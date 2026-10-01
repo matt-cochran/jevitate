@@ -66,7 +66,7 @@ import { seedRedirectReason } from "../seed-redirect.js";
 import { MissionSafety } from "../mission-safety.js";
 import type { SafetyConfig } from "../safety.js";
 import { type SideEffect } from "../side-effects.js";
-import type { InvariantSpec } from "@jevitate/recording";
+import type { BudgetDeclaration, InvariantSpec } from "@jevitate/recording";
 import {
   InvariantMonitor,
   type InvariantAction,
@@ -461,30 +461,247 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   return out;
 }
 
+/** The adversarial hunt's run state (#232): every closure variable of `runAdversarialHunt()`, one field each, names unchanged. */
+interface HuntContext {
+  readonly origin: string;
+  readonly bounds: Bounds;
+  readonly site: string;
+  readonly now: () => number;
+  readonly timeBudgetMs: number;
+  readonly routeGlobs: string[];
+  readonly inScope: (url: string) => boolean;
+  readonly departures: ScopeDeparture[];
+  outOfScopeSteps: number;
+  readonly thresholds: CoverageThresholds;
+  readonly cov: CoverageTracker;
+  readonly sessions: MissionSessions;
+  collector: PageSignalCollector;
+  crashWatch: CrashWatch;
+  readonly declared: InvariantMonitor | null;
+  /** #300: when the run's pages last fired an auth-shaped request (time only). */
+  readonly authRequests: AuthRequestLog;
+  readonly budgetDecls: BudgetDeclaration[];
+  readonly budget: BudgetMonitor | null;
+  /** A `before` snapshot is armed for the action(s) the next adjudication judges. */
+  armed: boolean;
+  readonly heap: HeapLog;
+  readonly safety: MissionSafety;
+  readonly probeHost: HostProbe;
+  crashHost: HostPressure | undefined;
+  readonly secrets: readonly string[];
+  /** #303 (opt-in): the action deltas, per transcript step (evidence on the defects found there). */
+  readonly pageDeltas: PageDeltas | null;
+  readonly stepDeltas: Map<number, ActionDelta>;
+  /** #303: the tracker holding a before-capture for the action about to fire, else null. */
+  deltaArmed: ActionDeltas | null;
+  readonly segments: RunRecorder[];
+  recorder: RunRecorder;
+  readonly transcript: TranscriptLog;
+  readonly defects: Map<string, MutableDefect>;
+  readonly advisories: Map<string, MutableAdvisory>;
+  readonly hangs: Map<string, HangFinding>;
+  /** Every perception's full timing (with request samples), once each — the run summary's input. */
+  readonly timings: PageTiming[];
+  readonly perceiveOpts: { timingConfig?: TimingConfig | undefined; hangConfig?: HangConfig | undefined; settleConfig?: SettleConfig | undefined; requestBoundMs?: number | undefined; hangProbeMs?: number | undefined; renderWaitMs?: number | undefined; maxCandidates: number; secrets: readonly string[]; };
+  /** #301: this run's inert canary tokens, and every one submitted (token → field, page, payload). */
+  readonly canaries: CanaryTokens;
+  readonly submittedCanaries: Map<string, { readonly field: string; readonly submittedOn: string; readonly payload: "html" | "attribute"; }>;
+  readonly reportedCanaries: Set<string>;
+  /** #300: the identity the run started as (hashes only), read once the seed page settled. */
+  baseline: IdentityFingerprint | null;
+  readonly identityChanges: IdentityChange[];
+  readonly finish: (outcome: AdversarialOutcome["outcome"], stop: AdversarialStop, failure?: MissionFailure) => AdversarialOutcome;
+  readonly perceiveNow: () => Promise<{ snapshot: Snapshot; timing: PageTiming; rendered: boolean; reason?: string; hang: HangSignal | null; }>;
+  /**
+   * A hang is recorded in the transcript, its steps are replayed in fresh contexts to reproduce it,
+   * and it becomes a finding with k/N. The same hang again (by fingerprint) is one more occurrence —
+   * never reproduced twice.
+   */
+  readonly recordHang: (signal: HangSignal, snapshot: Snapshot, timing: PageTiming) => Promise<void>;
+  /**
+   * Starts a NEW Recording segment at the start URL on the current session page (after a reset):
+   * its findings replay from there, never through what ended the previous segment. Returns the
+   * perceived start page, or why the run cannot go on (the start page hangs, or does not stay in
+   * scope — e.g. the session was lost and it redirects to a login page).
+   */
+  /** #293: actions spent re-replaying the Journey prefix on resets (counted against `maxActions`). */
+  restartSpend: number;
+  readonly restartAtSeed: () => Promise<{ ok: true; snapshot: Snapshot; timing: PageTiming; } | { ok: false; stop: AdversarialStop; }>;
+  /**
+   * After a hang: reset to a known state — a fresh page when the mission can open one (a hung page
+   * may not even navigate), else the same page — re-navigate to the start URL in a NEW Recording
+   * segment, and keep hunting. Null when the mission cannot continue (an unresponsive page with no
+   * way to open a fresh one, or a start page that itself hangs or leaves the scope).
+   */
+  readonly resetAfterHang: (h: HangSignal) => Promise<{ ok: true; snapshot: Snapshot; timing: PageTiming; } | { ok: false; stop: AdversarialStop; }>;
+  /**
+   * #300 — after an action switched the signed-in identity: a FRESH session from the original storage
+   * state (the only way back to the identity the run was given), at the start URL in a new Recording
+   * segment, whose identity must match the baseline again. When no fresh session can be opened, or
+   * the restored one is not the original identity, the run cannot go on (`identity-changed`).
+   */
+  readonly restoreIdentity: () => Promise<{ ok: true; snapshot: Snapshot; timing: PageTiming; } | { ok: false; stop: AdversarialStop; why: string; }>;
+  /** The run's verdict: every finding kind folded by severity (a confirmed hang dominates). */
+  readonly verdict: () => MissionOutcome;
+  /**
+   * #150 — the verdict for a `stop: "budget"` ending: a clean, deliberate stop, so it is never
+   * `clean` (the run didn't finish its work) — `inconclusive`, unless a defect was already found,
+   * which still wins.
+   */
+  readonly budgetVerdict: () => MissionOutcome;
+  /**
+   * Horizontal-overflow hard signal (#149) for the CURRENT step, as a `DefectSignal` — pure DOM
+   * geometry (`overflow.ts`'s `detectOverflow`), never a Jev judgment. Folded into `hardSignals`
+   * alongside the console/network signals; dedup across occurrences is the same fingerprint-keyed
+   * `fold()` every other hard signal already goes through.
+   */
+  readonly overflowSignals: () => Promise<DefectSignal[]>;
+  /** A declared-invariant violation (#86) as a step finding. */
+  readonly declaredFinding: (v: InvariantViolation) => StepFinding;
+  /**
+   * The independent oracle for one step: drains the hard signals and checks the user invariants —
+   * the code-level `userInvariant` and the declared spec (against the `before` snapshot armed for
+   * `action`; with no action only its `never`s apply). Returns the transcript reason and the step's
+   * findings, or null when nothing broke.
+   */
+  readonly adjudicate: (action?: InvariantAction | null, opts?: { readonly identitySwitched?: boolean; }) => Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[]; } | null>;
+  /**
+   * Signals that land AFTER a step was adjudicated — while the next page loads and settles (a 500
+   * fired by the page the action opened) — belong to that step: drained and folded into it, so a
+   * late signal is never lost (not even after the last step, or before a reset).
+   */
+  readonly drainLate: (step: number) => Promise<void>;
+  /**
+   * Folds one step's advisory signals into the deduped advisory set (mirrors `fold`, but no repro
+   * or triage — an advisory is reported, never a defect, so nothing here needs to be reproduced).
+   */
+  readonly foldAdvisories: (step: number, list: readonly StepAdvisory[]) => void;
+  /**
+   * #250 — when each action of the current Recording segment FIRED (wall clock, the signal
+   * collector's), with its transcript step and its last Recording step index: an HTTP 5xx is
+   * attributed by when its request STARTED (`PageSignalCollector.requestStartOf`), the way
+   * `Http5xxOracle` attributes it for the other strategies.
+   */
+  readonly fired: WeakMap<RunRecorder, { readonly at: number; readonly step: number; readonly index: number; }[]>;
+  readonly markFired: (at: number, step: number) => void;
+  /** The action whose request an `http-5xx` finding answered; undefined when it cannot tell. */
+  readonly requestOrigin: (f: StepFinding) => { readonly step: number; readonly recordingStepIndex: number; } | undefined;
+  /**
+   * Folds one step's findings into the deduped defect set — called AFTER the step is in the
+   * transcript, so a new defect's repro includes the step that surfaced it. A known fingerprint
+   * (or one seen in a known defect's cascade) only counts an occurrence.
+   */
+  readonly fold: (drainedAt: number, findings: readonly StepFinding[]) => Promise<void>;
+  readonly started: number;
+  snap: Snapshot;
+  snapTiming: PageTiming | undefined;
+  last: LastAction | null;
+  lastRecordedTarget: string | null;
+  actions: number;
+  strategySteps: number;
+  idleStreak: number;
+  readonly visitedLinks: Set<string>;
+  /**
+   * Control identities (#161, a regression of #75) that failed as not-actionable / timed out:
+   * never re-chosen by any strategy for the rest of the run. The adversarial strategies pick
+   * their own candidates from the live snapshot every step (no shared frontier of #75's own to
+   * consult), so the mission loop tracks this itself.
+   */
+  readonly unactionable: Set<string>;
+  /**
+   * Controls found disabled when last planned (#188). Filling a form over several episodes may
+   * enable its submit, so a disabled plan is never blacklisted — but it is recorded once per
+   * disabled streak, not once per episode (a disabled "Create key" read as 7 clicks in one run).
+   * An enabled plan ends the streak.
+   */
+  readonly disabledNow: Set<string>;
+  /**
+   * Controls the safety policy refused (#116) — never re-planned by any strategy (#193), so a
+   * denied submit is attempted (and its refusal recorded) once, not every turn.
+   */
+  readonly refusedIds: Set<string>;
+  /** #300: controls whose action switched the signed-in identity — never acted on again. */
+  readonly identitySwitchers: Set<string>;
+  /**
+   * A click-afforded control the safety policy refuses (#116: `--deny`, paid, destructive) is never
+   * offered as a target (#193) — withheld at planning, its refusal recorded once, like the
+   * frontier missions do (#186).
+   */
+  readonly refuses: (c: Control) => boolean;
+  /** Page chrome (#115/#193): a landmark control, or one seen unchanged on 2+ in-scope pathnames. */
+  readonly chrome: ChromeTracker;
+  readonly isChrome: (c: Control) => boolean;
+  /** What clicks revealed (#193): a control that made a form appear, and disclosures that showed none. */
+  readonly revealed: Map<string, readonly string[]>;
+  readonly barren: Set<string>;
+  /** Whether the run hunts with `exercise-controls` — then no strategy idles while controls remain (#193). */
+  readonly exercises: boolean;
+  readonly observeTarget: (on: Snapshot) => void;
+  /** How many episodes each strategy has run (rotates its form, field and value). */
+  readonly rounds: Map<MisuseStrategy, number>;
+  stop: AdversarialStop | null;
+  /** Why the run stopped, when that stop is itself the failure (#300 `identity-changed`). */
+  stopFailure: MissionFailure | undefined;
+  /** Wall-clock time the first action since the last adjudication fired (#300: auth requests since then). */
+  chainStart: number | null;
+  /** #301: canary tokens submitted since the last adjudicated step (checked after it, and after a reload). */
+  readonly chainCanaries: Set<string>;
+  /**
+   * #301 — after a settled step: is any canary of this run rendered as MARKUP? When this step's
+   * chain submitted one, the page is loaded again (a GET of the same in-scope URL — never a re-sent
+   * form) and checked again: seen after that ⇒ stored, seen only before ⇒ reflected. A canary first
+   * seen on a later page is stored. DOM inspection only — the payload is inert.
+   */
+  readonly checkCanaries: () => Promise<"ok" | "reloaded">;
+  /**
+   * SOFT augment only (guardrail #4). Jev's "looks broken?" is consulted and recorded in the
+   * transcript — it is never read into the defect decision. Wiring this answer into the defect
+   * condition would be the single most dangerous regression this mission can suffer. The state is
+   * redacted and carries the prompt-injection guard like every other prompt. It is advisory, so an
+   * unavailable judgment is recorded and the run goes on.
+   */
+  readonly softJudgment: (on: Snapshot) => Promise<{ judgments?: Record<string, TranscriptJudgment>; note?: string; }>;
+  /**
+   * One planned step through the gated act(). A select with no chosen option takes another
+   * option. `send` (a chat composer: #121) is given the CURRENT page's controls as its submit
+   * candidates, so it finds its own nearest Send button (or falls back to Enter) exactly as the
+   * goal loop's composer handling does — never a separate detected submit control to plan around.
+   */
+  readonly execute: (s: MisuseStep, candidates: readonly Control[]) => Promise<{ result: ActResult; value?: string; }>;
+  /** Appends an executed step to the Recording (the defect's repro path). */
+  readonly recordAction: (s: MisuseStep, value: string | undefined, at: number, submittedVia?: ActResult["submittedVia"]) => void;
+  /**
+   * Perceives what an action produced and checks it: a hang is recorded, then the mission resets
+   * to a known state and hunts on; an off-origin page sends it back to the seed. "reset" means the
+   * page the episode was planned on is gone; "stop" means the mission cannot continue.
+   */
+  readonly observeAfter: (step: number, action: string) => Promise<{ kind: "ok"; } | { kind: "reset"; } | { kind: "stop"; stop: AdversarialStop; }>;
+}
+
 async function runAdversarialHunt(params: AdversarialMissionParams, overlay: DemoOverlay | null): Promise<AdversarialOutcome> {
+  const ctx = {} as { -readonly [K in keyof HuntContext]: HuntContext[K] };
   // Guardrail #1 — authorize the target origin BEFORE anything else runs.
-  const origin = assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
-  const bounds = resolveBounds(params.bounds);
-  const site = params.site ?? origin;
-  const now = params.now ?? Date.now;
-  const timeBudgetMs = params.timeBudgetMs ?? DEFAULT_ADVERSARIAL_TIME_BUDGET_MS;
+  ctx.origin = assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
+  ctx.bounds = resolveBounds(params.bounds);
+  ctx.site = params.site ?? ctx.origin;
+  ctx.now = params.now ?? Date.now;
+  ctx.timeBudgetMs = params.timeBudgetMs ?? DEFAULT_ADVERSARIAL_TIME_BUDGET_MS;
   if (params.strategies.length === 0) throw new Error("runAdversarialMission: at least one strategy is required");
   // Scope containment (#64): the start route (and below it) plus the caller's globs.
-  const routeGlobs = scopeGlobs(params.seedUrl, params.routeGlobs);
-  const inScope = scopePredicate(params.allowlist, routeGlobs);
-  const departures: ScopeDeparture[] = [];
-  let outOfScopeSteps = 0;
-  const thresholds = resolveCoverageThresholds(params.coverageThresholds);
-  const cov = new CoverageTracker(inScope);
+  ctx.routeGlobs = scopeGlobs(params.seedUrl, params.routeGlobs);
+  ctx.inScope = scopePredicate(params.allowlist, ctx.routeGlobs);
+  ctx.departures = [];
+  ctx.outOfScopeSteps = 0;
+  ctx.thresholds = resolveCoverageThresholds(params.coverageThresholds);
+  ctx.cov = new CoverageTracker(ctx.inScope);
 
   // The live session; after a hang the mission resets to a fresh page and keeps hunting.
-  const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
+  ctx.sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
   // Attach the hard-signal listeners BEFORE navigating (on every page the run works in).
-  let collector = new PageSignalCollector(params.page, Date.now, params.allowlist);
-  let crashWatch = new CrashWatch(params.page);
+  ctx.collector = new PageSignalCollector(params.page, Date.now, params.allowlist);
+  ctx.crashWatch = new CrashWatch(params.page);
   // Declared invariants (#86): listening for `network` observables from before the first navigation.
-  const declared =
-    params.invariants === undefined
+  ctx.declared = params.invariants === undefined
       ? null
       : new InvariantMonitor(params.invariants, {
           allowlist: params.allowlist,
@@ -492,48 +709,48 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
           ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
         });
-  declared?.attach(params.page);
+  ctx.declared?.attach(params.page);
   /** #300: when the run's pages last fired an auth-shaped request (time only). */
-  const authRequests = new AuthRequestLog();
-  authRequests.attach(params.page);
+  ctx.authRequests = new AuthRequestLog();
+  ctx.authRequests.attach(params.page);
   // #150 — the SAME invariants monitor reads a budget's declared observables (one probe schedule).
-  const budgetDecls = params.invariants?.budget ?? [];
-  const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared);
+  ctx.budgetDecls = params.invariants?.budget ?? [];
+  ctx.budget = ctx.declared === null || ctx.budgetDecls.length === 0 ? null : new BudgetMonitor(ctx.budgetDecls, ctx.declared);
   /** A `before` snapshot is armed for the action(s) the next adjudication judges. */
-  let armed = false;
-  sessions.onReset((page) => {
-    collector = new PageSignalCollector(page, Date.now, params.allowlist);
-    crashWatch = new CrashWatch(page);
-    declared?.attach(page);
-    authRequests.attach(page);
-    armed = false;
+  ctx.armed = false;
+  ctx.sessions.onReset((page) => {
+    ctx.collector = new PageSignalCollector(page, Date.now, params.allowlist);
+    ctx.crashWatch = new CrashWatch(page);
+    ctx.declared?.attach(page);
+    ctx.authRequests.attach(page);
+    ctx.armed = false;
   });
-  const heap = new HeapLog();
+  ctx.heap = new HeapLog();
   /** The shared safety policy and the writes the run fires (#116). */
   // Its clock is the page monitor's (wall time), never the `now` seam: writes are attributed by it.
-  const safety = new MissionSafety(params.safety);
-  const probeHost = params.hostProbe ?? hostProbe();
-  let crashHost: HostPressure | undefined;
-  const secrets = params.secrets ?? [];
+  ctx.safety = new MissionSafety(params.safety);
+  ctx.probeHost = params.hostProbe ?? hostProbe();
+  ctx.crashHost = undefined;
+  ctx.secrets = params.secrets ?? [];
   /** #303 (opt-in): the action deltas, per transcript step (evidence on the defects found there). */
-  const pageDeltas = params.actionDeltas === true ? new PageDeltas({ secrets, goal: "adversarial misuse" }) : null;
-  const stepDeltas = new Map<number, ActionDelta>();
+  ctx.pageDeltas = params.actionDeltas === true ? new PageDeltas({ secrets: ctx.secrets, goal: "adversarial misuse" }) : null;
+  ctx.stepDeltas = new Map<number, ActionDelta>();
   /** #303: the tracker holding a before-capture for the action about to fire, else null. */
-  let deltaArmed: ActionDeltas | null = null;
+  ctx.deltaArmed = null;
   // One Recording per segment: segment 0 from the seed; a new one after each reset (its findings
   // replay from that segment's start, never through the hang that ended the previous one).
-  const segments: RunRecorder[] = [new RunRecorder(site, undefined, secrets, params.onRecording)];
-  let recorder = segments[0] as RunRecorder;
-  const transcript = new TranscriptLog(secrets, params.onTranscriptEntry);
-  const defects = new Map<string, MutableDefect>();
-  const advisories = new Map<string, MutableAdvisory>();
-  const hangs = new Map<string, HangFinding>();
+  ctx.segments = [new RunRecorder(ctx.site, undefined, ctx.secrets, params.onRecording)];
+  ctx.recorder = ctx.segments[0] as RunRecorder;
+  ctx.transcript = new TranscriptLog(ctx.secrets, params.onTranscriptEntry);
+  ctx.defects = new Map<string, MutableDefect>();
+  ctx.advisories = new Map<string, MutableAdvisory>();
+  ctx.hangs = new Map<string, HangFinding>();
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
-  const timings: PageTiming[] = [];
-  const perceiveOpts = {
-    maxCandidates: bounds.maxCandidates,
+  ctx.timings = [];
+  ctx.perceiveOpts = {
+    maxCandidates: ctx.bounds.maxCandidates,
     // #219: page content is redacted of every registered secret as it is perceived.
-    secrets,
+    secrets: ctx.secrets,
     ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
     ...(params.hangProbeMs === undefined ? {} : { hangProbeMs: params.hangProbeMs }),
     ...(params.requestBoundMs === undefined ? {} : { requestBoundMs: params.requestBoundMs }),
@@ -543,20 +760,20 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
   };
 
   /** #301: this run's inert canary tokens, and every one submitted (token → field, page, payload). */
-  const canaries = new CanaryTokens();
-  const submittedCanaries = new Map<string, { readonly field: string; readonly submittedOn: string; readonly payload: "html" | "attribute" }>();
-  const reportedCanaries = new Set<string>();
+  ctx.canaries = new CanaryTokens();
+  ctx.submittedCanaries = new Map<string, { readonly field: string; readonly submittedOn: string; readonly payload: "html" | "attribute" }>();
+  ctx.reportedCanaries = new Set<string>();
   /** #300: the identity the run started as (hashes only), read once the seed page settled. */
-  let baseline: IdentityFingerprint | null = null;
-  const identityChanges: IdentityChange[] = [];
+  ctx.baseline = null;
+  ctx.identityChanges = [];
 
-  const finish = (
+  ctx.finish = (
     outcome: AdversarialOutcome["outcome"],
     stop: AdversarialStop,
     failure?: MissionFailure,
   ): AdversarialOutcome => {
-    const finished = (segments[0] as RunRecorder).tryFinish({ intent: "adversarial" });
-    const later = segments.map((r, i) => {
+    const finished = (ctx.segments[0] as RunRecorder).tryFinish({ intent: "adversarial" });
+    const later = ctx.segments.map((r, i) => {
       if (i === 0) return null;
       const f = r.tryFinish({ intent: "adversarial (after reset)" });
       return f.ok ? f.recording : null;
@@ -564,7 +781,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     const recordingFailure: MissionFailure | undefined = finished.ok
       ? undefined
       : { kind: "exception", message: `recording rejected: ${finished.reason}` };
-    const coverage = cov.report(thresholds, outOfScopeSteps);
+    const coverage = ctx.cov.report(ctx.thresholds, ctx.outOfScopeSteps);
     // A run that found nothing only means something if it tried: below the coverage thresholds a
     // silent run proved nothing about its target, so it is `inconclusive` — never `clean`.
     const thin = outcome === "clean" && !coverage.sufficient;
@@ -577,40 +794,40 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       coverage,
       outcome: finished.ok ? honest : "crashed",
       stop: finished.ok ? stop : "crashed",
-      defects: [...defects.values()].map((d) => freeze(d, later, stepDeltas)),
-      advisories: [...advisories.values()].map(freezeAdvisory),
-      hangs: [...hangs.values()],
-      recording: finished.ok ? finished.recording : emptyRecording(site, finished.reason),
-      transcript: transcript.entries(),
+      defects: [...ctx.defects.values()].map((d) => freeze(d, later, ctx.stepDeltas)),
+      advisories: [...ctx.advisories.values()].map(freezeAdvisory),
+      hangs: [...ctx.hangs.values()],
+      recording: finished.ok ? finished.recording : emptyRecording(ctx.site, finished.reason),
+      transcript: ctx.transcript.entries(),
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
-      heap: heap.samples(),
-      timing: summarizeTimings(timings),
-      scope: { routeGlobs, outOfScopeSteps, departures: departures.slice(0, MAX_LISTED_DEPARTURES), resets: sessions.resets },
-      ...(declared === null ? {} : { invariants: declared.report() }),
-      ...(budget === null ? {} : { budget: budget.trajectory() }),
-      ...(identityChanges.length === 0 ? {} : { identityChanges: [...identityChanges] }),
-      ...(pageDeltas === null ? {} : { actionDeltas: deltaStatsOf([...stepDeltas.values()]) }),
-      ...safety.result(),
+      heap: ctx.heap.samples(),
+      timing: summarizeTimings(ctx.timings),
+      scope: { routeGlobs: ctx.routeGlobs, outOfScopeSteps: ctx.outOfScopeSteps, departures: ctx.departures.slice(0, MAX_LISTED_DEPARTURES), resets: ctx.sessions.resets },
+      ...(ctx.declared === null ? {} : { invariants: ctx.declared.report() }),
+      ...(ctx.budget === null ? {} : { budget: ctx.budget.trajectory() }),
+      ...(ctx.identityChanges.length === 0 ? {} : { identityChanges: [...ctx.identityChanges] }),
+      ...(ctx.pageDeltas === null ? {} : { actionDeltas: deltaStatsOf([...ctx.stepDeltas.values()]) }),
+      ...ctx.safety.result(),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
-            crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples(), {
-              ...(crashHost === undefined ? {} : { host: crashHost }),
+            crash: buildCrashReport(finalFailure, ctx.crashWatch.signals(), ctx.heap.samples(), {
+              ...(ctx.crashHost === undefined ? {} : { host: ctx.crashHost }),
             }),
           }
         : {}),
     };
   };
 
-  const perceiveNow = async (): Promise<{
+  ctx.perceiveNow = async (): Promise<{
     snapshot: Snapshot;
     timing: PageTiming;
     rendered: boolean;
     reason?: string;
     hang: HangSignal | null;
   }> => {
-    const p = await perceive(sessions.page, perceiveOpts);
-    timings.push(p.timing);
-    await heap.sample(sessions.page, transcript.nextStep);
+    const p = await perceive(ctx.sessions.page, ctx.perceiveOpts);
+    ctx.timings.push(p.timing);
+    await ctx.heap.sample(ctx.sessions.page, ctx.transcript.nextStep);
     return p.rendered
       ? { snapshot: p.snapshot, timing: p.timing, rendered: true, hang: p.hang }
       : { snapshot: p.snapshot, timing: p.timing, rendered: false, reason: p.reason, hang: p.hang };
@@ -621,9 +838,9 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * and it becomes a finding with k/N. The same hang again (by fingerprint) is one more occurrence —
    * never reproduced twice.
    */
-  const recordHang = async (signal: HangSignal, snapshot: Snapshot, timing: PageTiming): Promise<void> => {
+  ctx.recordHang = async (signal: HangSignal, snapshot: Snapshot, timing: PageTiming): Promise<void> => {
     let h = signal;
-    transcript.record({
+    ctx.transcript.record({
       op: null,
       control: null,
       confidence: null,
@@ -637,15 +854,15 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     // #230: the app stopped answering a fresh request — `target-unresponsive`, never a hang finding
     // and never blamed on a starved host.
     await assertTargetAnswering({
-      pageUrl: sessions.page.url(),
+      pageUrl: ctx.sessions.page.url(),
       authorized: (u) => isAuthorizedExploreTarget(u, params.allowlist),
     });
-    const step = transcript.nextStep - 1;
-    const known = hangs.get(hangFingerprint(h));
+    const step = ctx.transcript.nextStep - 1;
+    const known = ctx.hangs.get(hangFingerprint(h));
     if (known !== undefined) {
       // Already confirmed (or being confirmed): no replay budget spent again — just one more
       // occurrence, and the route added when it is a new one ("also seen on <route>", #87).
-      hangs.set(known.fingerprint, {
+      ctx.hangs.set(known.fingerprint, {
         ...known,
         occurrences: known.occurrences + 1,
         occurrenceSteps: [...known.occurrenceSteps, step],
@@ -653,7 +870,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       });
       return;
     }
-    const judged = params.hostHealth === undefined ? { host: await probeHost(), starved: null } : await params.hostHealth.judge();
+    const judged = params.hostHealth === undefined ? { host: await ctx.probeHost(), starved: null } : await params.hostHealth.judge();
     if (judged.starved !== null) {
       // #203: met while the host was starved — advisory `environment-degraded`, never a hang finding.
       params.hostHealth?.markDegraded(
@@ -662,11 +879,11 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       );
       return;
     }
-    const heapNow = await sampleHeap(sessions.page, 1_000);
+    const heapNow = await sampleHeap(ctx.sessions.page, 1_000);
     if (heapNow !== null) h = { ...h, heapBytes: heapNow.usedBytes };
     h = { ...h, host: judged.host };
-    const recordingStepIndex = Math.max(0, recorder.stepCount - 1);
-    const partial = recorder.tryFinish({ intent: "adversarial" });
+    const recordingStepIndex = Math.max(0, ctx.recorder.stepCount - 1);
+    const partial = ctx.recorder.tryFinish({ intent: "adversarial" });
     const reproduction: HangReproduction =
       params.openFreshSession === undefined || !partial.ok
         ? NOT_REPLAYED
@@ -676,12 +893,12 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
             hang: h,
             openSession: params.openFreshSession,
             ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
-            perceive: perceiveOpts,
+            perceive: ctx.perceiveOpts,
             ...(params.safety === undefined ? {} : { safety: params.safety }),
           });
-    const finding = hangFinding(h, transcript.entries(), recordingStepIndex, reproduction);
-    const segment = segments.indexOf(recorder);
-    hangs.set(
+    const finding = hangFinding(h, ctx.transcript.entries(), recordingStepIndex, reproduction);
+    const segment = ctx.segments.indexOf(ctx.recorder);
+    ctx.hangs.set(
       finding.fingerprint,
       segment > 0 && partial.ok ? { ...finding, repro: { ...finding.repro, recording: partial.recording } } : finding,
     );
@@ -694,29 +911,29 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * scope — e.g. the session was lost and it redirects to a login page).
    */
   /** #293: actions spent re-replaying the Journey prefix on resets (counted against `maxActions`). */
-  let restartSpend = 0;
-  const restartAtSeed = async (): Promise<
+  ctx.restartSpend = 0;
+  ctx.restartAtSeed = async (): Promise<
     { ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop }
   > => {
-    await monitorFor(sessions.page).instrument();
-    safety.attach(monitorFor(sessions.page));
-    recorder = new RunRecorder(site, undefined, secrets);
-    segments.push(recorder);
+    await monitorFor(ctx.sessions.page).instrument();
+    ctx.safety.attach(monitorFor(ctx.sessions.page));
+    ctx.recorder = new RunRecorder(ctx.site, undefined, ctx.secrets);
+    ctx.segments.push(ctx.recorder);
     if (params.restartAtStart !== undefined) {
       // #293: back through the Journey prefix (bounded: it spends the action budget).
-      restartSpend += params.restartCost ?? 0;
-      if (!(await params.restartAtStart(sessions.actor))) return { ok: false, stop: "scope-unreachable" };
+      ctx.restartSpend += params.restartCost ?? 0;
+      if (!(await params.restartAtStart(ctx.sessions.actor))) return { ok: false, stop: "scope-unreachable" };
     } else {
-      await Navigate.to(params.seedUrl).performAs(sessions.actor);
+      await Navigate.to(params.seedUrl).performAs(ctx.sessions.actor);
     }
-    recorder.navigate(params.seedUrl, now());
-    const back = await perceiveNow();
-    recorder.observed(back.snapshot.url, now(), back.timing);
+    ctx.recorder.navigate(params.seedUrl, ctx.now());
+    const back = await ctx.perceiveNow();
+    ctx.recorder.observed(back.snapshot.url, ctx.now(), back.timing);
     if (back.hang !== null) {
-      await recordHang(back.hang, back.snapshot, back.timing);
+      await ctx.recordHang(back.hang, back.snapshot, back.timing);
       return { ok: false, stop: "hang" };
     }
-    if (!inScope(back.snapshot.url)) return { ok: false, stop: "scope-unreachable" };
+    if (!ctx.inScope(back.snapshot.url)) return { ok: false, stop: "scope-unreachable" };
     return { ok: true, snapshot: back.snapshot, timing: back.timing };
   };
 
@@ -726,11 +943,11 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * segment, and keep hunting. Null when the mission cannot continue (an unresponsive page with no
    * way to open a fresh one, or a start page that itself hangs or leaves the scope).
    */
-  const resetAfterHang = async (
+  ctx.resetAfterHang = async (
     h: HangSignal,
   ): Promise<{ ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop }> => {
-    if (!(await sessions.reset(h))) return { ok: false, stop: "hang" };
-    return restartAtSeed();
+    if (!(await ctx.sessions.reset(h))) return { ok: false, stop: "hang" };
+    return ctx.restartAtSeed();
   };
 
   /**
@@ -739,7 +956,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * segment, whose identity must match the baseline again. When no fresh session can be opened, or
    * the restored one is not the original identity, the run cannot go on (`identity-changed`).
    */
-  const restoreIdentity = async (): Promise<
+  ctx.restoreIdentity = async (): Promise<
     { ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop; why: string }
   > => {
     const unrestorable = (detail: string): { ok: false; stop: AdversarialStop; why: string } => ({
@@ -747,28 +964,28 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       stop: "identity-changed",
       why: `the signed-in identity changed and the original one could not be restored (${detail})`,
     });
-    if (!(await sessions.fresh())) {
+    if (!(await ctx.sessions.fresh())) {
       // No fresh session: only a SIGNED-OUT original identity can be restored in place, by clearing
       // the session's auth state (cookies and auth-named storage) on the current page.
-      if (baseline === null || baseline.entries.size > 0) {
+      if (ctx.baseline === null || ctx.baseline.entries.size > 0) {
         return unrestorable("no fresh session can be opened from the original storage state");
       }
-      await clearAuthState(sessions.page);
+      await clearAuthState(ctx.sessions.page);
     }
-    const back = await restartAtSeed();
+    const back = await ctx.restartAtSeed();
     if (!back.ok) {
       return back.stop === "scope-unreachable" ? unrestorable("the start URL no longer stays in scope") : { ok: false, stop: back.stop, why: `reset after the identity change ended: ${back.stop}` };
     }
-    const still = baseline === null ? null : identityChange(baseline, await readIdentity(sessions.page), { authRequest: false });
+    const still = ctx.baseline === null ? null : identityChange(ctx.baseline, await readIdentity(ctx.sessions.page), { authRequest: false });
     if (still !== null) return unrestorable(`the fresh session is not the original identity: ${still}`);
     return back;
   };
 
   /** The run's verdict: every finding kind folded by severity (a confirmed hang dominates). */
-  const verdict = (): MissionOutcome =>
+  ctx.verdict = (): MissionOutcome =>
     combineOutcomes([
-      defects.size > 0 ? "defects-found" : "clean",
-      ...[...hangs.values()].map((h) => hangOutcome(h.reproduction.status)),
+      ctx.defects.size > 0 ? "defects-found" : "clean",
+      ...[...ctx.hangs.values()].map((h) => hangOutcome(h.reproduction.status)),
     ]);
 
   /**
@@ -776,10 +993,10 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * `clean` (the run didn't finish its work) — `inconclusive`, unless a defect was already found,
    * which still wins.
    */
-  const budgetVerdict = (): MissionOutcome =>
+  ctx.budgetVerdict = (): MissionOutcome =>
     combineOutcomes([
-      defects.size > 0 ? "defects-found" : "inconclusive",
-      ...[...hangs.values()].map((h) => hangOutcome(h.reproduction.status)),
+      ctx.defects.size > 0 ? "defects-found" : "inconclusive",
+      ...[...ctx.hangs.values()].map((h) => hangOutcome(h.reproduction.status)),
     ]);
   /**
    * Horizontal-overflow hard signal (#149) for the CURRENT step, as a `DefectSignal` — pure DOM
@@ -787,12 +1004,12 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * alongside the console/network signals; dedup across occurrences is the same fingerprint-keyed
    * `fold()` every other hard signal already goes through.
    */
-  const overflowSignals = async (): Promise<DefectSignal[]> => {
-    const vp = sessions.page.viewportSize();
+  ctx.overflowSignals = async (): Promise<DefectSignal[]> => {
+    const vp = ctx.sessions.page.viewportSize();
     if (!shouldCheckOverflow(vp?.width, params.overflow?.checkOverflow ?? false)) return [];
     // #302: text cut off vertically, under the same gate — one signal per element.
     const clipped = (
-      await detectClipping(sessions.page, {
+      await detectClipping(ctx.sessions.page, {
         viewport: vp ?? { width: 1280, height: 720 },
         ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
         ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
@@ -807,7 +1024,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       url: c.url,
       descriptor: c.element.descriptor,
     }));
-    const finding = await detectOverflow(sessions.page, {
+    const finding = await detectOverflow(ctx.sessions.page, {
       viewport: vp ?? { width: 1280, height: 720 },
       ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
       ...(params.overflow?.toleranceCss === undefined ? {} : { toleranceCss: params.overflow.toleranceCss }),
@@ -827,7 +1044,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
   };
 
   /** A declared-invariant violation (#86) as a step finding. */
-  const declaredFinding = (v: InvariantViolation): StepFinding => ({
+  ctx.declaredFinding = (v: InvariantViolation): StepFinding => ({
     fingerprint: v.fingerprint,
     related: [v.fingerprint],
     kind: "invariant",
@@ -845,23 +1062,23 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * `action`; with no action only its `never`s apply). Returns the transcript reason and the step's
    * findings, or null when nothing broke.
    */
-  const adjudicate = async (
+  ctx.adjudicate = async (
     action: InvariantAction | null = null,
     opts: { readonly identitySwitched?: boolean } = {},
   ): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
     // #300: after an identity switch no invariant is judged — they were declared for the original
     // identity — and what the monitor observed for this action is dropped. Hard signals still count.
     const skip = opts.identitySwitched === true;
-    if (skip) declared?.discardPending();
+    if (skip) ctx.declared?.discardPending();
     const invariantResult: { ok: boolean; reason?: string } =
-      !skip && params.userInvariant ? await params.userInvariant(sessions.page) : { ok: true };
-    const declaredResult = declared === null || skip ? null : await declared.after(sessions.actor, armed ? action : null);
-    armed = false;
+      !skip && params.userInvariant ? await params.userInvariant(ctx.sessions.page) : { ok: true };
+    const declaredResult = ctx.declared === null || skip ? null : await ctx.declared.after(ctx.sessions.actor, ctx.armed ? action : null);
+    ctx.armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
-    await sessions.page.waitForTimeout(10);
-    const hardSignals = collector.drain();
-    hardSignals.push(...(await overflowSignals()));
-    const url = redactUrl(sessions.page.url());
+    await ctx.sessions.page.waitForTimeout(10);
+    const hardSignals = ctx.collector.drain();
+    hardSignals.push(...(await ctx.overflowSignals()));
+    const url = redactUrl(ctx.sessions.page.url());
     const route = normalizeRoute(url);
     const findings: StepFinding[] = [];
     // A console error correlated with a captured 4xx response is advisory, never a defect (#88) —
@@ -896,7 +1113,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         invariantReason: reason,
       });
     }
-    for (const v of declaredResult?.violations ?? []) findings.push(declaredFinding(v));
+    for (const v of declaredResult?.violations ?? []) findings.push(ctx.declaredFinding(v));
     if (findings.length === 0 && stepAdvisories.length === 0) return null;
     const reasons = [
       ...hardSignals.map((s) => s.detail),
@@ -914,16 +1131,16 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * fired by the page the action opened) — belong to that step: drained and folded into it, so a
    * late signal is never lost (not even after the last step, or before a reset).
    */
-  const drainLate = async (step: number): Promise<void> => {
-    const late = collector.drain();
+  ctx.drainLate = async (step: number): Promise<void> => {
+    const late = ctx.collector.drain();
     const advisorySignals = late.filter(isAdvisoryConsoleError);
     const forDefect = late.filter((s) => !isAdvisoryConsoleError(s));
     const group = groupStepSignals(forDefect);
     if (group === null && advisorySignals.length === 0) return;
-    const url = redactUrl(sessions.page.url());
+    const url = redactUrl(ctx.sessions.page.url());
     const route = normalizeRoute(url);
     if (group !== null) {
-      await fold(step, [
+      await ctx.fold(step, [
         {
           fingerprint: group.fingerprint,
           related: group.related,
@@ -936,7 +1153,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       ]);
     }
     if (advisorySignals.length > 0) {
-      foldAdvisories(
+      ctx.foldAdvisories(
         step,
         advisorySignals.map((s) => stepAdvisory(s, route, url)),
       );
@@ -947,14 +1164,14 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * Folds one step's advisory signals into the deduped advisory set (mirrors `fold`, but no repro
    * or triage — an advisory is reported, never a defect, so nothing here needs to be reproduced).
    */
-  const foldAdvisories = (step: number, list: readonly StepAdvisory[]): void => {
+  ctx.foldAdvisories = (step: number, list: readonly StepAdvisory[]): void => {
     for (const a of list) {
-      const known = advisories.get(a.fingerprint);
+      const known = ctx.advisories.get(a.fingerprint);
       if (known !== undefined) {
         if (!known.occurrenceSteps.includes(step)) known.occurrenceSteps.push(step);
         continue;
       }
-      advisories.set(a.fingerprint, { ...a, firstSeenStep: step, occurrenceSteps: [step] });
+      ctx.advisories.set(a.fingerprint, { ...a, firstSeenStep: step, occurrenceSteps: [step] });
     }
   };
 
@@ -964,26 +1181,26 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * attributed by when its request STARTED (`PageSignalCollector.requestStartOf`), the way
    * `Http5xxOracle` attributes it for the other strategies.
    */
-  const fired = new WeakMap<RunRecorder, Array<{ readonly at: number; readonly step: number; readonly index: number }>>();
-  const markFired = (at: number, step: number): void => {
-    if (recorder.stepCount === 0) return;
-    const list = fired.get(recorder) ?? [];
-    list.push({ at, step, index: recorder.stepCount - 1 });
-    fired.set(recorder, list);
+  ctx.fired = new WeakMap<RunRecorder, Array<{ readonly at: number; readonly step: number; readonly index: number }>>();
+  ctx.markFired = (at: number, step: number): void => {
+    if (ctx.recorder.stepCount === 0) return;
+    const list = ctx.fired.get(ctx.recorder) ?? [];
+    list.push({ at, step, index: ctx.recorder.stepCount - 1 });
+    ctx.fired.set(ctx.recorder, list);
   };
   /** The action whose request an `http-5xx` finding answered; undefined when it cannot tell. */
-  const requestOrigin = (f: StepFinding): { readonly step: number; readonly recordingStepIndex: number } | undefined => {
+  ctx.requestOrigin = (f: StepFinding): { readonly step: number; readonly recordingStepIndex: number } | undefined => {
     const own = f.signals.filter((x) => x.kind === "http-5xx");
     const signal = own.find((x) => signalFingerprint(x) === f.fingerprint) ?? (f.kind === "http-5xx" ? own[0] : undefined);
-    const started = signal === undefined ? undefined : collector.requestStartOf(signal);
+    const started = signal === undefined ? undefined : ctx.collector.requestStartOf(signal);
     if (started === undefined) return undefined;
-    const list = fired.get(recorder) ?? [];
+    const list = ctx.fired.get(ctx.recorder) ?? [];
     let hit: (typeof list)[number] | undefined;
     for (const e of list) if (e.at <= started) hit = e;
     if (hit !== undefined) return { step: hit.step, recordingStepIndex: hit.index };
     // Started before this segment's first action: its page load (the navigation, Recording step 0).
     const first = list[0];
-    return first === undefined || recorder.stepCount === 0 ? undefined : { step: Math.max(1, first.step - 1), recordingStepIndex: 0 };
+    return first === undefined || ctx.recorder.stepCount === 0 ? undefined : { step: Math.max(1, first.step - 1), recordingStepIndex: 0 };
   };
 
   /**
@@ -991,13 +1208,13 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * transcript, so a new defect's repro includes the step that surfaced it. A known fingerprint
    * (or one seen in a known defect's cascade) only counts an occurrence.
    */
-  const fold = async (drainedAt: number, findings: readonly StepFinding[]): Promise<void> => {
+  ctx.fold = async (drainedAt: number, findings: readonly StepFinding[]): Promise<void> => {
     for (const f of findings) {
       // #250: an HTTP 5xx belongs to the action whose request it answered, not to the step that
       // drained it (a submit left pending while the next step ran blamed that next step).
-      const origin = requestOrigin(f);
+      const origin = ctx.requestOrigin(f);
       const step = origin === undefined ? drainedAt : Math.min(drainedAt, origin.step);
-      const known = [...defects.values()].find((d) => d.fingerprint === f.fingerprint || d.related.has(f.fingerprint));
+      const known = [...ctx.defects.values()].find((d) => d.fingerprint === f.fingerprint || d.related.has(f.fingerprint));
       if (known !== undefined) {
         if (!known.occurrenceSteps.includes(step)) known.occurrenceSteps.push(step);
         for (const r of f.related) known.related.add(r);
@@ -1008,22 +1225,22 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       const summary =
         f.kind === "invariant" ? (f.invariantReason ?? f.title) : f.kind === "markup-injection" ? f.title : f.signals.map((s) => s.detail).join("; ");
       const triage = await tryTriage(params.generation, { failureSummary: summary, url: f.url });
-      defects.set(f.fingerprint, {
+      ctx.defects.set(f.fingerprint, {
         ...f,
         related: new Set(f.related),
-        epoch: segments.indexOf(recorder),
+        epoch: ctx.segments.indexOf(ctx.recorder),
         firstSeenStep: step,
         occurrenceSteps: [step],
         // The repro is the ordered steps; their timing stays in the run transcript (not copied per defect).
         repro: {
-          steps: transcript
+          steps: ctx.transcript
             .entries()
             .filter((e) => e.step <= step)
             .map((e): TranscriptEntry => {
               const { timing: _timing, ...entry } = e;
               return entry;
             }),
-          recordingStepIndex: origin?.recordingStepIndex ?? Math.max(0, recorder.stepCount - 1),
+          recordingStepIndex: origin?.recordingStepIndex ?? Math.max(0, ctx.recorder.stepCount - 1),
         },
         triage,
       });
@@ -1032,8 +1249,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
 
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
-    await monitorFor(sessions.page).instrument();
-    safety.attach(monitorFor(sessions.page));
+    await monitorFor(ctx.sessions.page).instrument();
+    ctx.safety.attach(monitorFor(ctx.sessions.page));
     // #128: real network evidence for the FIRST navigation — a refused connection can still
     // surface as a bare navigation timeout.
     let firstNavNetError: string | null = null;
@@ -1041,40 +1258,40 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       const text = req.failure()?.errorText;
       if (text !== undefined) firstNavNetError = text;
     };
-    sessions.page.on("requestfailed", onFirstNavRequestFailed);
+    ctx.sessions.page.on("requestfailed", onFirstNavRequestFailed);
     try {
       if (params.startInPlace !== true) {
-        await assertSeedReachable(sessions.actor, params.seedUrl);
-        await Navigate.to(params.seedUrl).performAs(sessions.actor);
+        await assertSeedReachable(ctx.sessions.actor, params.seedUrl);
+        await Navigate.to(params.seedUrl).performAs(ctx.sessions.actor);
       }
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
       if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
       // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
       // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
-      return finish("inconclusive", "scope-unreachable", {
+      return ctx.finish("inconclusive", "scope-unreachable", {
         kind: "target-unreachable",
         message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
       });
     } finally {
-      sessions.page.off("requestfailed", onFirstNavRequestFailed);
+      ctx.sessions.page.off("requestfailed", onFirstNavRequestFailed);
     }
-    recorder.navigate(params.seedUrl, now());
-    const started = now();
+    ctx.recorder.navigate(params.seedUrl, ctx.now());
+    ctx.started = ctx.now();
 
-    const seed = await perceiveNow();
+    const seed = await ctx.perceiveNow();
     if (seed.hang !== null) {
-      await recordHang(seed.hang, seed.snapshot, seed.timing);
-      return finish(verdict(), "hang");
+      await ctx.recordHang(seed.hang, seed.snapshot, seed.timing);
+      return ctx.finish(ctx.verdict(), "hang");
     }
     if (!seed.rendered) {
       // Nothing to misuse. #208: the page's own load is still adjudicated — a start page that
       // answered 5xx (or threw) IS a defect, found by the hard-signal oracle before any misuse, and
       // wins over "inconclusive". With no signal, the run proves nothing (never `clean`).
-      const seedVerdict = await adjudicate();
-      const step = transcript.nextStep;
+      const seedVerdict = await ctx.adjudicate();
+      const step = ctx.transcript.nextStep;
       const why = seed.reason ?? "page did not render";
-      transcript.record({
+      ctx.transcript.record({
         op: null,
         control: null,
         confidence: null,
@@ -1086,12 +1303,12 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         timing: seed.timing,
       });
       if (seedVerdict !== null) {
-        await fold(step, seedVerdict.findings);
-        foldAdvisories(step, seedVerdict.advisories);
+        await ctx.fold(step, seedVerdict.findings);
+        ctx.foldAdvisories(step, seedVerdict.advisories);
       }
       // `failure` explains a broken run only: a found defect is the run's result, not its failure.
-      if (defects.size > 0) return finish("defects-found", "not-rendered");
-      return finish("inconclusive", "not-rendered", {
+      if (ctx.defects.size > 0) return ctx.finish("defects-found", "not-rendered");
+      return ctx.finish("inconclusive", "not-rendered", {
         kind: "exception",
         message: `${why}${seedVerdict === null ? "" : `: ${seedVerdict.reason}`}`,
       });
@@ -1102,7 +1319,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     // departure keeps the existing generic "left the target scope" message unchanged.
     const redirect = seedRedirectReason(params.seedUrl, seed.snapshot.url);
     if (redirect !== null && redirect.loginLike) {
-      transcript.record({
+      ctx.transcript.record({
         op: null,
         control: null,
         confidence: null,
@@ -1113,13 +1330,13 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         snapshot: seed.snapshot,
         timing: seed.timing,
       });
-      return finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message: redirect.reason });
+      return ctx.finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message: redirect.reason });
     }
-    if (!inScope(seed.snapshot.url)) {
+    if (!ctx.inScope(seed.snapshot.url)) {
       // The start URL did not stay on the target (another route, off-allowlist): the run cannot
       // test what it was asked to — it proves nothing, so it is never `clean`.
       const message = `the start URL left the target scope (landed on ${redactUrl(seed.snapshot.url)})`;
-      transcript.record({
+      ctx.transcript.record({
         op: null,
         control: null,
         confidence: null,
@@ -1130,22 +1347,22 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         snapshot: seed.snapshot,
         timing: seed.timing,
       });
-      return finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message });
+      return ctx.finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message });
     }
     // #300: who the run is signed in as (or that it is signed out), before any action.
-    baseline = await readIdentity(sessions.page);
-    let snap = seed.snapshot;
+    ctx.baseline = await readIdentity(ctx.sessions.page);
+    ctx.snap = seed.snapshot;
     // A perception's timing is reported ONCE — on the first step decided on it — so a run whose
     // strategies found nothing to do on a page does not count that page's load several times.
-    let snapTiming: PageTiming | undefined = seed.timing;
-    recorder.observed(snap.url, now(), seed.timing);
+    ctx.snapTiming = seed.timing;
+    ctx.recorder.observed(ctx.snap.url, ctx.now(), seed.timing);
 
     // Step 1 is the seed load itself: an AMBIENT defect (a 5xx fired while the page loads, before
     // any misuse) is attributed to loading the page, and its repro is just the navigation.
     {
-      const verdict = await adjudicate();
-      const step = transcript.nextStep;
-      transcript.record({
+      const verdict = await ctx.adjudicate();
+      const step = ctx.transcript.nextStep;
+      ctx.transcript.record({
         op: null,
         control: null,
         confidence: null,
@@ -1153,23 +1370,23 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         strategy: "seed-load",
         actOk: true,
         reason: verdict === null ? "seed page loaded" : verdict.reason,
-        snapshot: snap,
+        snapshot: ctx.snap,
         timing: seed.timing,
       });
-      snapTiming = undefined;
+      ctx.snapTiming = undefined;
       if (verdict !== null) {
-        await fold(step, verdict.findings);
-        foldAdvisories(step, verdict.advisories);
+        await ctx.fold(step, verdict.findings);
+        ctx.foldAdvisories(step, verdict.advisories);
       }
     }
 
     // #150 — a budget's baseline is read once, on the seed's settled snapshot, before any action.
     // An unreadable baseline fails closed by default (`onUnreadable: "stop"`). A defect found on the
     // seed load itself (just above) still wins over the budget stop.
-    if (budget !== null) {
-      const b = await budget.baseline(sessions.page);
+    if (ctx.budget !== null) {
+      const b = await ctx.budget.baseline(ctx.sessions.page);
       if (b.crossed) {
-        transcript.record({
+        ctx.transcript.record({
           op: null,
           control: null,
           confidence: null,
@@ -1177,51 +1394,51 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           strategy: "budget",
           actOk: false,
           reason: b.reason ?? "budget observable unreadable at run start",
-          snapshot: snap,
+          snapshot: ctx.snap,
         });
-        return finish(budgetVerdict(), "budget");
+        return ctx.finish(ctx.budgetVerdict(), "budget");
       }
     }
 
-    let last: LastAction | null = null;
-    let lastRecordedTarget: string | null = null;
-    let actions = 0;
-    let strategySteps = 0;
-    let idleStreak = 0;
-    const visitedLinks = new Set<string>();
+    ctx.last = null;
+    ctx.lastRecordedTarget = null;
+    ctx.actions = 0;
+    ctx.strategySteps = 0;
+    ctx.idleStreak = 0;
+    ctx.visitedLinks = new Set<string>();
     /**
      * Control identities (#161, a regression of #75) that failed as not-actionable / timed out:
      * never re-chosen by any strategy for the rest of the run. The adversarial strategies pick
      * their own candidates from the live snapshot every step (no shared frontier of #75's own to
      * consult), so the mission loop tracks this itself.
      */
-    const unactionable = new Set<string>();
+    ctx.unactionable = new Set<string>();
     /**
      * Controls found disabled when last planned (#188). Filling a form over several episodes may
      * enable its submit, so a disabled plan is never blacklisted — but it is recorded once per
      * disabled streak, not once per episode (a disabled "Create key" read as 7 clicks in one run).
      * An enabled plan ends the streak.
      */
-    const disabledNow = new Set<string>();
+    ctx.disabledNow = new Set<string>();
     /**
      * Controls the safety policy refused (#116) — never re-planned by any strategy (#193), so a
      * denied submit is attempted (and its refusal recorded) once, not every turn.
      */
-    const refusedIds = new Set<string>();
+    ctx.refusedIds = new Set<string>();
     /** #300: controls whose action switched the signed-in identity — never acted on again. */
-    const identitySwitchers = new Set<string>();
+    ctx.identitySwitchers = new Set<string>();
     /**
      * A click-afforded control the safety policy refuses (#116: `--deny`, paid, destructive) is never
      * offered as a target (#193) — withheld at planning, its refusal recorded once, like the
      * frontier missions do (#186).
      */
-    const refuses = (c: Control): boolean => {
+    ctx.refuses = (c: Control): boolean => {
       // #300: a control that switched the signed-in identity is never offered again (silently: its
       // switch is already in the transcript and in `identityChanges`).
-      if (identitySwitchers.has(controlIdentity(c))) return true;
+      if (ctx.identitySwitchers.has(controlIdentity(c))) return true;
       if (affordedOp(c) !== "click") return false;
-      const withheld = safety.withholds("click", c, (reason) =>
-        transcript.record({
+      const withheld = ctx.safety.withholds("click", c, (reason) =>
+        ctx.transcript.record({
           op: null,
           control: c,
           confidence: null,
@@ -1229,35 +1446,35 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           strategy: "safety-policy",
           actOk: false,
           reason,
-          snapshot: snap,
+          snapshot: ctx.snap,
         }),
       );
       // #209: the coverage shortfall names what the policy refused (and how to permit it).
-      const risk = withheld ? safety.policy.refuses(c)?.risk : undefined;
-      if (risk !== undefined) cov.refused(snap.url, c, risk);
+      const risk = withheld ? ctx.safety.policy.refuses(c)?.risk : undefined;
+      if (risk !== undefined) ctx.cov.refused(ctx.snap.url, c, risk);
       return withheld;
     };
     /** Page chrome (#115/#193): a landmark control, or one seen unchanged on 2+ in-scope pathnames. */
-    const chrome = new ChromeTracker();
-    const isChrome = (c: Control): boolean => (c.landmark ?? null) !== null || chrome.isChrome(c);
+    ctx.chrome = new ChromeTracker();
+    ctx.isChrome = (c: Control): boolean => (c.landmark ?? null) !== null || ctx.chrome.isChrome(c);
     /** What clicks revealed (#193): a control that made a form appear, and disclosures that showed none. */
-    const revealed = new Map<string, readonly string[]>();
-    const barren = new Set<string>();
+    ctx.revealed = new Map<string, readonly string[]>();
+    ctx.barren = new Set<string>();
     /** Whether the run hunts with `exercise-controls` — then no strategy idles while controls remain (#193). */
-    const exercises = params.strategies.includes("exercise-controls");
-    const observeTarget = (on: Snapshot): void => {
-      cov.observe(on);
-      if (inScope(on.url)) chrome.observe(new URL(on.url).pathname, on.controls);
+    ctx.exercises = params.strategies.includes("exercise-controls");
+    ctx.observeTarget = (on: Snapshot): void => {
+      ctx.cov.observe(on);
+      if (ctx.inScope(on.url)) ctx.chrome.observe(new URL(on.url).pathname, on.controls);
     };
     /** How many episodes each strategy has run (rotates its form, field and value). */
-    const rounds = new Map<MisuseStrategy, number>();
-    let stop: AdversarialStop | null = null;
+    ctx.rounds = new Map<MisuseStrategy, number>();
+    ctx.stop = null;
     /** Why the run stopped, when that stop is itself the failure (#300 `identity-changed`). */
-    let stopFailure: MissionFailure | undefined;
+    ctx.stopFailure = undefined;
     /** Wall-clock time the first action since the last adjudication fired (#300: auth requests since then). */
-    let chainStart: number | null = null;
+    ctx.chainStart = null;
     /** #301: canary tokens submitted since the last adjudicated step (checked after it, and after a reload). */
-    const chainCanaries = new Set<string>();
+    ctx.chainCanaries = new Set<string>();
 
     /**
      * #301 — after a settled step: is any canary of this run rendered as MARKUP? When this step's
@@ -1265,29 +1482,29 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
      * form) and checked again: seen after that ⇒ stored, seen only before ⇒ reflected. A canary first
      * seen on a later page is stored. DOM inspection only — the payload is inert.
      */
-    const checkCanaries = async (): Promise<"ok" | "reloaded"> => {
-      const submitted = [...chainCanaries];
-      chainCanaries.clear();
+    ctx.checkCanaries = async (): Promise<"ok" | "reloaded"> => {
+      const submitted = [...ctx.chainCanaries];
+      ctx.chainCanaries.clear();
       const authorized = (u: string): boolean => isAuthorizedExploreTarget(u, params.allowlist);
-      const afterSubmit = await renderedCanaries(sessions.page, canaries.prefix, authorized);
-      const submittedOn = redactUrl(sessions.page.url());
+      const afterSubmit = await renderedCanaries(ctx.sessions.page, ctx.canaries.prefix, authorized);
+      const submittedOn = redactUrl(ctx.sessions.page.url());
       let afterReload = new Set<string>();
       let reloadedOn = submittedOn;
-      const reload = submitted.length > 0 && inScope(sessions.page.url());
+      const reload = submitted.length > 0 && ctx.inScope(ctx.sessions.page.url());
       if (reload) {
-        const url = sessions.page.url();
-        await Navigate.to(url).performAs(sessions.actor);
-        recorder.navigate(url, now());
-        lastRecordedTarget = null;
-        await perceiveNow().catch(() => undefined);
-        afterReload = await renderedCanaries(sessions.page, canaries.prefix, authorized);
-        reloadedOn = redactUrl(sessions.page.url());
+        const url = ctx.sessions.page.url();
+        await Navigate.to(url).performAs(ctx.sessions.actor);
+        ctx.recorder.navigate(url, ctx.now());
+        ctx.lastRecordedTarget = null;
+        await ctx.perceiveNow().catch(() => undefined);
+        afterReload = await renderedCanaries(ctx.sessions.page, ctx.canaries.prefix, authorized);
+        reloadedOn = redactUrl(ctx.sessions.page.url());
       }
       const found: StepFinding[] = [];
       for (const token of new Set([...afterSubmit, ...afterReload])) {
-        const sub = submittedCanaries.get(token);
-        if (sub === undefined || reportedCanaries.has(token)) continue;
-        reportedCanaries.add(token);
+        const sub = ctx.submittedCanaries.get(token);
+        if (sub === undefined || ctx.reportedCanaries.has(token)) continue;
+        ctx.reportedCanaries.add(token);
         const justSubmitted = submitted.includes(token);
         const seenAfterSubmit = afterSubmit.has(token);
         const seenAfterReload = afterReload.has(token);
@@ -1315,8 +1532,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         });
       }
       if (reload || found.length > 0) {
-        const at = transcript.nextStep;
-        transcript.record({
+        const at = ctx.transcript.nextStep;
+        ctx.transcript.record({
           op: null,
           control: null,
           confidence: null,
@@ -1327,9 +1544,9 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
             found.length === 0
               ? `inert canary not rendered as markup${reload ? " (checked after submit and after reloading the page)" : ""}`
               : `defect: ${found.map((f) => f.title).join("; ")}`,
-          snapshot: snap,
+          snapshot: ctx.snap,
         });
-        if (found.length > 0) await fold(at, found);
+        if (found.length > 0) await ctx.fold(at, found);
       }
       return reload ? "reloaded" : "ok";
     };
@@ -1341,14 +1558,14 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
      * redacted and carries the prompt-injection guard like every other prompt. It is advisory, so an
      * unavailable judgment is recorded and the run goes on.
      */
-    const softJudgment = async (
+    ctx.softJudgment = async (
       on: Snapshot,
     ): Promise<{ judgments?: Record<string, TranscriptJudgment>; note?: string }> => {
       try {
         const answers = await params.judgment.systemOne({
           state: buildJudgmentState({
             goal: "try to break it",
-            url: sessions.page.url(),
+            url: ctx.sessions.page.url(),
             controls: [PROMPT_INJECTION_GUARD, ...on.controls.map((c) => c.summary)],
             history: [],
           }),
@@ -1369,13 +1586,13 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
      * candidates, so it finds its own nearest Send button (or falls back to Enter) exactly as the
      * goal loop's composer handling does — never a separate detected submit control to plan around.
      */
-    const execute = async (s: MisuseStep, candidates: readonly Control[]): Promise<{ result: ActResult; value?: string }> => {
+    ctx.execute = async (s: MisuseStep, candidates: readonly Control[]): Promise<{ result: ActResult; value?: string }> => {
       if (s.op === "select" && s.control !== null && s.fillText === undefined) {
-        const option = await otherOption(sessions.page, s.control);
+        const option = await otherOption(ctx.sessions.page, s.control);
         if (option === null) return { result: { ok: false, mutated: false, reason: "no other option to choose" } };
-        return { result: await act(sessions.actor, { op: "select", control: s.control, value: option }), value: option };
+        return { result: await act(ctx.sessions.actor, { op: "select", control: s.control, value: option }), value: option };
       }
-      const result = await act(sessions.actor, {
+      const result = await act(ctx.sessions.actor, {
         op: s.op,
         control: s.control,
         value: s.fillText ?? null,
@@ -1385,27 +1602,27 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     };
 
     /** Appends an executed step to the Recording (the defect's repro path). */
-    const recordAction = (s: MisuseStep, value: string | undefined, at: number, submittedVia?: ActResult["submittedVia"]): void => {
+    ctx.recordAction = (s: MisuseStep, value: string | undefined, at: number, submittedVia?: ActResult["submittedVia"]): void => {
       if (s.control === null) {
         if (s.op === "reload") {
-          recorder.navigate(sessions.page.url(), at);
-          lastRecordedTarget = null;
+          ctx.recorder.navigate(ctx.sessions.page.url(), at);
+          ctx.lastRecordedTarget = null;
         }
         return;
       }
-      if (s.op === "click") recorder.click(s.control.descriptor, at);
+      if (s.op === "click") ctx.recorder.click(s.control.descriptor, at);
       else if (s.op === "type") {
         // A password field's typed value is synthetic (never a real secret), but it is still kept
         // out of the Recording — `{redacted:true}` with only its length, never the text itself.
         const v = value ?? "";
-        recorder.fill(s.control.descriptor, s.redacted === true ? { redacted: true, length: v.length } : v, at);
-      } else if (s.op === "select") recorder.select(s.control.descriptor, value ?? "", at);
+        ctx.recorder.fill(s.control.descriptor, s.redacted === true ? { redacted: true, length: v.length } : v, at);
+      } else if (s.op === "select") ctx.recorder.select(s.control.descriptor, value ?? "", at);
       else if (s.op === "send") {
-        recorder.fill(s.control.descriptor, value ?? "", at);
-        if (submittedVia !== undefined && submittedVia.kind === "click") recorder.click(submittedVia.control.descriptor, at);
-        else recorder.press("Enter", s.control.descriptor, at);
+        ctx.recorder.fill(s.control.descriptor, value ?? "", at);
+        if (submittedVia !== undefined && submittedVia.kind === "click") ctx.recorder.click(submittedVia.control.descriptor, at);
+        else ctx.recorder.press("Enter", s.control.descriptor, at);
       } else return;
-      lastRecordedTarget = JSON.stringify(s.control.descriptor);
+      ctx.lastRecordedTarget = JSON.stringify(s.control.descriptor);
     };
 
     /**
@@ -1413,39 +1630,39 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
      * to a known state and hunts on; an off-origin page sends it back to the seed. "reset" means the
      * page the episode was planned on is gone; "stop" means the mission cannot continue.
      */
-    const observeAfter = async (
+    ctx.observeAfter = async (
       step: number,
       action: string,
     ): Promise<{ kind: "ok" } | { kind: "reset" } | { kind: "stop"; stop: AdversarialStop }> => {
-      const next = await perceiveNow();
-      await drainLate(step);
-      snap = next.snapshot;
-      snapTiming = next.timing;
-      const target = lastRecordedTarget;
-      recorder.observed(
-        snap.url,
-        now(),
+      const next = await ctx.perceiveNow();
+      await ctx.drainLate(step);
+      ctx.snap = next.snapshot;
+      ctx.snapTiming = next.timing;
+      const target = ctx.lastRecordedTarget;
+      ctx.recorder.observed(
+        ctx.snap.url,
+        ctx.now(),
         next.timing,
-        target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
+        target === null ? undefined : { lastTargetStillPresent: ctx.snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
       );
-      lastRecordedTarget = null;
-      let restarted: Awaited<ReturnType<typeof restartAtSeed>>;
+      ctx.lastRecordedTarget = null;
+      let restarted: Awaited<ReturnType<typeof ctx.restartAtSeed>>;
       // Only IN-SCOPE pages are hang-checked (#193): a page reached by a departure is outside the
       // target, so its hang signal is advisory (noted on the departure), never a finding.
-      if (next.hang !== null && inScope(snap.url)) {
-        await recordHang(next.hang, next.snapshot, next.timing);
+      if (next.hang !== null && ctx.inScope(ctx.snap.url)) {
+        await ctx.recordHang(next.hang, next.snapshot, next.timing);
         // Keep hunting: reset to a known state (a fresh page at the start URL) and go on, within
         // budget. The hung route is not followed again (visit-route remembers it).
-        restarted = await resetAfterHang(next.hang);
-      } else if (!inScope(snap.url)) {
+        restarted = await ctx.resetAfterHang(next.hang);
+      } else if (!ctx.inScope(ctx.snap.url)) {
         // Scope containment (#64; guardrail #1 for another origin): the action left the target.
         // Record the departure, then reset to the start URL in a fresh page and hunt on there.
         // The step spent out of scope counts as out-of-scope, never as coverage.
-        outOfScopeSteps += 1;
-        const landed = redactUrl(snap.url);
-        departures.push({ step, url: landed, action });
+        ctx.outOfScopeSteps += 1;
+        const landed = redactUrl(ctx.snap.url);
+        ctx.departures.push({ step, url: landed, action });
         const fresh = params.openFreshSession !== undefined;
-        transcript.record({
+        ctx.transcript.record({
           op: null,
           control: null,
           confidence: null,
@@ -1456,103 +1673,103 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
             `left the target scope (landed on ${landed}); reset to the start URL${fresh ? " in a fresh page" : ""}`,
             next.hang === null ? undefined : outOfScopeHangNote(next.hang),
           ]),
-          snapshot: snap,
-          ...(snapTiming === undefined ? {} : { timing: snapTiming }),
+          snapshot: ctx.snap,
+          ...(ctx.snapTiming === undefined ? {} : { timing: ctx.snapTiming }),
         });
-        snapTiming = undefined;
+        ctx.snapTiming = undefined;
         // A page that still looked hung is left the way a hang is (a fresh page, or — when none can
         // be opened — a stop if it is unresponsive); any other departure just moves to a fresh page.
-        if (next.hang === null) await sessions.fresh();
-        else if (!(await sessions.reset(next.hang))) {
-          last = null;
+        if (next.hang === null) await ctx.sessions.fresh();
+        else if (!(await ctx.sessions.reset(next.hang))) {
+          ctx.last = null;
           return { kind: "stop", stop: "hang" };
         }
-        restarted = await restartAtSeed();
+        restarted = await ctx.restartAtSeed();
       } else {
         return { kind: "ok" };
       }
-      last = null;
+      ctx.last = null;
       if (!restarted.ok) return { kind: "stop", stop: restarted.stop };
-      snap = restarted.snapshot;
-      snapTiming = restarted.timing;
+      ctx.snap = restarted.snapshot;
+      ctx.snapTiming = restarted.timing;
       return { kind: "reset" };
     };
 
-    while (stop === null) {
-      if (strategySteps >= bounds.maxDecisions) {
-        stop = "step-budget";
+    while (ctx.stop === null) {
+      if (ctx.strategySteps >= ctx.bounds.maxDecisions) {
+        ctx.stop = "step-budget";
         break;
       }
-      if (actions + restartSpend >= bounds.maxActions) {
-        stop = "action-budget";
+      if (ctx.actions + ctx.restartSpend >= ctx.bounds.maxActions) {
+        ctx.stop = "action-budget";
         break;
       }
-      if (now() - started >= timeBudgetMs) {
-        stop = "time-budget";
+      if (ctx.now() - ctx.started >= ctx.timeBudgetMs) {
+        ctx.stop = "time-budget";
         break;
       }
-      const strategy = params.strategies[strategySteps % params.strategies.length];
+      const strategy = params.strategies[ctx.strategySteps % params.strategies.length];
       if (strategy === undefined) throw new Error("adversarial: strategy index out of range");
-      strategySteps += 1;
-      const round = rounds.get(strategy) ?? 0;
+      ctx.strategySteps += 1;
+      const round = ctx.rounds.get(strategy) ?? 0;
       // A snapshot armed by an episode that ended without an adjudication (budget, disabled target)
       // is stale: the next action gets a fresh one, so no effect is attributed to the wrong action.
-      armed = false;
-      chainStart = null;
+      ctx.armed = false;
+      ctx.chainStart = null;
 
       // A perception's timing is reported once — on the first step decided on it.
-      let stepSnap = snap;
-      let stepTiming = snapTiming;
-      snapTiming = undefined;
-      observeTarget(snap);
+      let stepSnap = ctx.snap;
+      let stepTiming = ctx.snapTiming;
+      ctx.snapTiming = undefined;
+      ctx.observeTarget(ctx.snap);
       // #209: when EVERY target control on the page is one the safety policy refuses (three "Buy"
       // buttons, refused as paid), no strategy can exercise anything — stop now, naming the refusal,
       // instead of scrolling and re-planning until the budget runs out.
-      if (inScope(snap.url)) for (const c of snap.controls) if (isExercisable(c, inScope)) refuses(c);
-      if (cov.everyTargetRefused()) {
-        stop = "targets-refused";
+      if (ctx.inScope(ctx.snap.url)) for (const c of ctx.snap.controls) if (isExercisable(c, ctx.inScope)) ctx.refuses(c);
+      if (ctx.cov.everyTargetRefused()) {
+        ctx.stop = "targets-refused";
         break;
       }
       const planning = (on: Snapshot, as: MisuseStrategy, extra: Partial<EpisodeContext> = {}): EpisodeContext => ({
         snapshot: on,
         strategy: as,
-        round: rounds.get(as) ?? 0,
-        last,
-        visitedLinks,
-        exercised: cov.exercisedKeys,
-        blacklisted: refusedIds.size === 0 ? unactionable : new Set([...unactionable, ...refusedIds]),
-        inScope,
-        refuses,
-        isChrome,
-        disclosures: { revealed, barren },
+        round: ctx.rounds.get(as) ?? 0,
+        last: ctx.last,
+        visitedLinks: ctx.visitedLinks,
+        exercised: ctx.cov.exercisedKeys,
+        blacklisted: ctx.refusedIds.size === 0 ? ctx.unactionable : new Set([...ctx.unactionable, ...ctx.refusedIds]),
+        inScope: ctx.inScope,
+        refuses: ctx.refuses,
+        isChrome: ctx.isChrome,
+        disclosures: { revealed: ctx.revealed, barren: ctx.barren },
         rng: Math.random,
-        canary: () => canaries.next(),
+        canary: () => ctx.canaries.next(),
         ...extra,
       });
-      let episode = planMisuseEpisode(planning(snap, strategy));
+      let episode = planMisuseEpisode(planning(ctx.snap, strategy));
       /** The strategy the episode actually runs (a fallback to `exercise-controls`, #193). */
       let ran: MisuseStrategy = strategy;
 
-      cov.strategy(strategy, episode !== null);
+      ctx.cov.strategy(strategy, episode !== null);
       // #193: a strategy with nothing to do here never idles while target controls are still
       // unexercised — when the run hunts with `exercise-controls`, the turn exercises one instead.
-      if (episode === null && exercises && strategy !== "exercise-controls") {
-        const fallback = planMisuseEpisode(planning(snap, "exercise-controls"));
+      if (episode === null && ctx.exercises && strategy !== "exercise-controls") {
+        const fallback = planMisuseEpisode(planning(ctx.snap, "exercise-controls"));
         if (fallback !== null) {
           ran = "exercise-controls";
-          cov.strategy(ran, true);
+          ctx.cov.strategy(ran, true);
           const note = (st: MisuseStep): string => joinReasons([`no ${strategy} action applies`, st.note]) ?? st.note;
           episode = { steps: fallback.steps.map((st, i) => (i === 0 ? { ...st, note: note(st) } : st)) };
         }
       }
       if (episode === null) {
-        idleStreak += 1;
+        ctx.idleStreak += 1;
         // Independent oracle — runs EVERY step, even when a strategy chose no action: the user
         // invariant is an independent probe of live page state, and hard signals may have accrued.
-        const step = transcript.nextStep;
-        const verdict = await adjudicate();
-        const soft = verdict === null ? await softJudgment(stepSnap) : {};
-        transcript.record({
+        const step = ctx.transcript.nextStep;
+        const verdict = await ctx.adjudicate();
+        const soft = verdict === null ? await ctx.softJudgment(stepSnap) : {};
+        ctx.transcript.record({
           op: null,
           control: null,
           confidence: null,
@@ -1565,15 +1782,15 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           ...(soft.judgments === undefined ? {} : { judgments: soft.judgments }),
         });
         if (verdict !== null) {
-          await fold(step, verdict.findings);
-          foldAdvisories(step, verdict.advisories);
+          await ctx.fold(step, verdict.findings);
+          ctx.foldAdvisories(step, verdict.advisories);
         }
         // A whole cycle of strategies found nothing to do on this page: there is nothing left.
-        if (idleStreak >= params.strategies.length) stop = "strategies-exhausted";
+        if (ctx.idleStreak >= params.strategies.length) ctx.stop = "strategies-exhausted";
         continue;
       }
-      idleStreak = 0;
-      rounds.set(ran, (ran === strategy ? round : (rounds.get(ran) ?? 0)) + 1);
+      ctx.idleStreak = 0;
+      ctx.rounds.set(ran, (ran === strategy ? round : (ctx.rounds.get(ran) ?? 0)) + 1);
 
       // A queue, not a fixed list: a disclosure that reveals a form is followed, in the same turn,
       // by this strategy's own episode on the revealed form (#193).
@@ -1584,13 +1801,13 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       let pendingEarlier = false;
       while (queue.length > 0) {
         const s = queue.shift() as MisuseStep;
-        if (actions + restartSpend >= bounds.maxActions) break;
+        if (ctx.actions + ctx.restartSpend >= ctx.bounds.maxActions) break;
         // An earlier step of this episode removed this step's control (a Cancel closed the dialog
         // the Save lived in): the rest of the episode was planned for a state that is gone. It ends
         // here, without spending an action — never a failed act that reads as a broken control.
         const gone = s.control;
         if (refreshed && gone !== null && !stepSnap.controls.some((c) => controlKey(c) === controlKey(gone))) {
-          transcript.record({
+          ctx.transcript.record({
             op: null,
             control: gone,
             confidence: null,
@@ -1610,17 +1827,17 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         // on a target that cannot be clicked. Checked live (not from the planning snapshot), because
         // an earlier step in THIS episode may just have made it enabled (e.g. filling the last
         // required field) — the same live truth `act()`'s own gate re-checks right before clicking.
-        if (s.op === "click" && s.control !== null && (await isDisabledNow(sessions.page, s.control))) {
+        if (s.op === "click" && s.control !== null && (await isDisabledNow(ctx.sessions.page, s.control))) {
           const id = controlIdentity(s.control);
-          const again = disabledNow.has(id);
-          disabledNow.add(id);
+          const again = ctx.disabledNow.has(id);
+          ctx.disabledNow.add(id);
           if (again) {
             stepTiming = undefined;
             break;
           }
           // #155/#193: a submit that could not be attempted is recorded with WHY — never silently.
-          if (s.submitsForm !== undefined) cov.blocked(stepSnap.url, s.submitsForm, "the submit control is disabled", "disabled");
-          transcript.record({
+          if (s.submitsForm !== undefined) ctx.cov.blocked(stepSnap.url, s.submitsForm, "the submit control is disabled", "disabled");
+          ctx.transcript.record({
             op: null,
             control: s.control,
             confidence: null,
@@ -1634,11 +1851,11 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           stepTiming = undefined;
           break;
         }
-        if (s.op === "click" && s.control !== null) disabledNow.delete(controlIdentity(s.control));
+        if (s.op === "click" && s.control !== null) ctx.disabledNow.delete(controlIdentity(s.control));
         // #300: a control that switched the signed-in identity is never acted on again (a strategy
         // that re-plans it from the live snapshot gets a no-op, counted against no budget).
-        if (s.control !== null && identitySwitchers.has(controlIdentity(s.control))) {
-          transcript.record({
+        if (s.control !== null && ctx.identitySwitchers.has(controlIdentity(s.control))) {
+          ctx.transcript.record({
             op: null,
             control: s.control,
             confidence: null,
@@ -1654,14 +1871,14 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         }
         // The shared safety policy (#116): a paid / session-ending / destructive / --deny'd control is
         // never clicked — a no-op like a disabled target, counted against no budget.
-        const unsafe = safety.gate(s.op, s.control);
+        const unsafe = ctx.safety.gate(s.op, s.control);
         if (unsafe !== null) {
           if (s.control !== null) {
-            refusedIds.add(controlIdentity(s.control));
-            cov.refused(stepSnap.url, s.control, unsafe.risk);
+            ctx.refusedIds.add(controlIdentity(s.control));
+            ctx.cov.refused(stepSnap.url, s.control, unsafe.risk);
           }
-          if (s.submitsForm !== undefined) cov.blocked(stepSnap.url, s.submitsForm, unsafe.reason, "denied");
-          transcript.record({
+          if (s.submitsForm !== undefined) ctx.cov.blocked(stepSnap.url, s.submitsForm, unsafe.reason, "denied");
+          ctx.transcript.record({
             op: null,
             control: s.control,
             confidence: null,
@@ -1678,11 +1895,11 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
         // would cross what remains of the budget is refused BEFORE it fires — code decides, never a
         // model routing around it. The run stops cleanly, with `stop: "budget"`.
-        if (budget !== null) {
-          const risk = s.control === null ? null : safety.policy.riskOf(s.control);
-          const g = await budget.guard(sessions.page, { op: s.op, control: s.control?.name ?? s.op, paid: risk === "paid" });
+        if (ctx.budget !== null) {
+          const risk = s.control === null ? null : ctx.safety.policy.riskOf(s.control);
+          const g = await ctx.budget.guard(ctx.sessions.page, { op: s.op, control: s.control?.name ?? s.op, paid: risk === "paid" });
           if (g.refuse) {
-            transcript.record({
+            ctx.transcript.record({
               op: null,
               control: s.control,
               confidence: null,
@@ -1694,7 +1911,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
               ...(stepTiming === undefined ? {} : { timing: stepTiming }),
             });
             stepTiming = undefined;
-            stop = "budget";
+            ctx.stop = "budget";
             break;
           }
         }
@@ -1703,66 +1920,66 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         // pause, so the overlay never lets the earlier action settle and change what the misuse tests.
         if (overlay !== null) {
           await overlay.announce(
-            sessions.page,
-            { step: transcript.nextStep, strategy: `adversarial · ${ran}`, op: s.op, target: s.control === null ? null : s.control.name || s.control.summary, why: s.note },
+            ctx.sessions.page,
+            { step: ctx.transcript.nextStep, strategy: `adversarial · ${ran}`, op: s.op, target: s.control === null ? null : s.control.name || s.control.summary, why: s.note },
             pendingEarlier ? null : s.control,
           );
         }
         // Declared invariants (#86): snapshot BEFORE the action(s) the next adjudication judges.
-        const actedOn = sessions.page.url();
-        if (declared !== null && !armed) {
-          await declared.before(sessions.actor);
-          armed = true;
+        const actedOn = ctx.sessions.page.url();
+        if (ctx.declared !== null && !ctx.armed) {
+          await ctx.declared.before(ctx.sessions.actor);
+          ctx.armed = true;
         }
         // #303 (opt-in): the page right before a settled action (a racing, unsettled one gets none).
-        deltaArmed = null;
-        if (pageDeltas !== null && s.settle && !pendingEarlier) {
-          const dl = await pageDeltas.on(sessions.page);
-          const route = normalizeRoute(redactUrl(sessions.page.url()));
+        ctx.deltaArmed = null;
+        if (ctx.pageDeltas !== null && s.settle && !pendingEarlier) {
+          const dl = await ctx.pageDeltas.on(ctx.sessions.page);
+          const route = normalizeRoute(redactUrl(ctx.sessions.page.url()));
           await dl.perceived(route).catch(() => null);
           try {
             await dl.beforeAction(route, s.op, s.control);
-            deltaArmed = dl;
+            ctx.deltaArmed = dl;
           } catch {
             dl.discard();
           }
         }
-        const at = now();
+        const at = ctx.now();
         const firedAt = Date.now();
-        if (chainStart === null) chainStart = firedAt;
-        const firedStep = transcript.nextStep;
-        safety.mark(transcript.nextStep, s.op, s.control);
-        const { result, value } = await execute(s, stepSnap.controls);
-        actions += 1;
-        if (deltaArmed !== null) {
-          if (result.ok) deltaArmed.acted({ label: `${s.op} ${s.control?.name ?? ""}`.trim(), recordIndex: 0, step: transcript.nextStep, ...(value === undefined ? {} : { value }) });
+        if (ctx.chainStart === null) ctx.chainStart = firedAt;
+        const firedStep = ctx.transcript.nextStep;
+        ctx.safety.mark(ctx.transcript.nextStep, s.op, s.control);
+        const { result, value } = await ctx.execute(s, stepSnap.controls);
+        ctx.actions += 1;
+        if (ctx.deltaArmed !== null) {
+          if (result.ok) ctx.deltaArmed.acted({ label: `${s.op} ${s.control?.name ?? ""}`.trim(), recordIndex: 0, step: ctx.transcript.nextStep, ...(value === undefined ? {} : { value }) });
           else {
-            deltaArmed.discard();
-            deltaArmed = null;
+            ctx.deltaArmed.discard();
+            ctx.deltaArmed = null;
           }
         }
         // #301: an inert canary typed into a field is registered (token → field, page, payload).
         const token = result.ok ? canaryTokenOf(value) : null;
         if (token !== null && value !== undefined && s.control !== null) {
-          submittedCanaries.set(token, { field: s.control.name || s.control.summary, submittedOn: redactUrl(actedOn), payload: canaryPayloadOf(value) });
-          chainCanaries.add(token);
+          ctx.submittedCanaries.set(token, { field: s.control.name || s.control.summary, submittedOn: redactUrl(actedOn), payload: canaryPayloadOf(value) });
+          ctx.chainCanaries.add(token);
         }
         if (result.ok) {
-          recordAction(s, value, at, result.submittedVia);
-          markFired(firedAt, firedStep);
+          ctx.recordAction(s, value, at, result.submittedVia);
+          ctx.markFired(firedAt, firedStep);
         }
-        if (result.ok) cov.acted(stepSnap.url, s.control);
+        if (result.ok) ctx.cov.acted(stepSnap.url, s.control);
         // #155 — a submit click counts as submitted only when it actually sent a request (a write
         // or a navigation); one the browser blocked with native validation never reached the
         // server, so it is recorded `blocked` instead (with the browser's own message, when known).
         if (result.ok && s.submitsForm !== undefined) {
-          if (submitRequestSent(monitorFor(sessions.page), at)) {
-            cov.submitted(stepSnap.url, s.submitsForm);
+          if (submitRequestSent(monitorFor(ctx.sessions.page), at)) {
+            ctx.cov.submitted(stepSnap.url, s.submitsForm);
           } else {
-            cov.blocked(stepSnap.url, s.submitsForm, await nativeValidationMessage(sessions.page));
+            ctx.cov.blocked(stepSnap.url, s.submitsForm, await nativeValidationMessage(ctx.sessions.page));
           }
         }
-        if (ran === "visit-route" && s.control !== null) visitedLinks.add(s.control.name);
+        if (ran === "visit-route" && s.control !== null) ctx.visitedLinks.add(s.control.name);
         // #161 (a regression of #75): a control refused as not-actionable (occluded, detached, a
         // clipped/offscreen anchor the static `isExercisable` check missed) is never re-chosen by
         // any strategy for the rest of the run — and never blindly repeated by `repeat-rapid`.
@@ -1770,14 +1987,14 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         // unsettled step of THIS episode just removed (a second Save after the first one closed
         // its dialog) is not unactionable — it is simply gone, and the form stays plannable.
         if (!result.ok && s.control !== null && !pendingEarlier && isUnactionableFailure(result.reason)) {
-          unactionable.add(controlIdentity(s.control));
+          ctx.unactionable.add(controlIdentity(s.control));
         }
-        last =
-          !result.ok && s.control !== null && unactionable.has(controlIdentity(s.control))
+        ctx.last =
+          !result.ok && s.control !== null && ctx.unactionable.has(controlIdentity(s.control))
             ? null
             : { op: s.op, control: s.control, ...(value === undefined ? {} : { fillText: value }) };
         // Evidence for "act while the submit is pending": how many requests the action left in flight.
-        const inFlight = !s.settle && result.ok ? monitorFor(sessions.page).pending().length : 0;
+        const inFlight = !s.settle && result.ok ? monitorFor(ctx.sessions.page).pending().length : 0;
         const reason = joinReasons([
           s.note,
           result.ok ? result.note : result.reason,
@@ -1795,39 +2012,39 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           ...(s.redacted === true ? { redacted: true } : {}),
         };
         stepTiming = undefined;
-        const step = transcript.nextStep;
+        const step = ctx.transcript.nextStep;
         if (!s.settle) {
           // The next step fires at once, without waiting for this one to settle (that is the misuse).
-          transcript.record({ ...entry, ...(reason === undefined ? {} : { reason }) });
+          ctx.transcript.record({ ...entry, ...(reason === undefined ? {} : { reason }) });
           pendingEarlier = pendingEarlier || result.ok;
           continue;
         }
         // #303 (opt-in): what this settled action changed — on its transcript step, and kept as
         // evidence for a defect first seen at this step.
-        if (deltaArmed !== null) {
-          const dl = deltaArmed;
-          deltaArmed = null;
-          await monitorFor(sessions.page).waitSettled({ ceilingMs: 5_000 }).catch(() => undefined);
-          const d = await dl.perceived(normalizeRoute(redactUrl(sessions.page.url()))).catch(() => null);
+        if (ctx.deltaArmed !== null) {
+          const dl = ctx.deltaArmed;
+          ctx.deltaArmed = null;
+          await monitorFor(ctx.sessions.page).waitSettled({ ceilingMs: 5_000 }).catch(() => undefined);
+          const d = await dl.perceived(normalizeRoute(redactUrl(ctx.sessions.page.url()))).catch(() => null);
           if (d !== null) {
-            stepDeltas.set(step, d.delta);
-            transcript.attachDelta(step, d.delta);
+            ctx.stepDeltas.set(step, d.delta);
+            ctx.transcript.attachDelta(step, d.delta);
           }
         }
         // #300: did this action switch the signed-in identity? Then its invariants are not judged,
         // the control is never picked again, and the run goes back to the original identity.
-        const since = chainStart ?? firedAt;
-        chainStart = null;
+        const since = ctx.chainStart ?? firedAt;
+        ctx.chainStart = null;
         const switched =
-          baseline === null
+          ctx.baseline === null
             ? null
-            : identityChange(baseline, await readIdentity(sessions.page), { authRequest: authRequests.since(since) });
+            : identityChange(ctx.baseline, await readIdentity(ctx.sessions.page), { authRequest: ctx.authRequests.since(since) });
         if (switched !== null) {
-          chainCanaries.clear();
-          const switchVerdict = await adjudicate(null, { identitySwitched: true });
-          const landed = redactUrl(sessions.page.url());
+          ctx.chainCanaries.clear();
+          const switchVerdict = await ctx.adjudicate(null, { identitySwitched: true });
+          const landed = redactUrl(ctx.sessions.page.url());
           const actionName = s.control?.name ?? s.op;
-          transcript.record({
+          ctx.transcript.record({
             ...entry,
             reason:
               joinReasons([
@@ -1837,17 +2054,17 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
               ]) ?? "identity changed",
           });
           if (switchVerdict !== null) {
-            await fold(step, switchVerdict.findings);
-            foldAdvisories(step, switchVerdict.advisories);
+            await ctx.fold(step, switchVerdict.findings);
+            ctx.foldAdvisories(step, switchVerdict.advisories);
           }
           if (s.control !== null) {
-            refusedIds.add(controlIdentity(s.control));
-            identitySwitchers.add(controlIdentity(s.control));
+            ctx.refusedIds.add(controlIdentity(s.control));
+            ctx.identitySwitchers.add(controlIdentity(s.control));
           }
-          last = null;
-          const back = await restoreIdentity();
-          identityChanges.push({ step, action: actionName, url: landed, route: normalizeRoute(landed), reason: switched, restored: back.ok });
-          transcript.record({
+          ctx.last = null;
+          const back = await ctx.restoreIdentity();
+          ctx.identityChanges.push({ step, action: actionName, url: landed, route: normalizeRoute(landed), reason: switched, restored: back.ok });
+          ctx.transcript.record({
             op: null,
             control: null,
             confidence: null,
@@ -1857,73 +2074,73 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
             reason: back.ok
               ? "restored the original identity: reset to the start URL in a fresh session from the original storage state"
               : back.why,
-            snapshot: back.ok ? back.snapshot : snap,
+            snapshot: back.ok ? back.snapshot : ctx.snap,
             ...(back.ok ? { timing: back.timing } : {}),
           });
           if (!back.ok) {
-            stop = back.stop;
-            if (back.stop === "identity-changed") stopFailure = { kind: "identity-changed", message: back.why };
+            ctx.stop = back.stop;
+            if (back.stop === "identity-changed") ctx.stopFailure = { kind: "identity-changed", message: back.why };
             break;
           }
-          snap = back.snapshot;
-          snapTiming = undefined;
+          ctx.snap = back.snapshot;
+          ctx.snapTiming = undefined;
           break;
         }
-        const verdict = await adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step });
-        const soft = verdict === null ? await softJudgment(stepSnap) : {};
+        const verdict = await ctx.adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step });
+        const soft = verdict === null ? await ctx.softJudgment(stepSnap) : {};
         const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
-        transcript.record({
+        ctx.transcript.record({
           ...entry,
           ...(full === undefined ? {} : { reason: full }),
           ...(soft.judgments === undefined ? {} : { judgments: soft.judgments }),
         });
         if (verdict !== null) {
-          await fold(step, verdict.findings);
-          foldAdvisories(step, verdict.advisories);
+          await ctx.fold(step, verdict.findings);
+          ctx.foldAdvisories(step, verdict.advisories);
         }
         // #301: was a submitted canary rendered as markup (after submit, after reload)?
-        const canaryCheck = await checkCanaries();
-        const after = await observeAfter(step, s.control?.name ?? s.op);
+        const canaryCheck = await ctx.checkCanaries();
+        const after = await ctx.observeAfter(step, s.control?.name ?? s.op);
         if (after.kind === "stop") {
-          stop = after.stop;
+          ctx.stop = after.stop;
           break;
         }
         // The rest of the episode was planned for a page that is gone.
         if (after.kind === "reset") break;
         if (canaryCheck === "reloaded") {
           // The canary check loaded the page again: the rest of the episode's plan is stale.
-          observeTarget(snap);
+          ctx.observeTarget(ctx.snap);
           break;
         }
-        observeTarget(snap);
+        ctx.observeTarget(ctx.snap);
         // #193: what did this click reveal? A form that was not there before → remember the control
         // as the way back to it (and, for a disclosure, run this strategy's episode on it now); a
         // disclosure that showed no form is never re-opened "to look for a form".
         if (result.ok && s.op === "click" && s.control !== null) {
           const id = controlIdentity(s.control);
-          const before = new Set(detectForms(stepSnap.controls, inScope).map((f) => f.key));
-          const appeared = detectForms(snap.controls, inScope)
+          const before = new Set(detectForms(stepSnap.controls, ctx.inScope).map((f) => f.key));
+          const appeared = detectForms(ctx.snap.controls, ctx.inScope)
             .map((f) => f.key)
             .filter((k) => !before.has(k));
           if (appeared.length > 0) {
-            revealed.set(id, appeared);
-            barren.delete(id);
+            ctx.revealed.set(id, appeared);
+            ctx.barren.delete(id);
             if (s.discloses === true && ran !== "exercise-controls" && FORM_STRATEGY.has(ran)) {
               // Same round as the disclosure's own turn (its counter was already advanced).
-              const follow = planMisuseEpisode(planning(snap, ran, { disclose: false, round: (rounds.get(ran) ?? 1) - 1 }));
+              const follow = planMisuseEpisode(planning(ctx.snap, ran, { disclose: false, round: (ctx.rounds.get(ran) ?? 1) - 1 }));
               if (follow !== null) queue.push(...follow.steps);
             }
-          } else if (s.discloses === true && !revealed.has(id)) {
-            barren.add(id);
+          } else if (s.discloses === true && !ctx.revealed.has(id)) {
+            ctx.barren.add(id);
           }
         }
         refreshed = true;
         pendingEarlier = false;
         // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
-        if (budget !== null) {
-          const b = await budget.afterSettle(sessions.page, step);
+        if (ctx.budget !== null) {
+          const b = await ctx.budget.afterSettle(ctx.sessions.page, step);
           if (b.crossed) {
-            transcript.record({
+            ctx.transcript.record({
               op: null,
               control: null,
               confidence: null,
@@ -1931,40 +2148,40 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
               strategy: "budget",
               actOk: true,
               reason: b.reason ?? "mission budget crossed",
-              snapshot: snap,
+              snapshot: ctx.snap,
             });
-            stop = "budget";
+            ctx.stop = "budget";
             break;
           }
         }
-        stepSnap = snap;
-        stepTiming = snapTiming;
-        snapTiming = undefined;
+        stepSnap = ctx.snap;
+        stepTiming = ctx.snapTiming;
+        ctx.snapTiming = undefined;
       }
     }
 
     // Anything that arrived after the last adjudication still counts.
-    await drainLate(Math.max(1, transcript.nextStep - 1));
+    await ctx.drainLate(Math.max(1, ctx.transcript.nextStep - 1));
     // #195: the monitor's end-of-run flush — a never.response hit to the LAST step is never lost.
-    if (declared !== null) {
-      const late = await declared.flushResponses().catch(() => null);
-      if (late !== null && late.violations.length > 0) await fold(Math.max(1, transcript.nextStep - 1), late.violations.map(declaredFinding));
+    if (ctx.declared !== null) {
+      const late = await ctx.declared.flushResponses().catch(() => null);
+      if (late !== null && late.violations.length > 0) await ctx.fold(Math.max(1, ctx.transcript.nextStep - 1), late.violations.map(ctx.declaredFinding));
     }
-    if (stop === "identity-changed") return finish(budgetVerdict(), stop, defects.size > 0 ? undefined : stopFailure);
-    return finish(stop === "budget" ? budgetVerdict() : verdict(), stop);
+    if (ctx.stop === "identity-changed") return ctx.finish(ctx.budgetVerdict(), ctx.stop, ctx.defects.size > 0 ? undefined : ctx.stopFailure);
+    return ctx.finish(ctx.stop === "budget" ? ctx.budgetVerdict() : ctx.verdict(), ctx.stop);
   } catch (e) {
-    const failure = describeFailure(e, crashWatch.signals());
+    const failure = describeFailure(e, ctx.crashWatch.signals());
     // #226: the app stopped answering (a frozen backend) — the run proves nothing past that point,
     // but nothing in the engine broke: `inconclusive` with the typed reason, never `crashed`.
-    if (isTargetUnresponsive(failure)) return finish("inconclusive", "target-unresponsive", failure);
+    if (isTargetUnresponsive(failure)) return ctx.finish("inconclusive", "target-unresponsive", failure);
     // #296: the page's renderer stopped answering and the liveness watchdog closed it — the run ends
     // `inconclusive` with that typed reason, never `crashed` with an issue attributed to jevitate.
     // #205: likewise a session the resource governor ended over the memory ceiling.
-    if (isPageUnresponsive(failure)) return finish("inconclusive", failure.kind === "resource-limit" ? "resource-limit" : "stalled", failure);
-    crashHost = await probeHost();
-    return finish("crashed", "crashed", failure);
+    if (isPageUnresponsive(failure)) return ctx.finish("inconclusive", failure.kind === "resource-limit" ? "resource-limit" : "stalled", failure);
+    ctx.crashHost = await ctx.probeHost();
+    return ctx.finish("crashed", "crashed", failure);
   } finally {
-    await sessions.closeOwned();
+    await ctx.sessions.closeOwned();
   }
 }
 
