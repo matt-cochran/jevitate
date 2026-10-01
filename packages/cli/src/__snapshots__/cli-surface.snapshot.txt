@@ -17,16 +17,19 @@
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use the real OpenRouter adapter (requires OPENROUTER_API_KEY)
 
 # ai setup
-  description: 
+  description: enter (masked) and store the keys a feature needs in ~/.jevitate/credentials.json (0600); each key is verified with its provider before it is stored
   arguments:
     - name=feature required=true variadic=false default=null
   options:
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--no-verify required=false mandatory=false negate=true variadic=false default=null description=store the entered key without the live auth check (offline / CI)
+    - flags=--replace required=false mandatory=false negate=false variadic=false default=null description=prompt for a new value even when a key is already stored (rotate / replace it)
 
 # ai status
-  description: 
+  description: which keys each AI feature uses, where each comes from (env or ~/.jevitate/credentials.json), and whether the provider accepts it (a live auth check; never prints a key)
   options:
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--no-verify required=false mandatory=false negate=true variadic=false default=null description=skip the live auth check (offline / CI): report presence and source only
 
 # baseline
   description: named baselines for `diff`, `report --baseline` and `check --baseline`
@@ -324,6 +327,8 @@
     - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=report planned skill-install/mcp-register actions without writing
     - flags=--force required=false mandatory=false negate=false variadic=false default=null description=overwrite a user-modified installed skill file/block or MCP config entry
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--no-verify required=false mandatory=false negate=true variadic=false default=null description=skip the live auth check of each key (offline / CI): report presence and source only
+    - flags=--replace-keys required=false mandatory=false negate=false variadic=false default=null description=prompt (masked) for a new value of every key, even one already stored, and store it
     - flags=--skip-keys required=false mandatory=false negate=false variadic=false default=null description=skip credential collection
     - flags=--skip-mcp required=false mandatory=false negate=false variadic=false default=null description=skip registering the jevitate MCP server in detected harnesses
     - flags=--skip-project required=false mandatory=false negate=false variadic=false default=null description=skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs)

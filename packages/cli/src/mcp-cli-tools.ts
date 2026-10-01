@@ -555,8 +555,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   },
   {
     name: "get_ai_status",
-    description: "`jevitate ai status`: which model-gateway credentials are configured (presence only — never a key value).",
-    command: { path: "ai status", params: {}, omitted: JSON_FLAG },
+    description:
+      "`jevitate ai status`: which model-gateway credentials each AI feature uses, where each comes from (env or the stored file) and whether its provider accepts it (a live auth check; `verify: false` skips it) — names, sources and verdicts only, never a key value.",
+    command: { path: "ai status", params: { verify: b("--no-verify") }, omitted: JSON_FLAG },
   },
 ];
 

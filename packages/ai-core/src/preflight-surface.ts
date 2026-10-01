@@ -1,4 +1,4 @@
-import { MissingCredentialError, envAliasesFor, type CredentialKey, type Feature, type CredentialStore, requireKeys } from "./credentials.js";
+import { FEATURE_KEYS, MissingCredentialError, envAliasesFor, type CredentialKey, type Feature, type CredentialStore, requireKeys } from "./credentials.js";
 
 /** `TYPESAFE_API_KEY` -> `TYPESAFE_API_KEY (or TYPESAFE_JEV_API_KEY)`; unchanged for a key with
  *  no accepted alias (issue #83). */
@@ -47,13 +47,39 @@ export interface SecureKeyIO {
 export async function collectMissingKeys(
   feature: Feature, store: CredentialStore, io: SecureKeyIO,
 ): Promise<CredentialKey[]> {
-  const missing = requireKeysSafe(feature, store);
-  for (const k of missing) {
-    const v = await io.promptSecret(`Enter ${withAliasHint(k)} (input hidden; stored locally, never sent to a model):`);
+  return collectKeys(feature, store, io);
+}
+
+export interface CollectKeysOptions {
+  /**
+   * #268: prompt for EVERY required key of the feature, even one already configured, and persist
+   * the new value over the stored one (rotating / replacing a key). Default: missing keys only.
+   */
+  readonly replace?: boolean;
+  /**
+   * #291: called with each entered value BEFORE it is persisted; throwing refuses it (nothing is
+   * stored). The value never leaves this call stack.
+   */
+  readonly check?: (key: CredentialKey, value: string) => Promise<void>;
+}
+
+/** The prompt shown for `key` (names only: never a value). */
+export function keyPrompt(key: CredentialKey, replace = false): string {
+  return `${replace ? "Enter a new value for" : "Enter"} ${withAliasHint(key)} — input masked; stored locally in ~/.jevitate/credentials.json (0600), never sent to a model:`;
+}
+
+/** Collects (and persists) the feature's missing keys — or, with `replace`, all of them. Returns the key names collected. */
+export async function collectKeys(
+  feature: Feature, store: CredentialStore, io: SecureKeyIO, opts: CollectKeysOptions = {},
+): Promise<CredentialKey[]> {
+  const keys = opts.replace === true ? [...FEATURE_KEYS[feature]] : requireKeysSafe(feature, store);
+  for (const k of keys) {
+    const v = await io.promptSecret(keyPrompt(k, opts.replace === true && store.detect(k)));
     if (!v || v.trim().length === 0) throw new Error(`${k} not provided — aborting (fail-closed)`);
+    await opts.check?.(k, v.trim());
     await io.persist(k, v.trim());
   }
-  return missing;
+  return keys;
 }
 function requireKeysSafe(feature: Feature, store: CredentialStore): CredentialKey[] {
   try { requireKeys(feature, store); return []; }

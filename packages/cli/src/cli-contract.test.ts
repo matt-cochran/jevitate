@@ -188,11 +188,12 @@ describe("human output: never raw JSON without --json (#210)", () => {
   it("init: keys already configured read as ready, never `keys: {json}` / `collected: []`", async () => {
     const home = join(dir, "home");
     const r = await cli({
-      ai: { env: { OPENROUTER_API_KEY: "x", TYPESAFE_API_KEY: "y" } },
+      ai: { env: { OPENROUTER_API_KEY: "x", TYPESAFE_API_KEY: "y" }, localConfig: {}, verifyFetch: async () => ({ status: 200 }) },
       init: { detection: { existsSync: () => false, homedir: () => home, cwd: () => dir }, statePath: join(dir, "state.json") },
     }).run(["init", "--skip-skills", "--skip-mcp", "--skip-project"]);
-    expect(r.out).toContain("keys: generation ready — 1/1 configured (already configured)");
-    expect(r.out).toContain("keys: judgment ready — 1/1 configured (already configured)");
+    // #268: each key named with its provider and source (never a value); #291: its live check.
+    expect(r.out).toContain("keys: generation ready — OPENROUTER_API_KEY (OpenRouter), from env OPENROUTER_API_KEY: valid");
+    expect(r.out).toContain("keys: judgment ready — TYPESAFE_API_KEY (TypeSafe/Jev), from env TYPESAFE_API_KEY: valid");
     expect(r.out).not.toContain("{");
     expect(r.out).not.toContain("collected: []");
     expect(r.out).not.toContain('"x"');

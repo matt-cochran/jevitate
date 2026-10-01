@@ -11,5 +11,6 @@ export * from "./judgment.js";
 export * from "./jev.js";
 export * from "./jev-sdk-adapter.js";
 export * from "./preflight-surface.js";
+export * from "./key-verify.js";
 export * from "./retry.js";
 export * from "./usage.js";

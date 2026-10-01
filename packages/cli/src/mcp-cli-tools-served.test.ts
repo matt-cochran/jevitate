@@ -264,7 +264,8 @@ describe("#255 read-only and validation tools", () => {
     writeFileSync(inv, JSON.stringify({ observe: {}, invariants: {} }));
     const v = await tool("validate_invariants").handler({ files: [inv] });
     expect(body(v)).toHaveProperty("exitCode");
-    const ai = await tool("get_ai_status").handler({});
+    // `verify: false` → `--no-verify` (#291): presence and source only, no live provider call in a test.
+    const ai = await tool("get_ai_status").handler({ verify: false });
     expect(ai.isError, JSON.stringify(body(ai))).toBeUndefined();
     expect(JSON.stringify(body(ai))).not.toContain(SECRET_KEY);
     const bl = await tool("baselines").handler({ action: "list" });

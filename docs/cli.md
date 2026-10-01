@@ -74,6 +74,8 @@ jevitate ai generate [options] <task>
 jevitate ai setup [options] <feature>
 ```
 
+enter (masked) and store the keys a feature needs in ~/.jevitate/credentials.json (0600); each key is verified with its provider before it is stored
+
 **Arguments**
 
 | Argument | Description | Required | Default | Choices |
@@ -85,6 +87,8 @@ jevitate ai setup [options] <feature>
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--no-verify` | store the entered key without the live auth check (offline / CI) |  |  |  |  |
+| `--replace` | prompt for a new value even when a key is already stored (rotate / replace it) |  |  |  |  |
 
 ### ai status
 
@@ -92,11 +96,14 @@ jevitate ai setup [options] <feature>
 jevitate ai status [options]
 ```
 
+which keys each AI feature uses, where each comes from (env or ~/.jevitate/credentials.json), and whether the provider accepts it (a live auth check; never prints a key)
+
 **Options**
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--no-verify` | skip the live auth check (offline / CI): report presence and source only |  |  |  |  |
 
 ## baseline
 
@@ -603,6 +610,8 @@ set up jevitate: collect API keys, install skills/MCP wiring, create the repo's 
 | `--dry-run` | report planned skill-install/mcp-register actions without writing |  |  |  |  |
 | `--force` | overwrite a user-modified installed skill file/block or MCP config entry |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--no-verify` | skip the live auth check of each key (offline / CI): report presence and source only |  |  |  |  |
+| `--replace-keys` | prompt (masked) for a new value of every key, even one already stored, and store it |  |  |  |  |
 | `--skip-keys` | skip credential collection |  |  |  |  |
 | `--skip-mcp` | skip registering the jevitate MCP server in detected harnesses |  |  |  |  |
 | `--skip-project` | skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs) |  |  |  |  |

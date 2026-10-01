@@ -1,3 +1,5 @@
+import type { Feature } from "@jevitate/ai-core";
+import { featureKeysBody, type KeySourceReport, type KeyVerificationReport } from "./key-report.js";
 import type { Command } from "commander";
 import type { JsonEnvelope } from "./envelope.js";
 import { EXIT_CODES, exitCodeForEnvelope, isUsageErrorCode } from "./exit-codes.js";
@@ -413,17 +415,39 @@ export function formatLedgerVerifyHuman(verified: object, opts: { readonly dir?:
  * key or fails closed, so after it every required key is configured. Names only, never a value.
  */
 export function formatInitKeysHuman(
-  keys: Readonly<Record<string, { readonly required: readonly string[]; readonly collected: readonly string[]; readonly missing?: readonly string[] }>>,
+  keys: Readonly<
+    Record<
+      string,
+      {
+        readonly required: readonly string[];
+        readonly collected: readonly string[];
+        readonly missing?: readonly string[];
+        readonly sources?: readonly KeySourceReport[];
+        readonly verification?: readonly KeyVerificationReport[];
+        readonly warnings?: readonly string[];
+      }
+    >
+  >,
 ): string {
   return Object.entries(keys)
-    .map(([feature, { required, collected, missing }]) => {
+    .map(([feature, { required, collected, missing, sources, verification, warnings }]) => {
+      const named = (k: string): string => {
+        const s = sources?.find((x) => x.key === k);
+        return s === undefined ? k : `${k} (${s.provider})`;
+      };
       // #230: the non-interactive path (no TTY on stdin) never prompts — report what's still
       // missing and how to configure it, the same command name as the E_AI_SETUP_REQUIRED refusals.
       if (missing !== undefined && missing.length > 0) {
-        return `keys: ${feature} not configured — set ${missing.join(", ")} or run \`jevitate ai setup ${feature}\``;
+        return `keys: ${feature} not configured — set ${missing.map(named).join(", ")} or run \`jevitate ai setup ${feature}\``;
       }
-      const detail = collected.length > 0 ? `collected ${collected.join(", ")} now` : "already configured";
-      return `keys: ${feature} ready — ${required.length}/${required.length} configured (${detail})`;
+      if (sources === undefined) {
+        const detail = collected.length > 0 ? `collected ${collected.join(", ")} now` : "already configured";
+        return `keys: ${feature} ready — ${required.length}/${required.length} configured (${detail})`;
+      }
+      // #268: name each key, its provider and where it comes from (never a value); #291: its live check.
+      const body = featureKeysBody(feature as Feature, sources, verification);
+      const detail = collected.length > 0 ? ` (entered now: ${collected.join(", ")})` : "";
+      return [`keys: ${feature} ${body}${detail}`, ...(warnings ?? []).map((w) => `keys: warning: ${w}`)].join("\n");
     })
     .join("\n");
 }
