@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { CHAT_REPLY_STUCK_INSTRUCTIONS, FORM_VALUE_INSTRUCTIONS, type GenerationPort } from "@jevitate/ai-core";
 import { redactContext, redactUrl } from "./redact.js";
 
@@ -363,6 +364,47 @@ export function valuesStatedInGoal(goal: string, fieldLabel: string, field: Fiel
   return [...found].sort((a, b) => goal.indexOf(a) - goal.indexOf(b));
 }
 
+/** The identity a sign-up / sign-in field asks for (#271): an email address or a username. */
+export type IdentityKind = "email" | "username";
+
+export function identityKind(fieldLabel: string, field: FieldShape): IdentityKind | null {
+  if (field.tag !== "input") return null;
+  const type = (field.inputType ?? "").toLowerCase();
+  if (type === "password" || type === "search") return null;
+  const l = bareLabel(fieldLabel).toLowerCase();
+  if (type === "email" || /\be-?mail\b/.test(l)) return "email";
+  if (/\b(?:user ?name|user ?id|login|handle|screen ?name)\b/.test(l)) return "username";
+  return null;
+}
+
+/** A run's identity token (#271): short, lowercase alphanumeric, valid in any email local part or username. */
+export function newIdentityToken(): string {
+  return randomBytes(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
+}
+
+/**
+ * Makes a MODEL-INVENTED identity unique to this run (#271). A model asked for an email or a
+ * username invents the same well-known identity every run (`jane.doe@example.com`); on any target
+ * where an earlier run already created that account, sign-up fails with "already exists" and the
+ * run ends blocked. The invented value keeps its shape and gains the run's token
+ * (`jane.doe.jev3k9x2a@example.com`, `janedoe_jev3k9x2a`) — deterministic within the run, so a
+ * sign-up followed by a sign-in types the same identity both times. A value the goal states, or a
+ * bound secret field, is never passed through here. A value that does not have the expected shape
+ * is returned unchanged (`checkFieldValue` already rejected a malformed email).
+ */
+export function uniqueIdentity(value: string, kind: IdentityKind, token: string): string {
+  const v = value.trim();
+  const tag = `jev${token}`;
+  if (v.toLowerCase().includes(tag)) return v;
+  if (kind === "email") {
+    const at = v.lastIndexOf("@");
+    if (at <= 0) return v;
+    const local = v.slice(0, at).replace(/\.+$/, "");
+    return `${local}.${tag}${v.slice(at)}`;
+  }
+  return /^[\p{L}\p{N}._-]+$/u.test(v) ? `${v}_${tag}` : v;
+}
+
 /** The generation gateway's documented input ceiling for `visibleContext`. */
 const CONTEXT_CEILING = 4000;
 
@@ -371,7 +413,20 @@ export class FillHelper {
   #cacheValue: string | null = null;
   #calls = 0;
 
-  constructor(private readonly gen: GenerationPort) {}
+  readonly #identityToken: string;
+
+  /**
+   * `identityToken` (#271): the run's token appended to a model-invented email / username — unique
+   * per run by default; a caller (a test, a replay) may pin it.
+   */
+  constructor(private readonly gen: GenerationPort, opts: { readonly identityToken?: string } = {}) {
+    this.#identityToken = opts.identityToken ?? newIdentityToken();
+  }
+
+  /** This run's identity token (#271). */
+  get identityToken(): string {
+    return this.#identityToken;
+  }
 
   /** How many times the underlying gateway was actually called (for tests). */
   get generateCalls(): number {
@@ -415,7 +470,13 @@ export class FillHelper {
     }
     this.#calls += 1;
     const res = await this.gen.generate("form.value", input);
-    const text = res.output.text;
+    const generated = res.output.text;
+    // #271: a model-invented identity becomes unique to this run (never a goal-stated one, above).
+    const identity = field === undefined ? null : identityKind(input.fieldLabel, field);
+    const text =
+      generated !== null && identity !== null && checkFieldValue(generated, field!, input.fieldLabel, input.goal) === null
+        ? uniqueIdentity(generated, identity, this.#identityToken)
+        : generated;
     if (field !== undefined && text !== null) {
       const rejected =
         checkFieldValue(text, field, input.fieldLabel, input.goal) ??

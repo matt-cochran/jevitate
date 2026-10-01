@@ -170,6 +170,11 @@ export interface ExploreConfig {
   readonly allowlist: readonly string[];
   readonly startUrl: string;
   readonly bounds?: Partial<Bounds>;
+  /**
+   * #271: the token a model-invented email / username gains so it is unique to this run (a sign-up
+   * goal never collides with an account an earlier run created). Random per run unless pinned.
+   */
+  readonly identityToken?: string;
   readonly secrets?: readonly string[];
   /**
    * Secret field bindings (#72): a `type` on a matching control is typed by code with the bound
@@ -468,7 +473,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const bounds = resolveBounds(cfg.bounds);
   const tracker = new BoundsTracker(bounds);
   const noProgress = new NoProgressDetector(3);
-  const fillHelper = new FillHelper(cfg.gen);
+  const fillHelper = new FillHelper(cfg.gen, cfg.identityToken === undefined ? {} : { identityToken: cfg.identityToken });
   const recorder = new RunRecorder(cfg.site ?? startOrigin, undefined, secrets, cfg.onRecording);
   const page = cfg.actor.ability(BrowseTheWebToken).session.page;
   const crashWatch = new CrashWatch(page);

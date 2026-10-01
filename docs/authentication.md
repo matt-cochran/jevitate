@@ -54,6 +54,14 @@ APP_API_TOKEN=… jevitate explore --url https://app.example.test/ --goal "…" 
 
   A descriptor is `label=<text>`, `testId=<id>`, `type=<input type>` (for example
   `type=password`), `id=<element id>` or `name=<name attribute>`.
+- **Sign-up identities are unique per run.** When the goal does not state an email or a
+  username, the value the model invents for an email / username field gains the run's token
+  (`jane.doe@example.com` → `jane.doe.jev3k9x2a@example.com`, `janedoe` → `janedoe_jev3k9x2a`).
+  A sign-up goal can be repeated against the same stack without an "account already exists"
+  collision, and a sign-up followed by a sign-in in the same run types the same identity. A value
+  the goal states (`email: ada@example.com`) or a `--secret-field` binding is typed exactly as
+  given. A Journey authored from such a run records the unique value: replaying a sign-up Journey
+  against the same stack needs a fixture that resets that account.
 - **MFA (TOTP).** `--totp '<descriptor>=env:VAR'` takes a base32 TOTP seed (what
   the app shows at enrolment). The 6-digit code is computed locally (RFC 6238,
   SHA-1, 30 s) when the field is typed. The seed never reaches a model or disk.
