@@ -576,7 +576,8 @@ Outcomes, stop reasons and exit codes:
     (a "done" code rejected ends stop done, goalOutcome failed — never blocked)
   --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
     step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
-    | scope-unreachable | targets-refused | target-unresponsive | identity-changed | hang | crashed
+    | scope-unreachable | targets-refused | target-unresponsive | identity-changed | stalled | hang
+    | crashed
     (identity-changed: an action switched the signed-in identity and the original one could not be
     restored — inconclusive; every switch is listed in "identityChanges")
   --strategy coverage/exploratory's own "outcome" (folds into missionOutcome above):

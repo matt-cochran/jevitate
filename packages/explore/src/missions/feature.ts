@@ -34,7 +34,7 @@ import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
+import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
 import { seedRedirectReason } from "../seed-redirect.js";
@@ -178,6 +178,9 @@ function rankedFrontierCandidates(
     .sort((a, b) => b.score - a.score || a.i - b.i);
 }
 
+/** #277: how many times a seed that re-rendered differently on a reset is queued afresh. */
+const MAX_SEED_REQUEUES = 3;
+
 function pathnameOf(url: string): string {
   try {
     return new URL(url).pathname;
@@ -313,6 +316,19 @@ async function runFeatureFrontier(
   const maxDepth = params.maxDepth ?? 10;
   const maxPaths = params.maxPaths ?? 20;
   const site = new URL(params.seedUrl).origin;
+  // #277: the seed page is where the operator started the mission, so staying on it never "leaves the
+  // scope" — even when the route globs only name its sub-routes (`--url …/projects --route '/projects/**'`).
+  // Otherwise every action on the seed reads as a departure and its in-scope navigation is never followed.
+  const seedPathname = pathnameOf(params.seedUrl);
+  const inScope = (url: string): boolean => {
+    if (isInScope(url, params.scope)) return true;
+    try {
+      const u = new URL(url);
+      return u.origin === site && u.pathname === seedPathname;
+    } catch {
+      return false;
+    }
+  };
 
   const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
   const hangs = new Map<string, HangFinding>();
@@ -434,7 +450,7 @@ async function runFeatureFrontier(
 
     // Chrome last (#115): nav/header/footer landmarks, controls repeated across pathnames and links out
     // of scope are tried only once the capability's own controls are exhausted, each destination once.
-    const frontier = new Frontier({ classify: chromeClassifier({ chrome, inScope: (url) => isInScope(url, params.scope) }) });
+    const frontier = new Frontier({ classify: chromeClassifier({ chrome, inScope }) });
     /** The last transition left the scope — the next reset is a return after a departure. */
     let departed = false;
 
@@ -462,6 +478,7 @@ async function runFeatureFrontier(
     }
 
     let actions = 0;
+    let seedRequeues = 0;
 
     while (!frontier.isExhausted()) {
       if (actions >= bounds.maxActions) return endRun("cap");
@@ -474,7 +491,7 @@ async function runFeatureFrontier(
       // A link to a boundary already recorded proves nothing new: shared nav repeated on every
       // in-scope state would otherwise be re-clicked once per state (the states multiply as
       // in-scope controls toggle), so the run never exhausts.
-      if (item.control.href != null && !isInScope(item.control.href, params.scope) && boundaryEdgeSet.has(item.control.href)) continue;
+      if (item.control.href != null && !inScope(item.control.href) && boundaryEdgeSet.has(item.control.href)) continue;
 
       if (item.fromFingerprint !== currentFingerprint) {
         watchdog.during(departed ? "returning to the seed after a departure" : "resetting to a queued state");
@@ -493,6 +510,26 @@ async function runFeatureFrontier(
             // Stale — dropped, and so is every other item replaying the same path (#114).
             frontier.dropState(item.fromFingerprint);
             currentFingerprint = "";
+            // #277: the SEED itself re-rendered differently (a dismissed banner that stays dismissed, a
+            // list that changed): its queued controls are gone with it, so the seed as it renders NOW is
+            // queued afresh — the run keeps following its in-scope navigation instead of ending at the
+            // seed. Bounded: a seed that differs on every load is re-queued at most MAX_SEED_REQUEUES times.
+            if (item.pathPrefix === seedRec && seedRequeues < MAX_SEED_REQUEUES) {
+              const fresh = await guard(snapshotNow());
+              const freshFp = stateFingerprint(fresh);
+              if (seenHang.last === null && inScope(fresh.url) && seedRedirectReason(params.seedUrl, fresh.url) === null && !visited.has(freshFp)) {
+                seedRequeues += 1;
+                snap = fresh;
+                chrome.observe(pathnameOf(snap.url), snap.controls);
+                visited.add(freshFp);
+                leaves.set(freshFp, seedRec);
+                for (const { control, op } of rankedFrontierCandidates(snap.controls, words, chrome)) {
+                  if (withheld(control, op, snap)) continue;
+                  frontier.push({ key: actionKey(freshFp, control, op), fromFingerprint: freshFp, pathPrefix: seedRec, control, op });
+                }
+                currentFingerprint = freshFp;
+              }
+            }
             continue;
           }
           // The seed is gone (a lost session) or stopped answering: a typed stop, never an idle grind (#114).
@@ -649,7 +686,7 @@ async function runFeatureFrontier(
         continue;
       }
 
-      const landedInScope = isInScope(snap.url, params.scope);
+      const landedInScope = inScope(snap.url);
       transcript.record({
         op: item.op,
         control: item.control,
@@ -697,7 +734,8 @@ async function runFeatureFrontier(
     const failure = describeFailure(e, crashWatch.signals());
     // #226: the app stopped answering navigation (a frozen backend): the run stopped short of its
     // target — the same `inconclusive` ending as losing the seed, with the typed reason, never `crashed`.
-    return endRun(isTargetUnresponsive(failure) ? "scope-unreachable" : "crashed", failure);
+    // #296: a page whose renderer stopped answering (closed by the liveness watchdog) is `stalled`.
+    return endRun(isTargetUnresponsive(failure) ? "scope-unreachable" : isPageUnresponsive(failure) ? "stalled" : "crashed", failure);
   } finally {
     watchdog.stop();
     await sessions.closeOwned();

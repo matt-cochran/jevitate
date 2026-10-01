@@ -246,3 +246,68 @@ export async function readWorkingStatus(page: Page): Promise<string | null> {
   const status = await readInProgressStatus(page);
   return status === null ? null : `${status} with ${extra}`;
 }
+
+/** Ceiling (ms) on a wait the page documents itself (#258): stated copy never buys more than this. */
+export const MAX_DOCUMENTED_WAIT_MS = 30 * 60_000;
+
+const NUMBER_WORDS: Readonly<Record<string, number>> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  fifteen: 15, twenty: 20, thirty: 30, forty: 40, sixty: 60, ninety: 90,
+  "a couple of": 3, "a couple": 3, "a few": 5, few: 5, several: 10,
+};
+const UNIT_MS: ReadonlyArray<readonly [RegExp, number]> = [
+  [/^(?:seconds?|secs?|s)$/i, 1_000],
+  [/^(?:minutes?|mins?|m)$/i, 60_000],
+  [/^(?:hours?|hrs?|h)$/i, 3_600_000],
+];
+/** A sentence that talks about how long something takes or how long to wait. */
+const WAIT_TALK = /\b(?:take|takes|taking|took|wait|waiting|ready|done|finish|finishes|complete|completes|usually|typically|normally|should|may|might|can|up to|less than|under|within|about|around|roughly|approximately|expect)\b/i;
+const DURATION =
+  /\b(\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|sixty|ninety|a couple(?: of)?|a few|few|several)(?:\s*(?:-|–|to)\s*(\d+(?:\.\d+)?))?\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b/gi;
+
+/**
+ * #258: the duration a line of page copy says a wait takes — "This usually takes less than a minute",
+ * "may take up to 5 minutes", "ready in 2–3 minutes" — as ms (the longest stated, capped at
+ * `MAX_DOCUMENTED_WAIT_MS`), or null when the line states none. Pure.
+ */
+export function documentedWaitMs(line: string): number | null {
+  // "saved 2 minutes ago" / "about 5 minutes ago" is a timestamp, never a wait.
+  if (!WAIT_TALK.test(line) || /\bago\b/i.test(line)) return null;
+  let longest: number | null = null;
+  for (const m of line.matchAll(DURATION)) {
+    const [, first, upper, unit] = m;
+    const per = UNIT_MS.find(([re]) => re.test(unit ?? ""))?.[1];
+    if (per === undefined || first === undefined) continue;
+    const n = Number(upper ?? first) || NUMBER_WORDS[first.toLowerCase()] || NaN;
+    if (!Number.isFinite(n) || n <= 0) continue;
+    longest = Math.max(longest ?? 0, n * per);
+  }
+  return longest === null ? null : Math.min(longest, MAX_DOCUMENTED_WAIT_MS);
+}
+
+/** BROWSER CODE — visible short lines of page text that mention a duration (self-contained). */
+function durationLinesInPage(): string[] {
+  const body = document.body ? document.body.innerText : "";
+  const out: string[] = [];
+  for (const raw of body.split(/\n+/)) {
+    const line = raw.replace(/\s+/g, " ").trim();
+    if (line === "" || line.length > 300) continue;
+    if (/\b(?:seconds?|secs?|minutes?|mins?|hours?|hrs?)\b/i.test(line)) out.push(line);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+/**
+ * #258: a wait the page DOCUMENTS — visible copy stating how long the work it is doing takes ("We're
+ * reading it carefully before the next question. This usually takes less than a minute…"). Returns
+ * the line and the stated duration (ms), or null. Callers bound how long they believe it.
+ */
+export async function readDocumentedWait(page: Page): Promise<{ readonly text: string; readonly ms: number } | null> {
+  const lines = await page.evaluate(durationLinesInPage).catch(() => [] as string[]);
+  for (const line of lines) {
+    const ms = documentedWaitMs(line);
+    if (ms !== null) return { text: line.length > 120 ? `${line.slice(0, 120)}…` : line, ms };
+  }
+  return null;
+}

@@ -156,7 +156,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (322 exports)
+# @jevitate/explore (324 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -256,6 +256,7 @@
   SETTLE_QUIET_MS: const (number)
   SHORT_FIELD_MAX_WORDS: const (number)
   SINGLE_LINE_MAX_CHARS: const (number)
+  SNAPSHOT_BUDGET_MS: const (number)
   STARVATION_WINDOW_MS: const (number)
   STARVED_EVENT_LOOP_LAG_MS: const (number)
   STARVED_LOAD_PER_CORE: const (number)
@@ -371,6 +372,7 @@
   isNavControl: function
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
+  isPageUnresponsive: function
   isResourceLoadEcho: function
   isSecretLike: function
   isTargetUnresponsive: function

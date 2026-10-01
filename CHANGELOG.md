@@ -97,6 +97,20 @@ behaviour changes).
 - `<details>` summaries are controls, and goal-named controls survive the candidate cap (#287).
 - Refusals and scrolls the app answered never produce an app `ui-no-progress` hang (#276).
 
+### Fixed
+
+- A wait the page documents ("usually takes less than a minute") and a busy indicator the app
+  visibly keeps working behind (live progress text, a job poll) are waited out within
+  `--job-wait-ms` instead of being a 15 s hang; a stated duration can raise the budget. A spinner
+  over a silent page is still a hang, and a deferred hang names the budget (#258, #288).
+- A save that writes (2xx) and returns to an earlier route is progress, not a hang (#289).
+- `--feature` treats its seed page as in scope and re-queues a seed that re-renders on reset, so
+  it follows in-scope navigation instead of stopping after a banner click (#277).
+- Perception is bounded on pages with hundreds of controls, so a feature mission no longer
+  stalls on a busy editor page (#278).
+- A page renderer that freezes mid-perception ends `inconclusive` (`failure.kind: "stalled"`),
+  never a crash attributed to jevitate (#296).
+
 ## [0.2.0] – 2026-09-29
 
 A backlog sweep across every mission type, then three dogfood passes that turned it into one

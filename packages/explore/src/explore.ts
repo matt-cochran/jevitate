@@ -15,10 +15,10 @@ import {
   isAuthorizedExploreTarget,
 } from "./authorized-targets.js";
 import type { Snapshot } from "./snapshot.js";
-import { perceive } from "./perceive.js";
+import { perceive, type Perception } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "./timing.js";
-import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
+import { hangRoute, probeResponsive, visibleBusyIndicator, type HangSignal } from "./hang.js";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
 import type { HostHealthSampler, HostJudgment } from "./host-health.js";
 import { HANG_PROBE_MS } from "./perceive.js";
@@ -41,7 +41,7 @@ import {
   secretPlaceholder,
 } from "./secret-fields.js";
 import { act, parseInterceptor } from "./act.js";
-import { SideEffectGuard, SideEffectLog, awaitWrites, type SideEffect } from "./side-effects.js";
+import { SideEffectGuard, SideEffectLog, awaitWrites, type LastClick, type SideEffect } from "./side-effects.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { coveredByInterceptors } from "./occlusion.js";
@@ -91,11 +91,13 @@ import { redactText, redactUrl } from "./redact.js";
 import { demoOverlayFor } from "./demo-overlay.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, targetStoppedAnswering, assertSeedReachable } from "./mission-failure.js";
+import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget, targetStoppedAnswering, assertSeedReachable } from "./mission-failure.js";
 import {
   EMPTY_STATUS,
   describeStatus,
   isEmptyStatus,
+  MAX_DOCUMENTED_WAIT_MS,
+  readDocumentedWait,
   readInProgressStatus,
   readPageStatus,
   readWorkingStatus,
@@ -404,7 +406,11 @@ const JOB_WAIT_SLICE_MS = 60_000;
  * Waits, with backoff, while the page shows an in-progress status (#92): until it clears (the job
  * finished — then the page is given a moment to settle), the page navigates, or `budgetMs` passes.
  */
-async function waitOutJob(page: Page, budgetMs: number): Promise<{ cleared: boolean; waitedMs: number }> {
+async function waitOutJob(
+  page: Page,
+  budgetMs: number,
+  stillWorking: (page: Page) => Promise<boolean> = async (p) => (await readInProgressStatus(p)) !== null,
+): Promise<{ cleared: boolean; waitedMs: number }> {
   const started = Date.now();
   const url = safeUrl(page);
   let delay = 1_000;
@@ -413,12 +419,60 @@ async function waitOutJob(page: Page, budgetMs: number): Promise<{ cleared: bool
     if (left <= 0) return { cleared: false, waitedMs: Date.now() - started };
     await page.waitForTimeout(Math.max(1, Math.min(delay, left))).catch(() => undefined);
     delay = Math.min(delay * 2, 15_000);
-    if (safeUrl(page) !== url || (await readInProgressStatus(page)) === null) {
+    if (safeUrl(page) !== url || !(await stillWorking(page))) {
       const rest = budgetMs - (Date.now() - started);
       if (rest > 0) await monitorFor(page).waitSettled({ ceilingMs: Math.min(rest, 5_000) }).catch(() => undefined);
       return { cleared: true, waitedMs: Date.now() - started };
     }
   }
+}
+
+/**
+ * #288/#258 — the page still shows the work a hang was deferred for: an in-progress status, a busy
+ * indicator, or copy that documents the wait.
+ */
+async function stillShowsWork(page: Page): Promise<boolean> {
+  if ((await readInProgressStatus(page)) !== null) return true;
+  if ((await page.evaluate(visibleBusyIndicator).catch(() => null)) !== null) return true;
+  return (await readDocumentedWait(page)) !== null;
+}
+
+/** How long a documented wait (#258) is believed: twice what the page states plus a grace, capped. */
+function documentedWaitBudgetMs(statedMs: number): number {
+  return Math.min(MAX_DOCUMENTED_WAIT_MS, statedMs * 2 + 30_000);
+}
+
+/**
+ * #288 — a busy indicator that outlasted the ceiling while the app VISIBLY kept working: the page
+ * shows an in-progress status ("Drafting…") AND, during the wait, the app's requests kept completing
+ * (a job-status poll) or the indicator's own progress text changed. A spinner frozen over a silent
+ * page shows neither, and stays a hang. Returns a description, or null.
+ */
+async function liveBusyWork(page: Page, busyWait: Perception["busyWait"]): Promise<string | null> {
+  if (busyWait === undefined || (busyWait.requestsCompleted === 0 && !busyWait.indicatorChanged)) return null;
+  const status = await readInProgressStatus(page);
+  if (status === null) return null;
+  const evidence = [
+    ...(busyWait.requestsCompleted > 0 ? [`${busyWait.requestsCompleted} app request(s) completed during the wait`] : []),
+    ...(busyWait.indicatorChanged ? ["its progress indicator changed"] : []),
+  ];
+  return `${status} while the app kept working (${evidence.join(", ")})`;
+}
+
+/**
+ * #289: the last click fired at least one write the server accepted (a response below 400), none was
+ * rejected or is still unanswered, and the page is now on a different route than the click was made
+ * on — a save that returned to where it came from (the project hub after "Save changes"), which is
+ * progress, never a stalled-state hang.
+ */
+function savedAndLeft(
+  m: { readonly label: string; readonly clickFromRoute?: string | null },
+  routeNow: string,
+  lastClick: LastClick | null,
+): boolean {
+  if (!m.label.startsWith("click ") || (m.clickFromRoute ?? null) === null || m.clickFromRoute === routeNow) return false;
+  const writes = lastClick?.writes ?? [];
+  return writes.length > 0 && writes.every((w) => w.status !== null && w.status < 400);
 }
 
 /**
@@ -776,6 +830,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       sawNewState: boolean;
       /** A LINK click: the route it was clicked on (null for any other action) — #153. */
       linkFromRoute?: string | null;
+      /** #289: ANY click — the route it was clicked on (null for any other action). */
+      clickFromRoute?: string | null;
     } | null;
     /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
     lastRecordedTarget: string | null;
@@ -860,6 +916,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
    */
   let hangWorkWaitedMs = 0;
+  /** #258: the longest wait the page has documented this run (its budget, ms); 0 when none. */
+  let documentedBudgetMs = 0;
   const noteMutation = (
     label: string,
     descriptor: unknown,
@@ -867,13 +925,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     at: number,
     input?: { readonly field: string; readonly value: string },
     linkFromRoute: string | null = null,
+    clickFromRoute: string | null = null,
   ): void => {
     // An input change (type/select/send/upload) makes a repeat send something new — unless it set
     // the same value again (#123): the guard compares the values.
     if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
     failedActs.succeeded();
     if (!label.startsWith("type ")) typeNoEffect = null;
-    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute };
+    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute, clickFromRoute };
     refusedSinceMutation = 0;
     scrollsSinceMutation = 0;
     track.lastRecordedTarget = JSON.stringify(descriptor);
@@ -941,6 +1000,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // Shared perception: never decide on an unrendered page (bounded render wait) and never
       // offer an occluded control (see `perceive`).
+      const perceiveStartedAt = Date.now();
       const perception = await perceive(page, perceiveOpts);
       timings.push(perception.timing);
       // The last click's window closes here: what it wrote is now known (#92).
@@ -981,14 +1041,26 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // AND acknowledges it (a Cancel control, the pressed control disabled as "Analyzing...", a
       // determinate progress bar) is WORKING. Code waits it out, bounded by the job-wait budget;
       // past the budget the hang stands. A main thread that does not answer is never "working".
-      if (perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" && hangWorkWaitedMs < jobWaitMs) {
-        const working = await readWorkingStatus(page);
+      // #258: a wait the page DOCUMENTS ("this usually takes less than a minute") is working too, and
+      // its stated duration can raise the budget (twice the stated time plus a grace, capped). #288: so
+      // is a busy indicator that outlasted the ceiling while the app visibly kept working (an
+      // in-progress status, with its requests completing or its progress text changing meanwhile).
+      const documented =
+        perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" ? await readDocumentedWait(page) : null;
+      if (documented !== null) documentedBudgetMs = Math.max(documentedBudgetMs, documentedWaitBudgetMs(documented.ms));
+      const workBudgetMs = Math.max(jobWaitMs, documentedBudgetMs);
+      if (perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" && hangWorkWaitedMs < workBudgetMs) {
+        const working =
+          (await readWorkingStatus(page)) ??
+          (documented === null ? null : `a documented wait ("${documented.text}")`) ??
+          (perception.hang.kind === "ui-no-progress" ? await liveBusyWork(page, perception.busyWait) : null);
         if (working !== null) {
-          const w = await waitOutJob(page, Math.min(jobWaitMs - hangWorkWaitedMs, JOB_WAIT_SLICE_MS));
-          // The perception's own wait counts too: the budget bounds the whole time spent believing it.
-          hangWorkWaitedMs += w.waitedMs + perception.settle.waitedMs;
+          const w = await waitOutJob(page, Math.min(workBudgetMs - hangWorkWaitedMs, JOB_WAIT_SLICE_MS), stillShowsWork);
+          // The perception's own wait counts too (its whole time, the busy-indicator wait included): the
+          // budget bounds the whole time spent believing it.
+          hangWorkWaitedMs += Date.now() - perceiveStartedAt;
           const note = `not a hang yet (${perception.hang.kind}): the page shows ${working} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
-            w.cleared ? "the status cleared" : `still in progress; ${Math.round(hangWorkWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+            w.cleared ? "the status cleared" : `still in progress; ${Math.round(hangWorkWaitedMs / 1000)}s of the ${Math.round(workBudgetMs / 1000)}s job-wait budget used`
           })`;
           history.push(note);
           transcript.record({
@@ -1026,7 +1098,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           break;
         }
         const heapNow = await sampleHeap(page, 1_000);
-        const withHost: HangSignal = { ...perception.hang, host: judged.host };
+        // #288: a hang that stands after the page was believed to be working says how long, and how to
+        // allow a longer job — the operator's knob, never a silent longer wait.
+        const stood: HangSignal =
+          hangWorkWaitedMs > 0
+            ? {
+                ...perception.hang,
+                detail: `${perception.hang.detail} (still so after ${Math.round(hangWorkWaitedMs / 1000)}s of the page showing work — past the ${Math.round(workBudgetMs / 1000)}s job-wait budget; raise --job-wait-ms for longer jobs)`,
+              }
+            : perception.hang;
+        const withHost: HangSignal = { ...stood, host: judged.host };
         hang = {
           signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
           recordingStepIndex: Math.max(0, recorder.stepCount - 1),
@@ -1146,6 +1227,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // A link that navigated to ANOTHER route already visited is ordinary navigation, not an
           // in-place action that silently undid itself (#153): the stall rule is for in-place actions.
           !((m.linkFromRoute ?? null) !== null && m.linkFromRoute !== hangRoute(snap.url)) &&
+          // #289: a click whose write went through and that then took the page to another route
+          // (Save → back to the hub) did what it was for — a save-and-return, not an action that undid itself.
+          !savedAndLeft(m, hangRoute(snap.url), sideEffects.lastClick()) &&
           !EXPECTED_RETURN.test(m.label) &&
           !ignoreNoProgress(m.label) &&
           !ignoreNoProgress(hangRoute(snap.url))
@@ -2474,7 +2558,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         let message: string | undefined;
         if (r.ok) {
           recorder.click(control.descriptor, at);
-          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at, undefined, control.role === "link" ? hangRoute(snap.url) : null);
+          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at, undefined, control.role === "link" ? hangRoute(snap.url) : null, hangRoute(snap.url));
           tracker.countAction();
           if (isSubmitControl(control)) unsent.submitted();
           // What was typed has now been submitted (a form's button): an add-another flow's next
@@ -2569,7 +2653,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       failure = describeFailure(e, crashWatch.signals());
       // #226: the app stopped answering navigation (a frozen backend) — nothing in the engine broke:
       // `inconclusive` with the typed `target-unresponsive` reason, never `crashed`.
-      stop = isTargetUnresponsive(failure) ? "inconclusive" : "crashed";
+      // #296: likewise a page whose renderer stopped answering (closed by the liveness watchdog).
+      stop = isTargetUnresponsive(failure) || isPageUnresponsive(failure) ? "inconclusive" : "crashed";
     }
     // Else (#128): `stop`/`failure` were already set to `inconclusive`/`target-unreachable` at the
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.

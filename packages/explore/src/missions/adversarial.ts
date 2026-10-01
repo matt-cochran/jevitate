@@ -26,7 +26,7 @@ import {
   type TranscriptJudgment,
   type TranscriptListener,
 } from "../transcript.js";
-import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, tryTriage, type Triage, assertSeedReachable } from "../mission-failure.js";
+import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget, tryTriage, type Triage, assertSeedReachable } from "../mission-failure.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
@@ -231,7 +231,9 @@ export type AdversarialStop =
    * fresh session from the original storage state, or it no longer signs in as the same identity):
    * `inconclusive`, `failure.kind: "identity-changed"` — a defect found before still wins.
    */
-  | "identity-changed";
+  | "identity-changed"
+  /** #296: the page's renderer stopped answering and was closed by the liveness watchdog: `inconclusive`, `failure.kind: "stalled"`. */
+  | "stalled";
 
 /**
  * #300 — one time an action switched the signed-in identity (a "Continue as demo" shortcut on a
@@ -1953,6 +1955,9 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     // #226: the app stopped answering (a frozen backend) — the run proves nothing past that point,
     // but nothing in the engine broke: `inconclusive` with the typed reason, never `crashed`.
     if (isTargetUnresponsive(failure)) return finish("inconclusive", "target-unresponsive", failure);
+    // #296: the page's renderer stopped answering and the liveness watchdog closed it — the run ends
+    // `inconclusive` with that typed reason, never `crashed` with an issue attributed to jevitate.
+    if (isPageUnresponsive(failure)) return finish("inconclusive", "stalled", failure);
     crashHost = await probeHost();
     return finish("crashed", "crashed", failure);
   } finally {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import type { BrowserSession } from "@jevitate/playwright";
-import { TargetUnresponsiveError, describeFailure, describeUnreachable, isUnreachableTarget, targetStoppedAnswering, type LivenessAnswer, assertSeedReachable } from "./mission-failure.js";
+import { TargetUnresponsiveError, describeFailure, describeUnreachable, isPageUnresponsive, isUnreachableTarget, targetStoppedAnswering, type LivenessAnswer, assertSeedReachable } from "./mission-failure.js";
 
 /**
  * #128 — the pure rule for "the start URL simply could not be loaded": neither a defect in the app
@@ -136,5 +136,16 @@ describe("assertSeedReachable — #213: a target that is not running fails fast,
   it("a reachable target, or a session with no probe (a test double), passes", async () => {
     await expect(assertSeedReachable(actorWith(async () => null), "http://x/")).resolves.toBeUndefined();
     await expect(assertSeedReachable(actorWith(), "http://x/")).resolves.toBeUndefined();
+  });
+});
+
+describe("#296 — a page the liveness watchdog closed is never attributed to jevitate", () => {
+  it("carries no stack (the rejected read only waited on the frozen page) and is typed page-unresponsive", () => {
+    const e = new Error("locator.elementHandles: Target page, context or browser has been closed");
+    e.stack = `${e.message}\n    at snapshot (/opt/jevitate/packages/explore/dist/snapshot.js:1:1)`;
+    const f = describeFailure(e, { pageCrashed: false, pageClosed: true, browserDisconnected: false, unresponsive: "the page process stopped responding: no answer for 60s" });
+    expect(f.stack).toBeUndefined();
+    expect(isPageUnresponsive(f)).toBe(true);
+    expect(isPageUnresponsive({ kind: "exception", message: "x" })).toBe(false);
   });
 });

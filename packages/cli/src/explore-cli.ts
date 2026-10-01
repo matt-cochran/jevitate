@@ -244,7 +244,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option(
       "--job-wait-ms <ms>",
       "goal and usability: while the page shows an in-progress status (\"Simulating…\", aria-busy, a job \"is running\"), " +
-        "waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000)",
+        "waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); " +
+        "it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, " +
+        "and a wait the page documents (\"usually takes a minute\") can raise it",
       positiveIntArg,
     )
     .option(

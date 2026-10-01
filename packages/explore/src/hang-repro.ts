@@ -148,7 +148,7 @@ export type HangRule = "busy-indicator" | "stalled-state" | "same-kind";
 export function busyIndicatorOf(hang: Pick<HangSignal, "kind" | "detail" | "element">): string | null {
   if (hang.kind !== "ui-no-progress") return null;
   if (hang.element !== undefined && hang.element !== "") return hang.element;
-  const m = /^a busy indicator \((.+)\) never went away within \d+ms$/.exec(hang.detail.trim());
+  const m = /^a busy indicator \((.+)\) never went away within \d+ms(?: \(still so after .*\))?$/.exec(hang.detail.trim());
   return m?.[1] ?? null;
 }
 
