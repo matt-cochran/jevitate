@@ -244,7 +244,9 @@ export function groundFindings(outcome: AnalysisOutcome, points: readonly Fricti
       });
       continue;
     }
-    if (f.tier === "objective-a11y") {
+    // #198: a verified claim already carries its own evidence (and its friction, when it has one);
+    // collapsing two DIFFERENT verified claims onto one friction point would hide one of them.
+    if (f.tier === "objective-a11y" || f.claim !== undefined) {
       other.push(f);
       continue;
     }
