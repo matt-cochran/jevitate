@@ -37,6 +37,7 @@ The skills (each one's description tells the agent when to use it):
 | `jevitate-demo` | `demo "<aspect>"` / `demo approve`, `journey annotate`, `journey demo`, environments |
 | `jevitate-verify-fix` | `verify-fix`, evidence clips and screenshots, the ledger, `regression capture`/`run` |
 | `jevitate-ci-check` | `check --suite` (JUnit, SARIF, exit codes), baselines, `report`, `diff` |
+| `jevitate-test-campaign` | a whole-release test campaign: job catalog, discovery runs, journey-anchored missions, evidence, verify-fix, the gate |
 | `jevitate-ux-review`, `jevitate-load-test`, `jevitate-sources` | usability review, load tests, shared/third-party Journeys |
 
 Their source is [`packages/skills/skills/`](../packages/skills/skills). Every `jevitate` command and

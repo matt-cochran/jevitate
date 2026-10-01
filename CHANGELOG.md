@@ -20,6 +20,18 @@ behaviour changes).
 - Screenshots and videos also mask secrets the app reveals during the run: elements marked as
   secret (`data-jevitate-mask`, `data-secret`, one-time-code, secret/token/api-key test ids and
   labels) and credential-shaped values. Limits in docs/safety.md (#298).
+- Built-in skill `jevitate-test-campaign`: how to plan and run a whole-release test campaign
+  (job catalog, discovery runs, journey-anchored missions, full-stack evidence, verify-fix and
+  regressions, triage by exit code, budgets, CI suites and the release gate) (#292).
+
+### Changed
+
+- Releases are published by hand with `scripts/release.sh` while npm OIDC publishing is blocked
+  (npm/cli#9969). The Release workflow versions on `main` and prints how to open the version PR,
+  publishes only from a manual run, and no longer fails on every push; its actions are pinned to
+  commit SHAs on the Node 24 runtime. `release.sh` waits until npm serves the new versions and
+  tags locally; `scripts/sync-release-branches.sh` prepares the post-release `main` → `dev`
+  back-merge. RELEASING.md describes the working path (#267).
 
 ### Fixed
 
