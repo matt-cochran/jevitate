@@ -173,7 +173,9 @@ const settleMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe.skipIf(process.platform !== "linux")("#220 — a lost page/browser ends the run, bounded and typed; signals stop it cleanly", () => {
   it(
-    "a page process that FREEZES mid-run (alive, never answering) ends the run crashed with the liveness reason — no hang",
+    // #296: the watchdog closing a frozen renderer is the APP's page not answering, not an engine
+    // failure — `inconclusive` (exit 2, the same code) with the stalled liveness reason, never crashed.
+    "a page process that FREEZES mid-run (alive, never answering) ends the run inconclusive with the liveness reason — no hang, no crash",
     async () => {
       const onPage = onPageOfSession(1);
       const run = await spawnExplore([]);
@@ -184,8 +186,8 @@ describe.skipIf(process.platform !== "linux")("#220 — a lost page/browser ends
         const { code, afterMs } = await run.exited(60_000);
         expect(code).toBe(2);
         expect(afterMs).toBeLessThan(60_000);
-        expect(run.stdout()).toMatch(/^CRASHED:/m);
-        expect(run.stdout()).toMatch(/page process stopped responding/);
+        expect(run.stdout()).toMatch(/^INCONCLUSIVE:/m);
+        expect(run.stdout()).toMatch(/stalled: the page process stopped responding/);
       } finally {
         await rm(run.out, { recursive: true, force: true });
       }
