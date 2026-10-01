@@ -1,23 +1,27 @@
 // ux-claim-probe.ts — the CODE side of the UX claim pipeline (#198), on the live run's browser.
 //
-// 1. Guard probes: every control the shared safety policy calls DESTRUCTIVE (explore safety.ts's
-//    vocabulary — "Delete", "Remove", "Revoke"…) on an analyzed screen is clicked ONCE (per route ×
-//    control) on a fresh load of that screen, with EVERY write request blocked at the network layer
-//    (non-GET/HEAD/OPTIONS, and any request whose path names a destructive verb). The probe records
-//    whether anything guarded the click — a native confirm/alert (dismissed), a DOM dialog
-//    (`dialog[open]`, role=dialog/alertdialog, aria-modal), or a navigation to a confirmation page —
-//    and which writes the click attempted. Nothing the probe clicks can reach the server: the click
-//    is allowed under the safety policy only because its writes are blocked. A `--deny` control is
-//    never clicked (recorded `refused`). Limits (docs/ux-findings.md): a WebSocket message or a
-//    service-worker request is not blocked; a destructive action that is client-side only (no
-//    request) reads as "no write attempted".
+// 1. Guard probes — OPT-IN (`--probe-guards`). Without it nothing is clicked: every destructive
+//    control is recorded `skipped`, so its guard claim is reported unverifiable (coverage), never
+//    asserted and never silently dropped. With it, every control the shared safety policy calls
+//    DESTRUCTIVE (explore safety.ts's vocabulary) on an analyzed screen is clicked ONCE (per route ×
+//    control), each on a FRESH page in the run's context, fail-safe:
+//      - refused (→ unverifiable, reason recorded) when the page has an open WebSocket or
+//        EventSource, or a service worker controls it — writes over those cannot be blocked;
+//      - new WebSocket/EventSource connections are refused by the page once the probe is armed;
+//      - every request is aborted that is not GET/HEAD/OPTIONS, or whose URL (path or query) or body
+//        names a destructive verb (delete, remove, destroy, revoke, purge, archive… — also as an RPC
+//        name such as `DeleteUser`), whatever its method;
+//      - the page is closed as soon as a confirm/alert or a page dialog is observed: the probe never
+//        clicks anything inside a dialog (a native dialog is dismissed — cancel — then the page closes).
+//    It records whether a dialog or confirmation page guarded the click and which writes it
+//    attempted. A `--deny` control is never clicked (recorded `refused`).
 // 2. Finding screenshots: each verified claim finding with a cited control or quoted text gets a
 //    cropped, secret-masked screenshot (the run's pixel mask, demo-capture.ts) with the cited
-//    element boxed.
+//    element boxed (no click; the same request blocker is active).
 //
-// Both run on a DEDICATED page in the run's own browser context (same session), after the run's
-// loop ended — never on the page the run's oracles listen to — and the page's video (if recorded)
-// is deleted.
+// Both run on DEDICATED pages in the run's own browser context (same session), after the run's
+// loop ended — never on the page the run's oracles listen to — and a probe page's video (if
+// recorded) is deleted.
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Locator, Page, Route } from "playwright";
@@ -27,13 +31,38 @@ import { controlKey, redactEvidence, routeOf, type Control, type FindingScreensh
 import { MaskUnavailableError, SecretPixelMask, captureStepScreenshot } from "./demo-capture.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-/** A GET whose path names a destructive verb is treated as a write too (a `GET /items/1/delete` link). */
-const DESTRUCTIVE_PATH = /(?:^|[/_.-])(?:delete|remove|destroy|erase|purge|wipe|revoke|deactivate|terminate|unsubscribe)(?:$|[/_.?-])/i;
+const DESTRUCTIVE_WORD = /\b(?:delete|remove|destroy|erase|purge|wipe|revoke|archive|deactivate|terminate|unsubscribe|drop|trash|discard|cancel)\w*/i;
 const OPEN_DIALOGS = 'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]';
 const PROBE_TIMEOUT_MS = 8_000;
 /** At most this many controls are probed per run; the rest are recorded as not probed (unverifiable). */
 export const MAX_GUARD_PROBES = 25;
 const SETTLE_MS = 1_500;
+/** Why nothing was clicked without the opt-in. */
+export const PROBE_OPT_IN_REASON = "not probed: clicking destructive controls is opt-in (--probe-guards)";
+
+/**
+ * Does a request look destructive, whatever its method? Its URL (path AND query, decoded, camelCase
+ * split — `/rpc/DeleteUser`, `/delete?id=1`, `?action=remove`) or its body names a destructive verb.
+ */
+export function looksDestructive(url: string, body: string | null = null): boolean {
+  let text = url;
+  try {
+    const u = new URL(url);
+    text = `${u.pathname} ${u.search}`;
+  } catch {
+    text = url;
+  }
+  const words = (v: string): string => {
+    let d = v;
+    try {
+      d = decodeURIComponent(v.replace(/\+/g, " "));
+    } catch {
+      d = v;
+    }
+    return d.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[^A-Za-z0-9]+/g, " ");
+  };
+  return DESTRUCTIVE_WORD.test(words(text)) || (body !== null && DESTRUCTIVE_WORD.test(words(body.slice(0, 4_096))));
+}
 
 export interface ProbeTarget {
   readonly screen: UxEvidence;
@@ -52,7 +81,7 @@ export function planGuardProbes(
   safety?: SafetyConfig,
 ): { readonly targets: ProbeTarget[]; readonly refused: GuardProbe[] } {
   // Only the operator's --deny patterns refuse here: the built-in destructive category is exactly
-  // what the probe exists to click — with its writes blocked.
+  // what the (opted-in) probe exists to click — fail-safe, its writes blocked.
   const deny = new SafetyPolicy({ deny: safety?.deny ?? [], allowDestructive: true });
   const seen = new Set<string>();
   const targets: ProbeTarget[] = [];
@@ -78,6 +107,11 @@ export function planGuardProbes(
   return { targets, refused };
 }
 
+/** The opt-out record: every planned target is `skipped` (its guard claim: unverifiable). */
+export function skippedProbes(targets: readonly ProbeTarget[]): GuardProbe[] {
+  return targets.map((t) => ({ screenId: t.screen.screenId, route: t.route, control: t.label, controlKey: t.key, status: "skipped", detail: PROBE_OPT_IN_REASON }));
+}
+
 function locatorFor(page: Page, c: Control): Locator {
   if (c.descriptor !== undefined) return descriptorToLocator(page, c.descriptor);
   return page.getByRole(c.role as Parameters<Page["getByRole"]>[0], { name: c.name, exact: true });
@@ -87,19 +121,23 @@ function errText(e: unknown): string {
   return (e instanceof Error ? e.message : String(e)).split("\n")[0]!.slice(0, 200);
 }
 
-/** Blocks every write (see the module header); records each blocked one, in order. */
-function writeBlocker(secrets: readonly string[], seq: { n: number }) {
+/**
+ * Aborts every write and every destructive-looking request (see `looksDestructive`); records each
+ * one, in order. `allowDocument` is the screen's own URL: its load is let through.
+ */
+function writeBlocker(secrets: readonly string[], seq: { n: number }, allowDocument?: () => string | undefined) {
   const blocked: { at: number; endpoint: string }[] = [];
   const handler = async (route: Route): Promise<void> => {
     const req = route.request();
     const method = req.method().toUpperCase();
-    let path = "";
+    let body: string | null = null;
     try {
-      path = new URL(req.url()).pathname;
+      body = req.postData();
     } catch {
-      path = "";
+      body = null;
     }
-    if (SAFE_METHODS.has(method) && !DESTRUCTIVE_PATH.test(path)) {
+    const own = allowDocument?.() !== undefined && req.isNavigationRequest() && req.url() === allowDocument();
+    if (own || (SAFE_METHODS.has(method) && !looksDestructive(req.url(), body))) {
       await route.continue().catch(() => undefined);
       return;
     }
@@ -119,8 +157,63 @@ async function openDialogs(page: Page): Promise<number> {
     .catch(() => 0);
 }
 
-/** Probes each target on `page` (a dedicated page in the run's context). Never throws per target. */
-export async function runGuardProbes(page: Page, targets: readonly ProbeTarget[], opts: { readonly allowlist: readonly string[]; readonly secrets: readonly string[] }): Promise<GuardProbe[]> {
+/**
+ * BROWSER (init script on a probe page): counts WebSocket/EventSource connections the page opens,
+ * and refuses new ones once `window.__jevProbeArmed` is set (just before the click).
+ */
+const CONNECTION_GUARD = `(() => {
+  const w = window;
+  w.__jevProbeConnections = 0;
+  for (const name of ["WebSocket", "EventSource"]) {
+    const Orig = w[name];
+    if (typeof Orig !== "function") continue;
+    const Wrapped = function (...args) {
+      if (w.__jevProbeArmed) throw new Error("jevitate guard probe: " + name + " refused while probing");
+      w.__jevProbeConnections += 1;
+      return new Orig(...args);
+    };
+    Wrapped.prototype = Orig.prototype;
+    for (const k of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"]) if (k in Orig) Object.defineProperty(Wrapped, k, { value: Orig[k] });
+    w[name] = Wrapped;
+  }
+})();`;
+
+/** Why the page cannot be probed safely (a channel whose writes the probe cannot block), or null. */
+async function unsafeChannel(page: Page, sockets: number): Promise<string | null> {
+  const state = await page
+    .evaluate(() => {
+      const w = window as unknown as { __jevProbeConnections?: number };
+      return { connections: w.__jevProbeConnections ?? 0, sw: typeof navigator.serviceWorker !== "undefined" && navigator.serviceWorker.controller !== null };
+    })
+    .catch(() => null);
+  if (state === null) return "the page's connections could not be inspected";
+  if (sockets > 0) return "the page has an open WebSocket (its messages cannot be blocked)";
+  if (state.connections > 0) return "the page opened a WebSocket or EventSource (its messages cannot be blocked)";
+  if (state.sw) return "a service worker controls the page (its requests cannot be blocked)";
+  return null;
+}
+
+/** Opens a fresh probe page in `runPage`'s context; `close()` closes it and deletes its video. */
+async function openProbePage(runPage: Page): Promise<{ page: Page; close: () => Promise<void> }> {
+  const page = await runPage.context().newPage();
+  let closed = false;
+  return {
+    page,
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      const video = page.video();
+      await page.close().catch(() => undefined);
+      await video?.delete().catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * Probes each target, each on a fresh page in `runPage`'s context (call only with the opt-in).
+ * Never throws per target; a target that cannot be probed safely is `refused`/`failed`.
+ */
+export async function runGuardProbes(runPage: Page, targets: readonly ProbeTarget[], opts: { readonly allowlist: readonly string[]; readonly secrets: readonly string[] }): Promise<GuardProbe[]> {
   const out: GuardProbe[] = [];
   for (const [i, t] of targets.entries()) {
     const base = { screenId: t.screen.screenId, route: t.route, control: t.label, controlKey: t.key };
@@ -128,40 +221,72 @@ export async function runGuardProbes(page: Page, targets: readonly ProbeTarget[]
       out.push({ ...base, status: "failed", detail: `not probed: the run's probe cap (${MAX_GUARD_PROBES} controls) was reached` });
       continue;
     }
-    const seq = { n: 0 };
-    const { blocked, handler } = writeBlocker(opts.secrets, seq);
-    const dialogs: { at: number; type: string }[] = [];
-    const onDialog = (d: { type(): string; dismiss(): Promise<void> }): void => {
-      dialogs.push({ at: seq.n++, type: d.type() });
-      void d.dismiss().catch(() => undefined);
-    };
+    let probe: { page: Page; close: () => Promise<void> } | undefined;
     try {
       assertAuthorizedExploreTarget(t.screen.url, opts.allowlist);
+      probe = await openProbePage(runPage);
+      const page = probe.page;
+      const seq = { n: 0 };
+      let screenUrl: string | undefined = t.screen.url;
+      const { blocked, handler } = writeBlocker(opts.secrets, seq, () => screenUrl);
+      const dialogs: { at: number; type: string }[] = [];
+      let sockets = 0;
+      page.on("websocket", () => {
+        sockets += 1;
+      });
+      page.on("dialog", (d) => {
+        dialogs.push({ at: seq.n++, type: d.type() });
+        // Cancel — never accept: the probe never confirms anything. The page is closed right after.
+        void d.dismiss().catch(() => undefined);
+      });
+      await page.addInitScript({ content: CONNECTION_GUARD });
       await page.route("**/*", handler);
-      page.on("dialog", onDialog);
       await page.goto(t.screen.url, { waitUntil: "domcontentloaded", timeout: PROBE_TIMEOUT_MS });
       await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => undefined);
+      screenUrl = undefined; // from here on, even a reload of the screen goes through the blocker
       const loc = locatorFor(page, t.control).first();
       if (!(await loc.isVisible().catch(() => false))) {
         out.push({ ...base, status: "not-found", detail: "the control was not visible on a fresh load of its screen (it may need state the run built up)" });
         continue;
       }
+      const unsafe = await unsafeChannel(page, sockets);
+      if (unsafe !== null) {
+        out.push({ ...base, status: "refused", detail: `not probed: ${unsafe}` });
+        continue;
+      }
+      await page.evaluate(() => {
+        (window as unknown as { __jevProbeArmed?: boolean }).__jevProbeArmed = true;
+      });
       const before = await openDialogs(page);
       // Anything the page load itself sent is not the click's.
       blocked.length = 0;
       dialogs.length = 0;
       const startUrl = page.url().split("#")[0];
       await loc.click({ timeout: 3_000 });
-      for (let waited = 0; waited < SETTLE_MS && blocked.length === 0 && dialogs.length === 0; waited += 100) await page.waitForTimeout(100);
-      await page.waitForTimeout(150);
-      const domDialog = (await openDialogs(page)) > before;
-      const navigated = page.url().split("#")[0] !== startUrl;
+      let domDialog = false;
+      for (let waited = 0; waited < SETTLE_MS && blocked.length === 0 && dialogs.length === 0 && !domDialog; waited += 100) {
+        await page.waitForTimeout(100);
+        domDialog = (await openDialogs(page)) > before;
+      }
+      // A dialog was observed: stop here — the page closes without anything inside it being clicked.
+      const sawDialog = dialogs.length > 0 || domDialog;
+      if (!sawDialog) {
+        await page.waitForTimeout(150);
+        domDialog = (await openDialogs(page)) > before;
+      }
+      const navigated = !page.isClosed() && page.url().split("#")[0] !== startUrl;
+      const lateSocket = sockets > 0;
+      await probe.close();
       const firstWrite = blocked[0]?.at ?? Number.POSITIVE_INFINITY;
       const firstDialog = dialogs[0]?.at ?? Number.POSITIVE_INFINITY;
       // A write attempted before any native dialog was NOT guarded by it (a confirm blocks the write
-      // until answered; the probe dismisses it, so a guarded action never writes).
+      // until answered; the probe cancels it, so a guarded action never writes).
       const guard: GuardKind =
         blocked.length > 0 && firstWrite < firstDialog ? "none" : dialogs.length > 0 ? "native-dialog" : domDialog ? "dom-dialog" : navigated && blocked.length === 0 ? "navigation" : "none";
+      if (lateSocket && guard === "none") {
+        out.push({ ...base, status: "refused", detail: "not judged: the click opened a WebSocket (its messages cannot be blocked)" });
+        continue;
+      }
       const writes = [...new Set(blocked.map((b) => b.endpoint))];
       out.push({
         ...base,
@@ -171,15 +296,14 @@ export async function runGuardProbes(page: Page, targets: readonly ProbeTarget[]
         detail:
           guard === "none"
             ? writes.length > 0
-              ? `no guard: the click attempted ${writes.join(", ")} (blocked by the probe)`
+              ? `no guard: the click attempted ${writes.join(", ")} (aborted by the probe)`
               : "no guard and no write attempted"
-            : `guarded by ${guard === "native-dialog" ? `a native ${dialogs[0]?.type ?? "dialog"} (dismissed)` : guard === "dom-dialog" ? "a dialog on the page" : "a navigation to another page"}`,
+            : `guarded by ${guard === "native-dialog" ? `a native ${dialogs[0]?.type ?? "dialog"} (cancelled)` : guard === "dom-dialog" ? "a dialog on the page (left unanswered)" : "a navigation to another page"}`,
       });
     } catch (e) {
       out.push({ ...base, status: "failed", detail: redactText(`the probe could not click it: ${errText(e)}`, opts.secrets) });
     } finally {
-      page.off("dialog", onDialog);
-      await page.unroute("**/*", handler).catch(() => undefined);
+      await probe?.close();
     }
   }
   return out;
@@ -224,7 +348,8 @@ export async function captureFindingShots(
     throw e;
   }
   const seq = { n: 0 };
-  const { handler } = writeBlocker(opts.secrets, seq);
+  let current: string | undefined;
+  const { handler } = writeBlocker(opts.secrets, seq, () => current);
   await page.route("**/*", handler);
   const out: UxFinding[] = [];
   let n = 0;
@@ -244,7 +369,9 @@ export async function captureFindingShots(
       }
       try {
         assertAuthorizedExploreTarget(screen.url, opts.allowlist);
+        current = screen.url;
         await page.goto(screen.url, { waitUntil: "domcontentloaded", timeout: PROBE_TIMEOUT_MS });
+        current = undefined;
         await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => undefined);
         let loc = (control !== undefined ? locatorFor(page, control) : page.getByText(quote!.slice(0, 120), { exact: false })).first();
         if (!(await loc.isVisible().catch(() => false))) {

@@ -66,8 +66,13 @@ export interface GuardProbe {
   readonly control: string;
   /** adjudicate.ts `controlKey` (role + name). */
   readonly controlKey: string;
-  /** `probed`, or why it was not: not found again on a fresh load, refused (`--deny`), or the probe failed. */
-  readonly status: "probed" | "not-found" | "refused" | "failed";
+  /**
+   * `probed`, or why it was not: `skipped` (probing is opt-in, `--probe-guards`), not found again on
+   * a fresh load, `refused` (`--deny`, or a channel the probe cannot block: an open WebSocket /
+   * EventSource, a controlling service worker), or the probe failed. Every non-`probed` status makes
+   * the guard claim unverifiable — reported in coverage, never asserted.
+   */
+  readonly status: "probed" | "skipped" | "not-found" | "refused" | "failed";
   readonly guard?: GuardKind;
   /** The write requests the click attempted (and the probe blocked), e.g. `DELETE /api/users/:id`. */
   readonly blockedWrites?: readonly string[];
@@ -688,7 +693,7 @@ function verify(c: Candidate, type: ClaimType, ctx: VerifyContext): Verdict {
           ? { status: "refuted", reason: `not a destructive control: ${label(c.target)} is not in the safety policy's destructive vocabulary, so it was never probed` }
           : { status: "unverifiable", reason: "no guard probes for this run (a live usability run probes each destructive control with writes blocked)" };
       }
-      if (probe.status !== "probed") return { status: "unverifiable", reason: `guard probe ${probe.status}: ${probe.detail}` };
+      if (probe.status !== "probed") return { status: "unverifiable", reason: probe.status === "skipped" ? probe.detail : `guard probe ${probe.status}: ${probe.detail}` };
       if (probe.guard !== undefined && probe.guard !== "none") return { status: "refuted", reason: `guarded: clicking it opened a ${probe.guard === "navigation" ? "confirmation page" : probe.guard === "native-dialog" ? "confirm dialog" : "dialog"} first` };
       const writes = probe.blockedWrites ?? [];
       if (writes.length === 0) return { status: "refuted", reason: "clicking it sent no write request (nothing irreversible was attempted)" };

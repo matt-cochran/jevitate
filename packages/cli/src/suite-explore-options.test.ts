@@ -105,6 +105,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     maxFindingsPerPage: { kind: "usability", set: 3 },
     product: { kind: "usability", set: "product.json" },
     polish: { kind: "usability", set: true },
+    probeGuards: { kind: "usability", set: true },
     scope: { kind: "coverage", set: "app" },
     secret: { kind: "goal", set: ["env:SUITE_SECRET"] },
     totp: { kind: "goal", set: ["label=Code=env:SUITE_TOTP"] },

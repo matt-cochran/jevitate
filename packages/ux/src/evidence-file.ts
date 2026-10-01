@@ -157,7 +157,7 @@ const FileSchema = z.object({
         route: z.string(),
         control: z.string(),
         controlKey: z.string(),
-        status: z.enum(["probed", "not-found", "refused", "failed"]),
+        status: z.enum(["probed", "skipped", "not-found", "refused", "failed"]),
         guard: z.enum(["native-dialog", "dom-dialog", "navigation", "none"]).optional(),
         blockedWrites: z.array(z.string()).optional(),
         detail: z.string(),

@@ -131,6 +131,10 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "--product <file>",
       "(--strategy usability) product facts JSON (plans/prices, key journeys, each page's intended next step) the review checks screens against in code; default .jevitate/product.json in the project when present (docs/ux-findings.md)",
     )
+    .option(
+      "--probe-guards",
+      "(--strategy usability) opt in to clicking each destructive control once to check for a confirmation step — fail-safe: every write and destructive-looking request is aborted, and a page with an open WebSocket/EventSource or a service worker is not probed; without it those claims are reported unverifiable (docs/ux-findings.md)",
+    )
     .option("--polish", "(--strategy usability) polish each verified UX finding's recommendation with one generation call (opt-in; the default prose is built from templates)")
     .option(
       "--success <spec>",
@@ -483,6 +487,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         show?: string;
         product?: string;
         polish?: boolean;
+        probeGuards?: boolean;
         success: string[];
         successWhen?: string;
         allowVacuousChecks?: boolean;
@@ -708,8 +713,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         return;
       }
       // #198: product facts and polish shape the UX review's findings only.
-      if ((o.product !== undefined || o.polish === true) && (o.feature !== undefined || strategy !== "usability")) {
-        emitExplore(fail("E_EXPLORE_ARGS", "--product and --polish are supported only with --strategy usability"));
+      if ((o.product !== undefined || o.polish === true || o.probeGuards === true) && (o.feature !== undefined || strategy !== "usability")) {
+        emitExplore(fail("E_EXPLORE_ARGS", "--product, --polish and --probe-guards are supported only with --strategy usability"));
         return;
       }
       // #225: success checks judge a goal / a usability job — every other strategy (and --feature) would
@@ -1074,6 +1079,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.maxFindingsPerPage !== undefined ? { maxFindingsPerRoute: o.maxFindingsPerPage } : {}),
             ...(o.product !== undefined ? { product: o.product } : {}),
             ...(o.polish === true ? { polish: true } : {}),
+            ...(o.probeGuards === true ? { probeGuards: true } : {}),
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,

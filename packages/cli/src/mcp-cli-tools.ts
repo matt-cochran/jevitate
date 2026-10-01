@@ -250,6 +250,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         maxFindingsPerPage: n("--max-findings-per-page"),
         product: path("--product"),
         polish: b("--polish"),
+        probeGuards: b("--probe-guards"),
         repeat: n("--repeat"),
         minAgreement: n("--min-agreement"),
         allowDestructive: b("--allow-destructive"),

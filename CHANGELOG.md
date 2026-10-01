@@ -35,9 +35,13 @@ behaviour changes).
   `--url chrome-extension://<id>/sidepanel.html`, and the agent acts on their DOM. Recordings
   record each extension's `{id, name, version}`. verify-fix refuses a different build with exit 64.
   Headless runs use Playwright's full Chromium in new-headless mode. See docs/extensions.md (#256).
-- UX findings are claims verified by code (#198). A usability finding now comes from a guard probe
-  (each destructive control clicked once with every write blocked: did a confirm dialog, page
-  dialog or confirmation page come first?), from the product facts, or from friction the run hit.
+- UX findings are claims verified by code (#198). A usability finding now comes from a guard
+  probe, from the product facts, or from friction the run hit. The guard probe is opt-in
+  (`--probe-guards`). It clicks each destructive control once and checks whether a confirm dialog,
+  page dialog or confirmation page came first. It is fail-safe: it aborts every write and every
+  destructive-looking request (URL, query, RPC name or body, any method). It refuses pages with an
+  open WebSocket or EventSource or a service worker. It never answers a dialog. Without the flag,
+  guard claims are reported unverifiable.
   Jev only categorizes: a claim type from a closed list, a target control, a duplicate check, and
   two yes/no grade questions ("do we need this?", "do we need this to ship this feature?") that
   code maps to actionable / relevant-minor / generic / wrong. Claims that fail code's check are
@@ -64,7 +68,8 @@ behaviour changes).
   (control, page, blocked request, quoted text, expected fact) instead of being generated. The
   rubric no longer reports findings on its own, so `heuristicAppendix` is empty, and a finding's
   `rubricItemId` is the heuristic its claim type is cited under. Additive fields: `finding.claim`,
-  `finding.grade`, `finding.screenshot`, `report.claims`, suppression reasons `unverified` and
+  `finding.grade`, `finding.screenshot`, `report.claims` (probe status `skipped` when
+  `--probe-guards` is off), suppression reasons `unverified` and
   `not-a-problem`, and `probes` in the evidence sidecar. Reports add evidence caveats when no
   product facts were found, or when offline review has no guard probes.
 
@@ -73,7 +78,9 @@ behaviour changes).
 - **UX findings (#198).** Expect fewer findings and different `rubricItemId`s: a finding exists
   only when code verified its claim. Tooling that read `heuristicAppendix` or `tier: "semantic"`
   findings should read `findings[].claim` instead. A destructive-action finding needs a live run
-  (or its evidence sidecar). An offline `jevitate ux` without the sidecar lists such claims as
+  with `--probe-guards` (preferably against staging), or its evidence sidecar. Without the flag,
+  such claims are unverifiable coverage, so a page with destructive controls no longer reads as
+  complete coverage. An offline `jevitate ux` without the sidecar lists such claims as
   unverifiable coverage (`coverage.skipped`, `claim:destructive-unguarded`), never as findings.
   Add `.jevitate/product.json` (docs/ux-findings.md) to have prices and intended next steps checked.
 

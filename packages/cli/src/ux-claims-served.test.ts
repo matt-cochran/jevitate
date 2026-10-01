@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,6 +22,10 @@ import { discoverRecordingSidecars, loadRecordingSidecars, runUsabilityMission, 
  */
 
 const writes: string[] = [];
+/** Every request path the server saw, and every WebSocket frame it received. */
+const seen: string[] = [];
+const wsFrames: Buffer[] = [];
+const upgraded: import("node:net").Socket[] = [];
 /** A registered secret shown on the danger-zone page: it must never reach an artifact. */
 const CANARY = `tok-canary-${Math.random().toString(36).slice(2)}-secret`;
 let server: Server;
@@ -79,6 +84,16 @@ const PAGES: Record<string, string> = {
        dw.onclick = () => fetch('/api/workspace', { method: 'DELETE' });
      </script>`,
   ),
+  // Fail-safe cases: a delete sent over a WebSocket (never probed), and a GET link that deletes.
+  "/live": page(
+    "Live",
+    `<h1>Live list</h1><p>Item 1</p><button id="del">Delete item</button>
+     <script>
+       const ws = new WebSocket(location.origin.replace('http', 'ws') + '/ws');
+       del.onclick = () => ws.send('delete 1');
+     </script>`,
+  ),
+  "/files": page("Files", `<h1>Files</h1><p>report.pdf <a href="/delete?id=1">Delete file</a></p>`),
   // 5. Onboarding: the intended next step is obvious (look-alike); the trial length is wrong (real).
   "/onboarding": page(
     "Welcome",
@@ -102,6 +117,7 @@ const FACTS = {
 beforeAll(async () => {
   server = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
+    seen.push(path);
     if (req.method !== "GET" && req.method !== "HEAD") {
       writes.push(`${req.method} ${path}`);
       res.writeHead(204).end();
@@ -111,10 +127,24 @@ beforeAll(async () => {
     if (html === undefined) return void res.writeHead(404).end();
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
   });
+  // A minimal WebSocket endpoint: the handshake, then every frame is recorded (never answered).
+  server.on("upgrade", (req, socket) => {
+    upgraded.push(socket as import("node:net").Socket);
+    const key = String(req.headers["sec-websocket-key"] ?? "");
+    const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    // Text/binary data frames only (opcode 1/2) — a close frame from a closing page is not a message.
+    socket.on("data", (d: Buffer) => {
+      const opcode = (d[0] ?? 0) & 0x0f;
+      if (opcode === 1 || opcode === 2) wsFrames.push(d);
+    });
+    socket.on("error", () => undefined);
+  });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterAll(async () => {
+  for (const sock of upgraded) sock.destroy();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
@@ -166,6 +196,7 @@ describe("#198 acceptance, served (real Chromium): the claim pipeline catches ev
             bounds: { maxDecisions: 2 },
             secrets: [CANARY],
             product,
+            probeGuards: true,
             outDir,
             env: {},
             configPath: join(outDir, "no-config.json"),
@@ -231,4 +262,76 @@ describe("#198 acceptance, served (real Chromium): the claim pipeline catches ev
       240_000,
     );
   }
+});
+
+async function review(path: string, probeGuards: boolean) {
+  const outDir = await mkdtemp(join(tmpdir(), "jev-ux-probe-"));
+  try {
+    const result = await runUsabilityMission({
+      url: `${origin}${path}`,
+      job: "look around",
+      allowlist: [origin],
+      appContext: { appClass: "admin", job: "look around" },
+      judge,
+      gen: new FakeGenerationGateway(),
+      judgmentBudget: 10,
+      minConfidence: 0,
+      bounds: { maxDecisions: 2 },
+      ...(probeGuards ? { probeGuards: true } : {}),
+      outDir,
+      env: {},
+      configPath: join(outDir, "no-config.json"),
+      nowIso: () => "2026-10-01T00:00:02.000Z",
+    });
+    return result.report!;
+  } finally {
+    await rm(outDir, { recursive: true, force: true });
+  }
+}
+
+describe("#198 guard probe is fail-safe (served, real Chromium)", () => {
+  it(
+    "default (no --probe-guards): nothing is clicked; the destructive control's guard claim is unverifiable, never asserted",
+    async () => {
+      writes.length = 0;
+      const report = await review("/admin/queue", false);
+      expect(writes).toEqual([]);
+      expect(report.findings.filter((f) => f.claim?.type === "destructive-unguarded")).toEqual([]);
+      const item = report.claims!.items.find((i) => i.target === 'button "Delete user"');
+      expect(item).toMatchObject({ status: "unverifiable", reason: expect.stringMatching(/opt-in \(--probe-guards\)/) });
+      expect(report.coverage.skipped.map((s) => s.rubricItemId)).toContain("claim:destructive-unguarded");
+      expect(report.coverageComplete).toBe(false);
+    },
+    240_000,
+  );
+
+  it(
+    "a WebSocket-driven delete button is never probed (refused: the socket's messages cannot be blocked)",
+    async () => {
+      wsFrames.length = 0;
+      writes.length = 0;
+      const report = await review("/live", true);
+      expect(wsFrames).toEqual([]);
+      expect(writes).toEqual([]);
+      const item = report.claims!.items.find((i) => i.target === 'button "Delete item"');
+      expect(item).toMatchObject({ status: "unverifiable", reason: expect.stringMatching(/WebSocket/) });
+      expect(report.findings.filter((f) => f.claim?.type === "destructive-unguarded")).toEqual([]);
+    },
+    240_000,
+  );
+
+  it(
+    "a GET /delete?id= link is aborted by the probe: nothing reaches the server, and the unguarded delete is reported",
+    async () => {
+      seen.length = 0;
+      writes.length = 0;
+      const report = await review("/files", true);
+      expect(seen.filter((p) => p.startsWith("/delete"))).toEqual([]);
+      expect(writes).toEqual([]);
+      const f = report.findings.find((x) => x.claim?.type === "destructive-unguarded");
+      expect(f?.controls).toEqual(['link "Delete file"']);
+      expect(f?.observation).toMatch(/GET \/delete/);
+    },
+    240_000,
+  );
 });

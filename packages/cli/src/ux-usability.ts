@@ -11,7 +11,7 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { InvariantSpec } from "@jevitate/recording";
 import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
 import { a11yChecks, analyzeClaims, buildReport, calibrationCaveat, claimsCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AnalysisOutcome, type AppContext, type GuardProbe, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
-import { captureFindingShots, planGuardProbes, runGuardProbes, withProbePage } from "./ux-claim-probe.js";
+import { captureFindingShots, planGuardProbes, runGuardProbes, skippedProbes, withProbePage } from "./ux-claim-probe.js";
 import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
@@ -149,6 +149,13 @@ export interface RunUsabilityMissionOptions {
   readonly product?: string;
   /** #198 `--polish`: polish each verified finding's recommendation with one generation call (opt-in). */
   readonly polish?: boolean;
+  /**
+   * #198 `--probe-guards` (opt-in): click each destructive control once, fail-safe (every write and
+   * destructive-looking request aborted; refused on a page with an open WebSocket/EventSource or a
+   * controlling service worker), to verify whether a confirmation guards it. Off: nothing is clicked,
+   * and those guard claims are reported unverifiable.
+   */
+  readonly probeGuards?: boolean;
 }
 
 /** Usability reads only a spec's `budget` (#150) — never its `invariants`/`capture` (#86/#147, not supported here). */
@@ -562,9 +569,12 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     try {
       const plan = planGuardProbes(screens, secrets, opts.target?.safety);
       probes = [...plan.refused];
-      if (plan.targets.length > 0) {
+      // Clicking is opt-in (--probe-guards): without it every destructive control is `skipped`, and
+      // its guard claim is reported unverifiable — never asserted, never silently dropped.
+      if (opts.probeGuards !== true) probes.push(...skippedProbes(plan.targets));
+      else if (plan.targets.length > 0) {
         try {
-          probes.push(...(await withProbePage(session.page, (p) => runGuardProbes(p, plan.targets, { allowlist: opts.allowlist, secrets }))));
+          probes.push(...(await runGuardProbes(session.page, plan.targets, { allowlist: opts.allowlist, secrets })));
         } catch (err) {
           const why = `the guard probe could not open a page: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`;
           probes.push(...plan.targets.map((t): GuardProbe => ({ screenId: t.screen.screenId, route: t.route, control: t.label, controlKey: t.key, status: "failed", detail: why })));

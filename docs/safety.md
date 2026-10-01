@@ -37,6 +37,13 @@ security bug, and how to report one.
   `~/.jevitate/targets.json`) puts them in the paid category: a declared `budget` guard sees them,
   hang replays never repeat them, and a goal that asks for one may still click it — unlike
   `--deny`, which no mission may click.
+- The usability review's guard probe (`--probe-guards`, #198) is the one place jevitate clicks a
+  destructive control without a goal asking for it, and it is **opt-in**. When enabled, it clicks
+  each destructive control once on a fresh page. It aborts every non-GET request and every request
+  whose URL, query, RPC name or body names a destructive verb (`GET /delete?id=1` included). It
+  won't probe a page with an open WebSocket or EventSource or a controlling service worker. It
+  cancels any confirm and never clicks inside a dialog. Without the flag, nothing is clicked and
+  those claims are reported unverifiable ([UX findings](./ux-findings.md#guard-probes)).
 - A find-out goal (no `--success`) is read-only unless the goal asks for a change: write-flow
   controls are refused and the write requests an action fires are blocked. `--allow-writes`
   lifts it and `--allow-write <glob>` exempts a request path

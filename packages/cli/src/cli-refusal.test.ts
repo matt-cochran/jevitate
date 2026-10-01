@@ -191,6 +191,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--url", URL0, "--strategy", "usability", "--goal", "g", "--app-class", "consumer", "--fake-ai", "--product", badProduct],
       ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--product", badProduct],
       ["--url", URL0, "--strategy", "coverage", "--fake-ai", "--polish"],
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--probe-guards"],
       // #225: a strategy that does not honour success checks refuses them — never silently ignored.
       ...["coverage", "exploratory", "adversarial"].flatMap((strategy) => [
         ["--url", URL0, "--strategy", strategy, "--fake-ai", "--success", "urlIncludes:/x"],

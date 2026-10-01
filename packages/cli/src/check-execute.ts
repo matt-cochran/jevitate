@@ -336,6 +336,7 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
       ...(x.maxFindingsPerPage === undefined ? {} : { maxFindingsPerRoute: x.maxFindingsPerPage }),
       ...(x.product === undefined ? {} : { product: x.product }),
       ...(x.polish === true ? { polish: true } : {}),
+      ...(x.probeGuards === true ? { probeGuards: true } : {}),
       // #225: the job's completion checks — goal-item semantics, never ignored.
       ...(m.success === undefined ? {} : { successChecks: m.success.map(parseSuccessSpec) }),
       ...(m.successWhen === undefined ? {} : { successWhen: m.successWhen }),

@@ -8,9 +8,10 @@ its own that something is a problem, and it never writes the finding's text.
 
 1. **Claims start from what the run observed, not from a checklist.** A claim comes from one of
    three places:
-   - a **guard probe**: the live run clicks every control that the shared safety policy calls
-     destructive ("Delete", "Remove", "Revoke", "Close account"…), once per page, with every
-     write request blocked (see [Guard probes](#guard-probes));
+   - a **guard probe** (opt-in, `--probe-guards`): the live run clicks every control that the
+     shared safety policy calls destructive ("Delete", "Remove", "Revoke", "Close account"…),
+     once per page, fail-safe (see [Guard probes](#guard-probes)). Without the flag nothing is
+     clicked and those claims are reported unverifiable;
    - the **product facts** in `.jevitate/product.json`: a price or trial length on the screen
      that contradicts them, and each page whose intended next step they name;
    - **observed friction** that no run signal already explains: the run retried, waited, hit a
@@ -69,25 +70,47 @@ without probes, the claim is **unverifiable**. It is listed under `coverage.skip
 
 ## Guard probes
 
-After the run's loop ends, the live usability run opens a dedicated page in the same browser
-context (same session). On that page it:
+Clicking destructive controls is **off by default**. Without `--probe-guards`, nothing is clicked:
+each destructive control on an analyzed screen is recorded as a `skipped` probe, and its
+`destructive-unguarded` claim is **unverifiable**. It appears in `report.claims` and
+`coverage.skipped` (`claim:destructive-unguarded`, "clicking destructive controls is opt-in"). It
+is never asserted as a finding and never silently dropped. That leaves the report's coverage
+incomplete.
 
-- loads each analyzed screen that shows a destructive control, and clicks the control once per
-  page and control;
-- blocks every write request: anything other than GET/HEAD/OPTIONS, plus any request whose path
-  names a destructive verb (`/items/1/delete`). Nothing the probe clicks reaches the server;
-- dismisses a native `confirm`/`alert` and notes it. It also notes a page dialog
-  (`dialog[open]`, `role=dialog`/`alertdialog`, `aria-modal`) and a navigation to another page;
-- never clicks a control matching `--deny`. Such a control is recorded as `refused`.
+With `--probe-guards` (MCP `probeGuards`, check suite item `probeGuards`), after the run's loop
+ends, each destructive control is probed once per page and control, each on a **fresh page** in
+the run's browser context (same session). The probe is fail-safe:
+
+- **It refuses channels it cannot block.** The control is not clicked (`refused`, so the claim is
+  unverifiable, with the reason) when the page has an open WebSocket or EventSource, or a service
+  worker controls it. Once the probe is armed, the page also refuses to open a new WebSocket or
+  EventSource. If the click still opened one, the result is not judged.
+- **It aborts every write and every destructive-looking request, whatever the method.** That means
+  anything other than GET/HEAD/OPTIONS, and any request whose URL path or query, RPC name or body
+  names a destructive verb: delete, remove, destroy, erase, purge, wipe, revoke, archive,
+  deactivate, terminate, unsubscribe, drop, trash, discard, cancel. For example `GET /delete?id=1`,
+  `?action=remove` or `/rpc/…/DeleteUser`. Only the screen's own page load is let through.
+- **It never answers a dialog.** A native `confirm`/`alert` is cancelled, never accepted. The probe
+  stops as soon as a confirm, alert or page dialog (`dialog[open]`, `role=dialog`/`alertdialog`,
+  `aria-modal`) appears, and closes the page without clicking anything inside it.
+- **It never clicks a control matching `--deny`.** Such a control is recorded as `refused`.
+
+The probe records whether a dialog or a confirmation page guarded the click, and which requests
+the click attempted. Those requests were aborted, so none reached the server.
 
 The probes are written to the evidence sidecar (`probes`, redacted), so `jevitate ux` on that
-Recording verifies the same claims offline. The probe page's video, if one is recorded, is deleted.
+Recording verifies the same claims offline. A probe page's video, if one is recorded, is deleted.
 
-Limits: WebSocket messages and service-worker requests are not blocked. A destructive action that
-runs only in the browser, with no request, reads as "no write attempted" and is refuted. A
-control that only appears after state the run built up (an open menu, a selected row) may not be
-visible on a fresh load. It is then recorded as `not-found` and is unverifiable. At most 25 controls are probed per run; the rest are recorded as not
-probed and are unverifiable.
+Limits:
+
+- A destructive action that runs only in the browser, with no request, reads as "no write
+  attempted" and is refuted.
+- A request whose URL and body look harmless but that destroys data on a GET is not recognized.
+  That is a server bug the probe can't see. Probe a staging environment.
+- A control that only appears after state the run built up (an open menu, a selected row) may not
+  be visible on a fresh load. It is recorded as `not-found` and is unverifiable.
+- At most 25 controls are probed per run. The rest are recorded as not probed and are
+  unverifiable.
 
 ## Product facts (`.jevitate/product.json`)
 
@@ -180,9 +203,11 @@ Each page plants one real problem the review must catch and one look-alike it mu
 | Onboarding | "7-day free trial" (facts: 14 days) | the obvious, taken next step "Create project" |
 
 Both suites check that every planted problem is caught, graded `actionable`, and that no
-look-alike appears in any finding. The served suite also checks that not one write reached the
-server, that the screenshot is cropped and boxed, and that offline review over the sidecar
-reproduces the live findings.
+look-alike appears in any finding. The served suite runs with `--probe-guards` and also checks that not
+one write reached the server, that the screenshot is cropped and boxed, and that offline review
+over the sidecar reproduces the live findings. It also covers the probe's fail-safes. Without the
+flag, nothing is probed and the guard claim is unverifiable. A delete sent over a WebSocket is
+never probed. A `GET /delete?id=1` link is aborted, and nothing reaches the server.
 
 ## Still needs real-model calibration
 
