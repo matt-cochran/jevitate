@@ -158,7 +158,8 @@ re-triages a finished run from its saved timeline (for a ticket, or with a diffe
 
 **Runs without a command line.** A queued mission (MCP `queue_exploration`, drained by `mission run`)
 or a suite run takes the opt-in from `~/.jevitate/targets.json`, next to the origin's `logSources`:
-`"logTriage": true`. Jev scores relevance when the drain runs with `--real`, else by code. Every MCP
+`"logTriage": true`. A `jevitate check` suite item (or target) takes `"logTriage": true` too. Jev scores
+relevance when the drain or the check runs with `--real`, else by code. Every MCP
 result and report then carries `relatedLogs`.
 
 What it never does: Jev only chooses which lines travel with a defect. Whether a defect exists is

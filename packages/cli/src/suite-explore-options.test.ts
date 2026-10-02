@@ -144,6 +144,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     logCorrelationHeader: { kind: "feature", set: ["x-trace"], with: logs },
     logIdPattern: { kind: "feature", set: ["/rid=(\\w+)/"], with: logs },
     serverLogDrainMs: { kind: "feature", set: 100, with: logs },
+    logTriage: { kind: "feature", set: true, with: logs },
     checkOverflow: { kind: "coverage", set: true },
     ignoreOverflow: { kind: "coverage", set: [".carousel"] },
     before: { kind: "goal", set: "true", with: { allowShellHooks: true } },

@@ -1,4 +1,5 @@
 // check-execute.ts — `jevitate check` item execution (#231).
+import { triagedServerLog } from "./explore-shared.js";
 import { recordRun } from "./run-index.js";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
@@ -220,7 +221,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...emulationFor(g.emulation),
         ...targetConfig,
         ...invariants,
-        ...withServerLog,
+        ...triagedServerLog(serverLog, judge, ctx.opts.aiMode === "real"),
         url,
         goal,
         successChecks,
@@ -303,7 +304,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...(m.strategy === "exploratory" ? { strategy: "exploratory" as const } : {}),
         ...targetConfig,
         ...invariants,
-        ...withServerLog,
+        ...triagedServerLog(serverLog, judge, ctx.opts.aiMode === "real"),
         url,
         allowlist: item.t.allowlist,
         judge,
@@ -325,7 +326,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...emulationFor(m.emulation),
         ...targetConfig,
         ...invariants,
-        ...withServerLog,
+        ...triagedServerLog(serverLog, judge, ctx.opts.aiMode === "real"),
         seedUrl: url,
         allowlist: item.t.allowlist,
         strategies: CLI_ADVERSARIAL_STRATEGIES,
@@ -349,7 +350,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       ...common,
       ...emulationFor(m.emulation),
       ...targetConfig,
-      ...withServerLog,
+      ...triagedServerLog(serverLog, judge, ctx.opts.aiMode === "real"),
       url,
       job: m.goal ?? "",
       appContext: { appClass: m.appClass ?? "", job: m.goal ?? "" },
