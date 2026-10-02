@@ -154,6 +154,11 @@ jevitate explore --from-journey checkout --at-step payment --param email=a@examp
   missing). A prefix that no longer replays makes the check `inconclusive` with
   `failure.kind: "journey-stale"` (exit 2), never `fixed`.
 
+One anchored step with a state restore (`--fixtures`, `--before`/`--after` with
+`--allow-shell-hooks`) on a non-goal strategy (#312) runs the same way as a one-stop sweep: the
+setup before the prefix replay, the restore after the mission, and the sweep's result shape
+(`sweep.mode: "step"`, `sweep.atStep`).
+
 ### Sweeping every step
 
 `--at-step all` runs the strategy from EVERY top-level step (an anchor's name where one names the

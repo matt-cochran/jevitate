@@ -640,7 +640,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         // #293 sweep: `--at-step all|anchors` runs the strategy from EVERY step (or anchor), each in a
         // fresh session with --fixtures restored around it, --max-actions/--max-decisions split evenly
         // over the stop points, and reads them as one deduped report (a one-job campaign).
-        if (isSweepMode(o.atStep)) {
+        // #312: one anchored step with a state restore (--fixtures/--before/--after) on a non-goal
+        // strategy runs the same way — as a one-stop campaign, whose runner restores around the run.
+        const restoredSingle =
+          !isSweepMode(o.atStep) && strategy !== "goal" && (o.fixtures !== undefined || o.before !== undefined || o.after !== undefined);
+        if (isSweepMode(o.atStep) || restoredSingle) {
           if (o.real !== true && o.fakeAi !== true) {
             emitExplore(fail("E_AI_SETUP_REQUIRED", "a sweep's missions are model-driven: pass --real or --fake-ai"));
             return;
@@ -649,7 +653,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           const abs = (p: string): string => resolvePath(p);
           const spec = {
             version: 1,
-            name: `sweep of ${o.fromJourney} (${o.atStep}, ${strategy})`,
+            name: restoredSingle ? `${o.fromJourney} at step ${o.atStep.trim()} (${strategy}, restored)` : `sweep of ${o.fromJourney} (${o.atStep}, ${strategy})`,
             ...(o.env === undefined ? {} : { env: o.env }),
             ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }),
             ...(o.storageState === undefined ? {} : { storageState: abs(o.storageState) }),
@@ -663,7 +667,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
                 id: "sweep",
                 journey: o.fromJourney,
                 params: o.param,
-                anchors: o.atStep.trim(),
+                anchors: restoredSingle ? [o.atStep.trim()] : o.atStep.trim(),
                 strategies: [strategy],
                 ...(o.goal === undefined ? {} : { goal: o.goal }),
                 ...(o.appClass === undefined ? {} : { appClass: o.appClass }),
@@ -689,7 +693,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
               ...(o.fakeAi === true ? { fakeAi: true } : {}),
               missionArgs: forwardedArgv(this, SWEEP_OWNED),
             });
-            emitExplore(ok(withEngine({ sweep: { journeyId: o.fromJourney, mode: o.atStep.trim(), strategy, stops: plan.totalRuns, budgetPerStop: { maxActions: plan.jobs[0]?.maxActions, ...(plan.jobs[0]?.maxDecisions === undefined ? {} : { maxDecisions: plan.jobs[0].maxDecisions }) } }, ...result })), result.exitCode, formatCampaignHuman);
+            emitExplore(ok(withEngine({ sweep: { journeyId: o.fromJourney, mode: restoredSingle ? "step" : o.atStep.trim(), ...(restoredSingle ? { atStep: o.atStep.trim() } : {}), strategy, stops: plan.totalRuns, budgetPerStop: { maxActions: plan.jobs[0]?.maxActions, ...(plan.jobs[0]?.maxDecisions === undefined ? {} : { maxDecisions: plan.jobs[0].maxDecisions }) } }, ...result })), result.exitCode, formatCampaignHuman);
           } catch (err) {
             if (err instanceof CampaignSpecError) emitExplore(fail("E_EXPLORE_ARGS", err.message));
             else emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
@@ -1068,7 +1072,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // Mission fixtures (#140/#144) run around the goal loop and its replays only.
       const fixtureFlagsGiven = o.fixtures !== undefined || o.before !== undefined || o.after !== undefined;
       if (fixtureFlagsGiven && (o.feature !== undefined || strategy !== "goal")) {
-        emitExplore(fail("E_EXPLORE_ARGS", "--fixtures, --before and --after are supported only with --strategy goal"));
+        emitExplore(fail("E_EXPLORE_ARGS", "--fixtures, --before and --after are supported only with --strategy goal, or with --from-journey (any anchored strategy)"));
         return;
       }
 

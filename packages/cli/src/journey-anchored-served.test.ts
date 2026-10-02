@@ -431,6 +431,24 @@ describe("journey-anchored exploration (#293, served)", () => {
     sweepFinding = { resultPath: String(data.missions[1]?.resultPath), fingerprint: String(crash[0]?.fingerprints[0]) };
   }, 300_000);
 
+  it("#312: ONE anchored adversarial step with --fixtures runs between the fixture's setup and restore (a one-stop campaign)", async () => {
+    const fixtures = join(dir, "single-restore.json");
+    await writeFile(fixtures, JSON.stringify({ setup: [{ name: "seed", method: "POST", url: "/api/seed" }], restore: [{ name: "reset", method: "POST", url: "/api/reset" }] }));
+    served.length = 0;
+    const r = await cli([
+      "explore", "--from-journey", "editor", "--at-step", "editing", "--param", "phrase=open sesame", "--journeys-dir", journeysDir,
+      "--strategy", "adversarial", "--fixtures", fixtures, "--max-actions", "2", "--fake-ai", "--out", join(dir, "single"), "--json",
+    ]);
+    expect(r.envelope?.ok, r.out + r.err).toBe(true);
+    const data = r.envelope!.data! as {
+      sweep: { mode: string; atStep?: string; stops: number; budgetPerStop: { maxActions: number } };
+      missions: Array<{ status: string; restored?: boolean; branch: { step: number; anchor?: string } }>;
+    };
+    expect(data.sweep).toMatchObject({ mode: "step", atStep: "editing", stops: 1, budgetPerStop: { maxActions: 2 } });
+    expect(data.missions.map((m) => [m.status, m.restored, m.branch.step, m.branch.anchor])).toEqual([["ran", true, 2, "editing"]]);
+    expect(served.filter((x) => x === "POST /api/seed" || x === "POST /api/reset")).toEqual(["POST /api/seed", "POST /api/reset"]);
+  }, 300_000);
+
   it("verify-fix replays a branch-point finding THROUGH the Journey prefix (it reproduces only there); a stale prefix is a typed inconclusive", async () => {
     expect(sweepFinding).toBeDefined();
     const { resultPath, fingerprint } = sweepFinding!;

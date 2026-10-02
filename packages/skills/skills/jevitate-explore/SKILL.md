@@ -53,7 +53,8 @@ mission and reading the result honestly.
 - From deep inside a flow (#293): `jevitate explore --from-journey <promoted-journey-id> --at-step
   <anchor|n> [--param k=v] [--env <env>] --strategy adversarial --real --json` replays the Journey
   up to that step in the mission's own browser (form contents kept), then explores from there.
-  `jevitate journey anchors <id>` lists the named steps. A Journey that no longer replays ends the
+  `jevitate journey anchors <id>` lists the named steps. `--fixtures` (or `--before`/`--after` with
+  `--allow-shell-hooks`) restores state around it with any strategy. A Journey that no longer replays ends the
   run `inconclusive` (`failure.kind: "journey-stale"`). Many anchors at once: `jevitate campaign run
   <spec.json>` (see `jevitate-test-campaign`).
 - Behind a login: `--storage-state <file>` (a Playwright storageState path; `--save-storage-state
