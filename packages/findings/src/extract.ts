@@ -584,9 +584,10 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   const ctx: Ctx = {
     path,
     ...(str(result.transcriptPath) === undefined ? {} : { transcript: str(result.transcriptPath) }),
-    ...((str(result.recordingPath) ?? str(arr(result.recordingPaths)[0])) === undefined
+    // `recordingPath` was removed in 0.3.0; a 0.2.0-or-older result may still carry only it.
+    ...((str(arr(result.recordingPaths)[0]) ?? str(result.recordingPath)) === undefined
       ? {}
-      : { recording: str(result.recordingPath) ?? str(arr(result.recordingPaths)[0]) }),
+      : { recording: str(arr(result.recordingPaths)[0]) ?? str(result.recordingPath) }),
   };
   const observations: FindingObservation[] = [];
   const push = (o: FindingObservation | null): void => {

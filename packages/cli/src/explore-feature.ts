@@ -154,8 +154,6 @@ export type FeatureCliMissionResult = Omit<FeatureRunResult, "outcome"> & {
   readonly invariantSpec?: InvariantSpec;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
   /** Always zero (#188): a feature mission makes no model call — stated, never absent ("not tracked"). */
   readonly usage: UsageCounts;
   /** The host's health over the run (#203): peaks, the slowest render, starved steps. */

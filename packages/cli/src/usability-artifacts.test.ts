@@ -139,9 +139,10 @@ describe("usability run artifacts (#98) and run-signal findings (#96) — served
 
         // --- #98: the artifact shape, next to the report ---
         expect(result.reportPath).not.toBeNull();
-        expect(result.recordingPath).toBe(join(outDir, "usability-2026-09-24T00-00-00-000Z.recording.json"));
+        expect(result.recordingPaths).toEqual([join(outDir, "usability-2026-09-24T00-00-00-000Z.recording.json")]);
+        expect(result).not.toHaveProperty("recordingPath"); // removed in 0.3.0
         expect(result.transcriptPath).toBe(join(outDir, "usability-2026-09-24T00-00-00-000Z.transcript.json"));
-        const recording = JSON.parse(readFileSync(result.recordingPath, "utf8")) as Recording;
+        const recording = JSON.parse(readFileSync(result.recordingPaths[0]!, "utf8")) as Recording;
         const steps = recording.pages.flatMap((p) => p.steps.map((s) => s.step));
         // Launch, then Double down: the second Launch is refused (#92 — its POST already succeeded and
         // the page offers no retry), so it never becomes a Recording step.
@@ -195,10 +196,10 @@ describe("usability run artifacts (#98) and run-signal findings (#96) — served
 
         // --- #134: offline `ux <recording>` on this run's Recording reproduces the live findings ---
         expect(result.evidencePath).toBe(join(outDir, "usability-2026-09-24T00-00-00-000Z.evidence.json"));
-        const sidecars = discoverRecordingSidecars(result.recordingPath);
+        const sidecars = discoverRecordingSidecars(result.recordingPaths[0]!);
         expect(sidecars).toEqual({ evidencePath: result.evidencePath, transcriptPath: result.transcriptPath, screenshotDir: result.screenshotDir });
         const offline = await runUxReview({
-          recording: RecordingSchema.parse(JSON.parse(readFileSync(result.recordingPath, "utf8"))),
+          recording: RecordingSchema.parse(JSON.parse(readFileSync(result.recordingPaths[0]!, "utf8"))),
           appContext: { appClass: "admin" },
           judge: scriptedJudge([]),
           gen: new FakeGenerationGateway(),

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { runAdversarialCliMission } from "./explore-api.js";
-import { runVerifyFix, VerifyFixInputError } from "./verify-fix-api.js";
+import { findFinding, parsePersistedMission, runVerifyFix, VerifyFixInputError } from "./verify-fix-api.js";
 import { buildMcpTools } from "./mcp-api.js";
 import { buildProgram } from "./program.js";
 import { currentEngineInfo } from "./engine.js";
@@ -124,6 +124,29 @@ describe("verify-fix — CLI surface", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("verify-fix — older result files", () => {
+  it("still reads a server-log defect a 0.2.0-or-older result lists only in the removed serverLogDefects alias", () => {
+    const fp = "ab".repeat(8);
+    const mission = parsePersistedMission({
+      missionOutcome: "defects-found",
+      exitCode: 1,
+      result: {
+        target: { seedUrl: "http://x.test/", allowlist: ["http://x.test"] },
+        recordingPath: "/out/goal.json",
+        serverLogDefects: [
+          {
+            fingerprint: fp,
+            kind: "server-log",
+            repro: { recordingStepIndex: 0 },
+            serverLog: { sources: ["docker:api"], matcher: "error", normalizedMessage: "boom", drainMs: 500 },
+          },
+        ],
+      },
+    });
+    expect(findFinding(mission, fp)).toMatchObject({ fingerprint: fp, kind: "server-log" });
   });
 });
 

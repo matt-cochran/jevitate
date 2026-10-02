@@ -26,7 +26,7 @@ import { finishHostHealth } from "./host-health-run.js";
 import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
-import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
+import { openServerLogRuntime, type ServerLogsSummary } from "./log-correlation.js";
 import { serverLogRuntimeOptions } from "./explore-shared.js";
 import { assertSaveStorageStateOutsideProject, currentUrlSafe, persistStorageState, serverLogResult, type MissionTarget, type ServerLogOptions } from "./explore-api.js";
 import type { TargetConfig } from "./target-config.js";
@@ -221,11 +221,6 @@ export interface RunUsabilityMissionResult {
   readonly screensObserved: number;
   /** The explore loop's decision transcript, written next to the report (each step: its screenshot). */
   readonly transcriptPath: string;
-  /**
-   * The run's Recording, written next to the report (crash-safe: flushed after every step).
-   * @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor.
-   */
-  readonly recordingPath: string;
   /** Where the per-step screenshots are written (secret fields masked). */
   readonly screenshotDir: string;
   /**
@@ -269,8 +264,6 @@ export interface RunUsabilityMissionResult {
   readonly resultPath: string;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
   /**
@@ -773,7 +766,6 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(run.answer === undefined ? {} : { answer: run.answer }),
       screensObserved: collected.length,
       transcriptPath: journal.transcriptPath,
-      recordingPath: journal.recordingPath,
       screenshotDir,
       evidencePath: evidenceWritten,
       screenshots: capture.screenshots(),

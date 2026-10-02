@@ -35,6 +35,10 @@ defect, a crash or a 15 s hang.
   per-run browser-memory ceiling; a starved host refuses new runs with `E_HOST_STARVED`.
 - **Own-send tracking (#241).** A chat's reply wait follows the run's own in-flight request;
   background polling no longer keeps a wait alive or holds a landed reply's settle open.
+- **Deprecated result fields removed.** As announced in 0.2.0, results, `--json` envelopes and MCP
+  outputs no longer carry `serverLogDefects`, `recordingPath`, `usage.usd` or
+  `usage.jevPriceSource`. `schemaVersion` stays `1`; a 0.2.0 result that still has them validates,
+  and `report`, `ledger` and `verify-fix` still read them from older result files.
 
 ### Upgrade notes
 
@@ -62,6 +66,10 @@ defect, a crash or a 15 s hang.
 - **New log flags (#204, #282):** `--log-correlation-header`, `--log-id-pattern` and `--log-scope`
   are additive; set `--log-scope` when several runs share one backend log.
 - **Action deltas are opt-in (#303):** nothing changes without `--action-deltas`.
+- **Removed result fields:** read `defects` entries with `kind: "server-log"` instead of
+  `serverLogDefects`, `recordingPaths[0]` instead of `recordingPath`, `usage.totalUsd` (check
+  `usage.priced`) instead of `usage.usd`, and `usage.priceSource` instead of `usage.jevPriceSource`.
+  See docs/results.md "Removed aliases".
 
 ### Added
 

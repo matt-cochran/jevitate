@@ -65,7 +65,7 @@ export function loadJevUnitPriceUsd(path = resolveDataDir(["config.json"])): num
 /**
  * Resolves the Jev per-judgment unit price (#136): `JEVITATE_JEV_UNIT_PRICE_USD` (env) beats
  * `usage.jevUnitPriceUsd` (config); undefined when neither is set — `jevUsd` then stays unpriced,
- * exactly as it did before #136. The result's `source` is what `UsageCounts.jevPriceSource` echoes,
+ * exactly as it did before #136. The result's `source` is listed in `UsageCounts.priceSource`,
  * so a priced run's number is never unexplained. A malformed value fails closed (never silently
  * ignored, never silently mispriced): the CLI surfaces it as a setup error before any run starts.
  */

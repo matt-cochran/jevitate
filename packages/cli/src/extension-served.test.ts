@@ -109,7 +109,7 @@ describe.skipIf(!FULL_CHROMIUM)("#256 --extension (served, real Chromium, headle
         expect(parsed.ok).toBe(true);
         expect(parsed.data.outcome).toBe("succeeded");
         expect(parsed.data.finalUrl).toBe(`${extensionOrigin(ext.id)}/sidepanel.html`);
-        const recording = RecordingSchema.parse(JSON.parse(await readFile(parsed.data.recordingPath, "utf8")));
+        const recording = RecordingSchema.parse(JSON.parse(await readFile(parsed.data.recordingPaths[0], "utf8")));
         expect(recording.site).toBe(extensionOrigin(ext.id));
         expect(recording.extensions).toEqual([identity]);
         // The result's own Recording carries it too (schemaVersion 1, additive).

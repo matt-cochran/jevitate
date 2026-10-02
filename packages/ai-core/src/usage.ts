@@ -141,10 +141,6 @@ export interface UsageCounts {
   readonly missing?: readonly string[];
   /** Attempts that threw (counted in `judgments`/`generations`). */
   readonly failedCalls?: number;
-  /** The Jev price source(s), joined — #136 compat; prefer `priceSource`. */
-  readonly jevPriceSource?: string;
-  /** @deprecated Alias for `totalUsd` (#100 compat). Prefer `totalUsd` + `priced`. */
-  readonly usd?: number;
 }
 
 /** What a seam reports for one call. */
@@ -258,7 +254,6 @@ export function summarizeCalls(calls: readonly UsageCall[], missing: readonly st
   let unpriced = 0;
   let failed = 0;
   const sources: string[] = [];
-  const jevSources: string[] = [];
   const gaps: string[] = [...missing];
   for (const c of calls) {
     if (c.kind === "judgment") judgments += 1;
@@ -273,7 +268,6 @@ export function summarizeCalls(calls: readonly UsageCall[], missing: readonly st
     sources.push(c.source);
     if (c.kind === "judgment") {
       jevUsd = (jevUsd ?? 0) + c.usd;
-      jevSources.push(c.source);
     } else {
       generationUsd = (generationUsd ?? 0) + c.usd;
     }
@@ -281,7 +275,6 @@ export function summarizeCalls(calls: readonly UsageCall[], missing: readonly st
   const totalUsd = jevUsd === undefined && generationUsd === undefined ? undefined : (jevUsd ?? 0) + (generationUsd ?? 0);
   const priced = derivePriced(judgments + generations, unpriced, totalUsd !== undefined);
   const gapList = uniq(gaps);
-  const jevSourceList = uniq(jevSources);
   return {
     judgments,
     generations,
@@ -294,8 +287,6 @@ export function summarizeCalls(calls: readonly UsageCall[], missing: readonly st
     ...(sources.length === 0 ? {} : { priceSource: uniq(sources) }),
     ...(gapList.length === 0 ? {} : { missing: gapList }),
     ...(failed === 0 ? {} : { failedCalls: failed }),
-    ...(jevSourceList.length === 0 ? {} : { jevPriceSource: jevSourceList.join(" + ") }),
-    ...(totalUsd === undefined ? {} : { usd: totalUsd }),
   };
 }
 
@@ -403,6 +394,7 @@ export function usageCountsFrom(raw: unknown): UsageCounts | undefined {
   const priced: UsagePriced = o.priced === "full" || o.priced === "partial" ? o.priced : "none";
   const jevUsd = finiteNumber(o.jevUsd);
   const generationUsd = finiteNumber(o.generationUsd);
+  // A 0.2.0-or-older result may carry only the removed `usd` alias (#100): read it as `totalUsd`.
   const totalUsd = finiteNumber(o.totalUsd) ?? finiteNumber(o.usd);
   const priceSource = stringList(o.priceSource);
   const missing = stringList(o.missing);
@@ -487,7 +479,6 @@ export function sumUsage(
     ...(gapList.length === 0 ? {} : { missing: gapList }),
     ...(failed === 0 ? {} : { failedCalls: failed }),
     ...(unreportedRuns === 0 ? {} : { unreportedRuns }),
-    ...(totalUsd === undefined ? {} : { usd: totalUsd }),
   };
 }
 

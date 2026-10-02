@@ -75,9 +75,8 @@ Each call is priced by the first of these that applies:
 ```
 
 A malformed price fails the run's setup; it is never ignored. `priceSource` lists every
-source that priced a call. `jevPriceSource` is a single string — just the Jev (judgment) price
-source(s), joined with `" + "` — kept for compatibility with code written against the original
-cost-reporting change; prefer `priceSource`, which covers generation calls too.
+source that priced a call, judgment and generation alike. (The 0.2.0 `jevPriceSource` and `usd`
+aliases were removed in 0.3.0; read `priceSource` and `totalUsd`.)
 
 Next to each result, `<run>.usage.json` lists every call: `seq`, `kind`
 (`judgment`/`generation`), `task` (for example `form.value` or `chat.reply`), `model`,
