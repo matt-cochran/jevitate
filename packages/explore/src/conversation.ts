@@ -5,6 +5,7 @@ import { visibleBusyIndicator } from "./hang.js";
 import { redactPageText } from "./redact.js";
 import { backgroundEndpoints, endpointKey } from "./stuck-actions.js";
 import { clock } from "@jevitate/domain";
+import { clockBounded } from "./clock-bound.js";
 
 /**
  * Conversational pages (chat composers, assistants, interview flows): the independent-code side of
@@ -407,7 +408,7 @@ export async function waitForReply(
  */
 export async function waitForChange(page: Page, timeoutMs: number): Promise<boolean> {
   const before = await readPageText(page);
-  return page
+  const changed = page
     .waitForFunction((b) => (document.body ? document.body.innerText : "") !== b, before, {
       timeout: Math.max(1, timeoutMs),
       polling: 250,
@@ -419,6 +420,7 @@ export async function waitForChange(page: Page, timeoutMs: number): Promise<bool
       },
       () => false,
     );
+  return clockBounded(changed, Math.max(1, timeoutMs), false);
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   type HangSignal,
 } from "./hang.js";
 import { contentHash, clock } from "@jevitate/domain";
+import { clockBounded } from "./clock-bound.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { redactUrl } from "@jevitate/ai-core";
 import { resourceSettleFactor } from "@jevitate/playwright";
@@ -237,12 +238,14 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     if (busy !== null) {
       const busySince = clock.now();
       const remaining = Math.max(1, ceiling - (clock.now() - started));
-      const gone = await page
-        .waitForFunction(`!(${visibleBusyIndicator.toString()})()`, undefined, { timeout: remaining, polling: "raf" })
-        .then(
+      const gone = await clockBounded(
+        page.waitForFunction(`!(${visibleBusyIndicator.toString()})()`, undefined, { timeout: remaining, polling: "raf" }).then(
           () => true,
           () => false,
-        );
+        ),
+        remaining,
+        false,
+      );
       // A target can declare an indicator (or a route) where a lasting busy state is expected.
       if (!gone && !ignoreNoProgress(busy) && !ignoreNoProgress(hangRoute(page.url()))) {
         stuckBusy = busy;
