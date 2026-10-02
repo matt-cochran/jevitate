@@ -703,7 +703,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (87 exports)
+# @jevitate/playwright (88 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -763,6 +763,7 @@
   extensionOrigin: function
   findOrphanBrowsers: function
   governanceFromEnv: function
+  isTransientSlotError: function
   jevitateBrowsers: function
   knownDeviceNames: function
   markedBrowsers: function

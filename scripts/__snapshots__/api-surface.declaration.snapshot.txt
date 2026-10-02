@@ -1104,7 +1104,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (138 exports)
+# @jevitate/playwright (139 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1171,6 +1171,7 @@
   GovernorTicket: interface
   HostLoadSample: interface
   HostSignalDeps: interface
+  isTransientSlotError: function
   jevitateBrowsers: function
   knownDeviceNames: function
   LinuxResourceSignals: class

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MachineBrowserSlots } from "./machine-slots.js";
+import { MachineBrowserSlots, isTransientSlotError } from "./machine-slots.js";
 import { AdmissionTimeoutError } from "./browser-pool.js";
 
 /** #205: the machine-wide browser semaphore — concurrency, stale-holder recovery, timeouts. */
@@ -46,8 +46,10 @@ describe("MachineBrowserSlots", () => {
   });
 
   it("separate PROCESSES racing for 2 slots never exceed 2 holders", async () => {
-    const mod = fileURLToPath(new URL("../dist/machine-slots.js", import.meta.url));
-    expect(existsSync(mod), "build @jevitate/playwright first (pnpm -r build)").toBe(true);
+    const modUrl = new URL("../dist/machine-slots.js", import.meta.url);
+    expect(existsSync(fileURLToPath(modUrl)), "build @jevitate/playwright first (pnpm -r build)").toBe(true);
+    // import() takes a URL: a bare Windows path (`D:\…`) parses as the scheme `d:` and is refused.
+    const mod = modUrl.href;
     const log = join(dir, "log.txt");
     const child = `
       import { appendFileSync } from "node:fs";
@@ -154,5 +156,18 @@ describe("MachineBrowserSlots", () => {
     writeFileSync(slotFile(0), JSON.stringify({ pid: process.pid, host: "x", token: "successor", acquiredAt: "x" }));
     lease.release();
     expect(JSON.parse(readFileSync(slotFile(0), "utf8")).token).toBe("successor");
+  });
+});
+
+describe("isTransientSlotError (Windows delete-pending slot files)", () => {
+  const e = (code: string): NodeJS.ErrnoException => Object.assign(new Error(code), { code });
+  it("EPERM/EACCES/EBUSY are a slot mid-release on Windows only; real errors elsewhere", () => {
+    for (const code of ["EPERM", "EACCES", "EBUSY"]) {
+      expect(isTransientSlotError(e(code), "win32")).toBe(true);
+      expect(isTransientSlotError(e(code), "linux")).toBe(false);
+      expect(isTransientSlotError(e(code), "darwin")).toBe(false);
+    }
+    expect(isTransientSlotError(e("ENOSPC"), "win32")).toBe(false);
+    expect(isTransientSlotError(undefined, "win32")).toBe(false);
   });
 });

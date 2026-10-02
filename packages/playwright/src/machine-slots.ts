@@ -92,12 +92,23 @@ function installExitHook(): void {
   });
 }
 
+/**
+ * Windows: a slot file another process just unlinked while someone still had it open lingers as
+ * DELETE-PENDING until the last handle closes — opening, creating (`wx`) or renaming it fails with
+ * EPERM/EACCES/EBUSY instead of ENOENT/EEXIST. That is a slot mid-release (gone in milliseconds),
+ * never a permission problem; POSIX has no such state, so there these codes stay real errors.
+ */
+export function isTransientSlotError(err: unknown, platform: NodeJS.Platform = process.platform): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY");
+}
+
 function readHolder(path: string): SlotHolder | null | undefined {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT" || isTransientSlotError(err)) return undefined;
     throw err;
   }
   try {
@@ -217,7 +228,7 @@ export class MachineBrowserSlots {
       try {
         renameSync(s.path, aside);
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+        if ((err as NodeJS.ErrnoException).code === "ENOENT" || isTransientSlotError(err)) return false;
         throw err;
       }
       const moved = readHolder(aside);
@@ -229,7 +240,12 @@ export class MachineBrowserSlots {
           // a new holder took the index meanwhile; the moved file's owner re-acquires on its next heartbeat miss
         }
       }
-      unlinkSync(aside);
+      try {
+        unlinkSync(aside);
+      } catch (err) {
+        // Windows: a reader still has it open; the uniquely named aside file is never a slot file
+        if (!isTransientSlotError(err)) throw err;
+      }
       return same;
     } finally {
       rmdirSync(lock);
@@ -251,6 +267,8 @@ export class MachineBrowserSlots {
         try {
           writeFileSync(path, `${JSON.stringify(holder)}\n`, { flag: "wx" });
         } catch (err) {
+          // Windows: the previous holder's file is still being deleted — busy for now, next poll retries.
+          if (isTransientSlotError(err)) break;
           if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
           const s = this.#state(index);
           if (s !== undefined && s.stale !== null && this.#removeStale(s)) continue;
