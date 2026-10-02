@@ -47,6 +47,8 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "ai setup": "interactive secret entry (a hidden-echo stdin prompt for an API key): a key never passes through a model or an MCP argument",
   record: "a HUMAN-driven recording: a person clicks through the app in a headed browser while it records — there is nobody to click over MCP (author_journey is the agent's way to author a Journey)",
   "source trust": "trusting a third-party Journey (bound to its content hash) is a person's decision, like approve_action: MCP can add, pull and run a source, never vouch for it",
+  "logs triage":
+    "#313: sends a run's recorded log text (redacted) to the judgment model with --real — an operator opt-in for their own logs, like --log-source itself (operator-declared, never an MCP argument)",
   doctor:
     "#205: host maintenance for the operator (it signals processes on this machine and clears machine-wide browser slots); the same orphan sweep already runs automatically before every browser-driving MCP tool, and each result reports governance in hostHealth.resources",
 };

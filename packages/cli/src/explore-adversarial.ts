@@ -46,7 +46,7 @@ import {
   type ServerLogDefect,
   type ServerLogsSummary,
 } from "./log-correlation.js";
-import {
+import { triageOf,
   type ServerLogOptions,
   serverLogResult,
   type OverflowFlags,
@@ -387,7 +387,7 @@ export async function runAdversarialCliMission(
       ...(host.failure === undefined || outcome.failure !== undefined ? {} : { failure: host.failure }),
       ...host.fields,
     };
-    return await withRunEvidence({ ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) }, evidenceOf(opts, opts.secrets ?? []));
+    return await withRunEvidence({ ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) }, evidenceOf(opts, opts.secrets ?? []), triageOf(opts, serverLogRun, opts.secrets ?? []));
   } finally {
     disarmKillSwitch();
     health.stop();

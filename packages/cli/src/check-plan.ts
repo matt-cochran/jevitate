@@ -283,6 +283,11 @@ function itemSetup(
       ...(x.serverLogDrainMs === undefined ? {} : { drainMs: x.serverLogDrainMs }),
     };
   }
+  // #313: an item's `logTriage` turns triage on (or, `false`, off) over whichever log sources apply.
+  if (serverLog !== undefined && x.logTriage !== undefined) {
+    const { triage: _drop, ...rest } = serverLog;
+    serverLog = x.logTriage ? { ...rest, triage: {} } : rest;
+  }
   const actors = x.actor === undefined ? null : resolveMissionActors(x.actor);
   if (actors !== null) {
     checkActorsAgainstSpec(actors, p.invariants);

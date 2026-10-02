@@ -193,12 +193,31 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--allow-log-cmd` | a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running the spec's before/after operator hooks around every run (never model-chosen) | `false` |  |  |  |
+| `--allow-writes` | let a find-out mission change the app (forwarded to every mission, as explore's) |  |  |  |  |
+| `--deny <pattern>` | a control no mission may click (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--evidence-video` | per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's) |  |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
+| `--hook-timeout-ms <ms>` | timeout for each of the spec's before/after hooks (default 60000; the process group is killed) |  |  |  |  |
+| `--invariants <file>` | app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--journeys-dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
+| `--log-correlation-header <name>` | another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-defect <level|/regex/>` | backend log lines matching this become a server-log defect (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-id-pattern </regex/>` | how a correlation id is written in log lines (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-ignore <regex|substring>` | known-noise backend log lines to exclude (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-quiet-ok <spec>` | a --log-source that is legitimately quiet (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |
 | `--out <dir>` | the campaign's directory: every mission's results, campaign.json and campaign.md (default .jevitate/logs/<date>/campaign-<stamp>) |  |  |  |  |
+| `--paid <pattern>` | an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for the missions (requires keys) | `false` |  |  |  |
+| `--record-video [dir]` | record a video of each mission's browser context (forwarded to every mission, as explore's) |  |  |  |  |
+| `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
+| `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
 
 ## check
 
@@ -432,6 +451,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--log-quiet-ok <spec>` | declares a --log-source spec (exact match, repeatable) as legitimately quiet: zero lines from it does not make the --log-defect oracle unhealthy (#169). Without it, a declared source that opened but delivered not one line makes an otherwise-clean run inconclusive, same as one that failed to open | `[]` |  |  |  |
 | `--log-scope <regex|substring>` | attributes only backend log lines matching this (repeatable, /regex/flags/ or a plain substring, e.g. a tenant id) to the run (#282); the rest count as serverLogs.ignoredLines. For concurrent runs tailing one log. A line carrying one of the run's own correlation ids is in scope | `[]` |  |  |  |
 | `--log-source <spec>` | backend log source (repeatable; every strategy, incl. usability): file:<path> (tailed from its current end) \| docker:<container> (docker logs -f --since 0s) \| cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted | `[]` |  |  |  |
+| `--log-triage` | #313: record the run's whole signal timeline (backend lines at every level, the browser's console, page errors, failed requests) to <run>.signals.jsonl, and attach to each defect only the lines that relate to it (defects[].relatedLogs): code keeps the lines correlated to its request and prefilters its step's window, then, with --real, Jev scores each remaining line's relevance (log text goes to the judgment model, redacted — operator opt-in, never an MCP argument). Needs --log-source |  |  |  |  |
 | `--long-poll-ms <n>` | a request pending this long on an interactive page is a long-poll (default 5000) |  |  |  |  |
 | `--max-actions <n>` | hard cap on executed actions |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
@@ -1124,6 +1144,25 @@ delete runs older than the retention TTL, always keeping the newest runs (config
 | `--dir <dir>` | logs root to prune (default: the project's .jevitate/logs, else ~/.jevitate/logs) |  |  |  |  |
 | `--dry-run` | list what would be deleted, deleting nothing |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+
+### logs triage
+
+```
+jevitate logs triage [options]
+```
+
+#313: re-triage a finished run's signals (<run>.signals.jsonl, written by explore --log-triage): attach to each defect only the lines that relate to it (defects[].relatedLogs) — the lines correlated to its request, then, with --real, the window lines Jev scores relevant (else its error/warning lines). Rewrites the result
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--fake-ai` | no model: keep the correlated lines and the window's error/warning lines (code only) | `false` |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--real` | score relevance with the live Jev gateway (requires keys; log text goes to the judgment model, redacted) | `false` |  |  |  |
+| `--result <path>` | the run's <run>.result.json (its <run>.signals.jsonl must sit next to it) |  |  | yes |  |
+| `--secret <value|env:VAR>` | a value to keep out of the judgment payload (repeatable; env:VAR reads it from the environment) | `[]` |  |  |  |
+| `--threshold <p>` | Jev relevance probability at or above which a line is kept (default 0.5) |  |  |  |  |
 
 ## mcp
 

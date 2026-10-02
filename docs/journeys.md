@@ -154,6 +154,11 @@ jevitate explore --from-journey checkout --at-step payment --param email=a@examp
   missing). A prefix that no longer replays makes the check `inconclusive` with
   `failure.kind: "journey-stale"` (exit 2), never `fixed`.
 
+One anchored step with a state restore (`--fixtures`, `--before`/`--after` with
+`--allow-shell-hooks`) on a non-goal strategy (#312) runs the same way as a one-stop sweep: the
+setup before the prefix replay, the restore after the mission, and the sweep's result shape
+(`sweep.mode: "step"`, `sweep.atStep`).
+
 ### Sweeping every step
 
 `--at-step all` runs the strategy from EVERY top-level step (an anchor's name where one names the
@@ -218,6 +223,16 @@ Declare anchors in the Journey's `metadata` (validated: names unique, each step 
 | `fixtures`, `before`, `after` | The state restore around every run (paths relative to the spec; `~/` is home) |
 | `discovery` | `false` skips the discovery replay |
 | `maxRuns` | The mission cap (default 50, at most 200); `maxActions` (default 40) and `maxDecisions` are per-mission defaults |
+
+**Mission options (#311).** Every `campaign run` flag beyond its own (`--journeys-dir`, `--out`,
+`--allow-shell-hooks`, `--hook-timeout-ms`, `--real`/`--fake-ai`, `--json`) is forwarded to every
+anchored mission as given: `--allow-destructive`, `--allow-writes`, `--deny`, `--paid`,
+`--invariants`, the backend-log flags (`--log-source`, `--log-defect`, `--log-scope`, …,
+`--server-log-drain-ms`), `--evidence-video`, `--record-video` and `--screenshots`. They are operator
+flags, never spec fields: a spec file alone never widens what a mission may click or read. Over MCP,
+`run_campaign` takes the safety and media flags; log sources and hooks stay operator-only.
+`--hook-timeout-ms` bounds the spec's `before`/`after` hooks (it also applies to an `--at-step all`
+sweep's hooks).
 
 Bounded: at most 50 jobs. The campaign's outcome is the worst of its missions' (a stale or broken
 mission makes it `inconclusive`, exit 2; its findings are still reported). An invalid spec is

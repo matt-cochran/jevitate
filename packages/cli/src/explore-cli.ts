@@ -63,6 +63,7 @@ import {
   type ServerLogOptions,
 } from "./explore-api.js";
 import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
+import { triagedServerLog } from "./explore-shared.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { LogSpecError } from "./log-lines.js";
@@ -454,6 +455,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       [] as string[],
     )
     .option(
+      "--log-triage",
+      "#313: record the run's whole signal timeline (backend lines at every level, the browser's console, page errors, failed requests) to <run>.signals.jsonl, " +
+        "and attach to each defect only the lines that relate to it (defects[].relatedLogs): code keeps the lines correlated to its request and prefilters its step's window, " +
+        "then, with --real, Jev scores each remaining line's relevance (log text goes to the judgment model, redacted — operator opt-in, never an MCP argument). Needs --log-source",
+    )
+    .option(
       "--server-log-drain-ms <ms>",
       "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
       nonNegativeIntArg,
@@ -516,6 +523,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       const o = this.opts<{
         invariants: string[];
         logSource: string[];
+        logTriage?: boolean;
         allowLogCmd?: boolean;
         logDefect: string[];
         logQuietOk: string[];
@@ -640,7 +648,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         // #293 sweep: `--at-step all|anchors` runs the strategy from EVERY step (or anchor), each in a
         // fresh session with --fixtures restored around it, --max-actions/--max-decisions split evenly
         // over the stop points, and reads them as one deduped report (a one-job campaign).
-        if (isSweepMode(o.atStep)) {
+        // #312: one anchored step with a state restore (--fixtures/--before/--after) on a non-goal
+        // strategy runs the same way — as a one-stop campaign, whose runner restores around the run.
+        const restoredSingle =
+          !isSweepMode(o.atStep) && strategy !== "goal" && (o.fixtures !== undefined || o.before !== undefined || o.after !== undefined);
+        if (isSweepMode(o.atStep) || restoredSingle) {
           if (o.real !== true && o.fakeAi !== true) {
             emitExplore(fail("E_AI_SETUP_REQUIRED", "a sweep's missions are model-driven: pass --real or --fake-ai"));
             return;
@@ -649,7 +661,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           const abs = (p: string): string => resolvePath(p);
           const spec = {
             version: 1,
-            name: `sweep of ${o.fromJourney} (${o.atStep}, ${strategy})`,
+            name: restoredSingle ? `${o.fromJourney} at step ${o.atStep.trim()} (${strategy}, restored)` : `sweep of ${o.fromJourney} (${o.atStep}, ${strategy})`,
             ...(o.env === undefined ? {} : { env: o.env }),
             ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }),
             ...(o.storageState === undefined ? {} : { storageState: abs(o.storageState) }),
@@ -663,7 +675,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
                 id: "sweep",
                 journey: o.fromJourney,
                 params: o.param,
-                anchors: o.atStep.trim(),
+                anchors: restoredSingle ? [o.atStep.trim()] : o.atStep.trim(),
                 strategies: [strategy],
                 ...(o.goal === undefined ? {} : { goal: o.goal }),
                 ...(o.appClass === undefined ? {} : { appClass: o.appClass }),
@@ -677,6 +689,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             const plan = await validateCampaignSpec(spec, resolvePath("explore-sweep.json"), {
               journeysDir,
               allowShellHooks: o.allowShellHooks === true,
+              ...(o.hookTimeoutMs === undefined ? {} : { hookTimeoutMs: Number(o.hookTimeoutMs) }),
               environmentSeams: environmentSeams(deps),
             });
             const result = await runCampaign(plan, {
@@ -688,7 +701,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
               ...(o.fakeAi === true ? { fakeAi: true } : {}),
               missionArgs: forwardedArgv(this, SWEEP_OWNED),
             });
-            emitExplore(ok(withEngine({ sweep: { journeyId: o.fromJourney, mode: o.atStep.trim(), strategy, stops: plan.totalRuns, budgetPerStop: { maxActions: plan.jobs[0]?.maxActions, ...(plan.jobs[0]?.maxDecisions === undefined ? {} : { maxDecisions: plan.jobs[0].maxDecisions }) } }, ...result })), result.exitCode, formatCampaignHuman);
+            emitExplore(ok(withEngine({ sweep: { journeyId: o.fromJourney, mode: restoredSingle ? "step" : o.atStep.trim(), ...(restoredSingle ? { atStep: o.atStep.trim() } : {}), strategy, stops: plan.totalRuns, budgetPerStop: { maxActions: plan.jobs[0]?.maxActions, ...(plan.jobs[0]?.maxDecisions === undefined ? {} : { maxDecisions: plan.jobs[0].maxDecisions }) } }, ...result })), result.exitCode, formatCampaignHuman);
           } catch (err) {
             if (err instanceof CampaignSpecError) emitExplore(fail("E_EXPLORE_ARGS", err.message));
             else emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
@@ -1028,6 +1041,13 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           throw err;
         }
       }
+      if (o.logTriage === true) {
+        if (serverLog === undefined) {
+          emitExplore(fail("E_EXPLORE_ARGS", "--log-triage triages the run's backend and browser signals: it needs at least one --log-source"));
+          return;
+        }
+        serverLog = { ...serverLog, triage: {} };
+      }
       const withServerLog = serverLog === undefined ? {} : { serverLog };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
@@ -1067,7 +1087,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // Mission fixtures (#140/#144) run around the goal loop and its replays only.
       const fixtureFlagsGiven = o.fixtures !== undefined || o.before !== undefined || o.after !== undefined;
       if (fixtureFlagsGiven && (o.feature !== undefined || strategy !== "goal")) {
-        emitExplore(fail("E_EXPLORE_ARGS", "--fixtures, --before and --after are supported only with --strategy goal"));
+        emitExplore(fail("E_EXPLORE_ARGS", "--fixtures, --before and --after are supported only with --strategy goal, or with --from-journey (any anchored strategy)"));
         return;
       }
 
@@ -1135,7 +1155,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
-            ...withServerLog,
+            ...triagedServerLog(serverLog, covJudge, o.real === true),
             ...withPrefix,
           });
           // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see exit-codes.ts).
@@ -1219,7 +1239,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
-            ...withServerLog,
+            ...triagedServerLog(serverLog, advJudge, o.real === true),
             ...withPrefix,
           });
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
@@ -1318,7 +1338,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             overflow,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
-            ...withServerLog,
+            ...triagedServerLog(serverLog, uxJudge, o.real === true),
             ...withInvariants,
             ...(uxSuccessChecks.length === 0 ? {} : { successChecks: uxSuccessChecks }),
             ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
@@ -1514,7 +1534,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ...(o.hangReplays === undefined ? {} : { hangReplays: o.hangReplays }),
           conversation,
           ...runInvariants,
-          ...withServerLog,
+          ...triagedServerLog(serverLog, judge, o.real === true),
           ...(fx === undefined ? {} : { fixtures: fx }),
           ...withPrefix,
         });

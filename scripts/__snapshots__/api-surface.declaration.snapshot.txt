@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (561 exports)
+# @jevitate/explore (562 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -446,6 +446,7 @@
   draftForHang: function
   echoesGoal: function
   editCandidates: function
+  EMPTY_SETTLE_GRACE_MS: variable
   emptyRecording: function
   endpointOf: function
   EndpointTimingStat: interface
@@ -837,7 +838,7 @@
   WithheldWrite: interface
   WRITE_METHODS: variable
 
-# @jevitate/findings (43 exports)
+# @jevitate/findings (44 exports)
   CaseStatus: type-alias
   classify: function
   consolidate: function
@@ -857,6 +858,7 @@
   FindingsDiff: interface
   GateCase: interface
   identityBasis: function
+  RelatedLogRef: interface
   renderJUnit: function
   renderReportMarkdown: function
   renderSarif: function

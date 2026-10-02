@@ -277,6 +277,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "baseline list": { exempt: "a listing" },
   "baseline show": { cases: [["nope"]] },
   "logs prune": { exempt: "housekeeping: a missing logs dir has nothing to prune" },
+  "logs triage": { cases: [["--result", missing]] },
   "invariants validate": { cases: [[missing]] },
   doctor: { exempt: "#205: a diagnostic with no file or id input (it reports and, with --cleanup, cleans; nothing to refuse)" },
 });

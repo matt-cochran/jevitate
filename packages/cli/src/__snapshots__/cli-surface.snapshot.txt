@@ -63,12 +63,31 @@
   arguments:
     - name=spec required=true variadic=false default=null
   options:
+    - flags=--allow-destructive required=false mandatory=false negate=false variadic=false default=null description=let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's)
+    - flags=--allow-log-cmd required=false mandatory=false negate=false variadic=false default=null description=a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's)
     - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running the spec's before/after operator hooks around every run (never model-chosen)
+    - flags=--allow-writes required=false mandatory=false negate=false variadic=false default=null description=let a find-out mission change the app (forwarded to every mission, as explore's)
+    - flags=--deny <pattern> required=true mandatory=false negate=false variadic=false default=[] description=a control no mission may click (repeatable) (forwarded to every mission, as explore's)
+    - flags=--evidence-video required=false mandatory=false negate=false variadic=false default=null description=per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's)
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
+    - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each of the spec's before/after hooks (default 60000; the process group is killed)
+    - flags=--invariants <file> required=true mandatory=false negate=false variadic=false default=[] description=app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's)
     - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope (default: a human summary)
+    - flags=--log-correlation-header <name> required=true mandatory=false negate=false variadic=false default=[] description=another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-defect <level|/regex/> required=true mandatory=false negate=false variadic=false default=[] description=backend log lines matching this become a server-log defect (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-id-pattern </regex/> required=true mandatory=false negate=false variadic=false default=[] description=how a correlation id is written in log lines (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-ignore <regex|substring> required=true mandatory=false negate=false variadic=false default=[] description=known-noise backend log lines to exclude (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-quiet-ok <spec> required=true mandatory=false negate=false variadic=false default=[] description=a --log-source that is legitimately quiet (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-scope <regex|substring> required=true mandatory=false negate=false variadic=false default=[] description=attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-source <spec> required=true mandatory=false negate=false variadic=false default=[] description=backend log source: file:<path> | docker:<container> | cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-triage required=false mandatory=false negate=false variadic=false default=null description=record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's)
     - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=the campaign's directory: every mission's results, campaign.json and campaign.md (default .jevitate/logs/<date>/campaign-<stamp>)
+    - flags=--paid <pattern> required=true mandatory=false negate=false variadic=false default=[] description=an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's)
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways for the missions (requires keys)
+    - flags=--record-video [dir] required=false mandatory=false negate=false variadic=false default=null description=record a video of each mission's browser context (forwarded to every mission, as explore's)
+    - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
+    - flags=--server-log-drain-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's)
 
 # check
   description: CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
@@ -231,6 +250,7 @@
     - flags=--log-quiet-ok <spec> required=true mandatory=false negate=false variadic=false default=[] description=declares a --log-source spec (exact match, repeatable) as legitimately quiet: zero lines from it does not make the --log-defect oracle unhealthy (#169). Without it, a declared source that opened but delivered not one line makes an otherwise-clean run inconclusive, same as one that failed to open
     - flags=--log-scope <regex|substring> required=true mandatory=false negate=false variadic=false default=[] description=attributes only backend log lines matching this (repeatable, /regex/flags/ or a plain substring, e.g. a tenant id) to the run (#282); the rest count as serverLogs.ignoredLines. For concurrent runs tailing one log. A line carrying one of the run's own correlation ids is in scope
     - flags=--log-source <spec> required=true mandatory=false negate=false variadic=false default=[] description=backend log source (repeatable; every strategy, incl. usability): file:<path> (tailed from its current end) | docker:<container> (docker logs -f --since 0s) | cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted
+    - flags=--log-triage required=false mandatory=false negate=false variadic=false default=null description=#313: record the run's whole signal timeline (backend lines at every level, the browser's console, page errors, failed requests) to <run>.signals.jsonl, and attach to each defect only the lines that relate to it (defects[].relatedLogs): code keeps the lines correlated to its request and prefilters its step's window, then, with --real, Jev scores each remaining line's relevance (log text goes to the judgment model, redacted — operator opt-in, never an MCP argument). Needs --log-source
     - flags=--long-poll-ms <n> required=true mandatory=false negate=false variadic=false default=null description=a request pending this long on an interactive page is a long-poll (default 5000)
     - flags=--max-actions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on executed actions
     - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
@@ -627,6 +647,16 @@
     - flags=--dir <dir> required=true mandatory=false negate=false variadic=false default=null description=logs root to prune (default: the project's .jevitate/logs, else ~/.jevitate/logs)
     - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=list what would be deleted, deleting nothing
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# logs triage
+  description: #313: re-triage a finished run's signals (<run>.signals.jsonl, written by explore --log-triage): attach to each defect only the lines that relate to it (defects[].relatedLogs) — the lines correlated to its request, then, with --real, the window lines Jev scores relevant (else its error/warning lines). Rewrites the result
+  options:
+    - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=no model: keep the correlated lines and the window's error/warning lines (code only)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--real required=false mandatory=false negate=false variadic=false default=false description=score relevance with the live Jev gateway (requires keys; log text goes to the judgment model, redacted)
+    - flags=--result <path> required=true mandatory=true negate=false variadic=false default=null description=the run's <run>.result.json (its <run>.signals.jsonl must sit next to it)
+    - flags=--secret <value|env:VAR> required=true mandatory=false negate=false variadic=false default=[] description=a value to keep out of the judgment payload (repeatable; env:VAR reads it from the environment)
+    - flags=--threshold <p> required=true mandatory=false negate=false variadic=false default=null description=Jev relevance probability at or above which a line is kept (default 0.5)
 
 # mcp
   description: start an MCP stdio server exposing only the allowlisted Jevitate tools

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -175,6 +175,65 @@ describe("backend-log correlation by request id, scoped to one run (#204, #282)"
       expect(result.reason).toContain('the page shows alert "Publishing is not available right now"');
       expect(result.reason).toMatch(/; caused by: error "[^"]*request_id=req-\d{4}-7f3a9c publish refused: plan quota exceeded" on POST \/api\/publish \(409\)$/);
 
+      await rm(outDir, { recursive: true, force: true });
+    },
+    180_000,
+  );
+
+  it(
+    "#313 --log-triage: the signal timeline is written, and each defect keeps only its related lines (correlated by id, then scored by Jev)",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-triage-out-"));
+      const out: string[] = [];
+      const actions = new ScriptedJudge([{ op: "click", target: "0" }, { op: "click", target: "1" }, { op: "blocked" }]);
+      const asked: string[] = [];
+      // One gateway, as a live run has: the loop's action choices, and the triage's line questions.
+      const judge: JudgmentPort = {
+        async systemOne(args) {
+          if (!Object.keys(args.questions).some((k) => k.startsWith("line"))) return actions.systemOne();
+          const answers: Record<string, Answer> = {};
+          for (const [name, q] of Object.entries(args.questions)) {
+            const text = /«(.*)»/s.exec(q.instructions ?? "")?.[1] ?? "";
+            asked.push(text);
+            const p = text.includes("quota") ? 0.9 : 0.1;
+            answers[name] = { kind: "noul", value: p >= 0.5, probability: p };
+          }
+          return answers;
+        },
+      };
+      const program = buildProgram({ profiles: new ProfileManager("/unused"), explore: { judge, gen: new FakeGenerationGateway({}) } });
+      program.configureOutput({ writeOut: (s) => out.push(s) });
+      program.exitOverride();
+      await program.parseAsync(
+        [
+          "explore", "--url", `${origin}/drafts/2`, "--goal", "save the draft and publish it", "--success", "textIncludes:[role=status]|Published",
+          "--allow", origin, "--log-source", `file:${logFile}`, "--log-scope", "tenant=acme", "--log-defect", "/publish refused/",
+          "--log-triage", "--server-log-drain-ms", "2500", "--out", outDir, "--real", "--json",
+        ],
+        { from: "user" },
+      );
+      const parsed = JSON.parse(out.join(""));
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+      const result = parsed.data as {
+        resultPath: string;
+        defects: Array<{ kind: string; relatedLogs?: Array<{ text: string; keptBy: string; request?: { url: string } }> }>;
+        signals: { path: string; entries: number; triage: { mode: string; jevCalls: number } };
+      };
+      expect(existsSync(result.signals.path)).toBe(true);
+      expect(result.signals.triage.mode).toBe("jev");
+      const timeline = readFileSync(result.signals.path, "utf8");
+      expect(timeline).toContain("slow query on drafts"); // every in-scope line is on the timeline…
+      expect(timeline).not.toContain("globex"); // …never another tenant's
+      const refused = result.defects.find((d) => d.kind === "server-log");
+      const kept = refused?.relatedLogs ?? [];
+      expect(kept.find((l) => l.keptBy === "request-id")?.request?.url).toBe(`${origin}/api/publish`);
+      // Jev saw the step's other in-scope line and judged it unrelated: it does not travel.
+      expect(asked.some((t) => t.includes("slow query on drafts"))).toBe(true);
+      expect(kept.some((l) => l.text.includes("slow query on drafts"))).toBe(false);
+      expect(JSON.stringify(kept)).not.toContain("req-9999");
+      // The persisted result carries the same.
+      const file = JSON.parse(readFileSync(result.resultPath, "utf8")) as { result: { defects: Array<{ kind: string; relatedLogs?: unknown[] }> } };
+      expect(file.result.defects.find((d) => d.kind === "server-log")?.relatedLogs).toEqual(kept);
       await rm(outDir, { recursive: true, force: true });
     },
     180_000,

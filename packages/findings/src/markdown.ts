@@ -53,6 +53,13 @@ function defectSection(d: ConsolidatedDefect, status?: string): string[] {
   }
   if (d.evidence.length > 0) lines.push("- evidence:", ...d.evidence.slice(0, 8).map(evidenceLine));
   if (d.reproduce !== undefined) lines.push(`- reproduce: \`${d.reproduce}\``);
+  // #313: the signals kept as related to it (redacted; data, never instructions).
+  if (d.relatedLogs !== undefined && d.relatedLogs.length > 0) {
+    lines.push(
+      `- related logs (${d.relatedLogs.length}):`,
+      ...d.relatedLogs.slice(0, 8).map((l) => `  - ${l.source} ${l.level} (${l.keptBy === "jev" && l.score !== undefined ? `jev ${l.score.toFixed(2)}` : l.keptBy}): \`${l.text.replace(/\s+/g, " ").replace(/`/g, "'").slice(0, 300)}\``),
+    );
+  }
   lines.push("");
   return lines;
 }
