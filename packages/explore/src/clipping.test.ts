@@ -10,17 +10,23 @@ useSkippingTime({ per: "all" });
 
 /**
  * #302 vertical clipping, REAL Chromium. `/issue` is the issue's own repro: a 56px header whose
- * centred `flex-wrap` chip wraps to four lines at 375px and spills above the page top. `/clipped`
+ * centred `flex-wrap` chip wraps to six rows and spills above the page top. `/clipped`
  * is a fixed-height `overflow: hidden` card whose text is cut off. Every other page is intentional or
  * invisible and must stay silent: line-clamp, ellipsis, sr-only, a collapsed accordion, a skip link,
  * a scroll container, a scroll-locked body, and an --ignore-overflow match.
  */
-const doc = (body: string, bodyStyle = "margin:0;font:16px/20px sans-serif"): string =>
+const doc = (body: string, bodyStyle = "margin:0;font:16px/20px monospace"): string =>
   `<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body style="${bodyStyle}">${body}</body></html>`;
+// Layout-deterministic (CI fonts differ): every chip item takes a full row (flex-basis 100%), so the
+// chip is always 6 rows x 20px = 120px in a 56px header and spills 32px above the page top,
+// whatever the installed fonts' advance widths or ascent/descent.
+const CHIP = ["1173.14", "credits", "balance", "10.02", "credits", "held"]
+  .map((t) => `<span style="flex:0 0 100%;white-space:nowrap">${t}</span>`)
+  .join("");
 const LONG = "Your monthly report is ready. It covers usage, credits, invoices and every member who joined this month.";
 const PAGES: Record<string, string> = {
   "/issue": doc(
-    `<header style="height:56px;display:flex;align-items:center"><div data-testid="balance" style="display:flex;flex-wrap:wrap;width:120px;gap:0 4px"><span>1173.14</span><span>credits</span><span>balance</span><span>10.02</span><span>credits</span><span>held</span></div></header><main><p>Body</p></main>`,
+    `<header style="height:56px;display:flex;align-items:center"><div data-testid="balance" style="display:flex;flex-wrap:wrap;width:120px;gap:0 4px">${CHIP}</div></header><main><p>Body</p></main>`,
   ),
   "/clipped": doc(`<div data-testid="card" style="height:40px;overflow:hidden;width:200px"><p style="margin:0">${LONG}</p></div>`),
   "/clamped": doc(`<p style="margin:0;width:200px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden">${LONG}</p>`),
@@ -33,7 +39,7 @@ const PAGES: Record<string, string> = {
       `<div class="promo" style="height:40px;overflow:hidden;width:200px"><p style="margin:0">${LONG}</p></div>` +
       `<div style="height:40px;overflow:hidden;width:200px;visibility:hidden"><p style="margin:0">${LONG}</p></div>` +
       `<main id="main" style="height:3000px"><p>${LONG}</p></main>`,
-    "margin:0;font:16px/20px sans-serif;overflow:hidden;height:100vh",
+    "margin:0;font:16px/20px monospace;overflow:hidden;height:100vh",
   ),
 };
 
@@ -80,7 +86,8 @@ describe("detectClipping (#302)", () => {
     const f = found[0]!;
     expect(f).toMatchObject({ kind: "vertical-clipping", cause: "above-page-top", route: "/issue", viewport: VP, device: "iPhone X" });
     expect(f.element.descriptor).toBe("[data-testid=balance]");
-    expect(f.clippedPx).toBeGreaterThan(2);
+    // The whole spill (32px), not just the one row straddling y=0: in-flow rows wholly above count.
+    expect(f.clippedPx).toBeGreaterThan(24);
     expect(f.fingerprint).toMatch(/^[0-9a-f]{16}$/);
     expect(clippingSummary(f)).toContain("above the top of the page");
   }, 60_000);

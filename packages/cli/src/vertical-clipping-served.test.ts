@@ -21,13 +21,19 @@ useSkippingTime({ per: "all" });
  * top from a 56px header), a fixed-height `overflow: hidden` card that cuts its text off, and a
  * line-clamped teaser that truncates on purpose (never reported). `/clean` has only the teaser.
  */
+// Layout-deterministic (CI fonts differ): every chip item takes a full row (flex-basis 100%), so the
+// chip is always 6 rows x 20px = 120px in a 56px header and spills 32px above the page top,
+// whatever the installed fonts' advance widths or ascent/descent.
+const CHIP = ["1173.14", "credits", "balance", "10.02", "credits", "held"]
+  .map((t) => `<span style="flex:0 0 100%;white-space:nowrap">${t}</span>`)
+  .join("");
 const LONG = "Your monthly report is ready. It covers usage, credits, invoices and every member who joined this month.";
 const TEASER = `<p data-testid="teaser" style="width:200px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden">${LONG}</p>`;
 const page = (body: string): string =>
-  `<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body style="margin:0;font:16px/20px sans-serif">${body}<button type="button" onclick="this.textContent='Done'">Refresh</button></body></html>`;
+  `<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body style="margin:0;font:16px/20px monospace">${body}<button type="button" onclick="this.textContent='Done'">Refresh</button></body></html>`;
 const PAGES: Record<string, string> = {
   "/": page(
-    `<header style="height:56px;display:flex;align-items:center"><div data-testid="balance" style="display:flex;flex-wrap:wrap;width:120px;gap:0 4px"><span>1173.14</span><span>credits</span><span>balance</span><span>10.02</span><span>credits</span><span>held</span></div></header>` +
+    `<header style="height:56px;display:flex;align-items:center"><div data-testid="balance" style="display:flex;flex-wrap:wrap;width:120px;gap:0 4px">${CHIP}</div></header>` +
       `<div data-testid="card" style="height:40px;overflow:hidden;width:200px"><p style="margin:0">${LONG}</p></div>${TEASER}`,
   ),
   "/clean": page(TEASER),

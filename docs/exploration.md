@@ -266,8 +266,9 @@ What it does **not** report, by design:
   shows that it did. A "read more" box that truncates with a plain fixed height and
   `overflow: hidden` is reported; exclude it with `--ignore-overflow <selector>`.
 - Visually hidden text: an sr-only box (1px or less, `clip`/`clip-path`), a collapsed box (zero
-  height), text that is `visibility: hidden`, `display: none` or `opacity: 0`, and a skip link that
-  sits entirely above the page.
+  height), text that is `visibility: hidden`, `display: none` or `opacity: 0`, and a skip link (an
+  absolutely or fixed-positioned box) that sits entirely above the page. In-flow text that spilled
+  wholly above the page is still reported.
 - Scrollable boxes (`overflow: auto`/`scroll`) and the page root. A scroll-locked `<body>` is not a
   clipped box.
 - Text covered by a later sibling, such as a sticky nav overlapping a spilled line. That is

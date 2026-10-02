@@ -268,7 +268,7 @@ interface RawClipping {
  *    container or between it and the text — the app chose to truncate and shows that it did;
  *  - the sr-only / visually-hidden idiom: a box ≤1px, or one hidden by `clip`/`clip-path`;
  *  - a collapsed box (`clientHeight < 1`: accordions, closed menus) and text pulled off on purpose
- *    (skip links: entirely above the page top, or ≥1000px off);
+ *    (skip links: an absolutely/fixed-positioned box entirely above the page top, or ≥1000px off);
  *  - invisible text (`visibility: hidden`, `display: none`, `opacity: 0` on the way up);
  *  - `--ignore-overflow <selector>` matches (and their descendants).
  * One entry per element (the container, or the cut-off text's element), with its worst line.
@@ -336,6 +336,7 @@ function clippingAttribution(args: { tolerance: number; ignoreSelectors: string[
     let intentional = false;
     let hidden = false;
     let fixed = false;
+    let pulled = false;
     for (let el: Element | null = parent; el !== null; el = el.parentElement) {
       const s = style(el);
       if (s.display === "none" || s.visibility === "hidden" || s.visibility === "collapse" || s.opacity === "0") {
@@ -344,6 +345,7 @@ function clippingAttribution(args: { tolerance: number; ignoreSelectors: string[
       }
       if (clipper === null && truncates(s)) intentional = true;
       if (s.position === "fixed") fixed = true;
+      if (s.position === "absolute" || s.position === "fixed") pulled = true;
       if (clipper === null && !isPageRoot(el) && /^(hidden|clip)$/.test(s.overflowY)) clipper = el;
     }
     if (hidden || intentional) continue;
@@ -370,8 +372,11 @@ function clippingAttribution(args: { tolerance: number; ignoreSelectors: string[
     for (const l of lines) {
       const top = l.top + offset;
       const bottom = l.bottom + offset;
-      // Entirely above the page (a skip link), or pulled far off on purpose: never a cut-off line.
-      if (bottom <= 0 || top <= -1_000) continue;
+      // Pulled far off on purpose, or a positioned box (a skip link) sitting entirely above the
+      // page: never a cut-off line. An IN-FLOW line entirely above the page is spilled text and
+      // counts — its glyph box, not the line box, is measured, so ignoring it would make the
+      // result hinge on where the font's ascent/descent gaps fall relative to y=0.
+      if (top <= -1_000 || (bottom <= 0 && pulled)) continue;
       worst = Math.max(worst, -top);
     }
     if (worst > tol) record(parent, "above-page-top", worst);
