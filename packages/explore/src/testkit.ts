@@ -7,6 +7,9 @@
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
 import type { Answer, JudgmentPort, JudgmentState, Question } from "@jevitate/ai-core";
 import type { Op } from "./actions.js";
+import { TimeSkippingClock, clock, installClock, resetClock } from "@jevitate/domain";
+import { chromium, type Page } from "playwright";
+import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
 
 const port = new PlaywrightBrowserPort();
 
@@ -168,4 +171,132 @@ export class PreferenceJudge implements JudgmentPort {
     this.chosen.push(descriptions[value] ?? value);
     return { action: { kind: "choice", value, confidence: 0.9 } };
   }
+}
+
+// ── Skipping time (#304) ──────────────────────────────────────────────────────────────────────────
+
+/** Options for {@link useSkippingTime}. */
+export interface SkippingTimeOptions {
+  /** Real ms of no clock activity before an idle wait is skipped. Default 25. */
+  readonly idleMs?: number;
+  /**
+   * A request on the wire blocks skipping until it has been in flight this long (real ms): younger,
+   * it is real work about to land; older, it is HELD (a frozen backend) and the waits around it may
+   * be skipped. Default 1500. (A browser CALL in flight always blocks skipping.)
+   */
+  readonly heldMs?: number;
+  /**
+   * Also drive each watched page's time with `page.clock` (installed at open, advanced by every skip),
+   * so in-page timers (a toast, a poll, a documented wait) skip too. Default true. Off for a page that
+   * must keep the browser's own clock: a busy loop that spins on `Date.now()` never ends under a fake
+   * page clock.
+   */
+  readonly pageClock?: boolean;
+  /**
+   * `"each"` (default): a fresh skipping clock per test (`beforeEach`/`afterEach`). `"all"`: one for
+   * the whole suite (`beforeAll`/`afterAll`) — register it BEFORE a `beforeAll` that opens a shared
+   * session, so that session's page is watched too.
+   */
+  readonly per?: "each" | "all";
+}
+
+interface WatchedPage {
+  readonly page: Page;
+  readonly requests: Map<object, number>;
+}
+
+interface SkippingState {
+  readonly clock: TimeSkippingClock;
+  readonly pages: Set<WatchedPage>;
+  readonly heldMs: number;
+  readonly pageClock: boolean;
+  readonly restoreOpen: () => void;
+}
+
+let skipping: SkippingState | null = null;
+
+/**
+ * Runs Node time AND every watched page's time (`page.clock`) on a {@link TimeSkippingClock}: time
+ * flows as usual while anything is happening, and jumps over waits where nothing is (a settle
+ * window on a quiet page, a hang ceiling over a held request, a liveness bound on a frozen page).
+ * Every session opened through a `PlaywrightBrowserPort` while it is on is watched automatically.
+ * Assertions are unchanged — only the time source is.
+ */
+export function startSkippingTime(opts: SkippingTimeOptions = {}): TimeSkippingClock {
+  stopSkippingTime();
+  const pages = new Set<WatchedPage>();
+  const heldMs = opts.heldMs ?? 1_500;
+  const canSkip = (): boolean => {
+    const now = performance.now();
+    // Every Playwright call in this process (a launch, a new context, any page call) shares one client
+    // connection; its pending callbacks are the browser work still in flight.
+    const conn = (chromium as unknown as { _connection?: { _callbacks?: Map<number, object> } })._connection;
+    for (const w of pages) {
+      if (w.page.isClosed()) {
+        pages.delete(w);
+        continue;
+      }
+      for (const started of w.requests.values()) if (now - started < heldMs) return false;
+    }
+    // A browser call in flight blocks: it may carry its own real-time timeout (a click, a goto) that
+    // a skip would race, and a watchdog behind it must not fire early. The exception is a condition
+    // wait (`waitForFunction`): the product bounds those on the clock (`clockBounded`), so skipping
+    // to that bound is exactly what the code would do in real time.
+    for (const cb of conn?._callbacks?.values() ?? []) {
+      const c = cb as { type?: string; method?: string };
+      if (!(c.type === "Frame" && c.method === "waitForFunction")) return false;
+    }
+    return true;
+  };
+  const onSkip = async (ms: number): Promise<void> => {
+    await Promise.all(
+      [...pages].filter(() => skipping?.pageClock === true).map((w) =>
+        Promise.race([w.page.clock.runFor(Math.round(ms)).catch(() => undefined), new Promise((r) => setTimeout(r, 1_500))]),
+      ),
+    );
+  };
+  const skipClock = new TimeSkippingClock({ idleMs: opts.idleMs ?? 25, canSkip, onSkip });
+  installClock(skipClock);
+  const proto = PlaywrightBrowserPort.prototype;
+  const open = proto.open;
+  proto.open = async function (this: PlaywrightBrowserPort, ...args: Parameters<typeof open>) {
+    const session = await open.apply(this, args);
+    await watchPage(session.page as unknown as Page);
+    return session;
+  };
+  skipping = { clock: skipClock, pages, heldMs, pageClock: opts.pageClock ?? true, restoreOpen: () => (proto.open = open) };
+  return skipClock;
+}
+
+/** Back to the real clock (pages keep their installed clock until they close). */
+export function stopSkippingTime(): void {
+  if (skipping === null) return;
+  skipping.clock.stop();
+  skipping.restoreOpen();
+  skipping = null;
+  resetClock();
+}
+
+/** Watch `page` under skipping time: its `page.clock` follows Node time; its requests block skips while young. */
+export async function watchPage(page: Page): Promise<void> {
+  const state = skipping;
+  if (state === null) return;
+  const w: WatchedPage = { page, requests: new Map() };
+  page.on("request", (r) => w.requests.set(r, performance.now()));
+  const done = (r: object): void => void w.requests.delete(r);
+  page.on("requestfinished", done);
+  page.on("requestfailed", done);
+  if (state.pageClock) await page.context().clock.install({ time: clock.now() });
+  state.pages.add(w);
+}
+
+/** Every test in the enclosing suite (or file) runs on skipping time. */
+export function useSkippingTime(opts: SkippingTimeOptions = {}): void {
+  if (opts.per === "all") {
+    beforeAll(() => void startSkippingTime(opts));
+    afterAll(() => stopSkippingTime());
+    return;
+  }
+  beforeEach(() => void startSkippingTime(opts));
+  afterEach(() => stopSkippingTime());
 }

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission } from "./goal-based.js";
-import { ScriptedJudge, withSession } from "../testkit.js";
+import { ScriptedJudge, useSkippingTime, withSession } from "../testkit.js";
 
 /**
  * Waits that are the app WORKING, not hung — and the frozen UIs that must still be hangs:
@@ -97,6 +97,10 @@ afterAll(async () => {
 });
 
 const FAST = { renderWaitMs: 4_000, requestBoundMs: 3_000, hangProbeMs: 2_000 };
+
+// #304: Node and page time (`page.clock`) skip idle waits — documented waits, job polls and hang
+// ceilings elapse as soon as nothing else is happening; every bound and assertion is unchanged.
+useSkippingTime();
 
 describe("#289 — save-and-return navigation is progress, not a hang", () => {
   const saveAndReturn = (settingsLink: string) =>

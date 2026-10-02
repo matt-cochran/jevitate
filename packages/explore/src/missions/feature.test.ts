@@ -6,6 +6,11 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { runFeatureMission } from "./feature.js";
 import type { CapabilityScope } from "../feature/capability-scope.js";
+import { useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows on a quiet page); registered before the
+// shared session opens so its page is watched. Assertions are unchanged.
+useSkippingTime({ per: "all" });
 
 let site: { url: string; close(): Promise<void> };
 let session: BrowserSession;

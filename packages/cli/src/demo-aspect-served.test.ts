@@ -14,6 +14,7 @@ import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 import { demoJourney } from "./journey-demo-api.js";
 import type { CaptureLayer } from "./demo-capture.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
 
 /**
  * #249 served e2e: `jevitate demo "<aspect>"` explores a small served app with a deterministic
@@ -127,6 +128,8 @@ function watermarkProbe(seen: string[]): CaptureLayer {
 }
 
 describe("jevitate demo — served (#249)", () => {
+  // #304: Node and page time skip idle waits (replay polling, minimization timeouts, settle windows).
+  useSkippingTime();
   it(
     "explore with a detour → a minimized Journey without it that replays; DRAFT outputs; approve promotes and renders final outputs",
     async () => {

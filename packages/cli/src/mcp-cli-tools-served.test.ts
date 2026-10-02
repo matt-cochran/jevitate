@@ -16,6 +16,7 @@ import { buildMcpTools, type McpApiDeps, type McpTool } from "./mcp-api.js";
 import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
 import { CLI_TOOL_SPECS } from "./mcp-cli-tools.js";
 import type { CliDeps } from "./cli-shared.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
 
 /**
  * #255 served e2e for the MCP tools that mirror a CLI command (mcp-cli-tools.ts): each runs the
@@ -162,6 +163,8 @@ describe("#255 CLI-mirroring MCP tools — the surface", () => {
 });
 
 describe("#255 the Journey lifecycle over MCP", () => {
+  // #304: Node and page time skip idle waits (replay polling, minimization timeouts, settle windows).
+  useSkippingTime();
   it(
     "list → annotate (draft, then approve) → promote → demo (video + guide on disk)",
     async () => {
