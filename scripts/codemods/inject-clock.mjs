@@ -394,15 +394,18 @@ if (!DRY) {
   for (const dir of depsToAdd) {
     const pj = join(dir, "package.json");
     const pkg = JSON.parse(readFileSync(pj, "utf8"));
-    pkg.dependencies = { "@jevitate/domain": "workspace:*", ...(pkg.dependencies ?? {}) };
+    const deps = { ...(pkg.dependencies ?? {}), "@jevitate/domain": "workspace:*" };
+    pkg.dependencies = Object.fromEntries(Object.entries(deps).sort(([a], [b]) => a.localeCompare(b)));
     writeFileSync(pj, JSON.stringify(pkg, null, 2) + "\n");
+    // tsconfig: a textual insert keeps the file's own formatting
     const tj = join(dir, "tsconfig.json");
-    const tsconfig = JSON.parse(readFileSync(tj, "utf8"));
-    const refs = tsconfig.references ?? [];
-    if (!refs.some((r) => r.path === "../domain")) {
-      tsconfig.references = [{ path: "../domain" }, ...refs];
-      writeFileSync(tj, JSON.stringify(tsconfig, null, 2) + "\n");
+    let tsconfig = readFileSync(tj, "utf8");
+    if (!tsconfig.includes('"../domain"')) {
+      tsconfig = /"references"\s*:\s*\[/.test(tsconfig)
+        ? tsconfig.replace(/("references"\s*:\s*\[)(\s*)/, (_, open, ws) => `${open}${ws}{ "path": "../domain" },${ws === "" ? " " : ws}`)
+        : tsconfig.replace(/\n}\s*$/, ',\n  "references": [{ "path": "../domain" }]\n}\n');
+      writeFileSync(tj, tsconfig);
     }
   }
-  if (depsToAdd.size > 0) console.log("Run `pnpm install --offline` to link the new workspace dependencies.");
+  if (depsToAdd.size > 0) console.log("Run `pnpm install --prefer-offline` to link the new workspace dependencies.");
 }
