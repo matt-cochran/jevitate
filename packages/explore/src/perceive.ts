@@ -39,6 +39,13 @@ import { resourceSettleFactor } from "@jevitate/playwright";
 /** Ceiling (ms) on waiting for a page to render and settle — the same for every mission. */
 export const RENDER_WAIT_MS = 15_000;
 
+/**
+ * #310: how long a page that SETTLED with no interactive control is given for one to render before
+ * it counts as an empty state. Zero controls right after settling is almost always a code-split
+ * route still loading its chunk and data behind an empty shell, not a real state.
+ */
+export const EMPTY_SETTLE_GRACE_MS = 3_000;
+
 export interface PerceiveOptions {
   readonly maxCandidates?: number;
   /** #192: keep a long list's options the goal names past its per-list cap (see `SnapshotOptions`). */
@@ -50,6 +57,11 @@ export interface PerceiveOptions {
   readonly secrets?: readonly string[];
   /** Ceiling on the render + settle wait (ms). Default `RENDER_WAIT_MS`; 0 disables waiting. */
   readonly renderWaitMs?: number;
+  /**
+   * #310: grace (ms) a page that settled with no interactive control gets for one to render (then it
+   * settles again). Default `EMPTY_SETTLE_GRACE_MS`, within the render ceiling; 0 disables it.
+   */
+  readonly emptySettleGraceMs?: number;
   /** Quiet window for "settled" (ms). Default `SETTLE_QUIET_MS` (500). */
   readonly quietMs?: number;
   /** Bound (ms) on the main-thread probe (a trivial evaluate). Default `HANG_PROBE_MS` (5s). */
@@ -224,11 +236,25 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
       () => false,
     );
 
+  let controlSeen = false;
+  void controlsP.then((seen) => {
+    controlSeen = seen;
+  });
   const first = await Promise.race([
     controlsP.then(() => ({ kind: "controls" as const })),
     settledP.then((settle) => ({ kind: "settled" as const, settle })),
   ]);
-  const settle = first.kind === "settled" ? first.settle : await settledP;
+  let settle = first.kind === "settled" ? first.settle : await settledP;
+
+  // #310: settled before any control rendered (a lazily loaded route's empty shell between its chunk
+  // and its data). Give a control a bounded grace to appear, then settle again — never past the ceiling.
+  if (settle.settled && first.kind === "settled" && !controlSeen) {
+    const grace = Math.min(opts.emptySettleGraceMs ?? EMPTY_SETTLE_GRACE_MS * settleFactor, ceiling - (clock.now() - started));
+    if (grace > 0 && (await clockBounded(controlsP, grace, false))) {
+      const remaining = Math.max(1, ceiling - (clock.now() - started));
+      settle = await monitor.waitSettled({ quietMs, ceilingMs: remaining });
+    }
+  }
 
   // 3. A settled page that still shows a busy indicator: give it the rest of the ceiling to finish.
   let stuckBusy: string | null = null;
