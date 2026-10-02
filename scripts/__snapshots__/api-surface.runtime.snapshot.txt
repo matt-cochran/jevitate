@@ -105,11 +105,12 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (55 exports)
+# @jevitate/domain (61 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEGRADED_FINDINGS: array
   EnvironmentDegradedSchema: object
+  FakeClock: class
   GOAL_ONLY_OUTCOMES: array
   GOAL_OUTCOMES: array
   GOAL_OUTCOME_FOLD: object
@@ -136,8 +137,10 @@
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
+  clock: object
   combineOutcomes: function
   contentHash: function
+  currentClock: function
   evaluateGate: function
   fileDraft: function
   fingerprintMarker: function
@@ -145,6 +148,7 @@
   gatingDefects: function
   gaussian: function
   hasOwnFrame: function
+  installClock: function
   isBrokenRun: function
   isGoalOutcome: function
   isUnboundedHeapGrowth: function
@@ -154,6 +158,8 @@
   nextOpenAfter: function
   occurrenceComment: function
   outcomeExitCode: function
+  realClock: object
+  resetClock: function
   resolveThrottle: function
   safeChildPath: function
   safeRunPolicy: function

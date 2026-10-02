@@ -163,15 +163,18 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (98 exports)
+# @jevitate/domain (107 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
   Attribution: type-alias
   AttributionResult: interface
+  clock: variable
+  ClockImpl: interface
   combineOutcomes: function
   contentHash: function
   CrashEvidence: interface
+  currentClock: function
   DEFAULT_HEAP_GROWTH_RULE: variable
   DEFAULT_JEVITATE_REPO: variable
   DEGRADED_FINDINGS: variable
@@ -181,6 +184,8 @@
   EnvironmentDegraded: type-alias
   EnvironmentDegradedSchema: variable
   evaluateGate: function
+  FakeClock: class
+  FakeClockOptions: interface
   fileDraft: function
   FilingConfig: interface
   FilingOutcome: type-alias
@@ -199,6 +204,7 @@
   HeapSample: interface
   HostHealthSummary: type-alias
   HostHealthSummarySchema: variable
+  installClock: function
   InteractionPolicy: type-alias
   isBrokenRun: function
   isGoalOutcome: function
@@ -229,6 +235,8 @@
   PersistedMissionResultSchema: variable
   PlannedStep: type-alias
   QuietHours: type-alias
+  realClock: variable
+  resetClock: function
   resolveThrottle: function
   ResourceGovernanceSummaryRecord: type-alias
   ResourceGovernanceSummarySchema: variable
@@ -258,6 +266,7 @@
   targetsFor: function
   ThrottlePolicy: type-alias
   TimedStep: interface
+  TimerHandle: type-alias
   TimingProfile: interface
   TypingModel: type-alias
   UnsafeNameError: class
