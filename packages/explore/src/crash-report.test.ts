@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { buildCrashReport, sampleHeap } from "./crash-report.js";
-import { withSession } from "./testkit.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all", pageClock: false }); // page.clock replaces `performance` (no performance.memory)
 
 describe("sampleHeap — CDP Runtime.getHeapUsage, not Chromium's bucketed performance.memory (issue #83)", () => {
   it(

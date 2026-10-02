@@ -4,8 +4,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
-import { ScriptedJudge, withSession, type ScriptedStep } from "../testkit.js";
+import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "../testkit.js";
 import { UNSAVED_WRITE_REASON } from "../answer.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #239 — a false success: "record a decision … finish by reporting the saved decision" was accepted

@@ -9,6 +9,10 @@ import { MissionResultSchema } from "@jevitate/domain";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CLI_ADVERSARIAL_STRATEGIES, runAdversarialCliMission, runCoverageMission } from "./explore-api.js";
 import { runUsabilityMission } from "./ux-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #302 end to end, REAL Chromium at 375x812: the vertical-clipping signal is reported where the

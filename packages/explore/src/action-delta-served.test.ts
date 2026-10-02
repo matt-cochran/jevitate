@@ -8,7 +8,10 @@ import { ActionDeltas, DELTA_MAX_CHANGES, type ActionDelta } from "./action-delt
 import { monitorFor } from "./page-monitor.js";
 import { explore } from "./explore.js";
 import type { Control } from "./snapshot.js";
-import { PreferenceJudge, withSession } from "./testkit.js";
+import { PreferenceJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #303 — action deltas, served in real Chromium: each verdict, the volatility baseline (a ticking

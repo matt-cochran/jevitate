@@ -5,6 +5,10 @@ import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runAdversarialMission } from "./adversarial.js";
+import { useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #296: the page's renderer stops answering in the MIDDLE of a perception (a Storybook story that

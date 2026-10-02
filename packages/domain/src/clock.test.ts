@@ -160,6 +160,16 @@ describe("TimeSkippingClock", () => {
     skipping.stop();
   });
 
+  it("skips a long wait in steps of at most maxSkipMs", async () => {
+    const jumps: number[] = [];
+    const skipping = new TimeSkippingClock({ idleMs: 1, maxSkipMs: 1_000, onSkip: (ms) => void jumps.push(ms) });
+    installClock(skipping);
+    await clock.sleep(5_000);
+    expect(jumps.length).toBeGreaterThanOrEqual(5);
+    expect(Math.max(...jumps)).toBeLessThanOrEqual(1_000);
+    skipping.stop();
+  });
+
   it("does not skip while the process keeps using the clock", async () => {
     const skipping = new TimeSkippingClock({ idleMs: 30 });
     installClock(skipping);

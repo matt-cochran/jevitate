@@ -7,6 +7,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FsMissionQueueStore, FsMissionTargetStore, MissionTargetRegistry, type MissionTarget, type QueuedMission } from "@jevitate/missions";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { drainMissionQueue, realQueuedMissionExecutor } from "./mission-queue-runner.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #175 — queued missions against an app with a ROTATING refresh cookie. Every authenticated request

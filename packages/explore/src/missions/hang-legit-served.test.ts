@@ -1,14 +1,18 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { clock } from "@jevitate/domain";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission } from "./goal-based.js";
 import { monitorFor } from "../page-monitor.js";
 import { perceive } from "../perceive.js";
-import { ScriptedJudge, withSession } from "../testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "../testkit.js";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { verifyFix, type VerifySession } from "../verify-fix.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #153 — long-running LEGITIMATE work is not a hang: a started server stream (gRPC-web, NDJSON), a
@@ -72,7 +76,7 @@ beforeAll(async () => {
         return;
       case "/api/draft":
         // A slow unary job (the 7-minute draft, scaled down): answers after 6s.
-        timers.push(setTimeout(() => res.writeHead(200, { "content-type": "application/json" }).end("{}"), 6_000));
+        timers.push(clock.setTimeout(() => res.writeHead(200, { "content-type": "application/json" }).end("{}"), 6_000)); // #304: same clock as the code under test
         return;
       case "/api/draft-never":
         held.push(res); // the same job, genuinely stuck
@@ -99,7 +103,7 @@ beforeAll(async () => {
   origin = `http://127.0.0.1:${(addr satisfies AddressInfo).port}`;
 });
 afterAll(async () => {
-  for (const t of timers) clearTimeout(t);
+  for (const t of timers) clock.clearTimeout(t);
   for (const r of held) r.destroy();
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));

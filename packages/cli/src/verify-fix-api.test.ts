@@ -12,6 +12,10 @@ import { buildProgram } from "./program.js";
 import { currentEngineInfo } from "./engine.js";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import type { ProfileManager } from "@jevitate/daemon";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * Owner ruling 2 — the verify-fix path, end to end through the CLI surface: an adversarial run

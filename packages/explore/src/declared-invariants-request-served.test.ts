@@ -5,7 +5,10 @@ import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { validateInvariantSpec, type InvariantSpec } from "@jevitate/recording";
 import { runGoalBasedMission, type GoalBasedResult } from "./missions/goal-based.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #295 on a served page (real Chromium): "what was saved is what reloads". A list editor PUTs

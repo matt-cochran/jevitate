@@ -15,8 +15,11 @@ import {
 } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
-import { withSession } from "../testkit.js";
+import { withSession, useSkippingTime } from "../testkit.js";
 import { ANSWER_FITS_QUESTION } from "../answer.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #207 — a find-out goal must answer from ordinary page text and from a form field's value, and an

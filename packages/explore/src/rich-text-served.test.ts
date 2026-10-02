@@ -8,7 +8,10 @@ import type { Page } from "playwright";
 import { runGoalBasedMission } from "./missions/goal-based.js";
 import { InvariantMonitor } from "./declared-invariants.js";
 import { validateTextEdit } from "./rich-text.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #148 — rich-text editing inside `contenteditable` and visual-state checks, against the served

@@ -4,7 +4,10 @@ import { RecordingInterpreter } from "@jevitate/interpreter";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { startServer } from "@jevitate/example-site";
 import { RunRecorder, toPath } from "./index.js";
-import { withSession } from "./testkit.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 let site: { url: string; close(): Promise<void> };
 beforeAll(async () => {

@@ -310,6 +310,12 @@ export interface TimeSkippingOptions {
   readonly onSkip?: (ms: number) => Promise<void> | void;
   /** How often (real ms) the skipper looks for an idle wait. Default 5. */
   readonly tickMs?: number;
+  /**
+   * Largest single jump (ms). A long wait is skipped in steps of at most this, re-checking for idleness
+   * between them, so work a jump sets off (a page poll fired by `onSkip`) lands before time moves on.
+   * Default unlimited.
+   */
+  readonly maxSkipMs?: number;
 }
 
 interface SkipTimer {
@@ -370,12 +376,14 @@ export class TimeSkippingClock implements ClockImpl {
   readonly #idleMs: number;
   readonly #canSkip: () => boolean;
   readonly #onSkip: ((ms: number) => Promise<void> | void) | undefined;
+  readonly #maxSkipMs: number;
   #loop: ReturnType<typeof realSetInterval> | undefined;
 
   constructor(opts: TimeSkippingOptions = {}) {
     this.#idleMs = Math.max(0, opts.idleMs ?? 25);
     this.#canSkip = opts.canSkip ?? (() => true);
     this.#onSkip = opts.onSkip;
+    this.#maxSkipMs = Math.max(1, opts.maxSkipMs ?? Number.POSITIVE_INFINITY);
     this.#loop = realSetInterval(() => void this.#maybeSkip(), Math.max(1, opts.tickMs ?? 5));
     this.#loop.unref();
   }
@@ -483,7 +491,7 @@ export class TimeSkippingClock implements ClockImpl {
     let next: SkipTimer | undefined;
     for (const t of this.#timers.values()) if (next === undefined || t.at < next.at) next = t;
     if (next === undefined) return;
-    const jump = next.at - this.#mono();
+    const jump = Math.min(next.at - this.#mono(), this.#maxSkipMs);
     if (jump <= 1) return;
     if (!this.#canSkip()) return;
     this.#skipping = true;

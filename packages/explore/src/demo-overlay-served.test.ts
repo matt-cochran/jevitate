@@ -14,7 +14,10 @@ import { occluderOf } from "./occlusion.js";
 import { runInductionMission, type InductionRunResult } from "./missions/induction.js";
 import { runAdversarialMission, type AdversarialOutcome } from "./missions/adversarial.js";
 import { DEMO_OVERLAY_ATTR, DEMO_OVERLAY_HIDE_STYLE, DemoOverlay, demoOverlayFor } from "./demo-overlay.js";
-import { ScriptedJudge, withSession, type ScriptedStep } from "./testkit.js";
+import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #245 — the demo overlay is INVISIBLE TO JEVITATE. Served pages, real Chromium, deterministic fakes:

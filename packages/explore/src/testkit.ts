@@ -193,6 +193,12 @@ export interface SkippingTimeOptions {
    */
   readonly pageClock?: boolean;
   /**
+   * Largest single jump (ms), default 1000: a long wait is skipped in steps, so what a step sets off
+   * in the page (a poll's request, a timer's effect) lands before time moves on — as it would in real
+   * time, where a 1 s poll answers long before a 15 s ceiling.
+   */
+  readonly maxSkipMs?: number;
+  /**
    * `"each"` (default): a fresh skipping clock per test (`beforeEach`/`afterEach`). `"all"`: one for
    * the whole suite (`beforeAll`/`afterAll`) — register it BEFORE a `beforeAll` that opens a shared
    * session, so that session's page is watched too.
@@ -255,7 +261,7 @@ export function startSkippingTime(opts: SkippingTimeOptions = {}): TimeSkippingC
       ),
     );
   };
-  const skipClock = new TimeSkippingClock({ idleMs: opts.idleMs ?? 25, canSkip, onSkip });
+  const skipClock = new TimeSkippingClock({ idleMs: opts.idleMs ?? 25, canSkip, onSkip, maxSkipMs: opts.maxSkipMs ?? 1_000 });
   installClock(skipClock);
   const proto = PlaywrightBrowserPort.prototype;
   const open = proto.open;

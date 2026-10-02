@@ -11,7 +11,10 @@ import {
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import type { Step } from "@jevitate/recording";
 import { explore } from "./index.js";
-import { withSession } from "./testkit.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * Secret canary (end to end, REAL Chromium): per-run random canaries planted
