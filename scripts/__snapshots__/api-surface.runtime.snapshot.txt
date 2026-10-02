@@ -169,7 +169,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (364 exports)
+# @jevitate/explore (365 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -208,6 +208,7 @@
   DEMO_OVERLAY_HIDE_STYLE: const (string)
   DESTRUCTIVE: object
   DemoOverlay: class
+  EMPTY_SETTLE_GRACE_MS: const (number)
   EXPLORE: const (string)
   FORM_MISUSE_STRATEGIES: array
   FORM_TEXT_MAX_CHARS: const (number)
