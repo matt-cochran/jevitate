@@ -61,6 +61,10 @@ mission and reading the result honestly.
   <file>` writes the rotated one back). Pass real secrets with `--secret env:VAR` or
   `--secret-field 'label=Password=env:APP_PASSWORD'` so they stay out of every model call. Never
   put a secret value in the command line yourself.
+- Backend logs: `--log-source docker:<container>` (or `file:<path>`) with `--log-defect error`; add
+  `--log-triage` so each defect carries only its related lines (`defects[].relatedLogs`; Jev scores
+  relevance with `--real`; the timeline is `<run>.signals.jsonl`; `jevitate logs triage --result <r>`
+  re-triages). Hand `relatedLogs`, not the whole log, to a fix session or an issue.
 - App rules: `--invariants <file>` checks declared invariants around every action (e.g. "when the
   page says Saved, the server has the value"). A violation is a code-decided defect.
 - Evidence: `--evidence-video` (a captioned clip and before/at screenshots per defect),

@@ -48,7 +48,7 @@ import {
   type ServerLogDefect,
   type ServerLogsSummary,
 } from "./log-correlation.js";
-import {
+import { triageOf,
   type ServerLogOptions,
   serverLogResult,
   type OverflowFlags,
@@ -441,7 +441,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       resultPath: resultPathFor(journal.recordingPath),
       ...host.fields,
     };
-    return await withRunEvidence({ ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed, runUsage) }, evidenceOf(opts, []));
+    return await withRunEvidence({ ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed, runUsage) }, evidenceOf(opts, []), triageOf(opts, serverLogRun, []));
   } finally {
     disarmKillSwitch();
     health.stop();

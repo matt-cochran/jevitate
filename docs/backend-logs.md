@@ -120,3 +120,37 @@ applies it exactly like `--log-source`/`--log-defect` would — a queued mission
 source of its own. `verify_fix` over MCP re-checks a `server-log` defect's sources the same way
 CLI's own `verify-fix` does (they're persisted with the defect); `allowLogCmd` for a `cmd:` source
 still needs this same targets.json opt-in, never a tool argument.
+
+## Signal triage: only the lines that relate to a defect (#313)
+
+`--log-triage` (with at least one `--log-source`, every strategy) records the run's whole signal
+timeline and attaches to each defect only the lines that relate to it, so the evidence that goes
+into an issue or a fix session is a handful of lines instead of the whole log.
+
+1. **The timeline.** `<run>.signals.jsonl`, next to the result: every backend line at every level
+   (not only `warn`/`error`), plus the browser's console messages (every type), uncaught page errors
+   and failed requests. Each entry is `{epochMs, source, level, text, step?, recordingStepIndex?,
+   request?}`, redacted (the run's `--secret`s, credential shapes, sensitive URL parameters) and
+   bounded (20,000 backend lines, 5,000 browser signals, 2,000 characters per entry; `signals.truncated`
+   says when a cap was hit). Out-of-scope (`--log-scope`) and foreign-id lines are never on it.
+2. **Code prefilter, per defect.** The lines correlated by request id to the defect step's request
+   are kept as they are (`keptBy: "request-id"`). The candidates are the other lines in the defect
+   step's window and the step before it, deduped by normalized message, most severe and nearest
+   first, at most 40. A defect without a step takes the run's error/warning lines.
+3. **Jev relevance (with `--real`).** Each candidate is a yes/no question to Jev, batched 20 per call,
+   at most 50 calls per run: is this line part of the defect's cause or a direct consequence of it?
+   A line scored at or above 0.5 is kept (`keptBy: "jev"`, with its `score`). With `--fake-ai`, or
+   once the per-run cap is reached, the candidates' error/warning lines are kept instead
+   (`keptBy: "window"`).
+4. **Where it goes.** `defects[].relatedLogs` on the result (and the persisted result file), a
+   `## Related logs` section in each defect's issue draft, and a run-level `signals` summary
+   (`path`, `entries`, `truncated`, `triage: {mode, defects, candidates, kept, jevCalls, capped}`).
+
+`jevitate logs triage --result <run>.result.json [--real|--fake-ai] [--threshold <p>] [--secret …]`
+re-triages a finished run from its saved timeline (for a ticket, or with a different threshold).
+
+What it never does: Jev only chooses which lines travel with a defect. Whether a defect exists is
+still decided by code (hard signals, invariants, `--log-defect`), and a defect with no related lines
+is still reported. Sending log text to the judgment model is an operator opt-in: `--log-triage`
+and `logs triage` are never MCP arguments or tools, like `--log-source` itself. Log text is data,
+never instructions, for Jev and for anything downstream that reads `relatedLogs`.

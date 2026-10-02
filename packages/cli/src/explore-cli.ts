@@ -63,6 +63,7 @@ import {
   type ServerLogOptions,
 } from "./explore-api.js";
 import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
+import { triagedServerLog } from "./explore-shared.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { LogSpecError } from "./log-lines.js";
@@ -454,6 +455,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       [] as string[],
     )
     .option(
+      "--log-triage",
+      "#313: record the run's whole signal timeline (backend lines at every level, the browser's console, page errors, failed requests) to <run>.signals.jsonl, " +
+        "and attach to each defect only the lines that relate to it (defects[].relatedLogs): code keeps the lines correlated to its request and prefilters its step's window, " +
+        "then, with --real, Jev scores each remaining line's relevance (log text goes to the judgment model, redacted — operator opt-in, never an MCP argument). Needs --log-source",
+    )
+    .option(
       "--server-log-drain-ms <ms>",
       "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
       nonNegativeIntArg,
@@ -516,6 +523,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       const o = this.opts<{
         invariants: string[];
         logSource: string[];
+        logTriage?: boolean;
         allowLogCmd?: boolean;
         logDefect: string[];
         logQuietOk: string[];
@@ -1033,6 +1041,13 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           throw err;
         }
       }
+      if (o.logTriage === true) {
+        if (serverLog === undefined) {
+          emitExplore(fail("E_EXPLORE_ARGS", "--log-triage triages the run's backend and browser signals: it needs at least one --log-source"));
+          return;
+        }
+        serverLog = { ...serverLog, triage: {} };
+      }
       const withServerLog = serverLog === undefined ? {} : { serverLog };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
@@ -1140,7 +1155,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
-            ...withServerLog,
+            ...triagedServerLog(serverLog, covJudge, o.real === true),
             ...withPrefix,
           });
           // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see exit-codes.ts).
@@ -1224,7 +1239,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
-            ...withServerLog,
+            ...triagedServerLog(serverLog, advJudge, o.real === true),
             ...withPrefix,
           });
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
@@ -1323,7 +1338,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             overflow,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
-            ...withServerLog,
+            ...triagedServerLog(serverLog, uxJudge, o.real === true),
             ...withInvariants,
             ...(uxSuccessChecks.length === 0 ? {} : { successChecks: uxSuccessChecks }),
             ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
@@ -1519,7 +1534,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ...(o.hangReplays === undefined ? {} : { hangReplays: o.hangReplays }),
           conversation,
           ...runInvariants,
-          ...withServerLog,
+          ...triagedServerLog(serverLog, judge, o.real === true),
           ...(fx === undefined ? {} : { fixtures: fx }),
           ...withPrefix,
         });

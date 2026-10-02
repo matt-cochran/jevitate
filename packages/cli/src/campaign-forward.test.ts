@@ -25,11 +25,11 @@ describe("campaign run forwards explore's safety, evidence and log options to ev
     const run = parsedRun([
       "--allow-destructive", "--allow-writes", "--deny", "Archive", "--paid", "/^Launch/", "--paid", "Send",
       "--invariants", "inv.json", "--log-source", "docker:api-1", "--log-defect", "error", "--log-scope", "acme",
-      "--log-correlation-header", "x-trace", "--server-log-drain-ms", "5000", "--evidence-video", "--record-video", "--screenshots", "steps",
+      "--log-correlation-header", "x-trace", "--server-log-drain-ms", "5000", "--log-triage", "--evidence-video", "--record-video", "--screenshots", "steps",
       "--hook-timeout-ms", "120000", "--allow-shell-hooks", "--real", "--journeys-dir", "j", "--out", "o", "--json",
     ]);
     const argv = campaignMissionArgv(run);
-    expect(argv).toEqual(expect.arrayContaining(["--allow-destructive", "--allow-writes", "--evidence-video", "--record-video"]));
+    expect(argv).toEqual(expect.arrayContaining(["--allow-destructive", "--allow-writes", "--evidence-video", "--record-video", "--log-triage"]));
     const pairs = (flag: string): string[] => argv.flatMap((a, i) => (a === flag ? [argv[i + 1] ?? ""] : []));
     expect(pairs("--deny")).toEqual(["Archive"]);
     expect(pairs("--paid")).toEqual(["/^Launch/", "Send"]);
@@ -50,7 +50,7 @@ describe("campaign run forwards explore's safety, evidence and log options to ev
   it("MCP run_campaign takes the same safety and media flags, never log sources or hooks", () => {
     const cmd = CLI_TOOL_SPECS.find((t) => t.name === "run_campaign")!.command as { params: Record<string, unknown>; omitted: Record<string, string> };
     expect(Object.keys(cmd.params)).toEqual(expect.arrayContaining(["allowDestructive", "allowWrites", "deny", "paid", "invariants", "evidenceVideo", "recordVideo", "screenshots"]));
-    for (const flag of ["--log-source", "--allow-log-cmd", "--allow-shell-hooks", "--hook-timeout-ms"]) expect(Object.keys(cmd.omitted)).toContain(flag);
+    for (const flag of ["--log-source", "--allow-log-cmd", "--allow-shell-hooks", "--hook-timeout-ms", "--log-triage"]) expect(Object.keys(cmd.omitted)).toContain(flag);
   });
 });
 

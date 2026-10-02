@@ -23,6 +23,7 @@ import {
   type LogLine,
 } from "./log-lines.js";
 import { RequestIdLedger, declaredIds, type CorrelatedRequest, type RequestEvents } from "./log-trace.js";
+import { observeBrowserSignals, redactSignalText, type RawBrowserSignal, type SignalEntry } from "./signal-triage.js";
 
 /**
  * Correlates tailed backend log lines to the mission step they landed during (#142): each step's
@@ -158,6 +159,9 @@ export interface ServerLogRuntimeResult {
   readonly transcript: readonly TranscriptEntryWithLogs[];
   readonly summary: ServerLogsSummary;
   readonly defects: ServerLogDefect[];
+  /** #313 (`signals: true`): the run's whole redacted signal timeline — every backend line at every
+   *  level plus the browser's console, page errors and failed requests — each placed in its step. */
+  readonly signals?: { readonly entries: readonly SignalEntry[]; readonly truncated: boolean };
 }
 
 const UNATTRIBUTED_ROUTE = "(run)";
@@ -192,6 +196,8 @@ export interface ServerLogRuntimeOptions {
   readonly correlationHeaders?: readonly string[];
   /** #204: `--log-id-pattern`s: how an id is written in a log line of the operator's own format. */
   readonly idPatterns?: readonly RegExp[];
+  /** #313 `--log-triage`: also record the whole signal timeline (`ServerLogRuntimeResult.signals`). */
+  readonly signals?: boolean;
   /** The journal's own listener — still called for every entry (the crash-safe flush is unchanged). */
   readonly onTranscriptEntry?: (entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void;
 }
@@ -222,6 +228,9 @@ export class ServerLogRuntime {
   #ignoredLines = 0;
   readonly #inner: ((entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void) | undefined;
   readonly #maxTotalLines = 20_000;
+  readonly #signalsOn: boolean;
+  readonly #browserSignals: RawBrowserSignal[] = [];
+  #signalsDropped = false;
   #finished = false;
   readonly #exitHook = (): void => {
     for (const h of this.#handles) h.killSync();
@@ -237,6 +246,7 @@ export class ServerLogRuntime {
     this.#idPatterns = opts.idPatterns ?? [];
     this.#ledger = new RequestIdLedger({ headers: opts.correlationHeaders ?? [] });
     this.#inner = opts.onTranscriptEntry;
+    this.#signalsOn = opts.signals === true;
     // One `openLogSources` call per spec: each source's `onLine` must stamp ITS OWN spec onto every
     // `LogLine` (a shared callback across sources could not tell them apart). Each source also gets
     // its OWN `DotnetEntryGrouper` (#165) — a multi-line .NET entry must never straddle two sources.
@@ -253,7 +263,10 @@ export class ServerLogRuntime {
   }
 
   #pushLine(raw: string, epochMs: number, sourceRaw: string): void {
-    if (this.#lines.length >= this.#maxTotalLines) return;
+    if (this.#lines.length >= this.#maxTotalLines) {
+      this.#signalsDropped = true;
+      return;
+    }
     const parsed = parseLogLine(raw, epochMs, sourceRaw);
     // #169 item 3: a known-noise line is dropped here, BEFORE it can become step evidence, a
     // `topMessages`/`byLevel` entry or a defect candidate — but it was still delivered by the
@@ -281,6 +294,12 @@ export class ServerLogRuntime {
    */
   observe(page: RequestEvents): void {
     this.#ledger.observe(page);
+    // #313: with --log-triage, the browser's own signals join the same timeline.
+    if (this.#signalsOn) {
+      observeBrowserSignals(page, this.#browserSignals, () => clock.now(), () => {
+        this.#signalsDropped = true;
+      });
+    }
   }
 
   /** Wraps the journal's own `TranscriptListener`: unchanged persistence, plus this step's epoch. */
@@ -392,7 +411,34 @@ export class ServerLogRuntime {
         ? { requestsWithIds: this.#ledger.requestsWithIds, idMatchedLines: kept.filter((l) => byId.has(l)).length, foreignLines, outOfScopeLines }
         : undefined;
     const summary = this.#summary(unattributed, kept, attachedLines, correlation);
-    return { transcript: augmented, summary, defects };
+    if (!this.#signalsOn) return { transcript: augmented, summary, defects };
+    // #313: every kept line (all levels) and every browser signal, redacted, placed in its step.
+    const place = (step: number | undefined): Pick<SignalEntry, "step" | "recordingStepIndex"> =>
+      step === undefined ? {} : { step, recordingStepIndex: recordingStepIndexFor(transcript, step) };
+    const entries: SignalEntry[] = [
+      ...kept.map((line): SignalEntry => {
+        const hit = byId.get(line);
+        const win = hit === undefined ? windows.find((w) => line.epochMs >= w.startMs && line.epochMs <= w.endMs) : windowAt(hit.request.startedAtMs);
+        return {
+          epochMs: line.epochMs,
+          source: `server:${line.source}`,
+          level: line.level,
+          text: redactSignalText(line.raw, this.#secrets),
+          ...place(win?.step),
+          ...(hit === undefined
+            ? {}
+            : { request: { method: hit.request.method, url: redactSignalText(hit.request.url, this.#secrets), ...(hit.request.status === null ? {} : { status: hit.request.status }), id: redactText(hit.id, this.#secrets) } }),
+        };
+      }),
+      ...this.#browserSignals.map((b): SignalEntry => ({
+        epochMs: b.epochMs,
+        source: b.source,
+        level: b.level,
+        text: redactSignalText(b.text, this.#secrets),
+        ...place(windows.find((w) => b.epochMs >= w.startMs && b.epochMs <= w.endMs)?.step),
+      })),
+    ].sort((a, b) => a.epochMs - b.epochMs);
+    return { transcript: augmented, summary, defects, signals: { entries, truncated: this.#signalsDropped } };
   }
 
   #buildDefects(

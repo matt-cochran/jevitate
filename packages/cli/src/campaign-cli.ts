@@ -40,6 +40,7 @@ function withMissionFlags(cmd: Command): Command {
     .option("--allow-destructive", `let missions click session-ending, destructive and paid controls (a --deny pattern still holds) ${each}`)
     .option("--allow-writes", `let a find-out mission change the app ${each}`)
     .option("--allow-log-cmd", `a --log-source cmd:<command> may run as a subprocess ${each}`)
+    .option("--log-triage", `record each mission's signal timeline and attach only the related lines to each defect (#313) ${each}`)
     .option("--server-log-drain-ms <ms>", `how long to keep tailing --log-source after a mission's last action (default 3000) ${each}`, nonNegativeIntArg)
     .option("--evidence-video", `per defect: a captioned repro clip and before/at screenshots ${each}`)
     .option("--record-video [dir]", `record a video of each mission's browser context ${each}`);

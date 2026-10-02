@@ -109,7 +109,8 @@ was tried in the register, so the gate can show they were covered.
 Tail the backend while the browser runs, so each finding carries its server-side cause:
 `--log-source docker:<container>` (or `file:<path>`), `--log-defect error`, and
 `--log-correlation-header <name>` when the app propagates a request id. Matching log lines are
-redacted and attached to the step that caused them. Add `--evidence-video` (a captioned clip per
+redacted and attached to the step that caused them. Add `--log-triage` so each finding carries only
+its related lines (`defects[].relatedLogs`): put those in the issue, not the whole log. Add `--evidence-video` (a captioned clip per
 defect) or `--screenshots`, and link the files from the issue.
 
 ## 7. Triage by exit code, then collect before fixing
