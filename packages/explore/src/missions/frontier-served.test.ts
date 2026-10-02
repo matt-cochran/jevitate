@@ -204,13 +204,15 @@ describe("frontier missions — a departure never leaves the run idle (#114)", (
       slowSeedHangs = false;
       await withSession(async (session, actor) => {
         const start = Date.now();
-        const result = await coverage(session, actor, { seedUrl: `${origin}/slow`, stallTimeoutMs: 3_000 });
+        // The bound clears one step onto /elsewhere (a control-free page now gets #310's empty-settle
+        // grace before it counts as blank) so the stall lands where it is meant to: the return.
+        const result = await coverage(session, actor, { seedUrl: `${origin}/slow`, stallTimeoutMs: 6_000 });
         const elapsedMs = Date.now() - start;
         expect(result.outcome).toBe("stalled");
         expect(result.failure?.kind).toBe("stalled");
-        expect(result.failure?.message).toContain("no step completed within 3s");
+        expect(result.failure?.message).toContain("no step completed within 6s");
         expect(result.failure?.message).toContain("returning to the seed after a departure");
-        expect(elapsedMs).toBeLessThan(12_000);
+        expect(elapsedMs).toBeLessThan(18_000);
       });
     },
     60_000,
