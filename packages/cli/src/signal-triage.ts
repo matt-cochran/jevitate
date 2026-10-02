@@ -66,17 +66,24 @@ export interface LogTriageOptions {
   readonly threshold?: number;
 }
 
+/**
+ * Bounds. Jev calls cost a small fraction of what a generative model spends reading the same lines,
+ * so the prefilter hands Jev generously many candidates and the per-run call cap is high: the point
+ * is that the expensive model downstream reads only what Jev kept.
+ */
 export const SIGNAL_LIMITS = {
   /** Browser signals recorded per run (backend lines keep the runtime's own 20k cap). */
   browserSignals: 5_000,
   /** Characters kept per signal. */
   textChars: 2_000,
   /** Candidates per defect after the code prefilter. */
-  candidatesPerDefect: 40,
+  candidatesPerDefect: 150,
   /** Questions per Jev call. */
-  batch: 20,
+  batch: 25,
   /** Jev calls per run. */
-  jevCallsPerRun: 50,
+  jevCallsPerRun: 200,
+  /** Correlated lines shown to Jev as the defect's context. */
+  contextLines: 5,
 } as const;
 
 /** Redacts one signal's text (the run's secrets, credential shapes, sensitive URL params) and bounds it. */
@@ -161,6 +168,8 @@ interface DefectLike {
   readonly message?: string;
   readonly route?: string;
   readonly repro?: { readonly recordingStepIndex: number };
+  /** What the run did at the defect's step (`click button "Publish" on /drafts/1`), when known. */
+  readonly stepAction?: string;
 }
 
 const SEVERITY: Readonly<Record<string, number>> = { error: 0, pageerror: 0, warn: 1, warning: 1, assert: 1, info: 2, log: 2, debug: 3, trace: 3, unknown: 2 };
@@ -203,13 +212,19 @@ const related = (s: SignalEntry, keptBy: RelatedLog["keptBy"], score?: number): 
 });
 
 /** The defect, in words, as Jev's state: what the lines are judged against. Redacted and asserted. */
-function defectState(d: DefectLike, secrets: readonly string[]): JudgmentState {
+function defectState(d: DefectLike, correlated: readonly SignalEntry[], secrets: readonly string[]): JudgmentState {
   const what = [d.kind, d.title, d.message].filter((x): x is string => typeof x === "string" && x !== "").join(": ");
+  // The context Jev judges each line against: the step's action, and the lines already tied to the
+  // defect's own request (the server's side of it) — so "related" can mean cause or consequence.
+  const history = [
+    ...(d.stepAction === undefined ? [] : [`the step: ${d.stepAction}`]),
+    ...correlated.slice(0, SIGNAL_LIMITS.contextLines).map((s) => `logged for the defect's request: ${s.text}`),
+  ].map((h) => redactSignalText(h, secrets));
   const state: JudgmentState = {
     goal: redactSignalText(`Decide which log lines relate to this defect found while testing a web app: ${what}`, secrets),
     url: d.route === undefined ? "" : redactSignalText(d.route, secrets),
     controls: [],
-    history: [],
+    history,
   };
   assertNoSecretInPayload(state, secrets);
   return state;
@@ -237,7 +252,7 @@ export async function triageDefects(
     const out: RelatedLog[] = byId.map((s) => related(s, "request-id"));
     let pending = candidates;
     if (opts.judge !== undefined && pending.length > 0) {
-      const state = defectState(d, opts.secrets);
+      const state = defectState(d, byId, opts.secrets);
       while (pending.length > 0 && jevCalls < SIGNAL_LIMITS.jevCallsPerRun) {
         const batch = pending.slice(0, SIGNAL_LIMITS.batch);
         pending = pending.slice(SIGNAL_LIMITS.batch);
@@ -273,6 +288,22 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const asDefect = (v: unknown): DefectLike | undefined =>
   isRecord(v) && typeof v.fingerprint === "string" && typeof v.kind === "string" ? (v as unknown as DefectLike) : undefined;
 
+/** Recording step index → what the run did there (`click button "Go" on /x`), from its transcript. */
+function stepActions(transcript: unknown, signals: readonly SignalEntry[]): Map<number, string> {
+  const byStep = new Map<number, string>();
+  for (const e of Array.isArray(transcript) ? transcript : []) {
+    if (!isRecord(e) || typeof e.step !== "number" || typeof e.op !== "string") continue;
+    byStep.set(e.step, [e.op, typeof e.target === "string" ? e.target : "", typeof e.url === "string" ? `on ${e.url}` : ""].filter((x) => x !== "").join(" "));
+  }
+  const out = new Map<number, string>();
+  for (const s of signals) {
+    if (s.step === undefined || s.recordingStepIndex === undefined || out.has(s.recordingStepIndex)) continue;
+    const action = byStep.get(s.step);
+    if (action !== undefined) out.set(s.recordingStepIndex, action);
+  }
+  return out;
+}
+
 /**
  * Triage a persisted run (#313): reads `<stem>.signals.jsonl`, writes `relatedLogs` onto each of the
  * result's defects and the run's `signals` summary, in the result file AND the returned result.
@@ -286,7 +317,14 @@ export async function triageRunResult<R extends object>(
   const path = signalsPathFor(resultPath);
   const signals = readSignals(path);
   const r = result as unknown as Record<string, unknown>;
-  const defects = (Array.isArray(r.defects) ? r.defects : []).map(asDefect).filter((d): d is DefectLike => d !== undefined);
+  const actions = stepActions(r.transcript, signals);
+  const defects = (Array.isArray(r.defects) ? r.defects : [])
+    .map(asDefect)
+    .filter((d): d is DefectLike => d !== undefined)
+    .map((d) => {
+      const action = d.repro === undefined ? undefined : actions.get(d.repro.recordingStepIndex);
+      return action === undefined ? d : { ...d, stepAction: action };
+    });
   const { byFingerprint, triage } = await triageDefects(defects, signals, opts);
   const summary: SignalsSummary = { path, entries: signals.length, truncated: opts.truncated ?? (isRecord(r.signals) && r.signals.truncated === true), triage };
   const withLogs = (list: unknown): unknown =>

@@ -65,7 +65,7 @@ describe("prefilter (#313 step 2): code chooses the candidates", () => {
   });
 
   it("caps the candidates per defect", () => {
-    const many = Array.from({ length: 100 }, (_, i) => sig({ text: `distinct message ${"x".repeat(i)}`, recordingStepIndex: 2 }));
+    const many = Array.from({ length: SIGNAL_LIMITS.candidatesPerDefect * 2 }, (_, i) => sig({ text: `distinct message ${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}`, recordingStepIndex: 2 }));
     expect(prefilter(defect, many).candidates).toHaveLength(SIGNAL_LIMITS.candidatesPerDefect);
   });
 });
@@ -99,6 +99,19 @@ describe("triageDefects (#313 step 3): Jev scores relevance; code keeps the corr
       ["deprecated header used", "window"],
     ]);
     expect(triage).toMatchObject({ mode: "code", jevCalls: 0 });
+  });
+
+  it("Jev judges each line against the defect, its step's action and the lines already tied to its request", async () => {
+    const states: Array<{ goal: string; history: string[] }> = [];
+    const judge: JudgmentPort = {
+      async systemOne({ state, questions }) {
+        states.push({ goal: state.goal, history: state.history });
+        return Object.fromEntries(Object.keys(questions).map((k) => [k, { kind: "noul", value: false, probability: 0 } as Answer]));
+      },
+    };
+    await triageDefects([{ ...defect, stepAction: 'click button "Place order" on /checkout' }], signals, { judge, secrets: [] });
+    expect(states[0]?.goal).toContain("POST /api/orders returned 500");
+    expect(states[0]?.history).toEqual(['the step: click button "Place order" on /checkout', "logged for the defect's request: insert failed: duplicate key"]);
   });
 
   it("a defect with nothing related is still reported (an empty list, never a dropped finding)", async () => {
@@ -200,5 +213,29 @@ describe("--log-triage is refused without a log source (nothing ran)", () => {
     expect(env.error?.message).toMatch(/--log-triage .* needs at least one --log-source/);
     expect(process.exitCode).toBe(64);
     process.exitCode = undefined;
+  });
+});
+
+describe("#313: targets.json logTriage — the operator's opt-in for runs without a command line (queued, suites)", () => {
+  it("turns triage on for that origin's queued missions; a non-boolean is refused", async () => {
+    const { loadTargetsFile } = await import("./target-config.js");
+    const { serverLogFromTargetConfig } = await import("./mission-queue-runner.js");
+    dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
+    const file = join(dir, "targets.json");
+    await writeFile(file, JSON.stringify({ "https://app.example.test": { logSources: ["docker:api-1"], logTriage: true }, "https://other.example.test": { logSources: ["docker:api-2"] } }));
+    const targets = loadTargetsFile(file);
+    expect(serverLogFromTargetConfig(targets, "https://app.example.test/x")?.triage).toEqual({});
+    expect(serverLogFromTargetConfig(targets, "https://other.example.test/")?.triage).toBeUndefined();
+    await writeFile(file, JSON.stringify({ "https://app.example.test": { logSources: ["docker:api-1"], logTriage: "yes" } }));
+    expect(() => loadTargetsFile(file)).toThrow(/logTriage must be true or false/);
+  });
+
+  it("Jev scores only on live gateways: a fake run triages by code", async () => {
+    const { triagedServerLog } = await import("./explore-shared.js");
+    const judge = new FakeJudgmentGateway({});
+    const base = { sources: [], logDefect: [], triage: {} };
+    expect(triagedServerLog(base, judge, true).serverLog?.triage?.judge).toBe(judge);
+    expect(triagedServerLog(base, judge, false).serverLog?.triage?.judge).toBeUndefined();
+    expect(triagedServerLog({ sources: [], logDefect: [] }, judge, true).serverLog?.triage).toBeUndefined();
   });
 });

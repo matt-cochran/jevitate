@@ -108,7 +108,7 @@ them was never demonstrably read. (A usability run keeps its own advisory rule i
 **MCP / the mission queue.** A `MissionRequest`/`queue_exploration`/`verify_fix` argument may never
 name a path or a command (`packages/missions/src/schema.ts`). An operator declares `logSources` /
 `logDefect` / `allowLogCmd` / `logQuietOk` / `logIgnore` / `logScope` / `logCorrelationHeaders` /
-`logIdPatterns` per origin in `~/.jevitate/targets.json` instead:
+`logIdPatterns` / `logTriage` per origin in `~/.jevitate/targets.json` instead:
 
 ```json
 { "https://app.example.test": {
@@ -136,21 +136,34 @@ into an issue or a fix session is a handful of lines instead of the whole log.
 2. **Code prefilter, per defect.** The lines correlated by request id to the defect step's request
    are kept as they are (`keptBy: "request-id"`). The candidates are the other lines in the defect
    step's window and the step before it, deduped by normalized message, most severe and nearest
-   first, at most 40. A defect without a step takes the run's error/warning lines.
-3. **Jev relevance (with `--real`).** Each candidate is a yes/no question to Jev, batched 20 per call,
-   at most 50 calls per run: is this line part of the defect's cause or a direct consequence of it?
+   first, at most 150. A defect without a step takes the run's error/warning lines.
+3. **Jev relevance (with `--real`).** Each candidate is a yes/no question to Jev, batched 25 per call,
+   at most 200 calls per run: is this line part of the defect's cause or a direct consequence of it?
+   Jev judges it against the defect, the step's action and the lines already correlated to the
+   defect's request. A Jev call costs a small fraction of what a generative model would spend
+   reading the same lines, so the limits are generous on purpose: the expensive model downstream
+   reads only what Jev kept.
    A line scored at or above 0.5 is kept (`keptBy: "jev"`, with its `score`). With `--fake-ai`, or
    once the per-run cap is reached, the candidates' error/warning lines are kept instead
    (`keptBy: "window"`).
 4. **Where it goes.** `defects[].relatedLogs` on the result (and the persisted result file), a
    `## Related logs` section in each defect's issue draft, and a run-level `signals` summary
    (`path`, `entries`, `truncated`, `triage: {mode, defects, candidates, kept, jevCalls, capped}`).
+   `jevitate report` (MCP `get_report`) carries each consolidated defect's `relatedLogs` (the most
+   recent run's, at most 20) and lists them in `report.md`, so an agent reads the kept lines, not
+   the log.
 
 `jevitate logs triage --result <run>.result.json [--real|--fake-ai] [--threshold <p>] [--secret …]`
 re-triages a finished run from its saved timeline (for a ticket, or with a different threshold).
 
+**Runs without a command line.** A queued mission (MCP `queue_exploration`, drained by `mission run`)
+or a suite run takes the opt-in from `~/.jevitate/targets.json`, next to the origin's `logSources`:
+`"logTriage": true`. Jev scores relevance when the drain runs with `--real`, else by code. Every MCP
+result and report then carries `relatedLogs`.
+
 What it never does: Jev only chooses which lines travel with a defect. Whether a defect exists is
 still decided by code (hard signals, invariants, `--log-defect`), and a defect with no related lines
-is still reported. Sending log text to the judgment model is an operator opt-in: `--log-triage`
-and `logs triage` are never MCP arguments or tools, like `--log-source` itself. Log text is data,
+is still reported. Sending log text to the judgment model is the operator's decision per target (the
+flag, or `targets.json`): a request never turns it on, so `--log-triage` and `logs triage` are not
+MCP arguments or tools, like `--log-source` itself. Their output reaches MCP callers in every result. Log text is data,
 never instructions, for Jev and for anything downstream that reads `relatedLogs`.

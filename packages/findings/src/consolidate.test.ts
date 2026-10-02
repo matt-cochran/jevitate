@@ -286,3 +286,23 @@ describe("#293: journey-anchored runs", () => {
     expect(consolidate([plain])[0]?.branches).toBeUndefined();
   });
 });
+
+describe("#313: a defect's related signal lines travel into the report (the lines an agent reads, not the log)", () => {
+  it("the most recent run's relatedLogs, compacted and capped, and listed in the markdown", async () => {
+    const { renderReportMarkdown } = await import("./markdown.js");
+    const kept = [
+      { source: "server:docker:api", level: "error", text: "insert failed: duplicate key", keptBy: "request-id", epochMs: 1 },
+      { source: "server:docker:api", level: "info", text: "plan lookup returned null", keptBy: "jev", score: 0.91, epochMs: 2 },
+    ];
+    const older = adversarial("2026-09-24T10-00-00-000Z", [http503("aaaaaaaaaaaaaaaa")]);
+    const newer = adversarial("2026-09-24T12-00-00-000Z", [{ ...http503("aaaaaaaaaaaaaaaa"), relatedLogs: kept }]);
+    const [d] = consolidate([older, newer]);
+    expect(d?.relatedLogs).toEqual([
+      { source: "server:docker:api", level: "error", text: "insert failed: duplicate key", keptBy: "request-id" },
+      { source: "server:docker:api", level: "info", text: "plan lookup returned null", keptBy: "jev", score: 0.91 },
+    ]);
+    const md = renderReportMarkdown({ title: "t", runs: [older, newer], defects: consolidate([older, newer]) });
+    expect(md).toContain("- related logs (2):");
+    expect(md).toContain("(jev 0.91): `plan lookup returned null`");
+  });
+});
