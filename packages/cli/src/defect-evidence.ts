@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { withRunTriage, type RunTriage } from "./explore-shared.js";
 import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -572,8 +573,9 @@ export function evidenceOf(opts: RunEvidenceOptions, secrets: readonly string[])
   };
 }
 
-/** A written result with its defects' evidence attached (unchanged without `evidenceVideo`). */
-export async function withRunEvidence<R extends { readonly resultPath: string }>(result: R, evidence: AttachEvidenceOptions | undefined): Promise<R> {
-  if (evidence === undefined) return result;
-  return attachDefectEvidence(result, { ...evidence, resultPath: result.resultPath });
+/** A written result with its defects' evidence attached (unchanged without `evidenceVideo`), then its signals triaged (`--log-triage`). */
+export async function withRunEvidence<R extends { readonly resultPath: string }>(result: R, evidence: AttachEvidenceOptions | undefined, triage?: RunTriage): Promise<R> {
+  const withEvidence = evidence === undefined ? result : await attachDefectEvidence(result, { ...evidence, resultPath: result.resultPath });
+  // #313: then the run's signals, triaged per defect (`--log-triage`).
+  return withRunTriage(withEvidence, triage);
 }

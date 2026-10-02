@@ -17,7 +17,8 @@ import { readCliVersion } from "./version.js";
 import { type EngineInfo } from "./engine.js";
 import { MissionJournal } from "./mission-journal.js";
 import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
-import { type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
+import { type ServerLogDefect, type ServerLogRuntimeResult, type ServerLogsSummary } from "./log-correlation.js";
+import { signalsPathFor, triageRunResult, writeSignals, type LogTriageOptions } from "./signal-triage.js";
 import type { LogSourceSpec } from "./log-sources.js";
 import type { LogDefectMatcher, LogIgnoreMatcher } from "./log-lines.js";
 
@@ -43,6 +44,8 @@ export interface ServerLogOptions {
   readonly correlationHeaders?: readonly string[];
   /** #204: compiled `--log-id-pattern`s (how an id is written in the operator's log format). */
   readonly idPatterns?: readonly RegExp[];
+  /** #313 `--log-triage`: record the run's whole signal timeline and triage it per defect (Jev when `judge` is live). */
+  readonly triage?: LogTriageOptions;
 }
 
 /**
@@ -58,6 +61,7 @@ export function serverLogRuntimeOptions(o: ServerLogOptions | undefined): {
   correlationHeaders: readonly string[];
   idPatterns: readonly RegExp[];
   drainMs?: number;
+  signals?: boolean;
 } {
   return {
     sources: o?.sources ?? [],
@@ -68,6 +72,7 @@ export function serverLogRuntimeOptions(o: ServerLogOptions | undefined): {
     correlationHeaders: o?.correlationHeaders ?? [],
     idPatterns: o?.idPatterns ?? [],
     ...(o?.drainMs === undefined ? {} : { drainMs: o.drainMs }),
+    ...(o?.triage === undefined ? {} : { signals: true }),
   };
 }
 
@@ -263,4 +268,35 @@ export interface ExploreCliDeps {
   localConfig?: Partial<Record<CredentialKey, string>>;
   /** #291: the startup key check's verifier (tests; default the live HTTPS check). */
   verifyFetch?: VerifyFetch;
+}
+
+/** #313: what `withRunEvidence` needs to triage a finished run's signals (`--log-triage`). */
+export interface RunTriage {
+  readonly options: LogTriageOptions;
+  readonly signals: NonNullable<ServerLogRuntimeResult["signals"]>;
+  readonly secrets: readonly string[];
+}
+
+/**
+ * The run's `serverLog` options with the triage gateway set (#313): Jev scores relevance only on a
+ * live (`--real`) run — a fake gateway has no answers for it, so a `--fake-ai` run triages by code.
+ */
+export function triagedServerLog(serverLog: ServerLogOptions | undefined, judge: JudgmentPort, live: boolean): { serverLog?: ServerLogOptions } {
+  if (serverLog === undefined) return {};
+  if (serverLog.triage === undefined || !live) return { serverLog };
+  return { serverLog: { ...serverLog, triage: { ...serverLog.triage, judge } } };
+}
+
+/** The run's triage, or `undefined` unless `--log-triage` was given and the runtime recorded signals. */
+export function triageOf(o: { readonly serverLog?: ServerLogOptions }, run: ServerLogRuntimeResult | undefined, secrets: readonly string[]): RunTriage | undefined {
+  const options = o.serverLog?.triage;
+  if (options === undefined || run?.signals === undefined) return undefined;
+  return { options, signals: run.signals, secrets };
+}
+
+/** Writes the run's `<stem>.signals.jsonl` and triages it into the result (#313). */
+export async function withRunTriage<R extends { readonly resultPath: string }>(result: R, t: RunTriage | undefined): Promise<R> {
+  if (t === undefined) return result;
+  writeSignals(signalsPathFor(result.resultPath), t.signals.entries);
+  return triageRunResult(result, result.resultPath, { ...t.options, secrets: t.secrets, truncated: t.signals.truncated });
 }

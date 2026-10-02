@@ -27,7 +27,7 @@ import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogsSummary } from "./log-correlation.js";
-import { serverLogRuntimeOptions } from "./explore-shared.js";
+import { triageOf, serverLogRuntimeOptions } from "./explore-shared.js";
 import { assertSaveStorageStateOutsideProject, currentUrlSafe, persistStorageState, serverLogResult, type MissionTarget, type ServerLogOptions } from "./explore-api.js";
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
@@ -815,7 +815,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         analysisUnavailable: why,
       };
       // Persisted like every other mission's typed result, so MCP `get_mission_result` can read it (#117).
-      return await withRunEvidence({ ...unavailable, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, unavailable.exitCode, unavailable, runUsage) }, evidenceOf(opts, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]));
+      return await withRunEvidence({ ...unavailable, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, unavailable.exitCode, unavailable, runUsage) }, evidenceOf(opts, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]), triageOf(opts, serverLogRun, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]));
     }
     const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
       minConfidence,
@@ -826,7 +826,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     const reviewed = { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
-    return await withRunEvidence({ ...reviewed, resultPath: writeMissionResult(journal.recordingPath, runOutcome, reviewed.exitCode, reviewed, runUsage) }, evidenceOf(opts, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]));
+    return await withRunEvidence({ ...reviewed, resultPath: writeMissionResult(journal.recordingPath, runOutcome, reviewed.exitCode, reviewed, runUsage) }, evidenceOf(opts, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]), triageOf(opts, serverLogRun, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]));
   } finally {
     capture.detach();
     disarmKillSwitch();

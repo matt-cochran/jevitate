@@ -1,4 +1,4 @@
-import type { EvidenceRef, FindingObservation, RunBranch, RunRecord } from "./extract.js";
+import type { EvidenceRef, FindingObservation, RelatedLogRef, RunBranch, RunRecord } from "./extract.js";
 import type { FindingCategory, FindingIdentity, RunMode, Severity } from "./identity.js";
 
 /**
@@ -52,6 +52,8 @@ export interface ConsolidatedDefect {
    * journey, then step). Absent when no such run found it.
    */
   readonly branches?: readonly RunBranch[];
+  /** #313: the related signal lines (`--log-triage`) from the most recent run that kept any. */
+  readonly relatedLogs?: readonly RelatedLogRef[];
 }
 
 interface Member {
@@ -157,6 +159,7 @@ function toDefect(group: readonly Member[]): ConsolidatedDefect {
   const times = group.map((m) => m.run.startedAt).filter((t): t is string => t !== undefined).sort();
   const evidence = sorted.flatMap(({ run, obs }) => obs.evidence.map((e) => ({ ...e, runId: run.runId }))).slice(0, 20);
   const reproduce = sorted.find((m) => m.obs.reproduce !== undefined)?.obs.reproduce;
+  const relatedLogs = sorted.find((m) => (m.obs.relatedLogs?.length ?? 0) > 0)?.obs.relatedLogs;
   const fingerprints = [...new Set(group.flatMap((m) => m.obs.related))].sort();
   const branches = new Map<string, RunBranch>();
   for (const { run } of group) if (run.branch !== undefined) branches.set(`${run.branch.journeyId}#${run.branch.step}#${run.branch.anchor ?? ""}`, run.branch);
@@ -178,5 +181,6 @@ function toDefect(group: readonly Member[]): ConsolidatedDefect {
     ...(reproduce === undefined ? {} : { reproduce }),
     intermittent: group.some((m) => m.obs.intermittent === true),
     ...(branchList.length === 0 ? {} : { branches: branchList }),
+    ...(relatedLogs === undefined ? {} : { relatedLogs }),
   };
 }

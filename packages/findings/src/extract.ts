@@ -52,6 +52,35 @@ export interface FindingObservation {
   readonly reproduce?: string;
   /** The run itself saw it come and go (a hang reproduced k/N, verify-fix `intermittent`). */
   readonly intermittent?: boolean;
+  /** #313: the signals kept as related to it (`--log-triage`), at most 20. */
+  readonly relatedLogs?: readonly RelatedLogRef[];
+}
+
+/** #313: one kept signal line, as a report carries it. */
+export interface RelatedLogRef {
+  readonly source: string;
+  readonly level: string;
+  readonly text: string;
+  readonly keptBy: string;
+  readonly score?: number;
+}
+
+const MAX_RELATED_LOGS = 20;
+
+/** A defect's `relatedLogs` (#313), compacted for a report. */
+function relatedLogsOf(d: Json): RelatedLogRef[] {
+  return arr(d.relatedLogs)
+    .filter(isRecord)
+    .flatMap((l): RelatedLogRef[] => {
+      const source = str(l.source);
+      const level = str(l.level);
+      const text = str(l.text);
+      const keptBy = str(l.keptBy);
+      if (source === undefined || level === undefined || text === undefined || keptBy === undefined) return [];
+      const score = num(l.score);
+      return [{ source, level, text, keptBy, ...(score === undefined ? {} : { score }) }];
+    })
+    .slice(0, MAX_RELATED_LOGS);
 }
 
 export interface EngineStamp {
@@ -279,6 +308,7 @@ function defectObservation(d: Json, ctx: Ctx): FindingObservation | null {
     occurrences: num(d.occurrences) ?? 1,
     evidence,
     ...(reproStep === undefined ? {} : { reproduce: verifyCommand(ctx.path, fingerprint) }),
+    ...(relatedLogsOf(d).length === 0 ? {} : { relatedLogs: relatedLogsOf(d) }),
   });
 }
 

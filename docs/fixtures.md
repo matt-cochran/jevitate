@@ -46,8 +46,11 @@ jevitate explore --strategy goal --url http://localhost:3000/projects/new \
 - A target can declare its fixtures in `~/.jevitate/targets.json` instead of passing `--fixtures`. A
   Journey run with `--env` can also take them (and `hooks`) from its environment in
   `.jevitate/environments.json` ([environments](./journeys.md#environments---env)).
-- `--fixtures`/`--before`/`--after` are supported only with `--strategy goal` (the default): they
-  refuse to start with any other strategy.
+- `--fixtures`/`--before`/`--after` are supported with `--strategy goal` (the default), and with
+  `--from-journey` on any anchored strategy (#312): there, the one anchored step runs as a one-stop
+  campaign, between the setup and the restore, and the result is the sweep's shape (`sweep.mode:
+  "step"`, `missions`, one deduped `report`). Without `--from-journey`, any other strategy refuses
+  to start.
 
 ## Fixture identities: mint as one user, run as another
 

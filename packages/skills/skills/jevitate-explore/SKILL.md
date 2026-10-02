@@ -53,13 +53,18 @@ mission and reading the result honestly.
 - From deep inside a flow (#293): `jevitate explore --from-journey <promoted-journey-id> --at-step
   <anchor|n> [--param k=v] [--env <env>] --strategy adversarial --real --json` replays the Journey
   up to that step in the mission's own browser (form contents kept), then explores from there.
-  `jevitate journey anchors <id>` lists the named steps. A Journey that no longer replays ends the
+  `jevitate journey anchors <id>` lists the named steps. `--fixtures` (or `--before`/`--after` with
+  `--allow-shell-hooks`) restores state around it with any strategy. A Journey that no longer replays ends the
   run `inconclusive` (`failure.kind: "journey-stale"`). Many anchors at once: `jevitate campaign run
   <spec.json>` (see `jevitate-test-campaign`).
 - Behind a login: `--storage-state <file>` (a Playwright storageState path; `--save-storage-state
   <file>` writes the rotated one back). Pass real secrets with `--secret env:VAR` or
   `--secret-field 'label=Password=env:APP_PASSWORD'` so they stay out of every model call. Never
   put a secret value in the command line yourself.
+- Backend logs: `--log-source docker:<container>` (or `file:<path>`) with `--log-defect error`; add
+  `--log-triage` so each defect carries only its related lines (`defects[].relatedLogs`; Jev scores
+  relevance with `--real`; the timeline is `<run>.signals.jsonl`; `jevitate logs triage --result <r>`
+  re-triages). Hand `relatedLogs`, not the whole log, to a fix session or an issue.
 - App rules: `--invariants <file>` checks declared invariants around every action (e.g. "when the
   page says Saved, the server has the value"). A violation is a code-decided defect.
 - Evidence: `--evidence-video` (a captioned clip and before/at screenshots per defect),

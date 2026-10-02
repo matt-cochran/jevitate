@@ -1,3 +1,4 @@
+import { triagedServerLog } from "./explore-shared.js";
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename } from "node:path";
@@ -249,6 +250,8 @@ export interface RealExecutorOptions {
   readonly outDir: string;
   /** Builds fresh gateways (and a fresh usage tracker) per model-driven mission. */
   readonly gateways: () => Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }>;
+  /** #313: the gateways are live (`--real`): a target's `logTriage` then scores relevance with Jev (else code only). */
+  readonly liveJudgment?: boolean;
   readonly browserPortFactory?: () => BrowserPort;
   /**
    * Launch options only — typed `BrowserLaunchOptions`, never the demo-mode `BrowserRunOptions`
@@ -377,6 +380,7 @@ export function serverLogFromTargetConfig(targets: Readonly<Record<string, Targe
     logScope: parseLogScopeSpecs(config.logScope ?? []),
     correlationHeaders: parseCorrelationHeaders(config.logCorrelationHeaders ?? []),
     idPatterns: parseLogIdPatterns(config.logIdPatterns ?? []),
+    ...(config.logTriage === true ? { triage: {} } : {}),
   };
 }
 
@@ -455,6 +459,8 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
       throw new Error("a goal-based mission with only a route has no runner: queue it as strategy coverage or adversarial with that route");
     }
     const { judge, gen, usage } = await opts.gateways();
+    // #313: a target's `logTriage` scores relevance with Jev only on live gateways (else code only).
+    const triaged = triagedServerLog(serverLog, judge, opts.liveJudgment === true);
     if (mission.strategy === "coverage" || mission.strategy === "exploratory") {
       const r = await runCoverageMission({
         ...common,
@@ -468,7 +474,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
         ...invariants,
         ...withTarget,
-        ...withServerLog,
+        ...triaged,
         ...withEmulation,
         ...withStorageState,
         ...withMedia,
@@ -488,7 +494,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
         ...invariants,
         ...withTarget,
-        ...withServerLog,
+        ...triaged,
         ...withEmulation,
         ...withStorageState,
         ...withMedia,
@@ -531,7 +537,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         bounds,
         ...invariants,
         ...withTarget,
-        ...withServerLog,
+        ...triaged,
         ...withEmulation,
         ...withStorageState,
         ...withMedia,
