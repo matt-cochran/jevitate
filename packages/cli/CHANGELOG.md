@@ -1,5 +1,17 @@
 # @jevitate/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- 3a8962d: `explore --from-journey <id> --at-step <anchor|n>` now accepts `--fixtures`, `--before` and `--after` with any anchored strategy (#312). Before, only goal runs did. The step runs as a one-stop campaign, between the setup and the restore, and the result has the sweep's shape (`sweep.mode: "step"`). Runs without `--from-journey` still need `--strategy goal` for fixtures.
+- 62bea66: `campaign run` now forwards explore's mission options to every anchored mission (#311). These are `--allow-destructive`, `--allow-writes`, `--deny`, `--paid`, `--invariants`, the backend-log flags (`--log-source`, `--log-defect`, `--log-scope`, `--log-correlation-header`, and the rest) and `--evidence-video`, `--record-video` and `--screenshots`. MCP `run_campaign` takes the safety and media flags; log sources and hooks stay operator-only. `--hook-timeout-ms` now reaches the hooks of a campaign spec and of an `--at-step all|anchors` sweep. Before this change it was silently dropped, so those hooks always used the 60 s default.
+- 7751b00: Signal triage (#313). With `explore --log-source … --log-triage`, a run records its whole signal timeline to `<run>.signals.jsonl`: backend lines at every level, the browser's console, page errors and failed requests, all redacted and bounded. Each defect then carries only the lines related to it in `defects[].relatedLogs`, and its issue draft gets a `## Related logs` section. Code keeps the lines correlated to the defect's request by id and prefilters its step's window. With `--real`, Jev scores each remaining line's relevance; with `--fake-ai`, only the window's error and warning lines are kept. Jev only selects evidence and never decides whether a defect exists. `jevitate logs triage --result <r>` re-triages a finished run. Sending log text to the model is an operator opt-in, so `--log-triage` is not exposed over MCP. `campaign run` forwards `--log-triage` to its missions. A target in `~/.jevitate/targets.json` can opt in with `"logTriage": true`, which applies to queued (MCP) and suite runs. `report` and `get_report` carry each defect's `relatedLogs`. The limits are set high on purpose (150 candidates per defect, 200 Jev calls per run) because a Jev call costs a fraction of what the generative model would spend reading the same lines.
+
+### Patch Changes
+
+- 923bf2c: explore no longer blocks on code-split routes that briefly show an empty shell (#310). When a page settles before any interactive control has rendered, perception waits up to 3 s (scaled up on a throttled host, always within the render ceiling) for a control to appear, then lets the page settle again. Only after that does it count the page as having no controls. A page that really has no controls is still judged blank, just up to 3 s later.
+
 ## 0.3.0
 
 ### Minor Changes

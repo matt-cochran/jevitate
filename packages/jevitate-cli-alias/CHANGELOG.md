@@ -1,5 +1,15 @@
 # jevitate
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [3a8962d]
+- Updated dependencies [62bea66]
+- Updated dependencies [923bf2c]
+- Updated dependencies [7751b00]
+  - @jevitate/cli@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
