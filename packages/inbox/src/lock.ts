@@ -1,12 +1,13 @@
 import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { clock } from "@jevitate/domain";
 
 export class LockTimeoutError extends Error {
   constructor(id: string) { super(`could not acquire inbox lock for '${id}'`); this.name = "LockTimeoutError"; }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => clock.sleep(ms);
 
 export async function withIdLock<T>(
   dir: string,
@@ -19,7 +20,7 @@ export async function withIdLock<T>(
   const maxWaitMs = opts.maxWaitMs ?? 10_000;
   const lockPath = join(dir, `${id}.lock`);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + maxWaitMs;
+  const deadline = clock.now() + maxWaitMs;
   for (;;) {
     try {
       const h = await open(lockPath, "wx", 0o600);
@@ -32,14 +33,14 @@ export async function withIdLock<T>(
       // stale lock succeeds may remove it and retry; everyone else just retries.
       try {
         const st = await stat(lockPath);
-        if (Date.now() - st.mtimeMs > staleMs) {
+        if (clock.now() - st.mtimeMs > staleMs) {
           const claimed = `${lockPath}.reclaim.${randomBytes(6).toString("hex")}`;
           await rename(lockPath, claimed); // throws ENOENT if another proc already reclaimed
           await rm(claimed, { force: true });
           continue; // lock slot is now free — loop retries open("wx")
         }
       } catch { /* lock vanished or was reclaimed by another proc — retry */ }
-      if (Date.now() > deadline) throw new LockTimeoutError(id);
+      if (clock.now() > deadline) throw new LockTimeoutError(id);
       await sleep(retryMs);
     }
   }

@@ -5,6 +5,7 @@ import { resolveDataDir } from "./data-dir.js";
 import { artifactStamp } from "./mission-journal.js";
 import { runMultiRun, type MultiRunPlan, type MultiRunResult, type RunEnvelope } from "./multi-run.js";
 import { setKillSummary } from "./kill-signal.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The `explore --repeat/--persona` CLI glue (#141/#143): each run is the SAME `explore` command,
@@ -33,6 +34,10 @@ export function forwardedArgv(cmd: Command, omit: ReadonlySet<string> = new Set(
       if (value === false) argv.push(opt.long);
     } else if (opt.isBoolean()) {
       if (value === true) argv.push(opt.long);
+    } else if (opt.optional && value === true) {
+      // #290: an optional-value option given bare (`--screenshots`, `--record-video`) stores `true`;
+      // forward it bare so each run resolves its own default (next to its result), never `"true"`.
+      argv.push(opt.long);
     } else if (Array.isArray(value)) {
       for (const v of value) argv.push(opt.long, String(v));
     } else if (value !== undefined) {
@@ -87,7 +92,7 @@ export interface ExploreMultiRunArgs {
 
 export async function runExploreMultiRun(args: ExploreMultiRunArgs): Promise<MultiRunResult> {
   const { cmd, plan } = args;
-  const outDir = args.out ?? join(logsDirFor((args.nowIso ?? (() => new Date().toISOString()))()), `multi-${artifactStamp((args.nowIso ?? (() => new Date().toISOString()))())}`);
+  const outDir = args.out ?? join(logsDirFor((args.nowIso ?? (() => clock.nowIso()))()), `multi-${artifactStamp((args.nowIso ?? (() => clock.nowIso()))())}`);
   // With personas, each run's --storage-state is the persona's; otherwise the mission's own is kept.
   const base = forwardedArgv(cmd, plan.personas === null ? new Set() : new Set(["storageState"]));
   return runMultiRun({

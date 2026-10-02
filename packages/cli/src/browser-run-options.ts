@@ -8,7 +8,8 @@
  */
 import { readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { BrowserLaunchOptions, OpenOptions } from "@jevitate/playwright";
+import { describeExtensions, EXTENSION_ID, extensionIdentity, extensionOrigin, sameExtensionBuild, type BrowserLaunchOptions, type ExtensionIdentity, type OpenOptions } from "@jevitate/playwright";
+import { normalizeAllowlist } from "@jevitate/explore";
 
 /** The browser options a runner takes: how Chromium is launched, plus how the run is shown (#245). */
 export interface BrowserRunOptions extends BrowserLaunchOptions {
@@ -130,4 +131,75 @@ export function headedFromEnv(env: Readonly<Record<string, string | undefined>>)
 /** The one-line warning for a headed run that opens several windows at once (#245: warn, never refuse). */
 export function multiWindowWarning(what: string): string {
   return `warning: --headed with ${what} opens several browser windows; each is shown.\n`;
+}
+
+/** #256: a `chrome-extension://` target or replay that does not match the loaded `--extension`s (exit 64). */
+export class ExtensionMismatchError extends Error {
+  readonly code = "E_EXTENSION_ARGS" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "ExtensionMismatchError";
+  }
+}
+
+/** #256: the `chrome-extension://<id>` origin of every loaded `--extension`. */
+export function extensionOrigins(browser: BrowserLaunchOptions | undefined): string[] {
+  return (browser?.extensions ?? []).map((e) => extensionOrigin(e.id));
+}
+
+/** #256: what a run records about its loaded extensions (Recording `extensions`), or undefined for none. */
+export function loadedExtensions(browser: BrowserLaunchOptions | undefined): ExtensionIdentity[] | undefined {
+  const xs = browser?.extensions ?? [];
+  return xs.length === 0 ? undefined : xs.map(extensionIdentity);
+}
+
+/** #256: `{ extensions }` to spread into a Recording a run wrote, or `{}` when it loaded none. */
+export function extensionsStamp(browser: BrowserLaunchOptions | undefined): { extensions?: ExtensionIdentity[] } {
+  const xs = loadedExtensions(browser);
+  return xs === undefined ? {} : { extensions: xs };
+}
+
+/**
+ * #256: the `--allow` list a run uses once its loaded extensions' origins are allowed too — ONLY
+ * those ids. With no `--allow`, the default (the URL's own origin) plus the extension origins; with
+ * `--allow`, those plus the extension origins. No extensions: `allow` unchanged.
+ */
+export function allowWithExtensions(url: string | undefined, allow: readonly string[], browser: BrowserLaunchOptions | undefined): string[] {
+  const ext = extensionOrigins(browser);
+  if (ext.length === 0) return [...allow];
+  const base = allow.length > 0 ? [...allow] : url === undefined ? [] : normalizeAllowlist([url]);
+  return [...new Set([...base, ...ext])];
+}
+
+/**
+ * #256: a `chrome-extension://<id>/…` start URL must name an extension this run loads — refused
+ * before any browser opens otherwise (listing the loaded ids, since an unpacked id is derived from
+ * the directory's path). Any other URL passes.
+ */
+export function assertExtensionTargetLoaded(url: string | undefined, browser: BrowserLaunchOptions | undefined): void {
+  if (url === undefined || !url.toLowerCase().startsWith("chrome-extension:")) return;
+  let host = "";
+  try {
+    host = new URL(url).host;
+  } catch {
+    /* refused below */
+  }
+  const loaded = browser?.extensions ?? [];
+  if (EXTENSION_ID.test(host) && loaded.some((e) => e.id === host)) return;
+  const hint = loaded.length === 0 ? "load it with --extension <dir>" : `loaded: ${loaded.map((e) => `${e.name} → ${extensionOrigin(e.id)}/`).join(", ")}`;
+  throw new ExtensionMismatchError(`${url} is not a page of a loaded extension (${hint})`);
+}
+
+/**
+ * #256: a replay (verify-fix, journey run) refuses when the extensions the Recording ran with are
+ * not the build loaded now — same ids, names and versions — so a "fixed" verdict is never reached
+ * against a different extension build (or without the extension at all).
+ */
+export function assertSameExtensionBuild(recorded: readonly ExtensionIdentity[] | undefined, browser: BrowserLaunchOptions | undefined, what: string): void {
+  const loaded = loadedExtensions(browser);
+  if (sameExtensionBuild(recorded, loaded)) return;
+  throw new ExtensionMismatchError(
+    `${what} was recorded with extensions ${describeExtensions(recorded)} but this run loads ${describeExtensions(loaded)}; ` +
+      "pass the same --extension build (an unpacked extension's id follows its directory path unless its manifest pins a \"key\")",
+  );
 }

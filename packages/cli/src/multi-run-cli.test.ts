@@ -6,7 +6,8 @@ import { ProfileManager } from "@jevitate/daemon";
 import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import type { BrowserPort, OpenOptions } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
-import { lastEnvelope } from "./multi-run-cli.js";
+import { Command } from "commander";
+import { forwardedArgv, lastEnvelope } from "./multi-run-cli.js";
 
 /** `explore --repeat/--persona` wiring: flags validated first, each run re-invokes `explore`. */
 function capture(): { program: ReturnType<typeof buildProgram>; lines: string[]; opens: OpenOptions[] } {
@@ -60,6 +61,38 @@ describe("explore --repeat / --persona CLI", () => {
     expect(env.ok).toBe(true);
     expect(env.data.cells[0]!.runs).toHaveLength(2);
     expect(opens).toHaveLength(2);
+    process.exitCode = 0;
+  });
+
+  it("#290: a bare optional-value flag is forwarded bare, never as the value \"true\"", async () => {
+    const cmd = new Command("explore")
+      .exitOverride()
+      .option("--screenshots [mode]")
+      .option("--record-video [dir]")
+      .option("--url <url>")
+      .action(() => undefined);
+    await cmd.parseAsync(["--screenshots", "--record-video", "--url", URL], { from: "user" });
+    expect(forwardedArgv(cmd)).toEqual(["--screenshots", "--record-video", "--url", URL]);
+    const explicit = new Command("explore").exitOverride().option("--screenshots [mode]").action(() => undefined);
+    await explicit.parseAsync(["--screenshots", "steps"], { from: "user" });
+    expect(forwardedArgv(explicit)).toEqual(["--screenshots", "steps"]);
+  });
+
+  it("#290: bare --record-video in a multi-run records into each run's own directory, never ./true", async () => {
+    const { program, opens } = capture();
+    const out = join(dir, "bare-video");
+    await program.parseAsync(
+      ["explore", "--strategy", "coverage", "--url", URL, "--max-actions", "1", "--record-video", "--screenshots", "--repeat", "2", "--out", out, "--json"],
+      { from: "user" },
+    ).catch(() => undefined);
+    expect(opens).toHaveLength(2);
+    const dirs = opens.map((o) => o.recordVideo?.dir);
+    for (const d of dirs) {
+      expect(d).toBeDefined();
+      expect(d!.startsWith(out)).toBe(true);
+      expect(d).not.toMatch(/(^|[\\/])true([\\/]|$)/);
+    }
+    expect(new Set(dirs).size).toBe(2);
     process.exitCode = 0;
   });
 

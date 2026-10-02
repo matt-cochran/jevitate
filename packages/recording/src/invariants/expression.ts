@@ -11,6 +11,8 @@ export type ExprNode =
   | { readonly t: "not"; readonly e: ExprNode }
   /** `contains(list, x)` (#147): a list (`[*]` path) or text holds the value. */
   | { readonly t: "contains"; readonly l: ExprNode; readonly r: ExprNode }
+  /** `sameList(a, b)` (#295): two lists (`[*]` paths) hold the same items in the same order. */
+  | { readonly t: "sameList"; readonly l: ExprNode; readonly r: ExprNode }
   | { readonly t: "bin"; readonly op: BinOp; readonly l: ExprNode; readonly r: ExprNode };
 
 export type BinOp = "+" | "-" | "*" | "/" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||" | "->";
@@ -110,13 +112,13 @@ export function parseInvariantExpression(src: string): ExprNode {
     }
     if (t.k === "id") {
       p += 1;
-      if (t.v === "contains") {
+      if (t.v === "contains" || t.v === "sameList") {
         expectOp("(");
         const l = impl();
         expectOp(",");
         const r = impl();
         expectOp(")");
-        return { t: "contains", l, r };
+        return { t: t.v, l, r };
       }
       if (t.v === "null") return { t: "lit", v: null };
       if (t.v === "true") return { t: "lit", v: true };
@@ -168,7 +170,7 @@ export function parseInvariantExpression(src: string): ExprNode {
 export function walkExpression(ast: ExprNode, visit: (n: ExprNode) => void): void {
   visit(ast);
   if (ast.t === "neg" || ast.t === "not") walkExpression(ast.e, visit);
-  else if (ast.t === "bin" || ast.t === "contains") {
+  else if (ast.t === "bin" || ast.t === "contains" || ast.t === "sameList") {
     walkExpression(ast.l, visit);
     walkExpression(ast.r, visit);
   }
@@ -186,7 +188,7 @@ export function expressionObservables(ast: ExprNode): string[] {
 /** A snapshotted observable value. `UNKNOWN` = it could not be read (never a violation, never a pass). */
 export const UNKNOWN: unique symbol = Symbol("unknown");
 export type ObservedValue = number | string | boolean | null;
-/** A `[*]` JSON path's values (#147): only `contains()` reads it; it is never shown item by item. */
+/** A `[*]` JSON path's values (#147): only `contains()` / `sameList()` read it; never shown item by item. */
 export type ObservedList = readonly ObservedValue[];
 export type EvalValue = ObservedValue | ObservedList | typeof UNKNOWN;
 
@@ -227,6 +229,8 @@ function evalNode(n: ExprNode, env: ExpressionEnv): EvalValue {
     }
     case "contains":
       return evalContains(evalNode(n.l, env), evalNode(n.r, env));
+    case "sameList":
+      return evalSameList(evalNode(n.l, env), evalNode(n.r, env));
     case "bin":
       return evalBin(n.op, n.l, n.r, env);
   }
@@ -246,6 +250,19 @@ function evalContains(hay: EvalValue, needle: EvalValue): EvalValue {
   return UNKNOWN;
 }
 
+/**
+ * `sameList(a, b)` (#295): both are lists of the same length whose items are equal position by
+ * position (ids compare as text, like `contains`: `42` matches `"42"`). Order matters — a list that
+ * came back reordered is not the same list. Anything that is not a list on either side (unread, a
+ * scalar, missing) decides nothing.
+ */
+function evalSameList(a: EvalValue, b: EvalValue): EvalValue {
+  if (!Array.isArray(a) || !Array.isArray(b)) return UNKNOWN;
+  if (a.length !== b.length) return false;
+  const text = (v: ObservedValue): string => (v === null ? "\u0000null" : String(v));
+  return a.every((item, i) => text(item) === text(b[i] as ObservedValue));
+}
+
 function evalBin(op: BinOp, ln: ExprNode, rn: ExprNode, env: ExpressionEnv): EvalValue {
   if (op === "&&" || op === "||" || op === "->") {
     const l = asBool(evalNode(ln, env));
@@ -262,7 +279,7 @@ function evalBin(op: BinOp, ln: ExprNode, rn: ExprNode, env: ExpressionEnv): Eva
   const l = evalNode(ln, env);
   const r = evalNode(rn, env);
   if (l === UNKNOWN || r === UNKNOWN) return UNKNOWN;
-  // A list is only ever read through contains().
+  // A list is only ever read through contains() / sameList().
   if (Array.isArray(l) || Array.isArray(r)) return UNKNOWN;
   if (op === "==") return l === r;
   if (op === "!=") return l !== r;

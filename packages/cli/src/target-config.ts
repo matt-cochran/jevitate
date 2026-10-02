@@ -74,6 +74,12 @@ export interface TargetConfig {
   /** Raw `--log-ignore` specs (a `/regex/` or a plain substring), evaluated the same way as the CLI
    *  flag (#169 item 3). */
   readonly logIgnore?: readonly string[];
+  /** Raw `--log-scope` specs (#282): only matching backend log lines are attributed to a run. */
+  readonly logScope?: readonly string[];
+  /** Extra correlation-id header names (`--log-correlation-header`, #204). */
+  readonly logCorrelationHeaders?: readonly string[];
+  /** `--log-id-pattern` specs (`/regex/`, #204): how a correlation id is written in a log line. */
+  readonly logIdPatterns?: readonly string[];
   /**
    * #247: one session per persona on this origin (an environment's origin, `--env`): each persona's
    * own storageState path (relative to this file) and `env:VAR` secret-field specs. Never committed:
@@ -118,6 +124,9 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     secretFields?: string[];
     logQuietOk?: string[];
     logIgnore?: string[];
+    logScope?: string[];
+    logCorrelationHeaders?: string[];
+    logIdPatterns?: string[];
     personas?: Record<string, TargetPersona>;
   } = {};
   if (o.storageState !== undefined) {
@@ -175,6 +184,9 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   if (o.logDefect !== undefined) out.logDefect = strings(o.logDefect, `${where}.logDefect`);
   if (o.logQuietOk !== undefined) out.logQuietOk = strings(o.logQuietOk, `${where}.logQuietOk`);
   if (o.logIgnore !== undefined) out.logIgnore = strings(o.logIgnore, `${where}.logIgnore`);
+  if (o.logScope !== undefined) out.logScope = strings(o.logScope, `${where}.logScope`);
+  if (o.logCorrelationHeaders !== undefined) out.logCorrelationHeaders = strings(o.logCorrelationHeaders, `${where}.logCorrelationHeaders`);
+  if (o.logIdPatterns !== undefined) out.logIdPatterns = strings(o.logIdPatterns, `${where}.logIdPatterns`);
   if (o.allowLogCmd !== undefined) {
     if (typeof o.allowLogCmd !== "boolean") throw new TargetConfigError(`${where}.allowLogCmd must be a boolean`);
     out.allowLogCmd = o.allowLogCmd;
@@ -316,6 +328,9 @@ export function resolveTargetConfig(
     ...(base.secretFields === undefined ? {} : { secretFields: base.secretFields }),
     ...(base.logQuietOk === undefined ? {} : { logQuietOk: base.logQuietOk }),
     ...(base.logIgnore === undefined ? {} : { logIgnore: base.logIgnore }),
+    ...(base.logScope === undefined ? {} : { logScope: base.logScope }),
+    ...(base.logCorrelationHeaders === undefined ? {} : { logCorrelationHeaders: base.logCorrelationHeaders }),
+    ...(base.logIdPatterns === undefined ? {} : { logIdPatterns: base.logIdPatterns }),
     ...(base.personas === undefined ? {} : { personas: base.personas }),
   };
 }

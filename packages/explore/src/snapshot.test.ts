@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { snapshot, targetCandidates } from "./index.js";
-import { withSession, LOGIN_FIXTURE_HTML, INBOX_FIXTURE_HTML } from "./testkit.js";
+import { withSession, LOGIN_FIXTURE_HTML, INBOX_FIXTURE_HTML, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 describe("snapshot — perceive: indexed controls + durable descriptors + freshness", () => {
   it(

@@ -57,7 +57,32 @@ jevitate explore --url http://localhost:5173/imports --goal "import https://exam
   visible: `"heatAlpha": { "dom": { "selector": "[data-heat]", "read": { "style": "background-color",
   "channel": "alpha", "reduce": "min" } } }` with `"require": "heatSpans >= 1 -> heatAlpha > 0"`.
 - `network`: a JSON path in the last response whose URL matches the glob. Only
-  responses from an authorized origin are read.
+  responses from an authorized origin are read. `json` reads the **response** body;
+  `request` (instead of `json`) reads the JSON **payload the page sent** with that request,
+  read when its response arrives. Use it for what a save sent when its response says nothing
+  (`{"ok": true}`). Values under keys that name a credential (`password`, `token`,
+  `secret`, `apiKey`, `otp`, `cvc`, a card number…) are never read: they read as
+  `"[redacted]"`. Every value is also redacted like any other observable. A payload that is not
+  JSON (a form post, protobuf) is unreadable, so the invariant is unknown.
+
+  **What was saved is what reloads.** Compare the list a save sent with the list the reload
+  returns, in order, right after a reload (`when.op: ["reload"]`). Before the reload, the page and
+  the last GET legitimately differ from the edit:
+
+  ```json
+  {
+    "observe": {
+      "savedOrder":    { "network": { "url": "/api/items", "method": "PUT", "request": "$.items[*].id" } },
+      "reloadedOrder": { "network": { "url": "/api/items", "method": "GET", "json": "$.items[*].id" } }
+    },
+    "invariants": [
+      { "id": "saved-order-reloads", "when": { "op": ["reload"] }, "require": "sameList(savedOrder, reloadedOrder)" }
+    ]
+  }
+  ```
+
+  To reopen a panel instead of reloading, gate on that click (`"when": { "op": ["click"],
+  "control": { "name": "Mechanisms" } }`).
 - `probe`: a `get` (or `head`) of an existing endpoint. It must be on an `--allow`
   origin, and it runs with the mission browser's own cookies. Redirects are not
   followed, and nothing else is sent: no other method, headers or body (except
@@ -119,7 +144,12 @@ pass: it is counted in the result's `invariants` report.
 - `always`: an assertion that must hold after every action.
 
 The expression language is small: `before(x)`, `after(x)` (or just `x`), `delta(x)`,
-`contains(list, x)`, `+ - * /`, `== != < <= > >=`, `&&`, `||`, `!`, `->` (implication), `null`, `true` and `false`.
+`contains(list, x)`, `sameList(a, b)`, `+ - * /`, `== != < <= > >=`, `&&`, `||`, `!`, `->` (implication), `null`, `true` and `false`.
+A list is a `[*]` JSON path's values. It is read only by `contains` and `sameList`, and `==` on a
+list is unknown. `sameList(a, b)` holds when both lists have the same items in the same order
+(ids compare as text, so `42` matches `"42"`). A reordered list, or a missing or extra item,
+violates it. If either side is not a list (unread, missing, a scalar), it is unknown. A violation's
+detail shows both lists' items (up to 10).
 `settle` re-checks a **violated** `require` until it holds or `withinMs` passes, and only
 then counts the violation. An **unknown** result (an observable that could not be read —
 e.g. legitimately absent, `optional: true`) is never re-polled: it is reported at once, so
@@ -136,7 +166,8 @@ coverage, exploratory, adversarial and `--feature` missions. Each violation's de
 - the invariant's `id` and expression,
 - the before and after values (redacted),
 - the action and route,
-- the probe and network evidence (method, URL and status only, never a body).
+- the probe and network evidence (method, URL and status only, never a body; a `request`
+  observable's evidence is `request body of PUT … → 200`).
 
 **Linting files in CI (no browser).** `jevitate invariants validate <file…>` runs exactly
 the check above — schema, observables, merge across files, probe origins — and nothing else:
@@ -236,7 +267,9 @@ as a credits balance that pays for real provider calls:
   `stop: "budget"`. The mission outcome is `inconclusive`, or `defects-found` if a defect was
   already found. It is never `clean` and never `crashed`.
 - `guard` (optional) refuses a paid action whose `estimate × factor` would cross the remaining
-  budget. A missing estimate is refused, never treated as zero.
+  budget. A missing estimate is refused, never treated as zero. A numeric `dom` estimate is read
+  at its worst case: a range such as "≈ 50–90 credits" counts as 90 (an explicit
+  `number: { index }` is kept as declared).
 - `settle` keeps reading after the run ends, to catch a charge that lands late.
 - An unreadable observable stops the run (`onUnreadable: "stop"`, the default) rather than being
   treated as unspent.

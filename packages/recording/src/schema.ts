@@ -256,6 +256,27 @@ export interface RecordedStep {
    * The code check stays the step's own `expect` assertion; this text is never evaluated.
    */
   expectedResult?: string;
+  /**
+   * #303 (optional, additive): what the step's action changed on the page, as code observed it —
+   * a MEASUREMENT recorded alongside the step (never a postcondition, never replayed), redacted and
+   * bounded. Replay / verify-fix can compare it; `journey annotate` can read expected results from it.
+   */
+  delta?: ActionDeltaRecord;
+}
+
+/** #303: one step's action delta as a Recording keeps it (see `RecordedStep.delta`). */
+export interface ActionDeltaRecord {
+  verdict: "no-change" | "relevant-change" | "inconclusive";
+  why: string;
+  changes: string[];
+  announcements?: string[];
+  requests?: string[];
+  url?: { before: string; after: string };
+  expected?: { description: string; met: boolean | null };
+  partial?: string[];
+  /** Did the step's lasting changes survive a reload (a write step only, #303 persistence check)? */
+  persisted?: "yes" | "no" | "inconclusive";
+  overheadMs: number;
 }
 
 export interface PageSegment {
@@ -282,7 +303,20 @@ export interface Recording {
    * SAME device by default — a 375px defect never "verifies fixed" at a desktop width.
    */
   emulation?: RecordingEmulation;
+  /**
+   * #256: the unpacked browser extensions the run loaded (`--extension`), additive: absent means
+   * none. Each one's id, manifest name and version — never its local path — so verify-fix / a
+   * replay refuses a different build instead of reaching a verdict against it.
+   */
+  extensions?: RecordingExtension[];
   pages: PageSegment[];
+}
+
+export interface RecordingExtension {
+  /** The Chromium extension id (the `chrome-extension://<id>` host). */
+  id: string;
+  name: string;
+  version: string;
 }
 
 export interface RecordingFixture {
@@ -633,6 +667,21 @@ const StepTimingSchema = z
   })
   .strict();
 
+const ActionDeltaRecordSchema = z
+  .object({
+    verdict: z.enum(["no-change", "relevant-change", "inconclusive"]),
+    why: z.string().max(500),
+    changes: z.array(z.string().max(500)).max(50),
+    announcements: z.array(z.string().max(500)).max(20).optional(),
+    requests: z.array(z.string().max(500)).max(20).optional(),
+    url: z.object({ before: z.string(), after: z.string() }).strict().optional(),
+    expected: z.object({ description: z.string().max(500), met: z.boolean().nullable() }).strict().optional(),
+    partial: z.array(z.string().max(500)).max(20).optional(),
+    persisted: z.enum(["yes", "no", "inconclusive"]).optional(),
+    overheadMs: z.number(),
+  })
+  .strict();
+
 const RecordedStepSchema = z
   .object({
     step: StepSchema,
@@ -643,6 +692,7 @@ const RecordedStepSchema = z
     chunk: z.string().optional(),
     objective: z.string().max(2000).optional(),
     expectedResult: z.string().max(2000).optional(),
+    delta: ActionDeltaRecordSchema.optional(),
   })
   .strict();
 
@@ -673,6 +723,9 @@ export const RecordingSchema: ZodType<Recording> = z.object({
       hasTouch: z.boolean().optional(),
     })
     .strict()
+    .optional(),
+  extensions: z
+    .array(z.object({ id: z.string().regex(/^[a-p]{32}$/), name: z.string(), version: z.string() }).strict())
     .optional(),
   pages: z.array(PageSegmentSchema),
 });

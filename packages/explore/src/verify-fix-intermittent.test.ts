@@ -6,6 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
 import { verifyFix, verifyReplayVerdict, type ReplayAttemptEvidence, type VerifySession } from "./verify-fix.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
+import { useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #74: verify-fix must not say `fixed` after a single clean replay of an INTERMITTENT signal.

@@ -3,7 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { authHeaders, localStorageValue } from "./fixture-auth.js";
-import { buildMissionFixtures, checkSetupRefs, checkUrlRefOrigin, invariantSetupTexts, regressionFixtures, substituteSpecSetupRefs } from "./fixture-cli.js";
+import {
+  buildMissionFixtures,
+  checkSetupRefs,
+  checkUrlRefOrigin,
+  invariantSetupTexts,
+  regressionFixtures,
+  setupRefFreeUrl,
+  substituteSpecSetupRefs,
+  substituteUrlSetupRefs,
+} from "./fixture-cli.js";
 import { loadInvariantFiles } from "./invariants-file.js";
 import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 import {
@@ -126,7 +135,107 @@ describe("${setup.x} in --invariants (#187)", () => {
   });
 
   it("the --url refusal names the fix", () => {
-    expect(() => checkUrlRefOrigin("http://127.0.0.1:4321${setup.pieceUrl}")).toThrow(/put it after a `\/`/);
+    expect(() => checkUrlRefOrigin("http://${setup.host}/x")).toThrow(/put it after a `\/`/);
+  });
+});
+
+describe("#243: a root-relative ${setup.*} path right after the --url origin", () => {
+  const b = (v: string) => ({ values: { link: v }, secretNames: new Set<string>() });
+
+  it("is accepted before setup and bound to the value's path, on the same origin", () => {
+    const url = `${ORIGIN}\${setup.link}`;
+    expect(() => checkUrlRefOrigin(url)).not.toThrow();
+    expect(new URL(setupRefFreeUrl(url)).origin).toBe(ORIGIN);
+    expect(substituteUrlSetupRefs(url, b("/participate/intake/tok-1?x=1"))).toBe(`${ORIGIN}/participate/intake/tok-1?x=1`);
+    // a reference after a `/` keeps working as before
+    expect(setupRefFreeUrl(`${ORIGIN}/items/\${setup.link}`)).toBe(`${ORIGIN}/items/0`);
+    expect(substituteUrlSetupRefs(`${ORIGIN}/items/\${setup.link}`, b("i-1"))).toBe(`${ORIGIN}/items/i-1`);
+  });
+
+  it.each(["@evil.test/x", ":8080/x", ".evil.test/x", "0"])("a bound value %s that would move the origin is refused", (v) => {
+    expect(() => substituteUrlSetupRefs(`${ORIGIN}\${setup.link}`, b(v))).toThrow(/off its origin/);
+  });
+});
+
+describe("#243: per-step fixture identities", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-fx-identity-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  const owned = (identity = "owner") => ({
+    setup: [{ ...create, auth: { from: "cookies", identity }, outputs: { link: "$.url" } }],
+    restore: [{ method: "DELETE", url: "/api/items/x", auth: { from: "localStorage", key: "jwt", identity } }],
+  });
+
+  it("parses auth.identity on localStorage/cookies steps; refuses a bad name or one on a secretField step", () => {
+    const spec = parseFixtureSpec(owned(), BOUNDS);
+    expect(spec.setup[0]?.auth).toEqual({ from: "cookies", identity: "owner" });
+    expect(spec.restore[0]?.auth).toEqual({ from: "localStorage", key: "jwt", identity: "owner" });
+    expect(() => parseFixtureSpec(owned("../x"), BOUNDS)).toThrow(/identity must be an identity name/);
+    expect(() => parseFixtureSpec({ setup: [{ ...create, auth: { from: "secretField", name: "K", identity: "owner" } }] }, BOUNDS)).toThrow(/identity is not a known auth key/);
+  });
+
+  it("authenticates the step from the identity's storageState — never the mission's — and records only paths", async () => {
+    const owner = join(dir, "owner.json");
+    const mission = join(dir, "mission.json");
+    await writeFile(owner, JSON.stringify({ cookies: [{ name: "sid", value: "OWNER-SID", domain: "127.0.0.1", path: "/" }], origins: [{ origin: ORIGIN, localStorage: [{ name: "jwt", value: "OWNER-JWT" }] }] }));
+    await writeFile(mission, JSON.stringify({ cookies: [{ name: "sid", value: "MISSION-SID", domain: "127.0.0.1", path: "/" }], origins: [] }));
+    const spec = parseFixtureSpec(owned(), BOUNDS);
+    const calls: Call[] = [];
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec,
+      auth: { storageStatePath: mission, identities: { owner } },
+      fetchImpl: fakeFetch(calls, () => new Response(JSON.stringify({ url: "/invite/abc" }), { status: 201 })),
+    });
+    await fx.setup();
+    await fx.restore();
+    expect(calls.map((c) => c.headers)).toEqual([
+      expect.objectContaining({ cookie: "sid=OWNER-SID" }),
+      expect.objectContaining({ authorization: "Bearer OWNER-JWT" }),
+    ]);
+    expect(fx.persisted().identities).toEqual({ owner });
+    expect(JSON.stringify(fx.record())).not.toContain("OWNER-");
+    // A cold mission (no --storage-state at all) still mints as the owner.
+    const cold = new MissionFixtures({ ...BOUNDS, spec, auth: { identities: { owner } }, fetchImpl: fakeFetch([], () => new Response(JSON.stringify({ url: "/invite/abc" }), { status: 201 })) });
+    await cold.setup();
+    expect(cold.bindings().values.link).toBe("/invite/abc");
+  });
+
+  it("an unbound identity is refused before any request — never a fall back to the mission's session", async () => {
+    const mission = join(dir, "mission.json");
+    await writeFile(mission, JSON.stringify({ cookies: [], origins: [] }));
+    expect(() => new MissionFixtures({ ...BOUNDS, spec: parseFixtureSpec(owned(), BOUNDS), auth: { storageStatePath: mission } })).toThrow(/identity owner, which is not bound: pass --fixture-identity owner=/);
+  });
+
+  it("binds from --fixture-identity, else the origin's targets.json persona; refuses unused, flag-only and missing-file identities", async () => {
+    const owner = join(dir, "owner.json");
+    const persona = join(dir, "persona.json");
+    await writeFile(owner, "{}");
+    await writeFile(persona, "{}");
+    const file = join(dir, "fx.json");
+    await writeFile(file, JSON.stringify(owned()));
+    const ctx = { allowlist: [ORIGIN], baseUrl: `${ORIGIN}/app` };
+    expect(buildMissionFixtures({ fixtures: file, fixtureIdentity: [`owner=${owner}`] }, ctx)?.persisted().identities).toEqual({ owner });
+    expect(buildMissionFixtures({ fixtures: file }, { ...ctx, personas: { owner: { storageState: persona }, other: { storageState: join(dir, "nope.json") } } })?.persisted().identities).toEqual({ owner: persona });
+    // the flag wins over the persona
+    expect(buildMissionFixtures({ fixtures: file, fixtureIdentity: [`owner=${owner}`] }, { ...ctx, personas: { owner: { storageState: persona } } })?.persisted().identities).toEqual({ owner });
+    expect(() => buildMissionFixtures({ fixtures: file }, ctx)).toThrow(/identity owner, which is not bound/);
+    expect(() => buildMissionFixtures({ fixtures: file, fixtureIdentity: [`owner=${owner}`, `admin=${owner}`] }, ctx)).toThrow(/--fixture-identity admin: no fixture step authenticates as admin/);
+    expect(() => buildMissionFixtures({ fixtureIdentity: [`owner=${owner}`] }, ctx)).toThrow(/it needs --fixtures/);
+    expect(() => buildMissionFixtures({ fixtures: file, fixtureIdentity: [`owner=${join(dir, "gone.json")}`] }, ctx)).toThrow(/storage state not found/);
+    expect(() => buildMissionFixtures({ fixtures: file, fixtureIdentity: ["owner"] }, ctx)).toThrow(/must be <name>=<storageState>/);
+    expect(() => buildMissionFixtures({ fixtures: file, fixtureIdentity: [`owner=${owner}`, `owner=${owner}`] }, ctx)).toThrow(/given twice/);
+  });
+
+  it("authHeaders names the identity when its storage state lacks the credential", async () => {
+    const owner = join(dir, "owner.json");
+    await writeFile(owner, JSON.stringify({ cookies: [], origins: [] }));
+    expect(() => authHeaders({ from: "cookies", identity: "owner" }, `${ORIGIN}/a`, { identities: { owner } })).toThrow(/fixture identity owner's storage state has no cookie/);
+    expect(() => authHeaders({ from: "cookies", identity: "admin" }, `${ORIGIN}/a`, { identities: { owner } })).toThrow(/auth.identity admin is not bound/);
   });
 });
 

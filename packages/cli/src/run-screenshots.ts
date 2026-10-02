@@ -6,6 +6,7 @@ import { coverageStateFingerprint, snapshot, type TranscriptEntry } from "@jevit
 import type { StepObserver } from "@jevitate/interpreter";
 import type { BrowserPort } from "@jevitate/playwright";
 import { captureStepScreenshot, maskingPort, SecretPixelMask } from "./demo-capture.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * #251 — `--screenshots [dir]` / `--screenshots steps`: a screenshot capture mode for any run
@@ -144,8 +145,13 @@ export class RunScreenshots {
     return this.#opts.spec.mode;
   }
 
+  /** Registered secrets plus those the app revealed during the run (#298) — what the index must not hold. */
+  #known(): string[] {
+    return [...this.#opts.secrets, ...this.mask.revealed()];
+  }
+
   #redact(s: string): string {
-    return redactText(s, this.#opts.secrets);
+    return redactText(s, this.#known());
   }
 
   /** Creates the folder once and clears a previous run's images (never another file). */
@@ -167,7 +173,7 @@ export class RunScreenshots {
         if (this.#opts.spec.mode === "screens") {
           const fp = await Promise.race([
             snapshot(page).then((s) => coverageStateFingerprint(s)),
-            new Promise<null>((r) => setTimeout(() => r(null), FINGERPRINT_MS)),
+            new Promise<null>((r) => clock.setTimeout(() => r(null), FINGERPRINT_MS)),
           ]).catch(() => null);
           // An unreadable state cannot be proven a repeat: it is captured (never silently dropped).
           if (fp !== null && this.#seen.has(fp)) return;
@@ -210,7 +216,7 @@ export class RunScreenshots {
     await this.#prepare();
     const index = join(this.#opts.dir, "index.md");
     const md = this.contactSheet();
-    assertNoSecretInPayload(md, this.#opts.secrets, "screenshot index"); // the last line: never at rest
+    assertNoSecretInPayload(md, this.#known(), "screenshot index"); // the last line: never at rest
     await writeFile(index, md, "utf8");
     return {
       screenshotPaths: this.#entries.map((e) => e.path),
@@ -225,7 +231,7 @@ export class RunScreenshots {
     const lines = [
       `# Screenshots: ${oneLine(this.#redact(this.#opts.title))}`,
       "",
-      `Mode: ${mode} · ${this.#entries.length} screenshot(s) over ${this.#maxStep} step(s). The demo overlay is hidden and registered secrets are masked in every image.`,
+      `Mode: ${mode} · ${this.#entries.length} screenshot(s) over ${this.#maxStep} step(s). The demo overlay is hidden; registered secrets, elements the app marks as secret and credential-shaped values are masked in every image.`,
       "",
     ];
     for (const e of this.#entries) {
@@ -235,7 +241,8 @@ export class RunScreenshots {
     if (this.#skipped.length > 0) {
       lines.push("## Not captured", "", ...this.#skipped.map((s) => `- step ${s.step}: ${s.reason}`), "");
     }
-    return `${lines.join("\n").trimEnd()}\n`;
+    // Re-redacted as a whole: a secret the app revealed after an entry was written is scrubbed too (#298).
+    return `${this.#redact(lines.join("\n")).trimEnd()}\n`;
   }
 }
 

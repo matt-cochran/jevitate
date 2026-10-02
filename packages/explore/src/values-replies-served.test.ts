@@ -14,7 +14,10 @@ import {
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { explore, type ExploreRun } from "./explore.js";
 import { parseSecretField, type SecretField } from "./secret-fields.js";
-import { withSession } from "./testkit.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * Served fixtures (REAL Chromium) with scripted judges and scripted generators replaying what the

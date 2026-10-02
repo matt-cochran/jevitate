@@ -10,7 +10,7 @@ import { runInductionMission } from "./induction.js";
 import { monitorFor } from "../page-monitor.js";
 import { perceive } from "../perceive.js";
 import { verifyFix, type VerifySession } from "../verify-fix.js";
-import { ScriptedJudge, withSession } from "../testkit.js";
+import { ScriptedJudge, useSkippingTime, withSession } from "../testkit.js";
 import { HostHealthSampler } from "../host-health.js";
 
 /**
@@ -163,6 +163,7 @@ function hunt(path: string) {
 }
 
 describe("hangs are detected, classified and REPRODUCED in fresh contexts", () => {
+  useSkippingTime(); // #304: hang ceilings over held requests elapse as soon as nothing else is happening
   it(
     "an endpoint that never responds is a request-pending hang, reproduced 2/2",
     async () => {
@@ -278,6 +279,7 @@ describe("hangs are detected, classified and REPRODUCED in fresh contexts", () =
 });
 
 describe("the adversarial mission KEEPS HUNTING after a hang", () => {
+  useSkippingTime(); // #304: hang ceilings over held requests elapse as soon as nothing else is happening
   it(
     "one hanging route and one 500 route yield BOTH findings in one run; the repeated hang is deduped",
     async () => {
@@ -332,6 +334,7 @@ describe("the adversarial mission KEEPS HUNTING after a hang", () => {
 });
 
 describe("coverage exploration KEEPS EXPLORING after a hang", () => {
+  useSkippingTime(); // #304: hang ceilings over held requests elapse as soon as nothing else is happening
   it(
     "the induction mission records the hang (deduped, reproduced) and still reaches the other route",
     async () => {
@@ -375,6 +378,7 @@ describe("coverage exploration KEEPS EXPLORING after a hang", () => {
 });
 
 describe("#193 — a page reached only by an out-of-scope departure is never hang-checked", () => {
+  useSkippingTime(); // #304: hang ceilings over held requests elapse as soon as nothing else is happening
   it(
     "coverage: the hanging route outside the scope is a departure with an advisory note — no hang finding, the run goes on",
     async () => {
@@ -447,6 +451,7 @@ describe("#193 — a page reached only by an out-of-scope departure is never han
 });
 
 describe("#87 — a global hang element is ONE finding across every route it appears on", () => {
+  useSkippingTime({ pageClock: false }); // #304: a busy page keeps the browser's own clock
   it(
     "a persistent busy indicator shared by the layout, met on 3 routes, is 1 hang finding listing all 3 routes, reproduced once",
     async () => {
@@ -485,6 +490,7 @@ describe("#87 — a global hang element is ONE finding across every route it app
 });
 
 describe("hang evidence carries the host's resource pressure", () => {
+  useSkippingTime({ pageClock: false }); // #304: a busy page keeps the browser's own clock
   it(
     "a busy-looping page found while the (injected) host sampler reports pressure is recorded with it",
     async () => {
@@ -526,6 +532,7 @@ describe("hang evidence carries the host's resource pressure", () => {
  * and the run ends `inconclusive` rather than `hang`.
  */
 describe("a hang on a starved host is environment-degraded, never a hang finding (#203)", () => {
+  useSkippingTime({ pageClock: false }); // #304: a busy page keeps the browser's own clock
   const starvedHost = (): HostHealthSampler =>
     new HostHealthSampler({
       probe: async () => ({ sample: null, overThreshold: null, loadPerCore: 3.5 }),

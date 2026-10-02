@@ -1,0 +1,78 @@
+{
+  "version": "ux-claims@1",
+  "notes": "App-agnostic wording for the claim pipeline (#198): what Jev is asked when it categorizes observed friction, picks a target control, checks for a duplicate and grades a code-verified finding with two yes/no questions — plus the TEMPLATES the finding prose is built from. Jev only categorizes; code verifies every claim and builds the prose. The grade cutoffs are tuned on the deterministic edge-case fixtures (claims-fixtures.test.ts) only — a real-model calibration pass is still pending. Never name a specific product, route or domain term here (claim-prompts.test.ts). Bump `version` on any change.",
+  "types": {
+    "destructive-unguarded": "An irreversible action (delete, remove, revoke, close an account) runs at once, with no confirmation, undo or guard.",
+    "next-step-unclear": "The page does not make the next step toward the task available or obvious, so the user hesitated, went back or gave up.",
+    "no-feedback": "The user acted and nothing confirmed it worked (no message, no change, no progress), so they repeated it or waited.",
+    "blocked-action": "A control the task needs could not be used (disabled, refused or broken) and the page did not say why.",
+    "error-unrecoverable": "An error stopped the task and the page gave no way to understand or recover from it.",
+    "not-a-problem": "The friction was expected behavior or the user's own detour (a deliberate back-navigation, a normal wait), not a problem with the page."
+  },
+  "classify": {
+    "type": "The run hit this friction while doing its task: {friction}. Which claim best explains it, judged only from this screen and that friction? Choose not-a-problem when the page behaved as a reasonable user would expect.",
+    "target": "The run hit this friction on this screen: {friction}. Which ONE control is it about? Choose none when no single control is (a page-level wait or error)."
+  },
+  "duplicate": "A code-verified finding on this screen: {finding}. Is it the SAME problem as one of the listed earlier findings — the same root cause, so the same change fixes both? Choose new unless fixing the listed one would also fix this one.",
+  "grade": {
+    "need": "A code-verified finding on this screen: {finding}. Do we need to fix this? Answer yes when a {persona} doing the task would be hurt, misled, slowed or blocked by it; no when it is harmless, cosmetic, a matter of taste, or not actually a problem on this screen.",
+    "ship": "A code-verified finding on this screen: {finding}. Do we need to fix this to complete and ship the feature \"{feature}\"? Answer yes only when the task cannot be completed correctly without the fix, or the product would ship wrong (for example a wrong price, or an irreversible action with no guard); no for an improvement that can follow later."
+  },
+  "cutoffs": {
+    "need": 0.5,
+    "ship": 0.5,
+    "wrong": 0.2
+  },
+  "templates": {
+    "destructive-unguarded": {
+      "observation": "{control} on {route} acts immediately: clicking it sent {requests} with no confirmation dialog, undo or confirmation step.",
+      "userImpact": "A {persona} who clicks {control} by mistake loses what it acts on, with no chance to back out.",
+      "recommendation": "Guard {control}: ask for confirmation (naming what will be affected) or offer undo before {requests} is sent."
+    },
+    "fact-conflict.price": {
+      "observation": "{route} shows {plan} at {found} (\"{quote}\"), but the product facts list {expected}.",
+      "userImpact": "Users see a price the product does not charge, so they decide, budget or buy on wrong terms.",
+      "recommendation": "Show {plan} at {expected} on {route}, or update the product facts if the price changed."
+    },
+    "fact-conflict.trial": {
+      "observation": "{route} promises a {found} (\"{quote}\"), but the product facts list a {expected}.",
+      "userImpact": "Users plan around a trial length the product does not give them.",
+      "recommendation": "State the {expected} on {route}, or update the product facts if the trial changed."
+    },
+    "next-step-unclear.absent": {
+      "observation": "{route} does not offer the intended next step \"{nextStep}\" (product facts): no control on the page names it.",
+      "userImpact": "A {persona} doing the task has no visible way to continue along the intended path.",
+      "recommendation": "Add a visible \"{nextStep}\" control on {route} as the suggested next step, keeping the other options available."
+    },
+    "next-step-unclear.disabled": {
+      "observation": "The intended next step {control} on {route} is disabled.",
+      "userImpact": "A {persona} doing the task cannot continue along the intended path and is not told why.",
+      "recommendation": "Enable {control} on {route}, or say what must be done first to enable it."
+    },
+    "next-step-unclear.friction": {
+      "observation": "On {route} the run did not take the intended next step \"{nextStep}\" (product facts) and hit friction instead: {detail}.",
+      "userImpact": "A {persona} doing the task does not find the intended path and loses time looking for it.",
+      "recommendation": "Make \"{nextStep}\" the visibly suggested next step on {route}, keeping the other options available."
+    },
+    "next-step-unclear.observed": {
+      "observation": "On {route} the run could not find its next step: {detail}.",
+      "userImpact": "A {persona} doing the task loses time looking for how to continue.",
+      "recommendation": "Make the next step toward the task visible on {route}{controlHint}."
+    },
+    "no-feedback": {
+      "observation": "After acting on {subject} on {route}, nothing confirmed the action: {detail}.",
+      "userImpact": "A {persona} cannot tell whether the action worked, so they repeat it or wait.",
+      "recommendation": "Show a clear result after {subject} on {route}: a confirmation, the changed state, or progress while it runs."
+    },
+    "blocked-action": {
+      "observation": "{subject} on {route} could not be used: {detail}.",
+      "userImpact": "A {persona} doing the task is stopped at {subject} and is not told why.",
+      "recommendation": "Make {subject} on {route} usable, or explain on the page what is needed before it can be used."
+    },
+    "error-unrecoverable": {
+      "observation": "An error interrupted the task on {route}: {detail}.",
+      "userImpact": "A {persona} doing the task is stopped by the error with no clear way to recover.",
+      "recommendation": "On {route}, say what went wrong and how to continue (retry, fix the input, or another path)."
+    }
+  }
+}

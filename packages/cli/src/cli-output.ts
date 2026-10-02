@@ -1,3 +1,5 @@
+import type { Feature } from "@jevitate/ai-core";
+import { featureKeysBody, type KeySourceReport, type KeyVerificationReport } from "./key-report.js";
 import type { Command } from "commander";
 import type { JsonEnvelope } from "./envelope.js";
 import { EXIT_CODES, exitCodeForEnvelope, isUsageErrorCode } from "./exit-codes.js";
@@ -137,6 +139,11 @@ export function formatMissionHuman(result: unknown): string {
   } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
   const scope = scopeLine(result.scope);
   if (scope !== undefined) lines.push(`${tag("SCOPE")}${scope}`);
+  // #293: where a journey-anchored run branched off its Journey.
+  if (isRecord(result.branch) && str(result.branch.journeyId) !== undefined) {
+    const b = result.branch;
+    lines.push(`${tag("BRANCH")}journey ${str(b.journeyId)} after step ${String(b.step)}${str(b.anchor) === undefined ? "" : ` (anchor ${str(b.anchor)})`}`);
+  }
   // #213: the --storage-state session was not honoured (the run started on a sign-in page).
   if (isRecord(result.sessionLost) && str(result.sessionLost.reason) !== undefined) lines.push(`${tag("WARNING")}${str(result.sessionLost.reason)}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d), ...evidenceLines(d));
@@ -147,6 +154,7 @@ export function formatMissionHuman(result: unknown): string {
     lines.push(`${tag("REASON")}${str(result.reason)}`);
   }
   for (const l of uxLines(result)) lines.push(l);
+  lines.push(...deltaLines(result));
   const answer = answerLine(result.answer);
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
   // #245: the run's --record-video files.
@@ -157,6 +165,34 @@ export function formatMissionHuman(result: unknown): string {
   const firstFp = [...gating, ...hangs].find((d) => d.fingerprint !== undefined)?.fingerprint;
   lines.push(nextHint(firstFp, resultPath));
   return `${lines.join("\n")}\n`;
+}
+
+/** Most per-step delta lines the human output shows (the latest ones; `--json` has every step). */
+const HUMAN_DELTA_STEPS = 8;
+
+/**
+ * #303 (`--action-deltas`): what each action changed — one short line per step that carries a delta
+ * (the latest few), after a verdict count. Nothing at all when the run recorded none.
+ */
+function deltaLines(result: Record<string, unknown>): string[] {
+  const steps = arr(result.transcript)
+    .filter(isRecord)
+    .filter((e) => isRecord(e.delta));
+  if (steps.length === 0) return [];
+  const verdicts = new Map<string, number>();
+  for (const e of steps) {
+    const v = str((e.delta as Record<string, unknown>).verdict) ?? "?";
+    verdicts.set(v, (verdicts.get(v) ?? 0) + 1);
+  }
+  const out = [`${tag("DELTAS")}${steps.length} action(s): ${[...verdicts].map(([v, n]) => `${n} ${v}`).join(", ")}`];
+  for (const e of steps.slice(-HUMAN_DELTA_STEPS)) {
+    const d = e.delta as Record<string, unknown>;
+    const first = arr(d.changes).filter(isRecord).map((c) => str(c.text)).find((t) => t !== undefined);
+    const what = first ?? arr(d.announcements).map(str).find((t) => t !== undefined) ?? str(d.why) ?? "";
+    const line = `step ${typeof e.step === "number" ? e.step : "?"} ${str(d.action) ?? ""}: ${str(d.verdict) ?? "?"}${what === "" ? "" : ` — ${what}`}`;
+    out.push(`${tag("DELTA")}${line.length > 160 ? `${line.slice(0, 159)}…` : line}`);
+  }
+  return out;
 }
 
 /**
@@ -191,7 +227,10 @@ function uxLines(result: Record<string, unknown>): string[] {
   const TOP = 3;
   for (const f of findings.slice(0, TOP)) {
     const obs = str(f.observation) ?? "";
-    lines.push(`${tag("")}- [${str(f.severity) ?? "?"}] ${str(f.rubricItemId) ?? "?"} ${str(f.route) ?? ""}: ${obs.length > 100 ? `${obs.slice(0, 99)}…` : obs}`);
+    // #198: a verified claim names its claim type (and its boxed screenshot) instead of the rubric id.
+    const claim = isRecord(f.claim) ? str(f.claim.type) : undefined;
+    const shot = isRecord(f.screenshot) ? str(f.screenshot.path) : undefined;
+    lines.push(`${tag("")}- [${str(f.severity) ?? "?"}] ${claim ?? str(f.rubricItemId) ?? "?"} ${str(f.route) ?? ""}: ${obs.length > 100 ? `${obs.slice(0, 99)}…` : obs}${shot === undefined ? "" : ` (screenshot: ${shot})`}`);
   }
   if (findings.length > TOP) lines.push(`${tag("")}  … and ${findings.length - TOP} more in the report`);
   return lines;
@@ -413,17 +452,39 @@ export function formatLedgerVerifyHuman(verified: object, opts: { readonly dir?:
  * key or fails closed, so after it every required key is configured. Names only, never a value.
  */
 export function formatInitKeysHuman(
-  keys: Readonly<Record<string, { readonly required: readonly string[]; readonly collected: readonly string[]; readonly missing?: readonly string[] }>>,
+  keys: Readonly<
+    Record<
+      string,
+      {
+        readonly required: readonly string[];
+        readonly collected: readonly string[];
+        readonly missing?: readonly string[];
+        readonly sources?: readonly KeySourceReport[];
+        readonly verification?: readonly KeyVerificationReport[];
+        readonly warnings?: readonly string[];
+      }
+    >
+  >,
 ): string {
   return Object.entries(keys)
-    .map(([feature, { required, collected, missing }]) => {
+    .map(([feature, { required, collected, missing, sources, verification, warnings }]) => {
+      const named = (k: string): string => {
+        const s = sources?.find((x) => x.key === k);
+        return s === undefined ? k : `${k} (${s.provider})`;
+      };
       // #230: the non-interactive path (no TTY on stdin) never prompts — report what's still
       // missing and how to configure it, the same command name as the E_AI_SETUP_REQUIRED refusals.
       if (missing !== undefined && missing.length > 0) {
-        return `keys: ${feature} not configured — set ${missing.join(", ")} or run \`jevitate ai setup ${feature}\``;
+        return `keys: ${feature} not configured — set ${missing.map(named).join(", ")} or run \`jevitate ai setup ${feature}\``;
       }
-      const detail = collected.length > 0 ? `collected ${collected.join(", ")} now` : "already configured";
-      return `keys: ${feature} ready — ${required.length}/${required.length} configured (${detail})`;
+      if (sources === undefined) {
+        const detail = collected.length > 0 ? `collected ${collected.join(", ")} now` : "already configured";
+        return `keys: ${feature} ready — ${required.length}/${required.length} configured (${detail})`;
+      }
+      // #268: name each key, its provider and where it comes from (never a value); #291: its live check.
+      const body = featureKeysBody(feature as Feature, sources, verification);
+      const detail = collected.length > 0 ? ` (entered now: ${collected.join(", ")})` : "";
+      return [`keys: ${feature} ${body}${detail}`, ...(warnings ?? []).map((w) => `keys: warning: ${w}`)].join("\n");
     })
     .join("\n");
 }

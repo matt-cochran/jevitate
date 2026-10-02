@@ -3,6 +3,7 @@ import type { TargetDescriptor } from "@jevitate/recording";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { Control } from "./snapshot.js";
 import { redactText } from "./redact.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * #245 — the demo overlay: an on-page panel that shows an audience what jevitate is about to do and
@@ -215,13 +216,13 @@ async function bounded<T>(p: Promise<T>): Promise<T | undefined> {
     return await Promise.race([
       p,
       new Promise<undefined>((r) => {
-        timer = setTimeout(() => r(undefined), OVERLAY_CALL_MS);
+        timer = clock.setTimeout(() => r(undefined), OVERLAY_CALL_MS);
       }),
     ]);
   } catch {
     return undefined; // best-effort display only: an overlay failure never changes the run
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
   }
 }
 
@@ -301,7 +302,7 @@ export class DemoOverlay {
     this.#banner = null;
     await this.#render(page);
     if (control === null) return;
-    if (await this.#highlight(page, control.descriptor)) await new Promise((r) => setTimeout(r, DEMO_HIGHLIGHT_MS));
+    if (await this.#highlight(page, control.descriptor)) await clock.sleep(DEMO_HIGHLIGHT_MS);
   }
 
   /** Boxes the element `descriptor` finds (its first match); true when it was shown. */

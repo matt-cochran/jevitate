@@ -2,6 +2,7 @@ import type { Page, Request } from "playwright";
 import { redactUrl } from "@jevitate/ai-core";
 import { http5xxSignalOf, requestHeadersOf } from "../http-5xx.js";
 import { FirstPartyOrigins } from "../third-party.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The adversarial mission's TRUSTED HARD-SIGNAL defect oracle (spec §3.1/§9).
@@ -30,7 +31,25 @@ export type DefectSignal =
    * correlates with (the same request, or the nearest response within `CORRELATION_WINDOW_MS`) —
    * undefined when none was found. See `isAdvisoryConsoleError`.
    */
-  | { kind: "console-error"; detail: string; pageUrl?: string; correlatedStatus?: number; correlatedUrl?: string }
+  | {
+      kind: "console-error";
+      detail: string;
+      pageUrl?: string;
+      correlatedStatus?: number;
+      correlatedUrl?: string;
+      /**
+       * #297: the (redacted) URL of the FRAME that logged it — the page's own document, or an
+       * embedded iframe's — when it could be told (the message's source is a frame's document, or a
+       * script that frame loaded). Unset when unknown: the error is then the page's own.
+       */
+      frameUrl?: string;
+      /**
+       * #297: the frame's origin when that frame is THIRD-PARTY to the run (`FirstPartyOrigins`, #194:
+       * off the `--allow` origins' sites, never sent credentials) — a vendor's iframe logging its own
+       * CSP noise. Such an error is advisory, never the app's defect (`isAdvisoryConsoleError`).
+       */
+      thirdPartyFrame?: string;
+    }
   | { kind: "page-error"; detail: string; pageUrl?: string }
   /** `method` (#250): the request's HTTP method, when known — evidence only, never in the fingerprint. */
   | { kind: "http-5xx"; detail: string; url: string; status: number; method?: string }
@@ -41,7 +60,9 @@ export type DefectSignal =
    * folded into that step's hard signals the same way. `route`/`descriptor` are already the
    * finding's own (redacted, route-templated) values; `signalKey` keys on them directly.
    */
-  | { kind: "horizontal-overflow"; detail: string; overflowPx: number; route: string; url: string; descriptor: string };
+  | { kind: "horizontal-overflow"; detail: string; overflowPx: number; route: string; url: string; descriptor: string }
+  /** Vertical clipping (#302): text cut off by a fixed-height box or above the page top — `overflow.ts`'s `detectClipping`. */
+  | { kind: "vertical-clipping"; detail: string; clippedPx: number; cause: "overflow-hidden" | "above-page-top"; route: string; url: string; descriptor: string };
 
 /**
  * Chromium emits a browser-generated console "error" for EVERY failed resource
@@ -87,18 +108,18 @@ const ERR_ABORTED = "net::ERR_ABORTED";
  * independently via `http-5xx`); a 4xx is ADVISORY — the app logged an error for a response the
  * server returned BY DESIGN (an authorization refusal, a validation error), so it is reported but
  * never counted as a defect. An UNCORRELATED console error (no response near it) stays a defect,
- * as before.
+ * as before. A console error raised inside a THIRD-PARTY frame (#297, `thirdPartyFrame`) is
+ * advisory too: a vendor's iframe (its own CSP violations, its own logging) is not the app.
  */
-export function isAdvisoryConsoleError(
-  signal: DefectSignal,
-): signal is Extract<DefectSignal, { kind: "console-error" }> & { correlatedStatus: number } {
-  return (
-    signal.kind === "console-error" &&
-    signal.correlatedStatus !== undefined &&
-    signal.correlatedStatus >= 400 &&
-    signal.correlatedStatus < 500
-  );
+export function isAdvisoryConsoleError(signal: DefectSignal): signal is Extract<DefectSignal, { kind: "console-error" }> {
+  if (signal.kind !== "console-error") return false;
+  // #297: raised inside a third-party frame (a vendor's iframe) — never the app's own defect.
+  if (signal.thirdPartyFrame !== undefined) return true;
+  return signal.correlatedStatus !== undefined && signal.correlatedStatus >= 400 && signal.correlatedStatus < 500;
 }
+
+/** Most script URLs remembered per page for attributing a console message to its frame (#297). */
+const MAX_SCRIPT_FRAMES = 1_000;
 
 /** How close (ms) a response must be to a console error to correlate as "near in time" (#88). */
 export const CORRELATION_WINDOW_MS = 2_000;
@@ -116,12 +137,24 @@ export class PageSignalCollector {
    * `FirstPartyOrigins`) is not the app's defect and never becomes an `http-5xx` signal. Omitted,
    * every origin counts (the pre-#208 behaviour).
    */
-  constructor(page: Page, now: () => number = Date.now, allowlist?: readonly string[]) {
+  constructor(page: Page, now: () => number = clock.now, allowlist?: readonly string[]) {
     const responseSeen = new WeakSet<Request>();
     const requestStarted = new WeakMap<Request, number>();
     const firstParty = allowlist === undefined ? undefined : new FirstPartyOrigins(allowlist);
+    // #297: which frame loaded each script — a console message's source is a script URL or a
+    // frame's document URL, and the FRAME (not the script's host: an app may serve its own bundle
+    // from a CDN) decides whose error it is.
+    const scriptFrames = new Map<string, string | null>();
     page.on("request", (r) => {
       requestStarted.set(r, now());
+      if (r.resourceType() === "script") {
+        const frameUrl = frameUrlOf(r);
+        if (frameUrl !== undefined && scriptFrames.size < MAX_SCRIPT_FRAMES) {
+          const known = scriptFrames.get(r.url());
+          // The same script loaded by frames of different origins: ambiguous, so never attributed.
+          scriptFrames.set(r.url(), known === undefined || known === frameUrl || (known !== null && originOf(known) === originOf(frameUrl)) ? frameUrl : null);
+        }
+      }
       if (firstParty === undefined) return;
       const headers = requestHeadersOf(r);
       if (headers !== undefined) firstParty.observe(r.url(), headers);
@@ -158,11 +191,16 @@ export class PageSignalCollector {
       // Correlated against the REDACTED text (both sides of the match go through the same
       // redaction, so a query-string secret never breaks an otherwise-matching URL).
       const correlated = correlate(redactedText);
+      const frameUrl = consoleFrameUrl(page, msg, scriptFrames);
+      const thirdPartyFrame =
+        frameUrl === undefined || firstParty === undefined || frameUrl === page.mainFrame().url() ? null : firstParty.thirdParty(frameUrl);
       this.buffer.push({
         kind: "console-error",
         detail: redactedText,
         pageUrl: redactUrl(page.url()),
         ...(correlated === undefined ? {} : { correlatedStatus: correlated.status, correlatedUrl: correlated.url }),
+        ...(frameUrl === undefined ? {} : { frameUrl: redactUrl(frameUrl) }),
+        ...(thirdPartyFrame === null ? {} : { thirdPartyFrame }),
       });
     });
     page.on("pageerror", (err) => {
@@ -221,4 +259,45 @@ function methodOf(r: { method?: () => string } | undefined): string | undefined 
   } catch {
     return undefined;
   }
+}
+
+/** The URL of the frame a request belongs to, without throwing (a stub, or a frame already gone). */
+function frameUrlOf(r: Request): string | undefined {
+  try {
+    const u = r.frame().url();
+    return u === "" ? undefined : u;
+  } catch {
+    return undefined;
+  }
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The URL of the frame a console message came from (#297), or undefined when it cannot be told.
+ * A message's `location().url` is the document of the frame that logged it (an inline script, a
+ * browser-generated CSP violation) or the script that called `console.error`; the latter is mapped
+ * to the frame that loaded it. Unknown → undefined: the error stays the page's own (fail closed).
+ */
+function consoleFrameUrl(
+  page: Page,
+  msg: { location(): { url: string } },
+  scriptFrames: ReadonlyMap<string, string | null>,
+): string | undefined {
+  let source: string;
+  try {
+    source = msg.location().url;
+  } catch {
+    return undefined;
+  }
+  if (source === "") return undefined;
+  const frames = page.frames();
+  if (frames.some((f) => f.url() === source)) return source;
+  return scriptFrames.get(source) ?? undefined;
 }

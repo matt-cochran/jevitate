@@ -27,7 +27,8 @@ security bug, and how to report one.
 
 - Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Generate, Send
   invite) controls are refused by default. `--deny <pattern>` adds your own, and
-  `--allow-destructive` lifts the default. A goal run may still click the one its goal asks for.
+  `--allow-destructive` lifts the default. A goal run may still click the one its goal asks for
+  ("Delete the draft" → Delete; "Invite a teammate" → Send invite).
   The paid classifier reads only short, verb-led button and link labels: a chat question card or
   a radio/checkbox answer that merely contains "pay", "trial" or "upgrade" is not refused unless
   its label names a charge. A refused control is not offered to the model again in that run.
@@ -35,11 +36,23 @@ security bug, and how to report one.
   `--paid <pattern>` (repeatable, same syntax as `--deny`; `safety.paid` in
   `~/.jevitate/targets.json`) puts them in the paid category: a declared `budget` guard sees them,
   hang replays never repeat them, and a goal that asks for one may still click it — unlike
-  `--deny`, which no mission may click.
+  `--deny`, which no mission may click. A goal asks for a `--paid` control by its action word:
+  a trailing live estimate ("Confirm analysis (≈ 4–10 credits)") and confirmation words
+  ("Confirm", "and") are ignored, so "analyze this text" asks for "Confirm analysis".
+- The usability review's guard probe (`--probe-guards`, #198) is the one place jevitate clicks a
+  destructive control without a goal asking for it, and it is **opt-in**. When enabled, it clicks
+  each destructive control once on a fresh page. It aborts every non-GET request and every request
+  whose URL, query, RPC name or body names a destructive verb (`GET /delete?id=1` included). It
+  won't probe a page with an open WebSocket or EventSource or a controlling service worker. It
+  cancels any confirm and never clicks inside a dialog. Without the flag, nothing is clicked and
+  those claims are reported unverifiable ([UX findings](./ux-findings.md#guard-probes)).
 - A find-out goal (no `--success`) is read-only unless the goal asks for a change: write-flow
-  controls are refused and the write requests an action fires are blocked. `--allow-writes`
-  lifts it and `--allow-write <glob>` exempts a request path
-  ([find-out goals](./success-checks.md#find-out-goals-no---success)).
+  controls are refused and the write requests an action fires are blocked. A form submit is judged
+  by the requests it sends, so a lookup form that only reads still works. A goal with no
+  `--success` that asks for a change still never performs a destructive write (a destructive
+  control, or a `DELETE` / `Remove*`-style request) unless the operator passes `--allow-writes` or
+  `--allow-destructive`. `--allow-writes` lifts the guard and `--allow-write <glob>` exempts a
+  request path ([find-out goals](./success-checks.md#find-out-goals-no---success)).
 - **Third-party writes.** The read-only guard blocks only the app's own writes. Code decides from
   each request, never the model. A write is the app's (first-party) when any of these holds:
   - its origin is an `--allow` origin, or shares an allowed origin's host (any port) or site
@@ -70,9 +83,27 @@ security bug, and how to report one.
 - Every write request a run fires is listed in the result (`sideEffects`). A request outside
   the `--allow` origins is listed by its full origin and path. A repeat guard refuses
   re-firing the same write, and `--read-rpc` marks POST-based read RPCs so they are not mistaken
-  for writes.
+  for writes. The repeat guard counts only the app's own writes: a third-party write (a vendor's
+  telemetry or `csp-report` beacon, Stripe.js's `m.stripe.com` beacon) and a request matched by
+  `--settle-ignore` are listed but never make a control unclickable a second time.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
+- **Inert markup canaries (#301).** The adversarial boundary values include an HTML-injection canary
+  (`<i data-jev-canary="TOKEN">jevTOKEN</i>`) and an attribute-break canary
+  (`jevTOKEN" data-jev-canary="TOKEN`). The token is random per submission. Neither contains a
+  script, an event handler, a `javascript:` URL or anything else that executes, in the app or in
+  its users' browsers. The run only inspects the DOM for an element carrying the canary attribute,
+  after submit and after loading the page again with a plain GET (a form is never re-sent). A hit
+  means the input was rendered unescaped (`markup-injection`, stored or reflected). The canary
+  never attempts exploitation. Its values go only to the `--allow` origins, through the same gated
+  actions, paid/destructive guards and budgets as every other value. Canaries the app accepts stay
+  in its data like any other boundary value, so reset state between runs (below). See
+  [exploration](./exploration.md#adversarial-scope-form-misuse-and-coverage).
+- **Identity changes (#300).** An adversarial action that switches the signed-in identity (a "Sign
+  in as demo" shortcut) is detected from hashed auth state, never raw cookie or token values. That
+  step's invariants are not judged against the new identity, the control is never clicked again,
+  and the run returns to the original identity in a fresh session (or stops `inconclusive`,
+  `identity-changed`).
 
 **Runs change the app's state — reset it between runs.** The guardrails above keep a run from
 clicking what it must not; they do not undo what it legitimately did. An adversarial run submits
@@ -138,12 +169,51 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   from the video's first frame, and re-prove the mask at every step. This fails closed: a clip or
   image whose mask cannot be proven is not written, and the reason is recorded. The demo overlay
   is hidden in screenshots.
+- **Secrets the app reveals during the run** (#298) — a freshly minted API key, a one-time reveal
+  panel, an invite or reset link — are not known in advance, so they cannot be registered. The
+  pixel mask also covers, with no registration:
+  - elements the app marks as secret: `data-jevitate-mask` (add it to your app's reveal panels to
+    opt in), `data-secret`, `autocomplete="one-time-code"`, a `data-testid` containing `secret`,
+    `api-key`, `apikey` or `token`, an `aria-label` containing `secret`, `api key` or `token`;
+  - credential-shaped values in text and fields: JWTs, `sk_live_…`/`sk-…`, GitHub/GitLab/Slack
+    tokens, AWS access key ids, Google API keys, `<hex>.<hex>` id/secret pairs, 32+ hex chars, and
+    32+ char tokens mixing upper case, lower case and digits.
+
+  A value found either way is learned for the rest of the run: it is masked where it appears again
+  (another screen, unmarked) and scrubbed from the screenshot `index.md`. Learned values stay in
+  memory and are never written. **Limits:** a revealed secret with no marker and no credential
+  shape (a 6-digit code, a short word, a passphrase) is not masked — register it with `--secret`,
+  or mark it in the app. A marker on a large container masks the whole container. Over-masking is
+  possible (a commit SHA is 40 hex chars). A reveal inside a modal `<dialog>` fails closed (the
+  image is skipped, as for registered secrets). Pixel masking covers images and video only: a
+  revealed value the run *reports* (a find-out answer, the transcript) is not redacted unless it
+  is registered.
+
+- **Action deltas** (#303, opt-in with `--action-deltas`) — what each action changed on the page (an accessibility snapshot
+  before and after, the announcements in between, the action's requests, URL and title) — are
+  redacted **first**: each snapshot line is scrubbed inside the capture, before it is parsed, kept
+  or compared, so no raw value outlives the capture call. Scrubbed: registered secrets, bound
+  secret-field values, the value of any field named like a credential (password, passcode, secret,
+  token, API key, one-time code, OTP, PIN, CVC), the values shown in `type=password` fields and in
+  the secret-marked elements above (learned in memory only, like the pixel mask), and every
+  credential-shaped value. Announcements and request paths get the same scrub. Every delta is then
+  checked by the fail-closed guard before it is stored (transcript, Recording) or sent (the model's
+  step history, Jev's relevance question). The same limit as the pixel mask applies: a secret with
+  no marker, no credential name and no credential shape is not recognised — register it. Why the scrub is
+  not done inside the page: the snapshot is Playwright's `ariaSnapshot`, which reads field values
+  from Playwright's own isolated script world, where nothing the page (or jevitate's page scripts)
+  defines can hide them, and changing the live page's values to hide them would change the app
+  under test. So the raw snapshot reaches the jevitate process for the length of one call and is
+  scrubbed there, line by line, before anything else reads it.
 
 **Page text is data, not instructions.** Model prompts carry a prompt-injection guard, and page
 content is passed as untrusted data.
 
 **A model never decides a verdict.** Defects come from hard signals, your success checks, your
-invariants and your log matchers, all evaluated by code. A model's "this looks broken" is recorded
+invariants and your log matchers, all evaluated by code. An action's delta verdict (`no-change`,
+`relevant-change`, `inconclusive`) is code's too: Jev may label a change relevant or irrelevant and
+propose an ignore rule, but a rule is accepted only for a node code saw change with no action, and
+Jev can never turn a non-empty diff into `no-change`. A model's "this looks broken" is recorded
 as advisory and never gates an outcome, heals a step or files a defect. Write and irreversible
 steps are never auto-healed.
 

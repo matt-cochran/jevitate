@@ -1,11 +1,12 @@
 import {
-  collectMissingKeys,
+  collectKeys,
   FEATURE_KEYS,
   type CredentialStore,
   type SecureKeyIO,
   type Feature,
   type CredentialKey,
 } from "@jevitate/ai-core";
+import type { KeySourceReport, KeyVerificationReport } from "./key-report.js";
 
 export interface FeatureKeyReport {
   required: CredentialKey[];
@@ -17,6 +18,12 @@ export interface FeatureKeyReport {
    * throws (fail-closed), so there is nothing left to report as missing.
    */
   missing?: CredentialKey[];
+  /** #268: where each key comes from — names and sources only (additive). */
+  sources?: KeySourceReport[];
+  /** #291: the live auth check per key (additive; absent with --no-verify). */
+  verification?: KeyVerificationReport[];
+  /** #268: an env var that overrides a key just stored. */
+  warnings?: string[];
 }
 export type KeyCollectionReport = Record<Feature, FeatureKeyReport>;
 
@@ -31,6 +38,10 @@ export interface CollectAllMissingKeysOptions {
    * (a real terminal): unchanged prompting behavior.
    */
   interactive?: boolean;
+  /** #268 (`--replace-keys`): prompt for every key, even one already stored, and store the new value. */
+  replace?: boolean;
+  /** #291: checks each entered value before it is persisted (throws to refuse it). */
+  check?: (key: CredentialKey, value: string) => Promise<void>;
 }
 
 /**
@@ -50,7 +61,10 @@ export async function collectAllMissingKeys(
   for (const feature of FEATURES) {
     const required = [...FEATURE_KEYS[feature]];
     if (interactive) {
-      const collected = await collectMissingKeys(feature, store, io);
+      const collected = await collectKeys(feature, store, io, {
+        ...(opts.replace === true ? { replace: true } : {}),
+        ...(opts.check === undefined ? {} : { check: opts.check }),
+      });
       report[feature] = { required, collected };
     } else {
       // Never prompt: report what's still missing instead of hanging on a closed stdin. `missing`

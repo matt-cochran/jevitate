@@ -5,7 +5,7 @@ import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runAdversarialMission, type AdversarialMissionParams, type AdversarialOutcome } from "./adversarial.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
-import { withSession } from "../testkit.js";
+import { useSkippingTime, withSession } from "../testkit.js";
 
 /**
  * #121 — dogfood repro: a header search wrongly paired with an unrelated "Send feedback", text
@@ -156,6 +156,9 @@ const FULL_FORM_STRATEGIES: readonly MisuseStrategy[] = [
   "act-while-pending",
   "exercise-controls",
 ];
+
+// #304: Node and page time skip idle waits (settle windows on a quiet page). Assertions are unchanged.
+useSkippingTime();
 
 describe("adversarial — settings page: field/submit pairing, numeric boundaries, widened disclosure (#121)", () => {
   it(

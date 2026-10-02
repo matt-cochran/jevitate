@@ -5,6 +5,10 @@ import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
 import { verifyFix, type VerifySession } from "./verify-fix.js";
+import { useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #213 dogfood: an inconclusive verify-fix whose replay could not reach the defect's step because

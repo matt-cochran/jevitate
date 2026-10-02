@@ -135,6 +135,24 @@ export class NoProgressDetector {
   }
 
   /**
+   * Records one executed step whose action delta (#303) code decided: `no-change` (nothing changed
+   * after volatility filtering and no request was sent) is the ONLY verdict that counts toward the
+   * streak; `relevant-change` is progress; `inconclusive` is neither (the streak holds). Without a
+   * verdict (no delta was captured for the step) the signature decides, as in `note`.
+   */
+  noteDelta(op: string, signature: string, verdict: "no-change" | "relevant-change" | "inconclusive" | null): boolean {
+    if (verdict === null || op === "wait") return this.note(op, signature);
+    if (verdict === "relevant-change") {
+      this.progress(signature);
+      return false;
+    }
+    this.#lastSignature = signature;
+    if (verdict === "inconclusive") return false;
+    this.#streak += 1;
+    return this.#streak >= this.limit;
+  }
+
+  /**
    * Records a step that made progress the signature cannot show (#172: a scroll that MOVED the
    * page — the control set is the same, the viewport is not): the streak restarts from here.
    */

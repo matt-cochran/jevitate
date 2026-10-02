@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { sampleHeap } from "./crash-report.js";
-import { withSession } from "./testkit.js";
+import { buildCrashReport, sampleHeap } from "./crash-report.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all", pageClock: false }); // page.clock replaces `performance` (no performance.memory)
 
 describe("sampleHeap — CDP Runtime.getHeapUsage, not Chromium's bucketed performance.memory (issue #83)", () => {
   it(
@@ -40,4 +43,18 @@ describe("sampleHeap — CDP Runtime.getHeapUsage, not Chromium's bucketed perfo
     },
     120_000,
   );
+});
+
+describe("#296 — a crash report for a page the liveness watchdog closed", () => {
+  it("is hang evidence (main-thread-unresponsive), never attributed to jevitate's own stack frame", () => {
+    const report = buildCrashReport(
+      { kind: "stalled", message: "the page process stopped responding", stack: "Error: x\n    at snapshot (/root/packages/explore/dist/snapshot.js:1:1)" },
+      { pageCrashed: false, pageClosed: true, browserDisconnected: false, unresponsive: "the page process stopped responding" },
+      [],
+      { ownCodeRoots: ["/root/packages"] },
+    );
+    expect(report.evidence.hang).toBe(true);
+    expect(report.evidence.hangKind).toBe("main-thread-unresponsive");
+    expect(report.attribution.attribution).not.toBe("jevitate");
+  });
 });

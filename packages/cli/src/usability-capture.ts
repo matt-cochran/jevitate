@@ -20,6 +20,7 @@ import { join } from "node:path";
 import type { Locator, Page, Request } from "playwright";
 import { DEMO_OVERLAY_HIDE_STYLE, endpointOf, redactText, redactUrl, type SecretField, type Snapshot, type TranscriptEntry } from "@jevitate/explore";
 import type { RunSignalCapture, SignalRequest, SignalScreen, SignalStep } from "@jevitate/ux";
+import { clock } from "@jevitate/domain";
 
 /** Secret-bearing inputs — the same predicate as `@jevitate/recorder`'s `isSecretField`, in CSS. */
 export const SECRET_INPUT_SELECTOR = [
@@ -42,9 +43,9 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
     p,
     new Promise<T>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+      timer = clock.setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
     }),
-  ]).finally(() => clearTimeout(timer));
+  ]).finally(() => clock.clearTimeout(timer));
 }
 
 /** A bound secret field's matcher → a locator for every element it could match. */
@@ -205,7 +206,7 @@ export class UsabilityCapture {
 
   constructor(opts: UsabilityCaptureOptions) {
     this.#opts = opts;
-    this.#now = opts.now ?? Date.now;
+    this.#now = opts.now ?? clock.now;
     opts.page.on("request", this.#onRequest);
     opts.page.on("requestfinished", this.#onFinished);
     opts.page.on("requestfailed", this.#onFailed);

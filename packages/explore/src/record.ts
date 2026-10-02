@@ -1,5 +1,6 @@
 import {
   RecordingSchema,
+  type ActionDeltaRecord,
   type Assertion,
   type PageSegment,
   type RecordedStep,
@@ -322,6 +323,25 @@ export class RunRecorder {
       this.#emit();
     }
     this.#lastStepObserved = true;
+  }
+
+  /**
+   * #303: attaches an action's delta (a measurement, never replayed) to the recorded step at flat
+   * index `index` — redacted again here; the Recording's fail-closed secret proof covers it too.
+   */
+  attachDelta(index: number, delta: ActionDeltaRecord): void {
+    let i = 0;
+    for (const page of this.#pages) {
+      for (const recorded of page.steps) {
+        if (i === index) {
+          if (recorded.delta !== undefined) return;
+          recorded.delta = JSON.parse(redactText(JSON.stringify(delta), this.#secrets)) as ActionDeltaRecord;
+          this.#emit();
+          return;
+        }
+        i += 1;
+      }
+    }
   }
 
   /**

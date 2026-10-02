@@ -17,6 +17,10 @@ import {
   FingerprintMismatchError,
   RegressionHardSignalOracleError,
 } from "./regression-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #119/#129: `regression capture` must accept every defect kind `verify-fix` does (a declared

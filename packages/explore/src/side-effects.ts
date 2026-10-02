@@ -4,6 +4,7 @@ import { requestEndpoint } from "./authorized-targets.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
 import type { ControlRisk } from "./safety.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The repeated-side-effect guard (#92) — independent code, keyed on what the NETWORK saw, never on
@@ -26,6 +27,11 @@ import type { ControlRisk } from "./safety.js";
  * A sign-in control ("Log in") is never guarded (repeating a sign-in creates nothing), and a
  * back / start-over click ("Back to sign in") abandons the flow on its route, lifting the guard for
  * the controls clicked there (#110).
+ * Only the APP's writes are guarded (#274, #284): a write to a third-party origin (`FirstPartyOrigins`,
+ * #194 — Stripe.js's `POST https://m.stripe.com/6`, a vendor's `csp-report`, analytics) or one the
+ * target declares background (`--settle-ignore`) is not the control's side effect, so it never makes
+ * a safe control (a menu, a nav link) unclickable a second time. It is still listed in the result's
+ * `sideEffects` (`SideEffectLog`, marked `thirdParty`).
  */
 
 /** The request methods that change server state. */
@@ -109,11 +115,30 @@ export class SideEffectGuard {
 
   /** The run's authorized origins: an off-origin write is named origin + path (#194). */
   readonly #origins: readonly string[];
+  /** Which origins are the app's (#194): a third-party write is never the control's side effect (#274). */
+  readonly #firstParty: FirstPartyOrigins;
+  /** The target's background requests (`--settle-ignore`, #284): never a control's side effect. */
+  readonly #ignored: (url: string) => boolean;
 
-  constructor(monitor: PageMonitor, opts: { readonly isWrite?: WriteClassifier; readonly allowlist?: readonly string[] } = {}) {
+  constructor(
+    monitor: PageMonitor,
+    opts: {
+      readonly isWrite?: WriteClassifier;
+      readonly allowlist?: readonly string[];
+      readonly firstParty?: FirstPartyOrigins;
+      readonly ignoreRequests?: (url: string) => boolean;
+    } = {},
+  ) {
     this.#monitor = monitor;
     this.#isWrite = opts.isWrite ?? writeClassifier();
     this.#origins = opts.allowlist ?? [];
+    this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
+    this.#ignored = opts.ignoreRequests ?? (() => false);
+  }
+
+  /** Is this request the app's own (#274/#284): first-party and not declared background? */
+  #ours(url: string): boolean {
+    return this.#firstParty.thirdParty(url) === null && !this.#ignored(url);
   }
 
   /** How a request is named (#194): path on an allowed origin, else origin + path. */
@@ -162,16 +187,19 @@ export class SideEffectGuard {
     this.#monitor.stopCapture(o.capture);
     const requests = o.capture.requests();
     // #130a: ANY request counts here (a read proves the click did something) — never just a write.
-    const inflightAny = this.#monitor.pending().some((r) => r.startedAt >= o.at);
+    // #283: in flight means NOT ENDED — a write the server holds open past the long-poll threshold is
+    // background for settling, but still this click's write (never forgotten, never re-fired).
+    const unfinished = this.#monitor.unfinished();
+    const inflightAny = unfinished.some((r) => r.startedAt >= o.at);
     const done: FiredWrite[] = requests
-      .filter((r: CapturedRequest) => this.#write(r))
+      .filter((r: CapturedRequest) => this.#write(r) && this.#ours(r.url))
       .map((r) => ({
         method: r.method.toUpperCase(),
         path: this.#name(r.url),
         status: r.status,
         rejected: (r.status !== null && r.status >= 400) || (r.status === null && r.failed),
       }));
-    const inflight = this.#monitor.pending().filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }));
+    const inflight = unfinished.filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r.url));
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
     this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending] };
     if (done.length + pending.length === 0) return;
@@ -180,7 +208,7 @@ export class SideEffectGuard {
 
   /** Writes fired by this run's clicks that are still in flight now. */
   inflight(): FiredWrite[] {
-    const live = new Set(this.#monitor.pending());
+    const live = new Set(this.#monitor.unfinished());
     const out: FiredWrite[] = [];
     for (const f of this.#fired.values()) {
       for (const r of f.inflight) {
@@ -220,7 +248,7 @@ export class SideEffectGuard {
     if (f === undefined || f.route !== route) return { refuse: false };
     // Repeating a sign-in creates nothing (a retry after "Back to sign in", a 2FA restart).
     if (SIGN_IN_NAME.test(f.label)) return { refuse: false };
-    const live = new Set(this.#monitor.pending());
+    const live = new Set(this.#monitor.unfinished());
     const stillInFlight = f.inflight.filter((r) => live.has(r));
     const what = f.writes.map(describeWrite).join(", ");
     if (stillInFlight.length > 0) {
@@ -266,14 +294,14 @@ export async function awaitWrites(
   ceilingMs: number,
   pollMs = 250,
 ): Promise<{ resolved: boolean; waitedMs: number }> {
-  const started = Date.now();
-  const remaining = (): number => ceilingMs - (Date.now() - started);
+  const started = clock.now();
+  const remaining = (): number => ceilingMs - (clock.now() - started);
   while (guard.inflight().length > 0) {
-    if (remaining() <= 0) return { resolved: false, waitedMs: Date.now() - started };
-    await new Promise((r) => setTimeout(r, Math.max(1, Math.min(pollMs, remaining()))));
+    if (remaining() <= 0) return { resolved: false, waitedMs: clock.now() - started };
+    await clock.sleep(Math.max(1, Math.min(pollMs, remaining())));
   }
   if (remaining() > 0) await monitor.waitSettled({ ceilingMs: Math.min(remaining(), 15_000) }).catch(() => undefined);
-  return { resolved: true, waitedMs: Date.now() - started };
+  return { resolved: true, waitedMs: clock.now() - started };
 }
 
 /** One write a run's action fired (#116: the result's `sideEffects`). */
@@ -345,7 +373,7 @@ export class SideEffectLog {
     } = {},
   ) {
     this.#isWrite = opts.isWrite ?? writeClassifier();
-    this.#now = opts.now ?? Date.now;
+    this.#now = opts.now ?? clock.now;
     this.#origins = opts.allowlist ?? [];
     this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
   }
@@ -398,7 +426,7 @@ export class SideEffectLog {
         const m = this.#owner(r.startedAt);
         if (m !== undefined) push(m, r.method, r.url, r.status, r.startedAt ?? m.at);
       }
-      for (const r of monitor.pending()) {
+      for (const r of monitor.unfinished()) {
         const path = pathOf(r.url);
         if (!this.#isWrite({ method: r.method, path, contentType: r.requestContentType ?? null })) continue;
         const m = this.#owner(r.startedAt);

@@ -9,6 +9,10 @@ import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { PersistedMissionResultSchema } from "@jevitate/domain";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { runAdversarialCliMission } from "./explore-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #245 `--record-video`: a served, real-Chromium (headless) run writes a video of its browser

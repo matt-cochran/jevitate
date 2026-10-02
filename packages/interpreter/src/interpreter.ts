@@ -6,6 +6,7 @@ import type { InterpretResult } from "./interpret-result.js";
 import { runStep } from "./run-step.js";
 import { ReplayTargetError, type ResolveTargetOptions } from "./resolve-target.js";
 import type { RecordingSink } from "./sink.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The `forEach` child step kinds Task 4's `run-step.ts` actually supports
@@ -251,13 +252,13 @@ async function runFlat(
   if (flat.slice(startIndex, lastIndex + 1).some((r) => stepAssertions(r.step).some((a) => a.kind === "flashed"))) {
     await installFlashRecorder(actor.ability(BrowseTheWebToken).session.page);
   }
-  const runStartedAt = performance.now();
+  const runStartedAt = clock.monotonicMs();
   let lastSunkStepEndedAt = runStartedAt;
   for (let i = startIndex; i <= lastIndex; i++) {
     let outcome;
     const recorded = flat[i] as RecordedStep;
     await observe(observer?.beforeStep && (() => observer.beforeStep!({ actor, index: i, recorded })));
-    const stepStartedAt = performance.now();
+    const stepStartedAt = clock.monotonicMs();
     try {
       outcome = await runStep(actor, flat[i], vars, i, targetOpts);
     } catch (err) {
@@ -267,7 +268,7 @@ async function runFlat(
         ? { outcome: "failed", at: i, error: message, reason: err.kind }
         : { outcome: "failed", at: i, error: message };
     }
-    const stepEndedAt = performance.now();
+    const stepEndedAt = clock.monotonicMs();
     await observe(
       observer?.afterStep &&
         (() => observer.afterStep!({ actor, index: i, recorded, outcome: outcome.kind === "awaiting_human" ? "awaiting_human" : "done" })),

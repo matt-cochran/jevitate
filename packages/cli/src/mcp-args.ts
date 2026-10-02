@@ -1,4 +1,5 @@
 import { McpPathError, confineMcpPath } from "./mcp-paths.js";
+import { readUnpackedExtensions, type UnpackedExtension } from "@jevitate/playwright";
 
 /**
  * #255 — strict typed reads of MCP tool arguments. A wrong type is a typed `invalid_args` refusal
@@ -89,6 +90,36 @@ export function optStringMap(args: McpArgs, key: string): Record<string, string>
 export function optPath(args: McpArgs, key: string, roots: readonly string[], opts: { session?: boolean } = {}): string | undefined {
   if (args[key] === undefined) return undefined;
   return confineMcpPath(args[key], key, roots, opts);
+}
+
+/**
+ * `name=<storageState path>` entries (the CLI's repeatable `--actor`/`--fixture-identity`), each
+ * path confined as a session.
+ */
+export function optNamedSessions(args: McpArgs, key: string, roots: readonly string[]): string[] | undefined {
+  const list = optStringArray(args, key);
+  if (list === undefined) return undefined;
+  return list.map((x, i) => {
+    const eq = x.indexOf("=");
+    if (eq <= 0) throw new McpArgError(`'${key}[${i}]' must be 'name=<storageState path>'`);
+    return `${x.slice(0, eq)}=${confineMcpPath(x.slice(eq + 1), `${key}[${i}]`, roots, { session: true })}`;
+  });
+}
+
+/**
+ * #256: `extension` — unpacked extension directories (the CLI's repeatable `--extension <dir>`),
+ * each confined like every path argument, then read and checked (a directory with a valid
+ * manifest.json) before any browser opens.
+ */
+export function optExtensions(args: McpArgs, roots: readonly string[], key = "extension"): UnpackedExtension[] | undefined {
+  const dirs = optStringArray(args, key);
+  if (dirs === undefined || dirs.length === 0) return undefined;
+  const confined = dirs.map((d, i) => confineMcpPath(d, `${key}[${i}]`, roots));
+  try {
+    return readUnpackedExtensions(confined);
+  } catch (err) {
+    throw new McpArgError(err instanceof Error ? err.message : String(err));
+  }
 }
 
 /**

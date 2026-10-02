@@ -85,8 +85,10 @@ describe("#209 — a usability review whose job failed is never clean", () => {
       expect(result.outcome.status).toBe("incomplete");
       expect(result.missionOutcome).toBe("inconclusive");
       expect(result.exitCode).toBe(2);
-      expect(result.failure?.kind).toBe("job-incomplete");
-      expect(result.failure?.message).toMatch(/^the job under review was not completed: /);
+      // #237: this model gives up before trying anything — the run says so precisely (too little
+      // exploration), still inconclusive and never clean.
+      expect(result.failure?.kind).toBe("insufficient-coverage");
+      expect(result.failure?.message).toMatch(/gave up before trying any of the page's \d+ controls/);
     },
     240_000,
   );

@@ -10,7 +10,7 @@ decides it. `--success` can be repeated, and every check must hold:
 | Check | Holds when |
 |---|---|
 | `urlIncludes:<text>` | the final URL contains the text |
-| `visible:<d>` | the element is visible |
+| `visible:<d>` | at least one matching element is visible (a list row matching several elements is fine) |
 | `textIncludes:<d>\|<text>` | the element's text contains the text (case-insensitive) |
 | `count:<d>\|min=<n>,max=<n>` | the number of matching elements is within the bounds |
 | `valueEquals:<d>\|<value>` | a form control's **value** (input, textarea, select) equals the value exactly |
@@ -21,8 +21,8 @@ decides it. `--success` can be repeated, and every check must hold:
 | `attr:<d>\|<name>=<value>` | the first match's attribute equals the value (`attr:<d>\|<name>`: present; `attr:<d>\|!<name>`: absent) |
 | `flashed:<d>\|class=<cls>[\|withinMs=<n>]` | a match **gained** the class (or `attr=<name>`, or `animation`) after the last user input — a transient flash that is gone by the time the page settles |
 | `reloadThen:<check>` | the page is reloaded first, then the check holds (proves the value persisted) |
-| `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing) |
-| `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status |
+| `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing). A request counts once it is sent, even when its response has not arrived (a long-running RPC the server holds open) |
+| `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status (requests still awaiting a response are not judged; the check fails if none has answered) |
 
 In these specs:
 
@@ -105,6 +105,23 @@ jevitate explore --url https://app.example.test/profile --goal "set the last nam
   --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
 ```
 
+## Typing a file's exact text (`--type-fixture`)
+
+A goal that quotes a passage to type has it typed as quoted, but a long text, or one whose line
+breaks matter, is better kept in a file: `--type-fixture '<descriptor>=<file>'` (repeatable, goal
+strategy; the descriptor is `label=`, `testId=`, `type=`, `id=` or `name=`, as for
+`--secret-field`). When the run types into a matching field, code types the file's contents
+verbatim: line breaks kept, never paraphrased, never cut by the generated-text cap. The model sees
+only `«fixture:<file name>»` on the field. The file must exist and be UTF-8 text of at most 256 KiB.
+The Recording keeps the typed text, so a Journey replays it exactly. If the text contains a
+`--secret`, the fill is recorded `{ redacted: true }` instead. Over MCP the argument is
+`typeFixture`, and its file path is confined like every other path argument.
+
+```bash
+jevitate explore --url http://localhost:8088/import --goal "Import this text and analyze it" \
+  --type-fixture 'label=Paste your text=./fixtures/newsletter.txt' --success 'visible:text=Analysis ready'
+```
+
 ## Rich-text editors
 
 A `contenteditable` element (a document editor's prose block) is also offered the `edit_text`
@@ -138,9 +155,12 @@ checks get. A figure counts as a stated figure only when it stands free (`$25`, 
 itself states need no page, and a rejection quotes the offending token.
 
 **Read-only by default.** A find-out goal that does not itself ask for a change runs under a
-read-only guard. Code refuses controls that start a write flow (checkout, upgrade, create,
-save, confirm, submit, send, upload) and blocks the write requests a model-chosen action
-fires; each refusal is recorded and told to the model. The app's own background writes
+read-only guard. Code refuses controls whose name starts a write flow (checkout, upgrade,
+create, save, confirm, submit, send, upload) and blocks the write requests a model-chosen action
+fires; each refusal is recorded and told to the model. A form submit is judged by the requests it
+sends, not its shape: a lookup form's "Load" or "Search" that only reads (GET/HEAD, a `Get*`/`List*`
+RPC, or a `--read-rpc` match) is clicked, and a submit that writes is blocked at the network (a
+native form POST is answered in the browser with `204 No Content`, so the page stays where it was). The app's own background writes
 outside an action (token refresh, heartbeats, telemetry) pass and are listed in
 `sideEffects` with `background: true`, and auth-refresh paths (`**/refresh*`, `**/token*`,
 `**/oauth/**`, `**/auth/**/refresh*`) are never blocked. The guard only blocks the app's own writes: those to the
@@ -156,6 +176,13 @@ exempts more request paths (a glob starting with `https://` matches origin and p
 `~/.jevitate/targets.json`, `safety.allowWrites` is `true` (lift it) or an array of path globs
 (exempt them). The paid/destructive policy in
 [Safety](./safety.md) still applies either way.
+
+**Never destructive without the operator.** A goal with no `--success` that asks for a change
+("Remove a product…", "Create a key…") is not read-only, but it still never destroys anything on
+its own words: a destructive control (Delete, Remove, Revoke…) is refused before the click, and a
+destructive write request an action fires (`DELETE`, a `Remove*`/`Delete*`/`Revoke*` RPC, a
+`/remove`-like path segment) is blocked, whatever the control is called. Pass `--allow-writes` (or
+`--allow-destructive`) to permit it.
 
 **Scrolling is progress.** A scroll that moved the page counts as progress, so a find-out
 goal whose answer is further down the page is not stopped as "no progress". Before a

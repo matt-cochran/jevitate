@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, rmSync, rmdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { resolveDataDir } from "./data-dir.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Retention for run output under `.jevitate/logs/<date>/` (0.2.0): a run older than `ttlDays` is
@@ -87,7 +88,7 @@ export interface PruneReport {
 
 /** Applies `retention` to the logs under `root`. `dryRun` reports what would go, deleting nothing. */
 export function pruneLogs(root: string, retention: LogsRetention, opts: { readonly nowMs?: number; readonly dryRun?: boolean } = {}): PruneReport {
-  const nowMs = opts.nowMs ?? Date.now();
+  const nowMs = opts.nowMs ?? clock.now();
   const { runs, dateDirs } = runsIn(root);
   const newestFirst = [...runs].sort((a, b) => b.mtimeMs - a.mtimeMs);
   const cutoff = nowMs - retention.ttlDays * 86_400_000;

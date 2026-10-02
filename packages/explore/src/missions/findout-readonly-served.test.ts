@@ -6,7 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
 import type { SafetyConfig } from "../safety.js";
 import { DEFAULT_ALLOWED_WRITES, goalAsksForChange, pathGlob } from "../read-only.js";
-import { ScriptedJudge, withSession, type ScriptedStep } from "../testkit.js";
+import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #157 / #158 on a served pricing page. Allumata dogfood round 2: asked what the Design Partner plan

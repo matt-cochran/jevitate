@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Recording } from "./schema.js";
 import { RecordingSchema } from "./schema.js";
+import { clock } from "@jevitate/domain";
 
 export interface RecordingStore {
   put(id: string, rec: Recording): Promise<void>;
@@ -80,7 +81,7 @@ export class FsRecordingStore implements RecordingStore {
     assertSafeId(id);
 
     const envelope: StoredEnvelope = {
-      savedAtIso: new Date().toISOString(),
+      savedAtIso: clock.nowIso(),
       recording: validated,
     };
     const serialized = JSON.stringify(envelope);

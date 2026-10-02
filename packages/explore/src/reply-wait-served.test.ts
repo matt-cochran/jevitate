@@ -1,9 +1,13 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { clock } from "@jevitate/domain";
 import { monitorFor } from "./page-monitor.js";
 import { readPageText, waitForReply } from "./conversation.js";
-import { withSession } from "./testkit.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #93 — the reply wait observes until idle instead of a fixed wall clock. Timings are scaled 1:10
@@ -45,14 +49,15 @@ let base: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
     if (req.url === "/reply") {
-      setTimeout(() => {
+      // #304: the server's delays run on the same (skipping) clock as the code under test.
+      clock.setTimeout(() => {
         res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
         let i = 0;
-        const t = setInterval(() => {
+        const t = clock.setInterval(() => {
           i += 1;
           res.write(i === CHUNKS ? " END-OF-REPLY." : ` word${i}`);
           if (i === CHUNKS) {
-            clearInterval(t);
+            clock.clearInterval(t);
             res.end();
           }
         }, CHUNK_GAP_MS);

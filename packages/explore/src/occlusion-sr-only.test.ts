@@ -3,7 +3,10 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { act, coveredByInterceptors, failureLine, occluderOf, snapshot } from "./index.js";
-import { withSession } from "./testkit.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #90 — an sr-only input whose visible label is the real click target (the node-inspector overlay

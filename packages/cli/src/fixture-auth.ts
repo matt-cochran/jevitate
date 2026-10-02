@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { clock } from "@jevitate/domain";
 
 /**
  * Session-derived request auth for code-issued HTTP calls (mission fixtures, #140/#144) — the
@@ -15,10 +16,13 @@ import { readFileSync } from "node:fs";
  */
 
 export type RequestAuth =
-  /** `<header>: <scheme> <localStorage[key]>` for the request's origin (default `Authorization: Bearer`). */
-  | { readonly from: "localStorage"; readonly key: string; readonly scheme?: string; readonly header?: string }
-  /** The storageState cookies that match the request URL, as a `Cookie` header. */
-  | { readonly from: "cookies" }
+  /**
+   * `<header>: <scheme> <localStorage[key]>` for the request's origin (default `Authorization: Bearer`).
+   * `identity` (#243): read from that named fixture identity's storageState, not the mission's.
+   */
+  | { readonly from: "localStorage"; readonly key: string; readonly scheme?: string; readonly header?: string; readonly identity?: string }
+  /** The storageState cookies that match the request URL, as a `Cookie` header (`identity`: as above). */
+  | { readonly from: "cookies"; readonly identity?: string }
   /** `<header>: <scheme> <value>` from a `--secret-field` binding, named by its env variable. */
   | { readonly from: "secretField"; readonly name: string; readonly scheme?: string; readonly header?: string };
 
@@ -27,6 +31,12 @@ export interface AuthSources {
   readonly storageStatePath?: string;
   /** `--secret-field` values by their env-variable name. */
   readonly secretFields?: Readonly<Record<string, string>>;
+  /**
+   * #243: named fixture identities → their storageState PATH (`--fixture-identity <name>=<file>` or a
+   * targets.json persona). A step with `auth.identity` authenticates from that file only — never from
+   * the mission's own `--storage-state`, so the mission can run as someone else (or cold).
+   */
+  readonly identities?: Readonly<Record<string, string>>;
 }
 
 export class FixtureAuthError extends Error {
@@ -79,6 +89,10 @@ function cookieMatches(c: StoredCookie, url: URL, nowSec: number): boolean {
   return true;
 }
 
+function whose(auth: { readonly identity?: string }): string {
+  return auth.identity === undefined ? "the storage state" : `fixture identity ${auth.identity}'s storage state`;
+}
+
 function withScheme(scheme: string | undefined, value: string, fallback: string): string {
   const s = scheme ?? fallback;
   return s === "" ? value : `${s} ${value}`;
@@ -107,19 +121,28 @@ export function authHeaders(auth: RequestAuth, url: string, sources: AuthSources
     }
     return { [auth.header ?? "authorization"]: withScheme(auth.scheme, value, "Bearer") };
   }
-  if (sources.storageStatePath === undefined) {
-    throw new FixtureAuthError(`auth from ${auth.from} needs --storage-state`);
+  let statePath: string | undefined;
+  if (auth.identity !== undefined) {
+    statePath = sources.identities?.[auth.identity];
+    if (statePath === undefined) {
+      throw new FixtureAuthError(
+        `auth.identity ${auth.identity} is not bound: pass --fixture-identity ${auth.identity}=<storageState> or declare personas.${auth.identity}.storageState for this origin in targets.json`,
+      );
+    }
+  } else {
+    statePath = sources.storageStatePath;
+    if (statePath === undefined) throw new FixtureAuthError(`auth from ${auth.from} needs --storage-state (or an auth.identity)`);
   }
-  const state = readStorageState(sources.storageStatePath);
+  const state = readStorageState(statePath);
   if (auth.from === "cookies") {
-    const nowSec = Date.now() / 1000;
+    const nowSec = clock.now() / 1000;
     const jar = state.cookies.filter((c) => cookieMatches(c, target, nowSec));
-    if (jar.length === 0) throw new FixtureAuthError(`the storage state has no cookie for ${target.origin}`);
+    if (jar.length === 0) throw new FixtureAuthError(`${whose(auth)} has no cookie for ${target.origin}`);
     return { cookie: jar.map((c) => `${c.name}=${c.value}`).join("; ") };
   }
   const entry = state.origins.find((o) => o.origin === target.origin)?.localStorage.find((i) => i.name === auth.key);
   if (entry === undefined || entry.value === "") {
-    throw new FixtureAuthError(`the storage state has no localStorage "${auth.key}" for ${target.origin}`);
+    throw new FixtureAuthError(`${whose(auth)} has no localStorage "${auth.key}" for ${target.origin}`);
   }
   return { [auth.header ?? "authorization"]: withScheme(auth.scheme, entry.value, "Bearer") };
 }

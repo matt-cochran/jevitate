@@ -51,7 +51,11 @@ export default defineConfig({
     // that would turn unrelated tests' hangs/timeouts into `environment-degraded` and their outcomes
     // `inconclusive`. Tests of the attribution itself inject a fake host with `attribute: true`.
     // #213: never record test runs in the real ~/.jevitate/run-index.jsonl (index tests inject their own).
-    env: { JEVITATE_DURABLE_WRITES: "off", JEVITATE_HOST_STARVATION: "off", JEVITATE_RUN_INDEX: "off" },
+    // #205: resource governance (machine-wide browser slots under ~/.jevitate, starved-host refusal,
+    // throttling, the startup orphan sweep, the default memory ceiling) is off for the same reason —
+    // tests must not wait on, refuse over, or signal anything outside themselves. The governance
+    // tests inject their own governor, slot dir and process table.
+    env: { JEVITATE_DURABLE_WRITES: "off", JEVITATE_HOST_STARVATION: "off", JEVITATE_RUN_INDEX: "off", JEVITATE_RESOURCE_GOVERNANCE: "off" },
     // Only the workspace's `browser` project runs on threads (see
     // vitest.workspace.ts): at most two real-Chromium test files at once.
     poolOptions: { threads: { maxThreads: 2, minThreads: 1 } },

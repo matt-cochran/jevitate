@@ -14,6 +14,10 @@ import {
   pagesContext,
   quoteIsOnlyControlNames,
   reportAnswer,
+  REJECTED_AGAIN_REASON,
+  absenceCoverage,
+  goalAdmitsAbsence,
+  goalAsksToWrite,
 } from "./answer.js";
 
 const pages = [
@@ -387,5 +391,135 @@ describe("#229 — real-model find-out: vetoes stand, the heading hint is for on
     const list = { url: "http://app.test/items", text: "Items\nCreate item", controls: ["Create item"] };
     const v = groundAnswer({ answer: "Create item", claims: [{ claim: "the title", quote: "Create item" }] }, [list], { goal: "Find out the title of this item" });
     expect(!v.accept && v.notAnswer).toBe(true);
+  });
+});
+
+describe("#236 — numbered-list markers are formatting, not stated figures", () => {
+  const plans = {
+    url: "http://app.test/settings",
+    text: "Plans\nNo subscription\nDesign Partner 250 credits / month $300/month\nStartup Program 150 credits / month $300/month\nPremium (annual) 2,000 credits / month $45,000/year",
+  };
+  const claims = [
+    { claim: "You are currently not subscribed to any plan", quote: "No subscription" },
+    { claim: "Design Partner: 250 credits / month for $300/month", quote: "Design Partner 250 credits / month $300/month" },
+    { claim: "Startup Program: 150 credits / month for $300/month", quote: "Startup Program 150 credits / month $300/month" },
+    { claim: "Premium (annual): 2,000 credits / month for $45,000/year", quote: "Premium (annual) 2,000 credits / month $45,000/year" },
+  ];
+
+  it("a markdown numbered list (`1.`, `2)`, `**3.**`, `- 4.`) grounds when every real figure is on the page", () => {
+    const answer =
+      "You are currently not subscribed to any plan. The available plans are:\n1. **Design Partner** — 250 credits / month for $300/month.\n2) Startup Program — 150 credits / month for $300/month.\n**3.** Premium (annual) — 2,000 credits / month for $45,000/year.";
+    const v = groundAnswer({ answer, claims }, [plans]);
+    expect(v.accept ? "" : v.reason).toBe("");
+    const bulleted = groundAnswer({ answer: "Plans:\n- 1. Design Partner 250 credits / month", claims: claims.slice(1, 2) }, [plans]);
+    expect(bulleted.accept).toBe(true);
+  });
+
+  it("a figure that is not a line-start list marker still has to be on the page", () => {
+    const v = groundAnswer({ answer: "1. Design Partner — 250 credits, 7 seats", claims: claims.slice(1, 2) }, [plans]);
+    expect(!v.accept && v.reason).toMatch(/states 7, which no observed page shows/);
+    // "2.5" at a line start is a figure (no space after the dot), not a marker.
+    const decimal = groundAnswer({ answer: "2.5 GB of storage", claims: claims.slice(1, 2) }, [plans]);
+    expect(!decimal.accept && decimal.reason).toMatch(/states 2\.5/);
+  });
+
+  it("a claim's inflected word is said by its quote ('not subscribed' over 'No subscription'); an unrelated quote is not", () => {
+    expect(groundAnswer({ answer: "Not subscribed", claims: claims.slice(0, 1) }, [plans]).accept).toBe(true);
+    const off = groundAnswer({ answer: "Annual billing", claims: [{ claim: "Billing is annual", quote: "No subscription" }] }, [plans]);
+    expect(!off.accept && off.reason).toMatch(/does not say what the claim says/);
+  });
+});
+
+describe("#234 — a list answer quotes its entries one per line", () => {
+  const settings = {
+    url: "http://app.test/settings",
+    text: "Workspace settings\nTeam\nPeople in this workspace. Invite teammates and manage roles.\nInvite by email\nCredits\nYou have 120 credits.\nPlans\nPick a plan.\nAPI keys\nNo keys yet.\nDelete workspace or account",
+  };
+  const goal = "Find where your account and workspace settings live. Finish by reporting which sections are there.";
+
+  it("a multi-line quote whose lines are each on one page, in order, grounds as page text", () => {
+    const quote = "Workspace settings\nTeam\nCredits\nPlans\nAPI keys\nDelete workspace or account";
+    const v = groundAnswer({ answer: "Team, Credits, Plans, API keys, Delete workspace or account", claims: [{ claim: "The settings sections", quote }] }, [settings], { goal });
+    expect(v.accept ? "" : v.reason).toBe("");
+    expect(v.answer?.evidence[0]).toMatchObject({ grounded: true, source: "page-text", url: settings.url });
+  });
+
+  it("a line found nowhere, out of order, or too short to be a quote grounds nothing — and the reason says what a quote must be", () => {
+    for (const quote of ["Team\nBilling history", "Plans\nTeam", "Team\nAP"]) {
+      const v = groundAnswer({ answer: "sections", claims: [{ claim: "The settings sections", quote }] }, [settings], { goal });
+      expect(!v.accept && v.reason).toMatch(/lines are not all on one page in that order — quote one contiguous passage, or give one claim per list entry/);
+    }
+    // Lines split across two pages are not one page's list.
+    const other = { url: "http://app.test/billing", text: "Billing history" };
+    expect(groundAnswer({ answer: "x", claims: [{ claim: "sections", quote: "Team\nBilling history" }] }, [settings, other], { goal }).accept).toBe(false);
+    // A one-line quote keeps the plain reason.
+    const one = groundAnswer({ answer: "x", claims: [{ claim: "sections", quote: "Billing history" }] }, [settings], { goal });
+    expect(!one.accept && one.reason).toMatch(/quote not found on any observed page$/);
+  });
+
+  it("an identical rejected (answer, quotes) re-report is named as a repeat, not silently re-rejected", async () => {
+    const bad = { answer: "Team and Billing", claims: [{ claim: "The settings sections", quote: "Team\nBilling history" }] };
+    const gen = new FakeGenerationGateway({ "goal.answer": bad });
+    const vetoes = new VetoedAnswers();
+    const input = { goal, url: settings.url, pages: [settings], history: [], vetoes };
+    const first = await reportAnswer(gen, input);
+    expect(!first.accept && first.reason).not.toContain(REJECTED_AGAIN_REASON);
+    const second = await reportAnswer(gen, input);
+    expect(!second.accept && second.reason).toContain(REJECTED_AGAIN_REASON);
+    expect(!second.accept && second.reason).toMatch(/lines are not all on one page/);
+  });
+});
+
+describe("#238 — absence answers: which goals admit them, and the coverage floor", () => {
+  it("goals that ask whether something exists admit 'none'; plain find-outs do not", () => {
+    for (const g of [
+      "Check whether the product is currently having problems (saying none exists is a valid answer).",
+      "Is there a dark mode toggle?",
+      "Find out if there are any open invoices",
+      "Report whether the app offers SSO",
+    ]) expect(goalAdmitsAbsence(g), g).toBe(true);
+    for (const g of ["Find out the price of the Pro plan", "Which plan am I on?", "Report the title of this item"]) expect(goalAdmitsAbsence(g), g).toBe(false);
+  });
+
+  it("the floor: half the top-level navigation (≥ 2), else 2 distinct pages", () => {
+    const at = (...paths: string[]) => paths.map((p) => ({ url: `http://app.test${p}`, text: "x" })).reverse();
+    const nav = ["/home", "/settings", "/billing", "/help", "/team", "/docs"];
+    expect(absenceCoverage(at("/home", "/settings"), nav).covered).toBe(false);
+    const ok = absenceCoverage(at("/home", "/settings", "/billing?tab=1"), nav);
+    expect(ok).toMatchObject({ covered: true, seen: ["/home", "/settings", "/billing?tab=1"], unseen: ["/help", "/team", "/docs"] });
+    expect(absenceCoverage(at("/home"), ["/home"]).covered).toBe(true);
+    expect(absenceCoverage(at("/a"), []).covered).toBe(false);
+    expect(absenceCoverage(at("/a", "/b"), []).covered).toBe(true);
+  });
+
+  it("ObservedPages keeps the first page's same-site navigation as the top-level navigation", () => {
+    const o = new ObservedPages();
+    o.add("http://app.test/home", "Home", [], { navLinks: ["http://app.test/settings", "/billing#x", "https://other.test/x", "mailto:a@b.c"] });
+    o.add("http://app.test/settings", "Settings", [], { navLinks: ["http://app.test/settings/team"] });
+    expect(o.topNavigation()).toEqual(["/settings", "/billing"]);
+  });
+});
+
+describe("#239 — the run's own typed, unsaved values are not grounds", () => {
+  const form = { url: "http://app.test/decisions/new", text: "Start a bet", fields: [{ label: "The bet", value: "Annual plan launch at 20% off" }] };
+  const answer = { answer: "Annual plan launch at 20% off", claims: [{ claim: "The bet is an annual plan launch at 20% off", quote: "The bet: Annual plan launch at 20% off" }] };
+
+  it("a control-value the run typed (not yet saved) is rejected; a pre-existing / saved value still grounds", () => {
+    const o = new ObservedPages();
+    o.noteOwnInput("  Annual plan launch   at 20% off ");
+    const v = groundAnswer(answer, [form], { ownInputs: o.ownInputs() });
+    expect(!v.accept && v.reason).toMatch(/the run's own typed input in "The bet", never saved/);
+    o.confirmOwnInputs();
+    expect(groundAnswer(answer, [form], { ownInputs: o.ownInputs() }).accept).toBe(true);
+    expect(groundAnswer(answer, [form]).accept).toBe(true);
+  });
+
+  it("goalAsksToWrite: an imperative write, not a mention of one", () => {
+    for (const g of ["Record a real decision you're about to make.", "Open settings and invite a teammate", "Please save the draft", "Go to Team. Add Bob."]) {
+      expect(goalAsksToWrite(g), g).toBe(true);
+    }
+    for (const g of ["Find out how to add a teammate", "Report the saved decision", "Which records are listed?", "Log in and report your plan"]) {
+      expect(goalAsksToWrite(g), g).toBe(false);
+    }
   });
 });

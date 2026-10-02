@@ -10,11 +10,14 @@ import {
   resolveCoverageThresholds,
   parseSecretField,
   SecretFieldSpecError,
+  TypeFixtureSpecError,
   validateDenyPatterns,
   type CoverageThresholds,
   type SecretField,
   type SuccessCheck,
+  type TypeFixture,
 } from "@jevitate/explore";
+import { loadTypeFixtures } from "./type-fixture-file.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { SessionFileInProjectError, assertSessionFileOutsideProject } from "./project-dir.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
@@ -27,6 +30,8 @@ import {
   buildMissionFixtures,
   checkSetupRefs,
   checkUrlRefOrigin,
+  substituteUrlSetupRefs,
+  setupRefFreeUrl,
   invariantSetupTexts,
   substituteSpecSetupRefs,
   fixtureSetupFailedResult,
@@ -36,7 +41,6 @@ import {
 import {
   FixtureSetupError,
   FixtureSpecError,
-  SETUP_REF,
   UnboundSetupRefError,
   substituteSetupRefs,
   type MissionFixtures,
@@ -59,14 +63,15 @@ import {
   type ServerLogOptions,
 } from "./explore-api.js";
 import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
-import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { LogSpecError } from "./log-lines.js";
 import { MultiRunArgsError, resolveMultiRunPlan, wantsMultiRun } from "./multi-run.js";
 import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import { runUsabilityMission, UsabilityInvariantsUnsupportedError } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
-import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError } from "@jevitate/ux";
+import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError, ProductFactsError } from "@jevitate/ux";
 import { type EmulationSpec } from "@jevitate/playwright";
 import {
   type CliDeps,
@@ -81,20 +86,52 @@ import {
   withEmulationFlags,
   emulationFromFlags,
   emitCommandResult,
+  collectParam,
+  environmentSeams,
+  resolveDbPath,
+  resolveJourneysDir,
+  resolveMissionTargetsDir,
   stallTimeoutMs,
   EXPLORE_STRATEGIES,
   EXPLORE_OUTCOME_HELP,
   GatewaySelectionError,
   buildExploreGateways,
 } from "./cli-shared.js";
-import { multiWindowWarning } from "./browser-run-options.js";
+import { allowWithExtensions, assertExtensionTargetLoaded, multiWindowWarning } from "./browser-run-options.js";
+import { ParamValidationError } from "@jevitate/journey";
+import { SiteGateRefusedError } from "@jevitate/runtime";
+import { JourneyRequiresAuthError, UnknownJourneyError } from "./journey-api.js";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags } from "./environments.js";
+import { resolve as resolvePath } from "node:path";
+import { CAMPAIGN_LIMITS, isSweepMode } from "@jevitate/journey";
+import { CampaignSpecError, runCampaign, validateCampaignSpec } from "./campaign-api.js";
+import { formatCampaignHuman } from "./campaign-cli.js";
+import { forwardedArgv } from "./multi-run-cli.js";
+import {
+  ANCHORED_STRATEGIES,
+  JourneyPrefixArgsError,
+  JourneyPrefixStaleError,
+  journeyStaleResult,
+  resolveJourneyPrefix,
+  type JourneyPrefix,
+} from "./journey-prefix.js";
+import { clock } from "@jevitate/domain";
+
+/**
+ * #293: the flags a sweep sets on each of its missions itself (the rest of the command line is
+ * forwarded to every mission as given).
+ */
+const SWEEP_OWNED: ReadonlySet<string> = new Set([
+  "fromJourney", "atStep", "strategy", "journeysDir", "param", "env", "baseUrl", "storageState", "maxActions", "maxDecisions",
+  "goal", "success", "appClass", "real", "fakeAi", "fixtures", "before", "after", "allowShellHooks", "hookTimeoutMs",
+]);
 
 /**
  * Registers `jevitate explore` (every strategy: goal, coverage, exploratory, adversarial, usability, feature, multi-run).
  * `buildProgram` builds a fresh program for each run of a multi-run (#141/#143).
  */
 export function registerExploreCommands(program: Command, deps: CliDeps, buildProgram: (deps: CliDeps) => Command): void {
-  withScreenshotsFlag(withEmulationFlags(
+  withEnvironmentFlags(withScreenshotsFlag(withEmulationFlags(
     withFixtureFlags(
       withDemoFlags(
         withBrowserLaunchFlags(
@@ -105,8 +142,22 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         { recordVideo: true, overlay: true },
       ),
     ),
-  ))
+  )))
     .option("--url <url>", "target URL (must be an authorized origin)")
+    .option(
+      "--from-journey <id>",
+      "journey-anchored exploration (#293): start from a PROMOTED Journey instead of --url — its first --at-step steps are replayed " +
+        "in the mission's own browser context (page, form contents and session kept; fail-closed, never self-healed; --env/--base-url apply), " +
+        "then the mission starts on the live page. A replay that stops before the anchor ends the run inconclusive (failure.kind journey-stale, exit 2). " +
+        "Strategies: goal, coverage, exploratory, adversarial, usability",
+    )
+    .option(
+      "--at-step <n|name|all|anchors>",
+      "with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`); " +
+        "`all` sweeps every step and `anchors` every anchor: each a fresh session (restored by --fixtures), --max-actions/--max-decisions split evenly per stop, one deduped report",
+    )
+    .option("--param <kv>", "with --from-journey: a Journey param as key=value (repeatable); only the prefix's own params are required", collectParam, {} as Record<string, string>)
+    .option("--journeys-dir <path>", "with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option(
       "--strategy <name>",
       "exploration strategy: goal (default) | coverage | exploratory | adversarial | usability (UX review: ranked, cited findings)",
@@ -126,6 +177,15 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "--max-findings-per-page <n>",
       "(--strategy usability) cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5",
     )
+    .option(
+      "--product <file>",
+      "(--strategy usability) product facts JSON (plans/prices, key journeys, each page's intended next step) the review checks screens against in code; default .jevitate/product.json in the project when present (docs/ux-findings.md)",
+    )
+    .option(
+      "--probe-guards",
+      "(--strategy usability) opt in to clicking each destructive control once to check for a confirmation step — fail-safe: every write and destructive-looking request is aborted, and a page with an open WebSocket/EventSource or a service worker is not probed; without it those claims are reported unverifiable (docs/ux-findings.md)",
+    )
+    .option("--polish", "(--strategy usability) polish each verified UX finding's recommendation with one generation call (opt-in; the default prose is built from templates)")
     .option(
       "--success <spec>",
       [
@@ -155,6 +215,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "--allow-vacuous-checks",
       "downgrade a vacuous --success check to a warning. By default a check satisfied before the run's first action — a page check that held on the seed page and never changed " +
         "(an empty result container), a requestMade/responseStatus matched only by a page-load or polling request — FAILS: it cannot verify the goal",
+    )
+    .option(
+      "--action-deltas",
+      "opt-in (#303; every --strategy, not --feature): record what each action changed on the page — an accessibility snapshot before and after, announcements, " +
+        "the action's requests — redacted, with a code verdict per step (no-change | relevant-change | inconclusive) used by the goal loop's no-progress check and a persistence re-check after writes (goal), and as defect evidence (adversarial, coverage); " +
+        "adds `delta` to every transcript step (and Recording step, goal) and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one",
     )
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
@@ -188,6 +254,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option(
       "--totp <binding>",
       "goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--type-fixture <binding>",
+      "goal strategy: '<label|testId|type|id|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -243,7 +315,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option(
       "--job-wait-ms <ms>",
       "goal and usability: while the page shows an in-progress status (\"Simulating…\", aria-busy, a job \"is running\"), " +
-        "waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000)",
+        "waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); " +
+        "it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, " +
+        "and a wait the page documents (\"usually takes a minute\") can raise it",
       positiveIntArg,
     )
     .option(
@@ -362,6 +436,24 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       [] as string[],
     )
     .option(
+      "--log-scope <regex|substring>",
+      "attributes only backend log lines matching this (repeatable, /regex/flags/ or a plain substring, e.g. a tenant id) to the run (#282); the rest count as serverLogs.ignoredLines. For concurrent runs tailing one log. A line carrying one of the run's own correlation ids is in scope",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--log-correlation-header <name>",
+      "another request/response header that carries a correlation id (repeatable; built in: traceparent, x-request-id, x-correlation-id, request-id, x-amzn-trace-id, x-b3-traceid, x-cloud-trace-context). A log line carrying a request's id is attached to that exact request and the step that sent it, not by time (#204)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--log-id-pattern </regex/>",
+      "how a correlation id is written in your log lines, when not as trace_id=/request_id=/correlation_id= or a traceparent (repeatable; the first capture group is the id). Once ids correlate, a line with another request's id is never attributed to the run (#204)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--server-log-drain-ms <ms>",
       "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
       nonNegativeIntArg,
@@ -380,13 +472,13 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option("--personas <file>", "personas JSON: {\"<name>\": \"<storageState>\"} or {\"personas\": [{\"name\", \"storageState\"}]}")
     .option(
       "--check-overflow",
-      "check the horizontal-overflow hard signal (#149) even at a desktop (>=1024px) viewport — --strategy coverage/exploratory " +
+      "check the horizontal-overflow (#149) and vertical-clipping (#302: text cut off by a fixed-height box or above the page top) hard signals even at a desktop (>=1024px) viewport — --strategy coverage/exploratory " +
         "(a defect), adversarial (a defect) or usability (a signal finding). " +
         "On by default whenever --viewport/--device emulates a viewport narrower than 1024px",
     )
     .option(
       "--ignore-overflow <selector>",
-      "a CSS selector (repeatable) whose overflow is intentional — excluded from the horizontal-overflow signal, like --ignore-no-progress",
+      "a CSS selector (repeatable) whose overflow or clipping is intentional — excluded from the horizontal-overflow and vertical-clipping signals, like --ignore-no-progress",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -428,6 +520,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         logDefect: string[];
         logQuietOk: string[];
         logIgnore: string[];
+        logScope: string[];
+        logCorrelationHeader: string[];
+        logIdPattern: string[];
         serverLogDrainMs?: string;
         actor: string[];
         repeat?: string;
@@ -438,7 +533,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         requireFormSubmit: boolean;
         fileIssues?: boolean;
         issueRepo?: string;
-        hangReplays?: string;
+        /** Parsed by commander's `nonNegativeIntArg` (#275: a number, not a string). */
+        hangReplays?: number;
         settleIgnore: string[];
         apiPrefix: string[];
         longPollMs?: string;
@@ -451,9 +547,13 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         minConfidence?: string;
         maxFindingsPerPage?: string;
         show?: string;
+        product?: string;
+        polish?: boolean;
+        probeGuards?: boolean;
         success: string[];
         successWhen?: string;
         allowVacuousChecks?: boolean;
+        actionDeltas?: boolean;
         feature?: string;
         route: string[];
         scope?: string;
@@ -461,6 +561,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         secret: string[];
         secretField: string[];
         totp: string[];
+        typeFixture: string[];
         fixture?: string;
         storageState?: string;
         saveStorageState?: string;
@@ -485,7 +586,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         ignoreOverflow: string[];
         json?: boolean;
         evidenceVideo?: boolean;
-      } & BrowserLaunchFlags & DemoFlags & FixtureFlags & EmulationFlags & ScreenshotsFlags>();
+        fromJourney?: string;
+        atStep?: string;
+        param: Record<string, string>;
+        journeysDir?: string;
+      } & BrowserLaunchFlags & DemoFlags & FixtureFlags & EmulationFlags & ScreenshotsFlags & EnvironmentFlags>();
       // #210: one output rule for every strategy — the envelope with --json, a human summary without.
       const emitExplore = (envelope: JsonEnvelope<unknown>, exitCode?: number, human: (data: unknown) => string = formatMissionHuman): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "explore", human, ...(exitCode === undefined ? {} : { exitCode }) });
@@ -509,11 +614,140 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         }
       }
       const strategy = o.strategy ?? "goal";
+      // #293 journey-anchored exploration: the Journey, step, params and environment are resolved (and
+      // refused, exit 64) before anything else — the start URL every later check uses is where the
+      // Journey's prefix lands.
+      let journeyPrefix: JourneyPrefix | undefined;
+      const anchoredFlags = [o.fromJourney, o.atStep, o.journeysDir, o.env, o.baseUrl].some((v) => v !== undefined);
+      if (anchoredFlags || Object.keys(o.param).length > 0) {
+        const refuse = (message: string): void => emitExplore(fail("E_EXPLORE_ARGS", message));
+        if (o.fromJourney === undefined || o.atStep === undefined) {
+          refuse("--from-journey and --at-step go together (and --param, --env, --base-url and --journeys-dir need them)");
+          return;
+        }
+        if (o.url !== undefined) {
+          refuse("--url cannot be combined with --from-journey: the mission starts where the Journey's prefix leaves the page");
+          return;
+        }
+        if (o.feature !== undefined || !(ANCHORED_STRATEGIES as readonly string[]).includes(strategy)) {
+          refuse(`--from-journey supports --strategy ${ANCHORED_STRATEGIES.join(", ")} (not --feature)`);
+          return;
+        }
+        if (wantsMultiRun(o) || o.actor.length > 0) {
+          refuse("--from-journey runs one anchored mission: --repeat, --persona, --personas and --actor are not supported with it (a campaign runs several)");
+          return;
+        }
+        // #293 sweep: `--at-step all|anchors` runs the strategy from EVERY step (or anchor), each in a
+        // fresh session with --fixtures restored around it, --max-actions/--max-decisions split evenly
+        // over the stop points, and reads them as one deduped report (a one-job campaign).
+        if (isSweepMode(o.atStep)) {
+          if (o.real !== true && o.fakeAi !== true) {
+            emitExplore(fail("E_AI_SETUP_REQUIRED", "a sweep's missions are model-driven: pass --real or --fake-ai"));
+            return;
+          }
+          const journeysDir = resolveJourneysDir(deps, o.journeysDir);
+          const abs = (p: string): string => resolvePath(p);
+          const spec = {
+            version: 1,
+            name: `sweep of ${o.fromJourney} (${o.atStep}, ${strategy})`,
+            ...(o.env === undefined ? {} : { env: o.env }),
+            ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }),
+            ...(o.storageState === undefined ? {} : { storageState: abs(o.storageState) }),
+            ...(o.fixtures === undefined ? {} : { fixtures: abs(o.fixtures) }),
+            ...(o.before === undefined ? {} : { before: o.before }),
+            ...(o.after === undefined ? {} : { after: o.after }),
+            discovery: false,
+            maxRuns: CAMPAIGN_LIMITS.maxRuns,
+            jobs: [
+              {
+                id: "sweep",
+                journey: o.fromJourney,
+                params: o.param,
+                anchors: o.atStep.trim(),
+                strategies: [strategy],
+                ...(o.goal === undefined ? {} : { goal: o.goal }),
+                ...(o.appClass === undefined ? {} : { appClass: o.appClass }),
+                ...(o.success.length === 0 ? {} : { success: o.success }),
+                ...(o.maxActions === undefined ? {} : { maxActions: Number(o.maxActions) }),
+                ...(o.maxDecisions === undefined ? {} : { maxDecisions: Number(o.maxDecisions) }),
+              },
+            ],
+          };
+          try {
+            const plan = await validateCampaignSpec(spec, resolvePath("explore-sweep.json"), {
+              journeysDir,
+              allowShellHooks: o.allowShellHooks === true,
+              environmentSeams: environmentSeams(deps),
+            });
+            const result = await runCampaign(plan, {
+              newProgram: () => buildProgram(deps),
+              journeysDir,
+              missionTargetsDir: resolveMissionTargetsDir(deps),
+              ...(o.out === undefined ? {} : { outDir: o.out }),
+              ...(o.real === true ? { real: true } : {}),
+              ...(o.fakeAi === true ? { fakeAi: true } : {}),
+              missionArgs: forwardedArgv(this, SWEEP_OWNED),
+            });
+            emitExplore(ok(withEngine({ sweep: { journeyId: o.fromJourney, mode: o.atStep.trim(), strategy, stops: plan.totalRuns, budgetPerStop: { maxActions: plan.jobs[0]?.maxActions, ...(plan.jobs[0]?.maxDecisions === undefined ? {} : { maxDecisions: plan.jobs[0].maxDecisions }) } }, ...result })), result.exitCode, formatCampaignHuman);
+          } catch (err) {
+            if (err instanceof CampaignSpecError) emitExplore(fail("E_EXPLORE_ARGS", err.message));
+            else emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+          }
+          return;
+        }
+        try {
+          const environment = environmentFromFlags(
+            { ...(o.env === undefined ? {} : { env: o.env }), ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }) },
+            environmentSeams(deps),
+          );
+          // The environment's own session applies when --storage-state names none (as `journey run`).
+          if (o.storageState === undefined && environment?.storageState !== undefined) o.storageState = environment.storageState;
+          journeyPrefix = await resolveJourneyPrefix({
+            dir: resolveJourneysDir(deps, o.journeysDir),
+            id: o.fromJourney,
+            atStep: o.atStep,
+            params: o.param,
+            ...(environment === undefined ? {} : { environment }),
+            ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
+            dbPath: resolveDbPath(deps),
+            environmentFlags: { ...(o.env === undefined ? {} : { env: o.env }), ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }) },
+          });
+        } catch (err) {
+          if (isEnvironmentError(err) || err instanceof JourneyPrefixArgsError) emitExplore(fail(err.code, err.message));
+          else if (err instanceof UnknownJourneyError) emitExplore(fail("E_UNKNOWN_JOURNEY", err.message));
+          else if (err instanceof ParamValidationError) emitExplore(fail("E_INVALID_PARAMS", err.message));
+          else if (err instanceof JourneyRequiresAuthError) emitExplore(fail("E_JOURNEY_REQUIRES_AUTH", err.message));
+          else emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+          return;
+        }
+        // The prefix types its secret params into the page the mission perceives: they are redacted like
+        // --secret. Coverage/exploratory carry no redaction set, so a prefix with secrets refuses them.
+        if (journeyPrefix.secrets.length > 0 && (strategy === "coverage" || strategy === "exploratory")) {
+          refuse(`journey '${o.fromJourney}' types a secret param before step ${journeyPrefix.branch.step}: --strategy ${strategy} cannot redact it — use goal, adversarial or usability`);
+          return;
+        }
+        o.url = journeyPrefix.startUrl;
+        // Default allowlist: the origins the Journey's steps may be on (the environment's), not just the landing's.
+        if (o.allow.length === 0) o.allow = [...journeyPrefix.allowedOrigins];
+      }
+      const withPrefix = journeyPrefix === undefined ? {} : { journeyPrefix };
+      /** #293: a prefix that no longer replays, or a site policy that refused it — typed, handled once for every strategy. */
+      const emitJourneyFailure = (err: unknown): boolean => {
+        if (err instanceof JourneyPrefixStaleError) {
+          emitExplore(ok(withEngine(journeyStaleResult(err, strategy))), EXIT_CODES.inconclusive);
+          return true;
+        }
+        if (err instanceof SiteGateRefusedError) {
+          emitExplore(fail(err.code, err.message));
+          return true;
+        }
+        return false;
+      };
       // #195: `--secret env:VAR` is resolved from the environment before anything runs (fail closed).
       try {
         const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
         if (resolved.literals > 0) program.configureOutput().writeErr?.(LITERAL_SECRET_WARNING);
-        o.secret = resolved.secrets;
+        o.secret = [...resolved.secrets, ...(journeyPrefix?.secrets ?? [])];
       } catch (err) {
         if (!(err instanceof SecretArgError)) throw err;
         emitExplore(fail("E_EXPLORE_ARGS", err.message));
@@ -524,6 +758,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       let browser: ReturnType<typeof browserRunFromFlags>;
       try {
         browser = browserRunFromFlags(o, deps.explore?.env ?? process.env);
+        // #256: a chrome-extension:// --url must be a loaded extension's; loaded extensions' origins are allowed.
+        assertExtensionTargetLoaded(o.url, browser);
+        o.allow = allowWithExtensions(o.url, o.allow, browser);
       } catch (err) {
         emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
@@ -585,12 +822,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         emitExplore(fail("E_EXPLORE_ARGS", "--job-wait-ms must be a positive integer"));
         return;
       }
-      // #154: refused BEFORE any browser opens. 0 is valid: "don't replay" — a hang is then
+      // #154: refused BEFORE any browser opens — `nonNegativeIntArg` already rejects a bad value at
+      // parse time (#275: the value is a number here). 0 is valid: "don't replay" — a hang is then
       // reported unconfirmed (inconclusive), never replayed and never a crash.
-      if (o.hangReplays !== undefined && !/^\d+$/.test(o.hangReplays.trim())) {
-        emitExplore(fail("E_EXPLORE_ARGS", `--hang-replays must be a non-negative integer (0 = don't replay; the hang is reported unconfirmed), got "${o.hangReplays}"`));
-        return;
-      }
       try {
         validateDenyPatterns(o.deny);
         validateDenyPatterns(o.paid, "--paid");
@@ -618,7 +852,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
               ...(o.issueRepo === undefined ? {} : { issueRepo: o.issueRepo }),
               ...(o.jevitateRepo === undefined ? {} : { jevitateRepo: o.jevitateRepo }),
             },
-            new URL(o.url).origin,
+            new URL(setupRefFreeUrl(o.url)).origin,
           );
         } catch (err) {
           if (err instanceof FilingConfigError) {
@@ -633,7 +867,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       let target: TargetConfig | undefined;
       if (o.url !== undefined) {
         try {
-          target = resolveTargetConfig(loadTargetsFile(deps.explore?.targetsConfigPath), new URL(o.url).origin, {
+          target = resolveTargetConfig(loadTargetsFile(deps.explore?.targetsConfigPath), new URL(setupRefFreeUrl(o.url)).origin, {
             settleIgnore: o.settleIgnore,
             ignoreNoProgress: o.ignoreNoProgress,
             apiPrefixes: o.apiPrefix,
@@ -665,7 +899,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       const withEvidence = async <R extends object>(result: R): Promise<R> => {
         if (!evidenceOn) return result;
         let out = result;
-        if (filing?.enabled === true) out = await fileDraftsWithEvidence(out, filing, issueFiler, new Date().toISOString());
+        if (filing?.enabled === true) out = await fileDraftsWithEvidence(out, filing, issueFiler, clock.nowIso());
         return out;
       };
       // `--fixture` feeds the upload op, which only the explore loop (goal and
@@ -673,6 +907,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // silently ignoring a file the user expected to be uploaded.
       if (o.fixture !== undefined && (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))) {
         emitExplore(fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
+        return;
+      }
+      // #198: product facts and polish shape the UX review's findings only.
+      if ((o.product !== undefined || o.polish === true || o.probeGuards === true) && (o.feature !== undefined || strategy !== "usability")) {
+        emitExplore(fail("E_EXPLORE_ARGS", "--product, --polish and --probe-guards are supported only with --strategy usability"));
         return;
       }
       // #225: success checks judge a goal / a usability job — every other strategy (and --feature) would
@@ -687,6 +926,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             `--success, --success-when and --allow-vacuous-checks are supported only with --strategy goal or usability (not ${o.feature !== undefined ? "--feature" : `--strategy ${strategy}`})`,
           ),
         );
+        return;
+      }
+      // #303: action deltas are recorded by the goal loop (goal and usability runs) only — refused
+      // elsewhere, never silently ignored.
+      if (o.actionDeltas === true && o.feature !== undefined) {
+        emitExplore(fail("E_EXPLORE_ARGS", "--action-deltas is not supported with --feature (goal, usability, coverage, exploratory and adversarial runs record deltas)"));
         return;
       }
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
@@ -761,12 +1006,18 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           const sources = parseLogSourceSpecs(o.logSource, o.allowLogCmd ?? false);
           const logDefect = parseLogDefectSpecs(o.logDefect);
           const logIgnore = parseLogIgnoreSpecs(o.logIgnore);
+          const logScope = parseLogScopeSpecs(o.logScope);
+          const correlationHeaders = parseCorrelationHeaders(o.logCorrelationHeader);
+          const idPatterns = parseLogIdPatterns(o.logIdPattern);
           serverLog = {
             sources,
             logDefect,
             allowLogCmd: o.allowLogCmd ?? false,
             quietOk: o.logQuietOk,
             logIgnore,
+            logScope,
+            correlationHeaders,
+            idPatterns,
             ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
           };
         } catch (err) {
@@ -792,6 +1043,22 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ];
         } catch (err) {
           if (!(err instanceof SecretFieldSpecError)) throw err;
+          emitExplore(fail(err.code, err.message));
+          return;
+        }
+      }
+
+      // #281: fields typed with a file's exact text — read (and checked) before any browser opens.
+      let typeFixtures: TypeFixture[] = [];
+      if (o.typeFixture.length > 0) {
+        if (o.feature !== undefined || strategy !== "goal") {
+          emitExplore(fail("E_EXPLORE_ARGS", "--type-fixture is supported only with --strategy goal"));
+          return;
+        }
+        try {
+          typeFixtures = loadTypeFixtures(o.typeFixture);
+        } catch (err) {
+          if (!(err instanceof TypeFixtureSpecError)) throw err;
           emitExplore(fail(err.code, err.message));
           return;
         }
@@ -849,6 +1116,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         try {
           const result = await runCoverageMission({
             ...(target === undefined ? {} : { target }),
+            ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
             url: o.url,
             allowlist: covAllowlist,
             judge: covJudge,
@@ -868,10 +1136,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
             ...withServerLog,
+            ...withPrefix,
           });
           // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see exit-codes.ts).
           emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
+          if (emitJourneyFailure(err)) return;
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof ScopeUnderivableError) {
@@ -926,6 +1196,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         try {
           const result = await runAdversarialCliMission({
             ...(target === undefined ? {} : { target }),
+            ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
             seedUrl: o.url,
             allowlist: advAllowlist,
             usage: advUsage,
@@ -935,7 +1206,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             secrets: o.secret.length > 0 ? o.secret : undefined,
             ...(runFiling === undefined ? {} : { filing: runFiling }),
             issueFiler,
-            ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
+            ...(o.hangReplays === undefined ? {} : { hangReplays: o.hangReplays }),
             strategies: CLI_ADVERSARIAL_STRATEGIES,
             judgment: advJudge,
             generation: advGen,
@@ -949,11 +1220,13 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
             ...withServerLog,
+            ...withPrefix,
           });
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
           // itself broke (inconclusive/crashed) — see exit-codes.ts.
           emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
+          if (emitJourneyFailure(err)) return;
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof ScopeUnderivableError) {
@@ -1029,6 +1302,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
             ...(o.show !== undefined ? { show: o.show } : {}),
             ...(o.maxFindingsPerPage !== undefined ? { maxFindingsPerRoute: o.maxFindingsPerPage } : {}),
+            ...(o.product !== undefined ? { product: o.product } : {}),
+            ...(o.polish === true ? { polish: true } : {}),
+            ...(o.probeGuards === true ? { probeGuards: true } : {}),
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,
@@ -1047,11 +1323,14 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(uxSuccessChecks.length === 0 ? {} : { successChecks: uxSuccessChecks }),
             ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
             ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+            ...withPrefix,
+            ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
           });
           // UX findings are advisory (0); a failed --success check (#225) is 1, as on a goal run; a
           // broken run or an unavailable analysis is 2.
           emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
+          if (emitJourneyFailure(err)) return;
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof ScopeUnderivableError) {
@@ -1063,6 +1342,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             emitExplore(fail("E_UX_ARGS", err.message));
           } else if (err instanceof UsabilityInvariantsUnsupportedError) {
             emitExplore(fail("E_EXPLORE_ARGS", err.message));
+          } else if (err instanceof ProductFactsError) {
+            emitExplore(fail(err.code, err.message));
           } else {
             emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
@@ -1139,7 +1420,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         return;
       }
       const successWhen = o.successWhen === "held" || o.successWhen === "final" ? o.successWhen : undefined;
-      const allowlist = resolveExploreAllowlist(o.url, o.allow);
+      const allowlist = resolveExploreAllowlist(setupRefFreeUrl(o.url), o.allow);
       // Fixtures (#140/#144): the spec and every ${setup.x} reference are validated here, before any
       // browser or request; the setup itself runs just before the mission (below).
       let fx: MissionFixtures | undefined;
@@ -1147,11 +1428,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         checkUrlRefOrigin(o.url);
         fx = buildMissionFixtures(o, {
           allowlist,
-          baseUrl: o.url.replace(SETUP_REF, "0"),
+          baseUrl: setupRefFreeUrl(o.url),
           ...(primaryStorageState === undefined ? {} : { storageState: primaryStorageState }),
           secretFields,
           secrets: o.secret,
           ...(target?.fixtures === undefined ? {} : { targetFixtures: target.fixtures }),
+          ...(target?.personas === undefined ? {} : { personas: target.personas }),
         });
         checkSetupRefs({ "--url": o.url, "--goal": o.goal, "--success": o.success, ...invariantSetupTexts(invariants) }, fx);
       } catch (err) {
@@ -1186,7 +1468,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         try {
           await fx.setup();
           const b = fx.bindings();
-          url = substituteSetupRefs(o.url, b, { where: "--url" });
+          url = substituteUrlSetupRefs(o.url, b);
           goal = substituteSetupRefs(o.goal, b, { where: "--goal" });
           successChecks = o.success.map((spec) => parseSuccessSpec(substituteSetupRefs(spec, b, { where: "--success" })));
           // #187: ${setup.x} in the invariants (probe paths, deniedAs.open, capture routes), origin-fixed.
@@ -1209,6 +1491,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           successChecks,
           ...(successWhen === undefined ? {} : { successWhen }),
           ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+          ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
           allowlist,
           judge,
           gen,
@@ -1216,6 +1499,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
           ...(secretFields.length > 0 ? { secretFields } : {}),
+          ...(typeFixtures.length > 0 ? { typeFixtures } : {}),
           fixture: o.fixture,
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,
@@ -1227,15 +1511,17 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ...(actors === null ? {} : { actors }),
           ...(runFiling === undefined ? {} : { filing: runFiling }),
           issueFiler,
-          ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
+          ...(o.hangReplays === undefined ? {} : { hangReplays: o.hangReplays }),
           conversation,
           ...runInvariants,
           ...withServerLog,
           ...(fx === undefined ? {} : { fixtures: fx }),
+          ...withPrefix,
         });
         // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
         emitExplore(ok(await withEvidence(result)), result.exitCode);
       } catch (err) {
+        if (emitJourneyFailure(err)) return;
         if (err instanceof UnauthorizedExploreTargetError) {
           emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
         } else if (err instanceof FixtureNotFoundError) {

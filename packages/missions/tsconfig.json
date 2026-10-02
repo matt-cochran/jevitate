@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
-  "references": [{ "path": "../recording" }],
+  "references": [{ "path": "../domain" }, { "path": "../recording" }],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]
 }

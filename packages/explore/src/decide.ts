@@ -114,6 +114,8 @@ export interface DecideInput {
    * already on screen and never chooses `report`. Untrusted; redacted and bounded here.
    */
   readonly pageText?: string;
+  /** #303: the run records action deltas — the history carries `effect of …` lines (told to the model). */
+  readonly actionDeltas?: boolean;
 }
 
 /** The conversation the loop is in: the latest reply (untrusted page text) and what was sent. */
@@ -138,6 +140,14 @@ export const CONVERSATION_GUIDE =
   "message AND submits it), or type then click its Send control. After a reply, respond to it — or " +
   "pick a quick reply the reply offered. Propose `done` only when the goal's success condition is " +
   "visibly met on this page.";
+
+/**
+ * #303: told to the model in every action question — the `effect of …` history lines are code's
+ * record of what each action changed (bounded, redacted), so it need not re-derive it from the page.
+ */
+export const DELTA_HISTORY_GUIDE =
+  " History lines `effect of <action>: <verdict>` say what code observed that action change on the page " +
+  "(no-change: nothing changed and nothing was sent — repeating it will not help).";
 
 /**
  * One judgment per step over the COMPLETE actions available on this page (the candidate-action
@@ -234,6 +244,7 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
       "Which single action best advances the goal from the current page? Use the history: do not repeat an " +
       "action that already succeeded, and when a dialog or form step is in progress, complete it. " +
       CONVERSATION_GUIDE +
+      (input.actionDeltas === true ? DELTA_HISTORY_GUIDE : "") +
       (pageText === "" ? "" : PAGE_TEXT_GUIDE) +
       (omitted === 0
         ? ""

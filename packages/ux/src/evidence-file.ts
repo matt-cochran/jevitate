@@ -15,6 +15,7 @@ import { z } from "zod";
 import { redactEvidence } from "./redact.js";
 import type { JourneyOutcome } from "./friction.js";
 import type { RunSignalCapture } from "./signals.js";
+import type { GuardProbe } from "./claims.js";
 import type { AppContext, Control, UxEvidence } from "./types.js";
 
 export const UX_EVIDENCE_FILE_VERSION = 1 as const;
@@ -29,6 +30,11 @@ export interface UxEvidenceFile {
   readonly screens: readonly PersistedScreen[];
   readonly signals: RunSignalCapture;
   readonly outcome?: JourneyOutcome;
+  /**
+   * #198: the live run's guard probes (each destructive control clicked with writes blocked) — code
+   * evidence, redacted, so offline review verifies the same `destructive-unguarded` claims.
+   */
+  readonly probes?: readonly GuardProbe[];
 }
 
 export class UxEvidenceFileError extends Error {
@@ -144,6 +150,20 @@ const FileSchema = z.object({
     typedValues: z.array(z.string()).optional(),
   }),
   outcome: z.union([z.object({ status: z.literal("completed") }).passthrough(), z.object({ status: z.literal("incomplete"), reason: z.string() }).passthrough()]).optional(),
+  probes: z
+    .array(
+      z.object({
+        screenId: z.string(),
+        route: z.string(),
+        control: z.string(),
+        controlKey: z.string(),
+        status: z.enum(["probed", "skipped", "not-found", "refused", "failed"]),
+        guard: z.enum(["native-dialog", "dom-dialog", "navigation", "none"]).optional(),
+        blockedWrites: z.array(z.string()).optional(),
+        detail: z.string(),
+      }),
+    )
+    .optional(),
 });
 
 /** Parses and validates an evidence sidecar; a wrong shape throws `UxEvidenceFileError`, never a silent partial read. */

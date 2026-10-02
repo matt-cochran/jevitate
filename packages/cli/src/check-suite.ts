@@ -123,6 +123,19 @@ export interface SuiteMission extends SuiteItemOverrides {
   readonly successWhen?: "final" | "held";
   readonly maxActions?: number;
   readonly maxDecisions?: number;
+  /**
+   * #293 journey-anchored mission (`explore --from-journey`): the promoted Journey (in the target's
+   * `journeysDir`) whose prefix is replayed in the mission's own browser context first. Not with
+   * `url` or strategy `feature`.
+   */
+  readonly fromJourney?: string;
+  /** #293: the step to branch off — a 1-based step number or an anchor name (`--at-step`). */
+  readonly atStep?: string;
+  /** #293: the Journey's params (`--param`); only the prefix's own are required. */
+  readonly params?: Readonly<Record<string, string>>;
+  /** #293/#247: the environment the Journey prefix runs against (`--env` / `--base-url`). */
+  readonly env?: string;
+  readonly baseUrl?: string;
 }
 
 export interface SuiteVerifyFix {
@@ -305,7 +318,7 @@ export const SUITE_FIELDS = {
   target: ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix", "viewport", "device"],
   journey: ["id", "params", "routes", "viewport", "device", "storageState", "env", "baseUrl"],
   goal: ["name", "goal", "success", "url", "successWhen", "routes", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields", "fixtures"],
-  mission: ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "success", "successWhen", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields"],
+  mission: ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "success", "successWhen", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields", "fromJourney", "atStep", "params", "env", "baseUrl"],
   verifyFix: ["name", "result", "fingerprint", "replays", "storageState"],
 } as const satisfies Record<string, readonly string[]>;
 
@@ -502,8 +515,28 @@ function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
   const url = r.url(v, "url", path, true);
   const maxActions = r.number(v, "maxActions", path, { integer: true });
   const maxDecisions = r.number(v, "maxDecisions", path, { integer: true });
+  // #293: a journey-anchored mission — the Journey and step it branches off (checked at preflight).
+  const fromJourney = r.string(v, "fromJourney", path, true);
+  const rawStep = v.atStep;
+  const atStep = typeof rawStep === "number" && Number.isInteger(rawStep) && rawStep > 0 ? String(rawStep) : typeof rawStep === "string" && rawStep.trim() !== "" ? rawStep : undefined;
+  if (rawStep !== undefined && atStep === undefined) r.fail(`${path}.atStep`, "must be a positive step number or an anchor name");
+  const params = v.params;
+  if (params !== undefined && (!isRecord(params) || !Object.values(params).every((p) => typeof p === "string"))) r.fail(`${path}.params`, "must be an object of string values");
+  const env = r.string(v, "env", path, true);
+  const baseUrl = r.url(v, "baseUrl", path, true);
+  const anchored = fromJourney !== undefined || rawStep !== undefined || params !== undefined || env !== undefined || baseUrl !== undefined;
+  if (anchored) {
+    if (fromJourney === undefined || rawStep === undefined) r.fail(path, "fromJourney and atStep go together (and params, env and baseUrl need them)");
+    if (s === "feature") r.fail(`${path}.fromJourney`, "a feature mission cannot start from a Journey (strategies: coverage, exploratory, adversarial, usability)");
+    if (url !== undefined) r.fail(`${path}.url`, "cannot be combined with fromJourney: the mission starts where the Journey's prefix leaves the page");
+  }
   return {
     ...overridesOf(r, v, path, s),
+    ...(fromJourney === undefined ? {} : { fromJourney }),
+    ...(atStep === undefined ? {} : { atStep }),
+    ...(params === undefined ? {} : { params: params as Record<string, string> }),
+    ...(env === undefined ? {} : { env }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
     name: r.string(v, "name", path, true) ?? (feature === undefined ? s : `${s}-${feature}`),
     strategy: s,
     ...emulationOf(r.emulation(v, path)),

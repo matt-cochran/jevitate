@@ -15,6 +15,7 @@ function fakeLocator() {
     fill: vi.fn(async () => {}),
     pressSequentially: vi.fn(async () => {}),
     isVisible: vi.fn(async () => true),
+    count: vi.fn(async () => 1),
   };
 }
 

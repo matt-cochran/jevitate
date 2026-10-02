@@ -3,7 +3,7 @@ import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { closeOnce, demoOverlayOf, extensionsStamp, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -28,7 +28,7 @@ import {
   type FilingConfig,
   type IssueDraft,
   type IssueFilerPort,
-  type MissionOutcome,
+  type MissionOutcome, clock,
 } from "@jevitate/domain";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -37,6 +37,8 @@ import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissio
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
+import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
+import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
 import {
   applyServerLogOutcome,
@@ -58,6 +60,7 @@ import {
   persistStorageState,
   browserVersionOf,
   type MissionTarget,
+  serverLogRuntimeOptions,
 } from "./explore-shared.js";
 
 /**
@@ -128,6 +131,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly saveStorageState?: string;
   /** Registered secret values (`--secret`): kept out of the transcript, Recording and issue drafts. */
   readonly secrets?: readonly string[];
+  /** #303 `--action-deltas` (opt-in): record what each action changed (code verdict) — evidence only. */
+  readonly actionDeltas?: boolean;
   /** Issue filing (off unless enabled + a repo is configured). Default: drafts only. */
   readonly filing?: FilingConfig;
   /** Creates the filer — called only when filing is enabled. */
@@ -154,6 +159,11 @@ export interface RunAdversarialCliMissionOptions {
   readonly emulation?: EmulationSpec;
   /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
   readonly overflow?: OverflowFlags;
+  /**
+   * #293 `--from-journey`/`--at-step`: replayed into the session before the mission, which then starts
+   * on the live page it left (never a fresh navigation). `seedUrl` is only the expected landing.
+   */
+  readonly journeyPrefix?: JourneyPrefix;
 }
 
 export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & {
@@ -171,8 +181,6 @@ export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & 
   readonly target: MissionTarget;
   /** One ready-to-file draft per defect (and per crash), written next to the Recording. */
   readonly issues: FindingsIssues;
-  /** @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor. */
-  readonly recordingPath: string;
   /** The persisted typed result (`<recording>.result.json`), readable via MCP `get_mission_result`. */
   readonly resultPath: string;
   readonly transcriptPath: string;
@@ -186,12 +194,12 @@ export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & 
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
   /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
   readonly hostHealth: HostHealthSummary;
   /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
   readonly environmentDegraded: EnvironmentDegraded[];
+  /** #293: the Journey step a journey-anchored run branched from (absent on a bare-URL run). */
+  readonly branch?: JourneyBranchPoint;
 };
 
 /**
@@ -222,7 +230,7 @@ export async function runAdversarialCliMission(
   const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
   const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
   // #245: the mission session and every hang-replay session are shown/recorded alike.
@@ -255,14 +263,12 @@ export async function runAdversarialCliMission(
     }),
   });
   const serverLog = openServerLogRuntime({
-    sources: opts.serverLog?.sources ?? [],
-    logDefect: opts.serverLog?.logDefect ?? [],
-    quietOk: opts.serverLog?.quietOk ?? [],
-    logIgnore: opts.serverLog?.logIgnore ?? [],
-    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    ...serverLogRuntimeOptions(opts.serverLog),
     secrets: opts.secrets ?? [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  // #204: every request's correlation ids, from before the first navigation.
+  serverLog?.observe(session.page);
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     capture.noteEntry(session.page, entry);
     health.noteStep(entry);
@@ -275,6 +281,8 @@ export async function runAdversarialCliMission(
     await closeQuietly(session);
   });
   try {
+    // #293: a journey-anchored run first replays its Journey's prefix into this very session.
+    const start = await startFromJourney(opts.journeyPrefix, session, opts.seedUrl, opts.allowlist, opts.browser);
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
       hostHealth: health,
@@ -287,7 +295,10 @@ export async function runAdversarialCliMission(
       actor,
       judgment: opts.judgment,
       generation: opts.generation,
-      seedUrl: opts.seedUrl,
+      seedUrl: start.url,
+      ...(start.branch === undefined ? {} : { startInPlace: true }),
+      // #293: a reset re-replays the Journey prefix (counted against --max-actions), never just the URL.
+      ...(start.restart ?? {}),
       allowlist: opts.allowlist,
       strategies: opts.strategies,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
@@ -295,6 +306,7 @@ export async function runAdversarialCliMission(
       site: origin,
       ...(opts.bounds === undefined ? {} : { bounds: opts.bounds }),
       ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
+      ...(opts.actionDeltas === true ? { actionDeltas: true } : {}),
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
@@ -349,21 +361,23 @@ export async function runAdversarialCliMission(
       ...videos,
       ...shotFields,
       // #149: stamped with the emulation the mission ran under, so verify-fix replays under it by default.
-      recording:
-        resolvedEmulation === undefined ? outcome.recording : { ...outcome.recording, emulation: recordingEmulation(resolvedEmulation) },
+      recording: {
+        ...(resolvedEmulation === undefined ? outcome.recording : { ...outcome.recording, emulation: recordingEmulation(resolvedEmulation) }),
+        ...extensionsStamp(opts.browser), // #256
+      },
       outcome: missionOutcome,
       transcript,
-      recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
       exitCode,
       issues,
       // What `verify-fix` needs to replay a defect later: where, which origins, which session file
       // (the storageState PATH only — its cookies never enter an artifact).
       target: {
-        seedUrl: opts.seedUrl,
+        seedUrl: start.url,
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
+      ...branchFields(start),
       engine,
       ...(opts.invariants === undefined ? {} : { invariantSpec: opts.invariants }),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),

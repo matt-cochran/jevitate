@@ -1,5 +1,5 @@
 import { redactText } from "@jevitate/ai-core";
-import { worstOutcome, type MissionOutcome } from "@jevitate/domain";
+import { worstOutcome, type MissionOutcome, clock } from "@jevitate/domain";
 import { normalizeRoute, type TranscriptEntry } from "@jevitate/explore";
 import {
   closeLogSources,
@@ -9,6 +9,7 @@ import {
 } from "./log-sources.js";
 import {
   DotnetEntryGrouper,
+  LogSpecError,
   matchesLogDefect,
   matchesLogIgnore,
   normalizeLogMessage,
@@ -21,6 +22,7 @@ import {
   type LogLevel,
   type LogLine,
 } from "./log-lines.js";
+import { RequestIdLedger, declaredIds, type CorrelatedRequest, type RequestEvents } from "./log-trace.js";
 
 /**
  * Correlates tailed backend log lines to the mission step they landed during (#142): each step's
@@ -36,6 +38,15 @@ import {
  * Fail closed: every line is redacted with the run's own secret list before it is ever attached to
  * a step, turned into a defect, or counted in the summary — a log line can contain secrets the page
  * never showed.
+ *
+ * #204 — by trace / correlation id first: a line that carries an id one of the run's requests sent
+ * or received (`traceparent`, `x-request-id`, …; see `log-trace.ts`) is attached to EXACTLY that
+ * request (`request: { method, url, status, id }`) and to the step that sent it, whenever it
+ * landed. Only a line with no id falls back to the time window. Once ids demonstrably correlate, a
+ * line carrying ANOTHER id is other work (another user, a background job) and is never this run's.
+ *
+ * #282 — `--log-scope`: when given, only lines matching it (a tenant id, a run marker) are
+ * attributed; the rest count as `ignoredLines`. A line carrying one of the run's ids is in scope.
  */
 
 export interface ServerLogEvidence {
@@ -48,6 +59,19 @@ export interface ServerLogEvidence {
   readonly epochMs: number;
   /** The logger's own target/category, when known (#169). */
   readonly target?: string;
+  /**
+   * #204: the run's request this line was correlated to by a trace/correlation id it carries —
+   * method, redacted URL, response status (null: no response) and the id. Unset: attached by time.
+   */
+  readonly request?: ServerLogRequest;
+}
+
+/** #204: the request a server log line belongs to, by a correlation id both carry. */
+export interface ServerLogRequest {
+  readonly method: string;
+  readonly url: string;
+  readonly status: number | null;
+  readonly id: string;
 }
 
 export type TranscriptEntryWithLogs = TranscriptEntry & { readonly serverLogs?: readonly ServerLogEvidence[] };
@@ -79,8 +103,21 @@ export interface ServerLogsSummary {
   readonly attachedLines: number;
   readonly unattributedLines: number;
   /** Lines excluded by `--log-ignore` (#169 item 3) — known noise, never attached, never a defect
-   *  candidate, not counted in `byLevel`/`topMessages`. */
+   *  candidate, not counted in `byLevel`/`topMessages` — plus lines outside `--log-scope` (#282) and
+   *  lines carrying another request's correlation id (#204), broken down in `correlation`. */
   readonly ignoredLines: number;
+  /**
+   * #204/#282: how lines were correlated — set when a request carried a correlation id or
+   * `--log-scope` was given. `idMatchedLines`: attached to their exact request by id;
+   * `foreignLines`: carried another request's id (never this run's); `outOfScopeLines`: outside
+   * `--log-scope`. The last two are included in `ignoredLines`.
+   */
+  readonly correlation?: {
+    readonly requestsWithIds: number;
+    readonly idMatchedLines: number;
+    readonly foreignLines: number;
+    readonly outOfScopeLines: number;
+  };
   /**
    * False when `--log-defect` was given but at least one declared source is unhealthy: it never
    * opened/errored, OR it opened and delivered not one line while NOT declared `--log-quiet-ok`
@@ -104,12 +141,16 @@ export interface ServerLogDefect {
   readonly message: string;
   readonly occurrences: number;
   readonly repro: { readonly recordingStepIndex: number };
+  /** #204: the request the first occurrence was correlated to by id, when it was. */
+  readonly request?: ServerLogRequest;
   /** So `verify-fix` can re-open the SAME sources and re-check the SAME matcher (#142). */
   readonly serverLog: {
     readonly sources: readonly string[];
     readonly matcher: string;
     readonly normalizedMessage: string;
     readonly drainMs: number;
+    /** #282: the run's `--log-scope` (raw specs): verify-fix counts only lines in scope too. */
+    readonly scope?: readonly string[];
   };
 }
 
@@ -127,7 +168,7 @@ export const DEFAULT_SERVER_LOG_DRAIN_MS = 3_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
+    const t = clock.setTimeout(resolve, ms);
     t.unref?.();
   });
 }
@@ -144,6 +185,13 @@ export interface ServerLogRuntimeOptions {
   /** Already-parsed `--log-ignore` matchers (#169 item 3): known-noise lines excluded from
    *  correlation AND the defect oracle, counted separately (`serverLogs.ignoredLines`). */
   readonly logIgnore?: readonly LogIgnoreMatcher[];
+  /** #282: `--log-scope` matchers (same `/regex/` or substring grammar as `--log-ignore`): only lines
+   *  matching one are attributed (or carrying one of the run's correlation ids); the rest are ignored. */
+  readonly logScope?: readonly LogIgnoreMatcher[];
+  /** #204: extra response/request headers carrying a correlation id (`--log-correlation-header`). */
+  readonly correlationHeaders?: readonly string[];
+  /** #204: `--log-id-pattern`s: how an id is written in a log line of the operator's own format. */
+  readonly idPatterns?: readonly RegExp[];
   /** The journal's own listener — still called for every entry (the crash-safe flush is unchanged). */
   readonly onTranscriptEntry?: (entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void;
 }
@@ -162,12 +210,15 @@ export class ServerLogRuntime {
   readonly #groupers: DotnetEntryGrouper[] = [];
   readonly #lines: LogLine[] = [];
   readonly #stepEpoch = new Map<number, number>();
-  readonly #missionStartEpochMs = Date.now();
+  readonly #missionStartEpochMs = clock.now();
   readonly #secrets: readonly string[];
   readonly #matchers: readonly LogDefectMatcher[];
   readonly #drainMs: number;
   readonly #quietOk: ReadonlySet<string>;
   readonly #logIgnore: readonly LogIgnoreMatcher[];
+  readonly #logScope: readonly LogIgnoreMatcher[];
+  readonly #idPatterns: readonly RegExp[];
+  readonly #ledger: RequestIdLedger;
   #ignoredLines = 0;
   readonly #inner: ((entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void) | undefined;
   readonly #maxTotalLines = 20_000;
@@ -182,6 +233,9 @@ export class ServerLogRuntime {
     this.#drainMs = opts.drainMs ?? DEFAULT_SERVER_LOG_DRAIN_MS;
     this.#quietOk = new Set(opts.quietOk ?? []);
     this.#logIgnore = opts.logIgnore ?? [];
+    this.#logScope = opts.logScope ?? [];
+    this.#idPatterns = opts.idPatterns ?? [];
+    this.#ledger = new RequestIdLedger({ headers: opts.correlationHeaders ?? [] });
     this.#inner = opts.onTranscriptEntry;
     // One `openLogSources` call per spec: each source's `onLine` must stamp ITS OWN spec onto every
     // `LogLine` (a shared callback across sources could not tell them apart). Each source also gets
@@ -221,9 +275,17 @@ export class ServerLogRuntime {
     });
   }
 
+  /**
+   * #204: records the correlation ids of every request this page sends and receives. Call before
+   * the page's first navigation (the seed load's requests count too).
+   */
+  observe(page: RequestEvents): void {
+    this.#ledger.observe(page);
+  }
+
   /** Wraps the journal's own `TranscriptListener`: unchanged persistence, plus this step's epoch. */
   readonly onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
-    this.#stepEpoch.set(entry.step, Date.now());
+    this.#stepEpoch.set(entry.step, clock.now());
     this.#inner?.(entry, all);
   };
 
@@ -231,7 +293,7 @@ export class ServerLogRuntime {
    *  and returns the correlated transcript/summary/defects. Idempotent (a second call is a no-op
    *  empty result) — never blocks the mission itself, only this post-processing step. */
   async finish(transcript: readonly TranscriptEntry[]): Promise<ServerLogRuntimeResult> {
-    if (this.#finished) return { transcript, summary: this.#summary([]), defects: [] };
+    if (this.#finished) return { transcript, summary: this.#summary([], this.#lines), defects: [] };
     this.#finished = true;
     await sleep(this.#drainMs);
     this.#flushGroupers();
@@ -258,8 +320,38 @@ export class ServerLogRuntime {
     const unattributed: LogLine[] = [];
     let attachedLines = 0;
 
+    // #204: which lines carry one of the run's own correlation ids (and so belong to that request).
+    const byId = new Map<LogLine, { readonly request: CorrelatedRequest; readonly id: string }>();
     for (const line of this.#lines) {
-      const win = windows.find((w) => line.epochMs >= w.startMs && line.epochMs <= w.endMs);
+      const hit = this.#ledger.requestFor(line.raw);
+      if (hit !== undefined) byId.set(line, hit);
+    }
+    // Ids demonstrably correlate (a line matched one): a line declaring ANOTHER id is other work.
+    const idsLive = byId.size > 0;
+    let foreignLines = 0;
+    let outOfScopeLines = 0;
+    const kept: LogLine[] = [];
+    for (const line of this.#lines) {
+      if (!byId.has(line)) {
+        if (this.#logScope.length > 0 && !this.#logScope.some((m) => matchesLogIgnore(line, m))) {
+          outOfScopeLines += 1;
+          continue;
+        }
+        if (idsLive && declaredIds(line.raw, this.#idPatterns).length > 0) {
+          foreignLines += 1;
+          continue;
+        }
+      }
+      kept.push(line);
+    }
+    const windowAt = (epochMs: number): { step: number } | undefined =>
+      windows.find((w) => epochMs >= w.startMs && epochMs <= w.endMs) ?? (epochMs < (windows[0]?.startMs ?? 0) ? windows[0] : undefined);
+
+    const requests = new Map<LogLine, ServerLogRequest>();
+    for (const line of kept) {
+      const hit = byId.get(line);
+      // An id-correlated line belongs to the step that SENT its request, whenever the line landed.
+      const win = hit === undefined ? windows.find((w) => line.epochMs >= w.startMs && line.epochMs <= w.endMs) : windowAt(hit.request.startedAtMs);
       const isDefectCandidate = this.#matchers.some((m) => matchesLogDefect(line, m));
       const attach = ATTACH_LEVELS.has(line.level) || isDefectCandidate;
       if (win === undefined) {
@@ -268,6 +360,11 @@ export class ServerLogRuntime {
       }
       if (!attach) continue;
       attachedLines += 1;
+      const request: ServerLogRequest | undefined =
+        hit === undefined
+          ? undefined
+          : { method: hit.request.method, url: redactText(hit.request.url, this.#secrets), status: hit.request.status, id: redactText(hit.id, this.#secrets) };
+      if (request !== undefined) requests.set(line, request);
       const list = perStep.get(win.step) ?? [];
       list.push({
         level: line.level,
@@ -276,6 +373,7 @@ export class ServerLogRuntime {
         source: line.source,
         epochMs: line.epochMs,
         ...(line.target === undefined ? {} : { target: redactText(line.target, this.#secrets) }),
+        ...(request === undefined ? {} : { request }),
       });
       perStep.set(win.step, list);
       const rawList = perStepRaw.get(win.step) ?? [];
@@ -288,8 +386,12 @@ export class ServerLogRuntime {
       return logs === undefined || logs.length === 0 ? entry : { ...entry, serverLogs: logs };
     });
 
-    const defects = this.#matchers.length === 0 ? [] : this.#buildDefects(transcript, perStepRaw, unattributed);
-    const summary = this.#summary(unattributed, attachedLines);
+    const defects = this.#matchers.length === 0 ? [] : this.#buildDefects(transcript, perStepRaw, unattributed, requests);
+    const correlation =
+      this.#ledger.requestsWithIds > 0 || this.#logScope.length > 0
+        ? { requestsWithIds: this.#ledger.requestsWithIds, idMatchedLines: kept.filter((l) => byId.has(l)).length, foreignLines, outOfScopeLines }
+        : undefined;
+    const summary = this.#summary(unattributed, kept, attachedLines, correlation);
     return { transcript: augmented, summary, defects };
   }
 
@@ -297,6 +399,7 @@ export class ServerLogRuntime {
     transcript: readonly TranscriptEntry[],
     perStepRaw: ReadonlyMap<number, LogLine[]>,
     unattributed: readonly LogLine[],
+    requests: ReadonlyMap<LogLine, ServerLogRequest>,
   ): ServerLogDefect[] {
     const grouped = new Map<string, { defect: ServerLogDefect; count: number }>();
     const lastStep = transcript.length > 0 ? (transcript[transcript.length - 1] as TranscriptEntry).step : 0;
@@ -315,6 +418,7 @@ export class ServerLogRuntime {
       // fingerprint already used internally) — two occurrences that only differ by an id in the URL
       // read as the same defect everywhere, not just in the hash.
       const templatedRoute = route === UNATTRIBUTED_ROUTE ? route : normalizeRoute(route);
+      const request = requests.get(line);
       grouped.set(fp, {
         count: 1,
         defect: {
@@ -327,11 +431,13 @@ export class ServerLogRuntime {
           message: redactText(line.message, this.#secrets),
           occurrences: 1,
           repro: { recordingStepIndex: recordingStepIndexFor(transcript, atStep) },
+          ...(request === undefined ? {} : { request }),
           serverLog: {
             sources: this.#handles.map((h) => h.spec.raw),
             matcher: matched.raw,
             normalizedMessage,
             drainMs: this.#drainMs,
+            ...(this.#logScope.length === 0 ? {} : { scope: this.#logScope.map((m) => m.raw) }),
           },
         },
       });
@@ -346,12 +452,17 @@ export class ServerLogRuntime {
     return [...grouped.values()].map(({ defect, count }) => ({ ...defect, occurrences: count }));
   }
 
-  #summary(unattributed: readonly LogLine[], attachedLines = 0): ServerLogsSummary {
+  #summary(
+    unattributed: readonly LogLine[],
+    lines: readonly LogLine[],
+    attachedLines = 0,
+    correlation?: NonNullable<ServerLogsSummary["correlation"]>,
+  ): ServerLogsSummary {
     const byLevel: Record<string, number> = {};
-    for (const line of this.#lines) byLevel[line.level] = (byLevel[line.level] ?? 0) + 1;
+    for (const line of lines) byLevel[line.level] = (byLevel[line.level] ?? 0) + 1;
 
     const counts = new Map<string, { level: LogLevel; message: string; target?: string; count: number }>();
-    for (const line of this.#lines) {
+    for (const line of lines) {
       const message = normalizeLogMessage(line.message);
       const key = `${line.level}|${line.target ?? ""}|${message}`;
       const e = counts.get(key);
@@ -398,7 +509,8 @@ export class ServerLogRuntime {
       topMessages,
       attachedLines,
       unattributedLines: unattributed.length,
-      ignoredLines: this.#ignoredLines,
+      ignoredLines: this.#ignoredLines + (correlation?.foreignLines ?? 0) + (correlation?.outOfScopeLines ?? 0),
+      ...(correlation === undefined ? {} : { correlation }),
       oracleOk,
       ...(oracleReason === undefined ? {} : { oracleReason }),
     };
@@ -449,6 +561,18 @@ export function parseLogDefectSpecs(raw: readonly string[]): LogDefectMatcher[] 
 /** Parses `--log-ignore` values, failing closed on the first bad one (#169 item 3). */
 export function parseLogIgnoreSpecs(raw: readonly string[]): LogIgnoreMatcher[] {
   return raw.map(parseLogIgnoreSpec);
+}
+
+/** Parses `--log-scope` values (#282): the `--log-ignore` grammar, a `/regex/flags/` or a substring. */
+export function parseLogScopeSpecs(raw: readonly string[]): LogIgnoreMatcher[] {
+  return raw.map((r) => {
+    try {
+      return parseLogIgnoreSpec(r);
+    } catch (e) {
+      if (e instanceof LogSpecError) throw new LogSpecError(e.message.replace(/--log-ignore/g, "--log-scope"));
+      throw e;
+    }
+  });
 }
 
 /**

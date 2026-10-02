@@ -1,5 +1,6 @@
 import type { Recording, RecordedStep } from "@jevitate/recording";
 import { RecordingSchema } from "@jevitate/recording";
+import { clock } from "@jevitate/domain";
 
 /**
  * "Always-on recording" (design spec §5b): a `RecordingSink` receives one
@@ -57,7 +58,7 @@ export class BufferingSink implements RecordingSink {
     const rec: Recording = {
       version: opts.version ?? "1.0",
       site: opts.site,
-      startedAtIso: new Date().toISOString(),
+      startedAtIso: clock.nowIso(),
       pages: [
         {
           url: opts.url ?? opts.site,

@@ -43,14 +43,20 @@ import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outc
  *  - `defects[].evidence` — #250, additive (schemaVersion 1): an `--evidence-video` run's per-defect
  *    captioned repro clip (`videoPath`) and key screenshots (`screenshots`: before and at the failing
  *    step), or why it has none (`skipped`).
+ *  - `branch` — #293, additive (schemaVersion 1): a journey-anchored run's branch point — the
+ *    promoted Journey whose prefix was replayed in the run's own browser context (`journeyId`), how
+ *    many of its top-level steps ran (`step`, 1-based) and the anchor that named them (`anchor`).
+ *    Every finding of the run branched from there. Absent on a run started from a bare URL.
  *
  * Everything else on a result is strategy-specific (a goal run's `checks`/`answer`, a coverage run's
  * `coverage`, an adversarial run's `advisories`/`scope`, a usability run's `report`): the schema lets
  * it through unchanged and never gives it a cross-strategy meaning. In particular `outcome` is the
  * strategy's own ending (a goal run's outcome, a frontier's stop reason), NOT the portable verdict.
  *
- * Deprecated aliases, kept for 0.2.0 only and removed in the next minor: `serverLogDefects` (the
- * `server-log` subset of `defects`) and `recordingPath` (`recordingPaths[0]`).
+ * Removed in 0.3.0 (announced in 0.2.0; schemaVersion stays 1): the aliases `serverLogDefects` (the
+ * `server-log` subset of `defects`), `recordingPath` (`recordingPaths[0]`), `usage.usd`
+ * (`usage.totalUsd`) and `usage.jevPriceSource` (`usage.priceSource`). They are no longer written; the
+ * schema is loose, so a 0.2.0 result that still carries them parses, and readers tolerate them.
  */
 export const MISSION_RESULT_SCHEMA_VERSION = 1 as const;
 
@@ -104,6 +110,15 @@ export const ResultTargetSchema = z.looseObject({
   storageStatePath: z.string().optional(),
 });
 
+/** #293: where a journey-anchored run branched off its Journey. */
+export const ResultBranchSchema = z.looseObject({
+  journeyId: z.string().min(1),
+  step: z.number().int().positive(),
+  anchor: z.string().min(1).optional(),
+  stepLabel: z.string().optional(),
+});
+export type ResultBranch = z.infer<typeof ResultBranchSchema>;
+
 export const ResultEngineSchema = z.object({ version: z.string(), commit: z.string(), builtAt: z.string() });
 
 export const ResultUsageSchema = z.looseObject({
@@ -119,6 +134,26 @@ export const ResultUsageSchema = z.looseObject({
  * glance. Every number is `null` when the platform could not measure it (e.g. no load average on
  * Windows); never a guess.
  */
+/**
+ * #205 — what resource governance did during a run (`hostHealth.resources`): the machine-wide browser
+ * cap and slot, the most severe throttle level (and every change), the memory ceiling and the peak
+ * browser memory measured, and the resource limit that ended the run, if one did.
+ */
+export const ResourceGovernanceSummarySchema = z.looseObject({
+  governance: z.enum(["on", "off"]),
+  maxBrowsers: z.number().int().positive().nullable(),
+  machineSlot: z.looseObject({ index: z.number().int().nonnegative(), waitedMs: z.number().nonnegative() }).nullable(),
+  throttle: z.looseObject({ level: z.enum(["normal", "throttled", "starved"]), reasons: z.array(z.string()), settleFactor: z.number().positive() }),
+  throttleChanges: z.array(z.looseObject({ at: z.string(), level: z.enum(["normal", "throttled", "starved"]), reasons: z.array(z.string()) })),
+  memoryCeilingBytes: z.number().nonnegative().nullable(),
+  peakBrowserMemoryBytes: z.number().nonnegative().nullable(),
+  memoryMeasurement: z.enum(["pss", "rss", "unavailable", "off"]),
+  resourceLimit: z
+    .looseObject({ kind: z.literal("memory"), measuredBytes: z.number().nonnegative(), ceilingBytes: z.number().nonnegative(), metric: z.enum(["pss", "rss"]), message: z.string() })
+    .nullable(),
+});
+export type ResourceGovernanceSummaryRecord = z.infer<typeof ResourceGovernanceSummarySchema>;
+
 export const HostHealthSummarySchema = z.looseObject({
   /** Host samples taken over the run. */
   samples: z.number().int().nonnegative(),
@@ -143,6 +178,8 @@ export const HostHealthSummarySchema = z.looseObject({
   starvation: z.array(z.string()),
   /** `off` when starvation attribution was disabled (`JEVITATE_HOST_STARVATION=off`): sampled, never judged. */
   attribution: z.enum(["on", "off"]),
+  /** #205 — additive: what resource governance did during the run. */
+  resources: ResourceGovernanceSummarySchema.optional(),
 });
 export type HostHealthSummary = z.infer<typeof HostHealthSummarySchema>;
 
@@ -191,6 +228,8 @@ export const MissionResultSchema = z
     screenshotPaths: z.array(z.string().min(1)).optional(),
     screenshotIndex: z.string().min(1).optional(),
     screenshotsSkipped: z.array(z.looseObject({ step: z.number().int(), reason: z.string() })).optional(),
+    /** #293 — additive: the Journey step a journey-anchored run branched from (absent otherwise). */
+    branch: ResultBranchSchema.optional(),
   })
   .refine((r) => (r.strategy === "goal") === (r.goalOutcome !== undefined), {
     message: "goalOutcome is present on every goal result and on no other",
@@ -240,4 +279,6 @@ export interface MissionResultCore {
   /** #251: the run's `--screenshots` images and contact sheet (absent without the flag). */
   readonly screenshotPaths?: readonly string[];
   readonly screenshotIndex?: string;
+  /** #293: the Journey step a journey-anchored run branched from (absent on a bare-URL run). */
+  readonly branch?: { readonly journeyId: string; readonly step: number; readonly anchor?: string; readonly stepLabel?: string };
 }

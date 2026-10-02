@@ -7,6 +7,7 @@
 // from a Recording and a live hook can populate it from a Snapshot.
 import type { TargetDescriptor } from "@jevitate/recording";
 import type { SignalEvidence } from "./signals.js";
+import type { ClaimLedger, FindingClaim } from "./claims.js";
 
 /** Calibration context — REQUIRED on every analysis (Global Constraint #5). */
 export interface AppContext {
@@ -243,6 +244,30 @@ export interface UxFinding {
   readonly heuristicOnly?: boolean;
   /** #132: other findings on the same friction point, collapsed into this one as its rationale. */
   readonly contributing?: readonly ContributingFinding[];
+  /**
+   * #198: the claim this finding is — its type, where it came from and what CODE checked to verify
+   * it (claims.ts). Present on every finding of the claim pipeline; absent on signal/a11y findings.
+   */
+  readonly claim?: FindingClaim;
+  /**
+   * #198: the two-question grade's raw answers — Jev's probability of "yes" to "do we need this?"
+   * (`need`) and "do we need this to complete and ship this feature?" (`ship`). `quality.label` is
+   * mapped from them by code (claims.ts `gradeLabel`).
+   */
+  readonly grade?: { readonly need: number; readonly ship: number };
+  /**
+   * #198: a cropped, secret-masked screenshot of the cited control (or quoted text) with a box drawn
+   * around it — live runs only. `box` is the boxed element's position inside the cropped image.
+   */
+  readonly screenshot?: FindingScreenshot;
+}
+
+/** #198: a finding's targeted screenshot. */
+export interface FindingScreenshot {
+  readonly path: string;
+  /** What is boxed, e.g. `button "Delete user"` or `text "Pro $129/month"`. */
+  readonly target: string;
+  readonly box: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
 }
 
 /** #132: how much an observed problem got in the way of the job. */
@@ -317,7 +342,11 @@ export type SuppressionReason =
   /** A vocabulary-sensitive entry's quoted/cited evidence matches a value the run itself typed. */
   | "user-authored-content"
   /** 0.2.0 (#198 interim): the page (route) already has `maxFindingsPerRoute` findings shown. */
-  | "per-page-cap";
+  | "per-page-cap"
+  /** #198: a claim on OBSERVED friction whose explanation failed code's verification. */
+  | "unverified"
+  /** #198: observed friction Jev categorized as not a problem with the page. */
+  | "not-a-problem";
 
 /** A suppressed candidate — counted and summarized in the report, never silently dropped. */
 export interface SuppressedItem {
@@ -340,5 +369,7 @@ export type AnalysisOutcome =
       readonly suppressed?: readonly SuppressedItem[];
       /** Per-screen flagged occurrences before dedupe (for before/after accounting). */
       readonly rawOccurrences?: number;
+      /** #198: every claim considered and what code made of it (claim pipeline only). */
+      readonly claims?: ClaimLedger;
     }
   | { readonly kind: "failed"; readonly reason: string; readonly screenId?: string; readonly rubricItemId?: string };

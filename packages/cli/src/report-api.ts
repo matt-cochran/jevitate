@@ -16,6 +16,7 @@ import {
 } from "@jevitate/findings";
 import { formatUsageLine, sumUsage, usageCountsFrom, type UsageAggregate } from "@jevitate/ai-core";
 import { resolveDataDir } from "./data-dir.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The programmatic surface behind `jevitate report` (#139), `jevitate diff` / `--baseline` (#138)
@@ -201,7 +202,7 @@ export async function tagBaseline(opts: {
   const tag: BaselineTag = {
     version: 1,
     name: opts.name,
-    createdAt: (opts.nowIso ?? (() => new Date().toISOString()))(),
+    createdAt: (opts.nowIso ?? (() => clock.nowIso()))(),
     sources: opts.runs.map((r) => r.path),
     runs: opts.runs,
   };

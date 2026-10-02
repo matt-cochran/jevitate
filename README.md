@@ -60,6 +60,14 @@ terminal (CI, a coding agent), `init` never prompts: it reports which keys are m
 add them later with `jevitate ai setup <generation|judgment>`. It ends with a short **next steps**
 list that fits what it set up.
 
+Key entry is masked (each character shows as `•`; the instructions stay on screen). `init` and
+`jevitate ai status` name each key, its provider and where it comes from (`from env
+OPENROUTER_API_KEY` or `from ~/.jevitate/credentials.json`), and check it with the provider (a
+live, non-billable auth call: `valid`, `INVALID (HTTP 401)`, or `could not verify`). A key the
+provider rejects is never stored. To rotate or replace a stored key, run `jevitate ai setup
+<feature> --replace` (or `jevitate init --replace-keys` for all of them). Offline or in CI, pass
+`--no-verify`. See [authentication](./docs/authentication.md#api-keys-for-jevitates-own-ai).
+
 **3. First run: try to break a form.** No keys needed, because the adversarial mission plans its
 misuse in code:
 
@@ -80,6 +88,8 @@ mid-edit, and acts while a save is still pending. It prints the outcome (`clean`
 - `--fake-ai` swaps the mission's advisory model calls for deterministic stand-ins. Nothing it
   reports depends on them.
 - Logged-in app? Add `--storage-state auth.json` ([authentication](./docs/authentication.md)).
+- Part of the flow runs in a browser extension (side panel, popup)? Add `--extension <dir>`
+  ([browser extensions](./docs/extensions.md)).
 
 With keys, a **goal-directed run** reaches an end state, and code checks it:
 
@@ -236,7 +246,7 @@ More: [how it works](./docs/how-it-works.md), including the architecture and pac
 | **Evidence** | hangs (confirmed by replay), page timing, backend log correlation, redacted issue drafts ([exploration](./docs/exploration.md), [operations](./docs/operations.md)) |
 | **Journeys** | author a replayable flow from a goal, replay, self-heal under policy, load-test, share ([Journeys](./docs/journeys.md)) |
 | **Demos** | `journey demo` renders a Journey as a narrated video, `.vtt` subtitles and a step-by-step guide; `demo "<aspect>" --env <name> --success <check>` explores, minimizes, annotates and drafts one from a one-line request, and `demo approve <id>` promotes it ([demos](./docs/journeys.md#demo-an-aspect-from-a-one-line-request)) |
-| **Usability review** | ranked, cited findings grounded in what the run observed. Advisory, never a gate |
+| **Usability review** | ranked, cited findings: claims verified by code (a probe, the product facts, observed friction). Advisory, never a gate ([UX findings](./docs/ux-findings.md)) |
 
 ## Use it from your coding agent
 
@@ -249,7 +259,7 @@ jevitate mcp --print-config claude # or cursor | codex | json: print the snippet
 ```
 
 Run non-interactively like this, `init` never prompts for keys — it reports what's still missing
-(`keys: generation not configured — set OPENROUTER_API_KEY or run \`jevitate ai setup generation\``)
+(`keys: generation not configured — set OPENROUTER_API_KEY (OpenRouter) or run \`jevitate ai setup generation\``)
 and exits 0 regardless, since the rest of init (skills, MCP registration) still succeeded. Set the
 keys separately with `jevitate ai setup <generation|judgment>`.
 
@@ -331,10 +341,10 @@ Jevitate is pre-1.0 and under active development. Known limitations worth knowin
 - A hard-signal defect (e.g. an HTTP 500) is re-checked with `verify-fix`, not committed by
   `regression capture`. Declare the broken rule as an invariant to commit it
   ([verification](./docs/verification.md)).
-- UX quality findings (`jevitate ux`, `explore --strategy usability`) are a 0.2.0 PREVIEW:
-  advisory, the quality grader is not yet calibrated across apps, and finding grouping/dedup is
-  still being redesigned ([#133](https://github.com/matt-cochran/jevitate/issues/133),
-  [#198](https://github.com/matt-cochran/jevitate/issues/198)).
+- UX quality findings (`jevitate ux`, `explore --strategy usability`) are a PREVIEW and advisory.
+  Each finding is a claim verified by code, but Jev's categorization and the two-question grade
+  are tuned on fixtures only, not yet calibrated with the real model across apps
+  ([UX findings](./docs/ux-findings.md), [#198](https://github.com/matt-cochran/jevitate/issues/198)).
 - Chromium only.
 
 ## Documentation

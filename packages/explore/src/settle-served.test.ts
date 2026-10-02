@@ -6,7 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { monitorFor } from "./page-monitor.js";
 import { perceive } from "./perceive.js";
 import { runGoalBasedMission } from "./missions/goal-based.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * Live-updating and long-lived apps are NOT hung (owner follow-up to rulings 4/7): an SSE stream, a

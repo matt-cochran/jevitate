@@ -12,6 +12,10 @@ import { FakeGenerationGateway, type GenerationPort } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 import { annotationDraftPath } from "./journey-annotate-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #246 served e2e: `jevitate journey annotate` replays a Journey in a real browser against a served
