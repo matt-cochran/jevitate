@@ -29,6 +29,7 @@ import { SafetyPolicy, assertAuthorizedExploreTarget, controlRisk, endpointOf, l
 import { descriptorToLocator } from "@jevitate/recorder";
 import { controlKey, redactEvidence, routeOf, type Control, type FindingScreenshot, type GuardKind, type GuardProbe, type UxEvidence, type UxFinding } from "@jevitate/ux";
 import { MaskUnavailableError, SecretPixelMask, captureStepScreenshot } from "./demo-capture.js";
+import { clock } from "@jevitate/domain";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const OPEN_DIALOGS = 'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]';
@@ -245,13 +246,13 @@ export async function runGuardProbes(runPage: Page, targets: readonly ProbeTarge
       await loc.click({ timeout: 3_000 });
       let domDialog = false;
       for (let waited = 0; waited < SETTLE_MS && blocked.length === 0 && dialogs.length === 0 && !domDialog; waited += 100) {
-        await page.waitForTimeout(100);
+        await clock.sleep(100);
         domDialog = (await openDialogs(page)) > before;
       }
       // A dialog was observed: stop here — the page closes without anything inside it being clicked.
       const sawDialog = dialogs.length > 0 || domDialog;
       if (!sawDialog) {
-        await page.waitForTimeout(150);
+        await clock.sleep(150);
         domDialog = (await openDialogs(page)) > before;
       }
       const navigated = !page.isClosed() && page.url().split("#")[0] !== startUrl;

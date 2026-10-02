@@ -138,7 +138,9 @@ function parseVtt(vtt: string): Array<{ id: string; start: number; end: number; 
     });
 }
 
-describe("jevitate journey demo — served (#248)", () => {
+// #304 [realtime]: a recorded video is real time (its cues are checked against the video's own clock), so
+// this suite keeps the real clock.
+describe("[realtime] jevitate journey demo — served (#248)", () => {
   it(
     "writes a video, step-timed subtitles and a guide with one screenshot per step; no secret in any output",
     async () => {

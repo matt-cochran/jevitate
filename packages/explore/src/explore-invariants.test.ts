@@ -14,7 +14,10 @@ import {
   type Snapshot,
   type Control,
 } from "./index.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * @jevitate/explore — guardrail refusal contract (design §6, BINDING).

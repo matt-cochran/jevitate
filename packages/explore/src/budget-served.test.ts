@@ -7,7 +7,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { validateInvariantSpec, type InvariantSpec } from "@jevitate/recording";
 import { runGoalBasedMission } from "./missions/goal-based.js";
 import { runAdversarialMission } from "./missions/adversarial.js";
-import { ScriptedJudge } from "./testkit.js";
+import { ScriptedJudge, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #150 — a mission spend budget over a declared observable, against a served fixture: a "Generate"

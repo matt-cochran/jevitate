@@ -3,6 +3,10 @@ import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
 import { clippingSummary, detectClipping } from "./overflow.js";
+import { useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #302 vertical clipping, REAL Chromium. `/issue` is the issue's own repro: a 56px header whose

@@ -4,7 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway, type GenerationPort } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
-import { PreferenceJudge, withSession } from "../testkit.js";
+import { PreferenceJudge, withSession, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #242 — a goal run typed 49 different queries into the same search box and never submitted it:

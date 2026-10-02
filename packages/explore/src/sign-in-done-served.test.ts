@@ -6,7 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { explore, type ExploreRun } from "./explore.js";
 import { GOAL_IS_SIGN_IN_QUESTION, GOAL_MET_QUESTION } from "./decide.js";
 import { parseSecretField } from "./secret-fields.js";
-import { ScriptedJudge, withSession, type ScriptedStep } from "./testkit.js";
+import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #188 item 4 — usability done-recognition. A review with the goal "Sign in … and complete two-factor

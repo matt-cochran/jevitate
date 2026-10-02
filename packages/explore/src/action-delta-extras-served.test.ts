@@ -10,7 +10,10 @@ import { verifyFix, type VerifySession } from "./verify-fix.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
 import { runAdversarialMission } from "./missions/adversarial.js";
 import { runInductionMission } from "./missions/induction.js";
-import { PreferenceJudge, ScriptedJudge, withSession } from "./testkit.js";
+import { PreferenceJudge, ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #303 extras, served in real Chromium (all behind `actionDeltas`): the persistence re-check after

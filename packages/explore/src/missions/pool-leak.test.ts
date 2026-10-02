@@ -6,6 +6,10 @@ import { PlaywrightBrowserPort, createBrowserPool, type PlaywrightBrowserPool, t
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runInductionMission } from "./induction.js";
 import type { VerifySession } from "../verify-fix.js";
+import { useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #68 — a mission must never exhaust its own browser pool. Hang reproduction (fresh contexts, N per

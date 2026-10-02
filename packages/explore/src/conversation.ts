@@ -4,6 +4,8 @@ import { monitorFor } from "./page-monitor.js";
 import { visibleBusyIndicator } from "./hang.js";
 import { redactPageText } from "./redact.js";
 import { backgroundEndpoints, endpointKey } from "./stuck-actions.js";
+import { clock } from "@jevitate/domain";
+import { clockBounded } from "./clock-bound.js";
 
 /**
  * Conversational pages (chat composers, assistants, interview flows): the independent-code side of
@@ -336,8 +338,8 @@ export async function waitForReply(
   // The page text is read redacted, so the sent message is compared in the same (redacted) form.
   const sent = redactPageText(opts.sent, secrets);
   const monitor = monitorFor(page);
-  const started = Date.now();
-  const remaining = (): number => ceilingMs - (Date.now() - started);
+  const started = clock.now();
+  const remaining = (): number => ceilingMs - (clock.now() - started);
   // #241: endpoints the page was already requesting before the send (a balance poll) are background
   // traffic — their requests never count as the reply being worked on.
   const since = opts.sentAt ?? started - SEND_REQUEST_SLACK_MS;
@@ -349,14 +351,14 @@ export async function waitForReply(
   const result = (received: boolean, endedBy: ReplyResult["endedBy"]): ReplyResult => ({
     received,
     text: latest.slice(0, REPLY_KEEP_CHARS),
-    waitedMs: Date.now() - started,
+    waitedMs: clock.now() - started,
     endedBy,
   });
   for (;;) {
     if (remaining() <= 0) return result(false, "ceiling");
     const text = await readPageText(page, secrets);
     const fresh = newTurnText(opts.baseline, text, sent);
-    const t = Date.now();
+    const t = clock.now();
     if (fresh !== latest) {
       latest = fresh;
       latestSince = t;
@@ -371,7 +373,7 @@ export async function waitForReply(
     // only — the send's own request is still its work until it ends (a slow LLM turn).
     const unfinished = [...monitor.pending(), ...monitor.background().filter((r) => r.why === "long-poll")];
     const inFlight = unfinished.some((r) => r.startedAt >= since && !background.has(endpointKey(r)));
-    if (busy !== null || inFlight) lastActivity = Date.now();
+    if (busy !== null || inFlight) lastActivity = clock.now();
     if (isReply(latest) && busy === null) {
       // Streaming replies keep mutating: wait for the page to settle, then confirm it held still.
       // The page's background polling (a balance poll) never holds the reply's settle open (#241).
@@ -383,20 +385,20 @@ export async function waitForReply(
       const stillBusy =
         (await page.evaluate(visibleBusyIndicator).catch(() => null)) ??
         (pendingStatusShown(opts.baseline, againText) ? "pending status" : null);
-      if (again === latest && stillBusy === null && Date.now() - latestSince >= quietMs) return result(true, "reply");
+      if (again === latest && stillBusy === null && clock.now() - latestSince >= quietMs) return result(true, "reply");
       if (again !== latest) {
         latest = again;
-        latestSince = Date.now();
+        latestSince = clock.now();
         lastActivity = latestSince;
       }
-      if (stillBusy !== null) lastActivity = Date.now();
+      if (stillBusy !== null) lastActivity = clock.now();
       // Text-only streaming does not hold the settle wait open: pace the re-reads, never spin.
-      await page.waitForTimeout(Math.max(1, Math.min(pollMs, remaining()))).catch(() => undefined);
+      await clock.sleep(Math.max(1, Math.min(pollMs, remaining()))).catch(() => undefined);
       continue;
     }
-    if (Date.now() - lastActivity >= idleMs) return result(false, "idle");
-    const nap = Math.min(pollMs, remaining(), idleMs - (Date.now() - lastActivity));
-    await page.waitForTimeout(Math.max(1, nap)).catch(() => undefined);
+    if (clock.now() - lastActivity >= idleMs) return result(false, "idle");
+    const nap = Math.min(pollMs, remaining(), idleMs - (clock.now() - lastActivity));
+    await clock.sleep(Math.max(1, nap)).catch(() => undefined);
   }
 }
 
@@ -406,7 +408,7 @@ export async function waitForReply(
  */
 export async function waitForChange(page: Page, timeoutMs: number): Promise<boolean> {
   const before = await readPageText(page);
-  return page
+  const changed = page
     .waitForFunction((b) => (document.body ? document.body.innerText : "") !== b, before, {
       timeout: Math.max(1, timeoutMs),
       polling: 250,
@@ -418,6 +420,7 @@ export async function waitForChange(page: Page, timeoutMs: number): Promise<bool
       },
       () => false,
     );
+  return clockBounded(changed, Math.max(1, timeoutMs), false);
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import type { TargetDescriptor } from "@jevitate/recording";
+import { clock } from "@jevitate/domain";
 
 /**
  * How a recorded target is found again at replay — the ONE definition, shared with the recorder
@@ -78,7 +79,7 @@ export interface ResolveTargetOptions {
 export async function resolveTarget(page: Page, d: TargetDescriptor, opts: ResolveTargetOptions = {}): Promise<Locator> {
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const pollMs = opts.pollMs ?? 100;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = clock.now() + timeoutMs;
   for (;;) {
     const anchor = anchorLocator(page, d.anchor);
     if (anchor !== null && (await anchor.count()) === 1) return anchor;
@@ -92,7 +93,7 @@ export async function resolveTarget(page: Page, d: TargetDescriptor, opts: Resol
       return base;
     }
 
-    if (Date.now() >= deadline) {
+    if (clock.now() >= deadline) {
       if (count === 0) throw new ReplayTargetError("replay-target-not-found", `${describe(d)} matched nothing`);
       if (d.ordinal !== undefined && d.candidates === undefined && count <= d.ordinal) {
         throw new ReplayTargetError(
@@ -107,6 +108,6 @@ export async function resolveTarget(page: Page, d: TargetDescriptor, opts: Resol
           : `${describe(d)} matches ${count} elements and nothing recorded tells them apart`,
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    await clock.sleep(pollMs);
   }
 }

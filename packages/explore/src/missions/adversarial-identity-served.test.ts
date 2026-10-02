@@ -8,7 +8,10 @@ import type { Page } from "playwright";
 import { runAdversarialMission, type AdversarialMissionParams, type AdversarialOutcome } from "./adversarial.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
 import type { VerifySession } from "../verify-fix.js";
-import { withSession } from "../testkit.js";
+import { withSession, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #300 — a "Sign in as demo user" shortcut swaps the session mid-run: the run must notice, never

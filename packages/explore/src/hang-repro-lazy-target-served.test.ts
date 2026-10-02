@@ -7,6 +7,10 @@ import type { Recording } from "@jevitate/recording";
 import { replayAndDetectHang } from "./hang-repro.js";
 import type { HangSignal } from "./hang.js";
 import { verifyFix, type VerifySession } from "./verify-fix.js";
+import { useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #164 (second part) — a hang replay declared `replay-target-not-found` for a control that only

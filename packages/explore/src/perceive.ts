@@ -11,7 +11,8 @@ import {
   visibleBusyIndicator,
   type HangSignal,
 } from "./hang.js";
-import { contentHash } from "@jevitate/domain";
+import { contentHash, clock } from "@jevitate/domain";
+import { clockBounded } from "./clock-bound.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { redactUrl } from "@jevitate/ai-core";
 import { resourceSettleFactor } from "@jevitate/playwright";
@@ -150,13 +151,13 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   // render ceiling: answered → probe again and perceive as usual; still unanswered → the app's own
   // request hang (`request-pending` on the document), never `main-thread-unresponsive`.
   if (!responsive && documentPending(monitor.pending())) {
-    const deadline = Date.now() + ceiling;
-    while (Date.now() < deadline && documentPending(monitor.pending()) && !page.isClosed()) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    const deadline = clock.now() + ceiling;
+    while (clock.now() < deadline && documentPending(monitor.pending()) && !page.isClosed()) {
+      await clock.sleep(100);
     }
     const stillPending = monitor.pending();
     if (documentPending(stillPending)) {
-      const now = Date.now();
+      const now = clock.now();
       const win = monitor.window();
       const settle: SettleResult = { settled: false, waitedMs: now - (deadline - ceiling), pending: stillPending };
       const timing = unreadablePageTiming(page.url(), monitor.completedSince(win.start), stillPending, now);
@@ -183,7 +184,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     responsive = await probeResponsive(page, hangProbeMs);
   }
   if (!responsive) {
-    const now = Date.now();
+    const now = clock.now();
     const win = monitor.window();
     const pending = monitor.pending();
     const settle: SettleResult = { settled: false, waitedMs: hangProbeMs, pending };
@@ -210,7 +211,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   }
 
   // 2. Render + settle (event-driven; one ceiling).
-  const started = Date.now();
+  const started = clock.now();
   const settledP = monitor.waitSettled({ quietMs, ceilingMs: ceiling });
   // Resolves as soon as a control renders (event-driven); a timeout/navigation just means "not yet".
   const controlsP = page
@@ -235,14 +236,16 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   if (settle.settled) {
     const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
     if (busy !== null) {
-      const busySince = Date.now();
-      const remaining = Math.max(1, ceiling - (Date.now() - started));
-      const gone = await page
-        .waitForFunction(`!(${visibleBusyIndicator.toString()})()`, undefined, { timeout: remaining, polling: "raf" })
-        .then(
+      const busySince = clock.now();
+      const remaining = Math.max(1, ceiling - (clock.now() - started));
+      const gone = await clockBounded(
+        page.waitForFunction(`!(${visibleBusyIndicator.toString()})()`, undefined, { timeout: remaining, polling: "raf" }).then(
           () => true,
           () => false,
-        );
+        ),
+        remaining,
+        false,
+      );
       // A target can declare an indicator (or a route) where a lasting busy state is expected.
       if (!gone && !ignoreNoProgress(busy) && !ignoreNoProgress(hangRoute(page.url()))) {
         stuckBusy = busy;
@@ -256,7 +259,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     }
   }
 
-  const settleEndedAt = Date.now();
+  const settleEndedAt = clock.now();
   const win = monitor.window();
   const { timing, docId } = await measurePageTiming(page, {
     completed: monitor.completedSince(win.start),

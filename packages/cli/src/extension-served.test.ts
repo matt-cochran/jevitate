@@ -14,6 +14,10 @@ import { RecordingSchema } from "@jevitate/recording";
 import { buildProgram } from "./program.js";
 import { runAdversarialCliMission } from "./explore-api.js";
 import { runVerifyFix, VerifyFixInputError } from "./verify-fix-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #256 end to end in real Chromium (headless — the full Chromium build in new-headless mode; the

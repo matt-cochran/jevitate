@@ -3,8 +3,11 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runFeatureMission } from "./feature.js";
-import { withSession } from "../testkit.js";
+import { withSession, useSkippingTime } from "../testkit.js";
 import { snapshot } from "../snapshot.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #277 — a feature mission seeded at a list page whose controls do not name the feature must still

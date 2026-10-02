@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Page } from "playwright";
 import { CANARY_ATTRIBUTE } from "./input-strategy.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * #301 — the inert markup canary: does the app render a field's input as MARKUP (unescaped HTML or
@@ -62,7 +63,7 @@ export async function renderedCanaries(page: Page, prefix: string, authorized: (
     try {
       // Bounded: a frame whose document never arrives (an app that stopped answering) is skipped.
       const timeout = new Promise<string[]>((resolve) => {
-        timer = setTimeout(() => resolve([]), READ_TIMEOUT_MS);
+        timer = clock.setTimeout(() => resolve([]), READ_TIMEOUT_MS);
       });
       const read = frame.evaluate(
         ({ attr, pre }) =>
@@ -77,7 +78,7 @@ export async function renderedCanaries(page: Page, prefix: string, authorized: (
     } catch {
       // a detached or navigating frame: nothing read
     } finally {
-      clearTimeout(timer);
+      clock.clearTimeout(timer);
     }
   }
   return out;

@@ -33,6 +33,7 @@ import {
 import { verifyServerLogDefect } from "./server-log-verify.js";
 import { defectSignalText, persistedDefect, replayWithEvidence, signalCheckable, type DefectEvidence } from "./defect-evidence.js";
 import { RunScreenshots, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The programmatic surface behind `jevitate verify-fix` and the MCP `verify_fix` tool: loads a
@@ -384,7 +385,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   // #245: every replay (and observer) session is shown/recorded alike — videos in
   // `verify-fix-<stamp>.videos/` beside the mission result (or under `--record-video <dir>`).
-  const vfArtifact = joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${artifactStamp(new Date().toISOString())}.json`);
+  const vfArtifact = joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${artifactStamp(clock.nowIso())}.json`);
   const videoDir = runVideoDir(opts.browser, vfArtifact);
   const shown = sessionLaunchOptions(opts.browser, videoDir);
   const perceiveOpts = {

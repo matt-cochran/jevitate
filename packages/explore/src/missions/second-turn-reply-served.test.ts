@@ -1,10 +1,14 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { clock } from "@jevitate/domain";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { explore, type ExploreRun } from "../explore.js";
-import { ScriptedJudge, withSession } from "../testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #241 × #283 on a served chat (real Chromium). #241 stopped counting the page's background polling
@@ -58,7 +62,7 @@ beforeAll(async () => {
         if (!res.writableEnded) res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ reply: n === 1 ? "Hello there, first answer." : "Exports live under Settings, second answer." }));
       };
       if (n === 1) answer();
-      else setTimeout(answer, SLOW_TURN_MS);
+      else clock.setTimeout(answer, SLOW_TURN_MS); // #304: on the same (skipping) clock as the code under test
       return;
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(HTML);

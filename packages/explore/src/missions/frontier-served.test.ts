@@ -7,6 +7,7 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runInductionMission, type InductionMissionParams } from "./induction.js";
 import { runFeatureMission } from "./feature.js";
 import type { TranscriptEntry } from "../transcript.js";
+import { useSkippingTime } from "../testkit.js";
 
 /**
  * Served fixtures for the frontier missions (coverage, exploratory, `--feature`):
@@ -145,6 +146,9 @@ function coverage(session: BrowserSession, actor: CastActor, over: Partial<Induc
 
 const acted = (t: readonly TranscriptEntry[]): string[] =>
   t.filter((e) => e.target !== null).map((e) => (e.target ?? "").replace(/^\w+ "([^"]*)".*$/, "$1"));
+
+// #304: Node and page time skip idle waits (settle windows on a quiet page). Assertions are unchanged.
+useSkippingTime();
 
 describe("frontier missions — a departure never leaves the run idle (#114)", () => {
   it(

@@ -115,6 +115,7 @@ import {
   resolveJourneyPrefix,
   type JourneyPrefix,
 } from "./journey-prefix.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * #293: the flags a sweep sets on each of its missions itself (the rest of the command line is
@@ -898,7 +899,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       const withEvidence = async <R extends object>(result: R): Promise<R> => {
         if (!evidenceOn) return result;
         let out = result;
-        if (filing?.enabled === true) out = await fileDraftsWithEvidence(out, filing, issueFiler, new Date().toISOString());
+        if (filing?.enabled === true) out = await fileDraftsWithEvidence(out, filing, issueFiler, clock.nowIso());
         return out;
       };
       // `--fixture` feeds the upload op, which only the explore loop (goal and

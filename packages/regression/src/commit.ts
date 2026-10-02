@@ -4,6 +4,7 @@ import type { InvariantSpec, Recording } from "@jevitate/recording";
 import { RecordingSchema } from "@jevitate/recording";
 import type { ReproductionReport } from "./reproduce.js";
 import type { NetworkCheckOracle } from "./oracle.js";
+import { clock } from "@jevitate/domain";
 
 export class FlakyNotCommittableError extends Error {}
 
@@ -64,7 +65,7 @@ export async function commitRegression(
   const metaPath = join(dir, `${id}.meta.json`);
   const meta: RegressionMeta = {
     id,
-    capturedAtIso: new Date().toISOString(),
+    capturedAtIso: clock.nowIso(),
     fingerprint: report.fingerprint,
     reproduction: { attempts: report.attempts, reproducedCount: report.reproducedCount, rate: report.rate },
     bugSummary,

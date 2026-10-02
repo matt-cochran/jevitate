@@ -19,6 +19,7 @@ import { startServer } from "@jevitate/example-site";
 import { buildProgram } from "./program.js";
 import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
 import { formatMissionHuman } from "./cli-output.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
 
 /**
  * P1 acceptance (Task 12): `jevitate explore --url <fixture> --goal ... --success ...`
@@ -76,6 +77,9 @@ async function readTranscript(path: string): Promise<PersistedEntry[]> {
   if (!Array.isArray(parsed) || !parsed.every(isPersistedEntry)) throw new Error(`not a transcript: ${path}`);
   return parsed;
 }
+
+// #304: Node and page time skip idle waits (settle windows, assertion polling). Assertions are unchanged.
+useSkippingTime();
 
 describe("jevitate explore — real-browser fixture smoke (Task 12)", () => {
   it(

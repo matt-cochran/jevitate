@@ -4,7 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
-import { PreferenceJudge, withSession } from "../testkit.js";
+import { PreferenceJudge, withSession, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #287 — on an editor page with ~150 controls the control list stopped at the cap, and the

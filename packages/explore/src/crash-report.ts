@@ -6,7 +6,7 @@ import {
   type AttributionResult,
   type CrashEvidence,
   type HeapSample,
-  type MissionFailure,
+  type MissionFailure, clock,
 } from "@jevitate/domain";
 import type { CrashSignals } from "./mission-failure.js";
 import type { HostPressure } from "./host-pressure.js";
@@ -57,12 +57,12 @@ export async function sampleHeap(page: Page, timeoutMs = 2_000): Promise<Omit<He
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs);
+    timer = clock.setTimeout(() => resolve(null), timeoutMs);
   });
   try {
     return await Promise.race([read().catch(() => null), timeout]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
   }
 }
 

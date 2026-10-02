@@ -9,6 +9,10 @@ import { FsJourneyStore } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 import type { CheckResult } from "./check-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #137 served e2e: `jevitate check --suite` against a real page in a real browser. The suite has

@@ -27,6 +27,7 @@ import {
   nativeValidationMessage,
   submitRequestSent,
 } from "./helpers.js";
+import { clock } from "@jevitate/domain";
 
 /** What a turn planned: the strategy that runs, its planner, the episode, and the page it was planned on. */
 export interface Turn {
@@ -96,7 +97,7 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
       }
     }
     const at = ctx.now();
-    const firedAt = Date.now();
+    const firedAt = clock.now();
     if (ctx.chainStart === null) ctx.chainStart = firedAt;
     const firedStep = ctx.transcript.nextStep;
     ctx.safety.mark(ctx.transcript.nextStep, s.op, s.control);

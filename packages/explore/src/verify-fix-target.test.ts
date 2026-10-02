@@ -6,6 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import type { Recording, TargetDescriptor } from "@jevitate/recording";
 import { verifyFix, type VerifySession } from "./verify-fix.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
+import { useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * verify-fix on a replay that cannot find (or tell apart) a recorded element is INCONCLUSIVE —

@@ -16,7 +16,7 @@ import {
   type Journey,
 } from "@jevitate/journey";
 import { assertNoSecretInPayload, redactText, redactUrl, type GenerationPort, type GenerationProvenance } from "@jevitate/ai-core";
-import { contentHash } from "@jevitate/domain";
+import { contentHash, clock } from "@jevitate/domain";
 import type { StepObserver } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
@@ -227,7 +227,7 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
     version: 1,
     journeyId: opts.id,
     journeyHash,
-    createdAtIso: (now ?? (() => new Date().toISOString()))(),
+    createdAtIso: (now ?? (() => clock.nowIso()))(),
     provenance: provenance === undefined
       ? { adapter: "none", model: "none", promptVersion: "none" }
       : { adapter: provenance.adapter, model: provenance.model, promptVersion: provenance.promptVersion },

@@ -4,7 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
-import { PreferenceJudge, withSession, type Preference } from "../testkit.js";
+import { PreferenceJudge, withSession, type Preference, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #294 — a closed slide-in panel kept mounted and moved off-screen with a CSS transform: its

@@ -2,6 +2,7 @@ import type { Page, Request } from "playwright";
 import { redactUrl } from "@jevitate/ai-core";
 import { http5xxSignalOf, requestHeadersOf } from "../http-5xx.js";
 import { FirstPartyOrigins } from "../third-party.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The adversarial mission's TRUSTED HARD-SIGNAL defect oracle (spec §3.1/§9).
@@ -136,7 +137,7 @@ export class PageSignalCollector {
    * `FirstPartyOrigins`) is not the app's defect and never becomes an `http-5xx` signal. Omitted,
    * every origin counts (the pre-#208 behaviour).
    */
-  constructor(page: Page, now: () => number = Date.now, allowlist?: readonly string[]) {
+  constructor(page: Page, now: () => number = clock.now, allowlist?: readonly string[]) {
     const responseSeen = new WeakSet<Request>();
     const requestStarted = new WeakMap<Request, number>();
     const firstParty = allowlist === undefined ? undefined : new FirstPartyOrigins(allowlist);

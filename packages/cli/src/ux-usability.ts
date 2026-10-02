@@ -15,7 +15,7 @@ import { captureFindingShots, planGuardProbes, runGuardProbes, skippedProbes, wi
 import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
-import { foldGoalOutcome, type GoalOutcome, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
+import { foldGoalOutcome, type GoalOutcome, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogDefect } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
@@ -342,7 +342,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     (async (s: { page: { evaluate: (fn: () => string) => Promise<string> } }) =>
       s.page.evaluate(() => (typeof document !== "undefined" && document.body ? document.body.innerText : "")));
   const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   const stamp = artifactStamp(iso);
   const reportPath = join(outDir, `usability-${stamp}.json`);
   // #98 — the same artifact shape as goal/adversarial missions, next to the report: the decision

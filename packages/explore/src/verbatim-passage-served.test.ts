@@ -4,7 +4,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { explore, type ExploreRun } from "./explore.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #281 — a goal quoting the exact text to import ("… Click here to learn more about reminders …")

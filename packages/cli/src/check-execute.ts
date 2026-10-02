@@ -14,7 +14,7 @@ import { CLI_ADVERSARIAL_STRATEGIES, parseSuccessSpec } from "./explore-api.js";
 import { type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import { loadRunFile } from "./report-api.js";
-import { GOAL_ONLY_OUTCOMES } from "@jevitate/domain";
+import { GOAL_ONLY_OUTCOMES, clock } from "@jevitate/domain";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { type Json, type Planned, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
 import { applyJourneyEnvironment } from "./environments.js";
@@ -153,7 +153,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
   if (item.kind === "journey" && item.journey !== undefined) {
     const stored = item.t.journeys.get(item.journey.id);
     if (stored === undefined) return { status: "error", actions: 0, error: { type: "journey", message: `Journey ${item.journey.id} not loaded` } };
-    const startedAt = (opts.nowIso ?? (() => new Date().toISOString()))();
+    const startedAt = (opts.nowIso ?? (() => clock.nowIso()))();
     const sj = item.journey;
     // #247: the item's environment (resolved and checked at preflight); its session when the item and target name none.
     const environment = item.t.environments?.get(sj);
@@ -398,7 +398,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
 
   if (item.kind === "verify-fix" && item.verify !== undefined) {
     const v = item.verify;
-    const startedAt = (opts.nowIso ?? (() => new Date().toISOString()))();
+    const startedAt = (opts.nowIso ?? (() => clock.nowIso()))();
     const source = loadRunFile(v.result);
     const original = source?.observations.find((o) => o.related.includes(v.fingerprint));
     const r = await runners.verifyFix({

@@ -5,7 +5,7 @@
  */
 
 import { redactUrl } from "@jevitate/ai-core";
-import { combineOutcomes, type MissionOutcome } from "@jevitate/domain";
+import { combineOutcomes, type MissionOutcome, clock } from "@jevitate/domain";
 import {
   defectTitle,
   groupStepSignals,
@@ -121,7 +121,7 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
     const declaredResult = ctx.declared === null || skip ? null : await ctx.declared.after(ctx.sessions.actor, ctx.armed ? action : null);
     ctx.armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
-    await ctx.sessions.page.waitForTimeout(10);
+    await clock.sleep(10);
     const hardSignals = ctx.collector.drain();
     hardSignals.push(...(await ctx.overflowSignals()));
     const url = redactUrl(ctx.sessions.page.url());

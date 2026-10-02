@@ -15,6 +15,7 @@ import { buildJudgmentState } from "./redact.js";
 import { monitorFor } from "./page-monitor.js";
 import { backgroundEndpoints, endpointKey } from "./stuck-actions.js";
 import type { Control } from "./snapshot.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Action deltas (#303) — after each action, WHAT CHANGED on the page, kept to the changes that matter
@@ -286,9 +287,9 @@ export function parseAria(raw: string, secrets: readonly string[], learned: Read
 async function bounded<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([p.catch(() => fallback), new Promise<T>((r) => (timer = setTimeout(() => r(fallback), Math.max(1, ms))))]);
+    return await Promise.race([p.catch(() => fallback), new Promise<T>((r) => (timer = clock.setTimeout(() => r(fallback), Math.max(1, ms))))]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
   }
 }
 
@@ -301,7 +302,7 @@ export async function captureAria(
   page: Page,
   opts: { secrets: readonly string[]; learned: Set<string>; secretNames?: ReadonlySet<string>; timeoutMs?: number; scope?: Locator },
 ): Promise<AriaCapture> {
-  const t0 = Date.now();
+  const t0 = clock.now();
   const timeoutMs = opts.timeoutMs ?? DELTA_SNAPSHOT_TIMEOUT_MS;
   const facts = await bounded(page.evaluate(pageFacts, REVEALED_SECRET_SELECTORS), timeoutMs, null);
   for (const v of facts?.learned ?? []) opts.learned.add(v);
@@ -331,8 +332,8 @@ export async function captureAria(
     url,
     title,
     partial,
-    at: Date.now(),
-    ms: Date.now() - t0,
+    at: clock.now(),
+    ms: clock.now() - t0,
   };
 }
 
@@ -644,9 +645,9 @@ export class ActionDeltas {
     // route, AFTER the action so it never delays one; counted apart from the per-action overhead).
     const noise = this.#noise(route);
     if (pending !== null && pending.acted !== null && pending.route === route && !noise.baselined && capture.ok) {
-      const wait = this.#gap() - (Date.now() - capture.at);
+      const wait = this.#gap() - (clock.now() - capture.at);
       if (wait > 0) {
-        await new Promise((r) => setTimeout(r, wait));
+        await clock.sleep(wait);
         this.#baselineWaitMs += wait;
       }
       const again = await this.#capture();
@@ -671,7 +672,7 @@ export class ActionDeltas {
   async beforeAction(route: string, op: string, control: Control | null): Promise<void> {
     const noise = this.#noise(route);
     const last = this.#last;
-    const t0 = Date.now();
+    const t0 = clock.now();
     const before = await this.#capture();
     // The window since the perception had no action in it: whatever changed there changed on its
     // own (free — the decision's own time; never a wait before the action).
@@ -704,12 +705,12 @@ export class ActionDeltas {
       route,
       op,
       control,
-      at: Date.now(),
+      at: clock.now(),
       before,
       scope,
       scopedBefore,
       partial,
-      ms: Date.now() - t0,
+      ms: clock.now() - t0,
       acted: null,
     };
   }
@@ -805,7 +806,7 @@ export class ActionDeltas {
   }
 
   async #compute(p: Pending, after: AriaCapture, route: string): Promise<ActionDelta> {
-    const t0 = Date.now();
+    const t0 = clock.now();
     const noise = this.#noise(p.route);
     const partial = [...p.partial, ...p.before.partial, ...after.partial];
     if (!p.before.ok) partial.push(`before: ${p.before.reason ?? "no snapshot"}`);
@@ -877,9 +878,9 @@ export class ActionDeltas {
       // Jev (advisory): label the untied changes — cached per route; a rule is validated by code.
       const untied = located.map((x, i) => ({ ...x, i })).filter((x) => x.where === "page");
       if (untied.length > 0 && this.#o.judge != null) {
-        const tj = Date.now();
+        const tj = clock.now();
         await this.#label(p, noise, untied.map((x) => ({ i: x.i, c: x.c })), jevLabels, accepted, rejected);
-        jevMs = Date.now() - tj;
+        jevMs = clock.now() - tj;
         const relevant = [...jevLabels].filter(([, v]) => v === "relevant").map(([i]) => i);
         if (relevant.length > 0) {
           verdict = "relevant-change";
@@ -963,7 +964,7 @@ export class ActionDeltas {
       expected = { description: desc, met, by };
     }
 
-    const overheadMs = p.ms + after.ms + (Date.now() - t0) - (jevMs ?? 0);
+    const overheadMs = p.ms + after.ms + (clock.now() - t0) - (jevMs ?? 0);
     this.#overheads.push(overheadMs);
     this.#counts[verdict] += 1;
     const urlBefore = p.before.url;

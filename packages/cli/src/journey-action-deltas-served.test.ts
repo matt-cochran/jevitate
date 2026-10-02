@@ -9,6 +9,10 @@ import { ProfileManager } from "@jevitate/daemon";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #303 `--action-deltas` on replays (real Chromium): `journey run` records each replayed step's delta

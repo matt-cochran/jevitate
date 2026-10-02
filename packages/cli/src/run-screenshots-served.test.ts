@@ -16,6 +16,10 @@ import { runCoverageMission } from "./explore-api.js";
 import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { PersistedMissionResultSchema } from "@jevitate/domain";
 import { parseScreenshotsArg, ScreenshotsArgError } from "./run-screenshots.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #251 served acceptance: a Journey that visits 3 distinct screens over 6 steps (A → B → C, a

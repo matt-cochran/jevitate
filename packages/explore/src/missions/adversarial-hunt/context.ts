@@ -44,6 +44,7 @@ import type { MutableAdvisory, MutableDefect, StepAdvisory, StepFinding } from "
 import { DEFAULT_TIME_BUDGET_MS } from "./helpers.js";
 import { installOracle } from "./oracle.js";
 import { installSessions } from "./sessions.js";
+import { clock } from "@jevitate/domain";
 
 /** The adversarial hunt's run state (#232): every closure variable `runAdversarialHunt()` used to keep, one field each, names unchanged. */
 export interface HuntContext {
@@ -272,7 +273,7 @@ export function createHuntContext(params: AdversarialMissionParams): HuntContext
   ctx.origin = assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
   ctx.bounds = resolveBounds(params.bounds);
   ctx.site = params.site ?? ctx.origin;
-  ctx.now = params.now ?? Date.now;
+  ctx.now = params.now ?? clock.now;
   ctx.timeBudgetMs = params.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS;
   if (params.strategies.length === 0) throw new Error("runAdversarialMission: at least one strategy is required");
   // Scope containment (#64): the start route (and below it) plus the caller's globs.
@@ -286,7 +287,7 @@ export function createHuntContext(params: AdversarialMissionParams): HuntContext
   // The live session; after a hang the mission resets to a fresh page and keeps hunting.
   ctx.sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
   // Attach the hard-signal listeners BEFORE navigating (on every page the run works in).
-  ctx.collector = new PageSignalCollector(params.page, Date.now, params.allowlist);
+  ctx.collector = new PageSignalCollector(params.page, clock.now, params.allowlist);
   ctx.crashWatch = new CrashWatch(params.page);
   // Declared invariants (#86): listening for `network` observables from before the first navigation.
   ctx.declared = params.invariants === undefined
@@ -307,7 +308,7 @@ export function createHuntContext(params: AdversarialMissionParams): HuntContext
   /** A `before` snapshot is armed for the action(s) the next adjudication judges. */
   ctx.armed = false;
   ctx.sessions.onReset((page) => {
-    ctx.collector = new PageSignalCollector(page, Date.now, params.allowlist);
+    ctx.collector = new PageSignalCollector(page, clock.now, params.allowlist);
     ctx.crashWatch = new CrashWatch(page);
     ctx.declared?.attach(page);
     ctx.authRequests.attach(page);

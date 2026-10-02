@@ -16,6 +16,7 @@ import type { ChromeTracker } from "../feature/relevance.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { MAX_DOCUMENTED_WAIT_MS, readDocumentedWait, readInProgressStatus } from "../status.js";
 import type { ExploreRun } from "../explore.js";
+import { clock } from "@jevitate/domain";
 
 /** The judgment API's refusal of an over-long option list (#192). */
 export const TOO_MANY_CHOICES = /too many choices/i;
@@ -51,18 +52,18 @@ export async function waitOutJob(
   budgetMs: number,
   stillWorking: (page: Page) => Promise<boolean> = async (p) => (await readInProgressStatus(p)) !== null,
 ): Promise<{ cleared: boolean; waitedMs: number }> {
-  const started = Date.now();
+  const started = clock.now();
   const url = safeUrl(page);
   let delay = 1_000;
   for (;;) {
-    const left = budgetMs - (Date.now() - started);
-    if (left <= 0) return { cleared: false, waitedMs: Date.now() - started };
-    await page.waitForTimeout(Math.max(1, Math.min(delay, left))).catch(() => undefined);
+    const left = budgetMs - (clock.now() - started);
+    if (left <= 0) return { cleared: false, waitedMs: clock.now() - started };
+    await clock.sleep(Math.max(1, Math.min(delay, left))).catch(() => undefined);
     delay = Math.min(delay * 2, 15_000);
     if (safeUrl(page) !== url || !(await stillWorking(page))) {
-      const rest = budgetMs - (Date.now() - started);
+      const rest = budgetMs - (clock.now() - started);
       if (rest > 0) await monitorFor(page).waitSettled({ ceilingMs: Math.min(rest, 5_000) }).catch(() => undefined);
-      return { cleared: true, waitedMs: Date.now() - started };
+      return { cleared: true, waitedMs: clock.now() - started };
     }
   }
 }

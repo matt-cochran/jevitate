@@ -11,6 +11,10 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { PersistedMissionResultSchema } from "./result-schema.js";
 import { buildProgram } from "./program.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #293 served e2e — journey-anchored exploration in REAL (headless) Chromium against a served

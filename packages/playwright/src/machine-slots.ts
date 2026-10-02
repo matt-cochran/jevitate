@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { AdmissionTimeoutError } from "./browser-pool.js";
 import { processAlive } from "./browser-processes.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * #205: a MACHINE-WIDE cap on how many jevitate processes run browsers at once — shared by every
@@ -135,8 +135,8 @@ export class MachineBrowserSlots {
     this.#host = opts.host ?? hostname();
     this.#pid = opts.pid ?? process.pid;
     this.#isAlive = opts.isAlive ?? processAlive;
-    this.#now = opts.now ?? Date.now;
-    this.#sleep = opts.sleep ?? ((ms) => sleep(ms));
+    this.#now = opts.now ?? clock.now;
+    this.#sleep = opts.sleep ?? ((ms) => clock.sleep(ms));
     this.#heartbeatMs = opts.heartbeatMs ?? DEFAULT_SLOT_HEARTBEAT_MS;
     this.#staleAfterMs = opts.staleAfterMs ?? DEFAULT_SLOT_STALE_MS;
     this.#pollMs = opts.pollMs ?? DEFAULT_SLOT_POLL_MS;
@@ -266,7 +266,7 @@ export class MachineBrowserSlots {
   #lease(index: number, path: string, token: string, cap: number, waitedMs: number): MachineSlotLease {
     installExitHook();
     heldPaths.set(path, token);
-    const beat = setInterval(() => {
+    const beat = clock.setInterval(() => {
       const t = new Date(this.#now());
       try {
         utimesSync(path, t, t);
@@ -283,7 +283,7 @@ export class MachineBrowserSlots {
       release: () => {
         if (released) return;
         released = true;
-        clearInterval(beat);
+        clock.clearInterval(beat);
         heldPaths.delete(path);
         unlinkIfHeld(path, token);
       },

@@ -9,6 +9,10 @@ import type { Page } from "playwright";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { SecretPixelMask, captureStepScreenshot, maskingPort, revealedSecretsIn } from "./demo-capture.js";
 import { RunScreenshots } from "./run-screenshots.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #298 — a secret the app REVEALS during the run (a freshly minted API key on a one-time reveal

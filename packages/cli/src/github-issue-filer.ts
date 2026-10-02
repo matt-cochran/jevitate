@@ -9,6 +9,7 @@ import {
   type RetryDeps,
 } from "@jevitate/ai-core";
 import type { IssueFilerPort, IssueRef, NewIssue } from "@jevitate/domain";
+import { clock } from "@jevitate/domain";
 
 /**
  * The GitHub adapter for the domain's `IssueFilerPort` (owner ruling 3). It prefers the `gh` CLI
@@ -214,7 +215,7 @@ export class GitHubIssueFiler implements IssueFilerPort {
   async create(repo: string, issue: NewIssue): Promise<IssueRef> {
     const marker = FINGERPRINT_MARKER.exec(issue.body)?.[0];
     const schedule = this.#retry.schedule ?? BACKOFF_SCHEDULE_MS;
-    const sleep = this.#retry.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const sleep = this.#retry.sleep ?? ((ms: number) => clock.sleep(ms));
     const random = this.#retry.random ?? Math.random;
     for (let attempt = 0; ; attempt++) {
       try {

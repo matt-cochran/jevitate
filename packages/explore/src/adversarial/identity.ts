@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Page } from "playwright";
+import { clock } from "@jevitate/domain";
 
 /**
  * #300 — who the run is signed in as, so an adversarial run can tell when an action CHANGED the
@@ -47,9 +48,9 @@ function bounded<T>(p: Promise<T>): Promise<T | typeof TIMED_OUT> {
   p.catch(() => undefined);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
-    timer = setTimeout(() => resolve(TIMED_OUT), READ_TIMEOUT_MS);
+    timer = clock.setTimeout(() => resolve(TIMED_OUT), READ_TIMEOUT_MS);
   });
-  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([p, timeout]).finally(() => clock.clearTimeout(timer));
 }
 const TIMED_OUT = Symbol("timed-out");
 
@@ -232,7 +233,7 @@ export class AuthRequestLog {
     if (this.#attached.has(page)) return;
     this.#attached.add(page);
     page.on("request", (request) => {
-      if (isAuthRequest(request.url())) this.#last = Date.now();
+      if (isAuthRequest(request.url())) this.#last = clock.now();
     });
   }
 

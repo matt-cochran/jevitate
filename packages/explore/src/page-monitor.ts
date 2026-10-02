@@ -2,6 +2,7 @@ import { redactUrl } from "@jevitate/ai-core";
 import type { Page, Request } from "playwright";
 import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
 import { visibleBusyIndicator } from "./hang.js";
+import { clock } from "@jevitate/domain";
 
 /** The interactive-control selector (kept in step with `snapshot`). */
 const INTERACTIVE_SELECTOR =
@@ -360,7 +361,7 @@ export class PageMonitor {
   #instrumented: Promise<void> | undefined;
   readonly #captures = new Set<RequestCapture>();
 
-  constructor(page: Page, now: () => number = Date.now) {
+  constructor(page: Page, now: () => number = clock.now) {
     this.#page = page;
     this.#now = now;
     this.#lastNetworkActivity = now();
@@ -551,7 +552,7 @@ export class PageMonitor {
   async #interactive(boundMs: number): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), Math.max(1, boundMs));
+      timer = clock.setTimeout(() => resolve(false), Math.max(1, boundMs));
     });
     const probe = (async (): Promise<boolean> => {
       const controls = await this.#page.evaluate(hasEnabledControl, INTERACTIVE_SELECTOR);
@@ -561,7 +562,7 @@ export class PageMonitor {
     try {
       return await Promise.race([probe, bound]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
     }
   }
 
@@ -573,20 +574,26 @@ export class PageMonitor {
   async transientsSince(sinceMs: number, boundMs = 1_000): Promise<TransientNote[]> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<TransientNote[]>((resolve) => {
-      timer = setTimeout(() => resolve([]), Math.max(1, boundMs));
+      timer = clock.setTimeout(() => resolve([]), Math.max(1, boundMs));
     });
     try {
       return await Promise.race([
         this.#page
-          .evaluate((since) => {
-            const m = (window as unknown as { __jevitateMonitor?: { transients?: Array<{ t: number; role: string; text: string }> } }).__jevitateMonitor;
-            return (m?.transients ?? []).filter((x) => x.t >= since).map((x) => ({ t: x.t, role: x.role, text: x.text }));
-          }, sinceMs)
+          // `since` is Node time; the page stamps its notes with ITS clock (#304: the two may differ —
+          // `page.clock` in tests), so the cut is made by AGE: the same number of ms back in page time.
+          .evaluate(
+            ({ ageMs }) => {
+              const m = (window as unknown as { __jevitateMonitor?: { transients?: Array<{ t: number; role: string; text: string }> } }).__jevitateMonitor;
+              const since = Date.now() - ageMs;
+              return (m?.transients ?? []).filter((x) => x.t >= since).map((x) => ({ t: x.t, role: x.role, text: x.text }));
+            },
+            { ageMs: this.#now() - sinceMs },
+          )
           .catch(() => [] as TransientNote[]),
         bound,
       ]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
     }
   }
 
@@ -636,11 +643,11 @@ export class PageMonitor {
       const finish = (): void => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        clock.clearTimeout(timer);
         this.#wakers.delete(finish);
         resolve();
       };
-      const timer = setTimeout(finish, Math.max(0, ms));
+      const timer = clock.setTimeout(finish, Math.max(0, ms));
       this.#wakers.add(finish);
     });
   }
@@ -649,26 +656,27 @@ export class PageMonitor {
    * The latest DOM mutation time, or null when the page could not answer within `boundMs` (a busy
    * main thread) — which counts as NOT quiet.
    */
-  async #lastMutation(boundMs: number): Promise<{ lastMutation: number; deferredUntil: number } | null> {
+  async #lastMutation(boundMs: number): Promise<{ lastMutation: number; deferredUntil: number; pageNow: number } | null> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), Math.max(1, boundMs));
+      timer = clock.setTimeout(() => resolve(null), Math.max(1, boundMs));
     });
     try {
       return await Promise.race([
         this.#page
           .evaluate(() => {
             const m = (window as unknown as { __jevitateMonitor?: { lastMutation: number; deferred?: Map<unknown, number> } }).__jevitateMonitor;
-            if (m === undefined) return { lastMutation: Date.now(), deferredUntil: 0 };
+            const pageNow = Date.now();
+            if (m === undefined) return { lastMutation: pageNow, deferredUntil: 0, pageNow };
             let deferredUntil = 0;
             for (const due of m.deferred?.values() ?? []) deferredUntil = Math.max(deferredUntil, due);
-            return { lastMutation: m.lastMutation, deferredUntil };
+            return { lastMutation: m.lastMutation, deferredUntil, pageNow };
           })
           .catch(() => null),
         bound,
       ]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
     }
   }
 
@@ -730,9 +738,11 @@ export class PageMonitor {
         continue;
       }
       const t = this.#now();
+      // The page's stamps (mutations, deferred timers) are in the PAGE's clock and are compared with the
+      // page's own "now" (#304: page time may be `page.clock`, not Node's), network/action times in Node's.
       // A timer the action's own handler scheduled is still due (#152): its effect has not landed.
-      if (dom.deferredUntil > t) {
-        await this.#sleepOrActivity(Math.min(dom.deferredUntil - t, remaining()));
+      if (dom.deferredUntil > dom.pageNow) {
+        await this.#sleepOrActivity(Math.min(dom.deferredUntil - dom.pageNow, remaining()));
         continue;
       }
       // The quiet window is measured from AFTER the action (#152): a page that was already quiet
@@ -740,7 +750,7 @@ export class PageMonitor {
       // landing a few hundred ms later would be snapshotted into the NEXT action.
       const actionAt = this.#actionAt ?? Number.NEGATIVE_INFINITY;
       const network = ignore === undefined ? this.#lastNetworkActivity : this.#lastActivityExcept(ignore);
-      const quietFor = t - Math.max(network, dom.lastMutation, actionAt);
+      const quietFor = Math.min(t - Math.max(network, actionAt), dom.pageNow - dom.lastMutation);
       const stillPending = ignore === undefined ? this.pending().length : this.pending().filter((r) => !ignore(r)).length;
       if (quietFor >= quietMs && stillPending === 0) return this.#result(true, start);
       await this.#sleepOrActivity(Math.min(quietMs - Math.max(0, quietFor), remaining()));

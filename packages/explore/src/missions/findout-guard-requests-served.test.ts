@@ -6,7 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
 import type { SafetyConfig } from "../safety.js";
 import { isDestructiveRequest } from "../read-only.js";
-import { ScriptedJudge, withSession, type ScriptedStep } from "../testkit.js";
+import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #253 — the find-out guard judges a form submit by the requests it SENDS: a lookup form's "Load"

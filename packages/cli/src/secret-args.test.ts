@@ -6,6 +6,10 @@ import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate
 import { PlaywrightBrowserPort, type BrowserPort, type OpenOptions } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 import { SecretArgError, resolveSecretArgs } from "./secret-args.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #195 part 4 — `--secret env:VAR`: the value is read from the environment (never the process list

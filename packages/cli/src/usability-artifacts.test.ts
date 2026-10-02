@@ -11,6 +11,10 @@ import { parseSecretField } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { RecordingSchema, type Recording } from "@jevitate/recording";
 import { discoverRecordingSidecars, loadRecordingSidecars, runUsabilityMission, runUxReview } from "./ux-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #98 + #96 end to end on REAL Chromium: a usability run writes the goal/adversarial artifact shape

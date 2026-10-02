@@ -1,6 +1,6 @@
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, secretParamValues, validateParams, type Journey } from "@jevitate/journey";
 import { redactText } from "@jevitate/ai-core";
-import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
+import { safeRunPolicy, type RunPolicy, clock } from "@jevitate/domain";
 import { join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type EmulationSpec } from "@jevitate/playwright";
 import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
@@ -232,7 +232,7 @@ export async function runJourneyProgrammatically(
       const rawPort = (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
       return capturing ? maskingPort(rawPort, mask) : rawPort;
     };
-    const artifactName = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(new Date().toISOString())}.json`;
+    const artifactName = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(clock.nowIso())}.json`;
     // #245: `--record-video` → `journey-<id>-<stamp>.videos/` under the given dir, else the logs dir.
     const videoDir =
       opts.browser?.recordVideo === undefined || opts.session !== undefined

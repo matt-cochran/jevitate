@@ -12,13 +12,14 @@ import { maskSecretFields } from "../secret-fields.js";
 import { markTypeFixtures } from "../type-fixtures.js";
 import type { RunContext } from "./context.js";
 import type { Flow, Perceived } from "./step.js";
+import { clock } from "@jevitate/domain";
 
 /** Perceives the page and closes the previous action's windows (the start of every step). */
 export async function perceiveStep(ctx: RunContext): Promise<Perceived> {
   const { cfg } = ctx;
   // Shared perception: never decide on an unrendered page (bounded render wait) and never
   // offer an occluded control (see `perceive`).
-  const perceiveStartedAt = Date.now();
+  const perceiveStartedAt = clock.now();
   const perception = await perceive(ctx.page, ctx.perceiveOpts);
   ctx.timings.push(perception.timing);
   // The last click's window closes here: what it wrote is now known (#92).

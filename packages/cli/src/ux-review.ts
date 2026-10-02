@@ -10,6 +10,7 @@ import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import { writeUsageSidecar } from "./mission-journal.js";
 import { DEFAULT_JUDGMENT_BUDGET, type MissionTranscriptEntryLike, captureFromTranscript, recordingToEvidence } from "./ux-evidence.js";
+import { clock } from "@jevitate/domain";
 
 // ---------- Offline: `jevitate ux <recording>` ----------
 
@@ -171,7 +172,7 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   });
   const outDir = opts.outDir ?? logsDirFor();
   await mkdir(outDir, { recursive: true });
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   const reportPath = join(outDir, `ux-${iso.replace(/[:.]/g, "-")}.json`);
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   if (runUsage !== undefined) writeUsageSidecar(reportPath, runUsage);

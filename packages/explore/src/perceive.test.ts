@@ -4,7 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { act, explore, monitorFor, occluderOf, perceive, snapshot } from "./index.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * The shared perception step (render wait + occlusion) and the act() hardening (occlusion gate,

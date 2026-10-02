@@ -7,6 +7,7 @@ import { extensionsStamp } from "./browser-run-options.js";
 import type { Recording } from "@jevitate/recording";
 import { Recorder } from "@jevitate/recorder";
 import { resolveDataDir } from "./data-dir.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The programmatic surface behind `jevitate record` — opens a real browser on
@@ -102,7 +103,7 @@ export async function runRecording(opts: RunRecordingOptions): Promise<RunRecord
 
     const outDir = opts.outDir ?? logsDirFor();
     await mkdir(outDir, { recursive: true });
-    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+    const iso = (opts.nowIso ?? (() => clock.nowIso()))();
     const recordingPath = join(outDir, `record-${iso.replace(/[:.]/g, "-")}.json`);
     await writeFile(recordingPath, `${JSON.stringify(recording, null, 2)}\n`, "utf8");
 

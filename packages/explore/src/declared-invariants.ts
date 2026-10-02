@@ -91,6 +91,7 @@ import type {
   NeverResponseHit,
   ObserverSessions,
 } from "./declared-invariants/types.js";
+import { clock } from "@jevitate/domain";
 
 export * from "./declared-invariants/types.js";
 export * from "./declared-invariants/numbers.js";
@@ -501,7 +502,7 @@ export class InvariantMonitor {
     const entries = Object.entries(this.#spec.capture ?? {}).filter(([name]) => !this.#captures.has(name));
     if (entries.length === 0) return;
     if (this.#pendingBodies.size > 0) {
-      await Promise.race([Promise.allSettled([...this.#pendingBodies]), page.waitForTimeout(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
+      await Promise.race([Promise.allSettled([...this.#pendingBodies]), clock.sleep(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
     }
     for (const [name, c] of entries) {
       if (this.#captures.has(name)) continue;
@@ -781,10 +782,10 @@ export class InvariantMonitor {
     if (result === false && decl.settle !== undefined) {
       // Eventual consistency: re-check until it holds or the window closes. Only the observables this
       // invariant reads are re-read.
-      const now = this.#opts.now ?? Date.now;
+      const now = this.#opts.now ?? clock.now;
       const start = now();
       const poll = decl.settle.pollMs ?? DEFAULT_SETTLE_POLL_MS;
-      const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => p.waitForTimeout(ms));
+      const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => clock.sleep(ms));
       while (result === false && now() - start < decl.settle.withinMs) {
         await sleep(page, Math.min(poll, Math.max(0, decl.settle.withinMs - (now() - start))));
         after = await this.#snapshot(page, new Set(c.afterNames));
@@ -841,9 +842,9 @@ export class InvariantMonitor {
   async flushResponses(): Promise<AfterResult> {
     const violations: InvariantViolation[] = [];
     const held: string[] = [];
-    const deadline = Date.now() + FLUSH_WAIT_MS;
-    while (this.#responseInFlight.size > 0 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, FLUSH_POLL_MS));
+    const deadline = clock.now() + FLUSH_WAIT_MS;
+    while (this.#responseInFlight.size > 0 && clock.now() < deadline) {
+      await clock.sleep(FLUSH_POLL_MS);
     }
     const pageUrl = this.#lastPage === null ? "" : safeUrl(this.#lastPage);
     for (const n of this.#responseNevers) {
@@ -871,7 +872,7 @@ export class InvariantMonitor {
     if (names.size === 0) return { values, evidence };
     // A response that already arrived may still be having its body read: let it land (bounded).
     if (this.#pendingBodies.size > 0) {
-      await Promise.race([Promise.allSettled([...this.#pendingBodies]), page.waitForTimeout(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
+      await Promise.race([Promise.allSettled([...this.#pendingBodies]), clock.sleep(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
     }
     for (const name of names) {
       const o = this.#spec.observe?.[name];

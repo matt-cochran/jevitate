@@ -1,5 +1,6 @@
 import { redactUrl } from "@jevitate/ai-core";
 import { LogSpecError } from "./log-lines.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Request ↔ backend-log correlation by TRACE / CORRELATION ID (#204), instead of by time window.
@@ -133,7 +134,7 @@ export class RequestIdLedger {
 
   constructor(opts: { readonly headers?: readonly string[]; readonly now?: () => number } = {}) {
     this.#headers = new Set([...DEFAULT_CORRELATION_HEADERS, ...(opts.headers ?? []).map((h) => h.toLowerCase())]);
-    this.#now = opts.now ?? Date.now;
+    this.#now = opts.now ?? clock.now;
   }
 
   /** Starts listening on a page (call before its first navigation). */

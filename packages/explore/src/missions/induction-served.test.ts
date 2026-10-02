@@ -5,6 +5,10 @@ import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runInductionMission } from "./induction.js";
+import { useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #75 — a visually-hidden "Skip to content" link ate about a third of the coverage/exploratory

@@ -6,6 +6,7 @@ import { coverageStateFingerprint, snapshot, type TranscriptEntry } from "@jevit
 import type { StepObserver } from "@jevitate/interpreter";
 import type { BrowserPort } from "@jevitate/playwright";
 import { captureStepScreenshot, maskingPort, SecretPixelMask } from "./demo-capture.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * #251 — `--screenshots [dir]` / `--screenshots steps`: a screenshot capture mode for any run
@@ -172,7 +173,7 @@ export class RunScreenshots {
         if (this.#opts.spec.mode === "screens") {
           const fp = await Promise.race([
             snapshot(page).then((s) => coverageStateFingerprint(s)),
-            new Promise<null>((r) => setTimeout(() => r(null), FINGERPRINT_MS)),
+            new Promise<null>((r) => clock.setTimeout(() => r(null), FINGERPRINT_MS)),
           ]).catch(() => null);
           // An unreadable state cannot be proven a repeat: it is captured (never silently dropped).
           if (fp !== null && this.#seen.has(fp)) return;

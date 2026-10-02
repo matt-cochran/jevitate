@@ -5,7 +5,10 @@ import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { validateInvariantSpec } from "@jevitate/recording";
 import { runGoalBasedMission } from "./missions/goal-based.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #280 + #279 on a served page whose paid control carries a LIVE estimate range in its name:

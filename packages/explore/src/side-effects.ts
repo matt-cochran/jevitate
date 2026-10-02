@@ -4,6 +4,7 @@ import { requestEndpoint } from "./authorized-targets.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
 import type { ControlRisk } from "./safety.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The repeated-side-effect guard (#92) — independent code, keyed on what the NETWORK saw, never on
@@ -293,14 +294,14 @@ export async function awaitWrites(
   ceilingMs: number,
   pollMs = 250,
 ): Promise<{ resolved: boolean; waitedMs: number }> {
-  const started = Date.now();
-  const remaining = (): number => ceilingMs - (Date.now() - started);
+  const started = clock.now();
+  const remaining = (): number => ceilingMs - (clock.now() - started);
   while (guard.inflight().length > 0) {
-    if (remaining() <= 0) return { resolved: false, waitedMs: Date.now() - started };
-    await new Promise((r) => setTimeout(r, Math.max(1, Math.min(pollMs, remaining()))));
+    if (remaining() <= 0) return { resolved: false, waitedMs: clock.now() - started };
+    await clock.sleep(Math.max(1, Math.min(pollMs, remaining())));
   }
   if (remaining() > 0) await monitor.waitSettled({ ceilingMs: Math.min(remaining(), 15_000) }).catch(() => undefined);
-  return { resolved: true, waitedMs: Date.now() - started };
+  return { resolved: true, waitedMs: clock.now() - started };
 }
 
 /** One write a run's action fired (#116: the result's `sideEffects`). */
@@ -372,7 +373,7 @@ export class SideEffectLog {
     } = {},
   ) {
     this.#isWrite = opts.isWrite ?? writeClassifier();
-    this.#now = opts.now ?? Date.now;
+    this.#now = opts.now ?? clock.now;
     this.#origins = opts.allowlist ?? [];
     this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
   }

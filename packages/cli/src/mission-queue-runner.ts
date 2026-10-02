@@ -27,6 +27,7 @@ import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The queue drain behind `jevitate mission run` (#117). `queue_exploration` (MCP) only ENQUEUES —
@@ -126,7 +127,7 @@ export function needsModel(mission: QueuedMission): boolean {
  * queue record (`failed` + `error`) and the drain moves on.
  */
 export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise<DrainReport> {
-  const now = opts.nowIso ?? (() => new Date().toISOString());
+  const now = opts.nowIso ?? (() => clock.nowIso());
   const self = opts.owner ?? { pid: process.pid, host: hostname() };
   const recovered = await recoverOrphans(opts, self, now);
   const queued = (await opts.queue.list())

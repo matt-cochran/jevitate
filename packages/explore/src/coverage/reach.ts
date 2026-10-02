@@ -5,6 +5,7 @@ import type { Snapshot } from "../snapshot.js";
 import { seedRedirectReason } from "../seed-redirect.js";
 import { stateFingerprint } from "./fingerprint.js";
 import type { FrontierItem } from "./frontier.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Why a reset-and-replay did not land on the item's state:
@@ -74,7 +75,7 @@ export async function reachFrontierState(params: {
   const phase: ReachPhase = { seedLoaded: false, steps: 0 };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<ReachResult>((resolve) => {
-    timer = setTimeout(
+    timer = clock.setTimeout(
       () =>
         resolve(
           phase.seedLoaded
@@ -89,7 +90,7 @@ export async function reachFrontierState(params: {
     // `Promise.race` subscribes to the reset, so a rejection after the timeout won is handled.
     return await Promise.race([reach(params, phase), timedOut]);
   } finally {
-    clearTimeout(timer);
+    clock.clearTimeout(timer);
   }
 }
 

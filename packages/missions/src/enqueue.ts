@@ -5,6 +5,7 @@ import { MISSION_BOUNDS_CEILING, type Budget } from "./bounds.js";
 import { BudgetExceedsCeilingError } from "./errors.js";
 import type { MissionTargetRegistry } from "./target-registry.js";
 import type { MissionQueueStore } from "./queue-store.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Resolves a request's optional partial budget against the hard ceiling.
@@ -76,7 +77,7 @@ export async function enqueueMission(
     ...request,
     id: (deps.idGen ?? (() => randomUUID()))(),
     status: "queued",
-    enqueuedAtIso: (deps.clock ?? (() => new Date().toISOString()))(),
+    enqueuedAtIso: (deps.clock ?? (() => clock.nowIso()))(),
     budget,
   };
   await queue.enqueue(mission); // FsMissionQueueStore re-validates via QueuedMissionSchema before writing

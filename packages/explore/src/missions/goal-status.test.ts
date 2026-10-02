@@ -6,7 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult, type SuccessWhen } from "./goal-based.js";
 import { MAX_QUIET_WAITS } from "../explore.js";
 import type { SuccessCheck } from "../success-checks.js";
-import { ScriptedJudge, withSession, type ScriptedStep } from "../testkit.js";
+import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #79 / #80 / #84 — the goal loop reads the page's status text, stops waiting on a page where

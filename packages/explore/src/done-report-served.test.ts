@@ -6,7 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { explore, type ExploreRun } from "./explore.js";
 import { GOAL_MET_THRESHOLD } from "./conversation.js";
 import { GOAL_MET_INSTRUCTIONS } from "./decide.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * Done recognition (#91) and the `report` op (#101) on served fixtures, with a scripted judge.

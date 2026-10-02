@@ -11,6 +11,7 @@ import {
   type ThreadEntry,
   type Finding,
 } from "@jevitate/inbox";
+import { clock } from "@jevitate/domain";
 
 /**
  * The 8 HITL inbox tools MCP will expose (see `tools.ts` `ALLOWED_TOOLS`):
@@ -204,7 +205,7 @@ function parseQueueCommonFields(
 function synthesizeInboxId(kind: InboxItemKind, run: string): string {
   const cleanRun = run.toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
   const base = cleanRun.length > 0 ? cleanRun : "run";
-  const ts = Date.now().toString(36);
+  const ts = clock.now().toString(36);
   const rand = Math.random().toString(36).slice(2, 10);
   return `${kind}-${base}-${ts}-${rand}`.slice(0, 64);
 }
@@ -228,7 +229,7 @@ async function enqueueQueueItem(
       agent: fields.agent,
       hasScreenshot: fields.hasScreenshot,
       thread: [],
-      createdAt: new Date().toISOString(),
+      createdAt: clock.nowIso(),
       ttlSec: DEFAULT_TTL_SEC,
       ...(fields.targetUrl !== undefined ? { targetUrl: fields.targetUrl } : {}),
       ...(fields.findings !== undefined ? { findings: fields.findings } : {}),

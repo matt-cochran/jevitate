@@ -4,8 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission } from "./goal-based.js";
-import { ScriptedJudge, withSession } from "../testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "../testkit.js";
 import { FillHelper, identityKind, uniqueIdentity } from "../fill.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #271 — a sign-up goal's model-invented identity (`jane.doe@example.com`, every run) collides with
