@@ -1,5 +1,16 @@
 # jevitate
 
+## 0.4.0
+
+### Minor Changes
+
+- Released with `@jevitate/cli@0.4.0`: signal triage (`--log-triage`), `campaign run` mission options, state restore on a single anchored mission, and the empty-settle grace for code-split routes. See the root CHANGELOG.
+- Updated dependencies [3a8962d]
+- Updated dependencies [62bea66]
+- Updated dependencies [923bf2c]
+- Updated dependencies [7751b00]
+  - @jevitate/cli@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
