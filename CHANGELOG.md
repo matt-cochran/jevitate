@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [0.4.0] – unreleased
+## [0.4.0] – 2026-10-02
 
 0.4.0 makes a finding carry only the evidence that relates to it: with `--log-triage`, a run keeps a
 redacted timeline of every backend line and browser signal, code prefilters each defect's candidates,
