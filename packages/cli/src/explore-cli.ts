@@ -677,6 +677,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             const plan = await validateCampaignSpec(spec, resolvePath("explore-sweep.json"), {
               journeysDir,
               allowShellHooks: o.allowShellHooks === true,
+              ...(o.hookTimeoutMs === undefined ? {} : { hookTimeoutMs: Number(o.hookTimeoutMs) }),
               environmentSeams: environmentSeams(deps),
             });
             const result = await runCampaign(plan, {

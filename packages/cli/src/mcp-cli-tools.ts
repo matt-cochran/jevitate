@@ -338,11 +338,38 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_campaign",
     description:
-      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. Needs real or fakeAi.",
+      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. Needs real or fakeAi.",
     command: {
       path: "campaign run",
-      params: { spec: pos("path"), out: path("--out"), ...AI },
-      omitted: { "--journeys-dir": OMIT.storeDir, "--allow-shell-hooks": OMIT.hooks, ...JSON_FLAG },
+      params: {
+        spec: pos("path"),
+        out: path("--out"),
+        // #311: forwarded to every mission, exactly as run_exploration takes them.
+        allowDestructive: b("--allow-destructive"),
+        allowWrites: b("--allow-writes"),
+        deny: many("--deny"),
+        paid: many("--paid"),
+        invariants: { kind: "path[]", flag: "--invariants" },
+        recordVideo: { kind: "optional-path", flag: "--record-video" },
+        screenshots: { kind: "screenshots", flag: "--screenshots" },
+        evidenceVideo: b("--evidence-video"),
+        ...AI,
+      },
+      omitted: {
+        "--journeys-dir": OMIT.storeDir,
+        "--allow-shell-hooks": OMIT.hooks,
+        "--hook-timeout-ms": OMIT.hooks,
+        "--allow-log-cmd": OMIT.logCmd,
+        "--log-source": OMIT.logCmd,
+        "--log-defect": OMIT.logCmd,
+        "--log-ignore": OMIT.logCmd,
+        "--log-scope": OMIT.logCmd,
+        "--log-correlation-header": OMIT.logCmd,
+        "--log-id-pattern": OMIT.logCmd,
+        "--log-quiet-ok": OMIT.logCmd,
+        "--server-log-drain-ms": OMIT.logCmd,
+        ...JSON_FLAG,
+      },
     },
   },
   {

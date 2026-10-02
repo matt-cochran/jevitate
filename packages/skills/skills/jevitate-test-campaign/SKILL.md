@@ -92,7 +92,9 @@ Journey steps it branched from):
 jevitate campaign run .jevitate/campaign/campaign.json --real --json
 ```
 
-An invalid spec is refused with every problem listed (exit 64). Shell `before`/`after` restore
+Flags such as `--allow-destructive`, `--paid`, `--invariants`, `--log-source`/`--log-defect` and
+`--evidence-video` on `campaign run` are forwarded to every mission; `--hook-timeout-ms` bounds the
+spec's hooks. An invalid spec is refused with every problem listed (exit 64). Shell `before`/`after` restore
 hooks in the spec run only with `--allow-shell-hooks`, and only when the human asked for them.
 
 ## 5. A small untargeted pass, plus non-journey attacks

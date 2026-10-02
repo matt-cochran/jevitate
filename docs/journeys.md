@@ -219,6 +219,16 @@ Declare anchors in the Journey's `metadata` (validated: names unique, each step 
 | `discovery` | `false` skips the discovery replay |
 | `maxRuns` | The mission cap (default 50, at most 200); `maxActions` (default 40) and `maxDecisions` are per-mission defaults |
 
+**Mission options (#311).** Every `campaign run` flag beyond its own (`--journeys-dir`, `--out`,
+`--allow-shell-hooks`, `--hook-timeout-ms`, `--real`/`--fake-ai`, `--json`) is forwarded to every
+anchored mission as given: `--allow-destructive`, `--allow-writes`, `--deny`, `--paid`,
+`--invariants`, the backend-log flags (`--log-source`, `--log-defect`, `--log-scope`, …,
+`--server-log-drain-ms`), `--evidence-video`, `--record-video` and `--screenshots`. They are operator
+flags, never spec fields: a spec file alone never widens what a mission may click or read. Over MCP,
+`run_campaign` takes the safety and media flags; log sources and hooks stay operator-only.
+`--hook-timeout-ms` bounds the spec's `before`/`after` hooks (it also applies to an `--at-step all`
+sweep's hooks).
+
 Bounded: at most 50 jobs. The campaign's outcome is the worst of its missions' (a stale or broken
 mission makes it `inconclusive`, exit 2; its findings are still reported). An invalid spec is
 refused with every problem listed (`E_CAMPAIGN_SPEC`, exit 64) before any browser opens. A
