@@ -172,7 +172,7 @@ describe("realJevClientCall — the lazy live seam (SDK loader injected)", () =>
     });
     const s = usage.snapshot();
     expect(s.jevUsd).toBeCloseTo(0.0012, 10);
-    expect(s.jevPriceSource).toBe("provider:typesafe");
+    expect(s.priceSource).toEqual(["provider:typesafe"]);
     expect(s.priced).toBe("full");
   });
 

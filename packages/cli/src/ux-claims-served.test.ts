@@ -236,9 +236,9 @@ describe("#198 acceptance, served (real Chromium): the claim pipeline catches ev
           }
 
           // #134: offline review over the sidecar (guard probes included) reproduces the findings.
-          const sidecars = discoverRecordingSidecars(result.recordingPath);
+          const sidecars = discoverRecordingSidecars(result.recordingPaths[0]!);
           const offline = await runUxReview({
-            recording: RecordingSchema.parse(JSON.parse(readFileSync(result.recordingPath, "utf8"))),
+            recording: RecordingSchema.parse(JSON.parse(readFileSync(result.recordingPaths[0]!, "utf8"))),
             appContext: { appClass: "admin" },
             judge,
             gen: new FakeGenerationGateway(),

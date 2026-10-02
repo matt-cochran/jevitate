@@ -11,8 +11,8 @@ user". Sources are **operator-declared, read-only and never the model's choice**
 only, never part of an MCP `MissionRequest`. A `server-log` defect is listed in the result's
 `defects` on every strategy, like any other defect ([result schema](./results.md)). On a usability
 run it is marked `advisory: true`, like every other UX finding — it never gates
-`missionOutcome`/`exitCode`. (`serverLogDefects` is a deprecated alias of the server-log subset,
-kept for 0.2.0 only.)
+`missionOutcome`/`exitCode`. (The 0.2.0 `serverLogDefects` alias of the server-log subset was
+removed in 0.3.0; read `defects` with `kind: "server-log"`.)
 
 ```bash
 jevitate explore --url http://localhost:5173/imports --goal "import https://example.com" \

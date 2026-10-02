@@ -71,12 +71,15 @@ export function serverLogRuntimeOptions(o: ServerLogOptions | undefined): {
   };
 }
 
+/**
+ * The result's `serverLogs` summary. Server-log defects go into the result's `defects` (#195); the
+ * deprecated `serverLogDefects` alias was removed in 0.3.0.
+ */
 export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
   serverLogs?: ServerLogsSummary;
-  serverLogDefects?: ServerLogDefect[];
 } {
   if (runtimeResult === undefined) return {};
-  return { serverLogs: runtimeResult.summary, ...(runtimeResult.defects.length > 0 ? { serverLogDefects: runtimeResult.defects } : {}) };
+  return { serverLogs: runtimeResult.summary };
 }
 
 /**

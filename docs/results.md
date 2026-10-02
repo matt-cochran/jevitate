@@ -85,20 +85,22 @@ them no meaning across strategies. For example:
 `outcome` is one of these fields. For a goal run it is the goal outcome (the same as `goalOutcome`), and for a frontier run it
 is the stop reason. It is not the portable verdict: use `missionOutcome` or `exitCode` for that.
 
-## Deprecated aliases (0.2.0 only)
+## Removed aliases (0.3.0)
 
-These fields are still written in 0.2.0 and will be removed in the next minor release:
+0.2.0 deprecated these fields; 0.3.0 no longer writes them. `schemaVersion` stays `1`: this is the
+removal announced in 0.2.0, not a new schema. A 0.2.0 result that still carries them still
+validates, and `report`, `ledger` and `verify-fix` still read them from older result files (a
+0.2.0 `usage.usd` is read as `totalUsd`, a `serverLogDefects` entry as a defect, a `recordingPath` as
+the Recording).
 
-| Deprecated | Use instead |
+| Removed | Read instead |
 |---|---|
 | `serverLogDefects` | the entries in `defects` with `kind: "server-log"` |
 | `recordingPath` (goal, adversarial, usability) | `recordingPaths[0]` |
 | `usage.usd` | `usage.totalUsd` |
 | `usage.jevPriceSource` | `usage.priceSource` (also covers generation calls, not just Jev's) |
 
-Before this schema, a goal, coverage, adversarial, feature or usability run listed its `server-log`
-defects only in `serverLogDefects`. Readers that only looked at `defects` missed them.
-`serverLogDefects` (like the `server-log` entries it duplicates in `defects`) is present on EVERY
-strategy's result, but only when that run actually checked server logs (`--log-source`/`logSource`)
-AND found a matching defect — it is absent, not "missing", on a run with no log source configured or
-no match. A result with neither is not evidence that a strategy stopped writing it.
+Before #195, a goal, coverage, adversarial, feature or usability run listed its `server-log`
+defects only in `serverLogDefects`. Since 0.2.0 every one is in `defects` (with `kind:
+"server-log"`) on every strategy, present only when that run checked server logs
+(`--log-source`/`logSource`) and found a matching defect.

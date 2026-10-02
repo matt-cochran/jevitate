@@ -53,8 +53,10 @@ import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outc
  * it through unchanged and never gives it a cross-strategy meaning. In particular `outcome` is the
  * strategy's own ending (a goal run's outcome, a frontier's stop reason), NOT the portable verdict.
  *
- * Deprecated aliases, kept for 0.2.0 only and removed in the next minor: `serverLogDefects` (the
- * `server-log` subset of `defects`) and `recordingPath` (`recordingPaths[0]`).
+ * Removed in 0.3.0 (announced in 0.2.0; schemaVersion stays 1): the aliases `serverLogDefects` (the
+ * `server-log` subset of `defects`), `recordingPath` (`recordingPaths[0]`), `usage.usd`
+ * (`usage.totalUsd`) and `usage.jevPriceSource` (`usage.priceSource`). They are no longer written; the
+ * schema is loose, so a 0.2.0 result that still carries them parses, and readers tolerate them.
  */
 export const MISSION_RESULT_SCHEMA_VERSION = 1 as const;
 

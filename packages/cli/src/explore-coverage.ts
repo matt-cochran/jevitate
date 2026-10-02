@@ -212,8 +212,6 @@ export interface RunCoverageMissionResult {
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
   /** #293: the Journey step a journey-anchored run branched from (absent on a bare-URL run). */
   readonly branch?: JourneyBranchPoint;
 }

@@ -292,8 +292,9 @@ export function parsePersistedMission(raw: unknown): PersistedMission {
   // A run's own Recording (a coverage run has none; its findings carry their path).
   const recording = result.recording === null || result.recording === undefined ? null : RecordingSchema.parse(result.recording);
   const findings: PersistedFinding[] = [];
-  // `defects` holds every defect (#195); `serverLogDefects` is its deprecated server-log alias (and
-  // the only list a pre-#195 result has) — each fingerprint is taken once.
+  // `defects` holds every defect (#195). `serverLogDefects` is no longer written (removed in 0.3.0)
+  // but is still read: a 0.2.0 result carries it as an alias, a pre-#195 result as the only list
+  // of its server-log defects — each fingerprint is taken once.
   for (const list of [result.defects, result.hangs, result.serverLogDefects]) {
     if (!Array.isArray(list)) continue;
     for (const item of list) {

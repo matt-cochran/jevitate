@@ -79,6 +79,7 @@ function entryPath(dir: string, fingerprint: string): string {
 
 /** The raw finding object (as persisted) whose fingerprint or `related` list is `fp`. */
 function rawFinding(result: Record<string, unknown>, fp: string): Record<string, unknown> | undefined {
+  // `serverLogDefects` is no longer written (removed in 0.3.0); read it so older results still resolve.
   for (const list of [result.defects, result.hangs, result.serverLogDefects]) {
     if (!Array.isArray(list)) continue;
     for (const item of list) {

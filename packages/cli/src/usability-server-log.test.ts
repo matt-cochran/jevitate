@@ -74,9 +74,10 @@ describe("usability + --log-source (#142 follow-up)", () => {
         // The page has only the two log-emitting buttons; the low-confidence judge always picks the
         // first offered candidate, so its one allotted action reliably clicks one of them.
         expect(result.serverLogs?.attachedLines).toBeGreaterThan(0);
-        expect(result.serverLogDefects).toBeDefined();
-        expect(result.serverLogDefects!.length).toBeGreaterThan(0);
-        expect(result.serverLogDefects![0]!.kind).toBe("server-log");
+        const serverLogDefects = result.defects.filter((d) => d.kind === "server-log");
+        expect(serverLogDefects.length).toBeGreaterThan(0);
+        expect(serverLogDefects.every((d) => d.advisory === true)).toBe(true);
+        expect(result).not.toHaveProperty("serverLogDefects"); // removed in 0.3.0
       } finally {
         await rm(outDir, { recursive: true, force: true });
       }

@@ -40,7 +40,7 @@ describe("UsageTracker — #100 usage accounting", () => {
     const s = usage.snapshot();
     expect(s.generationUsd).toBeCloseTo(0.0055, 10);
     expect(s.totalUsd).toBeCloseTo(0.0055, 10);
-    expect(s.usd).toBeCloseTo(0.0055, 10); // #100 compat alias
+    expect(s).not.toHaveProperty("usd"); // the #100 alias was removed in 0.3.0
     // #163: two calls are unpriced, so the total is partial — never presented as complete.
     expect(s.priced).toBe("partial");
     expect(s.missing).toEqual(["generation: model not reported"]);
@@ -55,7 +55,7 @@ describe("UsageTracker — #136 jev (judgment) cost", () => {
     const s = usage.snapshot();
     expect(s.jevUsd).toBeUndefined();
     expect(s.totalUsd).toBeUndefined();
-    expect(s.usd).toBeUndefined();
+    expect(s).not.toHaveProperty("usd");
     expect(s.priced).toBe("none");
   });
 
@@ -66,7 +66,8 @@ describe("UsageTracker — #136 jev (judgment) cost", () => {
     usage.recordJudgment({ inputTokens: 10, outputTokens: 10 });
     const s = usage.snapshot();
     expect(s.jevUsd).toBeCloseTo(0.018, 10);
-    expect(s.jevPriceSource).toBe("env:JEVITATE_JEV_UNIT_PRICE_USD");
+    expect(s.priceSource).toEqual(["env:JEVITATE_JEV_UNIT_PRICE_USD"]);
+    expect(s).not.toHaveProperty("jevPriceSource"); // removed in 0.3.0
     expect(s.totalUsd).toBeCloseTo(0.018, 10);
     expect(s.priced).toBe("full"); // no generations were made, so nothing there needed pricing
   });
@@ -77,7 +78,7 @@ describe("UsageTracker — #136 jev (judgment) cost", () => {
     usage.recordJudgment({ inputTokens: 10, outputTokens: 10, usd: 0.002 });
     const s = usage.snapshot();
     expect(s.jevUsd).toBeCloseTo(0.003, 10);
-    expect(s.jevPriceSource).toBe("provider:typesafe");
+    expect(s.priceSource).toEqual(["provider:typesafe"]);
   });
 
   it("the split is shown, and priced is partial when one component is priced and the other made calls but couldn't be", () => {
@@ -227,5 +228,13 @@ describe("sumUsage — #163 aggregation across runs", () => {
     const back = usageCountsFrom(JSON.parse(JSON.stringify(u.snapshot())));
     expect(back).toMatchObject({ judgments: 1, jevUsd: 0.042, priced: "full" });
     expect(usageCountsFrom({ judgments: "x" })).toBeUndefined();
+  });
+
+  it("reads a 0.2.0-era usage object that still carries the removed usd / jevPriceSource aliases", () => {
+    const old = { judgments: 0, generations: 2, inputTokens: 2, outputTokens: 2, usd: 0.0055, priced: "full", jevPriceSource: "provider:typesafe" };
+    const back = usageCountsFrom(old);
+    expect(back).toMatchObject({ totalUsd: 0.0055, priced: "full" });
+    expect(back).not.toHaveProperty("usd");
+    expect(back).not.toHaveProperty("jevPriceSource");
   });
 });

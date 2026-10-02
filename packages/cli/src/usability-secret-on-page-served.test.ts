@@ -119,7 +119,7 @@ describe("#219 — usability on a page showing a registered secret", () => {
         });
         expect(step).toBeGreaterThanOrEqual(2);
         // The model typed the very secret into Email: recorded redacted, never in the clear.
-        const recording = await readFile(result.recordingPath, "utf8");
+        const recording = await readFile(result.recordingPaths[0]!, "utf8");
         expect(recording).toMatch(/"redacted":\s*true/);
         expect(result.missionOutcome).not.toBe("crashed");
         expect(result.failure?.message ?? "").not.toMatch(/secret/i);

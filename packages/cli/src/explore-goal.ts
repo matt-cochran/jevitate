@@ -215,8 +215,6 @@ export interface RunExplorationResult {
   readonly recordingPaths: string[];
   /** #245: `--record-video` files, finalized before this result was written (absent when not recording). */
   readonly videoPaths?: string[];
-  /** @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor. */
-  readonly recordingPath: string;
   /**
    * The per-decision trail (op, target, confidence, whether the action succeeded and why
    * not, URL, page signature) — so a stalled or failed run is explainable. Written next to
@@ -263,8 +261,6 @@ export interface RunExplorationResult {
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
   /** The fixture the mission started from (#140/#144): identity, non-secret outputs, the setup/restore log. */
   readonly fixtures?: MissionFixtureResult;
   /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
@@ -602,7 +598,6 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       decisions: mission.run.decisions,
       actions: mission.run.actions,
       recordingPaths: [journal.recordingPath],
-      recordingPath: journal.recordingPath,
       ...videos,
       ...shotFields,
       transcriptPath: journal.transcriptPath,

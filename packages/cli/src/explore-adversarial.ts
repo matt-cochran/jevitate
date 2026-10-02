@@ -181,8 +181,6 @@ export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & 
   readonly target: MissionTarget;
   /** One ready-to-file draft per defect (and per crash), written next to the Recording. */
   readonly issues: FindingsIssues;
-  /** @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor. */
-  readonly recordingPath: string;
   /** The persisted typed result (`<recording>.result.json`), readable via MCP `get_mission_result`. */
   readonly resultPath: string;
   readonly transcriptPath: string;
@@ -196,8 +194,6 @@ export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & 
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
   /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
   readonly hostHealth: HostHealthSummary;
   /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
@@ -371,7 +367,6 @@ export async function runAdversarialCliMission(
       },
       outcome: missionOutcome,
       transcript,
-      recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
       exitCode,
       issues,

@@ -27,7 +27,7 @@ export type AdvisoryServerLogDefect = ServerLogDefect & { readonly advisory: tru
 /**
  * All of a run's defects in ONE list (#195): the strategy's own (hard-signal / declared-invariant)
  * defects first, then its `server-log` defects — each fingerprint once. What `defects` holds on every
- * strategy's result; `serverLogDefects` remains only as a deprecated alias of the server-log subset.
+ * strategy's result (the 0.2.0 `serverLogDefects` alias of the server-log subset was removed in 0.3.0).
  */
 export function unifiedDefects<D extends { readonly fingerprint: string }>(
   own: readonly D[] | undefined,

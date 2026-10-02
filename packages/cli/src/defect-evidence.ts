@@ -150,6 +150,7 @@ export function signalCheckable(kind: string): boolean {
 /** The persisted defect (or hang) record with this fingerprint in a raw `<stem>.result.json`. */
 export function persistedDefect(raw: unknown, fingerprint: string): Record<string, unknown> | undefined {
   const result = isRecord(raw) && isRecord(raw.result) ? raw.result : undefined;
+  // `serverLogDefects` is no longer written (removed in 0.3.0); read it so older results still resolve.
   for (const list of [result?.defects, result?.hangs, result?.serverLogDefects]) {
     if (!Array.isArray(list)) continue;
     const hit = list.filter(isRecord).find((d) => d.fingerprint === fingerprint || (Array.isArray(d.related) && d.related.includes(fingerprint)));
