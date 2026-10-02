@@ -50,9 +50,16 @@ function idFromDigest(bytes: Uint8Array): string {
   return [...hex].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join("");
 }
 
-/** The id Chromium gives an unpacked extension loaded from `absDir` (no manifest `key`). POSIX paths. */
-export function extensionIdForPath(absDir: string): string {
-  return idFromDigest(Buffer.from(absDir, "utf8"));
+/**
+ * The id Chromium gives an unpacked extension loaded from `absDir` (no manifest `key`) — Chromium's
+ * `crx_file::id_util::GenerateIdForPath`: SHA-256 of the RAW bytes of the `base::FilePath` string.
+ * That string is UTF-8 on POSIX but UTF-16 (`wchar_t`, little-endian) on Windows, where
+ * `MaybeNormalizePath` first upper-cases a lower-case drive letter (`c:\x` and `C:\x` share an id).
+ */
+export function extensionIdForPath(absDir: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32") return idFromDigest(Buffer.from(absDir, "utf8"));
+  const normalized = /^[a-z]:/.test(absDir) ? absDir[0]!.toUpperCase() + absDir.slice(1) : absDir;
+  return idFromDigest(Buffer.from(normalized, "utf16le"));
 }
 
 /** The id Chromium gives an extension whose manifest pins `key` (base64 DER public key). */

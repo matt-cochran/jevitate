@@ -372,9 +372,15 @@ async function confirmExtensionsLoaded(context: BrowserContext, extensions: read
       try {
         await probe.goto(url, { timeout: timeoutMs });
       } catch (err) {
+        // Cross-check: extensions the browser DID start (service workers / background pages) under
+        // other ids mean the pre-launch id computation drifted from Chromium's, not a refused load.
+        const running = (await runningExtensionIds(context)).filter((id) => !extensions.some((x) => x.id === id));
         throw new ExtensionLoadError(
-          `the browser did not load the extension ${e.name}@${e.version} from ${e.dir} (id ${e.id}): ${url} is not reachable. ` +
-            "Use Playwright's bundled Chromium (no --browser-channel, or --browser-channel chromium); branded Google Chrome no longer loads unpacked extensions from the command line",
+          running.length > 0
+            ? `the browser loaded an extension under id ${running.join(", ")}, not the id ${e.id} computed for ${e.name}@${e.version} from ${e.dir}: ` +
+                "the extension id computation does not match this browser's (a jevitate bug — please report it with the platform and path)"
+            : `the browser did not load the extension ${e.name}@${e.version} from ${e.dir} (id ${e.id}): ${url} is not reachable. ` +
+                "Use Playwright's bundled Chromium (no --browser-channel, or --browser-channel chromium); branded Google Chrome no longer loads unpacked extensions from the command line",
           { cause: err },
         );
       }
@@ -382,6 +388,22 @@ async function confirmExtensionsLoaded(context: BrowserContext, extensions: read
   } finally {
     await probe.close().catch(() => undefined);
   }
+}
+
+/**
+ * Ids of the extensions running in `context` (from their service workers' and background pages'
+ * origins). Error path only: when none has registered yet, waits up to 2s for a service worker.
+ */
+async function runningExtensionIds(context: BrowserContext): Promise<string[]> {
+  if (context.serviceWorkers().length === 0 && context.backgroundPages().length === 0) {
+    await context.waitForEvent("serviceworker", { timeout: 2_000 }).catch(() => undefined);
+  }
+  const ids = new Set<string>();
+  for (const w of [...context.serviceWorkers(), ...context.backgroundPages()]) {
+    const m = /^chrome-extension:\/\/([a-p]{32})\//.exec(w.url());
+    if (m !== null) ids.add(m[1]!);
+  }
+  return [...ids];
 }
 
 /** #245: the page's video file path when its context records one, else undefined (never throws). */

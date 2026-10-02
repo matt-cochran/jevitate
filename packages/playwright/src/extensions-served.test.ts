@@ -60,6 +60,16 @@ describe.skipIf(!FULL_CHROMIUM)("unpacked extensions in real Chromium (headless,
     }
   }, 60_000);
 
+  it("a pre-launch id that drifted from Chromium's is named as such (the id the browser really used)", async () => {
+    const drifted = { ...ext, id: "a".repeat(32) };
+    const err = await new PlaywrightBrowserPort({ liveness: false }).open({ ...base, extensions: [drifted] }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ExtensionLoadError);
+    expect((err as Error).message).toContain(`loaded an extension under id ${ext.id}`);
+  }, 60_000);
+
   it("applies a storageState to the extension session's throwaway profile", async () => {
     const dir = await mkdtemp(join(tmpdir(), "jev-ext-state-"));
     try {

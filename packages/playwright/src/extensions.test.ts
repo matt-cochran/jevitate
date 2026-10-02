@@ -32,9 +32,20 @@ describe("readUnpackedExtension", () => {
 
   it("matches Chromium's id algorithm (sha256 of the path, first 32 hex digits mapped to a-p)", () => {
     // Observed from Chromium for an unpacked load of this exact path.
-    expect(extensionIdForPath("/tmp/claude-1000/-home-mc-working-jevitate/ec54f5c3-7a14-492d-8e0c-1b2230a99506/scratchpad/spike/ext")).toBe(
+    expect(extensionIdForPath("/tmp/claude-1000/-home-mc-working-jevitate/ec54f5c3-7a14-492d-8e0c-1b2230a99506/scratchpad/spike/ext", "linux")).toBe(
       "kppeopockgllidioapmbgnipplfeaffl",
     );
+  });
+
+  it("on Windows hashes the UTF-16LE path with the drive letter upper-cased (Chromium's GenerateIdForPath)", () => {
+    // sha256(UTF-16LE "C:\\foo") — the wchar_t bytes of the base::FilePath, not its UTF-8.
+    expect(extensionIdForPath("C:\\foo", "win32")).toBe("jcmdbpboelcpjmighalofidgocgojlkg");
+    expect(extensionIdForPath("c:\\foo", "win32")).toBe(extensionIdForPath("C:\\foo", "win32"));
+    // The same characters as UTF-8 (the POSIX rule) give a different id.
+    expect(extensionIdForPath("C:\\foo", "linux")).not.toBe(extensionIdForPath("C:\\foo", "win32"));
+    // The windows-latest runner's fixture path (UTF-8 would give cmobedim…, which Chromium refused);
+    // extensions-served.test.ts checks this id against the service worker Chromium actually started.
+    expect(extensionIdForPath("D:\\a\\jevitate\\jevitate\\packages\\playwright\\test-fixtures\\extension-mv3", "win32")).toBe("paghcaihebkgicenbhojoaokfecipcpd");
   });
 
   it("a manifest `key` pins the id independent of the directory", () => {
