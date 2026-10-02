@@ -36,7 +36,9 @@ describe.skipIf(!FULL_CHROMIUM)("unpacked extensions in real Chromium (headless,
         expect(session.extensions?.map((e) => e.id)).toEqual([ext.id]);
         await session.page.goto(`${extensionOrigin(ext.id)}/${page}`);
         await session.page.getByRole("button", { name: "I consent" }).click();
-        await expect.poll(() => session.page.getByRole("status").textContent()).toBe("consent given");
+        // The first chrome.storage write opens a fresh profile's extension store (LevelDB): over 1s on
+        // a cold Windows CI runner, so the default 1s poll window is a latency race, not a check.
+        await expect.poll(() => session.page.getByRole("status").textContent(), { timeout: 15_000 }).toBe("consent given");
         const stored = await session.page.evaluate(async () => (globalThis as unknown as { chrome: { storage: { local: { get(k: string): Promise<Record<string, unknown>> } } } }).chrome.storage.local.get("consent"));
         expect(stored).toEqual({ consent: "given" });
         // The page model the agent acts on includes the extension page's DOM.
