@@ -105,7 +105,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (61 exports)
+# @jevitate/domain (62 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEGRADED_FINDINGS: array
@@ -133,6 +133,7 @@
   ResultTargetSchema: object
   ResultUsageSchema: object
   SitePolicySchema: object
+  TimeSkippingClock: class
   UnsafeNameError: class
   assertInsideRoot: function
   assertSafeName: function

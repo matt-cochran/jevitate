@@ -163,7 +163,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (107 exports)
+# @jevitate/domain (109 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
@@ -267,6 +267,8 @@
   ThrottlePolicy: type-alias
   TimedStep: interface
   TimerHandle: type-alias
+  TimeSkippingClock: class
+  TimeSkippingOptions: interface
   TimingProfile: interface
   TypingModel: type-alias
   UnsafeNameError: class

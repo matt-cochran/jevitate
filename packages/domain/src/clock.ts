@@ -34,6 +34,10 @@ export interface ClockImpl {
 const realSetInterval = globalThis.setInterval.bind(globalThis);
 const realClearInterval = globalThis.clearInterval.bind(globalThis);
 const realSetImmediate = globalThis.setImmediate.bind(globalThis);
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
+const realDateNow = Date.now.bind(Date);
+const realPerfNow = globalThis.performance.now.bind(globalThis.performance);
 
 /**
  * The real platform clock: `Date.now`, `performance.now` and the global timers, looked up at CALL
@@ -287,5 +291,211 @@ export class FakeClock implements ClockImpl {
   async #yield(): Promise<void> {
     await Promise.resolve();
     for (let i = 0; i < this.#ioTurns; i++) await new Promise<void>((r) => realSetImmediate(r));
+  }
+}
+
+/** Options for {@link TimeSkippingClock}. */
+export interface TimeSkippingOptions {
+  /**
+   * Real ms with no clock call (nothing reading the time or scheduling) before an idle wait may be
+   * skipped. Default 25.
+   */
+  readonly idleMs?: number;
+  /**
+   * Extra veto, asked before every skip: false while real work the clock cannot see is in flight
+   * (a browser call awaiting its answer, a request on the wire). Default: always true.
+   */
+  readonly canSkip?: () => boolean;
+  /** Awaited before time jumps by `ms` (e.g. advance the pages' `page.clock` by the same amount). */
+  readonly onSkip?: (ms: number) => Promise<void> | void;
+  /** How often (real ms) the skipper looks for an idle wait. Default 5. */
+  readonly tickMs?: number;
+}
+
+interface SkipTimer {
+  at: number;
+  readonly fn: (...args: unknown[]) => void;
+  readonly args: unknown[];
+  readonly interval: number | null;
+  real: ReturnType<typeof realSetTimeout> | undefined;
+  refed: boolean;
+}
+
+/** A {@link TimeSkippingClock} handle: shaped like Node's `Timeout`; unref/ref reach the real timer. */
+class SkipTimeout {
+  constructor(
+    readonly id: number,
+    private readonly owner: TimeSkippingClock,
+  ) {}
+  ref(): this {
+    this.owner.refTimer(this.id, true);
+    return this;
+  }
+  unref(): this {
+    this.owner.refTimer(this.id, false);
+    return this;
+  }
+  hasRef(): boolean {
+    return this.owner.timerRefed(this.id);
+  }
+  refresh(): this {
+    return this;
+  }
+  close(): this {
+    this.owner.clearTimeout(this as unknown as TimerHandle);
+    return this;
+  }
+  [Symbol.toPrimitive](): number {
+    return this.id;
+  }
+}
+
+/**
+ * Real time that SKIPS idle waits — for tests that drive a real browser. Time flows exactly like the
+ * real clock (so real I/O, a real server and a real page all line up with it), but whenever the
+ * process is only waiting on this clock's timers — no clock call for `idleMs`, and `canSkip()` says
+ * no outside work is in flight — time jumps straight to the next timer. A 500 ms settle window, a
+ * 15 s hang threshold or a 60 s liveness bound then costs a few real milliseconds once nothing is
+ * happening, while anything that IS happening still runs in real time. `onSkip` lets the test move
+ * in-page time (`page.clock.runFor`) by the same jump, so page and Node clocks stay in step.
+ */
+export class TimeSkippingClock implements ClockImpl {
+  #offset = 0;
+  #nextId = 1;
+  #lastActivity = realPerfNow();
+  #skipping = false;
+  #skipped = 0;
+  #skips = 0;
+  readonly #timers = new Map<number, SkipTimer>();
+  readonly #idleMs: number;
+  readonly #canSkip: () => boolean;
+  readonly #onSkip: ((ms: number) => Promise<void> | void) | undefined;
+  #loop: ReturnType<typeof realSetInterval> | undefined;
+
+  constructor(opts: TimeSkippingOptions = {}) {
+    this.#idleMs = Math.max(0, opts.idleMs ?? 25);
+    this.#canSkip = opts.canSkip ?? (() => true);
+    this.#onSkip = opts.onSkip;
+    this.#loop = realSetInterval(() => void this.#maybeSkip(), Math.max(1, opts.tickMs ?? 5));
+    this.#loop.unref();
+  }
+
+  /** Total ms skipped so far, and how many jumps. */
+  get skipped(): { ms: number; jumps: number } {
+    return { ms: this.#skipped, jumps: this.#skips };
+  }
+
+  /** Stop skipping (time keeps flowing; pending timers still fire in real time). */
+  stop(): void {
+    if (this.#loop !== undefined) realClearInterval(this.#loop);
+    this.#loop = undefined;
+  }
+
+  now(): number {
+    this.#touch();
+    return realDateNow() + this.#offset;
+  }
+
+  monotonicMs(): number {
+    this.#touch();
+    return this.#mono();
+  }
+
+  setTimeout<A extends unknown[]>(fn: (...args: A) => void, ms?: number, ...args: A): TimerHandle {
+    return this.#schedule(fn as (...a: unknown[]) => void, ms, args, null);
+  }
+
+  setInterval<A extends unknown[]>(fn: (...args: A) => void, ms?: number, ...args: A): TimerHandle {
+    const every = Math.max(1, Math.floor(Number(ms ?? 0)) || 0);
+    return this.#schedule(fn as (...a: unknown[]) => void, every, args, every);
+  }
+
+  clearTimeout(handle: TimerHandle | string | number | undefined | null): void {
+    this.#touch();
+    if (handle === undefined || handle === null) return;
+    const id = Number(handle);
+    const t = this.#timers.get(id);
+    if (t?.real !== undefined) realClearTimeout(t.real);
+    this.#timers.delete(id);
+  }
+
+  clearInterval(handle: TimerHandle | string | number | undefined | null): void {
+    this.clearTimeout(handle);
+  }
+
+  /** @internal */
+  refTimer(id: number, refed: boolean): void {
+    const t = this.#timers.get(id);
+    if (t === undefined) return;
+    t.refed = refed;
+    if (refed) t.real?.ref();
+    else t.real?.unref();
+  }
+
+  /** @internal */
+  timerRefed(id: number): boolean {
+    return this.#timers.get(id)?.refed ?? false;
+  }
+
+  #mono(): number {
+    return realPerfNow() + this.#offset;
+  }
+
+  #touch(): void {
+    if (!this.#skipping) this.#lastActivity = realPerfNow();
+  }
+
+  #schedule(fn: (...a: unknown[]) => void, ms: number | undefined, args: unknown[], interval: number | null): TimerHandle {
+    this.#touch();
+    const id = this.#nextId++;
+    const delay = Math.max(0, Math.floor(Number(ms ?? 0)) || 0);
+    const t: SkipTimer = { at: this.#mono() + delay, fn, args, interval, real: undefined, refed: true };
+    this.#timers.set(id, t);
+    this.#arm(id, t);
+    return new SkipTimeout(id, this) as unknown as TimerHandle;
+  }
+
+  #arm(id: number, t: SkipTimer): void {
+    if (t.real !== undefined) realClearTimeout(t.real);
+    t.real = realSetTimeout(() => this.#fire(id), Math.max(0, t.at - this.#mono()));
+    if (!t.refed) t.real.unref();
+  }
+
+  #fire(id: number): void {
+    const t = this.#timers.get(id);
+    if (t === undefined) return;
+    if (t.at > this.#mono() + 0.5) {
+      this.#arm(id, t); // a real timer that woke early (rounding): wait out the rest
+      return;
+    }
+    if (t.interval === null) this.#timers.delete(id);
+    else {
+      t.at += t.interval;
+      this.#arm(id, t);
+    }
+    this.#lastActivity = realPerfNow();
+    t.fn(...t.args);
+  }
+
+  async #maybeSkip(): Promise<void> {
+    if (this.#skipping || this.#timers.size === 0) return;
+    if (realPerfNow() - this.#lastActivity < this.#idleMs) return;
+    let next: SkipTimer | undefined;
+    for (const t of this.#timers.values()) if (next === undefined || t.at < next.at) next = t;
+    if (next === undefined) return;
+    const jump = next.at - this.#mono();
+    if (jump <= 1) return;
+    if (!this.#canSkip()) return;
+    this.#skipping = true;
+    try {
+      await this.#onSkip?.(jump);
+      this.#offset += jump;
+      this.#skipped += jump;
+      this.#skips += 1;
+      for (const [id, t] of this.#timers) this.#arm(id, t);
+    } finally {
+      this.#skipping = false;
+      this.#lastActivity = realPerfNow();
+    }
   }
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { FakeClock, clock, installClock, realClock, resetClock, currentClock } from "./clock.js";
+import { FakeClock, TimeSkippingClock, clock, installClock, realClock, resetClock, currentClock } from "./clock.js";
 
 afterEach(() => resetClock());
 
@@ -123,5 +123,54 @@ describe("FakeClock", () => {
     expect(clock.now()).toBe(0);
     resetClock();
     expect(clock.now()).toBeGreaterThan(1_000_000);
+  });
+});
+
+describe("TimeSkippingClock", () => {
+  it("flows in real time but skips idle waits, in order", async () => {
+    const skipping = new TimeSkippingClock({ idleMs: 5 });
+    installClock(skipping);
+    const started = Date.now();
+    const t0 = clock.monotonicMs();
+    const log: number[] = [];
+    clock.setTimeout(() => log.push(2), 20_000);
+    clock.setTimeout(() => log.push(1), 10_000);
+    await clock.sleep(30_000);
+    expect(log).toEqual([1, 2]);
+    expect(clock.monotonicMs() - t0).toBeGreaterThanOrEqual(30_000);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(skipping.skipped.jumps).toBeGreaterThanOrEqual(3);
+    skipping.stop();
+  });
+
+  it("never skips while canSkip vetoes (outside work in flight); onSkip sees every jump", async () => {
+    let busy = true;
+    const jumps: number[] = [];
+    const skipping = new TimeSkippingClock({ idleMs: 1, canSkip: () => !busy, onSkip: (ms) => void jumps.push(ms) });
+    installClock(skipping);
+    let fired = false;
+    clock.setTimeout(() => (fired = true), 5_000);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fired).toBe(false);
+    busy = false;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fired).toBe(true);
+    expect(jumps.length).toBe(1);
+    expect(jumps[0]).toBeGreaterThan(4_000);
+    skipping.stop();
+  });
+
+  it("does not skip while the process keeps using the clock", async () => {
+    const skipping = new TimeSkippingClock({ idleMs: 30 });
+    installClock(skipping);
+    let fired = false;
+    clock.setTimeout(() => (fired = true), 5_000);
+    const until = Date.now() + 100;
+    while (Date.now() < until) {
+      clock.now();
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    expect(fired).toBe(false);
+    skipping.stop();
   });
 });
