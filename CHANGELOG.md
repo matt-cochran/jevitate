@@ -217,6 +217,10 @@ defect, a crash or a 15 s hang.
 
 ### Internal
 
+- #304: Node-side timing goes through one injectable clock (`clock` in `@jevitate/domain`, moved
+  there by the `scripts/codemods/inject-clock.mjs` codemod), guarded by `scripts/check-clock.mjs`
+  in `pnpm lint`. Tests use `FakeClock`, or `TimeSkippingClock` with `page.clock` in browser suites,
+  so idle waits no longer cost real time. A small `[realtime]` set keeps the real clock.
 - #232: the stateful exploration loops (`explore.ts`, `missions/adversarial.ts`,
   `missions/induction.ts`) are split into `goal-loop/`, `missions/adversarial-hunt/` and
   `missions/induction-frontier/` modules around explicit context objects; move-only.
