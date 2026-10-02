@@ -14,6 +14,7 @@ import type { RunContext } from "./context.js";
 import { EXPECTED_RETURN, savedAndLeft } from "./helpers.js";
 import { LAST_CHANCE_NOTE, MAX_MOVING_SCROLLS } from "./limits.js";
 import type { Flow, Perceived } from "./step.js";
+import { clock } from "@jevitate/domain";
 
 export async function checkProgress(ctx: RunContext, step: Perceived): Promise<Flow> {
   const { cfg } = ctx;
@@ -73,7 +74,7 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
       !ctx.ignoreNoProgress(hangRoute(snap.url))
     ) {
       const waited = ctx.now() - m.at;
-      if (waited < ctx.stallMs) await ctx.page.waitForTimeout(ctx.stallMs - waited);
+      if (waited < ctx.stallMs) await clock.sleep(ctx.stallMs - waited);
       const again = await perceive(ctx.page, ctx.perceiveOpts);
       ctx.timings.push(again.timing);
       const stuck =

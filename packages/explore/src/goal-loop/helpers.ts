@@ -58,7 +58,7 @@ export async function waitOutJob(
   for (;;) {
     const left = budgetMs - (clock.now() - started);
     if (left <= 0) return { cleared: false, waitedMs: clock.now() - started };
-    await page.waitForTimeout(Math.max(1, Math.min(delay, left))).catch(() => undefined);
+    await clock.sleep(Math.max(1, Math.min(delay, left))).catch(() => undefined);
     delay = Math.min(delay * 2, 15_000);
     if (safeUrl(page) !== url || !(await stillWorking(page))) {
       const rest = budgetMs - (clock.now() - started);

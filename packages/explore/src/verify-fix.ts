@@ -13,6 +13,7 @@ import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
 import { InvariantMonitor, type ObserverSessions } from "./declared-invariants.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * verifyFix — "is this defect fixed?", answered by REPLAY, not by opinion.
@@ -400,7 +401,7 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
     const failed = failedAt(stepResult);
     if (failed !== null) return failed;
     await settle();
-    await session.page.waitForTimeout(10);
+    await clock.sleep(10);
     // The original run already found the invariant applicable to this step: re-check exactly it.
     const checked = await monitor.after(session.actor, { ...stepAction(params.recording, index), url: actedOn, step: index }, { only: inv.id, force: true });
     const observed = checked.violations.map((v) => v.fingerprint);
@@ -474,7 +475,7 @@ async function runOneReplay(params: VerifyFixParams): Promise<SingleReplayAttemp
     await perceive(session.page, {
       ...(params.settleCeilingMs === undefined ? {} : { renderWaitMs: params.settleCeilingMs }),
     }).catch(() => undefined);
-    await session.page.waitForTimeout(10);
+    await clock.sleep(10);
     const observed = [...new Set(collector.drain().map(signalFingerprint))];
     const delta = rd === null ? undefined : deltaEvidence(rd, params.recordingStepIndex);
     const replay: VerifyFixResult["replay"] =

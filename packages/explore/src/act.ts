@@ -578,13 +578,13 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
             moved = true;
             break;
           }
-          await page.waitForTimeout(SCROLL_POLL_MS);
+          await clock.sleep(SCROLL_POLL_MS);
         } while (clock.now() < deadline);
       }
       return { ok: true, mutated: false, moved };
     }
     case "wait": {
-      await page.waitForTimeout(WAIT_MS);
+      await clock.sleep(WAIT_MS);
       return { ok: true, mutated: false };
     }
     case "reload":

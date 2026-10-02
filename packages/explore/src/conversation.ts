@@ -392,12 +392,12 @@ export async function waitForReply(
       }
       if (stillBusy !== null) lastActivity = clock.now();
       // Text-only streaming does not hold the settle wait open: pace the re-reads, never spin.
-      await page.waitForTimeout(Math.max(1, Math.min(pollMs, remaining()))).catch(() => undefined);
+      await clock.sleep(Math.max(1, Math.min(pollMs, remaining()))).catch(() => undefined);
       continue;
     }
     if (clock.now() - lastActivity >= idleMs) return result(false, "idle");
     const nap = Math.min(pollMs, remaining(), idleMs - (clock.now() - lastActivity));
-    await page.waitForTimeout(Math.max(1, nap)).catch(() => undefined);
+    await clock.sleep(Math.max(1, nap)).catch(() => undefined);
   }
 }
 

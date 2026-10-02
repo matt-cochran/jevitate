@@ -502,7 +502,7 @@ export class InvariantMonitor {
     const entries = Object.entries(this.#spec.capture ?? {}).filter(([name]) => !this.#captures.has(name));
     if (entries.length === 0) return;
     if (this.#pendingBodies.size > 0) {
-      await Promise.race([Promise.allSettled([...this.#pendingBodies]), page.waitForTimeout(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
+      await Promise.race([Promise.allSettled([...this.#pendingBodies]), clock.sleep(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
     }
     for (const [name, c] of entries) {
       if (this.#captures.has(name)) continue;
@@ -785,7 +785,7 @@ export class InvariantMonitor {
       const now = this.#opts.now ?? clock.now;
       const start = now();
       const poll = decl.settle.pollMs ?? DEFAULT_SETTLE_POLL_MS;
-      const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => p.waitForTimeout(ms));
+      const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => clock.sleep(ms));
       while (result === false && now() - start < decl.settle.withinMs) {
         await sleep(page, Math.min(poll, Math.max(0, decl.settle.withinMs - (now() - start))));
         after = await this.#snapshot(page, new Set(c.afterNames));
@@ -872,7 +872,7 @@ export class InvariantMonitor {
     if (names.size === 0) return { values, evidence };
     // A response that already arrived may still be having its body read: let it land (bounded).
     if (this.#pendingBodies.size > 0) {
-      await Promise.race([Promise.allSettled([...this.#pendingBodies]), page.waitForTimeout(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
+      await Promise.race([Promise.allSettled([...this.#pendingBodies]), clock.sleep(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
     }
     for (const name of names) {
       const o = this.#spec.observe?.[name];
