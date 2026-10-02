@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [0.3.0] – unreleased
+## [0.3.0] – 2026-10-02
 
 0.3.0 lets a mission start from inside a promoted Journey (`--from-journey`/`--at-step`, Journey
 anchors, `campaign run`), records what each action changed (`--action-deltas`), loads unpacked
