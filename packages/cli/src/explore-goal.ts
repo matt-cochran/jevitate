@@ -29,7 +29,7 @@ import { finishHostHealth } from "./host-health-run.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogEvidence, type ServerLogRuntimeResult, type ServerLogsSummary, type TranscriptEntryWithLogs } from "./log-correlation.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
 import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
-import { type ServerLogOptions, serverLogResult, serverLogRuntimeOptions, recordingEmulation, DRAFTS_ONLY, NO_FILER, draftContext, freshSessionOpener, currentUrlSafe, assertSaveStorageStateOutsideProject, persistStorageState, browserVersionOf, type MissionTarget, declaredResult } from "./explore-shared.js";
+import { triageOf, type ServerLogOptions, serverLogResult, serverLogRuntimeOptions, recordingEmulation, DRAFTS_ONLY, NO_FILER, draftContext, freshSessionOpener, currentUrlSafe, assertSaveStorageStateOutsideProject, persistStorageState, browserVersionOf, type MissionTarget, declaredResult } from "./explore-shared.js";
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -662,7 +662,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
     writeMissionResult(journal.recordingPath, result.missionOutcome, result.exitCode, result, runUsage);
-    return await withRunEvidence(result, evidenceOf(opts, secrets ?? []));
+    return await withRunEvidence(result, evidenceOf(opts, secrets ?? []), triageOf(opts, serverLogRun, secrets ?? []));
   } finally {
     disarmKillSwitch();
     health.stop();

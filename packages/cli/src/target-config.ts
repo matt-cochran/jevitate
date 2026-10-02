@@ -71,6 +71,12 @@ export interface TargetConfig {
   readonly secretFields?: readonly string[];
   /** Raw `logSources` entries declared legitimately quiet (mirrors `--log-quiet-ok`, #169). */
   readonly logQuietOk?: readonly string[];
+  /**
+   * #313: the operator's opt-in (mirrors `--log-triage`) for missions on this origin that are not
+   * given a command line — queued (MCP `queue_exploration`) and suite runs: record the signal
+   * timeline and attach only each defect's related lines, Jev-scored on a live run.
+   */
+  readonly logTriage?: boolean;
   /** Raw `--log-ignore` specs (a `/regex/` or a plain substring), evaluated the same way as the CLI
    *  flag (#169 item 3). */
   readonly logIgnore?: readonly string[];
@@ -123,6 +129,7 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     saveStorageState?: true | string;
     secretFields?: string[];
     logQuietOk?: string[];
+    logTriage?: boolean;
     logIgnore?: string[];
     logScope?: string[];
     logCorrelationHeaders?: string[];
@@ -183,6 +190,10 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   if (o.logSources !== undefined) out.logSources = strings(o.logSources, `${where}.logSources`);
   if (o.logDefect !== undefined) out.logDefect = strings(o.logDefect, `${where}.logDefect`);
   if (o.logQuietOk !== undefined) out.logQuietOk = strings(o.logQuietOk, `${where}.logQuietOk`);
+  if (o.logTriage !== undefined) {
+    if (typeof o.logTriage !== "boolean") throw new TargetConfigError(`${where}.logTriage must be true or false`);
+    out.logTriage = o.logTriage;
+  }
   if (o.logIgnore !== undefined) out.logIgnore = strings(o.logIgnore, `${where}.logIgnore`);
   if (o.logScope !== undefined) out.logScope = strings(o.logScope, `${where}.logScope`);
   if (o.logCorrelationHeaders !== undefined) out.logCorrelationHeaders = strings(o.logCorrelationHeaders, `${where}.logCorrelationHeaders`);
@@ -327,6 +338,7 @@ export function resolveTargetConfig(
     ...(base.saveStorageState === undefined ? {} : { saveStorageState: base.saveStorageState }),
     ...(base.secretFields === undefined ? {} : { secretFields: base.secretFields }),
     ...(base.logQuietOk === undefined ? {} : { logQuietOk: base.logQuietOk }),
+    ...(base.logTriage === undefined ? {} : { logTriage: base.logTriage }),
     ...(base.logIgnore === undefined ? {} : { logIgnore: base.logIgnore }),
     ...(base.logScope === undefined ? {} : { logScope: base.logScope }),
     ...(base.logCorrelationHeaders === undefined ? {} : { logCorrelationHeaders: base.logCorrelationHeaders }),

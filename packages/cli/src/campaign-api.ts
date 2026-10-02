@@ -106,6 +106,8 @@ export interface ValidateCampaignOptions {
   readonly journeysDir: string;
   /** `--allow-shell-hooks`: the spec's before/after hooks may run. */
   readonly allowShellHooks?: boolean;
+  /** `--hook-timeout-ms`: each before/after hook's timeout (#311: was dropped, so hooks always got the default). */
+  readonly hookTimeoutMs?: number;
   /** #247 seams (`environments.json`, `targets.json`). */
   readonly environmentSeams?: { readonly environmentsFile?: string; readonly targetsFile?: string };
 }
@@ -239,6 +241,7 @@ export async function validateCampaignSpec(raw: unknown, specPath: string, opts:
             ...(spec.before === undefined ? {} : { before: spec.before }),
             ...(spec.after === undefined ? {} : { after: spec.after }),
             allowShellHooks: opts.allowShellHooks === true,
+            ...(opts.hookTimeoutMs === undefined ? {} : { hookTimeoutMs: String(opts.hookTimeoutMs) }),
           },
           {
             allowlist: environment === undefined ? [new URL(full.recording.site).origin] : environment.allowedOrigins,

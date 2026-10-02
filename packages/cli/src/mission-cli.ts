@@ -251,6 +251,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         realQueuedMissionExecutor({
           outDir: o.out ?? logsDirFor(),
           gateways: () => buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }),
+          liveJudgment: o.real === true,
           ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
           ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),
           targets: targetConfigs,

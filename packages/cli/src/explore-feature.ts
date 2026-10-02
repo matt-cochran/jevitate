@@ -39,7 +39,7 @@ import {
   type ServerLogDefect,
   type ServerLogsSummary,
 } from "./log-correlation.js";
-import {
+import { triageOf,
   type ServerLogOptions,
   serverLogResult,
   freshSessionOpener,
@@ -360,7 +360,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       usage: NO_MODEL_USAGE,
       ...host.fields,
     };
-    return await withRunEvidence({ ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) }, evidenceOf(opts, []));
+    return await withRunEvidence({ ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) }, evidenceOf(opts, []), triageOf(opts, serverLogRun, []));
   } finally {
     disarmKillSwitch();
     health.stop();

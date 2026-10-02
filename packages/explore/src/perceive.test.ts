@@ -38,6 +38,10 @@ const PAGES: Record<string, string> = {
   "/descendant": `<!doctype html><html><body>
     <button type="button" id="labelled" onclick="this.dataset.clicked='yes'"><span style="padding:8px">Inner label</span></button>
   </body></html>`,
+  // #310: a code-split route — an empty shell with nothing pending, then (chunk parsed) the control.
+  "/lazy": `<!doctype html><html><body><div id="root"></div><script>
+    setTimeout(() => { const b = document.createElement("button"); b.textContent = "Lazy tab content"; document.getElementById("root").appendChild(b); }, 1500);
+  </script></body></html>`,
   "/pending": `<!doctype html><html><body><p>Loading…</p><script>fetch("/never").catch(() => undefined);</script></body></html>`,
   "/churn": `<!doctype html><html><body><button type="button">Go</button><ul></ul><script>
     let n = 0; const t = setInterval(() => { const li = document.createElement("li"); li.textContent = String(n); document.querySelector("ul").appendChild(li); if (++n === 12) clearInterval(t); }, 100);
@@ -87,7 +91,34 @@ describe("perceive — bounded render wait", () => {
     );
   });
 
-  it("judges a control-free page BLANK by the settled signal — in about the quiet window, not the ceiling", async () => {
+  it("#310: a lazily loaded route that settles on an empty shell is given a grace for its control, not judged blank", async () => {
+    await withSession(
+      "perceive-lazy-",
+      async (session) => {
+        await monitorFor(session.page).instrument();
+        await session.page.goto(`${origin}/lazy`, { waitUntil: "domcontentloaded" });
+        const p = await perceive(session.page);
+        expect(p.rendered).toBe(true);
+        expect(p.snapshot.controls.map((c) => c.name)).toEqual(["Lazy tab content"]);
+      },
+      origin,
+    );
+  });
+
+  it("#310: with the grace disabled the same empty shell is judged blank (the old behaviour)", async () => {
+    await withSession(
+      "perceive-lazy-nograce-",
+      async (session) => {
+        await monitorFor(session.page).instrument();
+        await session.page.goto(`${origin}/lazy`, { waitUntil: "domcontentloaded" });
+        const p = await perceive(session.page, { emptySettleGraceMs: 0 });
+        expect(p.rendered).toBe(false);
+      },
+      origin,
+    );
+  });
+
+  it("judges a control-free page BLANK by the settled signal — in the quiet window plus the empty-settle grace, not the ceiling", async () => {
     await withSession(
       "perceive-blank-",
       async (session) => {

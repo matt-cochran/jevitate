@@ -43,6 +43,9 @@ import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outc
  *  - `defects[].evidence` — #250, additive (schemaVersion 1): an `--evidence-video` run's per-defect
  *    captioned repro clip (`videoPath`) and key screenshots (`screenshots`: before and at the failing
  *    step), or why it has none (`skipped`).
+ *  - `defects[].relatedLogs` / `signals` — #313, additive (schemaVersion 1): with `--log-triage`, the
+ *    lines kept for each defect (`keptBy` request-id / jev / window, a Jev `score`) and the run's
+ *    timeline summary (`path` to `<run>.signals.jsonl`, `entries`, `truncated`, `triage` counts).
  *  - `branch` — #293, additive (schemaVersion 1): a journey-anchored run's branch point — the
  *    promoted Journey whose prefix was replayed in the run's own browser context (`journeyId`), how
  *    many of its top-level steps ran (`step`, 1-based) and the anchor that named them (`anchor`).
