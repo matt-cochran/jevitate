@@ -3,7 +3,7 @@ import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { assertNoSecretInPayload, redactText, redactUrl } from "@jevitate/ai-core";
-import { fileDraft, fingerprintMarker, targetsFor, type FilingConfig, type FilingOutcome, type IssueDraft, type IssueFilerPort } from "@jevitate/domain";
+import { fileDraft, fingerprintMarker, targetsFor, type FilingConfig, type FilingOutcome, type IssueDraft, type IssueFilerPort, clock } from "@jevitate/domain";
 import {
   DemoOverlay,
   PageSignalCollector,
@@ -97,7 +97,7 @@ export interface EvidenceReplayInput {
   readonly finalCard?: (reproduced: boolean | undefined) => { readonly text: string; readonly ok: boolean };
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => clock.sleep(ms);
 
 function oneLine(s: string): string {
   return s.replace(/\s+/g, " ").trim();
@@ -301,7 +301,7 @@ export async function replayWithEvidence(input: EvidenceReplayInput): Promise<De
   };
   let replay: DefectEvidence["replay"];
   try {
-    collector = new PageSignalCollector(page, Date.now, input.allowlist);
+    collector = new PageSignalCollector(page, clock.now, input.allowlist);
     await monitorFor(page).instrument();
     const actor = CastActor.named("evidence").whoCan(new BrowseTheWeb(session, [...input.allowlist]));
     const r = await new RecordingInterpreter({ observer }).runToCheckpoint(actor, observeAfterStep(input.recording, idx), idx);

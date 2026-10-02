@@ -31,6 +31,7 @@ import {
   GatewaySelectionError,
   buildExploreGateways,
 } from "./cli-shared.js";
+import { clock } from "@jevitate/domain";
 
 /** Registers `jevitate mission`: `target add|update|list|promote`, `run` (drains the mission queue), `queue` and `result` (#254). */
 export function registerMissionCommands(program: Command, deps: CliDeps): void {
@@ -282,7 +283,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         for (;;) {
           const report = await drainOnce();
           if (report.ran.length > 0) emit(report);
-          await new Promise((resolve) => setTimeout(resolve, intervalMs));
+          await clock.sleep(intervalMs);
         }
       } catch (err) {
         emitJson(program, fail("E_MISSION_RUN", String(err instanceof Error ? err.message : err)));

@@ -6,6 +6,7 @@ import { DEMO_OVERLAY_HIDE_STYLE } from "@jevitate/explore";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
 import type { BrowserPort } from "@jevitate/playwright";
+import { clock } from "@jevitate/domain";
 
 /**
  * #248 — the ONE place a demo screenshot is taken. The overlay is always hidden (Playwright's
@@ -417,11 +418,11 @@ async function within<T>(p: Promise<T>, what: string): Promise<T> {
     return await Promise.race([
       p,
       new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new MaskUnavailableError(`${what} timed out after ${MASK_CALL_MS}ms`)), MASK_CALL_MS);
+        timer = clock.setTimeout(() => reject(new MaskUnavailableError(`${what} timed out after ${MASK_CALL_MS}ms`)), MASK_CALL_MS);
       }),
     ]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
   }
 }
 

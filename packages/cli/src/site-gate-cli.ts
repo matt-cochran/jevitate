@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { Recording } from "@jevitate/recording";
 import type { Ability } from "@jevitate/screenplay";
 import { SiteGateRefusedError, enterSiteGate, throttleClassOf, type SiteGateDeps } from "@jevitate/runtime";
+import { clock as sysClock } from "@jevitate/domain";
 
 /**
  * The site-policy gate's repositories (`jevitate site policy set`), opened from the policy database
@@ -15,7 +16,7 @@ export async function withSiteGate<T>(dbPath: string | undefined, fn: (deps: Sit
   const db = openDatabase(dbPath);
   try {
     await migrateToLatest(db);
-    const clock = { nowIso: () => new Date().toISOString(), monotonicMs: () => Date.now() };
+    const clock = { nowIso: () => sysClock.nowIso(), monotonicMs: () => sysClock.now() };
     return await fn({
       policies: new SqliteSitePolicyRepository(db, clock),
       budgets: new SqliteBudgetRepository(db),

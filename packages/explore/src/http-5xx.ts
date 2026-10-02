@@ -3,6 +3,7 @@ import { redactUrl } from "@jevitate/ai-core";
 import type { DefectSignal } from "./adversarial/defect-oracle.js";
 import { defectTitle, normalizeRoute, signalFingerprint } from "./adversarial/defect-fingerprint.js";
 import { FirstPartyOrigins } from "./third-party.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The HTTP 5xx HARD SIGNAL, shared by every strategy (#208). One place decides "this response is an
@@ -99,7 +100,7 @@ export class Http5xxOracle {
   readonly #steps: Array<{ readonly step: number; readonly at: number }> = [];
 
   constructor(page: Page, opts: { readonly allowlist: readonly string[]; readonly now?: () => number }) {
-    this.#now = opts.now ?? Date.now;
+    this.#now = opts.now ?? clock.now;
     this.#firstParty = new FirstPartyOrigins(opts.allowlist);
     page.on("request", (r: Request) => {
       this.#started.set(r, this.#now());

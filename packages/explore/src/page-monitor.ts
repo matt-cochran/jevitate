@@ -2,6 +2,7 @@ import { redactUrl } from "@jevitate/ai-core";
 import type { Page, Request } from "playwright";
 import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
 import { visibleBusyIndicator } from "./hang.js";
+import { clock } from "@jevitate/domain";
 
 /** The interactive-control selector (kept in step with `snapshot`). */
 const INTERACTIVE_SELECTOR =
@@ -360,7 +361,7 @@ export class PageMonitor {
   #instrumented: Promise<void> | undefined;
   readonly #captures = new Set<RequestCapture>();
 
-  constructor(page: Page, now: () => number = Date.now) {
+  constructor(page: Page, now: () => number = clock.now) {
     this.#page = page;
     this.#now = now;
     this.#lastNetworkActivity = now();
@@ -551,7 +552,7 @@ export class PageMonitor {
   async #interactive(boundMs: number): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), Math.max(1, boundMs));
+      timer = clock.setTimeout(() => resolve(false), Math.max(1, boundMs));
     });
     const probe = (async (): Promise<boolean> => {
       const controls = await this.#page.evaluate(hasEnabledControl, INTERACTIVE_SELECTOR);
@@ -561,7 +562,7 @@ export class PageMonitor {
     try {
       return await Promise.race([probe, bound]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
     }
   }
 
@@ -573,7 +574,7 @@ export class PageMonitor {
   async transientsSince(sinceMs: number, boundMs = 1_000): Promise<TransientNote[]> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<TransientNote[]>((resolve) => {
-      timer = setTimeout(() => resolve([]), Math.max(1, boundMs));
+      timer = clock.setTimeout(() => resolve([]), Math.max(1, boundMs));
     });
     try {
       return await Promise.race([
@@ -586,7 +587,7 @@ export class PageMonitor {
         bound,
       ]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
     }
   }
 
@@ -636,11 +637,11 @@ export class PageMonitor {
       const finish = (): void => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        clock.clearTimeout(timer);
         this.#wakers.delete(finish);
         resolve();
       };
-      const timer = setTimeout(finish, Math.max(0, ms));
+      const timer = clock.setTimeout(finish, Math.max(0, ms));
       this.#wakers.add(finish);
     });
   }
@@ -652,7 +653,7 @@ export class PageMonitor {
   async #lastMutation(boundMs: number): Promise<{ lastMutation: number; deferredUntil: number } | null> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), Math.max(1, boundMs));
+      timer = clock.setTimeout(() => resolve(null), Math.max(1, boundMs));
     });
     try {
       return await Promise.race([
@@ -668,7 +669,7 @@ export class PageMonitor {
         bound,
       ]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
     }
   }
 

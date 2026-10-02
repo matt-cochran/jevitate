@@ -7,7 +7,7 @@ import { dirname, resolve as resolvePath } from "node:path";
 import { userInfo } from "node:os";
 import { Command, InvalidArgumentError } from "commander";
 import type { ProfileManager } from "@jevitate/daemon";
-import { type PlannedStep } from "@jevitate/domain";
+import { type PlannedStep, clock } from "@jevitate/domain";
 import { openDatabase, migrateToLatest, SqliteSitePolicyRepository } from "@jevitate/storage-sqlite";
 import {
   envCredentialStore,
@@ -449,8 +449,8 @@ export function collectParam(value: string, previous: Record<string, string>): R
 
 export function makeClock() {
   return {
-    nowIso: () => new Date().toISOString(),
-    monotonicMs: () => Date.now(),
+    nowIso: () => clock.nowIso(),
+    monotonicMs: () => clock.now(),
   };
 }
 

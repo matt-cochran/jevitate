@@ -1,6 +1,7 @@
 import { HostHealthSampler, degradedEnvironmentOutcome } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary, MissionFailure } from "@jevitate/domain";
 import { sharedResourceGovernor, type ResourceGovernor } from "@jevitate/playwright";
+import { clock } from "@jevitate/domain";
 
 /** When each run's sampler started (#205: the window the governor's summary covers). */
 const runStarts = new WeakMap<HostHealthSampler, number>();
@@ -13,7 +14,7 @@ const runStarts = new WeakMap<HostHealthSampler, number>();
  */
 export async function startHostHealth(injected?: HostHealthSampler): Promise<HostHealthSampler> {
   const health = (injected ?? new HostHealthSampler()).start();
-  runStarts.set(health, Date.now());
+  runStarts.set(health, clock.now());
   await health.sample();
   return health;
 }

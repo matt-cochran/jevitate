@@ -76,6 +76,7 @@ import {
 } from "./helpers.js";
 
 import type { ExploreConfig, ExploreRun } from "../explore.js";
+import { clock } from "@jevitate/domain";
 
 /** The goal loop's run state (#232): every closure variable of `explore()`, one field each, names unchanged. */
 export interface RunContext {
@@ -406,7 +407,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
     pageUrl: ctx.page.url(),
     authorized: (u: string) => isAuthorizedExploreTarget(u, cfg.allowlist),
   });
-  ctx.now = (): number => Date.now();
+  ctx.now = (): number => clock.now();
 
   ctx.transcript = new TranscriptLog(ctx.secrets, cfg.onTranscriptEntry);
   ctx.history = [];

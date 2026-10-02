@@ -12,6 +12,7 @@ import { hostProbe, type HostProbe } from "./host-pressure.js";
 import type { HostHealthSampler } from "./host-health.js";
 import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 import { assertTargetAnswering, type targetStoppedAnswering } from "./mission-failure.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Reproducing a hang (owner ruling 7): when a hang is detected, the steps that led to it are
@@ -258,7 +259,7 @@ function firstLine(e: unknown): string {
   return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
 }
 
-const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const realSleep = (ms: number): Promise<void> => clock.sleep(ms);
 
 /** One attempt: fresh session → replay → re-detect. Never throws. */
 export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangAttempt> {
@@ -290,10 +291,10 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
     const outcome = await Promise.race([
       replayP.then((r) => ({ kind: "done" as const, r })),
       new Promise<{ kind: "hung" }>((resolve) => {
-        timer = setTimeout(() => resolve({ kind: "hung" }), bound);
+        timer = clock.setTimeout(() => resolve({ kind: "hung" }), bound);
       }),
     ]).finally(() => {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
     });
     if (outcome.kind === "done" && outcome.r.outcome !== "completed") {
       const why =

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { clock } from "@jevitate/domain";
 
 /**
  * Session-derived request auth for code-issued HTTP calls (mission fixtures, #140/#144) — the
@@ -134,7 +135,7 @@ export function authHeaders(auth: RequestAuth, url: string, sources: AuthSources
   }
   const state = readStorageState(statePath);
   if (auth.from === "cookies") {
-    const nowSec = Date.now() / 1000;
+    const nowSec = clock.now() / 1000;
     const jar = state.cookies.filter((c) => cookieMatches(c, target, nowSec));
     if (jar.length === 0) throw new FixtureAuthError(`${whose(auth)} has no cookie for ${target.origin}`);
     return { cookie: jar.map((c) => `${c.name}=${c.value}`).join("; ") };

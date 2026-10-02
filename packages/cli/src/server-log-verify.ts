@@ -3,6 +3,7 @@ import type { Recording } from "@jevitate/recording";
 import { perceive, verifyReplayVerdict, type VerifyFixResult, type VerifyFixVerdict, type VerifySession } from "@jevitate/explore";
 import { closeLogSources, openLogSources, parseLogSourceSpecs, type LogSourceSpec } from "./log-sources.js";
 import { matchesLogDefect, matchesLogIgnore, normalizeLogMessage, parseLogDefectSpec, parseLogIgnoreSpec, parseLogLine, type LogLine } from "./log-lines.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * `verify-fix` for a `server-log` defect (#142): NOT a re-check of `@jevitate/explore`'s
@@ -47,7 +48,7 @@ function firstLine(e: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
+    const t = clock.setTimeout(resolve, ms);
     t.unref?.();
   });
 }

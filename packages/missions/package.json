@@ -12,6 +12,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "@jevitate/domain": "workspace:*",
     "@jevitate/recording": "workspace:*",
     "zod": "^4.6.5"
   }

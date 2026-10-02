@@ -228,12 +228,18 @@ importers:
 
   packages/inbox:
     dependencies:
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
       zod:
         specifier: ^4.6.5
         version: 4.6.5
 
   packages/interpreter:
     dependencies:
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
@@ -304,6 +310,9 @@ importers:
 
   packages/missions:
     dependencies:
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
@@ -313,6 +322,9 @@ importers:
 
   packages/playwright:
     dependencies:
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
       playwright:
         specifier: ^1.49.0
         version: 1.63.0
@@ -322,6 +334,9 @@ importers:
       '@jevitate/ai-core':
         specifier: workspace:*
         version: link:../ai-core
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter
@@ -354,6 +369,9 @@ importers:
 
   packages/regression:
     dependencies:
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter

@@ -9,6 +9,7 @@ import type { Control } from "./snapshot.js";
 import { occluderOf, srOnlyLabelOf } from "./occlusion.js";
 import { monitorFor } from "./page-monitor.js";
 import { isSubmitControl } from "./conversation.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * act: execute one decided op against the live page, GATED.
@@ -570,7 +571,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       // scroll position until it settles to a new value, or give up after SCROLL_SETTLE_MS.
       let moved = false;
       if (before !== null) {
-        const deadline = Date.now() + SCROLL_SETTLE_MS;
+        const deadline = clock.now() + SCROLL_SETTLE_MS;
         do {
           const after: number = await page.evaluate(scrollPositionAt, pt).catch(() => before);
           if (after !== before) {
@@ -578,7 +579,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
             break;
           }
           await page.waitForTimeout(SCROLL_POLL_MS);
-        } while (Date.now() < deadline);
+        } while (clock.now() < deadline);
       }
       return { ok: true, mutated: false, moved };
     }

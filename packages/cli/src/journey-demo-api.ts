@@ -22,6 +22,7 @@ import type { TargetDescriptor } from "@jevitate/recording";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { captureStepScreenshot, SecretPixelMask, type CaptureLayer } from "./demo-capture.js";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { clock as sysClock } from "@jevitate/domain";
 
 /**
  * #248 — `jevitate journey demo <id>`: replay a Journey as a narrated demo. The overlay (#245) shows
@@ -185,7 +186,7 @@ function targetOf(s: FlatJourneyStep): TargetDescriptor | null {
   return step.target ?? null;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => sysClock.sleep(ms);
 
 /** The title card is on screen at least this long (ms), whatever `--pace` is. */
 export const TITLE_CARD_MIN_MS = 1200;
@@ -197,9 +198,9 @@ export const FIRST_FRAME_WAIT_MS = 5_000;
  * about:blank, whose document the browser may replace right after it opens (wiping the card).
  */
 async function holdCard(overlay: DemoOverlay, page: Page, ms: number): Promise<void> {
-  const until = Date.now() + ms;
+  const until = sysClock.now() + ms;
   for (;;) {
-    const left = until - Date.now();
+    const left = until - sysClock.now();
     if (left <= 0) return;
     await sleep(Math.min(250, left));
     await overlay.refresh(page);
@@ -219,7 +220,7 @@ class VideoClock {
   #first: Promise<void> = Promise.resolve();
 
   opened(page: Page, video: boolean): void {
-    this.#openedAt = Date.now();
+    this.#openedAt = sysClock.now();
     const screencast = (page as Partial<Pick<Page, "screencast">>).screencast;
     if (!video || screencast === undefined) return;
     let seen: () => void = () => undefined;
@@ -237,15 +238,15 @@ class VideoClock {
       .start({
         onFrame: ({ timestamp }) => {
           if (this.#firstFrameAt === undefined) {
-            this.#firstFrameAt = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now();
+            this.#firstFrameAt = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : sysClock.now();
             seen();
             // Off the frame callback: stopping from inside it would wait on this very frame's ack.
-            setTimeout(stop, 0);
+            sysClock.setTimeout(stop, 0);
           }
         },
       })
       .catch(() => seen());
-    setTimeout(() => {
+    sysClock.setTimeout(() => {
       seen();
       stop();
     }, FIRST_FRAME_WAIT_MS).unref();
@@ -269,7 +270,7 @@ class VideoClock {
   /** ms on the video's timeline: from its first frame, else from when the page opened. */
   since(): number {
     const start = this.#firstFrameAt ?? this.#openedAt;
-    return start === undefined ? 0 : Math.max(0, Date.now() - start);
+    return start === undefined ? 0 : Math.max(0, sysClock.now() - start);
   }
 }
 

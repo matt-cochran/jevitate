@@ -1,4 +1,6 @@
 /** Default bound (ms) on the time between two completed steps of a frontier mission (#114). */
+import { clock } from "@jevitate/domain";
+
 export const DEFAULT_STALL_TIMEOUT_MS = 120_000;
 
 /** Thrown by `StallWatchdog.guard` once the watchdog fired: the run ends with `reason`. */
@@ -56,7 +58,7 @@ export class StallWatchdog {
 
   /** Pauses the countdown during a phase that is bounded on its own; the next `kick` re-arms it. */
   suspend(): void {
-    clearTimeout(this.timer);
+    clock.clearTimeout(this.timer);
   }
 
   /** Names what the run is doing now, without restarting the countdown. */
@@ -66,12 +68,12 @@ export class StallWatchdog {
 
   stop(): void {
     this.stopped = true;
-    clearTimeout(this.timer);
+    clock.clearTimeout(this.timer);
   }
 
   private arm(): void {
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
+    clock.clearTimeout(this.timer);
+    this.timer = clock.setTimeout(() => {
       if (this.stopped) return;
       this.stopped = true;
       this.resolveStalled(`no step completed within ${seconds(this.timeoutMs)}s (while ${this.phase})`);

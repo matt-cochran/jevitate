@@ -4,6 +4,7 @@ import { measureOwnBrowserMemory, type BrowserMemoryReading, type MemoryMetric }
 import { MachineBrowserSlots, type MachineSlotLease } from "./machine-slots.js";
 import type { MemMetric, ResourceSignals } from "./resource-signals.js";
 import { createResourceSignals } from "./select-resource-signals.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Resource governance for shared machines (#205). jevitate often runs next to builds, test suites,
@@ -304,7 +305,7 @@ export class ResourceGovernor {
     this.#sampleHost = opts.sampleHost ?? systemHostSample(createResourceSignals());
     this.#measureMemory = opts.measureMemory;
     this.#thresholds = opts.thresholds ?? DEFAULT_THROTTLE_THRESHOLDS;
-    this.#now = opts.now ?? Date.now;
+    this.#now = opts.now ?? clock.now;
     this.#intervalMs = opts.intervalMs ?? 2_000;
     this.#decisionTtlMs = opts.decisionTtlMs ?? 2_000;
     this.#admissionTimeoutMs = opts.admissionTimeoutMs ?? admissionTimeoutFromEnv(process.env);
@@ -409,13 +410,13 @@ export class ResourceGovernor {
   #startTicker(): void {
     if (this.#timer !== undefined) return;
     if (this.#watched.size === 0 && !(this.config.enabled && this.#open > 0)) return;
-    this.#timer = setInterval(() => void this.tick(), this.#intervalMs);
+    this.#timer = clock.setInterval(() => void this.tick(), this.#intervalMs);
     this.#timer.unref();
   }
 
   #stopTicker(): void {
     if (this.#timer === undefined || this.#watched.size > 0 || (this.config.enabled && this.#open > 0)) return;
-    clearInterval(this.#timer);
+    clock.clearInterval(this.#timer);
     this.#timer = undefined;
   }
 
@@ -482,7 +483,7 @@ export class ResourceGovernor {
       const read = page
         .evaluate(() => (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? -1)
         .catch(() => -1);
-      const timeout = new Promise<number>((resolve) => setTimeout(() => resolve(-1), 1_000).unref());
+      const timeout = new Promise<number>((resolve) => clock.setTimeout(() => resolve(-1), 1_000).unref());
       return Promise.race([read, timeout]);
     };
     const heaps = await Promise.all(candidates.map(([p]) => heapOf(p)));

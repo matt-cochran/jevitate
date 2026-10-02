@@ -91,6 +91,7 @@ import type {
   NeverResponseHit,
   ObserverSessions,
 } from "./declared-invariants/types.js";
+import { clock } from "@jevitate/domain";
 
 export * from "./declared-invariants/types.js";
 export * from "./declared-invariants/numbers.js";
@@ -781,7 +782,7 @@ export class InvariantMonitor {
     if (result === false && decl.settle !== undefined) {
       // Eventual consistency: re-check until it holds or the window closes. Only the observables this
       // invariant reads are re-read.
-      const now = this.#opts.now ?? Date.now;
+      const now = this.#opts.now ?? clock.now;
       const start = now();
       const poll = decl.settle.pollMs ?? DEFAULT_SETTLE_POLL_MS;
       const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => p.waitForTimeout(ms));
@@ -841,9 +842,9 @@ export class InvariantMonitor {
   async flushResponses(): Promise<AfterResult> {
     const violations: InvariantViolation[] = [];
     const held: string[] = [];
-    const deadline = Date.now() + FLUSH_WAIT_MS;
-    while (this.#responseInFlight.size > 0 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, FLUSH_POLL_MS));
+    const deadline = clock.now() + FLUSH_WAIT_MS;
+    while (this.#responseInFlight.size > 0 && clock.now() < deadline) {
+      await clock.sleep(FLUSH_POLL_MS);
     }
     const pageUrl = this.#lastPage === null ? "" : safeUrl(this.#lastPage);
     for (const n of this.#responseNevers) {

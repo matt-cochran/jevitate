@@ -9,6 +9,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
+    "@jevitate/domain": "workspace:*",
     "@jevitate/recording": "workspace:*",
     "@jevitate/screenplay": "workspace:*"
   },

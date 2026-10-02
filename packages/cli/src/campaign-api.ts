@@ -18,7 +18,7 @@ import {
   sweepStops,
   type JourneyBranchPoint,
 } from "@jevitate/journey";
-import { assertSafeName, combineOutcomes, MISSION_OUTCOMES, type MissionOutcome } from "@jevitate/domain";
+import { assertSafeName, combineOutcomes, MISSION_OUTCOMES, type MissionOutcome, clock } from "@jevitate/domain";
 import type { ConsolidatedDefect } from "@jevitate/findings";
 import { applyJourneyEnvironment, environmentFromFlags, isEnvironmentError, type ResolvedJourneyEnvironment } from "./environments.js";
 import { prefixParams } from "./journey-api.js";
@@ -394,7 +394,7 @@ function commonArgs(plan: CampaignPlan, job: CampaignJobPlan): string[] {
 
 /** Runs a validated campaign: discovery, then every anchored mission in order with state restore, then one report. */
 export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions): Promise<CampaignResult> {
-  const now = opts.nowIso ?? (() => new Date().toISOString());
+  const now = opts.nowIso ?? (() => clock.nowIso());
   const startedAt = now();
   const outDir = opts.outDir ?? join(logsDirFor(startedAt), `campaign-${artifactStamp(startedAt)}`);
   await mkdir(outDir, { recursive: true });

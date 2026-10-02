@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { computeDescriptor, isSecretField } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
-import { contentHash } from "@jevitate/domain";
+import { contentHash, clock } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
 import { redactControl, redactUrl } from "./redact.js";
@@ -649,11 +649,11 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
   let pastCap = 0;
   // #278: wall-clock bound on reading controls. Past it (as past the count cap) only the bounded
   // #287 goal-named rescue is still read, so perception stays well inside the stall watchdog.
-  const deadline = Date.now() + (opts?.budgetMs ?? SNAPSHOT_BUDGET_MS);
+  const deadline = clock.now() + (opts?.budgetMs ?? SNAPSHOT_BUDGET_MS);
 
   for (const [i, handle] of handles.entries()) {
     try {
-      if (controls.length >= maxCandidates || evaluated >= maxEvaluated || Date.now() > deadline) {
+      if (controls.length >= maxCandidates || evaluated >= maxEvaluated || clock.now() > deadline) {
         truncated = true;
         const name = cheapNames !== null && cheapNames.length === handles.length ? cheapNames[i] : undefined;
         if (pastCap >= MENTIONED_PAST_CAP || name === undefined || name === "" || mentioned?.(name) !== true) continue;

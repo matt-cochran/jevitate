@@ -7,6 +7,7 @@ import {
   type MissionTarget,
   type MissionTargetStore,
 } from "@jevitate/missions";
+import { clock } from "@jevitate/domain";
 
 /**
  * Distinct from `@jevitate/missions`' generic promote error so the CLI can map
@@ -126,7 +127,7 @@ function applyAuth(target: MissionTarget, auth: MissionTargetAuthInput | undefin
 export async function addMissionTarget(
   ctx: MissionTargetContext,
   input: AddMissionTargetInput,
-  nowIso: () => string = () => new Date().toISOString(),
+  nowIso: () => string = () => clock.nowIso(),
 ): Promise<MissionTarget> {
   const target: MissionTarget = applyAuth(
     {

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@jevitate/ai-core": "workspace:*",
+    "@jevitate/domain": "workspace:*",
     "@jevitate/interpreter": "workspace:*",
     "@jevitate/playwright": "workspace:*",
     "@jevitate/recording": "workspace:*",

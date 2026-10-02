@@ -11,6 +11,7 @@ import {
   type VerifyFixReport,
 } from "./verify-fix-api.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The finding ledger (#195 part 6): a built-in store of the repro material `verify-fix` needs,
@@ -188,7 +189,7 @@ export function ledgerAdd(opts: LedgerAddOptions): LedgerAddResult {
     kind: finding.kind,
     ...(finding.title === undefined ? {} : { title: finding.title }),
     ...(ticket === undefined ? {} : { ticket }),
-    addedAt: previous?.ledger.addedAt ?? (opts.nowIso ?? (() => new Date().toISOString()))(),
+    addedAt: previous?.ledger.addedAt ?? (opts.nowIso ?? (() => clock.nowIso()))(),
     source: {
       result: basename(opts.resultPath),
       ...(typeof result.strategy === "string" ? { strategy: result.strategy } : {}),

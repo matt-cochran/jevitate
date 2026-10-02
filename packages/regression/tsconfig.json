@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
   "references": [
+    { "path": "../domain" },
     { "path": "../recording" },
     { "path": "../interpreter" },
     { "path": "../screenplay" },

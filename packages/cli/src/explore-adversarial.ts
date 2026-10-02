@@ -28,7 +28,7 @@ import {
   type FilingConfig,
   type IssueDraft,
   type IssueFilerPort,
-  type MissionOutcome,
+  type MissionOutcome, clock,
 } from "@jevitate/domain";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -234,7 +234,7 @@ export async function runAdversarialCliMission(
   const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
   const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
   // #245: the mission session and every hang-replay session are shown/recorded alike.

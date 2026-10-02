@@ -1,4 +1,5 @@
 import { envAliasesFor, type CredentialKey } from "./credentials.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Credential provenance and live verification (#268, #291). Everything here handles key NAMES,
@@ -87,7 +88,7 @@ export async function verifyKey(
   if (url === undefined) throw new Error(`no live verification for ${key}`);
   if (value.trim().length === 0) return { status: "missing" };
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const timer = clock.setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetchFn(url, { method: "GET", headers: { Authorization: `Bearer ${value.trim()}`, Accept: "application/json" }, signal: ctrl.signal });
     if (res.status >= 200 && res.status < 300) return { status: "valid" };
@@ -97,7 +98,7 @@ export async function verifyKey(
     const reason = ctrl.signal.aborted ? `no answer within ${timeoutMs}ms` : (e instanceof Error ? e.message : String(e)).split("\n")[0] ?? "network error";
     return { status: "unreachable", reason: scrub(reason, value).slice(0, 200) };
   } finally {
-    clearTimeout(timer);
+    clock.clearTimeout(timer);
   }
 }
 

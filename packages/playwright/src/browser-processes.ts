@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
-import { setTimeout as sleep } from "node:timers/promises";
+import { clock } from "@jevitate/domain";
 
 /**
  * #205: which browser processes jevitate started, how much memory they use, and which of them a
@@ -152,7 +152,7 @@ function psRows(): { pid: number; ppid: number; rssKiB: number; command: string 
 /** One `ps` listing reused for the memory reads of one measurement (they happen within milliseconds). */
 let psCache: { at: number; rows: ReturnType<typeof psRows> } | undefined;
 function cachedPsRows(): ReturnType<typeof psRows> {
-  if (psCache === undefined || Date.now() - psCache.at > 500) psCache = { at: Date.now(), rows: psRows() };
+  if (psCache === undefined || clock.now() - psCache.at > 500) psCache = { at: clock.now(), rows: psRows() };
   return psCache.rows;
 }
 
@@ -275,8 +275,8 @@ export async function cleanupOrphanBrowsers(opts: { readonly table?: ProcessTabl
     }
   }
   if (signalled.length > 0) {
-    const deadline = Date.now() + graceMs;
-    while (Date.now() < deadline && signalled.some((b) => processAlive(b.pid))) await sleep(50);
+    const deadline = clock.now() + graceMs;
+    while (clock.now() < deadline && signalled.some((b) => processAlive(b.pid))) await clock.sleep(50);
   }
   for (const b of signalled) {
     if (!processAlive(b.pid)) {

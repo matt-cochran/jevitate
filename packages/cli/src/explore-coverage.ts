@@ -31,7 +31,7 @@ import {
   combineOutcomes,
   gatingDefects,
   type MissionFailure,
-  type MissionOutcome,
+  type MissionOutcome, clock,
 } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
@@ -239,7 +239,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
   const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   const stamp = artifactStamp(iso);
   // `MissionJournal` creates `outDir` synchronously (mkdirSync).
   // #213: an exploratory run's files are named for it (`exploratory-*`), not `coverage-*`; every

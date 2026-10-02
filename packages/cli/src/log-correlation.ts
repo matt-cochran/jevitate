@@ -1,5 +1,5 @@
 import { redactText } from "@jevitate/ai-core";
-import { worstOutcome, type MissionOutcome } from "@jevitate/domain";
+import { worstOutcome, type MissionOutcome, clock } from "@jevitate/domain";
 import { normalizeRoute, type TranscriptEntry } from "@jevitate/explore";
 import {
   closeLogSources,
@@ -168,7 +168,7 @@ export const DEFAULT_SERVER_LOG_DRAIN_MS = 3_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
+    const t = clock.setTimeout(resolve, ms);
     t.unref?.();
   });
 }
@@ -210,7 +210,7 @@ export class ServerLogRuntime {
   readonly #groupers: DotnetEntryGrouper[] = [];
   readonly #lines: LogLine[] = [];
   readonly #stepEpoch = new Map<number, number>();
-  readonly #missionStartEpochMs = Date.now();
+  readonly #missionStartEpochMs = clock.now();
   readonly #secrets: readonly string[];
   readonly #matchers: readonly LogDefectMatcher[];
   readonly #drainMs: number;
@@ -285,7 +285,7 @@ export class ServerLogRuntime {
 
   /** Wraps the journal's own `TranscriptListener`: unchanged persistence, plus this step's epoch. */
   readonly onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
-    this.#stepEpoch.set(entry.step, Date.now());
+    this.#stepEpoch.set(entry.step, clock.now());
     this.#inner?.(entry, all);
   };
 

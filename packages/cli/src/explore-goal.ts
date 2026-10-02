@@ -13,7 +13,7 @@ import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantRep
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
-import { foldGoalOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
+import { foldGoalOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -412,7 +412,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
   const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
   // itself creates `outDir` synchronously (mkdirSync).
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));

@@ -3,6 +3,7 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { DegradedFindingKind, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { hostProbe, type HostPressure, type HostProbe } from "./host-pressure.js";
 import type { TranscriptEntry } from "./transcript.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Host-health sampling for one run (#203) — telling a STARVED HOST apart from an app finding.
@@ -177,7 +178,7 @@ export class HostHealthSampler {
       };
       this.#disposeLag = () => h.disable();
     }
-    this.#now = opts.now ?? Date.now;
+    this.#now = opts.now ?? clock.now;
     this.#intervalMs = opts.intervalMs ?? HOST_SAMPLE_INTERVAL_MS;
     this.#attribute = opts.attribute ?? starvationAttributionFromEnv();
     this.#cores = opts.cores ?? availableParallelism();
@@ -186,7 +187,7 @@ export class HostHealthSampler {
   /** Starts background sampling (never keeps the process alive). Idempotent. */
   start(): this {
     if (this.#timer === undefined && this.#intervalMs > 0) {
-      this.#timer = setInterval(() => void this.sample(), this.#intervalMs);
+      this.#timer = clock.setInterval(() => void this.sample(), this.#intervalMs);
       this.#timer.unref();
     }
     return this;
@@ -194,7 +195,7 @@ export class HostHealthSampler {
 
   /** Stops background sampling and releases the event-loop monitor. */
   stop(): void {
-    if (this.#timer !== undefined) clearInterval(this.#timer);
+    if (this.#timer !== undefined) clock.clearInterval(this.#timer);
     this.#timer = undefined;
     this.#disposeLag();
   }

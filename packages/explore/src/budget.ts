@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { BudgetDeclaration, BudgetGuard, ObservedValue } from "@jevitate/recording";
+import { clock } from "@jevitate/domain";
 
 /**
  * Mission spend budgets (#150): a cumulative cap on the change of an app-declared observable (e.g.
@@ -211,10 +212,10 @@ export class BudgetMonitor {
     if (withSettle.length === 0) return { crossed: false };
     const withinMs = Math.max(...withSettle.map((t) => t.decl.settle?.withinMs ?? 0));
     const pollMs = Math.min(...withSettle.map((t) => t.decl.settle?.pollMs ?? 1000));
-    const start = Date.now();
+    const start = clock.now();
     let result: BudgetSettleResult = { crossed: false };
-    while (Date.now() - start < withinMs) {
-      await sleep(Math.max(0, Math.min(pollMs, withinMs - (Date.now() - start))));
+    while (clock.now() - start < withinMs) {
+      await sleep(Math.max(0, Math.min(pollMs, withinMs - (clock.now() - start))));
       result = await this.afterSettle(page, step);
       if (result.crossed) return result;
     }
@@ -245,5 +246,5 @@ export class BudgetMonitor {
 }
 
 function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return clock.sleep(ms);
 }

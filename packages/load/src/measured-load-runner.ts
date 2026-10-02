@@ -3,6 +3,7 @@ import { deriveActorSeeds } from "./seeded-pool.js";
 import { computeLatencyPercentiles } from "./percentiles.js";
 import { LoadHarnessSetupError } from "./types.js";
 import type { CapacityReport, LoadActorRunnerFactory } from "./types.js";
+import { clock } from "@jevitate/domain";
 
 // Re-exported so existing `import { LoadHarnessSetupError } from
 // "./measured-load-runner.js"` call sites keep working — the class itself
@@ -47,8 +48,8 @@ export async function runLoadTest(config: RunLoadTestConfig): Promise<CapacityRe
   }
 
   const seeds = deriveActorSeeds(config.seed, config.concurrency);
-  const startedAtIso = new Date().toISOString();
-  const startedAtMs = Date.now();
+  const startedAtIso = clock.nowIso();
+  const startedAtMs = clock.now();
 
   const durations: number[] = [];
   let okRuns = 0;
@@ -69,10 +70,10 @@ export async function runLoadTest(config: RunLoadTestConfig): Promise<CapacityRe
       }
 
       for (let i = 0; i < config.iterationsPerActor; i++) {
-        const iterationStartMs = Date.now();
+        const iterationStartMs = clock.now();
         try {
           const result = await runner.run();
-          durations.push(Date.now() - iterationStartMs);
+          durations.push(clock.now() - iterationStartMs);
           if (result.outcome === "ok") okRuns++;
           else quarantinedRuns++;
         } catch {
@@ -82,8 +83,8 @@ export async function runLoadTest(config: RunLoadTestConfig): Promise<CapacityRe
     }),
   );
 
-  const endedAtIso = new Date().toISOString();
-  const durationMs = Date.now() - startedAtMs;
+  const endedAtIso = clock.nowIso();
+  const durationMs = clock.now() - startedAtMs;
   const totalRuns = okRuns + quarantinedRuns + errorRuns;
 
   return {

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { redactText, redactUrl } from "@jevitate/ai-core";
 import { isAuthorizedExploreTarget } from "@jevitate/explore";
 import { authHeaders, type AuthSources, type RequestAuth } from "./fixture-auth.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Mission fixtures (#140 declarative app setup, #144 setup/restore around missions and replays) —
@@ -577,7 +578,7 @@ function runHook(cmd: string, timeoutMs: number, stdin: string, env: Record<stri
         child.kill("SIGKILL");
       }
     };
-    const timer = setTimeout(() => {
+    const timer = clock.setTimeout(() => {
       timedOut = true;
       killGroup();
     }, timeoutMs);
@@ -588,11 +589,11 @@ function runHook(cmd: string, timeoutMs: number, stdin: string, env: Record<stri
       if (stderr.length < MAX_HOOK_STDOUT) stderr += d.toString("utf8");
     });
     child.on("error", (e) => {
-      clearTimeout(timer);
+      clock.clearTimeout(timer);
       resolve({ exitCode: null, timedOut, stdout, stderr: `${stderr}${e.message}` });
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      clock.clearTimeout(timer);
       resolve({ exitCode: code, timedOut, stdout, stderr });
     });
     child.stdin.on("error", () => undefined);
@@ -742,7 +743,7 @@ export class MissionFixtures {
     for (const [i, step] of (this.#opts.spec?.restore ?? []).entries()) await this.#runHttp(step, "restore", i);
     const after = this.#opts.hooks?.after;
     if (after !== undefined) {
-      const started = Date.now();
+      const started = clock.now();
       const r = await runHook(after, this.#opts.hooks?.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS, JSON.stringify({ vars: this.publicOutputs() }), {
         JEVITATE_FIXTURE_PHASE: "restore",
       });
@@ -751,7 +752,7 @@ export class MissionFixtures {
         kind: "shell",
         name: "--after",
         ok: !r.timedOut && r.exitCode === 0,
-        durationMs: Date.now() - started,
+        durationMs: clock.now() - started,
         exitCode: r.exitCode,
         ...(r.timedOut ? { detail: "timed out" } : {}),
         ...(r.stderr === "" ? {} : { stderr: clip(this.#redact(r.stderr)) }),
@@ -766,7 +767,7 @@ export class MissionFixtures {
   }
 
   async #runSetupHook(cmd: string): Promise<void> {
-    const started = Date.now();
+    const started = clock.now();
     const r = await runHook(cmd, this.#opts.hooks?.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS, "", { JEVITATE_FIXTURE_PHASE: "setup" });
     let detail: string | undefined;
     if (r.timedOut) detail = "the --before hook timed out";
@@ -777,7 +778,7 @@ export class MissionFixtures {
       kind: "shell",
       name: "--before",
       ok: detail === undefined,
-      durationMs: Date.now() - started,
+      durationMs: clock.now() - started,
       exitCode: r.exitCode,
       ...(detail === undefined ? {} : { detail }),
       ...(r.stderr === "" ? {} : { stderr: clip(this.#redact(r.stderr)) }),
@@ -808,10 +809,10 @@ export class MissionFixtures {
 
   /** Runs one HTTP step; returns the failure detail (redacted), or null. */
   async #runHttp(step: FixtureHttpStep, phase: "setup" | "restore", i: number): Promise<string | null> {
-    const started = Date.now();
+    const started = clock.now();
     const name = step.name ?? `${phase}[${i}]`;
     const log = (entry: Omit<FixtureStepLog, "phase" | "kind" | "name" | "durationMs" | "method">): void => {
-      this.#log.push({ phase, kind: "http", name, method: step.method, durationMs: Date.now() - started, ...entry });
+      this.#log.push({ phase, kind: "http", name, method: step.method, durationMs: clock.now() - started, ...entry });
     };
     let url: string;
     let body: string | undefined;
@@ -842,7 +843,7 @@ export class MissionFixtures {
     }
     const shownUrl = this.#redact(url);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), step.timeoutMs ?? DEFAULT_STEP_TIMEOUT_MS);
+    const timer = clock.setTimeout(() => controller.abort(), step.timeoutMs ?? DEFAULT_STEP_TIMEOUT_MS);
     try {
       const res = await (this.#opts.fetchImpl ?? fetch)(url, {
         method: step.method,
@@ -891,7 +892,7 @@ export class MissionFixtures {
       log({ ok: false, url: shownUrl, detail });
       return detail;
     } finally {
-      clearTimeout(timer);
+      clock.clearTimeout(timer);
     }
   }
 }

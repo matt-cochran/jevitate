@@ -9,6 +9,7 @@ import type { Bounds } from "../bounds.js";
 import type { SafetyConfig } from "../safety.js";
 import { ValueCapturingGenerationPort } from "./value-capturing-generation-port.js";
 import { autoDecidePostdoc } from "./auto-decide.js";
+import { clock } from "@jevitate/domain";
 
 export interface AuthorJourneyRequest {
   goal: string;
@@ -113,7 +114,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     promoted: false,
     params: deriveParamSchema(parameterizedRecording).required,
     authoredBy: "jev-driven",
-    createdAtIso: new Date().toISOString(),
+    createdAtIso: clock.nowIso(),
   };
 
   return { outcome: "authored", journey: { metadata, recording: parameterizedRecording } };

@@ -11,6 +11,7 @@ import { readDocumentedWait, readWorkingStatus } from "../status.js";
 import type { RunContext } from "./context.js";
 import { JOB_WAIT_SLICE_MS, documentedWaitBudgetMs, liveBusyWork, stillShowsWork, waitOutJob } from "./helpers.js";
 import type { Flow, Perceived } from "./step.js";
+import { clock } from "@jevitate/domain";
 
 export async function checkHang(ctx: RunContext, step: Perceived): Promise<Flow> {
   const { perceiveStartedAt, perception, snap } = step;
@@ -35,7 +36,7 @@ export async function checkHang(ctx: RunContext, step: Perceived): Promise<Flow>
       const w = await waitOutJob(ctx.page, Math.min(workBudgetMs - ctx.hangWorkWaitedMs, JOB_WAIT_SLICE_MS), stillShowsWork);
       // The perception's own wait counts too (its whole time, the busy-indicator wait included): the
       // budget bounds the whole time spent believing it.
-      ctx.hangWorkWaitedMs += Date.now() - perceiveStartedAt;
+      ctx.hangWorkWaitedMs += clock.now() - perceiveStartedAt;
       const note = `not a hang yet (${perception.hang.kind}): the page shows ${working} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
         w.cleared ? "the status cleared" : `still in progress; ${Math.round(ctx.hangWorkWaitedMs / 1000)}s of the ${Math.round(workBudgetMs / 1000)}s job-wait budget used`
       })`;

@@ -36,6 +36,7 @@ import {
   emitJson,
   environmentSeams,
 } from "./cli-shared.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * #248 — `jevitate journey demo <id>`: replay a Journey as a narrated demo (goal title card, each
@@ -108,7 +109,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
       let video = videoFlag === undefined ? undefined : resolvePath(videoFlag);
       let guide = guideFlag === undefined ? undefined : resolvePath(guideFlag);
       if (video === undefined && guide === undefined) {
-        const folder = join(logsDirFor(), `journey-demo-${id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(new Date().toISOString())}`);
+        const folder = join(logsDirFor(), `journey-demo-${id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(clock.nowIso())}`);
         video = join(folder, "demo.webm");
         guide = join(folder, "guide.md");
       }

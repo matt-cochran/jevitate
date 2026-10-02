@@ -1,6 +1,6 @@
 import { availableParallelism } from "node:os";
-import { setTimeout as sleep } from "node:timers/promises";
 import type { CpuMetric, MemMetric, ResourceSample, ResourceSignals } from "./resource-signals.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * One browser process, many isolated contexts — with admission control.
@@ -135,7 +135,7 @@ export async function withOpenDeadline<T>(work: Promise<T>, ms: number, message:
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
+    timer = clock.setTimeout(() => {
       timedOut = true;
       reject(new BrowserOpenTimeoutError(message));
     }, ms);
@@ -150,7 +150,7 @@ export async function withOpenDeadline<T>(work: Promise<T>, ms: number, message:
   try {
     return await Promise.race([work, deadline]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
   }
 }
 
@@ -247,8 +247,8 @@ export class BrowserPool<C extends PooledContext, O> {
     this.#closeTimeoutMs = opts.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
     this.#openTimeoutMs = opts.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
     this.#cores = opts.availableParallelism ?? availableParallelism;
-    this.#now = opts.now ?? Date.now;
-    this.#sleep = opts.sleep ?? ((ms) => sleep(ms));
+    this.#now = opts.now ?? clock.now;
+    this.#sleep = opts.sleep ?? ((ms) => clock.sleep(ms));
     this.#maxContexts = opts.maxContexts;
   }
 
@@ -277,7 +277,7 @@ export class BrowserPool<C extends PooledContext, O> {
     try {
       entry = this.#entryFor(launchKey, launch);
       if (entry.idleTimer !== undefined) {
-        clearTimeout(entry.idleTimer);
+        clock.clearTimeout(entry.idleTimer);
         entry.idleTimer = undefined;
       }
       entry.leases.add(state);
@@ -341,7 +341,7 @@ export class BrowserPool<C extends PooledContext, O> {
     await Promise.all(
       entries.map(async (entry) => {
         entry.closing = true;
-        if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
+        if (entry.idleTimer !== undefined) clock.clearTimeout(entry.idleTimer);
         await (await entry.browser).close();
       }),
     );
@@ -385,10 +385,10 @@ export class BrowserPool<C extends PooledContext, O> {
     const remaining = Math.max(0, deadline - this.#now());
     await new Promise<void>((resolve, reject) => {
       const waiter = (): void => {
-        clearTimeout(timer);
+        clock.clearTimeout(timer);
         resolve();
       };
-      const timer = setTimeout(() => {
+      const timer = clock.setTimeout(() => {
         const at = this.#slotWaiters.indexOf(waiter);
         if (at >= 0) this.#slotWaiters.splice(at, 1);
         reject(
@@ -410,7 +410,7 @@ export class BrowserPool<C extends PooledContext, O> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const closing = context.close();
     const timedOut = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), this.#closeTimeoutMs);
+      timer = clock.setTimeout(() => resolve("timeout"), this.#closeTimeoutMs);
       timer.unref?.();
     });
     try {
@@ -423,7 +423,7 @@ export class BrowserPool<C extends PooledContext, O> {
         );
       }
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
     }
   }
 
@@ -470,7 +470,7 @@ export class BrowserPool<C extends PooledContext, O> {
   #detach(launchKey: string, entry: BrowserEntry<C, O>, state: LeaseState<C>): void {
     entry.leases.delete(state);
     if (entry.leases.size > 0 || entry.closing || this.#browsers.get(launchKey) !== entry) return;
-    const timer = setTimeout(() => {
+    const timer = clock.setTimeout(() => {
       if (entry.leases.size > 0 || this.#browsers.get(launchKey) !== entry) return;
       this.#browsers.delete(launchKey);
       entry.closing = true;
