@@ -5,9 +5,9 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve as resolvePath } from "node:path";
 import { userInfo } from "node:os";
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import type { ProfileManager } from "@jevitate/daemon";
-import { type PlannedStep } from "@jevitate/domain";
+import { type PlannedStep, clock } from "@jevitate/domain";
 import { openDatabase, migrateToLatest, SqliteSitePolicyRepository } from "@jevitate/storage-sqlite";
 import {
   envCredentialStore,
@@ -32,7 +32,9 @@ import {
   type UsageSink,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
-import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, readUnpackedExtension, type UnpackedExtension } from "@jevitate/playwright";
+import { realVerifyFetch } from "./key-report.js";
+import { preflightRunKeys } from "./run-key-preflight.js";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { UnsafeNameError, assertSafeName } from "@jevitate/domain";
 import { fail, type JsonEnvelope } from "./envelope.js";
@@ -53,7 +55,8 @@ import { type RunResolvedJourney } from "./source-run-api.js";
 import { FsTrustStore, FsAckStore, DEFAULT_LOCK_PATH, type GitExec, type GhPort } from "@jevitate/sources";
 import type { BrowserLaunchOptions, BrowserPort, BrowserSession } from "@jevitate/playwright";
 import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
-import { nonNegativeIntArg } from "./cli-args.js";
+import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
+import { resourceLimitsFromFlags, withResourcePreflight, type GovernanceFlags } from "./resource-preflight.js";
 import { HEADED_DEFAULT_SLOW_MO_MS, assertHeadedDisplay, headedFromEnv, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 
 /** Injectable wiring for the `record` command (all optional; real defaults). */
@@ -250,11 +253,32 @@ export async function makeRealBrowserActor(
   };
 }
 
-/** Raw commander values of the shared `--browser-*` launch flags. */
-export interface BrowserLaunchFlags {
+/** Raw commander values of the shared `--browser-*` launch flags (and #205's resource-governance flags). */
+export interface BrowserLaunchFlags extends GovernanceFlags {
   browserExecutable?: string;
   browserChannel?: string;
   browserArg: string[];
+  /** #256: `--extension <dir>` (repeatable), each already read and checked by `extensionArg`. */
+  extension?: readonly UnpackedExtension[];
+}
+
+/**
+ * #256: the `--extension <dir>` argParser — reads and checks the unpacked extension NOW (a directory
+ * with a valid manifest.json), so a bad directory is a usage error (exit 64) on every command before
+ * anything runs. The same directory twice is kept once; two directories with one id are refused.
+ */
+export function extensionArg(value: string, prev: readonly UnpackedExtension[] | undefined): UnpackedExtension[] {
+  const before = prev ?? [];
+  let ext: UnpackedExtension;
+  try {
+    ext = readUnpackedExtension(value);
+  } catch (err) {
+    throw new InvalidArgumentError(err instanceof Error ? err.message : String(err));
+  }
+  const dup = before.find((e) => e.id === ext.id);
+  if (dup === undefined) return [...before, ext];
+  if (dup.dir === ext.dir) return [...before];
+  throw new InvalidArgumentError(`two extension directories have the same extension id ${ext.id}: ${dup.dir} and ${ext.dir}`);
 }
 
 /**
@@ -263,7 +287,11 @@ export interface BrowserLaunchFlags {
  * EXTENDS the Linux defaults (`--no-sandbox`, `--disable-dev-shm-usage`).
  */
 export function withBrowserLaunchFlags(cmd: Command): Command {
-  return cmd
+  // #205: resource governance — the run's limits, and the pre-run checks (orphan sweep, starved-host refusal).
+  return withResourcePreflight(cmd)
+    .option("--max-browsers <n>", "machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)", positiveIntArg)
+    .option("--max-browser-memory <MiB>", "memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)", positiveIntArg)
+    .option("--ignore-host-load", "start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it")
     .option("--browser-executable <path>", "launch this Chromium binary instead of Playwright's pinned one")
     .option("--browser-channel <name>", "Playwright browser channel to launch, e.g. chrome | msedge")
     .option(
@@ -271,6 +299,12 @@ export function withBrowserLaunchFlags(cmd: Command): Command {
       "extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
+    )
+    .option(
+      "--extension <dir>",
+      "load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless",
+      extensionArg,
+      [] as UnpackedExtension[],
     );
 }
 
@@ -280,7 +314,10 @@ export function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOpti
     ...(o.browserExecutable !== undefined ? { executablePath: o.browserExecutable } : {}),
     ...(o.browserChannel !== undefined ? { channel: o.browserChannel } : {}),
     ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
+    ...(o.extension !== undefined && o.extension.length > 0 ? { extensions: [...o.extension] } : {}),
   };
+  const resources = resourceLimitsFromFlags(o);
+  if (resources !== undefined) launch.resources = resources;
   return Object.keys(launch).length > 0 ? launch : undefined;
 }
 
@@ -412,8 +449,8 @@ export function collectParam(value: string, previous: Record<string, string>): R
 
 export function makeClock() {
   return {
-    nowIso: () => new Date().toISOString(),
-    monotonicMs: () => Date.now(),
+    nowIso: () => clock.nowIso(),
+    monotonicMs: () => clock.now(),
   };
 }
 
@@ -548,7 +585,10 @@ Outcomes, stop reasons and exit codes:
     (a "done" code rejected ends stop done, goalOutcome failed — never blocked)
   --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
     step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
-    | scope-unreachable | targets-refused | target-unresponsive | hang | crashed
+    | scope-unreachable | targets-refused | target-unresponsive | identity-changed | stalled | hang
+    | crashed
+    (identity-changed: an action switched the signed-in identity and the original one could not be
+    restored — inconclusive; every switch is listed in "identityChanges")
   --strategy coverage/exploratory's own "outcome" (folds into missionOutcome above):
     exhausted | insufficient-coverage | cap | scope-unreachable | stalled | crashed | hang
   A run that proved nothing is inconclusive with failure.kind insufficient-coverage (the same word as
@@ -564,6 +604,11 @@ Outcomes, stop reasons and exit codes:
   with --json: the {v, ok, data} envelope.
   Every command's exit codes: docs/outcomes.md "Exit codes".
 `;
+
+/** #291: the startup key check's env (opt-out) and verifier (injectable: tests never touch the network). */
+function keyPreflightOpts(deps: CliDeps): Parameters<typeof preflightRunKeys>[2] {
+  return { env: deps.explore?.env ?? process.env, fetchFn: deps.explore?.verifyFetch ?? deps.ai?.verifyFetch ?? realVerifyFetch };
+}
 
 /** Distinct from MissingCredentialError: "no --real/--fake-ai selected" vs "keys missing." */
 export class GatewaySelectionError extends Error {}
@@ -601,6 +646,8 @@ export async function buildExploreGateways(
   if (opts.real) {
     requireKeys("generation", store); // fail-closed
     requireKeys("judgment", store); // fail-closed
+    // #291: a key the provider rejects fails the run at startup (typed setup refusal), once per process.
+    await preflightRunKeys(["generation", "judgment"], store, keyPreflightOpts(deps));
     const gen = new OpenRouterGenerationGateway({
       store,
       catalog: DEFAULT_EXPLORE_CATALOG,
@@ -638,6 +685,7 @@ export async function buildGenerationGateway(
   if (opts.real) {
     const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? loadLocalCredentials());
     requireKeys("generation", store); // fail-closed
+    await preflightRunKeys(["generation"], store, keyPreflightOpts(deps)); // #291
     const gen = new OpenRouterGenerationGateway({
       store,
       catalog: DEFAULT_EXPLORE_CATALOG,

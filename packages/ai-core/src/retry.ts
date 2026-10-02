@@ -1,5 +1,6 @@
 import type { GenerationPort, GenerationResult, GenInput, GenTaskKind } from "./generation.js";
 import type { Answer, JudgmentPort, JudgmentState, Question } from "./judgment.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Retries for TRANSIENT failures only (owner ruling 4): exponential backoff with jitter over the
@@ -81,7 +82,7 @@ export function isTransientError(e: unknown): boolean {
   return typeof message === "string" && TRANSIENT_MESSAGE.test(message);
 }
 
-const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const realSleep = (ms: number): Promise<void> => clock.sleep(ms);
 
 /** ±20% jitter around the scheduled delay, so concurrent callers do not retry in lock-step. */
 export function jittered(baseMs: number, random: () => number): number {

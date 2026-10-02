@@ -19,6 +19,7 @@ import { startServer } from "@jevitate/example-site";
 import { buildProgram } from "./program.js";
 import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
 import { formatMissionHuman } from "./cli-output.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
 
 /**
  * P1 acceptance (Task 12): `jevitate explore --url <fixture> --goal ... --success ...`
@@ -77,6 +78,9 @@ async function readTranscript(path: string): Promise<PersistedEntry[]> {
   return parsed;
 }
 
+// #304: Node and page time skip idle waits (settle windows, assertion polling). Assertions are unchanged.
+useSkippingTime();
+
 describe("jevitate explore — real-browser fixture smoke (Task 12)", () => {
   it(
     "drives the fixture to the goal, writes a replayable Recording, and reports succeeded",
@@ -122,14 +126,14 @@ describe("jevitate explore — real-browser fixture smoke (Task 12)", () => {
       expect(parsed.data.finalUrl).toContain("/inbox");
 
       // The decision transcript is written next to the Recording and equals the returned one.
-      expect(parsed.data.transcriptPath).toBe(parsed.data.recordingPath.replace(/\.json$/, ".transcript.json"));
+      expect(parsed.data.transcriptPath).toBe(parsed.data.recordingPaths[0].replace(/\.json$/, ".transcript.json"));
       const transcript = await readTranscript(parsed.data.transcriptPath);
       expect(transcript).toEqual(parsed.data.transcript);
       expect(transcript.map((e) => e.op)).toEqual(["type", "click", "done"]);
       expect(transcript.every((e) => e.chosenBy === "model" && e.controlCount > 0)).toBe(true);
 
       // The written Recording is schema-valid and replays deterministically.
-      const raw = await readFile(parsed.data.recordingPath, "utf8");
+      const raw = await readFile(parsed.data.recordingPaths[0], "utf8");
       const recording = RecordingSchema.parse(JSON.parse(raw));
 
       const port = new PlaywrightBrowserPort();
@@ -291,9 +295,10 @@ describe("jevitate explore — --fake-ai smoke answers the candidate-action ques
         const { usage } = parsed.data;
         expect(usage.judgments).toBeGreaterThanOrEqual(1);
         expect(usage.jevUsd).toBeCloseTo(usage.judgments * 0.01, 10);
-        expect(usage.jevPriceSource).toBe("env:JEVITATE_JEV_UNIT_PRICE_USD");
+        expect(usage.priceSource).toEqual(["env:JEVITATE_JEV_UNIT_PRICE_USD"]);
         expect(usage.totalUsd).toBeCloseTo(usage.jevUsd, 10);
-        expect(usage.usd).toBeCloseTo(usage.jevUsd, 10); // #100 compat alias
+        expect(usage).not.toHaveProperty("usd"); // the #100 alias was removed in 0.3.0
+        expect(usage).not.toHaveProperty("jevPriceSource");
         expect(usage.priced).toBe("full"); // no generations were made (the fake judge never calls one)
       } finally {
         await rm(outDir, { recursive: true, force: true });
@@ -326,8 +331,8 @@ describe("shared decision transcript — every model-deciding strategy writes on
         expect(result.outcome).toBe("inconclusive");
         expect(result.exitCode).toBe(2);
         expect(result.coverage).toMatchObject({ sufficient: false, forms: { found: 1, submitted: 0 } });
-        expect(result.recordingPath).toBe(join(outDir, "adversarial-2026-09-23T00-00-00-000Z.json"));
-        expect(JSON.parse(await readFile(result.recordingPath, "utf8"))).toEqual(result.recording);
+        expect(result.recordingPaths).toEqual([join(outDir, "adversarial-2026-09-23T00-00-00-000Z.json")]);
+        expect(JSON.parse(await readFile(result.recordingPaths[0]!, "utf8"))).toEqual(result.recording);
         const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as unknown;
         expect(persisted).toMatchObject({
           missionOutcome: "inconclusive",

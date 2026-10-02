@@ -9,20 +9,25 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { InvariantSpec } from "@jevitate/recording";
-import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
-import { UxAnalyzer, a11yChecks, buildReport, calibrationCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AppContext, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
+import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
+import { a11yChecks, analyzeClaims, buildReport, calibrationCaveat, claimsCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AnalysisOutcome, type AppContext, type GuardProbe, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
+import { captureFindingShots, planGuardProbes, runGuardProbes, skippedProbes, withProbePage } from "./ux-claim-probe.js";
+import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
-import { foldGoalOutcome, type GoalOutcome, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
+import { foldGoalOutcome, type GoalOutcome, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogDefect } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
+import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
+import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
-import { Http5xxOracle, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
+import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
-import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
+import { openServerLogRuntime, type ServerLogsSummary } from "./log-correlation.js";
+import { serverLogRuntimeOptions } from "./explore-shared.js";
 import { assertSaveStorageStateOutsideProject, currentUrlSafe, persistStorageState, serverLogResult, type MissionTarget, type ServerLogOptions } from "./explore-api.js";
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
@@ -138,6 +143,32 @@ export interface RunUsabilityMissionOptions {
   readonly successWhen?: SuccessWhen;
   /** #202 `--allow-vacuous-checks`: a check satisfied before the first action warns instead of failing. */
   readonly allowVacuousChecks?: boolean;
+  /**
+   * #198 `--product <file>`: the product facts (plans/prices, key journeys, each page's intended next
+   * step). Default: `.jevitate/product.json` in the project, when present. Validated before a browser
+   * opens (`ProductFactsError`, E_UX_PRODUCT_INPUT).
+   */
+  readonly product?: string;
+  /** #198 `--polish`: polish each verified finding's recommendation with one generation call (opt-in). */
+  readonly polish?: boolean;
+  /**
+   * #198 `--probe-guards` (opt-in): click each destructive control once, fail-safe (every write and
+   * destructive-looking request aborted; refused on a page with an open WebSocket/EventSource or a
+   * controlling service worker), to verify whether a confirmation guards it. Off: nothing is clicked,
+   * and those guard claims are reported unverifiable.
+   */
+  readonly probeGuards?: boolean;
+  /**
+   * #293 `--from-journey`/`--at-step`: replayed into the session before the review, which then starts
+   * on the live page it left — never a fresh navigation. `url` is only the expected landing.
+   */
+  readonly journeyPrefix?: JourneyPrefix;
+  /**
+   * #303 `--action-deltas` (opt-in, off by default): record what each action changed on the page
+   * (code's verdict per action) — attached to every transcript and Recording step, summarised in the
+   * result (`actionDeltas`), told to the model and used by the no-progress check. Off: no capture.
+   */
+  readonly actionDeltas?: boolean;
 }
 
 /** Usability reads only a spec's `budget` (#150) — never its `invariants`/`capture` (#86/#147, not supported here). */
@@ -157,6 +188,8 @@ export interface RunUsabilityMissionResult {
   readonly hostHealth: HostHealthSummary;
   /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
   readonly environmentDegraded: EnvironmentDegraded[];
+  /** #293: the Journey step a journey-anchored review branched from (absent on a bare-URL run). */
+  readonly branch?: JourneyBranchPoint;
   /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: "usability";
@@ -188,11 +221,6 @@ export interface RunUsabilityMissionResult {
   readonly screensObserved: number;
   /** The explore loop's decision transcript, written next to the report (each step: its screenshot). */
   readonly transcriptPath: string;
-  /**
-   * The run's Recording, written next to the report (crash-safe: flushed after every step).
-   * @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor.
-   */
-  readonly recordingPath: string;
   /** Where the per-step screenshots are written (secret fields masked). */
   readonly screenshotDir: string;
   /**
@@ -206,6 +234,8 @@ export interface RunUsabilityMissionResult {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: readonly SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #303: the run's action deltas (verdict counts, per-action overhead) — only with `--action-deltas`. */
+  readonly actionDeltas?: ActionDeltaStats;
   /**
    * The typed verdict. UX findings are advisory, so a completed review is `clean`; a run whose
    * loop broke is `crashed`/`inconclusive`, and so is one whose analysis could not be produced — or
@@ -234,8 +264,6 @@ export interface RunUsabilityMissionResult {
   readonly resultPath: string;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
   /**
@@ -290,6 +318,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
   const maxFindingsPerRoute = resolveMaxFindingsPerRoute(opts.maxFindingsPerRoute, opts.env ?? process.env, loadUxMaxFindingsPerPage(opts.configPath));
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
+  // #198: the product facts are validated before a browser opens (a bad file is a usage error).
+  const product = await loadProductFacts(opts.product);
   // #250/#251: a recorded or screenshotted run's sessions carry the live pixel mask from their first
   // paint; `--screenshots` captures after each step (the Recording path names their folder).
   const runCapture = runCaptureFor({
@@ -312,7 +342,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     (async (s: { page: { evaluate: (fn: () => string) => Promise<string> } }) =>
       s.page.evaluate(() => (typeof document !== "undefined" && document.body ? document.body.innerText : "")));
   const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   const stamp = artifactStamp(iso);
   const reportPath = join(outDir, `usability-${stamp}.json`);
   // #98 — the same artifact shape as goal/adversarial missions, next to the report: the decision
@@ -382,18 +412,20 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
   const serverLog = openServerLogRuntime({
-    sources: opts.serverLog?.sources ?? [],
-    logDefect: opts.serverLog?.logDefect ?? [],
-    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    ...serverLogRuntimeOptions(opts.serverLog),
     secrets,
     onTranscriptEntry: journalListener,
   });
+  // #204: every request's correlation ids, from before the first navigation.
+  serverLog?.observe(session.page);
   // #159/#245: persisted and closed once — early (before the result is written) when recording video.
   const closeSession = closeOnce(async () => {
     await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
   });
   try {
+    // #293: a journey-anchored review first replays its Journey's prefix into this very session.
+    const start = await startFromJourney(opts.journeyPrefix, session, opts.url, opts.allowlist, opts.browser);
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     // #150 — usability's own budget wiring: a plain `InvariantMonitor` reads a budget's declared
     // observables (the same #86/#135 read/auth/redaction machinery), but this mission folds NO
@@ -418,6 +450,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       onTranscriptEntry: serverLog?.onTranscriptEntry ?? journalListener,
       onRecording: journal.onRecording,
+      // #303 (opt-in): action deltas, with Jev's advisory relevance labels.
+      ...(opts.actionDeltas === true ? { actionDeltas: { jev: true } } : {}),
       hostHealth: health,
       demoOverlay: demoOverlayOf(opts.browser),
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
@@ -426,7 +460,9 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       gen: opts.gen,
       goal: opts.job,
       allowlist: opts.allowlist,
-      startUrl: opts.url,
+      startUrl: start.url,
+      ...(start.branch === undefined ? {} : { startInPlace: true }),
+      ...(start.restart === undefined ? {} : { restartAtStart: start.restart.restartAtStart }),
       bounds: opts.bounds,
       secrets: opts.secrets,
       site: origin,
@@ -475,6 +511,36 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
                     requests: [],
                     detail: `scrollWidth exceeds innerWidth by ${overflow.overflowPx}px at a ${overflow.viewport.width}x${overflow.viewport.height} viewport`,
                   },
+                }),
+              );
+            }
+            // #302: text cut off vertically (a fixed-height box, or above the page top) — one finding per element.
+            const clipped = await detectClipping(session.page, {
+              viewport: vp ?? { width: 1280, height: 720 },
+              ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
+              ...(opts.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: opts.overflow.ignoreSelectors }),
+              secrets,
+            });
+            for (const c of clipped) {
+              if (seenOverflow.has(c.fingerprint)) continue;
+              seenOverflow.add(c.fingerprint);
+              overflowFindings.push(
+                makeSignalFinding({
+                  kind: "vertical-clipping",
+                  confidence: 0.9,
+                  url: ev.url,
+                  screenId: ev.screenId,
+                  observation:
+                    c.cause === "overflow-hidden"
+                      ? `${c.element.descriptor} cuts off its text by ${c.clippedPx}px on ${c.route}: the content is taller than the box and overflow is hidden.`
+                      : `${c.element.descriptor} is cut off ${c.clippedPx}px above the top of the page on ${c.route}.`,
+                  userImpact: "Part of the text is cut off and no scroll position shows it: a user on this device cannot read it.",
+                  recommendation:
+                    c.cause === "overflow-hidden"
+                      ? `Let ${c.element.descriptor} grow with its content (min-height instead of height), make it scrollable, or truncate on purpose with line-clamp at ${c.viewport.width}px.`
+                      : `Give the container of ${c.element.descriptor} room for its wrapped content (no fixed height, or no wrapping) at ${c.viewport.width}px.`,
+                  controls: [c.element.descriptor],
+                  evidence: { kind: "vertical-clipping", steps: [history.length], requests: [], detail: clippingSummary(c) },
                 }),
               );
             }
@@ -541,6 +607,28 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     ];
     // #132: the friction the run walked into — what grounds (or not) each rubric finding.
     const friction = detectFriction(signalCapture, run.outcome);
+    // #198: every destructive control on an analyzed screen is clicked once with its writes blocked
+    // (ux-claim-probe.ts) — the code evidence `destructive-unguarded` claims are verified against.
+    // On a dedicated page in the run's context, after the loop: the run's oracles never see it.
+    // A screen that cannot be redacted means no probes at all (destructive claims: unverifiable).
+    let probes: GuardProbe[] | undefined;
+    try {
+      const plan = planGuardProbes(screens, secrets, opts.target?.safety);
+      probes = [...plan.refused];
+      // Clicking is opt-in (--probe-guards): without it every destructive control is `skipped`, and
+      // its guard claim is reported unverifiable — never asserted, never silently dropped.
+      if (opts.probeGuards !== true) probes.push(...skippedProbes(plan.targets));
+      else if (plan.targets.length > 0) {
+        try {
+          probes.push(...(await runGuardProbes(session.page, plan.targets, { allowlist: opts.allowlist, secrets })));
+        } catch (err) {
+          const why = `the guard probe could not open a page: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`;
+          probes.push(...plan.targets.map((t): GuardProbe => ({ screenId: t.screen.screenId, route: t.route, control: t.label, controlKey: t.key, status: "failed", detail: why })));
+        }
+      }
+    } catch {
+      probes = undefined;
+    }
     // #134: the evidence sidecar, written through the redaction door BEFORE analysis (so it exists
     // even when analysis fails). Fail-closed: if any screen cannot be redacted, no file is written.
     const evidencePath = join(outDir, `usability-${stamp}.evidence.json`);
@@ -553,6 +641,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         screens: screens.map((ev) => persistableScreen(ev, secrets)),
         signals: signalCapture,
         outcome: run.outcome,
+        ...(probes === undefined ? {} : { probes }),
       };
       await mkdir(outDir, { recursive: true });
       await writeFile(evidencePath, `${JSON.stringify(file, null, 2)}\n`, "utf8");
@@ -560,14 +649,35 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     } catch {
       evidenceWritten = null;
     }
-    const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
-    const outcome = await analyzer.analyze({
-      screens,
-      rubric: loadV1Rubric(),
-      appContext: opts.appContext,
-      secrets,
-      judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
-    });
+    // #198: findings are claims verified by code (claims.ts) — guard probes, product facts and the
+    // friction the run walked into — categorized and graded by Jev, written from templates.
+    const claimed = await analyzeClaims(
+      {
+        screens,
+        rubric: loadV1Rubric(),
+        appContext: opts.appContext,
+        secrets,
+        judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
+        friction,
+        steps: signalCapture.steps,
+        signalFindings,
+        ...(probes === undefined ? {} : { probes }),
+        ...(product.facts === undefined ? {} : { facts: product.facts }),
+      },
+      { judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks, ...(opts.polish === true ? { polish: true } : {}) },
+    );
+    // #198: a cropped, masked screenshot with the cited control boxed, per verified claim finding.
+    let outcome: AnalysisOutcome = claimed;
+    if (claimed.kind === "analyzed" && claimed.findings.some((f) => f.claim !== undefined)) {
+      const byScreen = new Map(screens.map((ev) => [ev.screenId, ev]));
+      const dir = join(outDir, `usability-${stamp}.findings`);
+      try {
+        const findings = await withProbePage(session.page, (p) => captureFindingShots(p, claimed.findings, byScreen, { dir, allowlist: opts.allowlist, secrets }));
+        outcome = { ...claimed, findings };
+      } catch {
+        outcome = claimed; // presentation only: findings without screenshots are still the findings
+      }
+    }
     // #126: a run that stops on a hang is never `clean` — it is reproduced in fresh contexts (same
     // as a goal mission) and mapped through the same hang/intermittent/inconclusive rule.
     let hang: HangFinding | undefined;
@@ -640,10 +750,11 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "usability" as const,
       target: {
-        seedUrl: opts.url,
+        seedUrl: start.url,
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
+      ...branchFields(start),
       recordingPaths: [journal.recordingPath],
       ...videos,
       ...shotFields,
@@ -655,12 +766,12 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(run.answer === undefined ? {} : { answer: run.answer }),
       screensObserved: collected.length,
       transcriptPath: journal.transcriptPath,
-      recordingPath: journal.recordingPath,
       screenshotDir,
       evidencePath: evidenceWritten,
       screenshots: capture.screenshots(),
       sideEffects: run.sideEffects,
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
+      ...(run.actionDeltas === undefined ? {} : { actionDeltas: run.actionDeltas }),
       engine: currentEngineInfo(),
       ...((): { failure?: MissionFailure } => {
         const f = run.failure ?? host.failure ?? jobFailure;
@@ -710,7 +821,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       minConfidence,
       quality,
       maxFindingsPerRoute,
-      calibrationCaveats: [calibrationCaveat(opts.appContext.appClass)],
+      ...(product.facts === undefined ? { evidenceCaveats: [NO_PRODUCT_FACTS_CAVEAT] } : {}),
+      calibrationCaveats: [calibrationCaveat(opts.appContext.appClass), claimsCaveat()],
     });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     const reviewed = { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };

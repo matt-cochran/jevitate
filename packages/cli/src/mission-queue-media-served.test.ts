@@ -9,6 +9,10 @@ import { FsMissionQueueStore, FsMissionTargetStore, MissionTargetRegistry, type 
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { drainMissionQueue, realQueuedMissionExecutor } from "./mission-queue-runner.js";
 import { buildMcpTools } from "./mcp-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #255: `queue_exploration` (and `mission queue`) carry the media and persona the CLI's `explore`

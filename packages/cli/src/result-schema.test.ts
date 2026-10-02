@@ -35,7 +35,9 @@ import {
  * served page, real Chromium, deterministic fakes for the model) — as returned, as printed by
  * `--json`, and as persisted in `<stem>.result.json` — validates against `MissionResultSchema`,
  * and fills the common fields the same way: a backend-log defect is in `defects` on every
- * strategy (not only in `serverLogDefects`), and the Recording(s) are always `recordingPaths[]`.
+ * strategy, and the Recording(s) are always `recordingPaths[]`. The 0.2.0 deprecated aliases
+ * (`serverLogDefects`, `recordingPath`, `usage.usd`, `usage.jevPriceSource`) are no longer written
+ * (removed in 0.3.0, schemaVersion still 1) — but a 0.2.0 result that carries them still validates.
  */
 
 // Compile-time: every strategy's result type carries the common fields (a runner that stops filling one fails to build).
@@ -125,6 +127,7 @@ function assertConforms(result: unknown, strategy: string): ReturnType<typeof Mi
   expect(parsed.success, `${strategy}: ${parsed.success ? "" : JSON.stringify(parsed.error.issues, null, 2)}`).toBe(true);
   const core = MissionResultSchema.parse(json);
   expect(core.schemaVersion).toBe(MISSION_RESULT_SCHEMA_VERSION);
+  assertNoRemovedAliases(json, strategy);
   expect(core.strategy).toBe(strategy);
   // #203: every strategy's result carries the host's health and its environment-degraded findings.
   expect(core.hostHealth, `${strategy}: hostHealth`).toMatchObject({ cores: expect.any(Number), steps: expect.any(Number) });
@@ -138,11 +141,20 @@ function assertConforms(result: unknown, strategy: string): ReturnType<typeof Mi
   return core;
 }
 
-/** The backend-log defect is in `defects` (#195) — and the deprecated alias is exactly its server-log subset. */
-function assertServerLogDefectInDefects(result: { defects: ReadonlyArray<{ kind: string; fingerprint: string }>; serverLogDefects?: ReadonlyArray<{ fingerprint: string }> }): void {
+/** The 0.2.0 deprecated aliases are removed in 0.3.0: no strategy writes them any more. */
+function assertNoRemovedAliases(json: unknown, strategy: string): void {
+  const r = json as Record<string, unknown>;
+  expect(r, `${strategy}: serverLogDefects`).not.toHaveProperty("serverLogDefects");
+  expect(r, `${strategy}: recordingPath`).not.toHaveProperty("recordingPath");
+  const usage = (r.usage ?? {}) as Record<string, unknown>;
+  expect(usage, `${strategy}: usage.usd`).not.toHaveProperty("usd");
+  expect(usage, `${strategy}: usage.jevPriceSource`).not.toHaveProperty("jevPriceSource");
+}
+
+/** The backend-log defect is in `defects` (#195), the only list that carries it. */
+function assertServerLogDefectInDefects(result: { defects: ReadonlyArray<{ kind: string; fingerprint: string }> }): void {
   const serverLogOnes = result.defects.filter((d) => d.kind === "server-log");
   expect(serverLogOnes.length).toBeGreaterThan(0);
-  expect((result.serverLogDefects ?? []).map((d) => d.fingerprint)).toEqual(serverLogOnes.map((d) => d.fingerprint));
 }
 
 /** Answers every decision with the same candidate action (`done`, `blocked`, `wait`, `click:0`, …). */
@@ -150,6 +162,17 @@ function always(value: string): JudgmentPort {
   return {
     async systemOne() {
       return { action: { kind: "choice", value, confidence: 0.9 } };
+    },
+  };
+}
+
+/** Answers the first decision with `first`, every later one with `then`. */
+function sequence(first: string, then: string): JudgmentPort {
+  let n = 0;
+  return {
+    async systemOne() {
+      n += 1;
+      return { action: { kind: "choice", value: n === 1 ? first : then, confidence: 0.9 } };
     },
   };
 }
@@ -185,12 +208,25 @@ describe("#217 — a goal result's missionOutcome is canonical; its own ending i
     expect(MissionResultSchema.safeParse(minimal({ missionOutcome: "clean", goalOutcome: "failed" })).success).toBe(false);
   });
 
+  it("a 0.2.0 result still carrying the removed aliases (serverLogDefects, recordingPath, usage.usd/jevPriceSource) still validates at schemaVersion 1", () => {
+    const old = minimal({
+      missionOutcome: "clean",
+      goalOutcome: "succeeded",
+      recordingPaths: ["/goal.json"],
+      recordingPath: "/goal.json",
+      serverLogDefects: [],
+      usage: { judgments: 1, generations: 0, inputTokens: 1, outputTokens: 0, priced: "full", totalUsd: 0.1, usd: 0.1, jevPriceSource: "provider:typesafe" },
+    });
+    expect(MissionResultSchema.safeParse(old).success).toBe(true);
+  });
+
   const endings: ReadonlyArray<[string, () => JudgmentPort, string, string, string, number?]> = [
     // [goalOutcome, judge, success check, missionOutcome, stop, maxActions]
     ["succeeded", clickThenDone, "textIncludes:[data-testid=status]|saved", "clean", "done"],
     // The model keeps saying done; code rejects it each time: failed, and the loop's stop is `done`.
     ["failed", () => always("done"), "textIncludes:[data-testid=status]|never", "defects-found", "done"],
-    ["blocked", () => always("blocked"), "textIncludes:[data-testid=status]|never", "defects-found", "blocked"],
+    // #237: the model tries something first — a `blocked` before any action is refused as unexplored.
+    ["blocked", () => sequence("click:0", "blocked"), "textIncludes:[data-testid=status]|never", "defects-found", "blocked"],
     ["exhausted", () => always("click:0"), "textIncludes:[data-testid=status]|never", "defects-found", "exhausted", 1],
   ];
   for (const [goalOutcome, judge, check, missionOutcome, stop, maxActions] of endings) {
@@ -235,7 +271,7 @@ describe("one result schema across strategies (#195 part 5)", () => {
       });
       const core = assertConforms(r, "goal");
       expect(core.missionOutcome).toBe("defects-found");
-      expect(core.recordingPaths).toEqual([r.recordingPath]);
+      expect(core.recordingPaths).toEqual([expect.stringMatching(/\.json$/)]);
       assertServerLogDefectInDefects(r);
     },
     180_000,
@@ -276,7 +312,7 @@ describe("one result schema across strategies (#195 part 5)", () => {
         serverLog: serverLog(),
       });
       const core = assertConforms(r, "adversarial");
-      expect(core.recordingPaths).toEqual([r.recordingPath]);
+      expect(core.recordingPaths).toEqual([expect.stringMatching(/\.json$/)]);
       assertServerLogDefectInDefects(r);
     },
     240_000,

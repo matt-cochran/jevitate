@@ -1,6 +1,6 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
@@ -132,7 +132,22 @@ function expectTargetUnresponsive(result: Awaited<ReturnType<typeof frozenGoal>>
   expect(result.run.failure?.stack).toBeUndefined();
 }
 
-describe("#230 — a backend that freezes mid-GOAL ends target-unresponsive, never a hang finding", () => {
+/**
+ * #304 [realtime]: a backend that really holds its responses and a page call that really never
+ * returns — behaviour that only exists in real time, so these keep the real clock. The page-liveness
+ * bound (60 s by default) is scaled down to 15 s here (still past the FAST hang bounds, so the hang path is met first).
+ */
+describe("[realtime] #230 — a backend that freezes mid-GOAL ends target-unresponsive, never a hang finding", () => {
+  let previous: string | undefined;
+  beforeEach(() => {
+    previous = process.env.JEVITATE_PAGE_UNRESPONSIVE_MS;
+    process.env.JEVITATE_PAGE_UNRESPONSIVE_MS = "15000";
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env.JEVITATE_PAGE_UNRESPONSIVE_MS;
+    else process.env.JEVITATE_PAGE_UNRESPONSIVE_MS = previous;
+  });
+
   it(
     "host attribution off: inconclusive / target-unresponsive, not a request-pending hang",
     async () => {

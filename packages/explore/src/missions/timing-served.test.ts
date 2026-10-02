@@ -1,10 +1,14 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { clock } from "@jevitate/domain";
 import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runAdversarialMission } from "./adversarial.js";
-import { withSession } from "../testkit.js";
+import { withSession, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all", pageClock: false }); // the page's own Navigation/Resource Timing needs the real `performance`
 
 /**
  * Owner ruling 6 — a deliberately slow endpoint must show up in the run's timing summary, keyed by
@@ -22,7 +26,7 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
     if (path.startsWith("/api/slow/")) {
-      setTimeout(() => res.writeHead(200, { "content-type": "application/json" }).end("{}"), SLOW_MS);
+      clock.setTimeout(() => res.writeHead(200, { "content-type": "application/json" }).end("{}"), SLOW_MS); // #304: same clock as the code under test
       return;
     }
     if (path.startsWith("/asset/")) {

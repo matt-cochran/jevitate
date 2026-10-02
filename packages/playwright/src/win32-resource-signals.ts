@@ -1,6 +1,6 @@
 import { cpus, freemem, type CpuInfo } from "node:os";
-import { setTimeout as sleep } from "node:timers/promises";
 import { ResourceSignalError, type ResourceSample, type ResourceSignals } from "./resource-signals.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * Windows signals. `os.loadavg()` is ALWAYS [0, 0, 0] on Windows, so it is
@@ -23,7 +23,7 @@ export interface Win32SignalDeps {
 export const defaultWin32SignalDeps: Win32SignalDeps = {
   cpus,
   freemem,
-  sleep: (ms) => sleep(ms),
+  sleep: (ms) => clock.sleep(ms),
   windowMs: 250,
 };
 

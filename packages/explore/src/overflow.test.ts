@@ -3,6 +3,10 @@ import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
 import { detectOverflow, shouldCheckOverflow, DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD } from "./overflow.js";
+import { useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * `/wide`: a table[data-testid=wide] with min-width:600px and no scroll wrapper — page-level

@@ -2,6 +2,7 @@
 import { type UsageCounts } from "@jevitate/ai-core";
 import type { SuiteBudget } from "./check-suite.js";
 import { type BudgetReport } from "./check-types.js";
+import { clock } from "@jevitate/domain";
 
 // ── budget ───────────────────────────────────────────────────────────────────
 
@@ -22,7 +23,7 @@ export class BudgetMeter {
 
   constructor(limits: SuiteBudget, opts: { now?: () => number; costKnownZero?: boolean } = {}) {
     this.#limits = limits;
-    this.#now = opts.now ?? Date.now;
+    this.#now = opts.now ?? clock.now;
     this.#start = this.#now();
     this.#costKnownZero = opts.costKnownZero === true;
   }

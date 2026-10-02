@@ -13,6 +13,7 @@ import {
   type Action,
 } from "@jevitate/inbox";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The `jevitate ui` local HTTP server — the human-facing side of the HITL
@@ -261,7 +262,7 @@ export async function startUiServer(deps: StartUiServerDeps): Promise<UiServerHa
       let item;
       if (action === "input") {
         if (input === undefined) return send(res, 400, { error: "invalid_body", message: "'input' must be a string" });
-        item = await store.appendThread(id, { author: "human", text: input, at: new Date().toISOString() });
+        item = await store.appendThread(id, { author: "human", text: input, at: clock.nowIso() });
       } else {
         const resolveAction = action as Exclude<Action, "input">;
         item = await store.resolve(id, {
@@ -406,7 +407,7 @@ export async function startUiServer(deps: StartUiServerDeps): Promise<UiServerHa
 
   boundPort = await bind();
 
-  const sweepTimer = setInterval(() => {
+  const sweepTimer = clock.setInterval(() => {
     void store.sweepExpired().catch(() => {
       // best-effort background sweep; a failure here must not crash the server
     });
@@ -417,7 +418,7 @@ export async function startUiServer(deps: StartUiServerDeps): Promise<UiServerHa
   if (shouldOpen) openInBrowser(url);
 
   async function close(): Promise<void> {
-    clearInterval(sweepTimer);
+    clock.clearInterval(sweepTimer);
     // Drop keep-alive sockets now, not when the client next times them out: the UI server binds a
     // fixed default port, so a client's pooled socket to a closed server would otherwise be reused
     // against the next server on that port and fail with "other side closed".

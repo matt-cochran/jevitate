@@ -85,6 +85,27 @@ describe("withServerCause (#165 'Also' — pairs a UI blocker with its correlate
     expect(withServerCause("blocked", "blocked", undefined)).toBe("blocked");
   });
 
+  it("#204: a line correlated to its exact request by id reads 'caused by: … on METHOD /path (status)', and wins over a time-window line", () => {
+    const transcript: TranscriptEntryWithLogs[] = [
+      step("http://x.test/drafts", [
+        { level: "error", message: "unrelated by time", raw: "…", source: "file:app.log", epochMs: 1 },
+        {
+          level: "error",
+          message: "publish refused: plan quota exceeded",
+          raw: "…",
+          source: "file:app.log",
+          epochMs: 2,
+          request: { method: "POST", url: "http://x.test/api/publish?draft=7", status: 409, id: "req-0003-7f3a9c" },
+        },
+      ]),
+      // The run ended on `blocked`: the action before it is the step its blocker is about.
+      { ...step("http://x.test/drafts"), step: 2, op: "blocked", signature: "s2" },
+    ];
+    expect(withServerCause('the page shows alert "Publishing is not available"', "blocked", transcript)).toBe(
+      'the page shows alert "Publishing is not available"; caused by: error "publish refused: plan quota exceeded" on POST /api/publish (409)',
+    );
+  });
+
   it("is a no-op when the last step has no warn/error server-log evidence", () => {
     const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "info", message: "handled", raw: "…", source: "file:app.log", epochMs: 1 }])];
     expect(withServerCause("blocked", "blocked", transcript)).toBe("blocked");

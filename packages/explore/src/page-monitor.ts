@@ -2,6 +2,7 @@ import { redactUrl } from "@jevitate/ai-core";
 import type { Page, Request } from "playwright";
 import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
 import { visibleBusyIndicator } from "./hang.js";
+import { clock } from "@jevitate/domain";
 
 /** The interactive-control selector (kept in step with `snapshot`). */
 const INTERACTIVE_SELECTOR =
@@ -87,6 +88,8 @@ export interface CompletedRequest extends InflightRequest {
    * clean finish.
    */
   readonly abortedAfterResponse?: boolean;
+  /** A `--settle-ignore`d request (telemetry, a beacon): the target's background traffic, never its work. */
+  readonly ignored?: true;
 }
 
 export interface SettleResult {
@@ -97,6 +100,27 @@ export interface SettleResult {
   readonly pending: InflightRequest[];
   /** Long-lived requests treated as background while waiting (evidence: why they did not count). */
   readonly background?: Array<InflightRequest & { readonly why: "stream" | "ignored" | "long-poll" }>;
+}
+
+/**
+ * #303: what counts as an ANNOUNCEMENT the page made (a toast, a banner, a live region's update) —
+ * noted by the monitor's observer as it happens, so an action's delta still sees one that was gone
+ * before the page settled.
+ */
+export const TRANSIENT_SELECTOR =
+  "[aria-live]:not([aria-live=off]),[role=status],[role=alert],[role=log],[class*=toast],[class*=snackbar],[class*=notification]";
+/** A dialog counts as an announcement only when it is itself ADDED (never for edits inside it). */
+const TRANSIENT_DIALOG_SELECTOR = "[role=dialog],[role=alertdialog],dialog";
+/** Bound on the announcements the page keeps (oldest dropped first). */
+const TRANSIENT_MAX = 50;
+/** Bound (chars) on one announcement's text. */
+const TRANSIENT_TEXT_MAX = 200;
+
+/** One announcement the page made (raw page text — redact before keeping or sending it). */
+export interface TransientNote {
+  readonly t: number;
+  readonly role: string;
+  readonly text: string;
 }
 
 /**
@@ -126,10 +150,45 @@ const INSTRUMENT = `(() => {
     }
     return true;
   };
+  // #303: short-lived announcements (a toast, a banner, a live region's update) are often gone by the
+  // time the page settles and an action's delta is read: the SAME observer notes each one (bounded
+  // ring, raw text stays in the page until read; the reader redacts it before anything keeps it).
+  state.transients = [];
+  const ANNOUNCE = "${TRANSIENT_SELECTOR}";
+  const ADDED = ANNOUNCE + ",${TRANSIENT_DIALOG_SELECTOR}";
+  const announcer = (n) => {
+    const el = n === null ? null : n.nodeType === 1 ? n : n.parentElement;
+    if (el === null || el === undefined || typeof el.closest !== "function") return null;
+    return el.closest(ANNOUNCE);
+  };
+  const noteTransients = (records) => {
+    const seen = new Set();
+    for (const r of records) {
+      let el = null;
+      if (r.type === "characterData") el = announcer(r.target);
+      else if (r.type === "childList") {
+        el = announcer(r.target);
+        if (el === null) for (const n of r.addedNodes) { if (n.nodeType === 1 && n.matches(ADDED)) { el = n; break; } }
+      }
+      if (el === null || seen.has(el)) continue;
+      seen.add(el);
+      const text = (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${TRANSIENT_TEXT_MAX});
+      if (text === "") continue;
+      const role = el.getAttribute("role") || (el.tagName === "DIALOG" ? "dialog" : "live");
+      const last = state.transients[state.transients.length - 1];
+      if (last && last.text === text && last.role === role) { last.t = Date.now(); continue; }
+      state.transients.push({ t: Date.now(), role, text });
+      if (state.transients.length > ${TRANSIENT_MAX}) state.transients.splice(0, state.transients.length - ${TRANSIENT_MAX});
+    }
+  };
   const start = () => {
     try {
       new MutationObserver((records) => {
         if (records.some(structural)) state.lastMutation = Date.now();
+        // Only while a run records action deltas (#303, opt-in): off, the observer does no more work.
+        if (window.__jevitateDeltasOn === true) {
+          try { noteTransients(records); } catch (e) { /* never let the note break settling */ }
+        }
       }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     } catch (e) { /* no document yet */ }
   };
@@ -192,6 +251,12 @@ export interface CapturedRequest {
   readonly startedAt?: number;
   /** The REQUEST's `content-type` header, when it sent one (#110). */
   readonly requestContentType?: string;
+  /**
+   * #283: the request was SENT but had not finished when the capture was read (a unary RPC the
+   * server holds open for minutes, or one its document abandoned without an end event). Only
+   * `RequestCapture.sent()` lists these; `status` is null.
+   */
+  readonly pending?: true;
 }
 
 /** Most requests a capture keeps; past it the oldest are dropped and `truncated` is set. */
@@ -204,6 +269,10 @@ const MAX_CAPTURED = 20_000;
  */
 export class RequestCapture {
   readonly #requests: CapturedRequest[] = [];
+  /** #283: requests sent since the capture started that have not finished (keyed by the request). */
+  readonly #inflight = new Map<object, CapturedRequest>();
+  /** #283: requests sent that never reported an end (their document went away first). */
+  readonly #unfinished: CapturedRequest[] = [];
   #truncated = false;
 
   /** @internal — fed by the page's monitor. */
@@ -215,9 +284,35 @@ export class RequestCapture {
     }
   }
 
+  /** @internal — the page's monitor saw `key` sent. */
+  began(key: object, r: CapturedRequest): void {
+    this.#inflight.set(key, { ...r, status: null, failed: false, pending: true });
+  }
+
+  /**
+   * @internal — `key` ended. `finished` is its finished record (then `add`ed), or null when the
+   * monitor had already forgotten it (its document was replaced): it stays "sent, never finished".
+   */
+  ended(key: object, finished: CapturedRequest | null): void {
+    const sent = this.#inflight.get(key);
+    this.#inflight.delete(key);
+    if (finished !== null) this.add(finished);
+    else if (sent !== undefined && this.#unfinished.length < MAX_CAPTURED) this.#unfinished.push(sent);
+  }
+
   /** The requests captured so far, in the order they finished. */
   requests(): CapturedRequest[] {
     return [...this.#requests];
+  }
+
+  /**
+   * Every request SENT since the capture started (#283): the finished ones (`requests()`), then the
+   * ones still in flight or abandoned without an end event (`pending: true`, `status: null`). A
+   * `requestMade` check is judged over these — a request counts once it was sent, whether or not
+   * its response has arrived.
+   */
+  sent(): CapturedRequest[] {
+    return [...this.#requests, ...this.#unfinished, ...this.#inflight.values()];
   }
 
   /** True when more requests finished than the capture keeps (the oldest were dropped). */
@@ -244,6 +339,9 @@ function requestContentTypeOf(r: Request): string | undefined {
   }
 }
 
+/** How long (ms) finished requests are remembered past a perception — `BACKGROUND_WINDOW_MS`'s look-back. */
+const RECENT_REQUESTS_MS = 60_000;
+
 export class PageMonitor {
   readonly #page: Page;
   readonly #inflight = new Map<Request, InflightRequest>();
@@ -253,6 +351,8 @@ export class PageMonitor {
   readonly #contentTypes = new WeakMap<Request, string>();
   readonly #now: () => number;
   #lastNetworkActivity: number;
+  /** The last main-frame navigation (activity no request filter can discount). */
+  #lastNavigation: number;
   /** Long-lived requests that are not in-flight work, and why. */
   readonly #background = new Map<Request, "stream" | "ignored" | "long-poll">();
   #ignore: (url: string) => boolean = () => false;
@@ -261,10 +361,11 @@ export class PageMonitor {
   #instrumented: Promise<void> | undefined;
   readonly #captures = new Set<RequestCapture>();
 
-  constructor(page: Page, now: () => number = Date.now) {
+  constructor(page: Page, now: () => number = clock.now) {
     this.#page = page;
     this.#now = now;
     this.#lastNetworkActivity = now();
+    this.#lastNavigation = now();
     page.on("request", (r) => {
       const startedAt = this.#now();
       if (r.isNavigationRequest() && r.frame() === page.mainFrame()) this.#documentNavStartedAt = startedAt;
@@ -276,6 +377,18 @@ export class PageMonitor {
         startedAt,
         ...(requestContentType === undefined ? {} : { requestContentType }),
       });
+      for (const c of this.#captures) {
+        c.began(r, {
+          method: r.method().toUpperCase(),
+          url: redactUrl(r.url()),
+          path: pathOf(r.url()),
+          status: null,
+          failed: false,
+          resourceType: r.resourceType(),
+          startedAt,
+          ...(requestContentType === undefined ? {} : { requestContentType }),
+        });
+      }
       if (this.#ignore(r.url())) {
         this.#background.set(r, "ignored"); // the target's own background traffic: no activity either
         return;
@@ -289,7 +402,11 @@ export class PageMonitor {
       const navAt = this.#documentNavStartedAt;
       if (navAt === null) return;
       for (const [r, info] of this.#inflight) {
-        if (info.startedAt < navAt) this.#inflight.delete(r);
+        if (info.startedAt >= navAt) continue;
+        // #289: a request the old document already got its RESPONSE for (a save whose handler then
+        // navigated away on the response) ended with that status — kept as completed, never lost.
+        if (this.#statuses.has(r)) end(r, false);
+        else this.#inflight.delete(r);
       }
       this.#touch();
     });
@@ -315,9 +432,10 @@ export class PageMonitor {
           abortedAfterResponse,
           endedAt,
           durationMs: Math.max(0, endedAt - started.startedAt),
+          ...(ignored ? { ignored: true as const } : {}),
         });
         for (const c of this.#captures) {
-          c.add({
+          c.ended(r, {
             method: started.method.toUpperCase(),
             url: redactUrl(started.url),
             path: pathOf(started.url),
@@ -330,6 +448,8 @@ export class PageMonitor {
             ...(started.requestContentType === undefined ? {} : { requestContentType: started.requestContentType }),
           });
         }
+      } else {
+        for (const c of this.#captures) c.ended(r, null);
       }
       if (!ignored) this.#touch();
     };
@@ -348,8 +468,24 @@ export class PageMonitor {
     // A navigation is activity too (a request abandoned by an unloading document is reported by
     // Chromium as `requestfailed`, which ends it above).
     page.on("framenavigated", (frame) => {
-      if (frame === page.mainFrame()) this.#touch();
+      if (frame === page.mainFrame()) {
+        this.#lastNavigation = this.#now();
+        this.#touch();
+      }
     });
+  }
+
+  /**
+   * The latest network activity, discounting requests `ignore` names (and `--settle-ignore`d ones):
+   * the last start of one still in flight, the last end of a finished one, or a navigation.
+   */
+  #lastActivityExcept(ignore: (r: InflightRequest) => boolean): number {
+    let at = this.#lastNavigation;
+    for (const [r, info] of this.#inflight) {
+      if (this.#background.get(r) !== "ignored" && !ignore(info)) at = Math.max(at, info.startedAt);
+    }
+    for (const c of this.#completed) if (c.ignored !== true && !ignore(c)) at = Math.max(at, c.endedAt);
+    return at;
   }
 
   #touch(): void {
@@ -392,6 +528,16 @@ export class PageMonitor {
       .map(([, info]) => info);
   }
 
+  /**
+   * Every request that has not finished yet (#283) — pending work AND requests the settle rule treats
+   * as background (a long-poll, a stream, a `--settle-ignore`d one). Settle never waits on the
+   * background ones, but a write a run's action fired is still in flight until it ENDS: a unary RPC
+   * the server holds open for minutes is demoted to "long-poll" for settling, never forgotten.
+   */
+  unfinished(): InflightRequest[] {
+    return [...this.#inflight.values()];
+  }
+
   /** In-flight requests currently treated as background, and why. */
   background(): Array<InflightRequest & { why: "stream" | "ignored" | "long-poll" }> {
     const out: Array<InflightRequest & { why: "stream" | "ignored" | "long-poll" }> = [];
@@ -406,7 +552,7 @@ export class PageMonitor {
   async #interactive(boundMs: number): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), Math.max(1, boundMs));
+      timer = clock.setTimeout(() => resolve(false), Math.max(1, boundMs));
     });
     const probe = (async (): Promise<boolean> => {
       const controls = await this.#page.evaluate(hasEnabledControl, INTERACTIVE_SELECTOR);
@@ -416,7 +562,38 @@ export class PageMonitor {
     try {
       return await Promise.race([probe, bound]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
+    }
+  }
+
+  /**
+   * #303: the announcements (toasts, banners, live-region updates) the page made at or after
+   * `sinceMs` (wall clock), oldest first — RAW page text: the caller redacts it before keeping it.
+   * Empty when the page cannot answer within `boundMs`.
+   */
+  async transientsSince(sinceMs: number, boundMs = 1_000): Promise<TransientNote[]> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<TransientNote[]>((resolve) => {
+      timer = clock.setTimeout(() => resolve([]), Math.max(1, boundMs));
+    });
+    try {
+      return await Promise.race([
+        this.#page
+          // `since` is Node time; the page stamps its notes with ITS clock (#304: the two may differ —
+          // `page.clock` in tests), so the cut is made by AGE: the same number of ms back in page time.
+          .evaluate(
+            ({ ageMs }) => {
+              const m = (window as unknown as { __jevitateMonitor?: { transients?: Array<{ t: number; role: string; text: string }> } }).__jevitateMonitor;
+              const since = Date.now() - ageMs;
+              return (m?.transients ?? []).filter((x) => x.t >= since).map((x) => ({ t: x.t, role: x.role, text: x.text }));
+            },
+            { ageMs: this.#now() - sinceMs },
+          )
+          .catch(() => [] as TransientNote[]),
+        bound,
+      ]);
+    } finally {
+      if (timer !== undefined) clock.clearTimeout(timer);
     }
   }
 
@@ -441,12 +618,18 @@ export class PageMonitor {
     return { start, actionAt: this.#actionAt !== null && this.#actionAt >= start ? this.#actionAt : null, lastDocId: this.#lastDocId };
   }
 
-  /** Closes the window at `at` (the perception just read the page) and forgets older requests. */
+  /**
+   * Closes the window at `at` (the perception just read the page) and forgets requests that ended
+   * more than `RECENT_REQUESTS_MS` before it. The window's own readers ask `completedSince(start)`;
+   * the recent history is what tells the page's background polling from an action's work (#241:
+   * `backgroundEndpoints` looks back that far) — forgotten at every perception, a poll that ran
+   * between two quick decisions was taken for the action's effect.
+   */
   closeWindow(at: number, docId: string | null): void {
     this.#windowStart = at;
     this.#actionAt = null;
     if (docId !== null) this.#lastDocId = docId;
-    const keepFrom = at;
+    const keepFrom = at - RECENT_REQUESTS_MS;
     for (let i = this.#completed.length - 1; i >= 0; i--) {
       const r = this.#completed[i];
       if (r !== undefined && r.endedAt < keepFrom) this.#completed.splice(i, 1);
@@ -460,11 +643,11 @@ export class PageMonitor {
       const finish = (): void => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        clock.clearTimeout(timer);
         this.#wakers.delete(finish);
         resolve();
       };
-      const timer = setTimeout(finish, Math.max(0, ms));
+      const timer = clock.setTimeout(finish, Math.max(0, ms));
       this.#wakers.add(finish);
     });
   }
@@ -473,26 +656,27 @@ export class PageMonitor {
    * The latest DOM mutation time, or null when the page could not answer within `boundMs` (a busy
    * main thread) — which counts as NOT quiet.
    */
-  async #lastMutation(boundMs: number): Promise<{ lastMutation: number; deferredUntil: number } | null> {
+  async #lastMutation(boundMs: number): Promise<{ lastMutation: number; deferredUntil: number; pageNow: number } | null> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), Math.max(1, boundMs));
+      timer = clock.setTimeout(() => resolve(null), Math.max(1, boundMs));
     });
     try {
       return await Promise.race([
         this.#page
           .evaluate(() => {
             const m = (window as unknown as { __jevitateMonitor?: { lastMutation: number; deferred?: Map<unknown, number> } }).__jevitateMonitor;
-            if (m === undefined) return { lastMutation: Date.now(), deferredUntil: 0 };
+            const pageNow = Date.now();
+            if (m === undefined) return { lastMutation: pageNow, deferredUntil: 0, pageNow };
             let deferredUntil = 0;
             for (const due of m.deferred?.values() ?? []) deferredUntil = Math.max(deferredUntil, due);
-            return { lastMutation: m.lastMutation, deferredUntil };
+            return { lastMutation: m.lastMutation, deferredUntil, pageNow };
           })
           .catch(() => null),
         bound,
       ]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clock.clearTimeout(timer);
     }
   }
 
@@ -512,15 +696,21 @@ export class PageMonitor {
     };
   }
 
-  async waitSettled(opts: { quietMs?: number; ceilingMs: number }): Promise<SettleResult> {
+  /**
+   * Waits until the page has settled: no pending request and no network or DOM activity for
+   * `quietMs`, bounded by `ceilingMs`. `ignoreRequest` discounts requests that are not the awaited
+   * work — the page's background polling (#241): neither pending nor activity.
+   */
+  async waitSettled(opts: { quietMs?: number; ceilingMs: number; ignoreRequest?: (r: InflightRequest) => boolean }): Promise<SettleResult> {
     await this.instrument();
+    const ignore = opts.ignoreRequest;
     const quietMs = opts.quietMs ?? SETTLE_QUIET_MS;
     const start = this.#now();
     const remaining = (): number => opts.ceilingMs - (this.#now() - start);
     for (;;) {
       if (remaining() <= 0) return this.#result(false, start);
       const pending = [...this.#inflight.entries()].filter(
-        ([r, info]) => !STREAM_TYPES.has(info.resourceType) && !this.#background.has(r),
+        ([r, info]) => !STREAM_TYPES.has(info.resourceType) && !this.#background.has(r) && !(ignore?.(info) ?? false),
       );
       if (pending.length > 0) {
         const oldest = Math.min(...pending.map(([, info]) => info.startedAt));
@@ -548,17 +738,21 @@ export class PageMonitor {
         continue;
       }
       const t = this.#now();
+      // The page's stamps (mutations, deferred timers) are in the PAGE's clock and are compared with the
+      // page's own "now" (#304: page time may be `page.clock`, not Node's), network/action times in Node's.
       // A timer the action's own handler scheduled is still due (#152): its effect has not landed.
-      if (dom.deferredUntil > t) {
-        await this.#sleepOrActivity(Math.min(dom.deferredUntil - t, remaining()));
+      if (dom.deferredUntil > dom.pageNow) {
+        await this.#sleepOrActivity(Math.min(dom.deferredUntil - dom.pageNow, remaining()));
         continue;
       }
       // The quiet window is measured from AFTER the action (#152): a page that was already quiet
       // before it must still stay quiet for `quietMs` once the action was dispatched, or an effect
       // landing a few hundred ms later would be snapshotted into the NEXT action.
       const actionAt = this.#actionAt ?? Number.NEGATIVE_INFINITY;
-      const quietFor = t - Math.max(this.#lastNetworkActivity, dom.lastMutation, actionAt);
-      if (quietFor >= quietMs && this.pending().length === 0) return this.#result(true, start);
+      const network = ignore === undefined ? this.#lastNetworkActivity : this.#lastActivityExcept(ignore);
+      const quietFor = Math.min(t - Math.max(network, actionAt), dom.pageNow - dom.lastMutation);
+      const stillPending = ignore === undefined ? this.pending().length : this.pending().filter((r) => !ignore(r)).length;
+      if (quietFor >= quietMs && stillPending === 0) return this.#result(true, start);
       await this.#sleepOrActivity(Math.min(quietMs - Math.max(0, quietFor), remaining()));
     }
   }

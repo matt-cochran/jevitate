@@ -51,19 +51,27 @@ import type { EmulationSpec } from "@jevitate/playwright";
 import { safeRunPolicy as defaultRunPolicy, type RunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { JourneyRequiresAuthError, UnknownJourneyError, runJourneyProgrammatically } from "./journey-api.js";
 import { runVerifyFix, type RunVerifyFixOptions, type VerifyFixReport } from "./verify-fix-api.js";
-import { type BrowserRunOptions } from "./browser-run-options.js";
+import { ExtensionMismatchError, type BrowserRunOptions } from "./browser-run-options.js";
 import { browserRunFromFlags, emulationFromFlags } from "./cli-shared.js";
 import { environmentFromFlags, isEnvironmentError, type ResolvedJourneyEnvironment } from "./environments.js";
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "./mission-fixtures.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
-import { McpArgError, argErrorBody, optBool, optEnum, optInt, optPath, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "./mcp-args.js";
+import { McpArgError, argErrorBody, optBool, optEnum, optInt, optNamedSessions, optPath, optExtensions, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "./mcp-args.js";
 import { defaultMcpPathRoots } from "./mcp-paths.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
 import { CLI_TOOL_SPECS, cliToolInputSchema, runCliTool } from "./mcp-cli-tools.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { loadTargetsFile } from "./target-config.js";
+import { resourcePreflight, type GovernanceFlags } from "./resource-preflight.js";
+
+/** #205: a native tool's `maxBrowsers` / `maxBrowserMemory` (MiB) arguments, typed like the CLI flags. */
+function governanceArgs(args: Record<string, unknown>): GovernanceFlags {
+  const maxBrowsers = optInt(args, "maxBrowsers", 1);
+  const maxBrowserMemory = optInt(args, "maxBrowserMemory", 1);
+  return { ...(maxBrowsers === undefined ? {} : { maxBrowsers }), ...(maxBrowserMemory === undefined ? {} : { maxBrowserMemory }) };
+}
 
 /**
  * The MCP stdio server behind `jevitate mcp`. It exposes ONLY the tools in
@@ -99,6 +107,8 @@ export interface McpJourneyRunOptions {
   readonly emulation?: EmulationSpec;
   readonly screenshots?: ScreenshotsSpec;
   readonly fixtures?: (site: string) => MissionFixtures | undefined;
+  /** #303: record and compare each replayed step's action delta (`--action-deltas`). */
+  readonly actionDeltas?: boolean;
 }
 
 /**
@@ -107,7 +117,7 @@ export interface McpJourneyRunOptions {
  * paid/destructive hang writes, redaction literals) are never MCP arguments: targets.json decides.
  */
 export type McpVerifyFixArgs = Pick<RunVerifyFixOptions, "resultPath" | "fingerprint"> &
-  Partial<Pick<RunVerifyFixOptions, "storageState" | "browser" | "replays" | "invariantFiles" | "fixtureFlags" | "emulation" | "allowEmulationOverride" | "screenshots">>;
+  Partial<Pick<RunVerifyFixOptions, "storageState" | "browser" | "replays" | "invariantFiles" | "fixtureFlags" | "emulation" | "allowEmulationOverride" | "screenshots" | "actionDeltas">>;
 
 export interface McpApiDeps {
   /** Journeys store directory (`~/.jevitate/journeys` in production). */
@@ -303,6 +313,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           ...(o?.emulation === undefined ? {} : { emulation: o.emulation }),
           ...(o?.screenshots === undefined ? {} : { screenshots: o.screenshots }),
           ...(o?.fixtures === undefined ? {} : { fixtures: o.fixtures }),
+          ...(o?.actionDeltas === true ? { actionDeltas: true } : {}),
         }),
       ));
   const pathRoots = deps.pathRoots ?? defaultMcpPathRoots();
@@ -511,6 +522,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         ...(a.emulation === undefined ? {} : { emulation: a.emulation }),
         ...(a.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: a.allowEmulationOverride }),
         ...(a.screenshots === undefined ? {} : { screenshots: a.screenshots }),
+        ...(a.actionDeltas === true ? { actionDeltas: true } : {}),
       }));
   /** #255: verify_fix's CLI-parity replay options, validated like `verify-fix`'s flags (typed, before any browser). */
   const verifyFixOptions = (args: Record<string, unknown>): Omit<McpVerifyFixArgs, "resultPath" | "fingerprint"> => {
@@ -519,6 +531,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const replays = optInt(args, "replays", 1);
     const invariantFiles = (optStringArray(args, "invariants") ?? []).map((f, i) => optPath({ [`invariants[${i}]`]: f }, `invariants[${i}]`, pathRoots)!);
     const fixtures = optPath(args, "fixtures", pathRoots);
+    const fixtureIdentity = optNamedSessions(args, "fixtureIdentity", pathRoots);
     const allowEmulationOverride = optBool(args, "allowEmulationOverride");
     const headed = optBool(args, "headed");
     const slowMo = optInt(args, "slowMo", 0);
@@ -526,19 +539,25 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const shots = optScreenshots(args, pathRoots);
     const viewport = optViewport(args);
     const device = optString(args, "device");
+    const extension = optExtensions(args, pathRoots);
+    const governance = governanceArgs(args);
+    const actionDeltas = optBool(args, "actionDeltas");
     try {
-      const browser = browserRunFromFlags({ browserArg: [], ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
+      const browser = browserRunFromFlags({ browserArg: [], ...governance, ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
       const screenshots = parseScreenshotsArg(shots);
       const emulation = emulationFromFlags({ ...(viewport === undefined ? {} : { viewport }), ...(device === undefined ? {} : { device }) });
       return {
         ...(storageState === undefined ? {} : { storageState }),
         ...(replays === undefined ? {} : { replays }),
         ...(invariantFiles.length === 0 ? {} : { invariantFiles }),
-        ...(fixtures === undefined ? {} : { fixtureFlags: { fixtures } }),
+        ...(fixtures === undefined && fixtureIdentity === undefined
+          ? {}
+          : { fixtureFlags: { ...(fixtures === undefined ? {} : { fixtures }), ...(fixtureIdentity === undefined ? {} : { fixtureIdentity }) } }),
         ...(allowEmulationOverride === undefined ? {} : { allowEmulationOverride }),
         ...(browser === undefined ? {} : { browser }),
         ...(screenshots === undefined ? {} : { screenshots }),
         ...(emulation === undefined ? {} : { emulation }),
+        ...(actionDeltas === true ? { actionDeltas: true } : {}),
       };
     } catch (err) {
       throw new McpArgError(err instanceof Error ? err.message : String(err));
@@ -563,6 +582,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       if (body === undefined) throw err;
       return errorResult(body);
     }
+    // #205: the same pre-run checks as `jevitate verify-fix` (orphan sweep, starved-host refusal).
+    const starved = await resourcePreflight({});
+    if (starved !== null) return errorResult({ error: "refused", code: starved.error?.code, message: starved.error?.message });
     const ref = await resolveResultId(args.id, "verify_fix");
     if ("response" in ref) {
       // A mission still queued/running has nothing to verify yet: never a pass.
@@ -618,11 +640,13 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const headed = optBool(args, "headed");
     const slowMo = optInt(args, "slowMo", 0);
     const recordVideo = optRecordVideo(args, pathRoots);
+    const extension = optExtensions(args, pathRoots);
+    const governance = governanceArgs(args);
     let browser: BrowserRunOptions | undefined;
     let screenshots: ScreenshotsSpec | undefined;
     let emulation: EmulationSpec | undefined;
     try {
-      browser = browserRunFromFlags({ browserArg: [], ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
+      browser = browserRunFromFlags({ browserArg: [], ...governance, ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
       screenshots = parseScreenshotsArg(optScreenshots(args, pathRoots));
       const viewport = optViewport(args);
       const device = optString(args, "device");
@@ -632,9 +656,11 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       throw new McpArgError(err instanceof Error ? err.message : String(err));
     }
     const fixturesFile = optPath(args, "fixtures", pathRoots);
+    const fixtureIdentity = optNamedSessions(args, "fixtureIdentity", pathRoots);
     // The environment's hooks apply as on the CLI; they need --allow-shell-hooks, which MCP never sets.
     const fixtureFlags = {
       ...(fixturesFile === undefined ? {} : { fixtures: fixturesFile }),
+      ...(fixtureIdentity === undefined ? {} : { fixtureIdentity }),
       ...(environment?.hooks?.before === undefined ? {} : { before: environment.hooks.before }),
       ...(environment?.hooks?.after === undefined ? {} : { after: environment.hooks.after }),
     };
@@ -677,6 +703,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         ...(browser === undefined ? {} : { browser }),
         ...(emulation === undefined ? {} : { emulation }),
         ...(screenshots === undefined ? {} : { screenshots }),
+        ...(optBool(args, "actionDeltas") === true ? { actionDeltas: true } : {}),
       },
       ...(usage === undefined ? {} : { usage }),
     };
@@ -688,13 +715,14 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "Replay a finding's reproduction (by mission result id — or a finished queue_exploration missionId — + fingerprint) N times in fresh browsers (default 3) — `jevitate verify-fix`. status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass). " +
         "#255 (same as the CLI flags): 'replays' (>= 1); 'recordVideo' (true or a directory: the before/after evidence pair — `evidence.before` is the run's own clip, `evidence.after` a captioned replay — plus videoPaths); 'screenshots'; 'headed'/'slowMo'; " +
         "'storageState' (a path inside the project or ~/.jevitate, never a repo's .jevitate/; overrides the mission's session); 'viewport' {width,height} or 'device' (refused when it differs from the finding's recorded emulation unless 'allowEmulationOverride'); " +
-        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
+        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'fixtureIdentity' (#243: 'name=<storageState path>' entries re-binding a fixture step's auth.identity; default: the identities the mission recorded); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with); 'actionDeltas' (#303, opt-in: the defect step's replayed delta vs the recorded one, as evidence on each attempt); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
       inputSchema: {
         type: "object",
         properties: {
           id: { type: "string" },
           fingerprint: { type: "string" },
           replays: { type: "integer", minimum: 1 },
+          actionDeltas: { type: "boolean" },
           recordVideo: { type: ["boolean", "string"] },
           screenshots: { type: ["boolean", "string"] },
           headed: { type: "boolean" },
@@ -705,6 +733,10 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           allowEmulationOverride: { type: "boolean" },
           invariants: { type: "array", items: { type: "string" } },
           fixtures: { type: "string" },
+          fixtureIdentity: { type: "array", items: { type: "string" } },
+          extension: { type: "array", items: { type: "string" } },
+          maxBrowsers: { type: "integer", minimum: 1 },
+          maxBrowserMemory: { type: "integer", minimum: 1 },
         },
         required: ["id", "fingerprint"],
       },
@@ -729,8 +761,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "server's own browser, never returned or logged. A Journey that declares metadata.requiresAuth refuses " +
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
-        "'viewport' {width,height} or 'device' (mutually exclusive); 'fixtures' (a fixtures JSON path: setup before, restore after; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
-        "'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals). A site-policy refusal is {error: throttled, retryAfter}.",
+        "'viewport' {width,height} or 'device' (mutually exclusive); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
+        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
         properties: {
@@ -746,9 +778,14 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           viewport: { type: "object", properties: { width: { type: "integer" }, height: { type: "integer" } }, required: ["width", "height"] },
           device: { type: "string" },
           fixtures: { type: "string" },
+          fixtureIdentity: { type: "array", items: { type: "string" } },
           selfHeal: { type: "string", enum: ["fail-closed", "hybrid", "full"] },
           real: { type: "boolean" },
           fakeAi: { type: "boolean" },
+          extension: { type: "array", items: { type: "string" } },
+          maxBrowsers: { type: "integer", minimum: 1 },
+          maxBrowserMemory: { type: "integer", minimum: 1 },
+          actionDeltas: { type: "boolean" },
         },
         required: ["id"],
       },
@@ -767,6 +804,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           if (err instanceof SetupRequired) return errorResult({ error: "setup_required", message: err.message });
           throw err;
         }
+        // #205: the same pre-run checks as `jevitate journey run` (orphan sweep, starved-host refusal).
+        const starved = await resourcePreflight({});
+        if (starved !== null) return errorResult({ error: "refused", code: starved.error?.code, message: starved.error?.message });
         try {
           const result = await runJourney(args.id, resolved.params, resolved.storageState, resolved.options);
           // #163: a self-healing run's model usage lands on its result, as on the CLI.
@@ -778,6 +818,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           }
           if (err instanceof UnknownJourneyError) return errorResult({ error: "not_found", id: args.id, message: err.message });
           if (err instanceof JourneyRequiresAuthError) return errorResult({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });
+          if (err instanceof ExtensionMismatchError) return errorResult({ error: "invalid_args", code: err.code, message: err.message });
           if (err instanceof ParamValidationError) return errorResult({ error: "invalid_args", code: "E_INVALID_PARAMS", message: err.message });
           if (isEnvironmentError(err) || err instanceof FixtureSpecError || err instanceof UnboundSetupRefError) {
             return errorResult({ error: "invalid_args", code: err.code, message: err.message });

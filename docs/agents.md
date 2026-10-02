@@ -37,6 +37,7 @@ The skills (each one's description tells the agent when to use it):
 | `jevitate-demo` | `demo "<aspect>"` / `demo approve`, `journey annotate`, `journey demo`, environments |
 | `jevitate-verify-fix` | `verify-fix`, evidence clips and screenshots, the ledger, `regression capture`/`run` |
 | `jevitate-ci-check` | `check --suite` (JUnit, SARIF, exit codes), baselines, `report`, `diff` |
+| `jevitate-test-campaign` | a whole-release test campaign: job catalog, discovery runs, journey-anchored missions, evidence, verify-fix, the gate |
 | `jevitate-ux-review`, `jevitate-load-test`, `jevitate-sources` | usability review, load tests, shared/third-party Journeys |
 
 Their source is [`packages/skills/skills/`](../packages/skills/skills). Every `jevitate` command and
@@ -70,13 +71,14 @@ tool from the CLI), except the few listed below with the reason:
 | `create_demo`, `approve_demo` | demo one aspect on a named, non-production environment as a DRAFT; approve it (renders the final demo, promotes the Journey) | `demo "<aspect>"` / `demo create`, `demo approve` |
 | `author_journey` | explore toward a goal and author an unpromoted Journey from the verified path | `explore-author-journey` |
 | `queue_exploration`, `run_queued_missions`, `get_mission_result` | queue a bounded mission against a promoted target (`goal-based`/`coverage`/`exploratory`/`adversarial`/`feature`; `recordVideo`, `screenshots`, `evidenceVideo`, `persona`), drain the queue once, read its typed result | `mission queue`, `mission run`, `mission result` |
-| `run_exploration` | run `explore` directly (every strategy, including `usability`), within its budget | `explore` |
+| `run_exploration` | run `explore` directly (every strategy, including `usability`), within its budget; `fromJourney` + `atStep` (+ `params`, `env`) start it from a promoted Journey's step (#293) | `explore` |
 | `verify_fix` | re-check a finding: `replays`, `recordVideo` (before/after evidence), `screenshots`, `storageState`, `viewport`/`device` (+ `allowEmulationOverride`), `invariants`, `fixtures` | `verify-fix` |
 | `run_check`, `get_report`, `diff_runs`, `baselines` | the CI gate; the deduped defect report; a run diff; named baselines (`list`/`show`/`tag`) | `check`, `report`, `diff`, `baseline …` |
 | `ledger`, `regressions` | the repro ledger (`add`/`list`/`verify`); committed regressions (`capture`/`run`) | `ledger …`, `regression …` |
 | `mission_targets` | the targets missions may run against (`add`/`list`/`update`/`promote`) | `mission target …` |
+| `journey_anchors`, `run_campaign` | a Journey's named anchors (#293); a campaign of journey-anchored missions with one deduped report | `journey anchors`, `campaign run` |
 | `run_load_test`, `ux_review`, `validate_invariants` | a load test of a Journey; an offline UX review of a Recording; validate invariant files | `load run`, `ux`, `invariants validate` |
-| `recordings`, `sources`, `site_policy`, `profiles`, `prune_logs`, `get_ai_status` | Recording tools (`diff`/`fit`/`postdoc`/`promote`); Journey sources (`add`/`list`/`pull`/`update`/`remove`/`run`); site policies (`get`/`set`/`simulate`); profiles (`create`/`status`); log retention; which keys are configured (never a value) | `recording …`, `source …`, `site policy …`/`site simulate`, `profile …`, `logs prune`, `ai status` |
+| `recordings`, `sources`, `site_policy`, `profiles`, `prune_logs`, `get_ai_status` | Recording tools (`diff`/`fit`/`postdoc`/`promote`); Journey sources (`add`/`list`/`pull`/`update`/`remove`/`run`); site policies (`get`/`set`/`simulate`); profiles (`create`/`status`); log retention; which keys are configured, their source and a live validity check (never a value) | `recording …`, `source …`, `site policy …`/`site simulate`, `profile …`, `logs prune`, `ai status` |
 | `queue_retrieval`, `queue_action`, `get_command`, `cancel_command`, `approve_action` | the command queue (`approve_action` and cancelling are human-only and refuse over MCP) | `inbox queue-retrieval`, `inbox queue-action`, `inbox command`; `inbox cancel` / `inbox approve` refuse the same way (approve or cancel in `jevitate ui`) |
 | `list_incoming`, `get_thread` | site-integration reads | `inbox list`, `inbox show` |
 | `get_site_health` | health, including the engine build identity | `inbox health` |

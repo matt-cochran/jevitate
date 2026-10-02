@@ -9,6 +9,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
+    "@jevitate/domain": "workspace:*",
     "playwright": "^1.49.0"
   },
   "scripts": {

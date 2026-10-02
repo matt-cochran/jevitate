@@ -12,6 +12,7 @@ import { CheckAiSetupError, type CheckFinding, type CheckGateways, type CheckIte
 import { BudgetMeter } from "./check-budget.js";
 import { type Planned, type PreparedTarget, errorMessage, plan, prepareTarget } from "./check-plan.js";
 import { type ExecContext, type Executed, caseDetail, execute } from "./check-execute.js";
+import { clock } from "@jevitate/domain";
 export { affectedBy } from "./check-plan.js";
 export { BudgetMeter } from "./check-budget.js";
 export { type BudgetReport, CheckAiSetupError, type CheckFinding, type CheckGateways, type CheckItemReport, CheckPreflightError, type CheckResult, type CheckRunners, type ItemKind, type RunCheckOptions } from "./check-types.js";
@@ -27,7 +28,7 @@ const REAL_RUNNERS: CheckRunners = {
 };
 
 export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
-  const nowIso = opts.nowIso ?? (() => new Date().toISOString());
+  const nowIso = opts.nowIso ?? (() => clock.nowIso());
   const startedAt = nowIso();
   const engine = currentEngineInfo();
   const outDir = resolve(opts.outDir);
@@ -52,7 +53,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const usage = async (): Promise<UsageCounts | undefined> => (gw === undefined ? undefined : (await gw).usage.snapshot());
   let n = 0;
   const ctx: ExecContext = { opts, runners, resultsDir, gateways, engine, seq: () => String(++n) };
-  const now = opts.now ?? Date.now;
+  const now = opts.now ?? clock.now;
   let exceeded: string | undefined;
   const executed: Array<{ item: Planned; ex: Executed | undefined; durationMs: number }> = [];
   for (const item of items) {

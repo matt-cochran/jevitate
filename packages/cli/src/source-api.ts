@@ -22,6 +22,7 @@ import {
   type TrustStore,
 } from "@jevitate/sources";
 import { UnknownJourneyError } from "./journey-api.js";
+import { clock } from "@jevitate/domain";
 
 const execFileAsync = promisify(execFile);
 
@@ -88,7 +89,7 @@ function mgrOf(deps: SourceApiDeps): GitSourceManager {
 }
 
 function nowIso(deps: SourceApiDeps): string {
-  return (deps.now ?? (() => new Date().toISOString()))();
+  return (deps.now ?? (() => clock.nowIso()))();
 }
 
 /**

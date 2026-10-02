@@ -5,8 +5,11 @@ import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runAdversarialMission } from "./adversarial.js";
-import { withSession } from "../testkit.js";
+import { withSession, useSkippingTime } from "../testkit.js";
 import type { VerifySession } from "../verify-fix.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #226: the app's server FREEZES mid-run (alive, accepting connections, never answering — what a

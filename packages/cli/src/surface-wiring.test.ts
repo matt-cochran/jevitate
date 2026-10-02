@@ -60,7 +60,12 @@ const MASK_INTERNAL = "#250/#251: the pixel mask is built inside the run from th
 const OBSERVER_INTERNAL = "#246/#248: only annotate and demo replay with an observer (evidence, captions); `--screenshots` composes its own inside the run";
 const OBSERVER_NOT_INTERPRETER = "#251: annotate/demo pass their observer (`observer`) so `--screenshots` can compose with it; never a whole interpreter";
 const EVIDENCE_PACE = "#250: the after-clip's caption pace is fixed (EVIDENCE_PACE_MS); a test seam only";
+const NO_DELTAS_HERE = "#303: --action-deltas is a per-run opt-in on explore items, journey run/annotate/demo and verify-fix; this batch/suite/candidate replay only needs its verdict";
 const NO_SCREENSHOTS_HERE = "#251: this surface takes no --screenshots (a batch/queued/MCP/suite-journey run: none asked for)";
+const WHOLE_JOURNEY = "#293: only an anchored mission replays a Journey PREFIX into its own open session (journey-prefix.ts); this surface replays the whole Journey in a browser of its own";
+const PREFIX_IN_SESSION = "#293: a Journey prefix replays INTO the mission's already-open session — the mission's own browser, emulation and capture apply";
+const BRANCH_RECORDED = "#293: a branch-point finding still replays through its Journey prefix, with the params its result recorded (non-secret); secret ones are re-supplied only on `verify-fix --param`";
+const NO_ANCHORED_HERE = "#293: a journey-anchored mission is an `explore --from-journey` run, a suite mission item or a campaign job — never this surface";
 
 /** `<file> <api>` → option → why that surface does not pass it. */
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -90,6 +95,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     fixture: "offline review: nothing to upload",
   },
   "ledger-cli.ts runLedgerVerify": {
+    actionDeltas: NO_DELTAS_HERE,
     evidencePaceMs: EVIDENCE_PACE,
     screenshots: NO_SCREENSHOTS_HERE,
     settleCeilingMs: "verify-fix reuses the recorded run's render wait",
@@ -99,6 +105,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     secrets: "redaction of fixture logs only; a batch re-check takes no fixture hooks",
     emulation: "replays under each finding's own recorded emulation",
     allowEmulationOverride: "replays under each finding's own recorded emulation",
+    journeyPrefix: BRANCH_RECORDED,
   },
   "regression-cli.ts runRegressionCapture": {},
   "regression-cli.ts runRegressionRun": {},
@@ -110,10 +117,25 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     allowLogCmd: MCP_NARROW,
     hangReplayWrites: MCP_NARROW,
     secrets: MCP_NARROW,
+    journeyPrefix: BRANCH_RECORDED,
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
-  "journey-cli.ts runJourneyProgrammatically": { account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL },
+  "journey-cli.ts runJourneyProgrammatically": { account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
+  "journey-prefix.ts runJourneyProgrammatically": {
+    account: SITE_ACCOUNT,
+    actionDeltas:
+      "#303 × #293: the prefix is the anchored mission's setup, not its actions — `--action-deltas` records the mission's own steps from the branch point on; a prefix that no longer replays is already a typed journey-stale (fail-closed), never a delta mismatch",
+    browserPortFactory: PREFIX_IN_SESSION,
+    emulation: PREFIX_IN_SESSION,
+    mask: PREFIX_IN_SESSION,
+    screenshots: PREFIX_IN_SESSION,
+    fixtures: "#293: the anchored run's caller owns the state (explore --fixtures around a goal run; a campaign's restore around every run)",
+    interpreter: ANNOTATE_OBSERVER,
+    observer: OBSERVER_INTERNAL,
+    policy: "#293: a prefix replays with the fail-closed safeRunPolicy() — paid/destructive steps refused as in any run",
+    selfHealer: "#293: a prefix never self-heals: a healed prefix is no branch point — it is a stale Journey (journey-stale)",
+  },
   "journey-annotate-api.ts runJourneyProgrammatically": {
     interpreter: OBSERVER_NOT_INTERPRETER,
     policy: "annotate replays with the fail-closed safeRunPolicy() — it documents a Journey, never heals one",
@@ -125,6 +147,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
+    actionDeltas: NO_DELTAS_HERE,
     account: SITE_ACCOUNT,
     interpreter: "#249: a clean-path candidate replay only needs its verdict (the demo/annotate stages observe their own replays)",
     policy: "a clean-path candidate replays with the fail-closed safeRunPolicy() — paid/destructive steps refused as in any run",
@@ -132,6 +155,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     mask: "a clean-path candidate captures no media (the demo stage masks its own)",
     observer: OBSERVER_INTERNAL,
     screenshots: "a clean-path candidate captures no media (the demo stage renders the screenshots)",
+    session: WHOLE_JOURNEY,
+    stopAfterStep: WHOLE_JOURNEY,
   },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
@@ -140,8 +165,11 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     account: SITE_ACCOUNT,
     browserPortFactory: SEAM,
     interpreter: ANNOTATE_OBSERVER,
+    session: WHOLE_JOURNEY,
+    stopAfterStep: WHOLE_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
+    actionDeltas: NO_DELTAS_HERE,
     mask: MASK_INTERNAL,
     observer: OBSERVER_INTERNAL,
     screenshots: NO_SCREENSHOTS_HERE,
@@ -149,6 +177,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     policy: "a suite Journey replays with the fail-closed safeRunPolicy()",
     selfHealer: "check never self-heals: a broken step fails the gate",
     interpreter: ANNOTATE_OBSERVER,
+    session: WHOLE_JOURNEY,
+    stopAfterStep: WHOLE_JOURNEY,
   },
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
@@ -157,8 +187,10 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     successChecks: "a queued goal carries one successAssertion",
     successWhen: QUEUE_NARROW,
     allowVacuousChecks: QUEUE_NARROW,
+    actionDeltas: QUEUE_NARROW,
     secrets: "redaction comes from the target's secret fields",
     fixture: QUEUE_NARROW,
+    typeFixtures: QUEUE_NARROW,
     nowIso: SEAM,
     filing: QUEUE_NARROW,
     issueFiler: QUEUE_NARROW,
@@ -166,15 +198,19 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     conversation: QUEUE_NARROW,
     invariantAuthTokens: QUEUE_NO_ENV_SECRETS,
     actors: QUEUE_NARROW,
+    journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runCoverageMission": {
+    actionDeltas: QUEUE_NARROW,
     hostHealth: SEAM,
     nowIso: SEAM,
     invariantAuthTokens: QUEUE_NO_ENV_SECRETS,
     stallTimeoutMs: QUEUE_NARROW,
     overflow: QUEUE_NARROW,
+    journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runAdversarialCliMission": {
+    actionDeltas: QUEUE_NARROW,
     hostHealth: SEAM,
     secrets: "redaction comes from the target's secret fields",
     filing: QUEUE_NARROW,
@@ -184,6 +220,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     coverageThresholds: QUEUE_NARROW,
     invariantAuthTokens: QUEUE_NO_ENV_SECRETS,
     overflow: QUEUE_NARROW,
+    journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runFeatureCliMission": {
     hostHealth: SEAM,
@@ -195,10 +232,12 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── check suites ────────────────────────────────────────────────────────────────────────────
   "check-execute.ts runExploration": {
     hostHealth: SEAM,
+    typeFixtures: "#281: a file typed verbatim is an explore --type-fixture binding; a suite goal declares none",
     successAssertion: "a suite goal passes success specs as successChecks",
     nowIso: SEAM,
     filing: "check reports findings itself (JUnit/SARIF)",
     issueFiler: "check reports findings itself (JUnit/SARIF)",
+    journeyPrefix: "#293: a suite's journey-anchored items are mission items (fromJourney/atStep); a goal item starts at its url",
   },
   "check-execute.ts runCoverageMission": {
     hostHealth: SEAM,
@@ -226,6 +265,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariantAuthTokens: "usability refuses declared invariants (#150)",
   },
   "check-execute.ts runVerifyFix": {
+    actionDeltas: NO_DELTAS_HERE,
     evidencePaceMs: EVIDENCE_PACE,
     screenshots: NO_SCREENSHOTS_HERE,
     settleCeilingMs: "verify-fix reuses the recorded run's render wait",
@@ -236,6 +276,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     secrets: "redaction comes from the target's secret fields",
     emulation: "replays under the finding's own recorded emulation",
     allowEmulationOverride: "replays under the finding's own recorded emulation",
+    journeyPrefix: BRANCH_RECORDED,
   },
 };
 

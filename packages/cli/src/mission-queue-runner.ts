@@ -23,9 +23,11 @@ import { parseSecretField, secretFieldSecrets, type SecretField } from "@jevitat
 import { runWithMissionKillListener } from "./kill-signal.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
-import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The queue drain behind `jevitate mission run` (#117). `queue_exploration` (MCP) only ENQUEUES —
@@ -125,7 +127,7 @@ export function needsModel(mission: QueuedMission): boolean {
  * queue record (`failed` + `error`) and the drain moves on.
  */
 export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise<DrainReport> {
-  const now = opts.nowIso ?? (() => new Date().toISOString());
+  const now = opts.nowIso ?? (() => clock.nowIso());
   const self = opts.owner ?? { pid: process.pid, host: hostname() };
   const recovered = await recoverOrphans(opts, self, now);
   const queued = (await opts.queue.list())
@@ -273,6 +275,8 @@ interface QueuedAuth {
   readonly saveStorageState?: string;
   readonly secretFields: readonly SecretField[];
   readonly fixtures?: string;
+  /** #243: the origin's personas — what a fixture step's `auth.identity` binds to. */
+  readonly personas?: TargetConfig["personas"];
 }
 
 /**
@@ -319,6 +323,7 @@ function queuedAuth(
       ...(p.storageState === undefined ? {} : { storageState: p.storageState }),
       secretFields,
       ...(config.fixtures === undefined ? {} : { fixtures: config.fixtures }),
+      ...(config.personas === undefined ? {} : { personas: config.personas }),
     };
   }
   const fromRecord = target.storageState !== undefined;
@@ -335,6 +340,7 @@ function queuedAuth(
     ...(saveStorageState === undefined ? {} : { saveStorageState }),
     secretFields,
     ...(config.fixtures === undefined ? {} : { fixtures: config.fixtures }),
+    ...(config.personas === undefined ? {} : { personas: config.personas }),
   };
 }
 
@@ -368,6 +374,9 @@ export function serverLogFromTargetConfig(targets: Readonly<Record<string, Targe
     allowLogCmd,
     quietOk: config.logQuietOk ?? [],
     logIgnore: parseLogIgnoreSpecs(config.logIgnore ?? []),
+    logScope: parseLogScopeSpecs(config.logScope ?? []),
+    correlationHeaders: parseCorrelationHeaders(config.logCorrelationHeaders ?? []),
+    idPatterns: parseLogIdPatterns(config.logIdPatterns ?? []),
   };
 }
 
@@ -497,6 +506,8 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         secretFields: auth.secretFields,
         secrets: secretFieldSecrets(auth.secretFields),
         ...(auth.fixtures === undefined ? {} : { targetFixtures: auth.fixtures }),
+        // #243: a fixture step's `auth.identity` binds to the origin's targets.json persona of that name.
+        ...(auth.personas === undefined ? {} : { personas: auth.personas }),
       },
     );
     let goal = mission.goal!;

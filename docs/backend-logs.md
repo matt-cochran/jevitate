@@ -11,8 +11,8 @@ user". Sources are **operator-declared, read-only and never the model's choice**
 only, never part of an MCP `MissionRequest`. A `server-log` defect is listed in the result's
 `defects` on every strategy, like any other defect ([result schema](./results.md)). On a usability
 run it is marked `advisory: true`, like every other UX finding — it never gates
-`missionOutcome`/`exitCode`. (`serverLogDefects` is a deprecated alias of the server-log subset,
-kept for 0.2.0 only.)
+`missionOutcome`/`exitCode`. (The 0.2.0 `serverLogDefects` alias of the server-log subset was
+removed in 0.3.0; read `defects` with `kind: "server-log"`.)
 
 ```bash
 jevitate explore --url http://localhost:5173/imports --goal "import https://example.com" \
@@ -43,6 +43,30 @@ substring, over the raw line) drops known-noise lines, such as a background job'
 from both correlation and the `--log-defect` oracle. They still count in the source's `linesRead`
 (proof it was tailed) and are reported separately as `serverLogs.ignoredLines`.
 
+**Scoping a shared log to one run.** When several runs tail the same log (concurrent missions
+against one backend), `--log-scope <regex|substring>` (repeatable, the same grammar) attributes only
+the lines that match it, such as the tenant or account the run signs in as. The rest count as
+`serverLogs.ignoredLines` (`serverLogs.correlation.outOfScopeLines`) and never become evidence or
+defects. A line that carries one of the run's own correlation ids (below) is always in scope.
+`verify-fix` re-checks a `server-log` defect with the same scope.
+
+**Correlation by request id.** Every request the run's page sends is recorded with the correlation
+ids it carries, on the request or the response: the W3C `traceparent` (its trace id), `x-request-id`,
+`x-correlation-id`, `request-id`, `x-amzn-trace-id` (its `Root`), `x-b3-traceid`,
+`x-cloud-trace-context`, plus any header named by `--log-correlation-header <name>` (repeatable). A log
+line that contains one of those ids (as a whole token, never a prefix) is attached to that exact
+request and to the step that sent it, whenever the line landed. A slow background failure is not
+blamed on whatever step was running when it was logged. The line's evidence carries `request:
+{ method, url, status, id }`, and so does a defect's first occurrence. Once a line has matched one
+of the run's ids, a line that carries a different id is someone else's work: another user, another
+run, or a background job. Such a line is never attributed to the run
+(`serverLogs.correlation.foreignLines`, counted in `ignoredLines`). An id is recognized in a line
+when it is keyed as `trace_id`/`traceId`/`request_id`/`requestId`/`correlation_id` (`=` or `:`),
+or written as a `traceparent`. For any other format, `--log-id-pattern </regex/>` (repeatable; the
+first capture group is the id) says how ids are written. Lines with no id fall back to the time
+window below. `serverLogs.correlation` reports `requestsWithIds`, `idMatchedLines`, `foreignLines`
+and `outOfScopeLines`.
+
 **Correlation.** Each step's window runs from the previous step's settle time to this step's own
 settle time — the wall-clock epoch a mission's incremental transcript-flush listener already
 observes, so this needs no change to the mission loop. The LAST step's window is additionally held
@@ -54,7 +78,11 @@ whatever its level) are attached as evidence, redacted with the run's own `--sec
 step's transcript entry (`serverLogs`) and to any defect or `blocked` reason on it. A `blocked`,
 `exhausted` or `inconclusive` reason also names the last step's correlated server error (or
 warning), e.g. `field "Email" is invalid; server: error Api.Controllers.Signup "duplicate key…"`.
-Only the last step is consulted, so a stale earlier error is never blamed for the current blocker.
+When that line was correlated to its exact request by id, the reason names the request:
+`… the page shows alert "Publishing is not available"; caused by: error "publish refused: plan
+quota exceeded" on POST /api/publish (409)`. Only the last step is consulted (and, when the run
+ended on `blocked`, `done` or `report`, the action just before it), so a stale earlier error is
+never blamed for the current blocker.
 
 **Optional oracle.** `--log-defect <level|/regex/>` (repeatable) makes a matching line a defect kind
 `server-log`: `error`/`warn`/`info`/`debug` matches as `level >= this`; `/pattern/flags` is compiled
@@ -79,7 +107,8 @@ them was never demonstrably read. (A usability run keeps its own advisory rule i
 
 **MCP / the mission queue.** A `MissionRequest`/`queue_exploration`/`verify_fix` argument may never
 name a path or a command (`packages/missions/src/schema.ts`). An operator declares `logSources` /
-`logDefect` / `allowLogCmd` / `logQuietOk` / `logIgnore` per origin in `~/.jevitate/targets.json` instead:
+`logDefect` / `allowLogCmd` / `logQuietOk` / `logIgnore` / `logScope` / `logCorrelationHeaders` /
+`logIdPatterns` per origin in `~/.jevitate/targets.json` instead:
 
 ```json
 { "https://app.example.test": {

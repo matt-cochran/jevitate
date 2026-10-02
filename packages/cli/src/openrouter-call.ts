@@ -1,4 +1,5 @@
 import { failureClass, openRouterProviderSettings, type OpenRouterCall, type UsageSink } from "@jevitate/ai-core";
+import { clock } from "@jevitate/domain";
 
 /** The slice of the AI SDK's `generateObject` result/error this seam reads for usage accounting. */
 interface TokenUsage {
@@ -34,7 +35,7 @@ export type GenerateObjectFn = (args: Record<string, unknown>) => Promise<{ obje
 export function openRouterCallWith(generateObject: GenerateObjectFn, createOpenRouter: (s: { apiKey: string }) => (model: string) => unknown, usage?: UsageSink): OpenRouterCall {
   return async ({ model, schema, body, authHeader, temperature, task }) => {
     const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
-    const start = Date.now();
+    const start = clock.now();
     const label = { model, ...(task === undefined ? {} : { task }) };
     let out: Awaited<ReturnType<GenerateObjectFn>>;
     try {
@@ -58,7 +59,7 @@ export function openRouterCallWith(generateObject: GenerateObjectFn, createOpenR
       ...label,
       ...(cost === undefined ? {} : { usd: cost }),
     });
-    return { object: out.object, latencyMs: Date.now() - start };
+    return { object: out.object, latencyMs: clock.now() - start };
   };
 }
 

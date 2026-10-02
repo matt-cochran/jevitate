@@ -4,16 +4,16 @@ import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { closeOnce, demoOverlayOf, extensionsStamp, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
-import type { HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
+import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
-import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
+import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
-import { foldGoalOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
+import { foldGoalOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -23,11 +23,13 @@ import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.j
 import { applyHttp5xxGoalOutcome, describeHttp5xx, http5xxGoalReason } from "./http-5xx-outcome.js";
 import { goalExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
+import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
+import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogEvidence, type ServerLogRuntimeResult, type ServerLogsSummary, type TranscriptEntryWithLogs } from "./log-correlation.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
 import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
-import { type ServerLogOptions, serverLogResult, recordingEmulation, DRAFTS_ONLY, NO_FILER, draftContext, freshSessionOpener, currentUrlSafe, assertSaveStorageStateOutsideProject, persistStorageState, browserVersionOf, type MissionTarget, declaredResult } from "./explore-shared.js";
+import { type ServerLogOptions, serverLogResult, serverLogRuntimeOptions, recordingEmulation, DRAFTS_ONLY, NO_FILER, draftContext, freshSessionOpener, currentUrlSafe, assertSaveStorageStateOutsideProject, persistStorageState, browserVersionOf, type MissionTarget, declaredResult } from "./explore-shared.js";
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -60,6 +62,12 @@ export interface RunExplorationOptions {
    * of a failure. Default: it fails — a run that proved nothing is never clean.
    */
   readonly allowVacuousChecks?: boolean;
+  /**
+   * #303 `--action-deltas` (opt-in, off by default): record what each action changed on the page
+   * (code's verdict per action) — attached to every transcript and Recording step, summarised in the
+   * result (`actionDeltas`), told to the model and used by the no-progress check. Off: no capture.
+   */
+  readonly actionDeltas?: boolean;
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
@@ -76,6 +84,8 @@ export interface RunExplorationOptions {
    * by code, never by the model; each value/seed is also a run secret (redacted everywhere).
    */
   readonly secretFields?: readonly SecretField[];
+  /** #281: fields typed with a file's exact text (CLI `--type-fixture`, read by the CLI). */
+  readonly typeFixtures?: readonly TypeFixture[];
   /**
    * Local file the `upload` op attaches (CLI `--fixture`). Validated before any
    * browser opens: a missing file throws `FixtureNotFoundError`.
@@ -155,6 +165,12 @@ export interface RunExplorationOptions {
    * opened only when a declared cross-actor check needs it, never driven by the model.
    */
   readonly actors?: MissionActors;
+  /**
+   * #293 `--from-journey`/`--at-step`: replayed into the session (after fixture setup) before the
+   * goal loop, which then starts on the live page it left — never a fresh navigation. `url` is only
+   * the expected landing.
+   */
+  readonly journeyPrefix?: JourneyPrefix;
 }
 
 export interface RunExplorationResult {
@@ -177,6 +193,8 @@ export interface RunExplorationResult {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #303: the run's action deltas (verdict counts, per-action overhead) — only with `--action-deltas`. */
+  readonly actionDeltas?: ActionDeltaStats;
   /**
    * Did the loop complete its goal (`completed`, verified by the success assertion), or why not
    * (`incomplete` + reason)? `outcome` above is the mission verdict; this is the run's own account.
@@ -197,8 +215,6 @@ export interface RunExplorationResult {
   readonly recordingPaths: string[];
   /** #245: `--record-video` files, finalized before this result was written (absent when not recording). */
   readonly videoPaths?: string[];
-  /** @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor. */
-  readonly recordingPath: string;
   /**
    * The per-decision trail (op, target, confidence, whether the action succeeded and why
    * not, URL, page signature) — so a stalled or failed run is explainable. Written next to
@@ -245,14 +261,14 @@ export interface RunExplorationResult {
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
   /** The fixture the mission started from (#140/#144): identity, non-secret outputs, the setup/restore log. */
   readonly fixtures?: MissionFixtureResult;
   /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
   readonly hostHealth: HostHealthSummary;
   /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
   readonly environmentDegraded: EnvironmentDegraded[];
+  /** #293: the Journey step a journey-anchored run branched from (absent on a bare-URL run). */
+  readonly branch?: JourneyBranchPoint;
 }
 
 /** Outcomes that already mean the run itself broke or hung — a server-log finding never downgrades
@@ -292,6 +308,8 @@ function serverLogOutcomeReason(newOutcome: GoalBasedOutcome | MissionOutcome, r
 const BLOCKED_LIKE_OUTCOMES: ReadonlySet<GoalBasedOutcome> = new Set(["blocked", "exhausted", "failed", "inconclusive"]);
 
 const SERVER_CAUSE_MAX_CHARS = 160;
+/** Decisions that end a run without acting on the page (their state is the previous action's). */
+const ENDING_OPS: ReadonlySet<string> = new Set(["blocked", "done", "report"]);
 
 /**
  * The most informative correlated server-log line attached to the LAST transcript step (#165's
@@ -299,17 +317,41 @@ const SERVER_CAUSE_MAX_CHARS = 160;
  * describes): an `error` line wins over a `warn` one; ties keep the first (arrival order). `undefined`
  * when `--log-source` was not given, or nothing warn/error-level attached to that step.
  */
-function lastStepServerCause(transcript: readonly TranscriptEntryWithLogs[] | undefined): string | undefined {
-  const logs = transcript?.[transcript.length - 1]?.serverLogs;
-  if (logs === undefined || logs.length === 0) return undefined;
+function lastStepServerCause(transcript: readonly TranscriptEntryWithLogs[] | undefined): { readonly text: string; readonly correlated: boolean } | undefined {
+  // The step the run ended on: the last entry — and, when the run ended on a decision that acts on
+  // nothing (`blocked`, `done`, `report`), the action just before it too, whose UI state that
+  // decision is about (#204: its request's lines are attached to it).
+  const logs: ServerLogEvidence[] = [];
+  for (let i = (transcript?.length ?? 0) - 1; i >= 0; i--) {
+    const e = transcript?.[i];
+    if (e === undefined) break;
+    logs.push(...(e.serverLogs ?? []));
+    if (e.op === null || !ENDING_OPS.has(e.op)) break;
+  }
+  if (logs.length === 0) return undefined;
+  // An error beats a warn; at the same level, a line correlated to its exact request by id (#204)
+  // beats one attached by time; ties keep the first (arrival order).
+  const rank = (l: ServerLogEvidence): number => (l.level === "error" ? 2 : 0) + (l.request === undefined ? 0 : 1);
   let line: ServerLogEvidence | undefined;
   for (const l of logs) {
     if (l.level !== "error" && l.level !== "warn") continue;
-    if (line === undefined || (line.level !== "error" && l.level === "error")) line = l;
+    if (line === undefined || rank(l) > rank(line)) line = l;
   }
   if (line === undefined) return undefined;
   const body = line.message.length > SERVER_CAUSE_MAX_CHARS ? `${line.message.slice(0, SERVER_CAUSE_MAX_CHARS)}…` : line.message;
-  return `${line.level}${line.target === undefined ? "" : ` ${line.target}`} ${quote(body)}`;
+  const said = `${line.level}${line.target === undefined ? "" : ` ${line.target}`} ${quote(body)}`;
+  if (line.request === undefined) return { text: said, correlated: false };
+  const r = line.request;
+  return { text: `${said} on ${r.method} ${pathOf(r.url)}${r.status === null ? "" : ` (${r.status})`}`, correlated: true };
+}
+
+/** A redacted request URL's path (the reason names the endpoint, never its query). */
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.split(/[?#]/)[0] ?? url;
+  }
 }
 
 function quote(s: string): string {
@@ -318,7 +360,9 @@ function quote(s: string): string {
 
 /**
  * Pairs an already-computed UI-side `reason` with the correlated server cause on the step the run
- * ended on (#165 "Also"): `"<UI reason>; server: <level> \"<message>\""`. A no-op when there is no
+ * ended on (#165 "Also"): `"<UI reason>; server: <level> \"<message>\""` — or, when the line was
+ * correlated to its exact request by a trace/correlation id (#204), `"<UI reason>; caused by:
+ * <level> \"<message>\" on POST /x (500)"`. A no-op when there is no
  * `reason` to pair with, the outcome isn't one of blocked/exhausted/inconclusive (a `defects-found`
  * or an oracle-unhealthy `inconclusive` already gets its own `serverLogOutcomeReason`), or no
  * server-log evidence attached to that step — including when `--log-source` was never given.
@@ -326,7 +370,8 @@ function quote(s: string): string {
 export function withServerCause(reason: string | undefined, outcome: GoalBasedOutcome, transcript: readonly TranscriptEntryWithLogs[] | undefined): string | undefined {
   if (reason === undefined || !BLOCKED_LIKE_OUTCOMES.has(outcome)) return reason;
   const cause = lastStepServerCause(transcript);
-  return cause === undefined ? reason : `${reason}; server: ${cause}`;
+  if (cause === undefined) return reason;
+  return `${reason}; ${cause.correlated ? "caused by" : "server"}: ${cause.text}`;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -363,7 +408,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
   const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
   // itself creates `outDir` synchronously (mkdirSync).
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
@@ -409,14 +454,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // Backend log correlation (#142): opened BEFORE the mission runs so its window covers the seed
   // load too; a no-op (`undefined`) when `--log-source` was not given.
   const serverLog = openServerLogRuntime({
-    sources: opts.serverLog?.sources ?? [],
-    logDefect: opts.serverLog?.logDefect ?? [],
-    quietOk: opts.serverLog?.quietOk ?? [],
-    logIgnore: opts.serverLog?.logIgnore ?? [],
-    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    ...serverLogRuntimeOptions(opts.serverLog),
     secrets: secrets ?? [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  // #204: every request's correlation ids, from before the first navigation.
+  serverLog?.observe(session.page);
   // #159: every settled step also refreshes the in-memory storageState snapshot (cheap no-op when
   // `--save-storage-state` was not given — `snapshotter.noteSettledStep` checks `enabled` itself).
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
@@ -432,6 +475,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     await closeQuietly(session);
   });
   try {
+    // #293: a journey-anchored run first replays its Journey's prefix into this very session.
+    const start = await startFromJourney(opts.journeyPrefix, session, opts.url, opts.allowlist, opts.browser);
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
@@ -451,7 +496,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       gen: opts.gen,
       goal: opts.goal,
       allowlist: opts.allowlist,
-      startUrl: opts.url,
+      startUrl: start.url,
+      ...(start.branch === undefined ? {} : { startInPlace: true }),
+      // #293: a retried run re-replays the Journey prefix instead of loading the anchor URL.
+      ...(start.restart === undefined ? {} : { restartAtStart: start.restart.restartAtStart }),
       ...(opts.successAssertion === undefined ? {} : { successAssertion: opts.successAssertion }),
       ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
       ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
@@ -459,6 +507,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       bounds: opts.bounds,
       secrets,
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
+      ...(opts.typeFixtures === undefined ? {} : { typeFixtures: opts.typeFixtures }),
       site: origin,
       fixture,
       ...conversationConfig(opts.conversation),
@@ -468,6 +517,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.actors === undefined ? {} : { primaryActor: opts.actors.primary.name }),
       hostHealth: health,
       demoOverlay: demoOverlayOf(opts.browser),
+      // #303 (opt-in): action deltas, with Jev's advisory relevance labels for changes code cannot tie.
+      ...(opts.actionDeltas === true ? { actionDeltas: { jev: true } } : {}),
     });
     await observers?.close();
 
@@ -478,6 +529,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...mission.recording,
       ...(missionFixture === undefined ? {} : { fixture: recordingFixture(missionFixture.record) }),
       ...(resolvedEmulation === undefined ? {} : { emulation: recordingEmulation(resolvedEmulation) }),
+      ...extensionsStamp(opts.browser), // #256
     };
     // Never blocks the mission itself: the drain wait happens AFTER `runGoalBasedMission` returned.
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(mission.transcript);
@@ -546,7 +598,6 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       decisions: mission.run.decisions,
       actions: mission.run.actions,
       recordingPaths: [journal.recordingPath],
-      recordingPath: journal.recordingPath,
       ...videos,
       ...shotFields,
       transcriptPath: journal.transcriptPath,
@@ -554,11 +605,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       exitCode: goalExitCode(goalOutcome),
       resultPath,
       target: {
-        seedUrl: opts.url,
+        seedUrl: start.url,
         allowlist: [...opts.allowlist],
         ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}),
         ...(opts.actors === undefined ? {} : { actors: persistedActors(opts.actors) }),
       },
+      ...branchFields(start),
       recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
       ...(mission.intermittentHangs === undefined ? {} : { intermittentHangs: mission.intermittentHangs }),
@@ -567,6 +619,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(mission.budget === undefined ? {} : { budget: mission.budget }),
       sideEffects: mission.run.sideEffects,
       ...(mission.run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: mission.run.sideEffectsTruncated }),
+      ...(mission.run.actionDeltas === undefined ? {} : { actionDeltas: mission.run.actionDeltas }),
       engine,
       ...(fx === undefined || missionFixture === undefined
         ? {}
@@ -577,6 +630,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
               log: fx.record().log,
               ...(missionFixture.persisted.spec === undefined ? {} : { spec: missionFixture.persisted.spec }),
               ...(missionFixture.persisted.hooks === undefined ? {} : { hooks: missionFixture.persisted.hooks }),
+              ...(missionFixture.persisted.identities === undefined ? {} : { identities: missionFixture.persisted.identities }),
             },
           }),
       // #209: a goal-specific miss (`success-check-failed`, `vacuous-check`) is typed too — after an

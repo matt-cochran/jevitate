@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import type { AdmissionRecord } from "./browser-pool.js";
 import type { ViewportSize } from "./emulation.js";
+import type { UnpackedExtension } from "./extensions.js";
+import type { ResourceLimits } from "./resource-governor.js";
 
 export interface BrowserSession {
   readonly page: Page;
@@ -23,6 +25,11 @@ export interface BrowserSession {
    * `recordVideo`. The file is finalized when the session closes (its context closes).
    */
   readonly videoPath?: string;
+  /**
+   * #256: the unpacked extensions this session's browser loaded (`OpenOptions.extensions`), each
+   * confirmed loaded — its `chrome-extension://<id>/` pages are navigable in this session.
+   */
+  readonly extensions?: readonly UnpackedExtension[];
   /**
    * #213: a fast pre-flight check that something is listening at `url`'s origin — a plain-words
    * reason when it definitely is not (connection refused, host not found), else null. Missions call
@@ -51,6 +58,18 @@ export interface BrowserLaunchOptions {
   channel?: string;
   args?: readonly string[];
   slowMo?: number;
+  /**
+   * #256: unpacked extensions to load (`--extension <dir>`, read by `readUnpackedExtension`). A
+   * session with extensions runs its own persistent Chromium context (Playwright loads extensions
+   * only there) on a throwaway profile, outside the pool; headless it uses the full Chromium build
+   * (`channel: "chromium"`, new headless) because the headless shell cannot load extensions.
+   */
+  extensions?: readonly UnpackedExtension[];
+  /**
+   * #205: this run's resource limits (`--max-browsers`, `--max-browser-memory`) — override the
+   * resource governor's defaults (see `ResourceGovernor`). Absent: the defaults/environment apply.
+   */
+  resources?: ResourceLimits;
 }
 
 /**

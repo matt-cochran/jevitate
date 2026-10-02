@@ -4,6 +4,10 @@ import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { FakeJudgmentGateway, FakeGenerationGateway } from "@jevitate/ai-core";
 import { runAdversarialMission } from "./adversarial.js";
+import { useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 let site: { url: string; close(): Promise<void> };
 let session: BrowserSession;

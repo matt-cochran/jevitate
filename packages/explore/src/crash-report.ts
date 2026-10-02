@@ -6,7 +6,7 @@ import {
   type AttributionResult,
   type CrashEvidence,
   type HeapSample,
-  type MissionFailure,
+  type MissionFailure, clock,
 } from "@jevitate/domain";
 import type { CrashSignals } from "./mission-failure.js";
 import type { HostPressure } from "./host-pressure.js";
@@ -57,12 +57,12 @@ export async function sampleHeap(page: Page, timeoutMs = 2_000): Promise<Omit<He
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs);
+    timer = clock.setTimeout(() => resolve(null), timeoutMs);
   });
   try {
     return await Promise.race([read().catch(() => null), timeout]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
   }
 }
 
@@ -122,14 +122,17 @@ export function buildCrashReport(
   } = {},
 ): CrashReport {
   const navigationTimeout = isNavigationTimeout(failure);
+  // #296: a page the liveness watchdog closed had stopped answering — the page's main thread (or a
+  // starved host), never an engine bug, even though the rejected read surfaced in jevitate's stack.
+  const unresponsive = signals.unresponsive !== undefined;
   const evidence: CrashEvidence = {
     ...(failure.stack === undefined ? {} : { stack: failure.stack }),
     pageCrashed: signals.pageCrashed,
     browserDisconnected: signals.browserDisconnected,
     rendererOom: looksLikeRendererOom(signals.pageCrashed, heapSamples),
     heapSamples: [...heapSamples],
-    hang: opts.hang ?? navigationTimeout,
-    ...(opts.hangKind === undefined ? {} : { hangKind: opts.hangKind }),
+    hang: opts.hang ?? (navigationTimeout || unresponsive),
+    ...(opts.hangKind === undefined ? (unresponsive ? { hangKind: "main-thread-unresponsive" } : {}) : { hangKind: opts.hangKind }),
     ...(navigationTimeout ? { navigationTimeout: true } : {}),
     ...(opts.host?.overThreshold ? { hostUnderPressure: opts.host.overThreshold } : {}),
   };

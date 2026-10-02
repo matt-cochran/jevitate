@@ -1,13 +1,14 @@
-import { FsJourneyStore, JourneyRegistry, deriveParamSchema, describeStep, flatJourneySteps, secretParamValues, validateParams, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, secretParamValues, validateParams, type Journey } from "@jevitate/journey";
 import { redactText } from "@jevitate/ai-core";
-import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
+import { safeRunPolicy, type RunPolicy, clock } from "@jevitate/domain";
 import { join } from "node:path";
-import { PlaywrightBrowserPort, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type EmulationSpec } from "@jevitate/playwright";
+import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
 import { logsDirFor } from "./project-dir.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
+import { ReplayDeltas, replayDeltaSummary, type ReplayDeltaSummary } from "@jevitate/explore";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { SecretPixelMask, maskingPort } from "./demo-capture.js";
 import { RunScreenshots, composeObservers, screenshotObserver, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
@@ -97,6 +98,23 @@ export interface RunJourneyProgrammaticallyOptions {
    * on the session before its first navigation whenever it records video or screenshots.
    */
   mask?: SecretPixelMask;
+  /**
+   * #293 journey-anchored exploration: replay in THIS already-open session and leave it open (the
+   * caller's mission continues in the same page, form contents and session). No browser is opened
+   * or closed here; video/screenshots belong to the caller's session.
+   */
+  session?: BrowserSession;
+  /**
+   * #293: replay only the first N top-level steps — the prefix up to an anchor. A `--param` the
+   * Journey does not take is still refused; one only a later step uses is not required (and unused).
+   */
+  stopAfterStep?: number;
+  /**
+   * #303 `--action-deltas` (opt-in): record what each replayed step changed (redacted, code verdict)
+   * and compare it with the delta the Journey's Recording stored — returned as `actionDeltas`.
+   * Observation only: it never changes the replay. Off: nothing is captured.
+   */
+  actionDeltas?: boolean;
 }
 
 /**
@@ -115,6 +133,19 @@ function redactSecretParams<T>(result: T, journey: Journey, params: Record<strin
           ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrub(x)]))
           : v;
   return scrub(result) as T;
+}
+
+/**
+ * #293: the params a Journey PREFIX runs with — a `--param` the whole Journey does not take is
+ * refused (`ParamValidationError`), one only a later step uses is dropped; the prefix's own required
+ * params are then checked by `validateParams` as usual.
+ */
+export function prefixParams(full: Journey, prefix: Journey, params: Record<string, string>): Record<string, string> {
+  const known = deriveParamSchema(full.recording).required;
+  const unknown = Object.keys(params).filter((k) => !known.includes(k));
+  if (unknown.length > 0) throw new ParamValidationError(`param mismatch — missing: [], unknown: [${unknown.join(", ")}]`);
+  const needed = deriveParamSchema(prefix.recording).required;
+  return Object.fromEntries(Object.entries(params).filter(([k]) => needed.includes(k)));
 }
 
 /**
@@ -149,7 +180,7 @@ export async function promoteJourney(dir: string, id: string): Promise<Journey> 
  */
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[] } & Partial<ScreenshotsResult>> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary } & Partial<ScreenshotsResult>> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -158,8 +189,12 @@ export async function runJourneyProgrammatically(
     throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
   }
   // #247: onto the chosen environment (a step on an origin it does not allow is refused here).
-  const journey = applyJourneyEnvironment(stored, opts.environment);
+  const full = applyJourneyEnvironment(stored, opts.environment);
+  // #293: only the prefix up to the anchor runs (its params are the ones those steps take).
+  const journey = opts.stopAfterStep === undefined ? full : journeyPrefix(full, opts.stopAfterStep);
   const allowedOrigins = opts.environment === undefined ? [journey.recording.site] : [...opts.environment.allowedOrigins];
+  // #256: a Journey recorded with extensions replays only under that same build (ExtensionMismatchError, exit 64).
+  if ((journey.recording.extensions ?? []).length > 0) assertSameExtensionBuild(journey.recording.extensions, opts.browser, `journey '${opts.id}'`);
 
   // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
   // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
@@ -171,7 +206,8 @@ export async function runJourneyProgrammatically(
 
   // Fail fast: validate BEFORE any browser launch, so bad params never pay
   // the cost (or risk) of opening a browser.
-  validateParams(deriveParamSchema(journey.recording), opts.params);
+  const inputParams = journey === full ? opts.params : prefixParams(full, journey, opts.params);
+  validateParams(deriveParamSchema(journey.recording), inputParams);
 
   const policy = opts.policy ?? safeRunPolicy();
 
@@ -180,29 +216,31 @@ export async function runJourneyProgrammatically(
   const gate = await gateJourney(opts.siteGate, journey.recording, { ...(opts.account === undefined ? {} : { account: opts.account }), enforceLimits: true });
 
   const fx = opts.fixtures?.(journey.recording.site);
-  let params = opts.params;
+  let params = inputParams;
   try {
     if (fx !== undefined) {
       await fx.setup();
       const b = fx.bindings();
-      params = Object.fromEntries(Object.entries(opts.params).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
+      params = Object.fromEntries(Object.entries(inputParams).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
     }
     // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
     // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
     const secrets = secretParamValues(journey, params);
     const mask = opts.mask ?? new SecretPixelMask(secrets);
-    const capturing = opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined;
-    const rawPort = (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
-    const port = capturing ? maskingPort(rawPort, mask) : rawPort;
-    const artifactName = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(new Date().toISOString())}.json`;
+    const capturing = opts.session === undefined && (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined);
+    const openPort = (): BrowserPort => {
+      const rawPort = (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
+      return capturing ? maskingPort(rawPort, mask) : rawPort;
+    };
+    const artifactName = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(clock.nowIso())}.json`;
     // #245: `--record-video` → `journey-<id>-<stamp>.videos/` under the given dir, else the logs dir.
     const videoDir =
-      opts.browser?.recordVideo === undefined
+      opts.browser?.recordVideo === undefined || opts.session !== undefined
         ? undefined
         : runVideoDir(opts.browser, join(opts.browser.recordVideo.dir ?? logsDirFor(), artifactName));
     const flat = flatJourneySteps(journey);
     const shots =
-      opts.screenshots === undefined
+      opts.screenshots === undefined || opts.session !== undefined
         ? undefined
         : new RunScreenshots({
             spec: opts.screenshots,
@@ -217,24 +255,29 @@ export async function runJourneyProgrammatically(
       const pick = [s.recorded.objective, s.recorded.step.label].map((t) => (t ?? "").trim()).find((t) => t !== "");
       return pick ?? describeStep(s.recorded.step);
     };
-    const session = await port.open({
-      ...sessionLaunchOptions(opts.browser, videoDir),
-      allowedOrigins,
-      baseUrl: journey.recording.site,
-      ...opts.emulation,
-      ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-    });
-    const closeSession = closeOnce(() => session.close());
+    // #293: a given session is the caller's — replayed into, never opened or closed here.
+    const session =
+      opts.session ??
+      (await openPort().open({
+        ...sessionLaunchOptions(opts.browser, videoDir),
+        allowedOrigins,
+        baseUrl: journey.recording.site,
+        ...opts.emulation,
+        ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
+      }));
+    const closeSession = opts.session === undefined ? closeOnce(() => session.close()) : async (): Promise<void> => undefined;
     try {
       const actor = CastActor.named("cli-runner").whoCan(
         new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
+      const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
       const observer = composeObservers(
+        replayDeltas?.observer(),
         opts.observer,
         shots === undefined ? undefined : screenshotObserver(shots, (a) => a.ability(BrowseTheWebToken).session.page, whatOf),
       );
-      const interpreter = opts.interpreter ?? (opts.observer === undefined && shots === undefined ? new RecordingInterpreter() : new RecordingInterpreter({ observer }));
+      const interpreter = opts.interpreter ?? (opts.observer === undefined && shots === undefined && replayDeltas === undefined ? new RecordingInterpreter() : new RecordingInterpreter({ observer }));
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer);
       let result: JourneyRunResult;
       try {
@@ -243,11 +286,12 @@ export async function runJourneyProgrammatically(
         await gate.done();
       }
       const shotFields = shots === undefined ? {} : await shots.finish();
+      const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretParams(replayDeltaSummary(replayDeltas), journey, params) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
-      if (fx === undefined) return { ...result, ...videos, ...shotFields };
+      if (fx === undefined) return { ...result, ...videos, ...shotFields, ...deltaFields };
       await fx.restore();
-      return { ...result, ...videos, ...shotFields, fixtures: fx.record() };
+      return { ...result, ...videos, ...shotFields, ...deltaFields, fixtures: fx.record() };
     } finally {
       await closeSession();
     }

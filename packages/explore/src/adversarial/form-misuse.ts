@@ -217,7 +217,14 @@ export function detectForms(controls: readonly Control[], inScope: (url: string)
 }
 
 /** Boundary / invalid values cycled by `boundary-submit`, one per round (never blind fuzz). */
-const BOUNDARY_ORDER: readonly InputStrategy[] = ["empty", "boundary", "long", "unicode", "invalid"];
+// #301: the inert markup canary comes early (round 1) so a short run still asks "is my input
+// rendered as markup?"; the attribute-break canary and an oversize value follow.
+const BOUNDARY_ORDER: readonly InputStrategy[] = ["empty", "markup", "boundary", "long", "attribute", "unicode", "invalid", "oversize"];
+
+/** A fresh canary token for a `markup`/`attribute` value (#301), when the run registers canaries. */
+function canaryFor(value: InputStrategy, ctx: EpisodeContext): string | undefined {
+  return value === "markup" || value === "attribute" ? ctx.canary?.() : undefined;
+}
 
 /** The previous executed step, for the strategies that react to it. */
 export interface LastAction {
@@ -265,6 +272,11 @@ export interface EpisodeContext {
    * Default true; false when the mission re-plans the SAME strategy right after a disclosure (#193).
    */
   readonly disclose?: boolean;
+  /**
+   * #301: a fresh per-submission canary token (the run's random token + a counter) for the inert
+   * `markup` / `attribute` boundary values. Absent ⇒ a fixed placeholder token (pure planning).
+   */
+  readonly canary?: () => string;
   readonly rng: () => number;
 }
 
@@ -296,10 +308,10 @@ function pickForm(forms: readonly FormModel[], exercised: ReadonlySet<string>, r
   return forms.find((f) => f.fields.some((c) => !exercised.has(controlKey(c)))) ?? at(forms, round);
 }
 
-function edit(field: Control, strategy: InputStrategy, note: string, settle = false): MisuseStep {
+function edit(field: Control, strategy: InputStrategy, note: string, settle = false, canary?: string): MisuseStep {
   if (affordedOp(field) === "select") return { op: "select", control: field, settle, note };
   const redacted = field.inputType === "password";
-  return { op: "type", control: field, fillText: valueFor(strategy, field), settle, note, ...(redacted ? { redacted } : {}) };
+  return { op: "type", control: field, fillText: valueFor(strategy, field, canary), settle, note, ...(redacted ? { redacted } : {}) };
 }
 
 function submit(form: FormModel, note: string, settle: boolean): MisuseStep {
@@ -311,8 +323,8 @@ function submit(form: FormModel, note: string, settle: boolean): MisuseStep {
  * nearest Send control, or Enter — `act()`'s existing `send` handling), so a composer never needs a
  * separately-detected submit control to be exercised (#121).
  */
-function sendStep(form: FormModel, field: Control, strategy: InputStrategy, note: string, settle: boolean): MisuseStep {
-  return { op: "send", control: field, fillText: valueFor(strategy, field), settle, note, submitsForm: form.key };
+function sendStep(form: FormModel, field: Control, strategy: InputStrategy, note: string, settle: boolean, canary?: string): MisuseStep {
+  return { op: "send", control: field, fillText: valueFor(strategy, field, canary), settle, note, submitsForm: form.key };
 }
 
 /**
@@ -337,7 +349,7 @@ function planComposerEpisode(
       };
     case "boundary-submit": {
       const value = at(BOUNDARY_ORDER, ctx.round) ?? "invalid";
-      return { steps: [sendStep(form, field, value, `send a ${value} value`, true)] };
+      return { steps: [sendStep(form, field, value, `send a ${value} value`, true, canaryFor(value, ctx))] };
     }
     case "act-while-pending":
       return {
@@ -396,7 +408,7 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
       return {
         steps: [
           ...ensureCheckboxes(form, false),
-          edit(field, value, `enter a ${value} value`),
+          edit(field, value, `enter a ${value} value`, false, canaryFor(value, ctx)),
           submit(form, `submit the ${value} value`, true),
         ],
       };

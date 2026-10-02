@@ -6,7 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { explore, type ExploreRun } from "./explore.js";
 import { GOAL_MET_THRESHOLD } from "./conversation.js";
 import { GOAL_MET_INSTRUCTIONS } from "./decide.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * Done recognition (#91) and the `report` op (#101) on served fixtures, with a scripted judge.
@@ -135,7 +138,9 @@ describe("done recognition (#91)", () => {
   it(
     "#188: a model `blocked` where the goal is not met still ends blocked (asked once, rejected)",
     async () => {
-      const judge = new ScriptedJudge([{ op: "blocked" }]);
+      // #237: the model tries something first (Double down, which does nothing) — a `blocked` before
+      // any action is refused as unexplored, never accepted.
+      const judge = new ScriptedJudge([{ op: "click", target: "1" }, { op: "blocked" }]);
       judge.goalMetProbability = 0.4;
       const r = await run(judge, "/decision", APPROVE_GOAL);
       expect(r.stop).toBe("blocked");

@@ -8,6 +8,10 @@ import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { TENANCY_SESSIONS, startServer, type TenancyOptions } from "@jevitate/example-site";
 import { buildProgram } from "./program.js";
 import { runVerifyFix } from "./verify-fix-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #147 acceptance — a multi-actor goal run against the two-tenant `/tenancy/*` fixture. Tenant a

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createReadStream, statSync } from "node:fs";
 import type { Readable } from "node:stream";
+import { clock } from "@jevitate/domain";
 
 type LogChildProcess = ChildProcessByStdio<null, Readable, Readable>;
 
@@ -94,7 +95,7 @@ function lineSplitter(onLine: (raw: string, epochMs: number) => void): (chunk: B
     carry += chunk.toString("utf8");
     const lines = carry.split(/\r?\n/);
     carry = lines.pop() ?? "";
-    for (const line of lines) if (line !== "") onLine(line, Date.now());
+    for (const line of lines) if (line !== "") onLine(line, clock.now());
   };
 }
 
@@ -130,12 +131,12 @@ function openFileSource(spec: Extract<LogSourceSpec, { kind: "file" }>, opts: Lo
     truncated: false,
     close: async () => {
       closed = true;
-      if (timer !== undefined) clearInterval(timer);
+      if (timer !== undefined) clock.clearInterval(timer);
       if (!handle.opened) handle.error = `${spec.path}: never appeared during the run`;
     },
     killSync: () => {
       closed = true;
-      if (timer !== undefined) clearInterval(timer);
+      if (timer !== undefined) clock.clearInterval(timer);
     },
   };
   const deliver = lineSplitter(boundedOnLine(handle, opts));
@@ -164,7 +165,7 @@ function openFileSource(spec: Extract<LogSourceSpec, { kind: "file" }>, opts: Lo
     stream.on("error", () => undefined);
     position = size;
   };
-  timer = setInterval(poll, opts.filePollMs ?? DEFAULT_FILE_POLL_MS);
+  timer = clock.setInterval(poll, opts.filePollMs ?? DEFAULT_FILE_POLL_MS);
   timer.unref?.();
   return handle;
 }
@@ -209,7 +210,7 @@ function openProcessSource(spec: LogSourceSpec, command: string, args: readonly 
         }
         const done = (): void => resolve();
         child.once("exit", done);
-        const t = setTimeout(done, 2000);
+        const t = clock.setTimeout(done, 2000);
         t.unref?.();
       });
     },

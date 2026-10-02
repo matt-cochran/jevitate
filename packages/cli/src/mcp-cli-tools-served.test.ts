@@ -16,6 +16,7 @@ import { buildMcpTools, type McpApiDeps, type McpTool } from "./mcp-api.js";
 import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
 import { CLI_TOOL_SPECS } from "./mcp-cli-tools.js";
 import type { CliDeps } from "./cli-shared.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
 
 /**
  * #255 served e2e for the MCP tools that mirror a CLI command (mcp-cli-tools.ts): each runs the
@@ -162,6 +163,8 @@ describe("#255 CLI-mirroring MCP tools — the surface", () => {
 });
 
 describe("#255 the Journey lifecycle over MCP", () => {
+  // #304: Node and page time skip idle waits (replay polling, minimization timeouts, settle windows).
+  useSkippingTime();
   it(
     "list → annotate (draft, then approve) → promote → demo (video + guide on disk)",
     async () => {
@@ -264,7 +267,8 @@ describe("#255 read-only and validation tools", () => {
     writeFileSync(inv, JSON.stringify({ observe: {}, invariants: {} }));
     const v = await tool("validate_invariants").handler({ files: [inv] });
     expect(body(v)).toHaveProperty("exitCode");
-    const ai = await tool("get_ai_status").handler({});
+    // `verify: false` → `--no-verify` (#291): presence and source only, no live provider call in a test.
+    const ai = await tool("get_ai_status").handler({ verify: false });
     expect(ai.isError, JSON.stringify(body(ai))).toBeUndefined();
     expect(JSON.stringify(body(ai))).not.toContain(SECRET_KEY);
     const bl = await tool("baselines").handler({ action: "list" });

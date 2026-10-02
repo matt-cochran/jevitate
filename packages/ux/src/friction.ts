@@ -50,6 +50,7 @@ export const SIGNAL_IMPACT: Readonly<Record<SignalKind, JobImpact>> = {
   "inert-control": "confused",
   "url-mismatch": "confused",
   "horizontal-overflow": "confused",
+  "vertical-clipping": "confused",
 };
 
 const IMPACT_SEVERITY: Readonly<Record<JobImpact, UxFinding["severity"]>> = { blocked: "major", slowed: "minor", confused: "minor", cosmetic: "info" };
@@ -244,7 +245,9 @@ export function groundFindings(outcome: AnalysisOutcome, points: readonly Fricti
       });
       continue;
     }
-    if (f.tier === "objective-a11y") {
+    // #198: a verified claim already carries its own evidence (and its friction, when it has one);
+    // collapsing two DIFFERENT verified claims onto one friction point would hide one of them.
+    if (f.tier === "objective-a11y" || f.claim !== undefined) {
       other.push(f);
       continue;
     }

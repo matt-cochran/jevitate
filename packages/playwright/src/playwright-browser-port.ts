@@ -5,6 +5,12 @@ import { PageLivenessWatchdog, pageUnresponsiveMsFromEnv } from "./page-liveness
 import { createResourceSignals } from "./select-resource-signals.js";
 import { emulationContextOptions, resolveEmulation } from "./emulation.js";
 import { probeReachable } from "./reachability.js";
+import { ExtensionLoadError, extensionLaunchArgs, extensionOrigin, type UnpackedExtension } from "./extensions.js";
+import { ownerMarkerArg } from "./browser-processes.js";
+import { sharedResourceGovernor, type GovernorTicket, type ResourceGovernor, type ResourceLimits } from "./resource-governor.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * Chromium switches applied on Linux regardless of caller args. They are the
@@ -163,6 +169,17 @@ export interface PlaywrightBrowserPortDeps {
   readonly openTimeoutMs?: number;
   /** #213: testing seam for the sessions' pre-flight reachability probe (default `probeReachable`). */
   readonly probe?: (url: string) => Promise<string | null>;
+  /** #205: the resource governor every session is admitted by (default: the process-wide `sharedResourceGovernor()`). */
+  readonly governor?: ResourceGovernor;
+}
+
+/**
+ * #205: the owner marker (`--jevitate-owner=<pid>@<start>`) is appended to every REAL launch, so the
+ * browser's memory can be attributed to this process and an orphan left by a killed jevitate can be
+ * found and closed (browser-processes.ts). Not part of a launch configuration's identity (`launchKey`).
+ */
+function marked<T extends { args?: string[] | readonly string[] }>(options: T | undefined): T {
+  return { ...(options as T), args: [...(options?.args ?? []), ownerMarkerArg()] };
 }
 
 /**
@@ -180,12 +197,14 @@ export class PlaywrightBrowserPort implements BrowserPort {
   readonly #liveness: { readonly unresponsiveMs?: number } | false;
   readonly #openTimeoutMs: number;
   readonly #probe: (url: string) => Promise<string | null>;
+  readonly #governor: ResourceGovernor | undefined;
 
   constructor(deps: PlaywrightBrowserPortDeps = {}) {
+    this.#governor = deps.governor;
     this.#liveness = deps.liveness ?? {};
     this.#openTimeoutMs = deps.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
-    this.#launch = deps.launch ?? ((options) => chromium.launch(options));
-    this.#launchPersistent = deps.launchPersistentContext ?? ((dir, options) => chromium.launchPersistentContext(dir, options));
+    this.#launch = deps.launch ?? ((options) => chromium.launch(marked(options)));
+    this.#launchPersistent = deps.launchPersistentContext ?? ((dir, options) => chromium.launchPersistentContext(dir, marked(options)));
     this.#platform = deps.platform ?? process.platform;
     this.#pool = deps.pool;
     this.#probe = deps.probe ?? ((url) => probeReachable(url));
@@ -195,7 +214,32 @@ export class PlaywrightBrowserPort implements BrowserPort {
     // TODO(M3): enforce allowedOrigins via route interception; currently unenforced.
     // Refused BEFORE any browser opens: an unregistered --device name, or --viewport + --device together.
     const emulation = resolveEmulation({ viewport: opts.viewport, device: opts.device });
+    // #205: admitted by the resource governor (machine-wide browser cap, throttling) before anything
+    // launches; the session's page is then watched against the memory ceiling until it closes.
+    const governor = this.#governor ?? sharedResourceGovernor();
+    const ticket = await governor.enter(opts.resources);
+    let session: BrowserSession;
+    try {
+      session = await this.#openAdmitted(opts, emulation);
+    } catch (err) {
+      ticket.release();
+      throw err;
+    }
+    return governed(session, governor, ticket, opts.resources);
+  }
+
+  async #openAdmitted(opts: OpenOptions, emulation: ReturnType<typeof resolveEmulation>): Promise<BrowserSession> {
     if (opts.persistentProfile !== undefined) return this.#openPersistent(opts, opts.persistentProfile, emulation);
+    // #256: Playwright loads extensions only in a persistent context — a throwaway profile per session.
+    if (opts.extensions !== undefined && opts.extensions.length > 0) {
+      const dir = await mkdtemp(join(tmpdir(), "jevitate-ext-profile-"));
+      try {
+        return await this.#openPersistent(opts, dir, emulation, dir);
+      } catch (err) {
+        await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+        throw err;
+      }
+    }
     const launchOptions = {
       headless: opts.headless,
       args: resolveLaunchArgs(opts.args, this.#platform),
@@ -238,24 +282,41 @@ export class PlaywrightBrowserPort implements BrowserPort {
     return pooledSession(lease, page, this.#watch(page), this.#probe, await videoPathOf(page));
   }
 
-  async #openPersistent(opts: OpenOptions, dir: string, emulation: ReturnType<typeof resolveEmulation>): Promise<BrowserSession> {
-    if (opts.storageState !== undefined) {
+  /**
+   * A persistent-context session: the caller's `persistentProfile`, or (#256) a throwaway profile
+   * `tempProfile` for a session that loads extensions — removed when the session closes. A
+   * throwaway profile has no state of its own, so a `storageState` is applied to it after launch.
+   */
+  async #openPersistent(opts: OpenOptions, dir: string, emulation: ReturnType<typeof resolveEmulation>, tempProfile?: string): Promise<BrowserSession> {
+    if (opts.storageState !== undefined && tempProfile === undefined) {
       throw new Error("storageState cannot be combined with persistentProfile: a persistent profile already carries its own state");
     }
+    const extensions = opts.extensions ?? [];
+    // #256: the headless shell (Playwright's default headless binary) cannot load extensions; the
+    // full Chromium build in new-headless mode can. An explicit channel/executable is kept as given.
+    const channel = opts.channel ?? (extensions.length > 0 && opts.headless && opts.executablePath === undefined ? "chromium" : undefined);
     let context: BrowserContext;
     try {
       context = await this.#launchPersistent(dir, {
         headless: opts.headless,
         baseURL: opts.baseUrl,
-        args: resolveLaunchArgs(opts.args, this.#platform),
+        args: resolveLaunchArgs([...(opts.args ?? []), ...extensionLaunchArgs(extensions)], this.#platform),
+        ...(extensions.length > 0 ? { ignoreDefaultArgs: ["--disable-extensions"] } : {}),
         ...(opts.executablePath !== undefined ? { executablePath: opts.executablePath } : {}),
-        ...(opts.channel !== undefined ? { channel: opts.channel } : {}),
+        ...(channel !== undefined ? { channel } : {}),
         ...(opts.slowMo !== undefined && opts.slowMo > 0 ? { slowMo: opts.slowMo } : {}),
         ...(emulation === undefined ? {} : emulationContextOptions(emulation)),
         ...(opts.recordVideo === undefined ? {} : { recordVideo: { dir: opts.recordVideo.dir } }),
       });
     } catch (err) {
-      throw explainLaunchFailure(err, opts);
+      throw explainLaunchFailure(err, { executablePath: opts.executablePath, channel });
+    }
+    try {
+      if (opts.storageState !== undefined) await context.setStorageState(opts.storageState);
+      await confirmExtensionsLoaded(context, extensions, this.#openTimeoutMs);
+    } catch (err) {
+      await context.close().catch(() => undefined);
+      throw err;
     }
     const page = context.pages()[0] ?? (await context.newPage());
     const watchdog = this.#watch(page);
@@ -264,6 +325,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
       page,
       admission: undefined,
       ...(videoPath === undefined ? {} : { videoPath }),
+      ...(extensions.length > 0 ? { extensions } : {}),
       async startTracing() {
         await context.tracing.start({ screenshots: true, snapshots: true });
       },
@@ -279,7 +341,11 @@ export class PlaywrightBrowserPort implements BrowserPort {
       probeReachable: this.#probe,
       async close() {
         watchdog?.stop();
-        await context.close();
+        try {
+          await context.close();
+        } finally {
+          if (tempProfile !== undefined) await rm(tempProfile, { recursive: true, force: true }).catch(() => undefined);
+        }
       },
     };
   }
@@ -291,6 +357,55 @@ export class PlaywrightBrowserPort implements BrowserPort {
   }
 }
 
+/**
+ * #256: proves each extension actually loaded — its `manifest.json` opens at
+ * `chrome-extension://<id>/` in a scratch page — so a browser that silently ignored
+ * `--load-extension` (branded Chrome ≥ 137, the headless shell, a policy) fails here with the
+ * reason instead of as an unexplained blocked navigation mid-run.
+ */
+async function confirmExtensionsLoaded(context: BrowserContext, extensions: readonly UnpackedExtension[], timeoutMs: number): Promise<void> {
+  if (extensions.length === 0) return;
+  const probe = await context.newPage();
+  try {
+    for (const e of extensions) {
+      const url = `${extensionOrigin(e.id)}/manifest.json`;
+      try {
+        await probe.goto(url, { timeout: timeoutMs });
+      } catch (err) {
+        // Cross-check: extensions the browser DID start (service workers / background pages) under
+        // other ids mean the pre-launch id computation drifted from Chromium's, not a refused load.
+        const running = (await runningExtensionIds(context)).filter((id) => !extensions.some((x) => x.id === id));
+        throw new ExtensionLoadError(
+          running.length > 0
+            ? `the browser loaded an extension under id ${running.join(", ")}, not the id ${e.id} computed for ${e.name}@${e.version} from ${e.dir}: ` +
+                "the extension id computation does not match this browser's (a jevitate bug — please report it with the platform and path)"
+            : `the browser did not load the extension ${e.name}@${e.version} from ${e.dir} (id ${e.id}): ${url} is not reachable. ` +
+                "Use Playwright's bundled Chromium (no --browser-channel, or --browser-channel chromium); branded Google Chrome no longer loads unpacked extensions from the command line",
+          { cause: err },
+        );
+      }
+    }
+  } finally {
+    await probe.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Ids of the extensions running in `context` (from their service workers' and background pages'
+ * origins). Error path only: when none has registered yet, waits up to 2s for a service worker.
+ */
+async function runningExtensionIds(context: BrowserContext): Promise<string[]> {
+  if (context.serviceWorkers().length === 0 && context.backgroundPages().length === 0) {
+    await context.waitForEvent("serviceworker", { timeout: 2_000 }).catch(() => undefined);
+  }
+  const ids = new Set<string>();
+  for (const w of [...context.serviceWorkers(), ...context.backgroundPages()]) {
+    const m = /^chrome-extension:\/\/([a-p]{32})\//.exec(w.url());
+    if (m !== null) ids.add(m[1]!);
+  }
+  return [...ids];
+}
+
 /** #245: the page's video file path when its context records one, else undefined (never throws). */
 async function videoPathOf(page: Page): Promise<string | undefined> {
   try {
@@ -298,6 +413,23 @@ async function videoPathOf(page: Page): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/** #205: the session with its memory watch and governor ticket released when it closes (exactly once). */
+function governed(session: BrowserSession, governor: ResourceGovernor, ticket: GovernorTicket, limits: ResourceLimits | undefined): BrowserSession {
+  const unwatch = governor.watchMemory(session.page, limits);
+  return {
+    ...session,
+    // The session's own close keeps its semantics (idempotent, a crash surfaced); unwatch/release are idempotent.
+    async close() {
+      unwatch();
+      try {
+        await session.close();
+      } finally {
+        ticket.release();
+      }
+    },
+  };
 }
 
 function pooledSession(

@@ -1,3 +1,4 @@
+import { anchoredRecording } from "./journey-prefix.js";
 import { safeChildPath } from "@jevitate/domain";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -205,6 +206,12 @@ export interface RunRegressionCaptureOptions {
   fingerprint?: string;
   /** #213: overwrite an existing `<id>.recording.json`/`.meta.json` — default: refused (fail closed). */
   force?: boolean;
+  /**
+   * #293: the failure was found from a Journey branch point — `makeActor` returns a session already
+   * through the Journey prefix, so the Recording's leading navigate to the anchor URL (which would
+   * reload the page) becomes an assertion that the prefix landed there (`anchoredRecording`).
+   */
+  anchored?: boolean;
 }
 
 export type RunRegressionCaptureResult =
@@ -220,7 +227,8 @@ export async function runRegressionCapture(opts: RunRegressionCaptureOptions): P
     throw new RegressionExistsError(opts.id, opts.regressionsDir);
   }
   const raw = JSON.parse(await readFile(opts.failingRecordingPath, "utf8"));
-  const recording = RecordingSchema.parse(raw);
+  const parsed = RecordingSchema.parse(raw);
+  const recording = opts.anchored === true ? anchoredRecording(parsed) : parsed;
   const attempts = opts.attempts ?? 3;
 
   let missionResult: MissionResultFile | undefined;
@@ -334,7 +342,7 @@ async function replayAndCheckNetwork(makeActor: () => Promise<Actor>, recording:
   // network to go idle before reading what was captured, or a fast write can be missed entirely.
   await monitor.waitSettled({ ceilingMs: 5_000 }).catch(() => undefined);
   monitor.stopCapture(capture);
-  const result = evaluateNetworkCheck(asSuccessCheck(check), capture.requests(), capture.truncated);
+  const result = evaluateNetworkCheck(asSuccessCheck(check), capture.sent(), capture.truncated);
   return !result.passed;
 }
 

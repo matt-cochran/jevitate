@@ -1,5 +1,5 @@
 import type { Page, Route, Request } from "playwright";
-import type { WriteClassifier } from "@jevitate/recording";
+import { rpcMethodOf, type WriteClassifier } from "@jevitate/recording";
 import { normalizeAllowlist, requestEndpoint } from "./authorized-targets.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { controlRisk } from "./safety.js";
@@ -35,8 +35,19 @@ import type { Control } from "./snapshot.js";
  *    refusal naming origin + path with a hint (`--allow` it, or `--allow-write "<origin>/<glob>"`).
  *    Pay / checkout controls are refused BEFORE the click by `refuses()`, whatever origin they call.
  *    Limit: a credential-free write to an origin never seen with credentials passes (docs/safety.md).
- * `--allow-writes` (or a goal that asks for a change — "create…", "update…") lifts the guard; the
- * #116 safety policy still applies then.
+ * #253: a form SUBMIT is judged by the requests it sends, not by its shape. A lookup/search form's
+ * "Load" that only GETs (or calls `Get*`/`List*` RPCs, or `--read-rpc` matches) is clicked; a submit
+ * whose request is a write is stopped at the network like any other action's write — a native form
+ * POST navigation is answered in the browser with `204 No Content` (the page stays put; the request
+ * never reaches the server). Controls whose NAME says they change state (`FLOW`, #116's categories)
+ * are still refused before the click.
+ *
+ * `--allow-writes` lifts the guard. A goal that asks for a change ("create…", "update…") lifts the
+ * READ-ONLY part only (#270): without `--allow-writes` / `--allow-destructive` a goal with no success
+ * check still never performs a DESTRUCTIVE write — mode `no-destructive` refuses a destructive control
+ * (#116's vocabulary, with NO goal-word lift: "Remove a product…" clicked a member row's "Remove") and
+ * aborts a destructive write request an action fires (`DELETE`, a `Remove*`/`Delete*`/`Revoke*`… RPC,
+ * a `/remove`-like path segment) — whatever the control's name. The #116 safety policy applies on top.
  */
 
 /**
@@ -64,8 +75,70 @@ export function goalAsksForChange(goal: string): boolean {
 const FLOW =
   /\b(?:create|add|new|save|submit|send|post|publish|confirm|continue|proceed|finish|complete|apply|redeem|claim|activate|enable|disable|connect|join|register|sign ?up|book|reserve|request|invite|accept|approve|reject|decline|archive|restore|reset|import|upload|transfer|assign|manage (?:subscription|billing|plan|payment)|billing portal|change (?:plan|tier)|downgrade|switch (?:plan|to)|get started|start|try (?:it|now|free)|install)\b/i;
 
-/** A form submit that only reads (a search/filter form). */
-const READ_SUBMIT = /\b(?:search|find|filter|go|look ?up|show|view|apply filters?)\b/i;
+/**
+ * #270: a write request that destroys something, by code from the request alone — `DELETE`, an RPC
+ * whose method starts with a destructive verb (`RemoveMember`, `DeleteProject`, `RevokeKey`), or a
+ * REST path segment that is one (`/members/42/remove`, `/keys/revoke-all`).
+ */
+const DESTRUCTIVE_VERBS = "delete|remove|revoke|destroy|erase|purge|wipe|drop|terminate|deactivate|unsubscribe|withdraw|evict|kick|ban|unlink|detach|disconnect";
+const DESTRUCTIVE_RPC = new RegExp(`^(?:${DESTRUCTIVE_VERBS.replace(/(^|\|)(\w)/g, (_m, sep: string, c: string) => sep + c.toUpperCase())})(?=[A-Z0-9_]|$)`);
+const DESTRUCTIVE_SEGMENT = new RegExp(`^(?:${DESTRUCTIVE_VERBS})(?:[-_.]|$)`, "i");
+/**
+ * #198: the FAIL-SAFE reading for a probe that clicks destructive controls on purpose — the same verbs
+ * plus the softer ones a probe must not let through either (archive, trash, discard, cancel), matched
+ * as a word anywhere in the path, query or body.
+ */
+const DESTRUCTIVE_WORD = new RegExp(
+  `\\b(?:${`${DESTRUCTIVE_VERBS}|archive|trash|discard|cancel`
+    .split("|")
+    // A whole word with its inflections ("deleted", "removing", "dropped") — never a longer word
+    // that merely starts with one ("banner", "dropdown", "kickoff").
+    .map((v) => (v.endsWith("e") ? `${v.slice(0, -1)}(?:e|es|ed|ing)` : `${v}(?:s|es|\\w?ed|\\w?ing|all)?`))
+    .join("|")})\\b`,
+  "i",
+);
+
+/** Is this (write) request destructive? Code only, from the method and path. */
+export function isDestructiveRequest(method: string, path: string): boolean {
+  if (method.toUpperCase() === "DELETE") return true;
+  const rpc = rpcMethodOf(path);
+  if (rpc !== null) return DESTRUCTIVE_RPC.test(rpc.method);
+  return path.split("/").some((seg) => DESTRUCTIVE_SEGMENT.test(seg));
+}
+
+/**
+ * #198 × #270 — ONE destructive-request classifier, two strengths. `isDestructiveRequest` is the
+ * precise reading the find-out guard holds writes by; this is the fail-safe one the UX guard probe
+ * aborts by, whatever the method: everything `isDestructiveRequest` holds, plus any request whose
+ * URL (path and query, decoded, camelCase split — `/rpc/DeleteUser`, `/delete?id=1`,
+ * `?action=remove`) or body names a destructive verb.
+ */
+export function looksDestructiveRequest(method: string, url: string, body: string | null = null): boolean {
+  let text = url;
+  let path = url;
+  try {
+    const u = new URL(url);
+    text = `${u.pathname} ${u.search}`;
+    path = u.pathname;
+  } catch {
+    text = url;
+    path = url.split(/[?#]/)[0] ?? url;
+  }
+  if (isDestructiveRequest(method, path)) return true;
+  const words = (v: string): string => {
+    let d = v;
+    try {
+      d = decodeURIComponent(v.replace(/\+/g, " "));
+    } catch {
+      d = v;
+    }
+    return d.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[^A-Za-z0-9]+/g, " ");
+  };
+  return DESTRUCTIVE_WORD.test(words(text)) || (body !== null && DESTRUCTIVE_WORD.test(words(body.slice(0, 4_096))));
+}
+
+/** What the guard holds back: every write (`read-only`, #158) or only a destructive one (#270). */
+export type ReadOnlyMode = "read-only" | "no-destructive";
 
 /** Auth-refresh endpoints a read-only run never blocks (a blocked rotating refresh signs the run out). */
 export const DEFAULT_ALLOWED_WRITES: readonly string[] = ["**/refresh*", "**/token*", "**/oauth/**", "**/auth/**/refresh*"];
@@ -91,6 +164,10 @@ export const READ_ONLY_NOTE =
   "never buy, upgrade, subscribe, create, save, submit, send or delete (such actions are refused and their write requests blocked); " +
   "end with `report` as soon as the page shows the answer";
 
+export const NO_DESTRUCTIVE_NOTE =
+  "this goal has no success check: destructive actions (delete, remove, revoke…) are refused and their write requests blocked — " +
+  "if the goal can only be met by destroying something, report that instead";
+
 export interface BlockedWrite {
   readonly method: string;
   /**
@@ -104,6 +181,7 @@ export interface BlockedWrite {
 
 export class ReadOnlyGuard {
   readonly #isWrite: WriteClassifier;
+  readonly #mode: ReadOnlyMode;
   readonly #blocked: BlockedWrite[] = [];
   /** Exempt globs; `full` = origin-qualified (matched against origin + path, #194). */
   readonly #allowed: ReadonlyArray<{ readonly re: RegExp; readonly full: boolean }>;
@@ -123,13 +201,20 @@ export class ReadOnlyGuard {
       readonly allowWrites?: readonly string[];
       readonly allowlist?: readonly string[];
       readonly firstParty?: FirstPartyOrigins;
+      /** Default `read-only` (#158); `no-destructive` holds back only destructive writes (#270). */
+      readonly mode?: ReadOnlyMode;
     } = {},
   ) {
     this.#isWrite = isWrite;
+    this.#mode = opts.mode ?? "read-only";
     this.#origins = opts.allowlist ?? [];
     this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
     this.#allowed = [...DEFAULT_ALLOWED_WRITES, ...(opts.allowWrites ?? [])].filter((g) => g.trim() !== "")
       .map((g) => ({ re: pathGlob(g), full: /^https?:\/\//i.test(g.trim()) }));
+  }
+
+  get mode(): ReadOnlyMode {
+    return this.#mode;
   }
 
   /** A model-chosen action is about to be dispatched: its writes are blocked until `settled()`. */
@@ -144,21 +229,28 @@ export class ReadOnlyGuard {
     return was;
   }
 
-  /** Why an op on a control may not run on a read-only goal, or null when it may. */
+  /** Why an op on a control may not run under this guard, or null when it may. */
   refuses(op: string, control: Pick<Control, "name" | "role" | "submits"> | null): string | null {
     const name = (control?.name ?? "").replace(/\s+/g, " ").trim();
+    if (this.#mode === "no-destructive") {
+      // #270: no goal-word lift — a goal without a success check never destroys on a name match.
+      if (op !== "click" || control === null) return null;
+      const risk = controlRisk(name, control.role);
+      if (risk?.risk !== "destructive") return null;
+      return `refused: "${name}" is destructive (destructive) and this goal has no success check — a destructive write needs --allow-writes; report what you found instead`;
+    }
     if (op === "send") return `refused: this find-out goal is read-only — sending a message is a write (pass --allow-writes to permit it)`;
     if (op === "upload") return `refused: this find-out goal is read-only — uploading is a write (pass --allow-writes to permit it)`;
     if (op !== "click" || control === null) return null;
     const risk = controlRisk(name, control.role);
+    // #253: a form submit is NOT refused for its shape — its requests decide (a write is blocked at
+    // the network, below); only a name that says it changes state is refused before the click.
     const why =
       risk !== null
         ? `${risk.risk === "session-end" ? "ends the session" : risk.risk === "destructive" ? "is destructive" : "may cost money or contact real people"} (${risk.risk})`
         : control.role !== "link" && FLOW.test(name)
           ? "starts a flow that changes state"
-          : control.submits === true && !READ_SUBMIT.test(name)
-            ? "submits a form"
-            : null;
+          : null;
     if (why === null) return null;
     return `refused: this find-out goal is read-only — "${name}" ${why}; find the answer on the page instead (pass --allow-writes to permit it)`;
   }
@@ -184,12 +276,28 @@ export class ReadOnlyGuard {
     // (reads too), so a backend the page authenticates to is first-party from then on.
     const thirdParty = this.#firstParty.thirdParty(request.url(), request.headers()) !== null;
     const endpoint = requestEndpoint(request.url(), this.#origins);
-    if (!write || thirdParty || !this.#inAction || this.#exempt(path, request.url())) {
+    const held = this.#mode === "read-only" || isDestructiveRequest(request.method(), path);
+    if (!write || !held || thirdParty || !this.#inAction || this.#exempt(path, request.url())) {
       await route.fallback().catch(() => undefined);
       return;
     }
     this.#blocked.push({ method: request.method().toUpperCase(), path: endpoint, ...this.#hint(request.url()) });
+    // #253: a native form POST is a main-frame NAVIGATION — aborting it would leave the page on the
+    // browser's error page. A `204 No Content` answer (from the browser, never the server) keeps the
+    // page where it was, per the HTML navigation rules; any other write is aborted.
+    if (this.#mainFrameNavigation(request)) {
+      await route.fulfill({ status: 204, body: "" }).catch(() => undefined);
+      return;
+    }
     await route.abort("blockedbyclient").catch(() => undefined);
+  }
+
+  #mainFrameNavigation(request: Request): boolean {
+    try {
+      return request.isNavigationRequest() && this.#page !== null && request.frame() === this.#page.mainFrame();
+    } catch {
+      return false; // a service-worker request has no frame
+    }
   }
 
   /**

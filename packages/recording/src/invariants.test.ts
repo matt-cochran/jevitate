@@ -415,6 +415,47 @@ describe("multi-actor specs (#147): captures, observers, cross-actor checks", ()
   });
 });
 
+describe("#295: request-payload observables and sameList() — what was saved is what reloads", () => {
+  const run = (src: string, vals: Record<string, EvalValue>) =>
+    evaluateInvariantExpression(parseInvariantExpression(src), { before: (n) => (n in vals ? (vals[n] as EvalValue) : UNKNOWN), after: (n) => (n in vals ? (vals[n] as EvalValue) : UNKNOWN) });
+
+  it("a network observable reads exactly one of json (the response) or request (the payload sent)", () => {
+    const spec = validateInvariantSpec(
+      {
+        observe: {
+          saved: { network: { url: "/api/items", method: "PUT", request: "$.items[*]" } },
+          reloaded: { network: { url: "/api/items", method: "GET", json: "$.items[*]" } },
+        },
+        invariants: [{ id: "round-trip", when: { op: ["reload"] }, require: "sameList(saved, reloaded)" }],
+      },
+      ALLOW,
+    );
+    expect(spec.observe?.saved).toEqual({ network: { url: "/api/items", method: "PUT", request: "$.items[*]" } });
+    const both = refusal({ observe: { x: { network: { url: "/a", json: "$.a", request: "$.a" } } }, invariants: [{ id: "i", require: "x == 1" }] });
+    expect(both.join("\n")).toMatch(/observe\.x\.network\.json: a network observable reads exactly one of json .* or request/);
+    const neither = refusal({ observe: { x: { network: { url: "/a" } } }, invariants: [{ id: "i", require: "x == 1" }] });
+    expect(neither.join("\n")).toMatch(/exactly one of json .* or request/);
+    expect(refusal({ observe: { x: { network: { url: "/a", request: "items" } } }, invariants: [{ id: "i", require: "x == 1" }] }).length).toBeGreaterThan(0);
+  });
+
+  it("sameList(a, b): same items in the same order (ids as text); a reorder or a missing item breaks it; non-lists decide nothing", () => {
+    expect(run("sameList(a, b)", { a: ["x", "y", 3], b: ["x", "y", "3"] })).toBe(true);
+    expect(run("sameList(a, b)", { a: ["x", "y"], b: ["y", "x"] })).toBe(false);
+    expect(run("sameList(a, b)", { a: ["x", "y"], b: ["x"] })).toBe(false);
+    expect(run("sameList(a, b)", { a: [], b: [] })).toBe(true);
+    expect(run("sameList(a, b)", { a: [null], b: ["null"] })).toBe(false);
+    expect(run("sameList(a, b)", { a: ["x"], b: null })).toBe(UNKNOWN);
+    expect(run("sameList(a, b)", { a: ["x"], b: "x" })).toBe(UNKNOWN);
+    expect(run("sameList(a, b)", { a: ["x"] })).toBe(UNKNOWN);
+    expect(run("!sameList(a, b)", { a: ["x", "y"], b: ["y", "x"] })).toBe(true);
+    // A list is still never compared with == (by design): use sameList.
+    expect(run("a == b", { a: ["x"], b: ["x"] })).toBe(UNKNOWN);
+    expect(() => parseInvariantExpression("sameList(a)")).toThrow();
+    // A reserved word, never an observable name.
+    expect(refusal({ observe: { sameList: { dom: { selector: "#x" } } }, invariants: [{ id: "i", require: "after(sameList) == 1" }] }).length).toBeGreaterThan(0);
+  });
+});
+
 describe("never.response (#195): an app response status on the mission's own traffic", () => {
   const spec = (response: unknown): unknown => ({ invariants: [{ id: "no-billing-403", never: { response } }] });
 

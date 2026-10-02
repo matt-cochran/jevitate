@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
-import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, journeyStepCount, listJourneyAnchors } from "@jevitate/journey";
 import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { ExtensionMismatchError } from "./browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
@@ -42,7 +43,7 @@ import {
   buildExploreGateways,
 } from "./cli-shared.js";
 
-/** Registers `jevitate journey`: `list|find|run|promote|annotate|demo|publish`. */
+/** Registers `jevitate journey`: `list|find|run|promote|anchors|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
@@ -134,6 +135,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--self-heal <mode>", "self-heal policy mode: fail-closed | hybrid | full", "fail-closed")
     .option("--real", "use live Jev + OpenRouter gateways for self-heal (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
+    .option("--action-deltas", "opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
@@ -153,7 +155,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
         ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
       };
-      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, json, screenshots: _screenshots, ...emulationFlags } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, json, screenshots: _screenshots, actionDeltas, ...emulationFlags } = this.opts<{
+        actionDeltas?: boolean;
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -241,6 +244,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
           ...(screenshots === undefined ? {} : { screenshots }),
           ...(storageState !== undefined ? { storageState } : {}),
+          ...(actionDeltas === true ? { actionDeltas: true } : {}),
           ...(environment === undefined ? {} : { environment }),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
           // #247: under an environment, its allowed origins.
@@ -279,6 +283,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
         } else if (err instanceof JourneyRequiresAuthError) {
           emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
+        } else if (err instanceof ExtensionMismatchError) {
+          emitJson(program, fail(err.code, err.message));
         } else if (err instanceof FixtureSetupError) {
           // Never run on unknown state: inconclusive, a configuration error (exit 2).
           emitJson(
@@ -323,6 +329,39 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         } else {
           emitJson(program, fail("E_JOURNEY_PROMOTE", String(err instanceof Error ? err.message : err)));
         }
+      }
+    });
+
+  // #293 — the named states worth exploring from (`explore --from-journey <id> --at-step <name>`).
+  journey
+    .command("anchors <id>")
+    .description("list a Journey's anchors (#293): named steps to branch a mission off with `explore --from-journey <id> --at-step <name>`, and their suggested probes")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      try {
+        const found = await new JourneyRegistry(new FsJourneyStore(resolveJourneysDir(deps, dir))).get(id);
+        if (found === null) {
+          emitJson(program, fail("E_UNKNOWN_JOURNEY", `unknown journey '${id}'`));
+          return;
+        }
+        const data = { journeyId: found.metadata.id, promoted: found.metadata.promoted, steps: journeyStepCount(found), anchors: listJourneyAnchors(found) };
+        if (json) {
+          emitJson(program, ok(data));
+        } else {
+          const out = program.configureOutput().writeOut;
+          if (data.anchors.length === 0) {
+            out?.(`journey '${data.journeyId}' declares no anchors — branch off a step number instead (--at-step 1..${data.steps}), or add metadata.anchors\n`);
+          }
+          for (const a of data.anchors) {
+            out?.(`${a.name}\tstep ${a.step}\tafter: ${a.afterStep}${a.description === undefined ? "" : `\t${a.description}`}${a.probes.length === 0 ? "" : `\tprobes: ${a.probes.join("; ")}`}\n`);
+          }
+          if (!data.promoted) out?.(`note: journey '${data.journeyId}' is not promoted — missions branch only off promoted Journeys\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_ANCHORS_ARGS", String(err instanceof Error ? err.message : err)));
       }
     });
 

@@ -11,9 +11,11 @@ import {
   visibleBusyIndicator,
   type HangSignal,
 } from "./hang.js";
-import { contentHash } from "@jevitate/domain";
+import { contentHash, clock } from "@jevitate/domain";
+import { clockBounded } from "./clock-bound.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { redactUrl } from "@jevitate/ai-core";
+import { resourceSettleFactor } from "@jevitate/playwright";
 
 /**
  * perceive: the ONE "look at a rendered page" step every mission loop uses (goal/usability
@@ -72,6 +74,13 @@ interface PerceptionBase {
   readonly timing: PageTiming;
   /** A hang detected while perceiving (owner ruling 7), or null. */
   readonly hang: HangSignal | null;
+  /**
+   * #288: what the page did while a busy indicator outlasted the ceiling (present only then) — the
+   * app's requests that completed during the wait (a job-status poll) and whether the indicator's
+   * own description changed (live progress text). Evidence a caller weighs to tell an app visibly
+   * working on a long job from a frozen one; perception itself still reports the hang.
+   */
+  readonly busyWait?: { readonly requestsCompleted: number; readonly indicatorChanged: boolean };
 }
 
 export type Perception =
@@ -109,8 +118,11 @@ function documentPending(pending: readonly { readonly resourceType: string }[]):
 }
 
 export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<Perception> {
-  const ceiling = opts.renderWaitMs ?? RENDER_WAIT_MS;
-  const quietMs = opts.quietMs ?? SETTLE_QUIET_MS;
+  // #205: while the host is throttled (loaded/low on memory) the DEFAULT settle windows are longer
+  // (`resourceSettleFactor`, 2x) — a starved renderer is slow, not hung; explicit values are kept.
+  const settleFactor = resourceSettleFactor();
+  const ceiling = opts.renderWaitMs ?? RENDER_WAIT_MS * settleFactor;
+  const quietMs = opts.quietMs ?? SETTLE_QUIET_MS * settleFactor;
   if (!Number.isFinite(ceiling) || ceiling < 0) {
     throw new Error(`perceive: renderWaitMs must be a non-negative number, got ${String(ceiling)}`);
   }
@@ -139,13 +151,13 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   // render ceiling: answered → probe again and perceive as usual; still unanswered → the app's own
   // request hang (`request-pending` on the document), never `main-thread-unresponsive`.
   if (!responsive && documentPending(monitor.pending())) {
-    const deadline = Date.now() + ceiling;
-    while (Date.now() < deadline && documentPending(monitor.pending()) && !page.isClosed()) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    const deadline = clock.now() + ceiling;
+    while (clock.now() < deadline && documentPending(monitor.pending()) && !page.isClosed()) {
+      await clock.sleep(100);
     }
     const stillPending = monitor.pending();
     if (documentPending(stillPending)) {
-      const now = Date.now();
+      const now = clock.now();
       const win = monitor.window();
       const settle: SettleResult = { settled: false, waitedMs: now - (deadline - ceiling), pending: stillPending };
       const timing = unreadablePageTiming(page.url(), monitor.completedSince(win.start), stillPending, now);
@@ -172,7 +184,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     responsive = await probeResponsive(page, hangProbeMs);
   }
   if (!responsive) {
-    const now = Date.now();
+    const now = clock.now();
     const win = monitor.window();
     const pending = monitor.pending();
     const settle: SettleResult = { settled: false, waitedMs: hangProbeMs, pending };
@@ -199,7 +211,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   }
 
   // 2. Render + settle (event-driven; one ceiling).
-  const started = Date.now();
+  const started = clock.now();
   const settledP = monitor.waitSettled({ quietMs, ceilingMs: ceiling });
   // Resolves as soon as a control renders (event-driven); a timeout/navigation just means "not yet".
   const controlsP = page
@@ -220,22 +232,34 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
 
   // 3. A settled page that still shows a busy indicator: give it the rest of the ceiling to finish.
   let stuckBusy: string | null = null;
+  let busyWait: { requestsCompleted: number; indicatorChanged: boolean } | undefined;
   if (settle.settled) {
     const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
     if (busy !== null) {
-      const remaining = Math.max(1, ceiling - (Date.now() - started));
-      const gone = await page
-        .waitForFunction(`!(${visibleBusyIndicator.toString()})()`, undefined, { timeout: remaining, polling: "raf" })
-        .then(
+      const busySince = clock.now();
+      const remaining = Math.max(1, ceiling - (clock.now() - started));
+      const gone = await clockBounded(
+        page.waitForFunction(`!(${visibleBusyIndicator.toString()})()`, undefined, { timeout: remaining, polling: "raf" }).then(
           () => true,
           () => false,
-        );
+        ),
+        remaining,
+        false,
+      );
       // A target can declare an indicator (or a route) where a lasting busy state is expected.
-      if (!gone && !ignoreNoProgress(busy) && !ignoreNoProgress(hangRoute(page.url()))) stuckBusy = busy;
+      if (!gone && !ignoreNoProgress(busy) && !ignoreNoProgress(hangRoute(page.url()))) {
+        stuckBusy = busy;
+        const now = await page.evaluate(visibleBusyIndicator).catch(() => null);
+        busyWait = {
+          // A `--settle-ignore`d beacon is no sign of the app working on the job (#284).
+          requestsCompleted: monitor.completedSince(busySince).filter((r) => r.resourceType !== "document" && r.ignored !== true).length,
+          indicatorChanged: now !== null && now !== busy,
+        };
+      }
     }
   }
 
-  const settleEndedAt = Date.now();
+  const settleEndedAt = clock.now();
   const win = monitor.window();
   const { timing, docId } = await measurePageTiming(page, {
     completed: monitor.completedSince(win.start),
@@ -271,13 +295,15 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
           ...(stuckBusy === null ? {} : { element: stuckBusy }),
         };
 
-  if (snap.controls.length > 0) return { rendered: true, snapshot: snap, settle, timing, hang };
+  const waited = busyWait === undefined ? {} : { busyWait };
+  if (snap.controls.length > 0) return { rendered: true, snapshot: snap, settle, timing, hang, ...waited };
   return {
     rendered: false,
     snapshot: snap,
     settle,
     timing,
     hang,
+    ...waited,
     reason: settle.settled
       ? "page settled with no interactive controls"
       : `page rendered no interactive controls within ${ceiling}ms`,

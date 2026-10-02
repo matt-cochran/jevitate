@@ -35,6 +35,7 @@ import type { CaptureLayer } from "./demo-capture.js";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import type { ResolvedJourneyEnvironment } from "./environments.js";
 import type { MissionFixtures } from "./mission-fixtures.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * #249 — `jevitate demo "<aspect>"`: one request → a reviewed, narrated demo of one aspect of an app.
@@ -318,7 +319,7 @@ export async function demoAspect(opts: DemoAspectOptions): Promise<DemoAspectRes
     throw new DemoExistsError(`a demo draft '${id}' is waiting for approval (${recordPath}) — approve it with \`jevitate demo approve ${id}\`, or pick another --id`);
   }
   const maxReplays = opts.maxReplays ?? DEMO_MINIMIZE_MAX_REPLAYS;
-  const now = opts.now ?? (() => new Date().toISOString());
+  const now = opts.now ?? (() => clock.nowIso());
   const base = { id, aspect, environment: env.name ?? env.baseUrl };
 
   const work = await mkdtemp(join(tmpdir(), "jevitate-demo-aspect-"));

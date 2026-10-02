@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (132 exports)
+# @jevitate/ai-core (150 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -17,11 +17,17 @@
   ChatReplyOutput: variable
   ChoiceAnswer: interface
   ChoiceQuestion: interface
+  collectKeys: function
+  CollectKeysOptions: interface
   collectMissingKeys: function
   ConfiguredModelPrices: interface
   CredentialKey: type-alias
   CredentialLeakError: class
+  credentialProvenance: function
+  CredentialProvenance: interface
+  CredentialSource: type-alias
   CredentialStore: interface
+  describeVerdict: function
   envAliasesFor: function
   envCredentialStore: function
   failureClass: function
@@ -63,6 +69,12 @@
   JourneyStepOutput: variable
   JudgmentPort: interface
   JudgmentState: interface
+  KEY_PROVIDERS: variable
+  KEY_VERIFY_TIMEOUT_MS: variable
+  KEY_VERIFY_URLS: variable
+  keyPrompt: function
+  KeyVerdict: type-alias
+  looksLikeOtherKey: function
   MAX_CHOICE_OPTIONS: variable
   MissingCredentialError: class
   ModelConstraints: type-alias
@@ -80,6 +92,7 @@
   Question: type-alias
   realJevClientCall: function
   redactContext: function
+  redactCredentialShapes: function
   REDACTION_MASK: variable
   redactText: function
   redactUrl: function
@@ -90,6 +103,9 @@
   RetryingJudgmentPort: class
   RetryResult: type-alias
   retryTransient: function
+  REVEALED_SECRET_SELECTORS: variable
+  REVEALED_SECRET_SHAPES: variable
+  revealedSecretsIn: function
   ScoreAnswer: interface
   ScoreQuestion: interface
   SdkChoiceQuestion: type-alias
@@ -132,6 +148,8 @@
   UxSpecificsInput: variable
   UxSpecificsItem: variable
   UxSpecificsOutput: variable
+  VerifyFetch: type-alias
+  verifyKey: function
   withPreflight: function
 
 # @jevitate/application (5 exports)
@@ -145,15 +163,18 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (94 exports)
+# @jevitate/domain (109 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
   Attribution: type-alias
   AttributionResult: interface
+  clock: variable
+  ClockImpl: interface
   combineOutcomes: function
   contentHash: function
   CrashEvidence: interface
+  currentClock: function
   DEFAULT_HEAP_GROWTH_RULE: variable
   DEFAULT_JEVITATE_REPO: variable
   DEGRADED_FINDINGS: variable
@@ -163,6 +184,8 @@
   EnvironmentDegraded: type-alias
   EnvironmentDegradedSchema: variable
   evaluateGate: function
+  FakeClock: class
+  FakeClockOptions: interface
   fileDraft: function
   FilingConfig: interface
   FilingOutcome: type-alias
@@ -181,6 +204,7 @@
   HeapSample: interface
   HostHealthSummary: type-alias
   HostHealthSummarySchema: variable
+  installClock: function
   InteractionPolicy: type-alias
   isBrokenRun: function
   isGoalOutcome: function
@@ -211,10 +235,16 @@
   PersistedMissionResultSchema: variable
   PlannedStep: type-alias
   QuietHours: type-alias
+  realClock: variable
+  resetClock: function
   resolveThrottle: function
+  ResourceGovernanceSummaryRecord: type-alias
+  ResourceGovernanceSummarySchema: variable
   RESULT_GOAL_OUTCOMES: variable
   RESULT_MISSION_OUTCOMES: variable
   RESULT_STRATEGIES: variable
+  ResultBranch: type-alias
+  ResultBranchSchema: variable
   ResultDefect: type-alias
   ResultDefectSchema: variable
   ResultEngineSchema: variable
@@ -236,14 +266,24 @@
   targetsFor: function
   ThrottlePolicy: type-alias
   TimedStep: interface
+  TimerHandle: type-alias
+  TimeSkippingClock: class
+  TimeSkippingOptions: interface
   TimingProfile: interface
   TypingModel: type-alias
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (481 exports)
+# @jevitate/explore (561 exports)
+  absenceCoverage: function
+  AbsenceCoverage: interface
   act: function
   ActArgs: interface
+  ActionDelta: interface
+  ActionDeltas: class
+  ActionDeltasOptions: interface
+  ActionDeltaStats: interface
+  actionName: function
   ActResult: interface
   AdversarialCoverage: interface
   AdversarialDefect: interface
@@ -265,10 +305,13 @@
   answerNotFoundReason: function
   AnswerVerdict: type-alias
   API_CREDENTIAL_HEADERS: variable
+  AriaCapture: interface
+  AriaLine: interface
   assertAuthorizedExploreTarget: function
   assertSeedReachable: function
   assertTargetAnswering: function
   assessCoverageSufficiency: function
+  attributeCanary: function
   authorJourney: function
   AuthorJourneyRequest: interface
   AuthorJourneyResult: type-alias
@@ -279,6 +322,7 @@
   Bounds: interface
   boundSecretField: function
   BoundsTracker: class
+  boundTypeFixture: function
   BudgetActionInfo: interface
   BudgetGuardResult: interface
   BudgetMonitor: class
@@ -290,10 +334,13 @@
   buildJudgmentState: function
   BuildStateInput: interface
   busyIndicatorOf: function
+  CANARY_ATTRIBUTE: variable
   CandidateAction: type-alias
   candidateId: function
   CapabilityScope: interface
+  capFormText: function
   capMessage: function
+  captureAria: function
   CapturedRequest: interface
   chatReply: function
   ChatReplyRequest: interface
@@ -302,6 +349,10 @@
   classifyHang: function
   classifyRequest: function
   clickTimeoutMs: function
+  ClippingCause: type-alias
+  ClippingFinding: interface
+  clippingSummary: function
+  compareDeltas: function
   CompletedRequest: interface
   Control: interface
   controlFields: function
@@ -349,6 +400,20 @@
   DEFERRED_EFFECT_MAX_MS: variable
   DEGRADED_STEP_MAJORITY: variable
   degradedEnvironmentOutcome: function
+  DELTA_HISTORY_GUIDE: variable
+  DELTA_JEV_MAX_CALLS: variable
+  DELTA_LINE_MAX: variable
+  DELTA_MAX_CHANGES: variable
+  DELTA_PROMPT_CHARS: variable
+  DELTA_SNAPSHOT_TIMEOUT_MS: variable
+  DeltaChange: interface
+  DeltaComparison: interface
+  DeltaLocality: type-alias
+  deltaPromptLine: function
+  deltaQuotableText: function
+  deltaRecord: function
+  deltaStatsOf: function
+  DeltaVerdict: type-alias
   DEMO_HIGHLIGHT_MS: variable
   DEMO_OVERLAY_ATTR: variable
   DEMO_OVERLAY_HIDE_STYLE: variable
@@ -359,14 +424,19 @@
   DemoOverlayIntent: interface
   describeAction: function
   describeAssertionSpec: function
+  describeChange: function
   describeCheck: function
+  describeExpected: function
   describeFailure: function
   describeStatus: function
   describeUnreachable: function
   DESTRUCTIVE: variable
+  detectClipping: function
+  DetectClippingOptions: interface
   detectForms: function
   detectOverflow: function
   DetectOverflowOptions: interface
+  diffAria: function
   disambiguate: function
   DisclosureMemory: interface
   DraftContext: interface
@@ -383,6 +453,9 @@
   errorPageReason: function
   evaluateNetworkCheck: function
   exactLiterals: function
+  expectedChange: function
+  ExpectedChange: interface
+  expectedResultFromDelta: function
   explore: function
   EXPLORE: variable
   ExploreConfig: interface
@@ -395,6 +468,7 @@
   FieldKind: type-alias
   FieldMatcher: interface
   FieldMatcherKey: type-alias
+  fieldMatches: function
   FieldShape: interface
   FieldValueLog: class
   FillHelper: class
@@ -417,9 +491,13 @@
   GOAL_IS_SIGN_IN_QUESTION: variable
   GOAL_MET_INSTRUCTIONS: variable
   GOAL_MET_QUESTION: variable
+  goalAdmitsAbsence: function
   goalAsksFor: function
+  goalAsksForAction: function
   goalAsksForChange: function
   goalAsksForReply: function
+  goalAsksForReport: function
+  goalAsksToWrite: function
   GoalBasedMissionConfig: interface
   GoalBasedOutcome: type-alias
   GoalBasedResult: interface
@@ -455,6 +533,9 @@
   Http5xxOracle: class
   Http5xxSignal: type-alias
   http5xxSignalOf: function
+  IdentityChange: interface
+  identityKind: function
+  IdentityKind: type-alias
   InductionMissionParams: interface
   InductionRunResult: interface
   InflightRequest: interface
@@ -471,6 +552,7 @@
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
   isInScope: function
@@ -478,6 +560,7 @@
   isNavControl: function
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
+  isPageUnresponsive: function
   isResourceLoadEcho: function
   isSecretLike: function
   isTargetUnresponsive: function
@@ -493,6 +576,10 @@
   LIST_OPTION_CAP: variable
   LivenessAnswer: type-alias
   LivenessProbe: type-alias
+  looksDestructiveRequest: function
+  markTypeFixtures: function
+  markupCanary: function
+  MarkupInjection: interface
   maskSecretFields: function
   matchGlob: function
   matchOption: function
@@ -516,7 +603,9 @@
   monitorFor: function
   NavigationTiming: interface
   NeverResponseHit: interface
+  newIdentityToken: function
   NO_ANSWER_REASON: variable
+  NO_DESTRUCTIVE_NOTE: variable
   NoActionContext: interface
   noActionShortfall: function
   NoProgressDetector: class
@@ -538,8 +627,10 @@
   OverflowElement: interface
   OverflowFinding: interface
   OverflowRect: type-alias
+  OVERSIZE_CHARS: variable
   p50: function
   PAGE_TEXT_GUIDE: variable
+  PageDeltas: class
   PageFacts: interface
   PageHeadings: interface
   PageMonitor: class
@@ -548,10 +639,12 @@
   PageTiming: interface
   PageTimingStat: interface
   PAID: variable
+  parseAria: function
   parseFirstNumber: function
   parseInterceptor: function
   parseNumbers: function
   parseSecretField: function
+  parseTypeFixtureSpec: function
   pathGlob: function
   pendingEvidence: function
   PendingRequestEvidence: interface
@@ -565,10 +658,13 @@
   PROMPT_INJECTION_GUARD: variable
   PROMPT_PAGE_TEXT_CHARS: variable
   quoteIsOnlyControlNames: function
+  RawChange: interface
   READ_ONLY_NOTE: variable
   ReadOnlyGuard: class
+  ReadOnlyMode: type-alias
   recordCoverageHang: function
   recordingStepCount: function
+  redactAriaLine: function
   redactContext: other
   redactControl: function
   REDACTION_MASK: other
@@ -576,6 +672,7 @@
   redactText: other
   redactUrl: other
   refusalNote: function
+  REJECTED_AGAIN_REASON: variable
   RELOAD_TIMEOUT_MS: variable
   reloadPage: function
   RENDER_BASELINE_RENDERS: variable
@@ -586,6 +683,10 @@
   RepeatVerdict: type-alias
   replayAndDetectHang: function
   ReplayAttemptEvidence: interface
+  ReplayDeltas: class
+  replayDeltaSummary: function
+  ReplayDeltaSummary: interface
+  ReplayStepDelta: interface
   replayTargetWaitMs: function
   replayWouldRepeatWrite: function
   REPLY_MAX_CHARS: variable
@@ -653,6 +754,7 @@
   SINGLE_LINE_MAX_CHARS: variable
   snapshot: function
   Snapshot: interface
+  SNAPSHOT_BUDGET_MS: variable
   SnapshotOptions: interface
   srOnlyLabelOf: function
   Stability: type-alias
@@ -672,6 +774,7 @@
   SuccessCheckResult: interface
   SuccessWhen: type-alias
   summarizeTimings: function
+  SUMMARY_GROUP_MIN: variable
   TARGET_FREE_ACTIONS: variable
   TARGET_LIVENESS_PROBE_MS: variable
   TargetCandidateOptions: interface
@@ -697,10 +800,19 @@
   TranscriptLog: class
   TranscriptReply: interface
   TranscriptStep: interface
+  TRANSIENT_SELECTOR: variable
+  TransientNote: interface
   Triage: type-alias
   tryTriage: function
+  typedPassages: function
+  TypeFixture: interface
+  typeFixtureContext: function
+  typeFixturePlaceholder: function
+  TypeFixtureSpecError: class
   UnauthorizedExploreTargetError: class
+  uniqueIdentity: function
   unreadablePageTiming: function
+  UNSAVED_WRITE_REASON: variable
   UPLOAD_OP_GUIDE: variable
   urlMatcher: function
   vacuousCheckMessage: function
@@ -718,13 +830,14 @@
   VerifySession: interface
   VetoedAnswers: class
   visibleBusyIndicator: function
+  VOLATILITY_GAP_MS: variable
   WAIT_OP_MS: variable
   WITHHELD_ANSWER_NOTE: variable
   withheldReason: function
   WithheldWrite: interface
   WRITE_METHODS: variable
 
-# @jevitate/findings (42 exports)
+# @jevitate/findings (43 exports)
   CaseStatus: type-alias
   classify: function
   consolidate: function
@@ -751,6 +864,7 @@
   requestIdentity: function
   routeTemplate: function
   RUN_MODES: variable
+  RunBranch: interface
   runFromMissionResult: function
   runFromUxReport: function
   runIdOf: function
@@ -854,7 +968,10 @@
   VisualAssertion: other
   VisualVerdict: other
 
-# @jevitate/journey (30 exports)
+# @jevitate/journey (51 exports)
+  ANCHOR_NAME_RE: variable
+  ANCHORED_STRATEGIES: variable
+  AnchoredStrategy: type-alias
   AnnotationChange: interface
   AnnotationDraft: type-alias
   AnnotationDraftMismatchError: class
@@ -862,6 +979,9 @@
   AnnotationDraftStep: type-alias
   AnnotationDraftStepSchema: variable
   applyAnnotationDraft: function
+  CAMPAIGN_LIMITS: variable
+  CampaignSpec: type-alias
+  CampaignSpecSchema: variable
   deriveParamSchema: function
   describeStep: function
   FlatJourneyStep: interface
@@ -870,20 +990,35 @@
   FsJourneyStore: class
   intentCoverage: function
   IntentCoverage: interface
+  isSweepMode: function
   Journey: interface
+  JourneyAnchor: interface
+  JourneyAnchorListing: interface
+  journeyBranchPoint: function
+  JourneyBranchPoint: interface
   JourneyMetadata: interface
   JourneyParameter: interface
   JourneyPrecondition: interface
+  journeyPrefix: function
   JourneyRegistry: class
   JourneySchema: variable
+  journeyStepCount: function
+  JourneyStepError: class
   JourneyStore: interface
   JourneySuccessCriterion: interface
+  listJourneyAnchors: function
   ParamSchema: interface
   ParamValidationError: class
+  prefixLandingPath: function
+  resolveJourneyStep: function
   SECRET_PARAM_NAME_RE: variable
   secretParamNames: function
   secretParamValues: function
   SecretRef: interface
+  splitBudget: function
+  SWEEP_MODES: variable
+  SweepMode: type-alias
+  sweepStops: function
   validateParams: function
 
 # @jevitate/load (16 exports)
@@ -969,19 +1104,22 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (75 exports)
+# @jevitate/playwright (139 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
   BrowserCrashedError: class
   BrowserLaunchOptions: interface
+  BrowserMemoryReading: interface
   BrowserNotInstalledError: class
   BrowserOpenTimeoutError: class
   BrowserPool: class
   BrowserPoolOptions: interface
   browserPoolOptionsFromEnv: function
   BrowserPort: interface
+  BrowserProcessReport: interface
   BrowserSession: interface
+  cleanupOrphanBrowsers: function
   closeSharedBrowserPool: function
   closestDeviceNames: function
   configureSharedBrowserPool: function
@@ -1000,27 +1138,67 @@
   DEFAULT_OPEN_TIMEOUT_MS: variable
   DEFAULT_PAGE_UNRESPONSIVE_MS: variable
   DEFAULT_PRESSURE_THRESHOLDS: variable
+  DEFAULT_SLOT_HEARTBEAT_MS: variable
+  DEFAULT_SLOT_POLL_MS: variable
+  DEFAULT_SLOT_STALE_MS: variable
+  DEFAULT_THROTTLE_THRESHOLDS: variable
   defaultDarwinSignalDeps: variable
   defaultHostSignalDeps: variable
   defaultLinuxSignalDeps: variable
+  defaultMaxBrowsers: function
   defaultMaxContexts: function
+  defaultMemoryCeilingBytes: function
+  defaultSlotDir: function
   defaultWin32SignalDeps: variable
+  describeExtensions: function
+  effectiveMaxBrowsers: function
   emulationContextOptions: function
   EmulationSpec: interface
   errnoCode: function
   explainLaunchFailure: function
+  EXTENSION_ID: variable
+  ExtensionDirError: class
+  extensionIdentity: function
+  ExtensionIdentity: interface
+  extensionIdForKey: function
+  extensionIdForPath: function
+  extensionLaunchArgs: function
+  ExtensionLoadError: class
+  extensionOrigin: function
+  findOrphanBrowsers: function
+  GovernanceConfig: interface
+  governanceFromEnv: function
+  GovernorTicket: interface
+  HostLoadSample: interface
   HostSignalDeps: interface
+  isTransientSlotError: function
+  jevitateBrowsers: function
   knownDeviceNames: function
   LinuxResourceSignals: class
   LinuxSignalDeps: interface
   LivenessPage: interface
+  MachineBrowserSlots: class
+  MachineSlotLease: interface
+  MachineSlotsOptions: interface
+  MarkedBrowser: interface
+  markedBrowsers: function
+  measureOwnBrowserMemory: function
   MemMetric: type-alias
+  MemoryMetric: type-alias
+  MemoryWatchedPage: interface
   OpenOptions: interface
+  OrphanCleanup: interface
+  orphanReason: function
+  OWNER_MARKER_SWITCH: variable
+  OwnerMarker: interface
+  ownerMarkerArg: function
   PageLivenessOptions: interface
   PageLivenessWatchdog: class
   pageLostReason: function
+  pageResourceLimit: function
   pageUnresponsiveMsFromEnv: function
   parseMeminfoBytes: function
+  parseOwnerMarker: function
   parsePsiAvg10: function
   parseViewport: function
   parseVmPressureLevel: function
@@ -1032,15 +1210,36 @@
   PooledContext: interface
   PressureThresholds: type-alias
   probeReachable: function
+  processAlive: function
+  ProcessInfo: interface
+  ProcessTable: interface
   ReachabilityDeps: interface
+  readUnpackedExtension: function
+  readUnpackedExtensions: function
   ResolvedEmulation: interface
   resolveEmulation: function
   resolveLaunchArgs: function
+  ResourceGovernanceSummary: type-alias
+  ResourceGovernor: class
+  ResourceGovernorOptions: interface
+  ResourceLimitBreach: type-alias
+  ResourceLimits: interface
   ResourceSample: interface
+  resourceSettleFactor: function
   ResourceSignalError: class
   ResourceSignals: interface
+  sameExtensionBuild: function
   sharedBrowserPool: function
+  sharedResourceGovernor: function
+  SlotHolder: interface
+  SlotState: interface
+  systemProcessTable: function
+  throttleDecision: function
+  ThrottleDecision: interface
+  ThrottleLevel: type-alias
+  ThrottleThresholds: interface
   UnknownDeviceError: class
+  UnpackedExtension: interface
   ViewportSize: interface
   Win32ResourceSignals: class
   Win32SignalDeps: interface
@@ -1089,8 +1288,9 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (133 exports)
+# @jevitate/recording (135 exports)
   ACTION_OPS: variable
+  ActionDeltaRecord: interface
   ActionOp: type-alias
   ACTOR_NAME_RE: variable
   AlignedColumn: interface
@@ -1184,6 +1384,7 @@
   RecordedStep: interface
   Recording: interface
   RecordingEmulation: interface
+  RecordingExtension: interface
   RecordingFixture: interface
   RecordingSchema: variable
   RecordingStore: interface
@@ -1385,7 +1586,7 @@
   SqliteBudgetRepository: class
   SqliteSitePolicyRepository: class
 
-# @jevitate/ux (146 exports)
+# @jevitate/ux (189 exports)
   A11yChecker: interface
   a11yChecks: function
   A11yControlFact: interface
@@ -1395,11 +1596,13 @@
   Adjudication: type-alias
   AnalysisOutcome: type-alias
   AnalysisRequest: interface
+  analyzeClaims: function
   AnalyzedEvidence: interface
   AppContext: interface
   APPLIES_QUESTION_ID: variable
   applyRubricDescriptions: function
   BehaviorSignals: interface
+  boundTargetOptions: function
   buildReport: function
   BuildReportOptions: interface
   buildState: function
@@ -1408,6 +1611,20 @@
   calibrationCaveat: function
   CalibrationNote: interface
   calibrationNoteFor: function
+  CLAIM_PROMPTS: variable
+  CLAIM_RUBRIC: variable
+  CLAIM_TYPES: variable
+  ClaimAnalysisRequest: interface
+  ClaimAnalyzerDeps: interface
+  ClaimLedger: interface
+  ClaimPrompts: type-alias
+  ClaimPromptsSchema: variable
+  ClaimRecord: interface
+  claimsCaveat: function
+  ClaimSource: type-alias
+  ClaimStatus: type-alias
+  ClaimTemplateError: class
+  ClaimType: type-alias
   clamp01: function
   combineConfidence: function
   ConfidenceBasis: interface
@@ -1415,6 +1632,7 @@
   Control: interface
   controlKey: function
   Coverage: interface
+  dedupeObjectiveFindings: function
   DEFAULT_MAX_FINDINGS_PER_ROUTE: variable
   DEFAULT_MIN_CONFIDENCE: variable
   DEFAULT_QUALITY_POLICY: variable
@@ -1436,24 +1654,36 @@
   evaluateFlag: function
   evidenceFromFile: function
   EvidenceRef: interface
+  FactConflict: interface
+  factsPageFor: function
+  fillClaimTemplate: function
   fillTemplate: function
+  findFactConflicts: function
+  FindingClaim: interface
+  FindingScreenshot: interface
   FlagRule: type-alias
+  FRICTION_CLAIM_CHOICES: variable
+  FrictionClaimChoice: type-alias
   FrictionKind: type-alias
   FrictionPoint: interface
   generateSpecifics: function
   GradeCandidate: interface
   gradeCandidates: function
+  gradeLabel: function
   gradeQuestion: function
   GRADER_FILTER_KAPPA_GATE: variable
   graderMayFilterByDefault: function
   groundFindings: function
   GROUNDING_UNNAMED: variable
+  GuardKind: type-alias
+  GuardProbe: interface
   IMPACT_RANK: variable
   JevQuestionSpec: interface
   JevQuestionSpecSchema: other
   JobImpact: type-alias
   JourneyEvidence: interface
   JourneyOutcome: type-alias
+  journeysFor: function
   judgeScreen: function
   loadRubric: other
   loadV1Rubric: other
@@ -1465,14 +1695,24 @@
   MIN_CONFIDENCE_ENV: variable
   MinConfidenceError: class
   MissingAppContextError: class
+  namesStep: function
+  NONE_TARGET: variable
   normalizeText: function
   OccurrenceEvidence: interface
+  parseProductFacts: function
+  parseProductFactsText: function
   parseQualityPolicy: function
   parseUxEvidenceFile: function
   persistableScreen: function
   PersistedScreen: type-alias
   policyFilters: function
   PredictedAttention: interface
+  PRODUCT_FACTS_VERSION: variable
+  ProductFacts: type-alias
+  ProductFactsError: class
+  ProductFactsSchema: variable
+  ProductPage: type-alias
+  ProductPlan: type-alias
   PromptAssetError: class
   QUALITY_LABELS: variable
   QUALITY_SHOW_ENV: variable
@@ -1491,6 +1731,7 @@
   resolveMinConfidence: function
   resolveQualityPolicy: function
   round2: function
+  routeMatches: function
   routeOf: function
   RubricApplicability: interface
   RubricEntry: interface
@@ -1509,9 +1750,12 @@
   SignalStep: interface
   SkippedItem: interface
   SPECIFICS_INSTRUCTIONS: variable
+  summarizeLedger: function
   SuppressedItem: interface
   SuppressionReason: type-alias
   SuppressionSummary: interface
+  TEMPLATE_KEYS: variable
+  TemplateKey: type-alias
   Tier: type-alias
   UX: variable
   UX_EVIDENCE_FILE_VERSION: variable

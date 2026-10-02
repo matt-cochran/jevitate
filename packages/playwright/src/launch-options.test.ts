@@ -186,3 +186,46 @@ describe("browserPoolOptionsFromEnv", () => {
     expect(() => browserPoolOptionsFromEnv({ JEVITATE_ADMISSION_TIMEOUT_MS: "0" })).toThrow(RangeError);
   });
 });
+
+describe("PlaywrightBrowserPort.open extensions (#256)", () => {
+  const ext = { dir: "/ext/a", id: "a".repeat(32), name: "A", version: "1", manifestVersion: 3 };
+  const capture = (): { calls: { dir: string; options: PersistentOptions }[]; launchPersistentContext: typeof chromium.launchPersistentContext } => {
+    const calls: { dir: string; options: PersistentOptions }[] = [];
+    return {
+      calls,
+      launchPersistentContext: async (dir, options) => {
+        calls.push({ dir, options: options ?? {} });
+        throw new Error("persistent launch intercepted");
+      },
+    };
+  };
+
+  test("a throwaway persistent profile that loads exactly the extensions; headless uses the full Chromium build", async () => {
+    const { calls, launchPersistentContext } = capture();
+    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", pool: calmPool() });
+    await expect(port.open({ ...base, extensions: [ext], args: ["--lang=de"] })).rejects.toThrow("persistent launch intercepted");
+    expect(calls[0]!.dir).toMatch(/jevitate-ext-profile-/);
+    expect(calls[0]!.options).toMatchObject({
+      headless: true,
+      channel: "chromium",
+      ignoreDefaultArgs: ["--disable-extensions"],
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--lang=de", "--disable-extensions-except=/ext/a", "--load-extension=/ext/a"],
+    });
+  });
+
+  test("an explicit channel or executable is kept; a headed run needs no channel", async () => {
+    const { calls, launchPersistentContext } = capture();
+    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", pool: calmPool() });
+    await expect(port.open({ ...base, extensions: [ext], channel: "chrome" })).rejects.toThrow();
+    await expect(port.open({ ...base, extensions: [ext], executablePath: "/opt/chromium" })).rejects.toThrow();
+    await expect(port.open({ ...base, extensions: [ext], headless: false })).rejects.toThrow();
+    expect(calls.map((c) => c.options.channel)).toEqual(["chrome", undefined, undefined]);
+  });
+
+  test("no extensions: the pooled path, never a persistent context", async () => {
+    const { calls, launchPersistentContext } = capture();
+    const port = new PlaywrightBrowserPort({ launch: capturingLauncher().launch, launchPersistentContext, platform: "linux", pool: calmPool() });
+    await expect(port.open({ ...base, extensions: [] })).rejects.toThrow("launch intercepted by test");
+    expect(calls).toEqual([]);
+  });
+});

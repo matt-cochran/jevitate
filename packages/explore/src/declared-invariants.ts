@@ -91,6 +91,7 @@ import type {
   NeverResponseHit,
   ObserverSessions,
 } from "./declared-invariants/types.js";
+import { clock } from "@jevitate/domain";
 
 export * from "./declared-invariants/types.js";
 export * from "./declared-invariants/numbers.js";
@@ -199,7 +200,7 @@ export class InvariantMonitor {
       };
     });
     for (const [name, o] of Object.entries(spec.observe ?? {})) {
-      const path = "network" in o ? o.network.json : "probe" in o ? o.probe.json : undefined;
+      const path = "network" in o ? (o.network.json ?? o.network.request) : "probe" in o ? o.probe.json : undefined;
       if (path !== undefined) this.#jsonPaths.set(name, parseJsonPath(path));
     }
     for (const [name, c] of Object.entries(spec.capture ?? {})) {
@@ -243,11 +244,24 @@ export class InvariantMonitor {
    * re-read, a guard's estimate). `unreadable` is true when the value could not be read (or is not
    * numeric) — the caller decides what that means for its own purpose.
    */
-  async readObservable(page: Page, name: string): Promise<{ value: ObservedValue | null; unreadable: boolean; evidence?: string }> {
+  async readObservable(
+    page: Page,
+    name: string,
+    opts: { readonly worstCase?: boolean } = {},
+  ): Promise<{ value: ObservedValue | null; unreadable: boolean; evidence?: string }> {
     this.attach(page);
-    const o = this.#spec.observe?.[name];
-    if (o === undefined) return { value: null, unreadable: true };
-    const read = await this.#read(page, name, o).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
+    const declared = this.#spec.observe?.[name];
+    if (declared === undefined) return { value: null, unreadable: true };
+    // #279: a worst-case read (a budget guard's estimate) of a numeric `dom` text reads EVERY number
+    // and keeps the largest magnitude — "≈ 50–90 credits" is 90. An explicit `{ index }` is the
+    // operator's own choice and is kept.
+    const worst = opts.worstCase === true && "dom" in declared && (declared.dom.number === true || declared.dom.number === "all");
+    const o: ObservableSpec = worst && "dom" in declared ? { ...declared, dom: { ...declared.dom, number: "all" } } : declared;
+    const raw = await this.#read(page, name, o).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
+    const read =
+      worst && isList(raw.value) && raw.value.length > 0 && raw.value.every((v) => typeof v === "number")
+        ? { ...raw, value: (raw.value as number[]).reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a)) }
+        : raw;
     // A list-valued observable (#147/#148) is never a valid scalar here — a caller like #150's
     // `BudgetMonitor` needs a number, and a list is neither readable as one nor a violation to guess at.
     if (read.value === UNKNOWN || isList(read.value)) {
@@ -315,23 +329,24 @@ export class InvariantMonitor {
           !this.#captures.has(name) && matchesUrlGlob(c.network.url, url) && (c.network.method === undefined || c.network.method.toUpperCase() === method),
       );
       if (hits.length === 0 && captureHits.length === 0) return;
+      // #295: a `request` observable reads the JSON payload the page SENT with this exchange — parsed
+      // only when one asks for it, with credential-named keys scrubbed before any path reads it.
+      const sentHits = hits.filter(([, o]) => o.network.request !== undefined);
+      const responseHits = hits.filter(([, o]) => o.network.request === undefined);
+      const evidence = `${method} ${redactUrl(url)} → ${response.status()}`;
+      if (sentHits.length > 0) {
+        const sent = requestJsonOf(response.request());
+        if (sent !== undefined) {
+          for (const [name] of sentHits) this.#setNetwork(name, sent, `request body of ${evidence}`);
+        }
+      }
+      if (responseHits.length === 0 && captureHits.length === 0) return;
       const read = response
         .body()
         .then((buf) => {
           if (buf.length > MAX_BODY_BYTES) return;
           const body: unknown = JSON.parse(buf.toString("utf8"));
-          const evidence = `${method} ${redactUrl(url)} → ${response.status()}`;
-          for (const [name] of hits) {
-            const path = this.#jsonPaths.get(name) ?? [];
-            if (jsonPathHasEach(path)) {
-              const list = readJsonPathList(body, path);
-              if (list !== undefined) this.#networkLists.set(name, { value: list.map((v) => this.#clip(v)), evidence });
-              continue;
-            }
-            const v = readJsonPath(body, path);
-            if (v === undefined) continue;
-            this.#network.set(name, { value: this.#clip(v), evidence });
-          }
+          for (const [name] of responseHits) this.#setNetwork(name, body, evidence);
           // #147: a capture binds ONCE, from a successful response (a failed create has no resource).
           if (response.status() >= 200 && response.status() < 300) {
             for (const [name] of captureHits) {
@@ -347,6 +362,32 @@ export class InvariantMonitor {
         });
       this.#pendingBodies.add(read);
     });
+  }
+
+  /** Records a `network` observable's latest value (a scalar, or a `[*]` path's list) read from `body`. */
+  #setNetwork(name: string, body: unknown, evidence: string): void {
+    const path = this.#jsonPaths.get(name) ?? [];
+    if (jsonPathHasEach(path)) {
+      const list = readJsonPathList(body, path);
+      if (list !== undefined) this.#networkLists.set(name, { value: list.map((v) => this.#clip(v)), evidence });
+      return;
+    }
+    const v = readJsonPath(body, path);
+    if (v === undefined) return;
+    this.#network.set(name, { value: this.#clip(v), evidence });
+  }
+
+  /**
+   * #300 — forgets everything observed for the action(s) in progress: the armed `before` snapshot,
+   * the `never.response` hits queued since the last check, and the latest `network` observable
+   * values. Called when an action switched the signed-in identity: what was observed then belongs to
+   * ANOTHER identity, so no invariant may judge it (neither now nor at the end-of-run flush).
+   */
+  discardPending(): void {
+    this.#before = null;
+    this.#responseHits.clear();
+    this.#network.clear();
+    this.#networkLists.clear();
   }
 
   /** Snapshots the observables an action's invariants compare against (call right before acting). */
@@ -461,7 +502,7 @@ export class InvariantMonitor {
     const entries = Object.entries(this.#spec.capture ?? {}).filter(([name]) => !this.#captures.has(name));
     if (entries.length === 0) return;
     if (this.#pendingBodies.size > 0) {
-      await Promise.race([Promise.allSettled([...this.#pendingBodies]), page.waitForTimeout(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
+      await Promise.race([Promise.allSettled([...this.#pendingBodies]), clock.sleep(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
     }
     for (const [name, c] of entries) {
       if (this.#captures.has(name)) continue;
@@ -741,10 +782,10 @@ export class InvariantMonitor {
     if (result === false && decl.settle !== undefined) {
       // Eventual consistency: re-check until it holds or the window closes. Only the observables this
       // invariant reads are re-read.
-      const now = this.#opts.now ?? Date.now;
+      const now = this.#opts.now ?? clock.now;
       const start = now();
       const poll = decl.settle.pollMs ?? DEFAULT_SETTLE_POLL_MS;
-      const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => p.waitForTimeout(ms));
+      const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => clock.sleep(ms));
       while (result === false && now() - start < decl.settle.withinMs) {
         await sleep(page, Math.min(poll, Math.max(0, decl.settle.withinMs - (now() - start))));
         after = await this.#snapshot(page, new Set(c.afterNames));
@@ -758,8 +799,17 @@ export class InvariantMonitor {
     for (const n of expressionObservables(ast)) {
       values[n] = { before: this.#shown(before.values.get(n)), after: this.#shown(after.values.get(n)) };
     }
+    // #295: a list (`[*]`) reads as its count in `values`; the detail also shows its items (already
+    // clipped and redacted when read), so a reordered list is visible as one.
+    const listed = (v: EvalValue | undefined): string | null =>
+      v !== undefined && v !== UNKNOWN && isList(v)
+        ? `[${v.slice(0, MAX_LIST_PREVIEW).map((item) => JSON.stringify(item)).join(", ")}${v.length > MAX_LIST_PREVIEW ? ", …" : ""}]`
+        : null;
     const detail = Object.entries(values)
-      .map(([n, v]) => `${n}: ${display(v.before)} → ${display(v.after)}`)
+      .map(([n, v]) => {
+        const items = listed(after.values.get(n));
+        return `${n}: ${display(v.before)} → ${display(v.after)}${items === null ? "" : ` ${items}`}`;
+      })
       .join("; ");
     const evidence = [...new Set(expressionObservables(ast).flatMap((n) => [before.evidence.get(n), after.evidence.get(n)]).filter((e): e is string => e !== undefined))];
     return make("require", decl.require ?? "", detail, values, evidence, settledForMs);
@@ -792,9 +842,9 @@ export class InvariantMonitor {
   async flushResponses(): Promise<AfterResult> {
     const violations: InvariantViolation[] = [];
     const held: string[] = [];
-    const deadline = Date.now() + FLUSH_WAIT_MS;
-    while (this.#responseInFlight.size > 0 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, FLUSH_POLL_MS));
+    const deadline = clock.now() + FLUSH_WAIT_MS;
+    while (this.#responseInFlight.size > 0 && clock.now() < deadline) {
+      await clock.sleep(FLUSH_POLL_MS);
     }
     const pageUrl = this.#lastPage === null ? "" : safeUrl(this.#lastPage);
     for (const n of this.#responseNevers) {
@@ -822,7 +872,7 @@ export class InvariantMonitor {
     if (names.size === 0) return { values, evidence };
     // A response that already arrived may still be having its body read: let it land (bounded).
     if (this.#pendingBodies.size > 0) {
-      await Promise.race([Promise.allSettled([...this.#pendingBodies]), page.waitForTimeout(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
+      await Promise.race([Promise.allSettled([...this.#pendingBodies]), clock.sleep(PENDING_BODY_WAIT_MS).catch(() => undefined)]);
     }
     for (const name of names) {
       const o = this.#spec.observe?.[name];
@@ -1013,3 +1063,44 @@ export class InvariantMonitor {
   }
 }
 
+/** Most items of a list observable a violation's detail shows (#295). */
+const MAX_LIST_PREVIEW = 10;
+
+/**
+ * Request-body keys that name a credential (#295): never read by a `request` observable — their
+ * values are replaced before any JSON path sees the payload, whatever the spec asks for.
+ */
+const CREDENTIAL_KEY =
+  /^(?:.*(?:pass(?:word|wd|code|phrase)?|secret|token|api[-_]?key|apikey|auth(?:orization)?|credential|session|cookie|otp|totp|mfa|pin|cvc|cvv|csc|ssn)|card[-_]?(?:number|no)|pan|private[-_]?key)$/i;
+
+/** The marker a scrubbed credential value reads as. */
+const SCRUBBED = "[redacted]";
+
+function scrubCredentials(v: unknown, depth = 0): unknown {
+  if (depth > 32) return SCRUBBED;
+  if (Array.isArray(v)) return v.map((item) => scrubCredentials(item, depth + 1));
+  if (v === null || typeof v !== "object") return v;
+  const out: Record<string, unknown> = {};
+  for (const [k, item] of Object.entries(v)) out[k] = CREDENTIAL_KEY.test(k) ? SCRUBBED : scrubCredentials(item, depth + 1);
+  return out;
+}
+
+/**
+ * The JSON payload a request sent (#295), credential-named keys scrubbed; undefined when it sent no
+ * body, a body over `MAX_BODY_BYTES`, or one that is not JSON (a form post, protobuf) — unread, never
+ * guessed.
+ */
+function requestJsonOf(request: Request): unknown {
+  let raw: string | null;
+  try {
+    raw = request.postData();
+  } catch {
+    return undefined;
+  }
+  if (raw === null || raw === "" || Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) return undefined;
+  try {
+    return scrubCredentials(JSON.parse(raw) as unknown);
+  } catch {
+    return undefined;
+  }
+}

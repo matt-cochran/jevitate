@@ -5,7 +5,8 @@ import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey
 import { assertAuthorizedExploreTarget, matchGlob, parseSecretField, resolveCoverageThresholds, secretFieldSecrets, SecretFieldSpecError, type CoverageThresholds, type SecretField, type SuccessCheck } from "@jevitate/explore";
 import { buildMissionFixtures, checkSetupRefs, type FixtureFlags } from "./fixture-cli.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
-import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import { loadPersonasFile, parsePersonaSpec, type Persona } from "./multi-run.js";
 import { assertHeadedDisplay } from "./browser-run-options.js";
@@ -18,6 +19,8 @@ import { serverLogFromTargetConfig } from "./mission-queue-runner.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { type EngineInfo } from "./engine.js";
 import { applyJourneyEnvironment, isEnvironmentError, resolveJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
+import { resolveJourneyPrefix, type JourneyPrefix } from "./journey-prefix.js";
+import { isSweepMode, splitBudget, sweepStops } from "@jevitate/journey";
 import type { SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
 import { CheckPreflightError, type ItemKind, type RunCheckOptions } from "./check-types.js";
 import { parseScreenshotsArg } from "./run-screenshots.js";
@@ -150,6 +153,10 @@ export interface PreparedTarget {
   readonly secretFields: readonly SecretField[];
   /** The target's fixtures file (the suite's, else targets.json's), validated at preflight (#170). */
   readonly fixturesFile?: string;
+  /** #293: each journey-anchored mission item's Journey prefix, resolved (and refused) at preflight. */
+  readonly prefixes?: ReadonlyMap<SuiteMission, JourneyPrefix>;
+  /** #293: each anchored mission item → the items it runs as (a sweep: one per stop point). */
+  readonly expanded?: ReadonlyMap<SuiteMission, readonly SuiteMission[]>;
 }
 
 /** What an item's fixture lifecycle is built from: its fixtures file and hooks, authenticated like its session. */
@@ -270,6 +277,9 @@ function itemSetup(
       allowLogCmd,
       quietOk: x.logQuietOk ?? [],
       logIgnore: parseLogIgnoreSpecs(x.logIgnore ?? []),
+      logScope: parseLogScopeSpecs(x.logScope ?? []),
+      correlationHeaders: parseCorrelationHeaders(x.logCorrelationHeader ?? []),
+      idPatterns: parseLogIdPatterns(x.logIdPattern ?? []),
       ...(x.serverLogDrainMs === undefined ? {} : { drainMs: x.serverLogDrainMs }),
     };
   }
@@ -292,6 +302,7 @@ function itemSetup(
       ...(x.after === undefined ? {} : { after: x.after }),
       ...(x.allowShellHooks === undefined ? {} : { allowShellHooks: x.allowShellHooks }),
       ...(x.hookTimeoutMs === undefined ? {} : { hookTimeoutMs: String(x.hookTimeoutMs) }),
+      ...(x.fixtureIdentity === undefined ? {} : { fixtureIdentity: x.fixtureIdentity }),
     };
     fixtures = { allowlist: p.allowlist, flags, ...(storageState === undefined ? {} : { storageState }), secretFields };
     // Validated now (the spec, and every ${setup.x} the goal uses), before anything runs.
@@ -370,7 +381,62 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
     }
   }
   const sweep = t.missions.length === 0 && t.goals.length === 0 && invariants !== undefined ? [invariantSweep()] : [];
+  const prefixes = new Map<SuiteMission, JourneyPrefix>();
+  const expanded = new Map<SuiteMission, SuiteMission[]>();
   for (const m of [...t.missions, ...sweep]) {
+    // #293: a journey-anchored mission — its Journey, step, params and environment, refused now if
+    // unusable; it starts where the prefix lands, which (with every origin the prefix may visit)
+    // must be on the target's allowlist.
+    if (m.fromJourney !== undefined && m.atStep !== undefined) {
+      const fromJourney = m.fromJourney;
+      try {
+        const env = resolveJourneyEnvironment({
+          ...(m.env === undefined ? {} : { env: m.env }),
+          ...(m.baseUrl === undefined ? {} : { baseUrl: m.baseUrl }),
+          ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }),
+          targets: opts.targetsConfig ?? {},
+        });
+        const session = sessionOf(t, m.storageState) ?? (m.storageState === null ? undefined : env?.storageState);
+        const dir = t.journeysDir ?? opts.journeysDir;
+        // #293 sweep: `atStep` "all"/"anchors" expands into one item per stop point, the item's
+        // maxActions/maxDecisions split evenly over them (each a fresh session, restored by the target's fixtures).
+        let derived: SuiteMission[] = [m];
+        if (isSweepMode(m.atStep)) {
+          const j = await new JourneyRegistry(new FsJourneyStore(dir)).get(fromJourney);
+          if (j === null || j === undefined) throw new Error(`unknown journey '${fromJourney}'`);
+          const stops = sweepStops(applyJourneyEnvironment(j, env), m.atStep);
+          derived = stops.map((stop) => ({
+            ...m,
+            atStep: stop,
+            name: `${m.name}@${stop}`,
+            ...(m.maxActions === undefined ? {} : { maxActions: splitBudget(m.maxActions, stops.length) }),
+            ...(m.maxDecisions === undefined ? {} : { maxDecisions: splitBudget(m.maxDecisions, stops.length) }),
+          }));
+        }
+        for (const dm of derived) {
+          const prefix = await resolveJourneyPrefix({
+            dir,
+            id: fromJourney,
+            atStep: dm.atStep!,
+            params: { ...(m.params ?? {}) },
+            ...(env === undefined ? {} : { environment: env }),
+            ...(session === undefined ? {} : { storageState: session }),
+            ...(opts.sitePolicyDbPath === undefined ? {} : { dbPath: opts.sitePolicyDbPath }),
+            environmentFlags: { ...(m.env === undefined ? {} : { env: m.env }), ...(m.baseUrl === undefined ? {} : { baseUrl: m.baseUrl }) },
+          });
+          const off = [new URL(prefix.startUrl).origin, ...prefix.allowedOrigins].filter((o) => !allowlist.includes(o));
+          if (off.length > 0) throw new Error(`Journey ${fromJourney} runs on ${off.join(", ")}, which is not on the target's allowlist`);
+          if (prefix.secrets.length > 0 && (m.strategy === "coverage" || m.strategy === "exploratory")) {
+            throw new Error(`Journey ${fromJourney} types a secret param before its anchor; strategy ${m.strategy} cannot redact it`);
+          }
+          prefixes.set(dm, prefix);
+        }
+        expanded.set(m, derived);
+      } catch (e) {
+        throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: ${errorMessage(e)}`);
+      }
+      continue;
+    }
     const missionUrl = m.url ?? t.url;
     if (!allowlist.includes(new URL(missionUrl).origin)) {
       throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: ${missionUrl} is not on the target's allowlist`);
@@ -476,6 +542,7 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
     config,
     secretFields,
     ...(fixturesFile === undefined ? {} : { fixturesFile }),
+    ...(prefixes.size === 0 ? {} : { prefixes, expanded }),
   };
 }
 
@@ -521,9 +588,11 @@ export function plan(prepared: readonly PreparedTarget[], changed: readonly stri
       out.push(...perPersona({ t: p, kind: "goal", name: g.name, goal: g, needsAi: true, setup, ...(s === undefined ? {} : { skipped: s }) }));
     });
     const missions = t.missions.length === 0 && t.goals.length === 0 && p.invariants !== undefined ? [invariantSweep()] : t.missions;
-    missions.forEach((m, mi) => {
-      const setup = setupOrRefuse(`$.targets[${ti}].missions[${mi}]`, () => itemSetup(p, m, m.strategy, opts));
-      out.push(...perPersona({ t: p, kind: "mission", name: m.name, strategy: m.strategy, mission: m, needsAi: m.strategy !== "feature", setup }));
+    missions.forEach((m0, mi) => {
+      for (const m of p.expanded?.get(m0) ?? [m0]) {
+        const setup = setupOrRefuse(`$.targets[${ti}].missions[${mi}]`, () => itemSetup(p, m, m.strategy, opts));
+        out.push(...perPersona({ t: p, kind: "mission", name: m.name, strategy: m.strategy, mission: m, needsAi: m.strategy !== "feature", setup }));
+      }
     });
     for (const v of t.verifyFix) out.push({ t: p, kind: "verify-fix", name: v.name, verify: v, needsAi: false });
   });

@@ -11,6 +11,7 @@ import {
   type VerifyFixReport,
 } from "./verify-fix-api.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The finding ledger (#195 part 6): a built-in store of the repro material `verify-fix` needs,
@@ -79,6 +80,7 @@ function entryPath(dir: string, fingerprint: string): string {
 
 /** The raw finding object (as persisted) whose fingerprint or `related` list is `fp`. */
 function rawFinding(result: Record<string, unknown>, fp: string): Record<string, unknown> | undefined {
+  // `serverLogDefects` is no longer written (removed in 0.3.0); read it so older results still resolve.
   for (const list of [result.defects, result.hangs, result.serverLogDefects]) {
     if (!Array.isArray(list)) continue;
     for (const item of list) {
@@ -188,7 +190,7 @@ export function ledgerAdd(opts: LedgerAddOptions): LedgerAddResult {
     kind: finding.kind,
     ...(finding.title === undefined ? {} : { title: finding.title }),
     ...(ticket === undefined ? {} : { ticket }),
-    addedAt: previous?.ledger.addedAt ?? (opts.nowIso ?? (() => new Date().toISOString()))(),
+    addedAt: previous?.ledger.addedAt ?? (opts.nowIso ?? (() => clock.nowIso()))(),
     source: {
       result: basename(opts.resultPath),
       ...(typeof result.strategy === "string" ? { strategy: result.strategy } : {}),

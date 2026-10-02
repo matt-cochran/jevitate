@@ -1,10 +1,11 @@
 /** The coverage/exploratory strategy runner behind `jevitate explore --strategy coverage|exploratory`. */
+import type { ActionDeltaStats } from "@jevitate/explore";
 import { writeFile } from "node:fs/promises";
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { closeOnce, demoOverlayOf, extensionsStamp, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -30,7 +31,7 @@ import {
   combineOutcomes,
   gatingDefects,
   type MissionFailure,
-  type MissionOutcome,
+  type MissionOutcome, clock,
 } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
@@ -38,6 +39,8 @@ import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissio
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
+import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
+import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
 import {
   applyServerLogOutcome,
@@ -56,6 +59,7 @@ import {
   persistStorageState,
   type MissionTarget,
   declaredResult,
+  serverLogRuntimeOptions,
 } from "./explore-shared.js";
 
 /**
@@ -131,6 +135,13 @@ export interface RunCoverageMissionOptions {
   readonly emulation?: EmulationSpec;
   /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
   readonly overflow?: OverflowFlags;
+  /**
+   * #293 `--from-journey`/`--at-step`: replayed into the session before the frontier, which then
+   * starts on the live page it left (never a fresh navigation). `url` is only the expected landing.
+   */
+  readonly journeyPrefix?: JourneyPrefix;
+  /** #303 `--action-deltas` (opt-in): record what each action changed (code verdict) — evidence only. */
+  readonly actionDeltas?: boolean;
 }
 
 /**
@@ -184,6 +195,8 @@ export interface RunCoverageMissionResult {
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #303 (`--action-deltas`): verdict counts and the actions that changed nothing. */
+  readonly actionDeltas?: ActionDeltaStats & { readonly noEffect?: readonly string[] };
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
   /**
@@ -199,8 +212,8 @@ export interface RunCoverageMissionResult {
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
+  /** #293: the Journey step a journey-anchored run branched from (absent on a bare-URL run). */
+  readonly branch?: JourneyBranchPoint;
 }
 
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
@@ -224,7 +237,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
   const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   const stamp = artifactStamp(iso);
   // `MissionJournal` creates `outDir` synchronously (mkdirSync).
   // #213: an exploratory run's files are named for it (`exploratory-*`), not `coverage-*`; every
@@ -264,14 +277,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
   const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const serverLog = openServerLogRuntime({
-    sources: opts.serverLog?.sources ?? [],
-    logDefect: opts.serverLog?.logDefect ?? [],
-    quietOk: opts.serverLog?.quietOk ?? [],
-    logIgnore: opts.serverLog?.logIgnore ?? [],
-    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    ...serverLogRuntimeOptions(opts.serverLog),
     secrets: [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  // #204: every request's correlation ids, from before the first navigation.
+  serverLog?.observe(session.page);
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     capture.noteEntry(session.page, entry);
     health.noteStep(entry);
@@ -285,6 +296,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     await closeQuietly(session);
   });
   try {
+    // #293: a journey-anchored run first replays its Journey's prefix into this very session.
+    const start = await startFromJourney(opts.journeyPrefix, session, opts.url, opts.allowlist, opts.browser);
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
@@ -295,9 +308,13 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       actor,
       judgment: opts.judge,
       generation: opts.gen,
-      seedUrl: opts.url,
+      seedUrl: start.url,
+      ...(start.branch === undefined ? {} : { startInPlace: true }),
+      // #293: a return to a queued state re-replays the Journey prefix (counted against --max-actions).
+      ...(start.restart ?? {}),
       allowlist: opts.allowlist,
       bounds: opts.bounds,
+      ...(opts.actionDeltas === true ? { actionDeltas: true } : {}),
       onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
@@ -318,7 +335,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     // #149: every repro Recording (per-state, and each defect's own) is stamped with the emulation
     // it was found under, so `verify-fix` replays it under the SAME device by default.
     const emu = recordingEmulation(resolvedEmulation);
-    const withEmu = (r: Recording): Recording => (emu === undefined ? r : { ...r, emulation: emu });
+    const withEmu = (r: Recording): Recording => ({ ...(emu === undefined ? r : { ...r, emulation: emu }), ...extensionsStamp(opts.browser) }); // + #256
     const stampedDefects = result.coverage.defects.map((d) => ({ ...d, recording: withEmu(d.recording) }));
     const stampedCoverage = { ...result.coverage, defects: stampedDefects };
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
@@ -378,10 +395,11 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       hangs: result.hangs,
       recording: null,
       target: {
-        seedUrl: opts.url,
+        seedUrl: start.url,
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
+      ...branchFields(start),
       timing: result.timing,
       strategy: opts.strategy ?? "coverage",
       // #213: the SCOPE line (#224's field) — the start route plus any --route/--scope app globs.
@@ -403,6 +421,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       transcriptPath: journal.transcriptPath,
       sideEffects: result.sideEffects ?? [],
       ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
+      ...(result.actionDeltas === undefined ? {} : { actionDeltas: result.actionDeltas }),
       ...(result.budget === undefined ? {} : { budget: result.budget }),
       engine: currentEngineInfo(),
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),

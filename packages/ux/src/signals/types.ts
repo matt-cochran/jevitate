@@ -109,7 +109,9 @@ export type SignalKind =
    * needs the live page. `runUsabilityMission` (ux-api.ts) constructs it directly with
    * `makeSignalFinding` and merges it in alongside `detectSignals`'s output.
    */
-  | "horizontal-overflow";
+  | "horizontal-overflow"
+  /** Text cut off vertically (#302, `@jevitate/explore`'s `detectClipping`) — live, like `horizontal-overflow`. */
+  | "vertical-clipping";
 
 /** The evidence a signal finding cites — what a reader checks to verify it. */
 export interface SignalEvidence {

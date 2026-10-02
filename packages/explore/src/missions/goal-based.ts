@@ -28,6 +28,10 @@ import {
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { goalAsksForChange } from "../read-only.js";
+import { goalAsksForReport } from "../answer.js";
+
+/** #286: the pseudo-check a goal that asks for a report adds to its `--success` checks. */
+const REPORT_CHECK = "report (the goal asks for a grounded answer)";
 import { demoOverlayFor } from "../demo-overlay.js";
 import { secretFieldSecrets } from "../secret-fields.js";
 
@@ -94,6 +98,12 @@ import { secretFieldSecrets } from "../secret-fields.js";
  */
 
 export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionContext"> {
+  /**
+   * #293: how a retried run (#126) gets back to its start state instead of loading `startUrl` — a
+   * journey-anchored run re-replays its Journey prefix. `false`: it could not (the retry then loads
+   * `startUrl`, as without it).
+   */
+  readonly restartAtStart?: (actor: ExploreConfig["actor"]) => Promise<boolean>;
   /** The independent success oracle (user-supplied): an assertion on the final page. */
   readonly successAssertion?: Assertion;
   /**
@@ -512,7 +522,9 @@ async function adjudicatedRun(
   );
   // #174: under `held`, once every check has held the run stops — it never keeps acting (or writing)
   // past a met goal. `reloadThen` is final-only, so a run that declares one keeps the model's `done`.
-  const stopWhenHeld = cfg.successWhen === "held" && checks.length > 0 && !checks.some((c) => c.kind === "reloadThen");
+  // #286: a goal that also asks for a report needs its grounded answer — checks holding never stop it.
+  const answerRequired = checks.length > 0 && goalAsksForReport(cfg.goal);
+  const stopWhenHeld = cfg.successWhen === "held" && checks.length > 0 && !checks.some((c) => c.kind === "reloadThen") && !answerRequired;
   // A find-out goal (#130d) has no page/network check to independently ground `done` with: it is
   // verified instead by a grounded `report` (#101), which `explore()` grounds on its own regardless
   // of `successCheck`. Leaving `successCheck` unset here (rather than wiring one that vacuously
@@ -521,9 +533,18 @@ async function adjudicatedRun(
   const hasChecks = checks.length > 0;
   // #158 — a find-out goal is READ-ONLY unless its text asks for a change or `--allow-writes`:
   // independent code refuses write flows and aborts write requests; the model is told.
-  const readOnly = !hasChecks && cfg.safety?.allowWrites !== true && !goalAsksForChange(cfg.goal);
-  const runOnce = (): Promise<ExploreRun> => {
+  const writesLifted = cfg.safety?.allowWrites === true;
+  const readOnly = !hasChecks && !writesLifted && !goalAsksForChange(cfg.goal);
+  // #270 — the goal's own words never lift the guard on a DESTRUCTIVE write ("Remove a product…"
+  // clicked a member row's "Remove" → RemoveMember 200): only the operator can.
+  const noDestructiveWrites = !hasChecks && !readOnly && !writesLifted && cfg.safety?.allowDestructive !== true;
+  let attempts = 0;
+  const runOnce = async (): Promise<ExploreRun> => {
     // A retried run (#126) starts over from the seed: nothing the first attempt saw carries over.
+    // #293: the first attempt starts in place (on the anchored page); a retry re-replays the Journey
+    // prefix when it can (`restartAtStart`), else loads the seed.
+    const first = attempts++ === 0;
+    const startInPlace = cfg.startInPlace === true && (first || (cfg.restartAtStart !== undefined && (await cfg.restartAtStart(cfg.actor))));
     settledSteps = 0;
     heldAtStep = null;
     sawNotHolding = false;
@@ -533,10 +554,14 @@ async function adjudicatedRun(
     firstActionAt = null;
     return explore({
       ...cfg,
+      startInPlace,
       readOnly,
+      noDestructiveWrites,
       missionContext: `${cfg.missionBrief === undefined ? "" : `${cfg.missionBrief}; `}${
         hasChecks
-          ? "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict"
+          ? `success is judged independently by user-supplied checks — your \`done\` is only a proposal, not the verdict${
+              answerRequired ? "; the goal also asks you to report what you found: end with `report` once the page shows it" : ""
+            }`
           : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict"
       }`,
       // `held`: after every settled step, a quick look at the page checks — remembered once they all
@@ -578,7 +603,7 @@ async function adjudicatedRun(
               // Never before an action: the start state proves nothing was done.
               if (settledSteps < 2) return null;
               if (pageChecks.length > 0 && heldAtStep === null) return null;
-              const requests = capture?.requests() ?? [];
+              const requests = capture?.sent() ?? [];
               if (!networkChecks.every((c) => judgeNetworkCheck(c, requests, capture?.truncated ?? false, scope()).passed)) return null;
               return pageChecks.length > 0
                 ? `every --success check held (the page checks at settled step ${heldAtStep}; --success-when held)`
@@ -604,6 +629,9 @@ async function adjudicatedRun(
               }
               return pending.length === 0 ? null : pending.join("; ");
             },
+            ...(answerRequired ? { requireAnswer: true } : {}),
+            // #235: only `reloadThen` checks — the in-run check below evaluates none of them.
+            ...(checks.every((c) => c.kind === "reloadThen") ? { successCheckDeferred: true } : {}),
             successCheck: () =>
               evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
                 (rs) =>
@@ -786,6 +814,10 @@ async function adjudicatedRun(
       }`,
     );
   }
+  // #286: the goal asked for a report — without a grounded answer the checks alone are not the goal.
+  if (answerRequired && run.answer === undefined) {
+    results = [...results, { check: REPORT_CHECK, passed: false, detail: "the goal asks to report what was found, but the run reported no grounded answer" }];
+  }
   const assertionPassed = results.every((r) => r.passed);
   // #209 — a truthful ending for a miss. `blocked` means the loop gave up; it is never used for a run
   // whose model claimed the goal (`done`) and whose independent check then failed — that is `failed`,
@@ -912,7 +944,7 @@ async function evaluateChecks(
   const results = new Map<number, SuccessCheckResult>();
   const needsSettle = checks.some((c) => c.kind !== "page");
   if (needsSettle) await monitorFor(page).waitSettled({ ceilingMs });
-  const requests = capture?.requests() ?? [];
+  const requests = capture?.sent() ?? [];
 
   const assertOn = async (actor: Actor, assertion: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
     const passed = await checkAssertion(actor, assertion, { timeoutMs });

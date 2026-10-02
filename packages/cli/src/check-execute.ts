@@ -14,7 +14,7 @@ import { CLI_ADVERSARIAL_STRATEGIES, parseSuccessSpec } from "./explore-api.js";
 import { type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import { loadRunFile } from "./report-api.js";
-import { GOAL_ONLY_OUTCOMES } from "@jevitate/domain";
+import { GOAL_ONLY_OUTCOMES, clock } from "@jevitate/domain";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { type Json, type Planned, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
 import { applyJourneyEnvironment } from "./environments.js";
@@ -70,7 +70,25 @@ function itemBrowser(base: BrowserRunOptions | undefined, x: SuiteExploreOptions
   return Object.keys(demo).length === 0 ? base : { ...base, ...demo };
 }
 
+/**
+ * #293: a journey-anchored mission item runs between the target's fixture setup and restore (as a
+ * Journey item does), so one stop point's side effects never leak into the next of a sweep.
+ */
 export async function execute(item: Planned, ctx: ExecContext, remaining: number | undefined): Promise<Executed> {
+  const anchored = item.kind === "mission" && item.mission !== undefined && item.t.prefixes?.has(item.mission) === true;
+  if (!anchored || item.t.fixturesFile === undefined) return executeItem(item, ctx, remaining);
+  const session = item.setup?.storageState;
+  const fx = fixturesFor(targetFixtures(item.t, session), item.t.prefixes!.get(item.mission!)!.startUrl);
+  if (fx === undefined) return executeItem(item, ctx, remaining);
+  try {
+    await fx.setup();
+    return await executeItem(item, ctx, remaining);
+  } finally {
+    await fx.restore();
+  }
+}
+
+async function executeItem(item: Planned, ctx: ExecContext, remaining: number | undefined): Promise<Executed> {
   const { opts, runners } = ctx;
   const t = item.t.target;
   const stamp: Stamp = {
@@ -135,7 +153,7 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
   if (item.kind === "journey" && item.journey !== undefined) {
     const stored = item.t.journeys.get(item.journey.id);
     if (stored === undefined) return { status: "error", actions: 0, error: { type: "journey", message: `Journey ${item.journey.id} not loaded` } };
-    const startedAt = (opts.nowIso ?? (() => new Date().toISOString()))();
+    const startedAt = (opts.nowIso ?? (() => clock.nowIso()))();
     const sj = item.journey;
     // #247: the item's environment (resolved and checked at preflight); its session when the item and target name none.
     const environment = item.t.environments?.get(sj);
@@ -208,6 +226,7 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
         successChecks,
         ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
         ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+        ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
         allowlist: item.t.allowlist,
         judge,
         gen,
@@ -252,7 +271,12 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
 
   if (item.kind === "mission" && item.mission !== undefined) {
     const m = item.mission;
-    const url = m.url ?? t.url;
+    // #293: a journey-anchored mission replays its Journey's prefix first and starts where it lands.
+    const prefix = item.t.prefixes?.get(m);
+    const withPrefix = prefix === undefined ? {} : { journeyPrefix: prefix };
+    // The prefix types its secret params into the page the mission perceives: redacted like the item's own.
+    const anchoredSecrets = prefix === undefined || prefix.secrets.length === 0 ? withSecrets : { secrets: [...(setup?.secrets ?? []), ...prefix.secrets] };
+    const url = prefix?.startUrl ?? m.url ?? t.url;
     const b = bounds(m.maxActions, m.maxDecisions, remaining);
     if (m.strategy === "feature") {
       const r = await runners.feature({
@@ -289,6 +313,8 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
         ...withStall,
         ...withOverflow,
         ...(m.routes === undefined && x.scope === undefined ? {} : { routeGlobs: [...(m.routes ?? []), ...(x.scope === "app" ? ["/**"] : [])] }),
+        ...withPrefix,
+        ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
@@ -303,15 +329,17 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
         seedUrl: url,
         allowlist: item.t.allowlist,
         strategies: CLI_ADVERSARIAL_STRATEGIES,
+        ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
         judgment: judge,
         generation: gen,
         usage,
         ...(b === undefined ? {} : { bounds: b }),
         ...(m.routes === undefined ? {} : { routeGlobs: [...m.routes] }),
-        ...withSecrets,
+        ...anchoredSecrets,
         ...withHangReplays,
         ...withOverflow,
         ...(setup?.coverageThresholds === undefined ? {} : { coverageThresholds: setup.coverageThresholds }),
+        ...withPrefix,
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.outcome, r as unknown as Json);
@@ -327,21 +355,26 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
       appContext: { appClass: m.appClass ?? "", job: m.goal ?? "" },
       allowlist: item.t.allowlist,
       ...withSecretFields,
-      ...withSecrets,
+      ...anchoredSecrets,
       ...withFixture,
       ...withConversation,
       ...withOverflow,
       ...(x.minConfidence === undefined ? {} : { minConfidence: x.minConfidence }),
       ...(x.show === undefined ? {} : { show: x.show }),
       ...(x.maxFindingsPerPage === undefined ? {} : { maxFindingsPerRoute: x.maxFindingsPerPage }),
+      ...(x.product === undefined ? {} : { product: x.product }),
+      ...(x.polish === true ? { polish: true } : {}),
+      ...(x.probeGuards === true ? { probeGuards: true } : {}),
       // #225: the job's completion checks — goal-item semantics, never ignored.
       ...(m.success === undefined ? {} : { successChecks: m.success.map(parseSuccessSpec) }),
       ...(m.successWhen === undefined ? {} : { successWhen: m.successWhen }),
       ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+      ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
       judge,
       gen,
       usage,
       bounds: b,
+      ...withPrefix,
     });
     const actions = actionsOf({ transcriptPath: r.transcriptPath });
     // #213: the item points at the PERSISTED result (which carries the UX report), never at the
@@ -365,7 +398,7 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
 
   if (item.kind === "verify-fix" && item.verify !== undefined) {
     const v = item.verify;
-    const startedAt = (opts.nowIso ?? (() => new Date().toISOString()))();
+    const startedAt = (opts.nowIso ?? (() => clock.nowIso()))();
     const source = loadRunFile(v.result);
     const original = source?.observations.find((o) => o.related.includes(v.fingerprint));
     const r = await runners.verifyFix({

@@ -1,3 +1,5 @@
+import { expectedResultFromDelta } from "@jevitate/explore";
+import type { ActionDeltaRecord } from "@jevitate/recording";
 import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -20,6 +22,7 @@ import type { TargetDescriptor } from "@jevitate/recording";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { captureStepScreenshot, SecretPixelMask, type CaptureLayer } from "./demo-capture.js";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { clock as sysClock } from "@jevitate/domain";
 
 /**
  * #248 — `jevitate journey demo <id>`: replay a Journey as a narrated demo. The overlay (#245) shows
@@ -79,6 +82,8 @@ export interface DemoStep {
   /** What the overlay and the subtitle said (redacted). */
   readonly caption: string;
   readonly expectedResult?: string;
+  /** #303 (`--action-deltas`): what the step changed when its Recording was made, one line (redacted). */
+  readonly observed?: string;
   /** The subtitle cue, ms from the start of the video. */
   readonly cue: { readonly startMs: number; readonly endMs: number };
   /** The step's screenshot in the guide's assets folder (a guide was asked for). */
@@ -124,9 +129,15 @@ function vttText(s: string): string {
 export function demoSubtitles(title: string, steps: readonly DemoStep[], draft = false): string {
   const note = title.replace(/\s+/g, " ").replace(/-->/g, "->").trim();
   const mark = draft ? `[${DEMO_DRAFT_MARK}] ` : "";
-  const cues = steps.map((s) => `step-${s.number}\n${vttTime(s.cue.startMs)} --> ${vttTime(s.cue.endMs)}\n${vttText(`${mark}${s.caption}`)}\n`);
+  const cues = steps.map((s) => `step-${s.number}\n${vttTime(s.cue.startMs)} --> ${vttTime(s.cue.endMs)}\n${vttText(`${mark}${s.caption}${s.observed === undefined ? "" : `\n${s.observed}`}`)}\n`);
   const draftNote = draft ? [`NOTE ${DEMO_DRAFT_MARK}: not yet approved (jevitate demo approve)\n`] : [];
   return ["WEBVTT\n", ...draftNote, ...(note === "" ? [] : [`NOTE ${note}\n`]), ...cues].join("\n");
+}
+
+/** #303: a recorded delta as one caption line — what changed, or that nothing did. */
+function deltaCaption(d: ActionDeltaRecord): string {
+  const what = expectedResultFromDelta(d) ?? (d.verdict === "no-change" ? "nothing visible changes" : d.why);
+  return `observed: ${what}`.slice(0, 200);
 }
 
 function oneLine(s: string): string {
@@ -153,6 +164,7 @@ export function demoGuide(journey: Journey, title: string, steps: readonly DemoS
   for (const s of steps) {
     lines.push(`### ${s.number}. ${oneLine(s.caption)}`, "");
     if (s.expectedResult !== undefined) lines.push(`**Expected result:** ${oneLine(s.expectedResult)}`, "");
+    if (s.observed !== undefined) lines.push(`**Observed:** ${oneLine(s.observed)}`, "");
     if (s.screenshot !== undefined) {
       const alt = `Step ${s.number}: ${oneLine(s.caption)}`.replace(/[[\]]/g, "");
       lines.push(`![${alt}](${encodeURI(`${assets}/${basename(s.screenshot)}`)})`, "");
@@ -174,7 +186,7 @@ function targetOf(s: FlatJourneyStep): TargetDescriptor | null {
   return step.target ?? null;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => sysClock.sleep(ms);
 
 /** The title card is on screen at least this long (ms), whatever `--pace` is. */
 export const TITLE_CARD_MIN_MS = 1200;
@@ -186,9 +198,9 @@ export const FIRST_FRAME_WAIT_MS = 5_000;
  * about:blank, whose document the browser may replace right after it opens (wiping the card).
  */
 async function holdCard(overlay: DemoOverlay, page: Page, ms: number): Promise<void> {
-  const until = Date.now() + ms;
+  const until = sysClock.now() + ms;
   for (;;) {
-    const left = until - Date.now();
+    const left = until - sysClock.now();
     if (left <= 0) return;
     await sleep(Math.min(250, left));
     await overlay.refresh(page);
@@ -208,7 +220,7 @@ class VideoClock {
   #first: Promise<void> = Promise.resolve();
 
   opened(page: Page, video: boolean): void {
-    this.#openedAt = Date.now();
+    this.#openedAt = sysClock.now();
     const screencast = (page as Partial<Pick<Page, "screencast">>).screencast;
     if (!video || screencast === undefined) return;
     let seen: () => void = () => undefined;
@@ -226,15 +238,15 @@ class VideoClock {
       .start({
         onFrame: ({ timestamp }) => {
           if (this.#firstFrameAt === undefined) {
-            this.#firstFrameAt = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now();
+            this.#firstFrameAt = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : sysClock.now();
             seen();
             // Off the frame callback: stopping from inside it would wait on this very frame's ack.
-            setTimeout(stop, 0);
+            sysClock.setTimeout(stop, 0);
           }
         },
       })
       .catch(() => seen());
-    setTimeout(() => {
+    sysClock.setTimeout(() => {
       seen();
       stop();
     }, FIRST_FRAME_WAIT_MS).unref();
@@ -258,7 +270,7 @@ class VideoClock {
   /** ms on the video's timeline: from its first frame, else from when the page opened. */
   since(): number {
     const start = this.#firstFrameAt ?? this.#openedAt;
-    return start === undefined ? 0 : Math.max(0, Date.now() - start);
+    return start === undefined ? 0 : Math.max(0, sysClock.now() - start);
   }
 }
 
@@ -319,7 +331,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
     };
     const since = (): number => clock.since();
 
-    const steps: Array<{ number: number; caption: string; expectedResult?: string; startMs: number; endMs?: number; screenshot?: string }> = [];
+    const steps: Array<{ number: number; caption: string; expectedResult?: string; observed?: string; startMs: number; endMs?: number; screenshot?: string }> = [];
     const captureErrors: string[] = [];
     const shots = join(work, "shots");
     await mkdir(shots, { recursive: true });
@@ -344,7 +356,10 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
         closeLast();
         const caption = captionOf(s, redact);
         const expected = oneLine(redact(s.recorded.expectedResult ?? ""));
-        steps.push({ number: index + 1, caption, ...(expected === "" ? {} : { expectedResult: expected }), startMs: since() });
+        // #303 (opt-in): the step's recorded delta as a short caption line ("what this step does").
+        const delta = opts.actionDeltas === true ? s.recorded.delta : undefined;
+        const observed = delta === undefined ? "" : oneLine(redact(deltaCaption(delta)));
+        steps.push({ number: index + 1, caption, ...(expected === "" ? {} : { expectedResult: expected }), ...(observed === "" ? {} : { observed }), startMs: since() });
         await overlay.caption(page, { head: `step ${index + 1} of ${flat.length}`, text: caption }, targetOf(s));
         await sleep(pace);
       },
@@ -390,6 +405,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
       number: s.number,
       caption: s.caption,
       ...(s.expectedResult === undefined ? {} : { expectedResult: s.expectedResult }),
+      ...(s.observed === undefined ? {} : { observed: s.observed }),
       cue: { startMs: Math.round(s.startMs), endMs: Math.round(s.endMs ?? s.startMs + 1) },
       ...(s.screenshot === undefined ? {} : { screenshot: s.screenshot }),
     }));

@@ -528,18 +528,21 @@ export async function findOrdinalAmong(
   handle: ElementHandle<Node>,
 ): Promise<{ ordinal: number; candidates: number } | null> {
   const base = descriptorToLocator(page, descriptor);
-  let count: number;
+  // #278: ONE query for every match and ONE in-page identity search — not a count plus a fresh
+  // `.nth(i)` query per match. A rung query (role + accessible name) walks the whole DOM, so probing
+  // k same-named siblings one at a time cost O(k) full-DOM queries per control, which on a large page
+  // (a heatmap of clickable words) turned one perception into minutes.
+  const matches = await base.elementHandles().catch(() => null);
+  if (matches === null) return null;
   try {
-    count = await base.count();
-  } catch {
-    return null;
+    if (matches.length <= 1) return null;
+    const at = await page
+      .evaluate(([els, target]) => els.indexOf(target), [matches, handle] as [ElementHandle<Node>[], ElementHandle<Node>])
+      .catch(() => -1);
+    return at < 0 ? null : { ordinal: at, candidates: matches.length };
+  } finally {
+    await Promise.all(matches.map((m) => m.dispose().catch(() => undefined)));
   }
-  if (count <= 1) return null;
-
-  for (let i = 0; i < count; i++) {
-    if (await resolvesToSameElement(page, base.nth(i), handle)) return { ordinal: i, candidates: count };
-  }
-  return null;
 }
 
 /**
@@ -592,9 +595,12 @@ export async function validateCandidates(
   page: Page,
   candidates: readonly DescriptorCandidate[],
   handle: ElementHandle<Node>,
+  opts: { readonly firstOnly?: boolean } = {},
 ): Promise<DescriptorCandidate[]> {
   const passing: DescriptorCandidate[] = [];
   for (const candidate of candidates) {
+    // #278: a caller that needs only the winning descriptor (a perception snapshot) stops at it.
+    if (opts.firstOnly === true && passing.length > 0) break;
     const locator = descriptorToLocator(page, candidate.descriptor);
     if (await resolvesToSameElement(page, locator, handle)) {
       passing.push(candidate);
@@ -641,13 +647,20 @@ export async function validateCandidates(
 export async function computeDescriptor(
   page: Page,
   handle: ElementHandle<Node>,
+  opts: {
+    /**
+     * #278: validate only until the winning rung is proven — `alternates` is then empty. For callers
+     * that use only `descriptor`/`stability` (a perception snapshot reads every control on the page).
+     */
+    readonly primaryOnly?: boolean;
+  } = {},
 ): Promise<ComputedDescriptor> {
   try {
     const facts = await handle.evaluate(readElementFacts, {
       generatedPatterns: [...GENERATED_PATTERNS],
       valueNamedInputTypes: [...VALUE_NAMED_INPUT_TYPES],
     });
-    const passing = await validateCandidates(page, buildCandidates(facts), handle);
+    const passing = await validateCandidates(page, buildCandidates(facts), handle, { firstOnly: opts.primaryOnly === true });
 
     const primary = passing[0];
     if (primary === undefined) {

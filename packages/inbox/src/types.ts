@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { clock } from "@jevitate/domain";
 
 export const SAFE_INBOX_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 export function assertSafeInboxId(id: string): void {
@@ -51,7 +52,7 @@ export interface InboxSummary {
   id: string; kind: InboxItemKind; status: InboxItemStatus; run: string; journey: string;
   step: string; agent: string; hasScreenshot: boolean; createdAt: string; ageSec: number;
 }
-export function toSummary(item: InboxItem, now = Date.now()): InboxSummary {
+export function toSummary(item: InboxItem, now = clock.now()): InboxSummary {
   return {
     id: item.id, kind: item.kind, status: item.status, run: item.run, journey: item.journey,
     step: item.step, agent: item.agent, hasScreenshot: item.hasScreenshot, createdAt: item.createdAt,

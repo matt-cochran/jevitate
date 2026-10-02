@@ -18,8 +18,10 @@ import type { Control } from "./snapshot.js";
  * `--allow-destructive` lifts the built-in categories (a `--deny` pattern always holds). On a goal
  * run, a built-in category is lifted for ONE control when the goal itself asks for it: the goal text
  * contains the control's risky verb ("delete the draft" allows "Delete"; "simulate how customers
- * respond" allows "Run the simulation"); a feature mission's named capability counts as its goal
- * ("buy a pack" allows "Buy pack 1"). A false positive only costs coverage of that control.
+ * respond" allows "Run the simulation"); a "Send <thing>" control is asked for by a goal that orders
+ * the thing as its verb ("Invite a teammate" allows "Send invite", #235); a feature mission's named
+ * capability counts as its goal ("buy a pack" allows "Buy pack 1"). A false positive only costs
+ * coverage of that control.
  *
  * #168 (Preveti round 3 dogfood): on a chat/question-card UI the controls ARE the assistant's
  * questions and answer options — a long question button ("How many qualified PM teams sign up but
@@ -50,6 +52,46 @@ const CHOICE_ROLES = new Set(["radio", "checkbox", "option"]);
 const EXPLICIT_CHARGE = /\$\s?\d|\b\d+(?:\.\d+)?\s?(?:usd|dollars?|eur|gbp)\b|\(paid\)/i;
 
 export type ControlRisk = "session-end" | "destructive" | "paid" | "denied";
+
+/**
+ * #280: a live cost estimate a paid control's name carries at its end — "(≈ 4–10 credits)",
+ * "[~$3]", "· ≈ 50 credits". It is the app's price tag, never the action: no goal can name it.
+ */
+const TRAILING_ESTIMATE = /\s*(?:[([][^()[\]]*\d[^()[\]]*[)\]]|[-–—·:|]?\s*[≈~]\s*\S.*)\s*$/u;
+
+/** A control's name without a trailing live cost estimate (#280): "Confirm analysis (≈ 4–10 credits)" → "Confirm analysis". */
+export function actionName(name: string): string {
+  let out = name.replace(/\s+/g, " ").trim();
+  for (let prev = ""; prev !== out; ) {
+    prev = out;
+    out = out.replace(TRAILING_ESTIMATE, "").trim();
+  }
+  return out === "" ? name.replace(/\s+/g, " ").trim() : out;
+}
+
+/** Words that confirm or connect, never name the action ("Confirm and draft the page" → draft). */
+const NON_ACTION_WORDS = new Set(["confirm", "and", "continue", "proceed", "ok", "okay", "yes", "now", "please", "then", "the", "a", "an", "my", "your", "this", "it", "to"]);
+
+/**
+ * Does the goal ask for an operator `--paid` control (#280)? Its ACTION word — the first word of its
+ * estimate-free name that is not a confirmation/connective ("Confirm analysis (≈ 4–10 credits)" →
+ * "analysis") — must appear in the goal, compared by a shared prefix (≥ 5 letters, or the whole word
+ * when shorter): "analyze it" asks for "Confirm analysis", "draft the page" for "Confirm and draft
+ * the page (≈ 50–90 credits)". A name with no action word is never asked for.
+ */
+export function goalAsksForAction(goal: string, name: string): boolean {
+  const words = actionName(name)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w !== "" && !NON_ACTION_WORDS.has(w));
+  const action = words[0];
+  if (action === undefined || action.length < 3 || /^\d+$/.test(action)) return false;
+  const need = action.slice(0, Math.min(5, action.length));
+  return goal
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .some((g) => g.startsWith(need) && (need.length === action.length ? g.length <= action.length + 3 : true));
+}
 
 export interface SafetyConfig {
   /**
@@ -95,9 +137,11 @@ export function controlRisk(
   name: string,
   role?: string,
 ): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string } | null {
-  const trimmed = name.replace(/\s+/g, " ").trim();
+  const full = name.replace(/\s+/g, " ").trim();
+  // #280: a trailing live estimate ("(≈ 50–90 credits)") is not part of the label's length.
+  const trimmed = actionName(full);
   if (trimmed === "" || trimmed.length > MAX_LABEL_LEN) return null;
-  if (role !== undefined && CHOICE_ROLES.has(role.toLowerCase()) && !EXPLICIT_CHARGE.test(trimmed)) return null;
+  if (role !== undefined && CHOICE_ROLES.has(role.toLowerCase()) && !EXPLICIT_CHARGE.test(full)) return null;
   for (const [risk, re] of [
     ["session-end", SESSION_END],
     ["destructive", DESTRUCTIVE],
@@ -126,7 +170,13 @@ export function goalAsksFor(goal: string, matched: string): boolean {
   // ("Send invite" needs both "send" and "invit" in the goal).
   if (SESSION_END.test(matched)) return g.includes(squash(matched));
   const words = matched.split(/\s+/).filter((w) => !/^(?:a|an|the|my|your)$/i.test(w));
-  return words.length > 0 && words.map(stem).every((s) => s.length >= 3 && g.includes(s));
+  if (words.length > 0 && words.map(stem).every((s) => s.length >= 3 && g.includes(s))) return true;
+  // #235: "Send <thing>" is asked for by the goal that orders the thing itself as its verb — "Invite a
+  // teammate" asks for "Send invite", "Email the team" for "Send email" — at a clause's start, never a
+  // mere mention ("report the invite's status" asks for nothing).
+  const [verb, ...object] = words;
+  if (verb?.toLowerCase() !== "send" || object.length === 0) return false;
+  return object.map(stem).every((s) => s.length >= 4 && new RegExp(`(?:^|[.;:!?]\\s*|\\b(?:and|then|please)\\s+)${s}`, "i").test(goal.trim()));
 }
 
 type DenyMatcher = (c: Pick<Control, "name" | "role" | "descriptor">) => boolean;
@@ -206,11 +256,13 @@ export class SafetyPolicy {
   }
 
   /** The built-in category, else `paid` when an operator `--paid` pattern matches (#181). */
-  #risk(c: Pick<Control, "name" | "role" | "descriptor">): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string } | null {
+  #risk(
+    c: Pick<Control, "name" | "role" | "descriptor">,
+  ): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string; readonly operator?: true } | null {
     const r = controlRisk(c.name, c.role);
     if (r !== null) return r;
     const name = c.name.replace(/\s+/g, " ").trim();
-    return name !== "" && this.#paid.some((m) => m(c)) ? { risk: "paid", matched: name } : null;
+    return name !== "" && this.#paid.some((m) => m(c)) ? { risk: "paid", matched: name, operator: true } : null;
   }
 
   /** The risk category of a control's name (for marking the side effects a click fired). */
@@ -227,7 +279,8 @@ export class SafetyPolicy {
     if (this.#allowDestructive) return null;
     const r = this.#risk(c);
     if (r === null) return null;
-    if (this.#goal !== null && goalAsksFor(this.#goal, r.matched)) return null;
+    // #280: an operator `--paid` match is asked for by its action word, never its whole (estimate-bearing) name.
+    if (this.#goal !== null && (r.operator === true ? goalAsksForAction(this.#goal, r.matched) : goalAsksFor(this.#goal, r.matched))) return null;
     const what = r.risk === "session-end" ? "ends the session" : r.risk === "destructive" ? "is destructive" : "may cost money or contact real people";
     return {
       risk: r.risk,

@@ -7,7 +7,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import type { VerifySession } from "../verify-fix.js";
 import { runAdversarialMission, type AdversarialMissionParams, type AdversarialOutcome } from "./adversarial.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
-import { withSession } from "../testkit.js";
+import { withSession, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #64 — adversarial coverage on an ordinary form. A served profile page (text fields, a select,
