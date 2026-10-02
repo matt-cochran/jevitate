@@ -1,6 +1,6 @@
 import type { Recording } from "@jevitate/recording";
 import type { ActivityRepository, BudgetRepository, SitePolicyRepository } from "@jevitate/application";
-import { Pacer, evaluateGate, makeRng, resolveThrottle, seedFrom } from "@jevitate/domain";
+import { Pacer, evaluateGate, makeRng, resolveThrottle, seedFrom, clock } from "@jevitate/domain";
 import { PaceInteractions } from "@jevitate/screenplay";
 import { flattenRecording, isWriteStep } from "./self-heal.js";
 
@@ -92,8 +92,8 @@ const OPEN: SiteGateResult = { ok: true, pace: null, done: async () => undefined
 export async function enterSiteGate(deps: SiteGateDeps, req: SiteGateRequest): Promise<SiteGateResult> {
   const policy = await deps.policies.get(req.site, req.account);
   if (policy === null) return OPEN;
-  const nowIso = deps.nowIso ?? (() => new Date().toISOString());
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const nowIso = deps.nowIso ?? (() => clock.nowIso());
+  const sleep = deps.sleep ?? ((ms: number) => clock.sleep(ms));
 
   if (req.enforceLimits) {
     const resolved = resolveThrottle([policy.throttles?.[req.throttleClass] ?? {}]);

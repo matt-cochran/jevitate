@@ -28,7 +28,12 @@ jevitate explore --strategy goal --url http://localhost:3000/projects/new \
   command.
 - `outputs` bind values from a response (`$.json.path` or `header:<name>`) as `${setup.<name>}`,
   which you can use in `--url`, `--goal`, `--success`, a Journey's `--param`s and later steps,
-  but never in the URL's origin.
+  but never in the URL's origin. In `--url`, a reference can sit right after the origin
+  (`--url 'http://localhost:3000${setup.link}'`) when its value is a root-relative path such as
+  `/join/abc`. A bound value that would move the URL off its origin (`@evil.test`, `:8080`) is
+  refused.
+- A step can authenticate as a **named identity** (`"auth": {"from": "cookies", "identity": "owner"}`)
+  instead of the mission's session. See [fixture identities](#fixture-identities-mint-as-one-user-run-as-another).
   `secretOutputs` are redacted everywhere and never reach text a model sees.
 - `${secretField.<VAR>}` puts a `--secret-field` value (read from `env:<VAR>`) into a step's
   `json`, `body` or `headers`, for example to log in to an app that keeps its token in memory.
@@ -43,6 +48,60 @@ jevitate explore --strategy goal --url http://localhost:3000/projects/new \
   `.jevitate/environments.json` ([environments](./journeys.md#environments---env)).
 - `--fixtures`/`--before`/`--after` are supported only with `--strategy goal` (the default): they
   refuse to start with any other strategy.
+
+## Fixture identities: mint as one user, run as another
+
+Token flows such as invites, intake links, open sign-up links and teammate invites have two
+parties. The **owner** creates the link and a **recipient**, often with no session at all, opens
+it. To test the recipient's experience, the fixture has to mint as the owner while the mission
+browser runs as somebody else, or cold. Otherwise the run only shows the owner's "you're already
+signed in" page.
+
+A step's `auth` can name an `identity`. The engine authenticates that step from the identity's
+own storageState file, using its `localStorage` key or its `cookies`, exactly the way it uses the
+mission's session. The mission's own session is `--storage-state`, or nothing at all.
+
+```json
+{
+  "setup": [
+    { "name": "mint-invite", "method": "POST", "url": "/api/invites",
+      "auth": { "from": "cookies", "identity": "owner" },
+      "expectStatus": [201], "outputs": { "link": "$.url", "token": "$.token" } }
+  ],
+  "restore": [
+    { "name": "revoke-invite", "method": "DELETE", "url": "/api/invites/${setup.token}",
+      "auth": { "from": "cookies", "identity": "owner" } }
+  ]
+}
+```
+
+```bash
+# The owner's session comes from a prior login (e.g. `jevitate profile`/a Playwright storageState).
+# The mission has NO --storage-state: it opens the minted link as a cold recipient.
+jevitate explore --strategy goal --url 'http://localhost:3000${setup.link}' \
+  --goal "accept the invite" --success 'textIncludes:css=h1|Welcome' \
+  --fixtures invite.fixtures.json --fixture-identity owner=owner.json --real
+```
+
+- **Binding an identity.** `--fixture-identity <name>=<storageState>` is repeatable and also
+  available as `fixtureIdentity` over MCP and in a `check --suite` goal item. Without the flag, an
+  identity binds to the `personas.<name>.storageState` that `~/.jevitate/targets.json` declares for
+  the mission's origin. The flag wins over the persona.
+- **Failing closed.** If a step names an identity that nothing binds, the run is refused
+  (`E_FIXTURE_SPEC`) before any browser opens or any request is sent. It never falls back to the
+  mission's session. A `--fixture-identity` that no step uses, or one whose file does not exist, is
+  refused too.
+- **Safety.** The fixtures file names only the identity, never a path or a credential. The
+  operator binds the file. The engine reads the storageState for each request, puts the header on
+  the wire only, and never writes it to a log, the result, the Recording or text a model sees. The
+  result records only the identity's **path** (`fixtures.identities`), the same way `--actor`
+  records its paths. The allowlist rules apply unchanged: a step still reaches only an `--allow`
+  origin.
+- **Replays.** Hang confirmation, `verify-fix` and `regression capture` re-mint as the same
+  identities on every replay, using the paths the result recorded. Pass `--fixture-identity` to
+  re-bind one, for example after the owner's session rotates.
+- An identity applies to `localStorage` and `cookies` auth. A `secretField` binding is already
+  independent of the mission's session.
 
 **Shell hooks.** `--before <cmd>` and `--after <cmd>` run your own commands around the mission and
 every replay, only with `--allow-shell-hooks`, with a timeout (`--hook-timeout-ms`, default 60000)

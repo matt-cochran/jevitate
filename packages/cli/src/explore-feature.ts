@@ -26,7 +26,7 @@ import {
   Http5xxOracle,
   hangOutcome,
 } from "@jevitate/explore";
-import { combineOutcomes, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
+import { combineOutcomes, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
@@ -48,6 +48,7 @@ import {
   persistStorageState,
   type MissionTarget,
   declaredResult,
+  serverLogRuntimeOptions,
 } from "./explore-shared.js";
 
 /**
@@ -153,8 +154,6 @@ export type FeatureCliMissionResult = Omit<FeatureRunResult, "outcome"> & {
   readonly invariantSpec?: InvariantSpec;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
-  readonly serverLogDefects?: ServerLogDefect[];
   /** Always zero (#188): a feature mission makes no model call — stated, never absent ("not tracked"). */
   readonly usage: UsageCounts;
   /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
@@ -197,7 +196,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   // Persist recordings + transcript + a typed result, like the goal and
   // coverage missions do (ticket #78 — previously nothing was written).
   const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const iso = (opts.nowIso ?? (() => clock.nowIso()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
   // #245: the mission session and every hang-replay session are shown/recorded alike.
@@ -229,14 +228,12 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
   const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const serverLog = openServerLogRuntime({
-    sources: opts.serverLog?.sources ?? [],
-    logDefect: opts.serverLog?.logDefect ?? [],
-    quietOk: opts.serverLog?.quietOk ?? [],
-    logIgnore: opts.serverLog?.logIgnore ?? [],
-    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    ...serverLogRuntimeOptions(opts.serverLog),
     secrets: [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  // #204: every request's correlation ids, from before the first navigation.
+  serverLog?.observe(session.page);
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     capture.noteEntry(session.page, entry);
     health.noteStep(entry);

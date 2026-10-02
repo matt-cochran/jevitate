@@ -1,5 +1,5 @@
 import { clickTimeoutMs } from "@jevitate/explore";
-import { pageUnresponsiveMsFromEnv } from "@jevitate/playwright";
+import { governanceFromEnv, pageUnresponsiveMsFromEnv } from "@jevitate/playwright";
 
 /**
  * Numeric `JEVITATE_*` tuning variables are validated ONCE, when the CLI starts, so a typo is a
@@ -10,7 +10,8 @@ import { pageUnresponsiveMsFromEnv } from "@jevitate/playwright";
  */
 export function runtimeEnvProblems(env: NodeJS.ProcessEnv = process.env): string[] {
   const problems: string[] = [];
-  for (const check of [pageUnresponsiveMsFromEnv, clickTimeoutMs]) {
+  // #205: JEVITATE_RESOURCE_GOVERNANCE / JEVITATE_MAX_BROWSERS / JEVITATE_MAX_BROWSER_MEMORY_MB.
+  for (const check of [pageUnresponsiveMsFromEnv, clickTimeoutMs, governanceFromEnv]) {
     try {
       check(env);
     } catch (err) {

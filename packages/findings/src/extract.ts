@@ -97,6 +97,25 @@ export interface RunRecord {
   readonly usage?: Readonly<Record<string, unknown>>;
   /** What the run could observe (#171); absent on older records (then only its mode and target compare). */
   readonly scope?: RunScope;
+  /** #293: the Journey step a journey-anchored run branched from — every finding of the run came from there. */
+  readonly branch?: RunBranch;
+}
+
+/** #293: where a journey-anchored run branched off a promoted Journey. */
+export interface RunBranch {
+  readonly journeyId: string;
+  /** Top-level steps replayed before the mission (1-based). */
+  readonly step: number;
+  readonly anchor?: string;
+}
+
+function branchOf(v: unknown): RunBranch | undefined {
+  if (!isRecord(v)) return undefined;
+  const journeyId = str(v.journeyId);
+  const step = num(v.step);
+  if (journeyId === undefined || step === undefined) return undefined;
+  const anchor = str(v.anchor);
+  return { journeyId, step, ...(anchor === undefined ? {} : { anchor }) };
 }
 
 type Json = Record<string, unknown>;
@@ -296,7 +315,7 @@ function hangObservation(h: Json, ctx: Ctx): FindingObservation | null {
   });
 }
 
-/** A 4xx-correlated console error (#88): reported, never a defect. */
+/** A 4xx-correlated (#88) or third-party-frame (#297) console error: reported, never a defect. */
 function advisoryObservation(a: Json, ctx: Ctx): FindingObservation | null {
   const fingerprint = str(a.fingerprint);
   if (fingerprint === undefined) return null;
@@ -306,7 +325,7 @@ function advisoryObservation(a: Json, ctx: Ctx): FindingObservation | null {
   return observation(
     {
       category: "advisory",
-      signal: `console-error${status === undefined ? "" : `@${status}`}`,
+      signal: `console-error${str(a.thirdPartyFrame) !== undefined ? "@third-party" : status === undefined ? "" : `@${status}`}`,
       fingerprint,
       ...(route === undefined ? {} : { route }),
     },
@@ -565,9 +584,10 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   const ctx: Ctx = {
     path,
     ...(str(result.transcriptPath) === undefined ? {} : { transcript: str(result.transcriptPath) }),
-    ...((str(result.recordingPath) ?? str(arr(result.recordingPaths)[0])) === undefined
+    // `recordingPath` was removed in 0.3.0; a 0.2.0-or-older result may still carry only it.
+    ...((str(arr(result.recordingPaths)[0]) ?? str(result.recordingPath)) === undefined
       ? {}
-      : { recording: str(result.recordingPath) ?? str(arr(result.recordingPaths)[0]) }),
+      : { recording: str(arr(result.recordingPaths)[0]) ?? str(result.recordingPath) }),
   };
   const observations: FindingObservation[] = [];
   const push = (o: FindingObservation | null): void => {
@@ -600,6 +620,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   const startedAt = str(result.startedAt) ?? stampToIso(runId);
   const origin = originOf(str(target?.seedUrl)) ?? originOf(str(result.site));
   const scope = missionScope(mode, result);
+  const branch = branchOf(result.branch);
   return {
     runId,
     mode,
@@ -614,6 +635,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
     ...(str(result.targetBuild) === undefined ? {} : { targetBuild: str(result.targetBuild) }),
     ...(isRecord(result.usage) ? { usage: result.usage } : {}),
     ...(scope === undefined ? {} : { scope }),
+    ...(branch === undefined ? {} : { branch }),
   };
 }
 

@@ -21,6 +21,8 @@ full flag list, or see the generated [CLI reference](./cli.md).
 - [Authenticated and stateful apps](./authentication.md): storage state, bound secrets, TOTP,
   sequential runs.
 - [Fixtures](./fixtures.md): known state before every run and every replay.
+- [Browser extensions](./extensions.md): load an unpacked extension (`--extension`) and drive its
+  side panel, popup or options page.
 - [Repeats, personas and actors](./multi-run.md): vote across runs, diff roles, check cross-tenant
   isolation.
 
@@ -28,6 +30,8 @@ full flag list, or see the generated [CLI reference](./cli.md).
 
 - [Outcomes and exit codes](./outcomes.md): every `outcome`, `stop` and `missionOutcome` value.
 - [Result schema](./results.md): the one versioned result shape every strategy writes.
+- [UX findings](./ux-findings.md): how a usability finding is made (claims verified by code), the
+  product facts file, guard probes, screenshots and what still needs real-model calibration.
 - [Verification](./verification.md): `verify-fix`, `regression capture`, `regression run`, and
   exact replay.
 - [CI, reports and baselines](./ci.md): `jevitate check`, `report`, `diff`, `baseline`.

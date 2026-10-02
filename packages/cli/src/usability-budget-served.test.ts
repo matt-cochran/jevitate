@@ -9,6 +9,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runUsabilityMission, UsabilityInvariantsUnsupportedError } from "./ux-api.js";
 import { runExploration } from "./explore-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #150 — a mission spend budget over a declared observable, wired into the usability review (which

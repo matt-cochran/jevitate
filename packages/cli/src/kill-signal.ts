@@ -216,7 +216,6 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
     defects: [],
     hangs: [],
     recordingPaths: [mission.recordingPath],
-    recordingPath: mission.recordingPath,
     ...(videoPaths === undefined ? {} : { videoPaths }),
     transcriptPath,
     resultPath: resultPathFor(mission.recordingPath),

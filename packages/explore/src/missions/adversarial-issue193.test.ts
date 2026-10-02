@@ -6,7 +6,7 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runAdversarialMission, type AdversarialOutcome } from "./adversarial.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
 import { DEFAULT_COVERAGE_THRESHOLDS } from "../adversarial/run-coverage.js";
-import { withSession } from "../testkit.js";
+import { useSkippingTime, withSession } from "../testkit.js";
 
 /**
  * #193 — dogfood repro: a Phone Numbers tool whose ONLY form lives in a modal ("Add New Phone
@@ -165,6 +165,7 @@ async function hunt(): Promise<AdversarialOutcome> {
 }
 
 describe("adversarial — a modal-only form beside a header menu (#193)", () => {
+  useSkippingTime();
   it(
     "submits the modal form, opens the header menu at most once, and never idles while controls remain",
     async () => {

@@ -670,3 +670,63 @@ describe("#214: `check` never gates on an advisory defect (a Jev judgment alone)
     expect(await run(coverageRunner([hard5xx], "defects-found"))).toMatchObject({ verdict: "fail", exitCode: 1 });
   });
 });
+
+describe("#293: a journey-anchored suite mission (fromJourney/atStep)", () => {
+  const journey = (promoted = true) => ({
+    metadata: { id: "order", name: "Order", promoted, params: ["name"], createdAtIso: "2026-10-01T00:00:00.000Z", anchors: [{ name: "review", step: 2 }] },
+    recording: {
+      version: "1",
+      site: "https://shop.example",
+      pages: [
+        {
+          url: "/app",
+          steps: [
+            { step: { kind: "navigate" as const, url: "/app", expect: { kind: "urlIncludes" as const, text: "/app" } } },
+            { step: { kind: "fill" as const, target: { label: "Name" }, value: { var: "name" }, expect: { kind: "visible" as const, target: { label: "Name" } } }, variableName: "name" },
+          ],
+        },
+      ],
+    },
+  });
+
+  it("parses the anchored fields and refuses them without their partner, with a url, or on a feature mission", () => {
+    const s = suite(0, {}, { missions: [{ name: "a", strategy: "adversarial", fromJourney: "order", atStep: "review", params: { name: "x" } }] });
+    expect(s.targets[0]?.missions[0]).toMatchObject({ fromJourney: "order", atStep: "review", params: { name: "x" } });
+    expect(suite(0, {}, { missions: [{ strategy: "coverage", fromJourney: "order", atStep: 2 }] }).targets[0]?.missions[0]?.atStep).toBe("2");
+    expect(() => suite(0, {}, { missions: [{ strategy: "coverage", fromJourney: "order" }] })).toThrow(/fromJourney and atStep go together/);
+    expect(() => suite(0, {}, { missions: [{ strategy: "coverage", fromJourney: "order", atStep: 2, url: URL0 }] })).toThrow(/url: cannot be combined with fromJourney/);
+    expect(() => suite(0, {}, { missions: [{ strategy: "feature", feature: "f", fromJourney: "order", atStep: 2 }] })).toThrow(/a feature mission cannot start from a Journey/);
+  });
+
+  it("resolves the prefix at preflight and hands it to the runner, which starts where it lands; an unpromoted Journey refuses the suite", async () => {
+    await new FsJourneyStore(dir).put(journey());
+    const usage = new UsageTracker();
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };
+    const seen: Array<{ seedUrl: string; branch?: unknown }> = [];
+    const adversarial = (async (o: { seedUrl: string; outDir?: string; journeyPrefix?: { branch: unknown } }) => {
+      seen.push({ seedUrl: o.seedUrl, branch: o.journeyPrefix?.branch });
+      const resultPath = join(o.outDir ?? dir, "adversarial-2026-10-01T10-00-00-000Z.result.json");
+      const result = { strategy: "adversarial", target: { seedUrl: o.seedUrl, allowlist: ["https://shop.example"] }, defects: [], hangs: [], advisories: [] };
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "clean", exitCode: 0, result }));
+      return { ...result, resultPath, outcome: "clean", missionOutcome: "clean", exitCode: 0 };
+    }) as unknown as CheckRunners["adversarial"];
+    const s = suite(0, {}, { missions: [{ name: "review", strategy: "adversarial", fromJourney: "order", atStep: "review", params: { name: "x" } }] });
+    const r = await runCheck({ suite: s, outDir: join(dir, "out-293"), journeysDir: dir, runners: { adversarial }, gateways: async () => gw, aiMode: "fake" });
+    expect(r.items.map((i) => [i.name, i.verdict])).toEqual([["review", "passed"]]);
+    expect(seen).toEqual([{ seedUrl: "https://shop.example/app", branch: { journeyId: "order", step: 2, anchor: "review", stepLabel: 'fill field "Name" with <param name>' } }]);
+
+    // #293 sweep: atStep "all" runs one item per stop point, its maxActions split evenly over them.
+    const sweepSeen: Array<{ step: unknown; maxActions?: number }> = [];
+    const sweeping = (async (o: { seedUrl: string; outDir?: string; bounds?: { maxActions?: number }; journeyPrefix?: { branch: { step: number; anchor?: string } } }) => {
+      sweepSeen.push({ step: o.journeyPrefix?.branch.anchor ?? o.journeyPrefix?.branch.step, ...(o.bounds?.maxActions === undefined ? {} : { maxActions: o.bounds.maxActions }) });
+      return adversarial(o as never);
+    }) as unknown as CheckRunners["adversarial"];
+    const sw = suite(0, {}, { missions: [{ name: "sweep", strategy: "adversarial", fromJourney: "order", atStep: "all", params: { name: "x" }, maxActions: 6 }] });
+    const swept = await runCheck({ suite: sw, outDir: join(dir, "out-293s"), journeysDir: dir, runners: { adversarial: sweeping }, gateways: async () => gw, aiMode: "fake" });
+    expect(swept.items.map((i) => i.name)).toEqual(["sweep@1", "sweep@review"]);
+    expect(sweepSeen).toEqual([{ step: 1, maxActions: 3 }, { step: "review", maxActions: 3 }]);
+
+    await new FsJourneyStore(dir).put(journey(false));
+    await expect(runCheck({ suite: s, outDir: join(dir, "out-293b"), journeysDir: dir, runners: { adversarial }, gateways: async () => gw, aiMode: "fake" })).rejects.toThrow(/mission review: journey 'order' is not promoted/);
+  });
+});

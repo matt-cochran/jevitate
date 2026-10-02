@@ -1,6 +1,6 @@
 ---
 name: jevitate-getting-started
-description: Start here for any jevitate task, or when unsure which jevitate skill applies — checks setup (keys, .jevitate/, MCP), gets a first useful result against the user's app URL, routes to the right skill (explore, run-journey, record, demo, verify-fix, ci-check, ux-review, load-test, sources, mission-scope), and says when to use the jevitate MCP tools vs the CLI, what the exit codes mean, and which approvals only a human may give.
+description: Start here for any jevitate task, or when unsure which jevitate skill applies — checks setup (keys, .jevitate/, MCP), gets a first useful result against the user's app URL, routes to the right skill (explore, run-journey, record, demo, verify-fix, ci-check, ux-review, load-test, sources, mission-scope, test-campaign), and says when to use the jevitate MCP tools vs the CLI, what the exit codes mean, and which approvals only a human may give.
 ---
 
 Jevitate tests a web app in a real browser and returns evidence: typed outcomes, exit codes,
@@ -43,6 +43,7 @@ Then pick the matching skill:
 | get a usability critique | `jevitate-ux-review` |
 | run a load test | `jevitate-load-test` |
 | share or run third-party Journeys | `jevitate-sources` |
+| test a whole release end to end (many user jobs, a QA sweep) | `jevitate-test-campaign` |
 
 ## 3. MCP tools or the CLI
 

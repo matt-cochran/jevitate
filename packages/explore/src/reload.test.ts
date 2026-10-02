@@ -3,7 +3,10 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { act, snapshot } from "./index.js";
-import { withSession } from "./testkit.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * The `reload` op (#65): a real navigation to the same page. It discards unsaved edits, accepts a

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadManifest } from "./manifest.js";
 
-test("loadManifest() returns exactly the eleven shipped skills", () => {
+test("loadManifest() returns exactly the twelve shipped skills", () => {
   const skills = loadManifest();
-  expect(skills).toHaveLength(11);
+  expect(skills).toHaveLength(12);
   const ids = new Set(skills.map((s) => s.id));
   expect(ids).toEqual(
     new Set([
@@ -19,6 +19,7 @@ test("loadManifest() returns exactly the eleven shipped skills", () => {
       "jevitate-record",
       "jevitate-run-journey",
       "jevitate-sources",
+      "jevitate-test-campaign",
       "jevitate-ux-review",
       "jevitate-verify-fix",
     ]),

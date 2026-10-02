@@ -12,6 +12,7 @@ export * from "./transcript.js";
 export * from "./decide.js";
 export * from "./fill.js";
 export * from "./secret-fields.js";
+export * from "./type-fixtures.js";
 export * from "./totp.js";
 export * from "./act.js";
 export * from "./fixture.js";
@@ -64,3 +65,5 @@ export * from "./http-5xx.js";
 export * from "./demo-overlay.js";
 // #251: the coverage page-state fingerprint (a new screen = a new state), for `--screenshots` dedupe.
 export { stateFingerprint as coverageStateFingerprint } from "./coverage/fingerprint.js";
+export * from "./action-delta.js";
+export * from "./replay-deltas.js";

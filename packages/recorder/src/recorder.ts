@@ -13,6 +13,7 @@ import {
 } from "./descriptor.js";
 import { installRecorderListener } from "./inject.js";
 import { isSecretField } from "./secret-field.js";
+import { clock } from "@jevitate/domain";
 
 /** The name the injected script calls: `window.__jevitateRecord(payload)`. */
 export const RECORD_BINDING = "__jevitateRecord";
@@ -253,7 +254,7 @@ export class Recorder {
       this.buffer.push({
         type: "navigation",
         seq: this.seq++,
-        receivedAt: Date.now(),
+        receivedAt: clock.now(),
         url: frame.url(),
         isMainFrame,
       });
@@ -272,7 +273,7 @@ export class Recorder {
     await this.install();
     this.clear();
     this.resolutions.clear();
-    this.startedAtIso = new Date().toISOString();
+    this.startedAtIso = clock.nowIso();
     this.intent = intent;
     this.recording = true;
   }
@@ -359,7 +360,7 @@ export class Recorder {
     const event: ActionCaptureEvent = {
       type: "action",
       seq: this.seq++,
-      receivedAt: Date.now(),
+      receivedAt: clock.now(),
       frameUrl: source.frame.url(),
       payload,
     };

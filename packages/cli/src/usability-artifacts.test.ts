@@ -11,6 +11,10 @@ import { parseSecretField } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { RecordingSchema, type Recording } from "@jevitate/recording";
 import { discoverRecordingSidecars, loadRecordingSidecars, runUsabilityMission, runUxReview } from "./ux-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #98 + #96 end to end on REAL Chromium: a usability run writes the goal/adversarial artifact shape
@@ -89,8 +93,8 @@ function scriptedJudge(actions: readonly string[]): JudgmentPort {
       }
       const out: Record<string, Answer> = {};
       for (const [key, q] of Object.entries(questions)) {
-        // A rubric principle question (`<item>::<q>`): judged violated, so the rubric tier yields
-        // findings the #134 offline comparison can check (the applicability question: applies).
+        // A legacy rubric principle question (`<item>::<q>`) would be judged violated; since #198 the
+        // claim pipeline asks claim/grade/dup questions instead (answered by the branches below).
         const rubric = key.includes("::") && !key.startsWith("grade::") && !key.endsWith("::__applies");
         if (rubric && q.kind === "noul") out[key] = { kind: "noul", value: false, probability: 0.1 };
         else if (rubric && q.kind === "score") out[key] = { kind: "score", value: 0.1 };
@@ -139,9 +143,10 @@ describe("usability run artifacts (#98) and run-signal findings (#96) — served
 
         // --- #98: the artifact shape, next to the report ---
         expect(result.reportPath).not.toBeNull();
-        expect(result.recordingPath).toBe(join(outDir, "usability-2026-09-24T00-00-00-000Z.recording.json"));
+        expect(result.recordingPaths).toEqual([join(outDir, "usability-2026-09-24T00-00-00-000Z.recording.json")]);
+        expect(result).not.toHaveProperty("recordingPath"); // removed in 0.3.0
         expect(result.transcriptPath).toBe(join(outDir, "usability-2026-09-24T00-00-00-000Z.transcript.json"));
-        const recording = JSON.parse(readFileSync(result.recordingPath, "utf8")) as Recording;
+        const recording = JSON.parse(readFileSync(result.recordingPaths[0]!, "utf8")) as Recording;
         const steps = recording.pages.flatMap((p) => p.steps.map((s) => s.step));
         // Launch, then Double down: the second Launch is refused (#92 — its POST already succeeded and
         // the page offers no retry), so it never becomes a Recording step.
@@ -195,10 +200,10 @@ describe("usability run artifacts (#98) and run-signal findings (#96) — served
 
         // --- #134: offline `ux <recording>` on this run's Recording reproduces the live findings ---
         expect(result.evidencePath).toBe(join(outDir, "usability-2026-09-24T00-00-00-000Z.evidence.json"));
-        const sidecars = discoverRecordingSidecars(result.recordingPath);
+        const sidecars = discoverRecordingSidecars(result.recordingPaths[0]!);
         expect(sidecars).toEqual({ evidencePath: result.evidencePath, transcriptPath: result.transcriptPath, screenshotDir: result.screenshotDir });
         const offline = await runUxReview({
-          recording: RecordingSchema.parse(JSON.parse(readFileSync(result.recordingPath, "utf8"))),
+          recording: RecordingSchema.parse(JSON.parse(readFileSync(result.recordingPaths[0]!, "utf8"))),
           appContext: { appClass: "admin" },
           judge: scriptedJudge([]),
           gen: new FakeGenerationGateway(),
@@ -215,10 +220,15 @@ describe("usability run artifacts (#98) and run-signal findings (#96) — served
           [...r.findings, ...r.heuristicAppendix]
             .flatMap((f) => [`${f.tier}|${f.rubricItemId}|${f.route}|${f.severity}`, ...(f.contributing ?? []).map((c) => `contributing|${c.rubricItemId}|${f.rubricItemId}`)])
             .sort();
-        expect(offline.report.evidenceCaveats).toBeUndefined();
+        // No sidecar caveat offline (#134): only the one the live run had too — no product facts (#198).
+        expect(offline.report.evidenceCaveats).toEqual(result.report!.evidenceCaveats);
+        expect(offline.report.evidenceCaveats?.map((c) => c.slice(0, 16))).toEqual(["no product facts"]);
         expect(set(offline.report)).toEqual(set(result.report!));
         expect(set(offline.report).some((k) => k.startsWith("signal|"))).toBe(true);
-        expect(set(offline.report).some((k) => k.startsWith("semantic|") || k.startsWith("contributing|")), JSON.stringify(set(offline.report))).toBe(true);
+        // #198: the rubric no longer sprays findings on its own — no `semantic` finding exists without a
+        // code-verified claim — and offline review accounts for every claim exactly as the live run did.
+        expect(set(offline.report).some((k) => k.startsWith("semantic|")), JSON.stringify(set(offline.report))).toBe(false);
+        expect(offline.report.claims).toEqual(result.report!.claims);
         expect(offline.report.suppressed.byRubricItem).toEqual(result.report!.suppressed.byRubricItem);
         expect(offline.report.coverage).toEqual(result.report!.coverage);
 

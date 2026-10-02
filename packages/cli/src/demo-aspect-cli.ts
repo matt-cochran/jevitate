@@ -52,6 +52,7 @@ import {
   GatewaySelectionError,
   buildExploreGateways,
 } from "./cli-shared.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * #249 — `jevitate demo "<aspect>" --env <name> --success <spec>`: explore → clean path → Journey →
@@ -109,6 +110,7 @@ function replayOptionsFrom(
     after: o.after ?? environment.hooks?.after,
     allowShellHooks: o.allowShellHooks,
     hookTimeoutMs: o.hookTimeoutMs,
+    fixtureIdentity: o.fixtureIdentity,
   };
   const storageState = o.storageState ?? environment.storageState;
   if (storageState !== undefined && !existsSync(storageState)) throw new DemoAspectArgsError(`storage state not found: ${storageState}`);
@@ -148,7 +150,7 @@ function withReplayFlags(cmd: Command): Command {
 
 function outDirFor(flag: string | undefined, id: string, kind: "draft" | "final"): string {
   if (flag !== undefined) return resolvePath(flag);
-  return join(logsDirFor(), `demo-${id}-${kind}-${artifactStamp(new Date().toISOString())}`);
+  return join(logsDirFor(), `demo-${id}-${kind}-${artifactStamp(clock.nowIso())}`);
 }
 
 function stepLines(steps: ReadonlyArray<{ number: number; step: string; objective?: string; expectedResult?: string }>): string {

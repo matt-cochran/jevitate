@@ -114,6 +114,8 @@ above, so it needs no separate exit-code mapping):
 | `not-rendered` | the target page never rendered. When the start page itself answered 5xx, that is an `http-5xx` defect and the run is `defects-found`. |
 | `scope-unreachable` | the start URL did not stay in scope (e.g. it redirected to a login page) |
 | `target-unresponsive` | the app stopped answering mid-run (e.g. its server froze): a navigation got no response — `inconclusive`, `failure.kind: "target-unresponsive"`, `failure.message` in plain words (`the app stopped responding to navigation to /app (timed out before any response)`), never `crashed` and never a stack trace |
+| `identity-changed` | an action switched the signed-in identity (#300, listed in `identityChanges`) and the original identity could not be restored: no fresh session could be opened from the original storage state, or the fresh session was someone else. `inconclusive`, `failure.kind: "identity-changed"`. A defect found before still wins. A switch that was restored doesn't stop the run. |
+| `stalled` | the page's renderer stopped answering (frozen, starved or wedged) and the liveness watchdog closed it so the run could end — `inconclusive`, `failure.kind: "stalled"`, no stack trace; never `crashed`, and never attributed to jevitate (the same ending closes a goal run as `stop: "inconclusive"` and a coverage/feature run as `stalled`) |
 | `hang` | the app under test hung |
 | `crashed` | the engine failed |
 
@@ -205,6 +207,14 @@ Every result carries `hostHealth`: `peakLoadPerCore`, `minFreeMemoryBytes`,
 `steps`/`degradedSteps`, `degraded`, the distinct `starvation` causes (one per kind of signal, not one per reading), and `attribution`.
 `JEVITATE_HOST_STARVATION=off` keeps the sampling and the summary but never attributes a finding to
 the host (`attribution: "off"`) — for a harness that guarantees a quiet host itself.
+
+`hostHealth.resources` (#205) records what resource governance did during the run: the
+machine-wide browser cap and slot, the most severe throttle level and every change, the memory
+ceiling, and the peak browser memory. A run whose browsers went over the memory ceiling ends
+`inconclusive` with `failure.kind: "resource-limit"`, and `failure.message` names the measured
+value and the ceiling. It is never `crashed` and never a finding about the app; adversarial runs
+report `stop: "resource-limit"`. A run refused on a starved host fails with `E_HOST_STARVED`
+(exit 2) before any browser opens. See [operations](./operations.md#shared-machines-resource-governance).
 
 **Why a frontier run is `insufficient-coverage` — and how to reach `clean`.** Its silence counts only
 when it exercised the target's own controls: at least one in-page control (a button, a field, or a link

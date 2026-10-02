@@ -3,7 +3,10 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { monitorFor } from "./page-monitor.js";
 import { evaluateNetworkCheck } from "./success-checks.js";
-import { withSession } from "./testkit.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #73: connect-web/gRPC-web (and plain `fetch`) clients abort their own request once the body is

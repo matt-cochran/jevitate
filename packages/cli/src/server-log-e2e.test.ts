@@ -112,8 +112,10 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
       expect(result.serverLogs.byLevel.warn).toBe(1);
       expect(result.serverLogs.byLevel.error).toBe(1);
       expect(result.serverLogs.oracleOk).toBe(true);
-      expect(result.serverLogDefects).toHaveLength(1);
-      const defect = result.serverLogDefects[0];
+      expect(result).not.toHaveProperty("serverLogDefects"); // removed in 0.3.0
+      const serverLogDefects = result.defects.filter((d) => d.kind === "server-log");
+      expect(serverLogDefects).toHaveLength(1);
+      const defect = serverLogDefects[0];
       expect(defect.kind).toBe("server-log");
       expect(defect.level).toBe("error");
       expect(defect.message).not.toContain(SECRET);
@@ -175,7 +177,7 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
       const parsed = JSON.parse(lines.join(""));
       expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
       const result = parsed.data;
-      expect(result.serverLogDefects ?? []).toHaveLength(0);
+      expect(result.defects.filter((d) => d.kind === "server-log")).toHaveLength(0);
       expect(result.serverLogs.byLevel.warn).toBe(1);
       expect(result.serverLogs.byLevel.error ?? 0).toBe(0);
       expect(result.serverLogs.oracleOk).toBe(true); // the source WAS readable — it just saw no error
@@ -237,7 +239,7 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
       const parsed = JSON.parse(lines.join(""));
       expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
       const result = parsed.data;
-      expect(result.serverLogDefects ?? []).toHaveLength(0);
+      expect(result.defects.filter((d) => d.kind === "server-log")).toHaveLength(0);
       expect(result.serverLogs.oracleOk).toBe(false);
       expect(result.serverLogs.sources[0].linesRead).toBe(0);
       // A run this --log-defect oracle never demonstrably watched is inconclusive, not clean.
@@ -303,7 +305,7 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
       const result = parsed.data;
       expect(result.serverLogs.sources[0].opened).toBe(true);
       expect(result.serverLogs.sources[0].linesRead).toBe(0);
-      expect(result.serverLogDefects ?? []).toHaveLength(0);
+      expect(result.defects.filter((d) => d.kind === "server-log")).toHaveLength(0);
       expect(result.serverLogs.oracleOk).toBe(false);
       expect(result.outcome).toBe("inconclusive");
       expect(result.exitCode).toBe(2);

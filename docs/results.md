@@ -29,7 +29,7 @@ fields the same way:
 | `missionOutcome` | string | The verdict: always one of the canonical [mission outcomes](./outcomes.md) (`clean`, `defects-found`, `hang`, `intermittent`, `inconclusive`, `crashed`), on every strategy — a goal run included. |
 | `goalOutcome` | string | Goal runs only (and on every goal run): the goal's own ending — `succeeded`, `failed`, `exhausted`, `blocked`, or a shared outcome it ended with directly (e.g. `defects-found`, `crashed`). It folds onto `missionOutcome` (`succeeded` → `clean`; `failed`/`exhausted`/`blocked` → `defects-found`; see [outcomes](./outcomes.md)). Additive in schema version 1. |
 | `exitCode` | number | The process exit code for `missionOutcome`. This is the value to compare across strategies. |
-| `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects — and a coverage/exploratory run's frontier defects (`horizontal-overflow`, `judgment-flagged-state`), which are also listed with their repro Recording in `coverage.defects`. Each one has a `fingerprint` (16 hex characters) and a `kind`. Every strategy records an HTTP 5xx from the app's own origins as an `http-5xx` defect with the same fingerprint (endpoint pattern + status), whichever strategy found it; a 5xx from a third-party origin is not the app's defect. A defect the strategy reports without gating on it has `advisory: true`: a usability run's `server-log` or `http-5xx` defect, and every `judgment-flagged-state` (Jev's opinion alone, #214). An advisory defect never sets `missionOutcome`/`exitCode`, and `check` never gates on it (unless the suite sets `gateAdvisory`). |
+| `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects — and a coverage/exploratory run's frontier defects (`horizontal-overflow`, `vertical-clipping`, `judgment-flagged-state`), which are also listed with their repro Recording in `coverage.defects`. Each one has a `fingerprint` (16 hex characters) and a `kind`. Every strategy records an HTTP 5xx from the app's own origins as an `http-5xx` defect with the same fingerprint (endpoint pattern + status), whichever strategy found it; a 5xx from a third-party origin is not the app's defect. A defect the strategy reports without gating on it has `advisory: true`: a usability run's `server-log` or `http-5xx` defect, and every `judgment-flagged-state` (Jev's opinion alone, #214). An advisory defect never sets `missionOutcome`/`exitCode`, and `check` never gates on it (unless the suite sets `gateAdvisory`). |
 | `hangs` | array | Every hang finding, each with its `fingerprint` and reproduction. |
 | `recordingPaths` | string[] | Every Recording the run wrote: one for goal, adversarial and usability runs, one per path for coverage and feature runs. It can be empty when a frontier run found no path. |
 | `transcriptPath` | string | The run's decision transcript. |
@@ -73,26 +73,34 @@ them no meaning across strategies. For example:
 
 - goal runs have `checks`, `answer`, `runOutcome`, `stop` and `finalUrl`;
 - coverage runs have `coverage`, and feature runs have their own `coverage`;
-- adversarial runs have `advisories`, `scope` and `coverage`;
-- usability runs have `report`, `reportPath` and `screenshots`.
+- adversarial runs have `advisories`, `scope` and `coverage` (an advisory is a console error
+  correlated with a 4xx (`status`), or one raised inside a third-party iframe (`thirdPartyFrame`,
+  the frame's origin; `frameUrl`): reported, never a defect);
+- usability runs have `report`, `reportPath` and `screenshots`. Since 0.3.0 the report also
+  carries the claim ledger (`report.claims`), and each finding carries its verified claim
+  (`claim`), its two-question grade (`grade`) and, on a live run, a cropped screenshot with the
+  cited control boxed (`screenshot`, under `usability-<stamp>.findings/`). See
+  [UX findings](./ux-findings.md).
 
 `outcome` is one of these fields. For a goal run it is the goal outcome (the same as `goalOutcome`), and for a frontier run it
 is the stop reason. It is not the portable verdict: use `missionOutcome` or `exitCode` for that.
 
-## Deprecated aliases (0.2.0 only)
+## Removed aliases (0.3.0)
 
-These fields are still written in 0.2.0 and will be removed in the next minor release:
+0.2.0 deprecated these fields; 0.3.0 no longer writes them. `schemaVersion` stays `1`: this is the
+removal announced in 0.2.0, not a new schema. A 0.2.0 result that still carries them still
+validates, and `report`, `ledger` and `verify-fix` still read them from older result files (a
+0.2.0 `usage.usd` is read as `totalUsd`, a `serverLogDefects` entry as a defect, a `recordingPath` as
+the Recording).
 
-| Deprecated | Use instead |
+| Removed | Read instead |
 |---|---|
 | `serverLogDefects` | the entries in `defects` with `kind: "server-log"` |
 | `recordingPath` (goal, adversarial, usability) | `recordingPaths[0]` |
 | `usage.usd` | `usage.totalUsd` |
 | `usage.jevPriceSource` | `usage.priceSource` (also covers generation calls, not just Jev's) |
 
-Before this schema, a goal, coverage, adversarial, feature or usability run listed its `server-log`
-defects only in `serverLogDefects`. Readers that only looked at `defects` missed them.
-`serverLogDefects` (like the `server-log` entries it duplicates in `defects`) is present on EVERY
-strategy's result, but only when that run actually checked server logs (`--log-source`/`logSource`)
-AND found a matching defect — it is absent, not "missing", on a run with no log source configured or
-no match. A result with neither is not evidence that a strategy stopped writing it.
+Before #195, a goal, coverage, adversarial, feature or usability run listed its `server-log`
+defects only in `serverLogDefects`. Since 0.2.0 every one is in `defects` (with `kind:
+"server-log"`) on every strategy, present only when that run checked server logs
+(`--log-source`/`logSource`) and found a matching defect.

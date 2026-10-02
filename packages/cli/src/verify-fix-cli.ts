@@ -24,6 +24,9 @@ import {
   withEmulationFlags,
   emulationFromFlags,
   emitCommandResult,
+  collectParam,
+  environmentSeams,
+  resolveDbPath,
 } from "./cli-shared.js";
 
 /** Registers `jevitate verify-fix`. */
@@ -74,6 +77,14 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--param <kv>",
+      "#293: a Journey param as key=value (repeatable) for a finding found from a Journey branch point — its replays go through the same prefix; " +
+        "a secret param (never persisted with the result) must be given again; redacted like --secret",
+      collectParam,
+      {} as Record<string, string>,
+    )
+    .option("--action-deltas", "opt-in (#303): record what each replayed step changed and compare the defect step's delta with the one the Recording stored — a mismatch is evidence on each attempt (never the verdict)")
     .option("--json", "emit the JSON envelope (default: a human summary)")
     .action(async function (this: Command, positional?: string) {
       const o = this.opts<
@@ -87,7 +98,9 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           invariants: string[];
           allowLogCmd?: boolean;
           hangReplayWrites?: boolean;
+          actionDeltas?: boolean;
           secret: string[];
+          param: Record<string, string>;
           json?: boolean;
         } & BrowserLaunchFlags &
           DemoFlags &
@@ -144,10 +157,12 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           ...(o.allowLogCmd === undefined ? {} : { allowLogCmd: o.allowLogCmd }),
           ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
           fixtureFlags: o,
-          secrets: o.secret,
+          secrets: [...o.secret, ...Object.values(o.param).filter((v) => v !== "")],
+          journeyPrefix: { params: o.param, dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) },
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(screenshots === undefined ? {} : { screenshots }),
+          ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
           ...(verifyFixEmulation === undefined ? {} : { emulation: verifyFixEmulation }),
           ...(o.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: o.allowEmulationOverride }),
         });

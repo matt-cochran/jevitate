@@ -5,11 +5,16 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
-  "scripts": { "build": "tsc --build" },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc --build"
+  },
   "dependencies": {
-    "@jevitate/recording": "workspace:*",
+    "@jevitate/domain": "workspace:*",
     "@jevitate/interpreter": "workspace:*",
+    "@jevitate/recording": "workspace:*",
     "@jevitate/screenplay": "workspace:*"
   },
   "devDependencies": {

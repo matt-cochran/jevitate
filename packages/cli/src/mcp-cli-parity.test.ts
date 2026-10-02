@@ -47,10 +47,12 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "ai setup": "interactive secret entry (a hidden-echo stdin prompt for an API key): a key never passes through a model or an MCP argument",
   record: "a HUMAN-driven recording: a person clicks through the app in a headed browser while it records — there is nobody to click over MCP (author_journey is the agent's way to author a Journey)",
   "source trust": "trusting a third-party Journey (bound to its content hash) is a person's decision, like approve_action: MCP can add, pull and run a source, never vouch for it",
+  doctor:
+    "#205: host maintenance for the operator (it signals processes on this machine and clears machine-wide browser slots); the same orphan sweep already runs automatically before every browser-driving MCP tool, and each result reports governance in hostHealth.resources",
 };
 
 type Kind = CliParam["kind"];
-const REPEATABLE: ReadonlySet<Kind> = new Set<Kind>(["string[]", "path[]", "named-sessions", "params"]);
+const REPEATABLE: ReadonlySet<Kind> = new Set<Kind>(["string[]", "path[]", "named-sessions", "bound-paths", "params"]);
 const OPTIONAL_VALUE: ReadonlySet<Kind> = new Set<Kind>(["optional-path", "optional-session", "screenshots"]);
 
 const program = buildProgram({ profiles: new ProfileManager("/unused-in-parity") });
@@ -195,11 +197,17 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       viewport: "--viewport",
       device: "--device",
       fixtures: "--fixtures",
+      fixtureIdentity: "--fixture-identity",
       selfHeal: "--self-heal",
       real: "--real",
       fakeAi: "--fake-ai",
+      extension: "--extension",
+      maxBrowsers: "--max-browsers",
+      maxBrowserMemory: "--max-browser-memory",
+      actionDeltas: "--action-deltas",
     },
     omitted: {
+      "--ignore-host-load": OMIT.hostLoad,
       "--dir": OMIT.storeDir,
       "--json": OMIT.json,
       "--before": OMIT.hooks,
@@ -227,10 +235,17 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       allowEmulationOverride: "--allow-emulation-override",
       invariants: "--invariants",
       fixtures: "--fixtures",
+      fixtureIdentity: "--fixture-identity",
+      extension: "--extension",
+      maxBrowsers: "--max-browsers",
+      maxBrowserMemory: "--max-browser-memory",
+      actionDeltas: "--action-deltas",
     },
     omitted: {
+      "--ignore-host-load": OMIT.hostLoad,
       "--fingerprint": "the positional's alias: MCP takes one 'fingerprint'",
       "--regressions-dir": "MCP names the finding by its result id (never a path); the ledger fallback is the ledger tool's `verify` action",
+      "--param": OMIT.branchParams,
       "--allow-log-cmd": OMIT.logCmd,
       "--hang-replay-writes": OMIT.hangWrites,
       "--secret": OMIT.envSecret,
@@ -277,5 +292,17 @@ describe("#255: the extended hand-written tools cover their command's flags", ()
     const uncovered = cmd.options.map((o) => o.long ?? "").filter((f) => !covered.has(f) && spec.omitted[f] === undefined);
     expect(uncovered, `${tool}: flags of ${spec.path} with no MCP decision`).toEqual([]);
     for (const f of Object.keys(spec.omitted)) expect(cmd.options.some((o) => o.long === f), `${tool}: omitted ${f} is stale`).toBe(true);
+  });
+});
+
+describe("#281: run_exploration's typeFixture confines each bound file like every MCP path", () => {
+  it("passes '<descriptor>=<confined path>' and refuses a file outside the roots", async () => {
+    const { buildCliArgv } = await import("./mcp-cli-tools.js");
+    const spec = CLI_TOOL_SPECS.find((t) => t.name === "run_exploration")!;
+    const root = process.cwd();
+    const argv = buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["label=Paste your text=fixtures/import.txt"] }, [root]);
+    expect(argv).toContain(`--type-fixture=label=Paste your text=${root}/fixtures/import.txt`);
+    expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["label=Body=/etc/passwd"] }, [root])).toThrow(/typeFixture\[0\]/);
+    expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["no-file"] }, [root])).toThrow(/descriptor>=<file path>/);
   });
 });

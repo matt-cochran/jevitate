@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import { positiveIntArg } from "./cli-args.js";
 import type { MissionFailure } from "@jevitate/domain";
@@ -9,6 +11,7 @@ import {
   SETUP_REF,
   UnboundSetupRefError,
   hookHash,
+  identityNames,
   loadFixtureFile,
   parseFixtureSpec,
   referencedNames,
@@ -31,6 +34,8 @@ export interface FixtureFlags {
   readonly after?: string;
   readonly allowShellHooks?: boolean;
   readonly hookTimeoutMs?: string;
+  /** #243: `--fixture-identity <name>=<storageState>` (repeatable) — who a step with `auth.identity` authenticates as. */
+  readonly fixtureIdentity?: readonly string[];
 }
 
 /** Adds `--fixtures`, `--before`, `--after`, `--allow-shell-hooks` and `--hook-timeout-ms`. */
@@ -44,7 +49,13 @@ export function withFixtureFlags(cmd: Command): Command {
     .option("--before <cmd>", "operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}")
     .option("--after <cmd>", "operator shell hook run after the mission and every replay (needs --allow-shell-hooks)")
     .option("--allow-shell-hooks", "opt in to running --before/--after (operator commands; never model-chosen)", false)
-    .option("--hook-timeout-ms <ms>", "timeout for each --before/--after hook (default 60000; the process group is killed)", positiveIntArg);
+    .option("--hook-timeout-ms <ms>", "timeout for each --before/--after hook (default 60000; the process group is killed)", positiveIntArg)
+    .option(
+      "--fixture-identity <name=storageState>",
+      "#243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable)",
+      (v: string, prev: string[]) => [...prev, v],
+      [] as string[],
+    );
 }
 
 export interface FixtureContext {
@@ -57,6 +68,43 @@ export interface FixtureContext {
   readonly targetFixtures?: string;
   /** A spec already validated elsewhere (a persisted mission result), used when no file is given. */
   readonly spec?: FixtureSpec;
+  /**
+   * #243: the origin's targets.json personas — `personas.<name>.storageState` binds fixture identity
+   * `<name>` when no `--fixture-identity` names it.
+   */
+  readonly personas?: Readonly<Record<string, { readonly storageState?: string }>>;
+  /** #243: identities a persisted mission result recorded (name → storageState path), for replays. */
+  readonly identities?: Readonly<Record<string, string>>;
+}
+
+const IDENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
+/**
+ * #243: every fixture identity the run can authenticate a step as → its storageState PATH. Lowest to
+ * highest precedence: the origin's targets.json personas, the identities a persisted result recorded,
+ * then `--fixture-identity`. Only paths are kept (the file is read per request, never logged); a
+ * missing file is refused here, before any browser or request.
+ */
+export function resolveFixtureIdentities(flags: FixtureFlags, ctx: Pick<FixtureContext, "personas" | "identities">, cwd: string = process.cwd()): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, p] of Object.entries(ctx.personas ?? {})) if (p.storageState !== undefined) out[name] = p.storageState;
+  for (const [name, path] of Object.entries(ctx.identities ?? {})) out[name] = path;
+  const seen = new Set<string>();
+  for (const spec of flags.fixtureIdentity ?? []) {
+    const eq = spec.indexOf("=");
+    if (eq <= 0) throw new FixtureSpecError(`--fixture-identity must be <name>=<storageState>, got ${JSON.stringify(spec)}`);
+    const name = spec.slice(0, eq);
+    const file = spec.slice(eq + 1).trim();
+    if (!IDENTITY_NAME.test(name)) throw new FixtureSpecError(`--fixture-identity name ${JSON.stringify(name)} must be 1-64 of [A-Za-z0-9_.-], starting alphanumeric`);
+    if (seen.has(name)) throw new FixtureSpecError(`--fixture-identity ${name} is given twice`);
+    seen.add(name);
+    if (file === "") throw new FixtureSpecError(`--fixture-identity ${name}: storage state path is empty`);
+    out[name] = isAbsolute(file) ? file : resolvePath(cwd, file);
+  }
+  for (const [name, path] of Object.entries(out)) {
+    if (!existsSync(path)) throw new FixtureSpecError(`fixture identity ${name}: storage state not found: ${path}`);
+  }
+  return out;
 }
 
 function hooksOf(flags: FixtureFlags): ShellHooks | undefined {
@@ -78,14 +126,29 @@ export function buildMissionFixtures(flags: FixtureFlags, ctx: FixtureContext): 
   const file = flags.fixtures ?? ctx.targetFixtures;
   const bounds = { allowlist: ctx.allowlist, baseUrl: ctx.baseUrl };
   const spec = file !== undefined ? loadFixtureFile(file, bounds, { openRefs: hooks?.before !== undefined }) : ctx.spec;
-  if (spec === undefined && hooks === undefined) return undefined;
+  const flagged = (flags.fixtureIdentity ?? []).map((x) => x.slice(0, Math.max(0, x.indexOf("="))));
+  if (spec === undefined && hooks === undefined) {
+    if (flagged.length > 0) throw new FixtureSpecError("--fixture-identity names who a fixture step authenticates as: it needs --fixtures");
+    return undefined;
+  }
   const secretFields = Object.fromEntries((ctx.secretFields ?? []).filter((f) => f.kind === "value").map((f) => [f.name, f.secret]));
+  // A named identity no step uses is a typo, not a no-op.
+  const usedNames = identityNames(spec);
+  for (const name of flagged) {
+    if (name !== "" && !usedNames.includes(name)) throw new FixtureSpecError(`--fixture-identity ${name}: no fixture step authenticates as ${name} (auth.identity)`);
+  }
+  // Only the identities the spec uses are checked for a file (an unused persona never blocks a run).
+  const used = new Set(identityNames(spec));
+  const bound = resolveFixtureIdentities(flags, {
+    ...(ctx.personas === undefined ? {} : { personas: Object.fromEntries(Object.entries(ctx.personas).filter(([n]) => used.has(n))) }),
+    ...(ctx.identities === undefined ? {} : { identities: Object.fromEntries(Object.entries(ctx.identities).filter(([n]) => used.has(n))) }),
+  });
   return new MissionFixtures({
     ...bounds,
     ...(spec === undefined ? {} : { spec }),
     ...(hooks === undefined ? {} : { hooks }),
     allowShellHooks: flags.allowShellHooks === true,
-    auth: { ...(ctx.storageState === undefined ? {} : { storageStatePath: ctx.storageState }), secretFields },
+    auth: { ...(ctx.storageState === undefined ? {} : { storageStatePath: ctx.storageState }), secretFields, identities: bound },
     ...(ctx.secrets === undefined ? {} : { secrets: ctx.secrets }),
   });
 }
@@ -111,16 +174,69 @@ export function checkSetupRefs(texts: Readonly<Record<string, string | readonly 
   }
 }
 
+/** The origin `url` keeps whatever its `${setup.*}` references hold, or null when a value could move it. */
+function fixedOrigin(url: string): string | null {
+  const originWith = (fill: string): string | null => {
+    try {
+      return new URL(url.replace(SETUP_REF, fill)).origin;
+    } catch {
+      return null;
+    }
+  };
+  // A reference after a `/` (or in the query) fills the path: any value keeps the origin.
+  const a = originWith("0");
+  if (a !== null && a === originWith("x.evil.test")) return a;
+  // #243: a reference right after the origin (`http://host${setup.link}`) is a root-relative path —
+  // allowed, and its VALUE must start with `/` (checked once bound, by substituteUrlSetupRefs).
+  const b = originWith("/0");
+  if (b !== null && b === originWith("/x.evil.test")) return b;
+  return null;
+}
+
+/**
+ * `url` with each `${setup.*}` replaced by a placeholder that keeps its origin — what the run's
+ * origin, allowlist and target config are read from before setup binds the real values.
+ */
+export function setupRefFreeUrl(url: string): string {
+  if (!url.includes("${setup.")) return url;
+  const pathFill = ((): boolean => {
+    try {
+      return new URL(url.replace(SETUP_REF, "0")).origin === new URL(url.replace(SETUP_REF, "x.evil.test")).origin;
+    } catch {
+      return false;
+    }
+  })();
+  return url.replace(SETUP_REF, pathFill || fixedOrigin(url) === null ? "0" : "/0");
+}
+
 /** Throws unless a `${setup.*}` reference in `url` leaves its origin fixed (the allowlist is decided before setup runs). */
 export function checkUrlRefOrigin(url: string): void {
   if (!url.includes("${setup.")) return;
-  try {
-    if (new URL(url.replace(SETUP_REF, "0")).origin !== new URL(url.replace(SETUP_REF, "x.evil.test")).origin) throw new Error("origin");
-  } catch {
+  if (fixedOrigin(url) === null) {
     throw new UnboundSetupRefError(
-      "--url: a ${setup.*} reference may fill the path or query, never the origin — put it after a `/` (e.g. `http://host:8093/${setup.path}` with a path value that has no leading `/`, or `http://host:8093/projects/${setup.id}`)",
+      "--url: a ${setup.*} reference may fill the path or query, never the origin — put it after a `/` (`http://host:8093/projects/${setup.id}`), or right after the origin for a root-relative path value (`http://host:8093${setup.link}` with a value like `/invite/abc`)",
     );
   }
+}
+
+/**
+ * `--url` with its `${setup.*}` references bound — and the bound URL still on the origin
+ * {@link checkUrlRefOrigin} fixed: a value placed right after the origin must be a root-relative path
+ * (`/…`), never `@evil.test`, `:8080` or `.evil.test`.
+ */
+export function substituteUrlSetupRefs(url: string, b: FixtureBindings): string {
+  const out = substituteSetupRefs(url, b, { where: "--url" });
+  if (!url.includes("${setup.")) return out;
+  let origin: string | null = null;
+  try {
+    origin = new URL(out).origin;
+  } catch {
+    // refused below
+  }
+  if (origin === null || origin !== fixedOrigin(url)) {
+    throw new UnboundSetupRefError("--url: a bound ${setup.*} value moved the URL off its origin — a value right after the origin must be a root-relative path starting with `/`");
+  }
+  return out;
 }
 
 /** Every string inside an invariants spec (#187), with the JSON path it sits at. */
@@ -226,6 +342,10 @@ export function regressionFixtures(
         ? { storageState: target.storageStatePath }
         : {}),
     ...(spec === undefined ? {} : { spec }),
+    // #243: re-mint as the identities the mission's steps used (a --fixture-identity re-binds one).
+    ...(isObject(saved?.identities)
+      ? { identities: Object.fromEntries(Object.entries(saved.identities).filter((e): e is [string, string] => typeof e[1] === "string")) }
+      : {}),
   });
   if (fx === undefined && recording.fixture !== undefined) {
     throw new FixtureSpecError(

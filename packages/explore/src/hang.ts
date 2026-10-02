@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { redactUrl } from "@jevitate/ai-core";
-import { contentHash } from "@jevitate/domain";
+import { contentHash, clock } from "@jevitate/domain";
 import { messageClass, normalizeRoute } from "./adversarial/defect-fingerprint.js";
 import { endpointOf } from "./timing.js";
 import type { InflightRequest, SettleResult } from "./page-monitor.js";
@@ -109,7 +109,7 @@ export function classifyHang(e: HangEvidence): HangKind | null {
 export async function probeResponsive(page: Page, boundMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<false>((resolve) => {
-    timer = setTimeout(() => resolve(false), Math.max(1, boundMs));
+    timer = clock.setTimeout(() => resolve(false), Math.max(1, boundMs));
   });
   // An evaluate that REJECTS on a live page (the execution context was replaced by a navigation in
   // progress) means the renderer answered: not unresponsive. Only a gone page's error is rethrown.
@@ -121,7 +121,7 @@ export async function probeResponsive(page: Page, boundMs: number): Promise<bool
   try {
     return await Promise.race([probe, bound]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
   }
 }
 

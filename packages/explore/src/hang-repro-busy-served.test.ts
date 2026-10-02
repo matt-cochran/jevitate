@@ -8,6 +8,10 @@ import { busyIndicatorOf, replayAndDetectHang, type ReproduceHangParams } from "
 import type { HangSignal } from "./hang.js";
 import { perceive } from "./perceive.js";
 import { verifyFix, type VerifySession } from "./verify-fix.js";
+import { useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #108 — a busy-indicator `ui-no-progress` hang: the original evidence was a specific spinner/

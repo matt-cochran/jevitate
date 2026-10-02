@@ -64,6 +64,9 @@ export const SUITE_EXPLORE_OPTIONS = {
   show: { shape: "string", appliesTo: ["usability"] },
   minConfidence: { shape: "ratio", appliesTo: ["usability"] },
   maxFindingsPerPage: { shape: "integer", appliesTo: ["usability"], range: [1, 1000] },
+  product: { shape: "path", appliesTo: ["usability"] },
+  polish: { shape: "boolean", appliesTo: ["usability"] },
+  probeGuards: { shape: "boolean", appliesTo: ["usability"] },
   // containment
   scope: { shape: "string", appliesTo: ["coverage", "exploratory"], oneOf: ["app"] },
   // secrets and sessions
@@ -102,6 +105,9 @@ export const SUITE_EXPLORE_OPTIONS = {
   logDefect: { shape: "strings", appliesTo: ALL_KINDS },
   logQuietOk: { shape: "strings", appliesTo: ALL_KINDS },
   logIgnore: { shape: "strings", appliesTo: ALL_KINDS },
+  logScope: { shape: "strings", appliesTo: ALL_KINDS },
+  logCorrelationHeader: { shape: "strings", appliesTo: ALL_KINDS },
+  logIdPattern: { shape: "strings", appliesTo: ALL_KINDS },
   serverLogDrainMs: { shape: "integer", appliesTo: ALL_KINDS },
   // horizontal overflow (#149)
   checkOverflow: { shape: "boolean", appliesTo: OVERFLOW },
@@ -111,8 +117,12 @@ export const SUITE_EXPLORE_OPTIONS = {
   after: { shape: "string", appliesTo: ["goal"] },
   allowShellHooks: { shape: "boolean", appliesTo: ["goal"] },
   hookTimeoutMs: { shape: "integer", appliesTo: ["goal"] },
+  // #243: named identities a fixture step authenticates as (`auth.identity`), not the item's own session
+  fixtureIdentity: { shape: "named-paths", appliesTo: ["goal"] },
   // #202: a success check satisfied before the run's first action is a warning, not a failure
   allowVacuousChecks: { shape: "boolean", appliesTo: GOAL_UX },
+  // #303: opt-in action deltas (every explore item kind but feature)
+  actionDeltas: { shape: "boolean", appliesTo: ["goal", "usability", "coverage", "exploratory", "adversarial"] },
   // #245 demo mode: opt-in per item (a check stays headless by default, CI included)
   headed: { shape: "boolean", appliesTo: ALL_KINDS },
   slowMo: { shape: "count", appliesTo: ALL_KINDS },
@@ -172,12 +182,23 @@ export const SUITE_DEDICATED_EXPLORE_OPTIONS: Readonly<Record<string, DedicatedO
   maxDecisions: { key: "maxDecisions", at: ["goal", "mission"] },
   viewport: { key: "viewport", at: ["target", "journey", "goal", "mission"] },
   device: { key: "device", at: ["target", "journey", "goal", "mission"] },
+  // #293 journey-anchored missions: the promoted Journey and step a mission item branches off.
+  fromJourney: { key: "fromJourney", at: ["mission"] },
+  atStep: { key: "atStep", at: ["mission"] },
+  param: { key: "params", at: ["journey", "mission"] },
+  env: { key: "env", at: ["journey", "mission"] },
+  baseUrl: { key: "baseUrl", at: ["journey", "mission"] },
+  journeysDir: { key: "journeysDir", at: ["target"] },
 };
 
 export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = {
   browserExecutable: "a check launches every item's browser the same way: pass --browser-executable to `jevitate check`",
   browserChannel: "a check launches every item's browser the same way: pass --browser-channel to `jevitate check`",
   browserArg: "a check launches every item's browser the same way: pass --browser-arg to `jevitate check`",
+  extension: "#256: a check launches every item's browser the same way: pass --extension to `jevitate check` (a suite item with its own `allow` lists the chrome-extension://<id> origin itself)",
+  maxBrowsers: "#205: resource governance is per check, not per item: pass --max-browsers to `jevitate check`",
+  maxBrowserMemory: "#205: resource governance is per check, not per item: pass --max-browser-memory to `jevitate check`",
+  ignoreHostLoad: "#205: whether a check starts on a starved host is decided once, for the whole check: pass --ignore-host-load to `jevitate check`",
   real: "one model gateway per check: the suite's `ai` or `jevitate check --real`",
   fakeAi: "one model gateway per check: the suite's `ai` or `jevitate check --fake-ai`",
   out: "one output directory per check (`jevitate check --out`); item results go to <out>/results",
@@ -187,6 +208,7 @@ export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = 
   jevitateRepo: "a check is a CI gate: findings are reported in JUnit/SARIF/report.md, never filed mid-run",
   repeat: "a check gates each item once by finding identity; track flakes across checks with --baseline",
   minAgreement: "a check gates each item once by finding identity; track flakes across checks with --baseline",
+  typeFixture: "#281: a file typed verbatim into a field is an `explore --type-fixture` binding; a suite goal declares none",
 };
 
 /** Suite key of a generic option (the explore attribute name itself). */

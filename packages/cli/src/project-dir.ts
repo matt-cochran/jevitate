@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir as osHomedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { clock } from "@jevitate/domain";
 
 /**
  * Where jevitate keeps things (0.2.0 layout):
@@ -61,8 +62,8 @@ export function logsRoot(deps: LayoutDeps = {}): string {
 }
 
 /** Where a run started at `iso` writes its output: `logs/<UTC date>`. */
-export function logsDirFor(iso: string = new Date().toISOString(), deps: LayoutDeps = {}): string {
-  return join(logsRoot(deps), logDateOf(iso) ?? new Date().toISOString().slice(0, 10));
+export function logsDirFor(iso: string = clock.nowIso(), deps: LayoutDeps = {}): string {
+  return join(logsRoot(deps), logDateOf(iso) ?? clock.nowIso().slice(0, 10));
 }
 
 /** The 0.1.0 locations results were written to — still read, never written. */

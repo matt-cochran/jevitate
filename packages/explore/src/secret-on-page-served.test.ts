@@ -14,7 +14,10 @@ import { WITHHELD_ANSWER_NOTE } from "./answer.js";
 import { readPageText } from "./conversation.js";
 import { perceive } from "./perceive.js";
 import { runAdversarialMission } from "./missions/adversarial.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #219 — a registered secret the page merely DISPLAYS (a profile page showing the signed-in email, in

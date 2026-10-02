@@ -2,10 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { logsDirFor } from "./project-dir.js";
 import { join } from "node:path";
 import { assertAuthorizedExploreTarget, normalizeAllowlist } from "@jevitate/explore";
-import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type UnpackedExtension } from "@jevitate/playwright";
+import { extensionsStamp } from "./browser-run-options.js";
 import type { Recording } from "@jevitate/recording";
 import { Recorder } from "@jevitate/recorder";
 import { resolveDataDir } from "./data-dir.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The programmatic surface behind `jevitate record` — opens a real browser on
@@ -54,6 +56,8 @@ export interface RunRecordingOptions {
   readonly waitForStop?: () => Promise<void>;
   /** Run headless? Default `false` — a record session is a live demonstration. */
   readonly headless?: boolean;
+  /** #256: unpacked extensions to load (`--extension`); recorded on the Recording. */
+  readonly extensions?: readonly UnpackedExtension[];
   /** ISO clock for the recording filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
 }
@@ -78,6 +82,7 @@ export async function runRecording(opts: RunRecordingOptions): Promise<RunRecord
     headless: opts.headless ?? false,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
+    ...(opts.extensions === undefined || opts.extensions.length === 0 ? {} : { extensions: opts.extensions }),
   });
 
   try {
@@ -93,12 +98,12 @@ export async function runRecording(opts: RunRecordingOptions): Promise<RunRecord
     // The demonstration: the user drives the browser until they signal done.
     await (opts.waitForStop ?? waitForEnterKey)();
 
-    const recording = await recorder.stop(opts.retro);
+    const recording = { ...(await recorder.stop(opts.retro)), ...extensionsStamp({ ...(opts.extensions === undefined ? {} : { extensions: opts.extensions }) }) };
     const finalUrl = session.page.url();
 
     const outDir = opts.outDir ?? logsDirFor();
     await mkdir(outDir, { recursive: true });
-    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+    const iso = (opts.nowIso ?? (() => clock.nowIso()))();
     const recordingPath = join(outDir, `record-${iso.replace(/[:.]/g, "-")}.json`);
     await writeFile(recordingPath, `${JSON.stringify(recording, null, 2)}\n`, "utf8");
 

@@ -14,7 +14,7 @@ import { ACTION_OPS, ACTOR_NAME_RE, INVARIANT_HTTP_METHODS } from "./shared.js";
  * re-exported by the `invariants.ts` barrel.
  */
 
-export const RESERVED = new Set(["before", "after", "delta", "contains", "null", "true", "false"]);
+export const RESERVED = new Set(["before", "after", "delta", "contains", "sameList", "null", "true", "false"]);
 /** `${capture.<name>}` in a probe path or a `deniedAs.open` (#147). */
 export const CAPTURE_REF_RE = /\$\{capture\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
 /** A `when.after` naming a capture (#147). */
@@ -85,10 +85,16 @@ export const NetworkObservableSchema = z
   .object({
     url: z.string().min(1),
     method: httpMethodField(),
-    json: JsonPathStringSchema,
+    json: JsonPathStringSchema.optional(),
+    request: JsonPathStringSchema.optional(),
     optional: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((n, ctx) => {
+    if ((n.json === undefined) === (n.request === undefined)) {
+      ctx.addIssue({ code: "custom", message: "a network observable reads exactly one of json (the response body) or request (the request body)", path: ["json"] });
+    }
+  });
 
 const ProbeAuthFromSchema = z
   .object({

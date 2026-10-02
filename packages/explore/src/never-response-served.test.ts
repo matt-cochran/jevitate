@@ -10,7 +10,10 @@ import { runFeatureMission } from "./missions/feature.js";
 import { runInductionMission } from "./missions/induction.js";
 import { runAdversarialMission } from "./missions/adversarial.js";
 import { FakeJudgmentGateway } from "@jevitate/ai-core";
-import { ScriptedJudge } from "./testkit.js";
+import { ScriptedJudge, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #195 part 3 — `never: { response: { url, status } }` on the mission's OWN captured traffic: a role

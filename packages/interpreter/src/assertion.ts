@@ -3,6 +3,7 @@ import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, CountOf, IsVisible, TextOf, ValueOf } from "@jevitate/screenplay";
 import { descriptorToTarget } from "./descriptor.js";
 import { evaluateVisual, isVisualAssertion } from "./visual-state.js";
+import { clock } from "@jevitate/domain";
 
 /** Default bound for the bounded polling loop, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -43,10 +44,10 @@ export async function pollUntil(
 ): Promise<boolean> {
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollMs = opts?.pollMs ?? DEFAULT_POLL_MS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = clock.now() + timeoutMs;
   for (;;) {
     if (await sample()) return true;
-    if (Date.now() >= deadline) return false;
+    if (clock.now() >= deadline) return false;
     await sleep(pollMs);
   }
 }
@@ -138,7 +139,7 @@ export async function readAssertionEvidence(actor: Actor, a: Assertion): Promise
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return clock.sleep(ms);
 }
 
 /**

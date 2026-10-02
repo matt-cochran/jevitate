@@ -6,7 +6,10 @@ import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runAdversarialMission, type AdversarialOutcome } from "./adversarial.js";
 import { verifyFix, type VerifySession } from "../verify-fix.js";
-import { withSession } from "../testkit.js";
+import { withSession, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * Owner ruling 2 — keep hunting after a defect; every finding can be replayed. A served app with

@@ -97,15 +97,28 @@ describe("planMisuseEpisode — form-aware strategies", () => {
   });
 
   it("boundary-submit cycles boundary values per round and submits", () => {
-    const values = [0, 1, 2, 3, 4].map(
+    const values = [0, 1, 2, 3, 4, 5, 6, 7].map(
       (round) => planMisuseEpisode(ctx(PROFILE(), { strategy: "boundary-submit", round }))?.steps[0]?.fillText,
     );
     expect(values[0]).toBe("");
-    expect(values[1]).toBe("x");
-    expect(values[2]).toHaveLength(2000);
-    expect(new Set(values).size).toBe(5);
+    // #301: the inert markup canary comes early, then the attribute-break canary and an oversize value.
+    expect(values[1]).toMatch(/^<i data-jev-canary="[a-z0-9]+">jev[a-z0-9]+<\/i>$/);
+    expect(values[2]).toBe("x");
+    expect(values[3]).toHaveLength(2000);
+    expect(values[4]).toMatch(/^jev[a-z0-9]+" data-jev-canary="[a-z0-9]+$/);
+    expect(values[7]?.length).toBeGreaterThanOrEqual(100_000);
+    expect(new Set(values).size).toBe(8);
     const ep = planMisuseEpisode(ctx(PROFILE(), { strategy: "boundary-submit" }));
     expect(ep?.steps.at(-1)?.control?.name).toBe("Save");
+  });
+
+  it("#301: boundary-submit's canaries carry a fresh token from the run's canary source", () => {
+    let n = 0;
+    const canary = (): string => `run${n++}`;
+    const a = planMisuseEpisode(ctx(PROFILE(), { strategy: "boundary-submit", round: 1, canary }))?.steps[0]?.fillText;
+    const b = planMisuseEpisode(ctx(PROFILE(), { strategy: "boundary-submit", round: 1, canary }))?.steps[0]?.fillText;
+    expect(a).toBe('<i data-jev-canary="run0">jevrun0</i>');
+    expect(b).toBe('<i data-jev-canary="run1">jevrun1</i>');
   });
 
   it("edit-cancel-save edits, cancels, then saves (and finds nothing without a Cancel)", () => {

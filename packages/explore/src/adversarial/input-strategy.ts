@@ -7,7 +7,35 @@ import type { Control } from "../index.js";
  * role/name — never a generative guess, never real PII, never a real recipient.
  */
 
-export type InputStrategy = "empty" | "boundary" | "long" | "unicode" | "invalid" | "normal";
+export type InputStrategy = "empty" | "boundary" | "long" | "unicode" | "invalid" | "normal" | "markup" | "attribute" | "oversize";
+
+/**
+ * #301 — INERT canary payloads (owner-safe, non-executing). Each carries a per-submission token the
+ * mission registers; nothing here is a script, an event handler or a `javascript:` URL — nothing that
+ * could execute in the app or its users' browsers. Detection is DOM inspection only
+ * (`markup-canary.ts`): an element carrying `data-jev-canary="<token>"` after submit or reload means
+ * the input was rendered as markup (unescaped); rendered as text, it is fine.
+ *
+ *  - `markup`    — an HTML-injection canary: `<i data-jev-canary="T">jevT</i>`;
+ *  - `attribute` — an attribute-break canary: `jevT" data-jev-canary="T` (breaks out of a quoted
+ *                  attribute value written without escaping);
+ *  - `oversize`  — a value far past any sane field limit (`OVERSIZE_CHARS`).
+ */
+export const CANARY_ATTRIBUTE = "data-jev-canary";
+/** `oversize`: ~100 KB of text — far past field limits, small enough to never stall the browser. */
+export const OVERSIZE_CHARS = 100_000;
+/** Placeholder token when the caller registers none (pure planning): still inert, never matched by a run. */
+const NO_CANARY = "0";
+
+/** An HTML-injection canary for `token`. */
+export function markupCanary(token: string): string {
+  return `<i ${CANARY_ATTRIBUTE}="${token}">jev${token}</i>`;
+}
+
+/** An attribute-break canary for `token`. */
+export function attributeCanary(token: string): string {
+  return `jev${token}" ${CANARY_ATTRIBUTE}="${token}`;
+}
 
 function isEmailLike(control: Control): boolean {
   return control.inputType === "email" || /e-?mail/i.test(control.name ?? "");
@@ -53,13 +81,17 @@ function numericValueFor(strategy: InputStrategy, control: Control): string {
     case "boundary":
       return String(min !== undefined ? min - gran : -1);
     case "long":
+    case "oversize":
       return String(max !== undefined ? max + gran : 1_000_000_000);
     case "unicode":
       // A field-typed value stands in for "unicode": text is never accepted here, so a decimal
       // (never valid unless the field allows fractional steps) covers the same "surprising input"
       // intent without repeating the fill error a real unicode string would cause.
       return String((min ?? 0) + gran / 2);
-    case "invalid": {
+    case "invalid":
+    case "markup":
+    case "attribute": {
+      // A number field takes no text: a canary could never be typed, so it gets the invalid value.
       const zeroInRange = (min === undefined || 0 >= min) && (max === undefined || 0 <= max);
       return zeroInRange ? "-1" : "0";
     }
@@ -129,18 +161,24 @@ function dateValueFor(strategy: InputStrategy, control: Control): string {
     case "boundary":
       return min !== undefined ? shiftDate(min, -1) : "1900-01-01";
     case "long":
+    case "oversize":
       return max !== undefined ? shiftDate(max, 1) : "9999-12-31";
     case "unicode":
       return "0001-01-01";
     case "invalid":
+    case "markup":
+    case "attribute":
       return max !== undefined ? shiftDate(max, 1) : min !== undefined ? shiftDate(min, -1) : "9999-12-31";
     case "normal":
       return "2024-06-15";
   }
 }
 
-/** Field-semantics value selection — NEVER blind fuzz (spec §3.1). */
-export function valueFor(strategy: InputStrategy, control: Control): string {
+/**
+ * Field-semantics value selection — NEVER blind fuzz (spec §3.1). `canary` is the token a `markup` /
+ * `attribute` value carries (#301), registered by the mission so a rendered canary names its field.
+ */
+export function valueFor(strategy: InputStrategy, control: Control, canary: string = NO_CANARY): string {
   if (strategy === "empty") return "";
   if (isNumericInput(control)) return numericValueFor(strategy, control);
   if (isDateLike(control)) return dateValueFor(strategy, control);
@@ -153,7 +191,14 @@ export function valueFor(strategy: InputStrategy, control: Control): string {
     case "long":
       return "x".repeat(2000);
     case "unicode":
-      return "مرحبا 😀 тест";
+      // RTL text, an emoji, Cyrillic, an RTL override (U+202E … U+202C) and zero-width characters.
+      return "مرحبا 😀 тест \u202Ejev\u202C\u200B\u200D";
+    case "markup":
+      return markupCanary(canary);
+    case "attribute":
+      return attributeCanary(canary);
+    case "oversize":
+      return "x".repeat(OVERSIZE_CHARS);
     case "invalid":
       return isNumericLike(name) ? "-1" : "\u0000invalid\u0000";
     case "normal":

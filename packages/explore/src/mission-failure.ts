@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 import { request as playwrightRequest } from "playwright";
 import type { GenerationPort } from "@jevitate/ai-core";
 import type { MissionFailure } from "@jevitate/domain";
-import { pageLostReason } from "@jevitate/playwright";
+import { pageLostReason, pageResourceLimit } from "@jevitate/playwright";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 
 /**
@@ -116,6 +116,11 @@ export interface CrashSignals {
   readonly browserDisconnected: boolean;
   /** #220: the page's liveness watchdog closed it — the page process stopped answering — and why. */
   readonly unresponsive?: string;
+  /**
+   * #205: the resource governor closed it — this run's browsers went over the memory ceiling — and
+   * why (the measured value and the ceiling). A resource limit, never a finding about the app.
+   */
+  readonly resourceLimit?: string;
 }
 
 /**
@@ -148,6 +153,7 @@ export class CrashWatch {
       pageClosed: this.#pageClosed,
       browserDisconnected: this.#browserDisconnected,
       ...unresponsiveSignal(this.#page),
+      ...resourceLimitSignal(this.#page),
     };
   }
 }
@@ -155,6 +161,11 @@ export class CrashWatch {
 function unresponsiveSignal(page: Page): { unresponsive?: string } {
   const reason = pageLostReason(page);
   return reason === undefined ? {} : { unresponsive: reason };
+}
+
+function resourceLimitSignal(page: Page): { resourceLimit?: string } {
+  const breach = pageResourceLimit(page);
+  return breach === undefined ? {} : { resourceLimit: breach.message };
 }
 
 /**
@@ -168,10 +179,18 @@ export function describeFailure(e: unknown, signals: CrashSignals): MissionFailu
   if (e instanceof TargetUnresponsiveError) return { kind: "target-unresponsive", message: e.message };
   const message = messageOf(e);
   const stack = e instanceof Error && e.stack !== undefined ? e.stack : undefined;
+  // #205: the resource governor closed the page over the memory ceiling — the run ends
+  // `inconclusive` with the measured value and the ceiling; no stack (nothing failed, nothing to
+  // attribute — a renderer killed by OUR limit is never the app's crash). Checked before the crash
+  // signals: closing the page is what surfaced it.
+  if (signals.resourceLimit !== undefined) return { kind: "resource-limit", message: signals.resourceLimit };
   // #220: the liveness watchdog closed a page that stopped answering — the run ended rather than
   // idle (a `stalled` stop), and the reason says why, not the generic "page closed" it surfaced as.
+  // #296: no stack — the operation that surfaced it (a snapshot read, an evaluate) was only waiting
+  // on the frozen page and was rejected when the watchdog closed it: nothing in jevitate failed, so
+  // there is nothing to attribute to jevitate (its stack frame would read as an engine bug).
   if (signals.unresponsive !== undefined && !signals.pageCrashed && !signals.browserDisconnected) {
-    return { kind: "stalled", message: `${signals.unresponsive} (${message})`, ...(stack === undefined ? {} : { stack }) };
+    return { kind: "stalled", message: `${signals.unresponsive} (${message.split("\n")[0] ?? message})` };
   }
   // #226: a navigation the app never answered (its server froze or went away mid-run) — the app
   // stopped responding, not the engine: a typed `target-unresponsive` ending with a plain reason, no
@@ -210,6 +229,16 @@ export function targetUnresponsiveMessage(e: unknown): string | null {
     path = undefined;
   }
   return `the app stopped responding to navigation${path === undefined ? "" : ` to ${path}`} (${describeUnreachable(first)})`;
+}
+
+/**
+ * #296: true for a failure that means the PAGE stopped answering — its renderer froze (or the host
+ * starved it) and the liveness watchdog closed it so the run could end (`describeFailure`'s `stalled`).
+ * #205: or the resource governor closed it over the memory ceiling (`resource-limit`). Either way the
+ * run is `inconclusive` with that typed reason, never `crashed`: no engine code failed.
+ */
+export function isPageUnresponsive(failure: MissionFailure | undefined): boolean {
+  return failure?.kind === "stalled" || failure?.kind === "resource-limit";
 }
 
 /** True for a failure that means the app stopped answering (#226): the run is `inconclusive`, never `crashed`. */

@@ -17,6 +17,7 @@
 // An ungrounded objective-a11y finding (a computed fact) stays ranked but is capped at `minor`.
 //
 // #133: the quality grade is shown on each finding; the default policy hides no grade.
+import type { ClaimLedger } from "./claims.js";
 import type { AnalysisOutcome, Coverage, JobImpact, SuppressedItem, SuppressionReason, UxFinding } from "./types.js";
 import { DEFAULT_MIN_CONFIDENCE } from "./confidence.js";
 import { DEFAULT_QUALITY_POLICY, policyFilters, type QualityPolicy } from "./grade.js";
@@ -144,6 +145,8 @@ export interface UxReport {
   readonly evidenceCaveats?: readonly string[];
   /** See `BuildReportOptions.calibrationCaveats`. */
   readonly calibrationCaveats?: readonly string[];
+  /** #198: the claim ledger — every claim considered and what code made of it (claim pipeline only). */
+  readonly claims?: ClaimLedger;
 }
 
 const SEVERITY_WEIGHT = { info: 1, minor: 2, major: 3 } as const;
@@ -183,7 +186,8 @@ const EMPTY_COVERAGE: Coverage = { totalItems: 0, evaluated: 0, skipped: [], bud
  * appendix); an objective finding without it is capped at minor. Signal findings ARE the evidence.
  */
 function applyGroundingRule(f: UxFinding): { finding: UxFinding; appendix: boolean } {
-  if (f.tier === "signal" || f.journeyEvidence !== undefined) return { finding: f, appendix: false };
+  // #198: a claim verified by code (a guard probe, the product facts, observed friction) is evidence.
+  if (f.tier === "signal" || f.journeyEvidence !== undefined || f.claim !== undefined) return { finding: f, appendix: false };
   if (f.tier === "objective-a11y") {
     return { finding: f.severity === "major" ? Object.freeze({ ...f, severity: "minor" as const }) : f, appendix: false };
   }
@@ -225,6 +229,8 @@ function summarize(items: readonly SuppressedItem[]): SuppressionSummary {
     "quality-policy": 0,
     "user-authored-content": 0,
     "per-page-cap": 0,
+    unverified: 0,
+    "not-a-problem": 0,
   };
   const byRubricItem: Record<string, number> = {};
   const byRubricItemRoute: Record<string, number> = {};
@@ -395,5 +401,6 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
     rawOccurrences: outcome.rawOccurrences ?? outcome.findings.length,
     ...(options.evidenceCaveats && options.evidenceCaveats.length > 0 ? { evidenceCaveats: options.evidenceCaveats } : {}),
     ...(calibrationCaveats.length > 0 ? { calibrationCaveats } : {}),
+    ...(outcome.claims === undefined ? {} : { claims: outcome.claims }),
   };
 }

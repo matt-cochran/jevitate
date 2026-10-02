@@ -31,6 +31,20 @@ describe("#213 — a usability summary mentions its UX findings", () => {
     expect(text).toContain("          … and 1 more in the report");
   });
 
+  it("#198: a verified claim shows its claim type and its boxed screenshot", () => {
+    const text = formatMissionHuman({
+      ...base,
+      report: {
+        findings: [
+          { severity: "major", rubricItemId: "nielsen-5", route: "/admin", observation: "Delete acts immediately.", claim: { type: "destructive-unguarded" }, screenshot: { path: "/out/f/finding-1.png" } },
+        ],
+        heuristicAppendix: [],
+        suppressed: { total: 0 },
+      },
+    });
+    expect(text).toContain("        - [major] destructive-unguarded /admin: Delete acts immediately. (screenshot: /out/f/finding-1.png)");
+  });
+
   it("says why there are none when the analysis was unavailable", () => {
     const text = formatMissionHuman({ ...base, missionOutcome: "inconclusive", report: null, analysisUnavailable: "UX analysis failed: boom" });
     expect(text).toContain("UX      no UX findings: analysis unavailable (UX analysis failed: boom)");

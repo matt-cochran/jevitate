@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { act, parseInterceptor, snapshot } from "./index.js";
 import type { Control } from "./snapshot.js";
-import { withSession, LOGIN_FIXTURE_HTML } from "./testkit.js";
+import { withSession, LOGIN_FIXTURE_HTML, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 const ORIGIN = "http://127.0.0.1:1";
 

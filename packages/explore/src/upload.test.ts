@@ -17,7 +17,10 @@ import {
   UPLOAD_OP_GUIDE,
   type Control,
 } from "./index.js";
-import { ScriptedJudge, withSession } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * The `upload` op end to end against a REAL Chromium: a trivial served page

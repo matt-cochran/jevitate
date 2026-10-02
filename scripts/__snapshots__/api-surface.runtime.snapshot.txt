@@ -1,6 +1,6 @@
 === RUNTIME (dist/index.js) ===
 
-# @jevitate/ai-core (85 exports)
+# @jevitate/ai-core (98 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
   BACKOFF_SCHEDULE_MS: array
@@ -32,12 +32,17 @@
   JourneyGoalOutput: object
   JourneyStepInput: object
   JourneyStepOutput: object
+  KEY_PROVIDERS: object
+  KEY_VERIFY_TIMEOUT_MS: const (number)
+  KEY_VERIFY_URLS: object
   MAX_CHOICE_OPTIONS: const (number)
   MissingCredentialError: class
   ModelConstraintsSchema: object
   NoEligibleModelError: class
   OpenRouterGenerationGateway: class
   REDACTION_MASK: const (string)
+  REVEALED_SECRET_SELECTORS: array
+  REVEALED_SECRET_SHAPES: array
   RetryExhaustedError: class
   RetryingGenerationPort: class
   RetryingJudgmentPort: class
@@ -59,7 +64,10 @@
   apiKeyFromAuthHeader: function
   assertNoOutboundCredential: function
   assertNoSecretInPayload: function
+  collectKeys: function
   collectMissingKeys: function
+  credentialProvenance: function
+  describeVerdict: function
   envAliasesFor: function
   envCredentialStore: function
   failureClass: function
@@ -68,14 +76,18 @@
   fromSdkAnswers: function
   isTransientError: function
   jittered: function
+  keyPrompt: function
+  looksLikeOtherKey: function
   openRouterProviderSettings: function
   priceCall: function
   realJevClientCall: function
   redactContext: function
+  redactCredentialShapes: function
   redactText: function
   redactUrl: function
   requireKeys: function
   retryTransient: function
+  revealedSecretsIn: function
   secretForms: function
   selectModel: function
   sumUsage: function
@@ -85,6 +97,7 @@
   toSetupRequiredResult: function
   usageCountsFrom: function
   usageSidecar: function
+  verifyKey: function
   withPreflight: function
 
 # @jevitate/application (0 exports)
@@ -92,11 +105,12 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (53 exports)
+# @jevitate/domain (62 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEGRADED_FINDINGS: array
   EnvironmentDegradedSchema: object
+  FakeClock: class
   GOAL_ONLY_OUTCOMES: array
   GOAL_OUTCOMES: array
   GOAL_OUTCOME_FOLD: object
@@ -111,18 +125,23 @@
   RESULT_GOAL_OUTCOMES: array
   RESULT_MISSION_OUTCOMES: array
   RESULT_STRATEGIES: array
+  ResourceGovernanceSummarySchema: object
+  ResultBranchSchema: object
   ResultDefectSchema: object
   ResultEngineSchema: object
   ResultHangSchema: object
   ResultTargetSchema: object
   ResultUsageSchema: object
   SitePolicySchema: object
+  TimeSkippingClock: class
   UnsafeNameError: class
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
+  clock: object
   combineOutcomes: function
   contentHash: function
+  currentClock: function
   evaluateGate: function
   fileDraft: function
   fingerprintMarker: function
@@ -130,6 +149,7 @@
   gatingDefects: function
   gaussian: function
   hasOwnFrame: function
+  installClock: function
   isBrokenRun: function
   isGoalOutcome: function
   isUnboundedHeapGrowth: function
@@ -139,6 +159,8 @@
   nextOpenAfter: function
   occurrenceComment: function
   outcomeExitCode: function
+  realClock: object
+  resetClock: function
   resolveThrottle: function
   safeChildPath: function
   safeRunPolicy: function
@@ -147,15 +169,17 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (307 exports)
+# @jevitate/explore (364 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
   ANSWER_PAGES_CHARS: const (number)
   ANSWER_VETO_BELOW: const (number)
   API_CREDENTIAL_HEADERS: array
+  ActionDeltas: class
   BoundsTracker: class
   BudgetMonitor: class
+  CANARY_ATTRIBUTE: const (string)
   CONVERSATION_GUIDE: const (string)
   CORRELATION_WINDOW_MS: const (number)
   CoverageTracker: class
@@ -173,6 +197,12 @@
   DEFAULT_VERIFY_REPLAYS: const (number)
   DEFERRED_EFFECT_MAX_MS: const (number)
   DEGRADED_STEP_MAJORITY: const (number)
+  DELTA_HISTORY_GUIDE: const (string)
+  DELTA_JEV_MAX_CALLS: const (number)
+  DELTA_LINE_MAX: const (number)
+  DELTA_MAX_CHANGES: const (number)
+  DELTA_PROMPT_CHARS: const (number)
+  DELTA_SNAPSHOT_TIMEOUT_MS: const (number)
   DEMO_HIGHLIGHT_MS: const (number)
   DEMO_OVERLAY_ATTR: const (string)
   DEMO_OVERLAY_HIDE_STYLE: const (string)
@@ -216,19 +246,23 @@
   MissionSessions: class
   NOT_REPLAYED: object
   NO_ANSWER_REASON: const (string)
+  NO_DESTRUCTIVE_NOTE: const (string)
   NoProgressDetector: class
   ONLY_GLOBAL_NAVIGATION: const (string)
   OPS: array
   OPS_NEEDING_TARGET: object
+  OVERSIZE_CHARS: const (number)
   ObservedPages: class
   PAGE_TEXT_GUIDE: const (string)
   PAID: object
   PROMPT_INJECTION_GUARD: const (string)
   PROMPT_PAGE_TEXT_CHARS: const (number)
+  PageDeltas: class
   PageMonitor: class
   PageSignalCollector: class
   READ_ONLY_NOTE: const (string)
   REDACTION_MASK: const (string)
+  REJECTED_AGAIN_REASON: const (string)
   RELOAD_TIMEOUT_MS: const (number)
   RENDER_BASELINE_RENDERS: const (number)
   RENDER_SLOWDOWN_FACTOR: const (number)
@@ -237,6 +271,7 @@
   RENDER_WAIT_MS: const (number)
   REPLY_MAX_CHARS: const (number)
   ReadOnlyGuard: class
+  ReplayDeltas: class
   RequestCapture: class
   RunRecorder: class
   SELECT_OPTION_INSTRUCTIONS: const (string)
@@ -244,10 +279,12 @@
   SETTLE_QUIET_MS: const (number)
   SHORT_FIELD_MAX_WORDS: const (number)
   SINGLE_LINE_MAX_CHARS: const (number)
+  SNAPSHOT_BUDGET_MS: const (number)
   STARVATION_WINDOW_MS: const (number)
   STARVED_EVENT_LOOP_LAG_MS: const (number)
   STARVED_LOAD_PER_CORE: const (number)
   STREAMING_CONTENT: object
+  SUMMARY_GROUP_MIN: const (number)
   SafetyPolicy: class
   ScopeUnderivableError: class
   SecretFieldSpecError: class
@@ -256,17 +293,23 @@
   TARGET_FREE_ACTIONS: array
   TARGET_LIVENESS_PROBE_MS: const (number)
   TRANSCRIPT_CONTROL_CAP: const (number)
+  TRANSIENT_SELECTOR: const (string)
   TargetUnresponsiveError: class
   TotpSeedError: class
   TranscriptLog: class
+  TypeFixtureSpecError: class
+  UNSAVED_WRITE_REASON: const (string)
   UPLOAD_OP_GUIDE: const (string)
   UnauthorizedExploreTargetError: class
+  VOLATILITY_GAP_MS: const (number)
   ValueCapturingGenerationPort: class
   VetoedAnswers: class
   WAIT_OP_MS: const (number)
   WITHHELD_ANSWER_NOTE: const (string)
   WRITE_METHODS: object
+  absenceCoverage: function
   act: function
+  actionName: function
   advisoryTitle: function
   affordedOp: function
   answerNotFoundReason: function
@@ -274,21 +317,27 @@
   assertSeedReachable: function
   assertTargetAnswering: function
   assessCoverageSufficiency: function
+  attributeCanary: function
   authorJourney: function
   autoDecidePostdoc: function
   awaitWrites: function
   boundSecretField: function
+  boundTypeFixture: function
   boundaryValueCandidates: function
   buildCrashReport: function
   buildJudgmentState: function
   busyIndicatorOf: function
   candidateId: function
+  capFormText: function
   capMessage: function
+  captureAria: function
   chatReply: function
   checkFieldValue: function
   classifyHang: function
   classifyRequest: function
   clickTimeoutMs: function
+  clippingSummary: function
+  compareDeltas: function
   controlFields: function
   controlKey: function
   controlRisk: function
@@ -300,15 +349,23 @@
   defaultLoadPerCore: function
   defectTitle: function
   degradedEnvironmentOutcome: function
+  deltaPromptLine: function
+  deltaQuotableText: function
+  deltaRecord: function
+  deltaStatsOf: function
   demoOverlayFor: function
   describeAction: function
   describeAssertionSpec: function
+  describeChange: function
   describeCheck: function
+  describeExpected: function
   describeFailure: function
   describeStatus: function
   describeUnreachable: function
+  detectClipping: function
   detectForms: function
   detectOverflow: function
+  diffAria: function
   disambiguate: function
   draftForCrash: function
   draftForDefect: function
@@ -320,13 +377,20 @@
   errorPageReason: function
   evaluateNetworkCheck: function
   exactLiterals: function
+  expectedChange: function
+  expectedResultFromDelta: function
   explore: function
   failureLine: function
   fieldKind: function
+  fieldMatches: function
   finishDeclaredRun: function
+  goalAdmitsAbsence: function
   goalAsksFor: function
+  goalAsksForAction: function
   goalAsksForChange: function
   goalAsksForReply: function
+  goalAsksForReport: function
+  goalAsksToWrite: function
   goalListsSeveral: function
   groundAnswer: function
   groupStepSignals: function
@@ -340,10 +404,12 @@
   hostProbe: function
   hotp: function
   http5xxSignalOf: function
+  identityKind: function
   invariantFingerprint: function
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
   isInScope: function
@@ -351,6 +417,7 @@
   isNavControl: function
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
+  isPageUnresponsive: function
   isResourceLoadEcho: function
   isSecretLike: function
   isTargetUnresponsive: function
@@ -359,12 +426,16 @@
   judgeAnswerFits: function
   judgeGoalCompletion: function
   judgeGoalMet: function
+  looksDestructiveRequest: function
+  markTypeFixtures: function
+  markupCanary: function
   maskSecretFields: function
   matchGlob: function
   matchOption: function
   measurePageTiming: function
   messageClass: function
   monitorFor: function
+  newIdentityToken: function
   noActionShortfall: function
   normalizeAllowlist: function
   normalizeRoute: function
@@ -373,10 +444,12 @@
   outOfScopeHangNote: function
   p50: function
   pagesContext: function
+  parseAria: function
   parseFirstNumber: function
   parseInterceptor: function
   parseNumbers: function
   parseSecretField: function
+  parseTypeFixtureSpec: function
   pathGlob: function
   pendingEvidence: function
   perceive: function
@@ -387,6 +460,7 @@
   quoteIsOnlyControlNames: function
   recordCoverageHang: function
   recordingStepCount: function
+  redactAriaLine: function
   redactContext: function
   redactControl: function
   redactPageText: function
@@ -395,6 +469,7 @@
   refusalNote: function
   reloadPage: function
   replayAndDetectHang: function
+  replayDeltaSummary: function
   replayTargetWaitMs: function
   replayWouldRepeatWrite: function
   reportAnswer: function
@@ -444,6 +519,10 @@
   toPath: function
   totp: function
   tryTriage: function
+  typeFixtureContext: function
+  typeFixturePlaceholder: function
+  typedPassages: function
+  uniqueIdentity: function
   unreadablePageTiming: function
   urlMatcher: function
   vacuousCheckMessage: function
@@ -537,23 +616,38 @@
   stylesOf: function
   textIncludesCI: function
 
-# @jevitate/journey (17 exports)
+# @jevitate/journey (32 exports)
+  ANCHORED_STRATEGIES: array
+  ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
   AnnotationDraftSchema: object
   AnnotationDraftStepSchema: object
+  CAMPAIGN_LIMITS: object
+  CampaignSpecSchema: object
   FsJourneyStore: class
   JourneyRegistry: class
   JourneySchema: object
+  JourneyStepError: class
   ParamValidationError: class
   SECRET_PARAM_NAME_RE: object
+  SWEEP_MODES: array
   applyAnnotationDraft: function
   deriveParamSchema: function
   describeStep: function
   flatJourneySteps: function
   formatAnnotationChanges: function
   intentCoverage: function
+  isSweepMode: function
+  journeyBranchPoint: function
+  journeyPrefix: function
+  journeyStepCount: function
+  listJourneyAnchors: function
+  prefixLandingPath: function
+  resolveJourneyStep: function
   secretParamNames: function
   secretParamValues: function
+  splitBudget: function
+  sweepStops: function
   validateParams: function
 
 # @jevitate/load (8 exports)
@@ -609,7 +703,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (49 exports)
+# @jevitate/playwright (88 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -623,15 +717,26 @@
   DEFAULT_OPEN_TIMEOUT_MS: const (number)
   DEFAULT_PAGE_UNRESPONSIVE_MS: const (number)
   DEFAULT_PRESSURE_THRESHOLDS: object
+  DEFAULT_SLOT_HEARTBEAT_MS: const (number)
+  DEFAULT_SLOT_POLL_MS: const (number)
+  DEFAULT_SLOT_STALE_MS: const (number)
+  DEFAULT_THROTTLE_THRESHOLDS: object
   DarwinResourceSignals: class
+  EXTENSION_ID: object
+  ExtensionDirError: class
+  ExtensionLoadError: class
   LinuxResourceSignals: class
+  MachineBrowserSlots: class
+  OWNER_MARKER_SWITCH: const (string)
   PageLivenessWatchdog: class
   PlaywrightBrowserPort: class
+  ResourceGovernor: class
   ResourceSignalError: class
   UnknownDeviceError: class
   Win32ResourceSignals: class
   admissionViolation: function
   browserPoolOptionsFromEnv: function
+  cleanupOrphanBrowsers: function
   closeSharedBrowserPool: function
   closestDeviceNames: function
   configureSharedBrowserPool: function
@@ -641,23 +746,51 @@
   defaultDarwinSignalDeps: object
   defaultHostSignalDeps: object
   defaultLinuxSignalDeps: object
+  defaultMaxBrowsers: function
   defaultMaxContexts: function
+  defaultMemoryCeilingBytes: function
+  defaultSlotDir: function
   defaultWin32SignalDeps: object
+  describeExtensions: function
+  effectiveMaxBrowsers: function
   emulationContextOptions: function
   errnoCode: function
   explainLaunchFailure: function
+  extensionIdForKey: function
+  extensionIdForPath: function
+  extensionIdentity: function
+  extensionLaunchArgs: function
+  extensionOrigin: function
+  findOrphanBrowsers: function
+  governanceFromEnv: function
+  isTransientSlotError: function
+  jevitateBrowsers: function
   knownDeviceNames: function
+  markedBrowsers: function
+  measureOwnBrowserMemory: function
+  orphanReason: function
+  ownerMarkerArg: function
   pageLostReason: function
+  pageResourceLimit: function
   pageUnresponsiveMsFromEnv: function
   parseMeminfoBytes: function
+  parseOwnerMarker: function
   parsePsiAvg10: function
   parseViewport: function
   parseVmPressureLevel: function
   parseVmStatAvailableBytes: function
   probeReachable: function
+  processAlive: function
+  readUnpackedExtension: function
+  readUnpackedExtensions: function
   resolveEmulation: function
   resolveLaunchArgs: function
+  resourceSettleFactor: function
+  sameExtensionBuild: function
   sharedBrowserPool: function
+  sharedResourceGovernor: function
+  systemProcessTable: function
+  throttleDecision: function
   withOpenDeadline: function
 
 # @jevitate/recorder (24 exports)
@@ -867,13 +1000,19 @@
   migrateToLatest: function
   openDatabase: function
 
-# @jevitate/ux (87 exports)
+# @jevitate/ux (112 exports)
   APPLIES_QUESTION_ID: const (string)
   CALIBRATED_QUALITY_POLICY: object
   CALIBRATION_KNOWN_APP_CLASSES: array
+  CLAIM_PROMPTS: object
+  CLAIM_RUBRIC: object
+  CLAIM_TYPES: array
+  ClaimPromptsSchema: object
+  ClaimTemplateError: class
   DEFAULT_MAX_FINDINGS_PER_ROUTE: const (number)
   DEFAULT_MIN_CONFIDENCE: const (number)
   DEFAULT_QUALITY_POLICY: object
+  FRICTION_CLAIM_CHOICES: array
   GRADER_FILTER_KAPPA_GATE: const (number)
   GROUNDING_UNNAMED: const (number)
   IMPACT_RANK: object
@@ -883,6 +1022,10 @@
   MaxFindingsPerRouteError: class
   MinConfidenceError: class
   MissingAppContextError: class
+  NONE_TARGET: const (string)
+  PRODUCT_FACTS_VERSION: const (number)
+  ProductFactsError: class
+  ProductFactsSchema: object
   PromptAssetError: class
   QUALITY_LABELS: array
   QUALITY_SHOW_ENV: const (string)
@@ -894,6 +1037,7 @@
   SIGNAL_RULES: object
   SPECIFICS_INSTRUCTIONS: const (string)
   SignalFindingError: class
+  TEMPLATE_KEYS: array
   UX: const (string)
   UX_EVIDENCE_FILE_VERSION: const (number)
   UX_EVIDENCE_KEYS: array
@@ -905,14 +1049,18 @@
   V1_RUBRIC: array
   a11yChecks: function
   adjudicate: function
+  analyzeClaims: function
   applyRubricDescriptions: function
+  boundTargetOptions: function
   buildReport: function
   buildState: function
   calibrationCaveat: function
   calibrationNoteFor: function
+  claimsCaveat: function
   clamp01: function
   combineConfidence: function
   controlKey: function
+  dedupeObjectiveFindings: function
   defaultQualityPolicy: function
   deriveRefs: function
   describeCandidate: function
@@ -930,18 +1078,26 @@
   detectUrlMismatches: function
   evaluateFlag: function
   evidenceFromFile: function
+  factsPageFor: function
+  fillClaimTemplate: function
   fillTemplate: function
+  findFactConflicts: function
   generateSpecifics: function
   gradeCandidates: function
+  gradeLabel: function
   gradeQuestion: function
   graderMayFilterByDefault: function
   groundFindings: function
+  journeysFor: function
   judgeScreen: function
   loadRubric: function
   loadV1Rubric: function
   makeFinding: function
   makeSignalFinding: function
+  namesStep: function
   normalizeText: function
+  parseProductFacts: function
+  parseProductFactsText: function
   parseQualityPolicy: function
   parseUxEvidenceFile: function
   persistableScreen: function
@@ -953,5 +1109,7 @@
   resolveMinConfidence: function
   resolveQualityPolicy: function
   round2: function
+  routeMatches: function
   routeOf: function
+  summarizeLedger: function
   withSignalFindings: function

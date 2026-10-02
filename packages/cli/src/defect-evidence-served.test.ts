@@ -14,6 +14,10 @@ import { runAdversarialCliMission, runExploration } from "./explore-api.js";
 import { stepCaption } from "./defect-evidence.js";
 import { loadRunFile } from "./report-api.js";
 import { parsePersistedMission, runVerifyFix } from "./verify-fix-api.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #250 served acceptance — the example-site defect: Save answers `PUT /api/profile → 500` while the

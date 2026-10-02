@@ -2,7 +2,8 @@ import { RecordingInterpreter } from "@jevitate/interpreter";
 import type { Recording } from "@jevitate/recording";
 import { perceive, verifyReplayVerdict, type VerifyFixResult, type VerifyFixVerdict, type VerifySession } from "@jevitate/explore";
 import { closeLogSources, openLogSources, parseLogSourceSpecs, type LogSourceSpec } from "./log-sources.js";
-import { matchesLogDefect, normalizeLogMessage, parseLogDefectSpec, parseLogLine, type LogLine } from "./log-lines.js";
+import { matchesLogDefect, matchesLogIgnore, normalizeLogMessage, parseLogDefectSpec, parseLogIgnoreSpec, parseLogLine, type LogLine } from "./log-lines.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * `verify-fix` for a `server-log` defect (#142): NOT a re-check of `@jevitate/explore`'s
@@ -28,6 +29,8 @@ export interface VerifyServerLogParams {
   readonly matcher: string;
   readonly normalizedMessage: string;
   readonly drainMs: number;
+  /** #282: the run's `--log-scope` (raw specs): only lines in scope count, as in the original run. */
+  readonly scope?: readonly string[];
   readonly allowLogCmd: boolean;
   /** Opens a FRESH browser session (never the one the defect was found in). */
   readonly openSession: () => Promise<VerifySession>;
@@ -45,7 +48,7 @@ function firstLine(e: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
+    const t = clock.setTimeout(resolve, ms);
     t.unref?.();
   });
 }
@@ -89,7 +92,9 @@ async function runOneServerLogReplay(params: VerifyServerLogParams, sourceSpecs:
     await closeLogSources(handles);
 
     const matcher = parseLogDefectSpec(params.matcher);
-    const fired = lines.some((l) => matchesLogDefect(l, matcher) && normalizeLogMessage(l.message) === params.normalizedMessage);
+    const scope = (params.scope ?? []).map(parseLogIgnoreSpec);
+    const inScope = (l: LogLine): boolean => scope.length === 0 || scope.some((m) => matchesLogIgnore(l, m));
+    const fired = lines.some((l) => inScope(l) && matchesLogDefect(l, matcher) && normalizeLogMessage(l.message) === params.normalizedMessage);
 
     if (outcome.outcome !== "completed") {
       const replay: VerifyFixResult["replay"] =
@@ -128,6 +133,7 @@ export async function verifyServerLogDefect(params: VerifyServerLogParams): Prom
   try {
     sourceSpecs = parseLogSourceSpecs(params.sources, params.allowLogCmd);
     parseLogDefectSpec(params.matcher); // validated once up front, fail closed
+    for (const s of params.scope ?? []) parseLogIgnoreSpec(s);
   } catch (e) {
     return {
       ...base,

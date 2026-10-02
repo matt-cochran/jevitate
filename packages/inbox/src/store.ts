@@ -5,6 +5,7 @@ import { withIdLock } from "./lock.js";
 import { flushIfDurable } from "./durability.js";
 import type { Action, InboxItem, InboxSummary, ThreadEntry } from "./types.js";
 import { InboxItemSchema, SAFE_INBOX_ID_RE, assertSafeInboxId, asSecret, resolveTransition, toSummary } from "./types.js";
+import { clock } from "@jevitate/domain";
 
 export type Channel = "human" | "agent";
 
@@ -154,7 +155,7 @@ export class FsInboxStore implements InboxStore {
     });
   }
 
-  async getSummaries(now = Date.now()): Promise<InboxSummary[]> {
+  async getSummaries(now = clock.now()): Promise<InboxSummary[]> {
     let entries: string[];
     try {
       entries = await readdir(this.dir);
@@ -200,7 +201,7 @@ export class FsInboxStore implements InboxStore {
       }
 
       if (item.humanInput !== undefined && item.secretConsumedAt === undefined) {
-        const consumedAt = new Date().toISOString();
+        const consumedAt = clock.nowIso();
         const returned: InboxItem = { ...item, secretConsumedAt: consumedAt };
         const burned: InboxItem = { ...returned };
         delete burned.humanInput;
@@ -232,7 +233,7 @@ export class FsInboxStore implements InboxStore {
       const transition = resolveTransition(item.kind, req.action);
       if (transition === "illegal") throw new IllegalTransitionError(item.kind, req.action);
 
-      const now = new Date().toISOString();
+      const now = clock.nowIso();
       const updated: InboxItem = { ...item, status: transition, resolvedAt: now };
 
       if (req.action === "resume" && req.input !== undefined) {
@@ -270,7 +271,7 @@ export class FsInboxStore implements InboxStore {
     });
   }
 
-  async sweepExpired(now = Date.now()): Promise<number> {
+  async sweepExpired(now = clock.now()): Promise<number> {
     let entries: string[];
     try {
       entries = await readdir(this.dir);
@@ -312,7 +313,7 @@ export class FsInboxStore implements InboxStore {
     return count;
   }
 
-  async health(now = Date.now()): Promise<InboxHealth> {
+  async health(now = clock.now()): Promise<InboxHealth> {
     let entries: string[];
     try {
       entries = await readdir(this.dir);

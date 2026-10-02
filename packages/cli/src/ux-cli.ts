@@ -6,7 +6,7 @@ import { ok, fail } from "./envelope.js";
 import { withEngine } from "./engine.js";
 import { discoverRecordingSidecars, loadRecordingSidecars, runUxReview, UxAnalysisFailedError } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
-import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError } from "@jevitate/ux";
+import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError, ProductFactsError } from "@jevitate/ux";
 import { type CliDeps, emitJson, GatewaySelectionError, buildExploreGateways } from "./cli-shared.js";
 
 /** Registers `jevitate ux <recording>`. */
@@ -41,6 +41,11 @@ export function registerUxCommands(program: Command, deps: CliDeps): void {
       "--evidence <file>",
       "a live usability run's evidence sidecar (screens as analyzed + run signals); default: <stem>.evidence.json next to the Recording — with it, offline review reproduces the live run's findings",
     )
+    .option(
+      "--product <file>",
+      "product facts JSON (plans/prices, key journeys, each page's intended next step) the review checks screens against in code; default .jevitate/product.json in the project when present (docs/ux-findings.md)",
+    )
+    .option("--polish", "polish each verified finding's recommendation with one generation call (opt-in; the default prose is built from templates)")
     .option("--real", "use live Jev gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways", false)
     .option("--json", "emit a JSON envelope")
@@ -55,6 +60,8 @@ export function registerUxCommands(program: Command, deps: CliDeps): void {
         out?: string;
         result?: string;
         evidence?: string;
+        product?: string;
+        polish?: boolean;
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
@@ -108,6 +115,8 @@ export function registerUxCommands(program: Command, deps: CliDeps): void {
           ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
           ...(o.show !== undefined ? { show: o.show } : {}),
           ...(o.maxFindingsPerPage !== undefined ? { maxFindingsPerRoute: o.maxFindingsPerPage } : {}),
+          ...(o.product !== undefined ? { product: o.product } : {}),
+          ...(o.polish === true ? { polish: true } : {}),
           outDir: o.out,
           ...sidecars,
         });
@@ -115,6 +124,8 @@ export function registerUxCommands(program: Command, deps: CliDeps): void {
       } catch (err) {
         if (err instanceof UxAnalysisFailedError) {
           emitJson(program, fail("E_UX_ANALYSIS", err.message));
+        } else if (err instanceof ProductFactsError) {
+          emitJson(program, fail(err.code, err.message));
         } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof MaxFindingsPerRouteError || err instanceof UxConfigError) {
           emitJson(program, fail("E_UX_ARGS", err.message));
         } else {

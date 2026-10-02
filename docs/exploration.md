@@ -2,6 +2,17 @@
 
 How exploring missions stay in scope, what counts as coverage, how hangs are detected and confirmed, and what Jevitate measures about page timing.
 
+## Starting from a Journey step
+
+Every strategy except `--feature` can start from a promoted Journey instead of a bare URL:
+`jevitate explore --from-journey <id> --at-step <anchor|n> --strategy <s>` replays the Journey's
+prefix in the mission's own browser context (page, form contents and session kept), and the mission
+starts on the live page — its scope is that page's route, as if it were `--url`. A prefix that no
+longer replays ends the run `inconclusive` (`failure.kind: "journey-stale"`, exit 2). Results carry
+`branch: { journeyId, step, anchor? }`. `--at-step all` (or `anchors`) sweeps every step, and a
+reset inside an anchored mission re-replays the prefix (its steps count against `--max-actions`). See [Explore from a Journey step](./journeys.md#explore-from-a-journey-step-anchors-and-campaigns)
+for anchors, campaigns and the known limits.
+
 ## Adversarial scope, form misuse and coverage
 
 An adversarial run is **scoped to its target**: the start URL's route and everything
@@ -18,7 +29,9 @@ Most pages are forms, so the run looks for them: fields plus a Save / Submit con
 has no `<form>`). It then tries misuse around submitting:
 
 - a double submit;
-- a submit with boundary or invalid values (empty, edge, long, unicode, invalid);
+- a submit with boundary or invalid values (empty, an inert markup canary, edge, long, an
+  attribute-break canary, unicode with RTL override and zero-width characters, invalid, oversize
+  ~100 KB), one per round, chosen by the field's type (a number or date field never gets text);
 - edit, then Cancel, then Save;
 - a reload with unsaved edits;
 - acting again while the save request is still pending.
@@ -26,6 +39,57 @@ has no `<form>`). It then tries misuse around submitting:
 It also acts once on every other control on the target. Password fields, file inputs,
 log-out controls and visually hidden skip links are never targets, and a toggle pair
 (Collapse/Expand, Show/Hide) is exercised once in each direction, not over and over.
+
+**Markup canary (#301).** To ask "is my input rendered as markup?", the boundary values include
+two inert canaries, each with a fresh random token per submission:
+
+- an HTML-injection canary, `<i data-jev-canary="TOKEN">jevTOKEN</i>`;
+- an attribute-break canary, `jevTOKEN" data-jev-canary="TOKEN`.
+
+They contain no script, no event handler and no `javascript:` URL: nothing in them can execute.
+Detection is DOM inspection only. After each settled step the run looks for an element carrying
+`data-jev-canary="<this run's token>"` in the page and in frames on an `--allow` origin. Right
+after a canary is submitted, it also loads the same in-scope URL again (a plain GET, never a re-sent
+form) and looks again. Such an element exists only when the app parsed the input as markup. A
+canary shown as escaped text is fine and is never reported. A hit is a `markup-injection` defect
+with `markupInjection: {field, payload: "html" | "attribute", submittedOn, renderedOn,
+afterSubmit, afterReload, stored}`. It is `stored` when it survived the reload or showed up later on
+another page, and `reflected` otherwise.
+
+Limits: the canary detects unescaped rendering, nothing more. It never tries to exploit it, and it
+proves nothing about sanitizers that keep `<i>` and `data-*` but strip scripts. It doesn't see
+markup that is rendered in a closed shadow root, in a cross-origin frame, or only on a page the run
+never visits. `verify-fix` cannot re-check a `markup-injection` defect by replay, so it returns
+`inconclusive`; re-run the adversarial mission instead. Canary values go only to the `--allow`
+origins, through the same gated actions as every other value, so the paid/destructive guards and
+budgets apply. The ones the app accepts stay in the app (see [safety](./safety.md)).
+
+**Identity changes (#300).** The run takes a baseline of who it is signed in as right after the
+start page loads, from the session's auth cookies and auth-named `localStorage`/`sessionStorage`
+entries. It keeps hashes only and never stores a raw value. A JWT is compared by its subject claims
+(`sub`, user id, email, tenant/org), so a refreshed token for the same user is not a change. After
+each settled action it checks that baseline again. The identity changed when:
+
+- an auth entry appeared or disappeared;
+- a token's subject claims differ;
+- an opaque auth value was re-issued by an auth-shaped request (login, sign-in, session, verify,
+  token, `demo`).
+
+An example is a "Continue as demo" shortcut on a login page. When the identity changes, that step's
+invariants (`userInvariant` and the declared spec) are **not judged**: they were written for the
+original identity. What the step observed (its `before` snapshot, queued `never.response` hits) is
+dropped. The control is never picked again. The run then goes back to the start URL in a fresh
+session from the original storage state and checks that it is the original identity again. With
+no fresh session, only a signed-out original identity can be restored, by clearing the session's
+cookies and auth-named storage in place. Each
+switch is listed in the result as `identityChanges: [{step, action, url, route, reason,
+restored}]`, with auth entries named, never their values. When the original identity can't be
+restored, the run stops `inconclusive` with `stop: "identity-changed"` and
+`failure.kind: "identity-changed"`. That happens when a signed-in original identity has no fresh
+session to return to, or the fresh session is someone else. A defect found before the stop still wins. Hard signals (5xx, console
+errors) from the switched step are still reported, since they are the app's errors whoever is
+signed in. Limit: a same-named opaque session value swapped without any auth-shaped request is not
+detected; `--deny '<the control>'` covers that case.
 
 A submit counts as submitted only once a request (a write or a navigation) actually left
 the page. A submit the browser's own validation blocked (`required`, `type=email`,
@@ -101,6 +165,9 @@ These do not count:
 - auto-detected long-polls: a request pending longer than `settle.longPollMs`
   (default 5000) while the page is otherwise interactive (a control is rendered
   and no busy indicator shows);
+  a write that one of the run's clicks sent is still tracked until it ends, though: a
+  `wait` (or a `blocked`) observes it within the job-wait budget instead of reporting
+  that nothing is pending;
 - text-only updates of existing nodes (a clock, a live counter) and inline-style
   animation.
 
@@ -176,3 +243,33 @@ narrower than 1024px. It is reported as a defect in coverage, exploratory and ad
 and as a signal finding in the usability review. `--check-overflow` turns it on at any width, and
 `--ignore-overflow <selector>` excludes intentional cases. It is pure DOM geometry, never a model
 judgment.
+
+A **vertical-clipping** hard signal (#302) runs alongside it, under the same gate, and is reported
+the same way: a defect in coverage, exploratory and adversarial runs, and a signal finding in the
+usability review. It flags text that no scroll position shows, in two cases:
+
+- **`overflow-hidden`**: text falls outside its nearest `overflow: hidden`/`clip` box because the box
+  is shorter than its content (`scrollHeight > clientHeight`), for example a fixed-height card. The
+  finding names the box.
+- **`above-page-top`**: text spilled out of a too-short container above the top of the page, for
+  example a `flex-wrap` chip centred in a 56px header that wraps to four lines at 375px. The finding
+  names the text's element.
+
+Each finding has the element's descriptor, the clipped distance (`clippedPx`) and a fingerprint of
+route and element. One element is one finding however many states show it, up to 10 per page
+state.
+
+What it does **not** report, by design:
+
+- **Intentional truncation.** Text under `line-clamp`/`-webkit-line-clamp` or
+  `text-overflow: ellipsis` is ignored, not reported as advisory. The app chose to truncate and
+  shows that it did. A "read more" box that truncates with a plain fixed height and
+  `overflow: hidden` is reported; exclude it with `--ignore-overflow <selector>`.
+- Visually hidden text: an sr-only box (1px or less, `clip`/`clip-path`), a collapsed box (zero
+  height), text that is `visibility: hidden`, `display: none` or `opacity: 0`, and a skip link (an
+  absolutely or fixed-positioned box) that sits entirely above the page. In-flow text that spilled
+  wholly above the page is still reported.
+- Scrollable boxes (`overflow: auto`/`scroll`) and the page root. A scroll-locked `<body>` is not a
+  clipped box.
+- Text covered by a later sibling, such as a sticky nav overlapping a spilled line. That is
+  occlusion, not clipping.

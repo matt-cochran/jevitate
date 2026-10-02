@@ -5,8 +5,6 @@ import {
   FEATURE_KEYS,
   requireKeys,
   MissingCredentialError,
-  collectMissingKeys,
-  envAliasesFor,
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
   GEN_TASKS,
@@ -18,6 +16,11 @@ import {
   type GenTaskKind,
   type CatalogModel,
   type ModelConstraints,
+  type KeyVerdict,
+  type VerifyFetch,
+  collectKeys,
+  verifyKey,
+  KEY_PROVIDERS,
 } from "@jevitate/ai-core";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import type { CliDeps } from "./program.js";
@@ -26,6 +29,17 @@ import { loadLocalCredentials } from "./credentials-file.js";
 import { realOpenRouterCall } from "./openrouter-call.js";
 import { resolveUsagePricing } from "./usage-config.js";
 import { emitJsonOrRefusal } from "./cli-refusal.js";
+import { readMaskedLine } from "./masked-input.js";
+import {
+  describeFeatureKeys,
+  keySources,
+  realVerifyFetch,
+  shadowWarnings,
+  verificationProblems,
+  verifyFeatureKeys,
+  type KeySourceReport,
+  type KeyVerificationReport,
+} from "./key-report.js";
 
 /**
  * Additive, optional wiring for `@jevitate/ai-core` threaded through `CliDeps`.
@@ -40,6 +54,10 @@ export interface AiCliDeps {
   gateway?: GenerationPort;
   catalog?: CatalogModel[];
   constraints?: ModelConstraints;
+  /** #291: the live key check's HTTP GET (tests inject a stub; default: real HTTPS). */
+  verifyFetch?: VerifyFetch;
+  /** Whether stdin can prompt (a TTY). Default: `process.stdin.isTTY`. Only consulted for the real prompt. */
+  isInteractive?: () => boolean;
 }
 
 const DEFAULT_CATALOG: CatalogModel[] = [
@@ -49,58 +67,12 @@ const DEFAULT_CONSTRAINTS: ModelConstraints = { requiredCapabilities: [] };
 
 const FEATURES: Feature[] = ["generation", "judgment"];
 
-/**
- * A tiny write gate: forwards to `output` while unmuted, drops everything
- * while muted. Exported so the actual "does the key get echoed" decision is
- * directly unit-testable, independent of readline/TTY simulation (per-
- * keystroke echo can't be faithfully exercised outside a real terminal in a
- * non-interactive test runner).
- */
-export function createMutableEcho(output: NodeJS.WritableStream): {
-  write: (chunk: string) => void;
-  mute: () => void;
-  unmute: () => void;
-} {
-  let muted = false;
-  return {
-    write: (chunk: string) => {
-      if (!muted) output.write(chunk);
-    },
-    mute: () => {
-      muted = true;
-    },
-    unmute: () => {
-      muted = false;
-    },
-  };
-}
-
 export function realSecureIO(): SecureKeyIO {
   return {
     async promptSecret(message: string): Promise<string> {
-      const readline = await import("node:readline");
-      return new Promise<string>((resolve) => {
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-        const echo = createMutableEcho(process.stdout);
-        // Node's core readline has no public masked-input option. Routing
-        // every write readline would otherwise make through this output
-        // stream's internal hook through our own mute-able gate is the
-        // documented workaround for suppressing per-keystroke terminal echo
-        // (Node readline FAQ) — genuinely hides the typed key, matching
-        // `collectMissingKeys`'s "input hidden" prompt copy. Muted only for
-        // the duration of this single prompt; the model never sees the
-        // typed value either way (out-of-band, host-only).
-        (rl as unknown as { _writeToOutput: (chunk: string) => void })._writeToOutput = (chunk: string) =>
-          echo.write(chunk);
-        echo.write(`${message} `);
-        echo.mute();
-        rl.question("", (answer) => {
-          echo.unmute();
-          rl.close();
-          process.stdout.write("\n");
-          resolve(answer);
-        });
-      });
+      // #269: the instructions stay on screen and each typed character shows as `•` (never the
+      // character); see masked-input.ts for why readline's echo-muting hack could not do this.
+      return readMaskedLine(process.stdin, process.stdout, message);
     },
     async persist(key: CredentialKey, value: string): Promise<void> {
       const { mkdir, writeFile, readFile } = await import("node:fs/promises");
@@ -136,62 +108,160 @@ function buildStore(ai: AiCliDeps | undefined) {
   return envCredentialStore(ai?.env ?? process.env, ai?.localConfig ?? loadLocalCredentials());
 }
 
+/** The env + stored-file inputs the store resolves from — for naming each key's source (#268). */
+export function credentialInputs(ai: AiCliDeps | undefined): {
+  env: Record<string, string | undefined>;
+  localConfig: Partial<Record<CredentialKey, string>>;
+} {
+  return { env: ai?.env ?? process.env, localConfig: ai?.localConfig ?? loadLocalCredentials() };
+}
+
+/** A key the provider refused, or that could not be checked, when entered (#291): never stored. */
+export class KeyCheckError extends Error {
+  constructor(
+    readonly code: "E_AI_KEY_INVALID" | "E_AI_KEY_UNVERIFIED",
+    message: string,
+  ) {
+    super(message);
+    this.name = "KeyCheckError";
+  }
+}
+
+/**
+ * The pre-persist check for an entered key (#291): a live auth check; `invalid` / `unreachable`
+ * refuse it (nothing stored). Returns the verdict cache the post-entry verification reuses.
+ */
+export function enteredKeyCheck(fetchFn: VerifyFetch): {
+  check: (key: CredentialKey, value: string) => Promise<void>;
+  verdicts: Map<CredentialKey, KeyVerdict>;
+  entered: Map<CredentialKey, string>;
+} {
+  const verdicts = new Map<CredentialKey, KeyVerdict>();
+  const entered = new Map<CredentialKey, string>();
+  return {
+    verdicts,
+    entered,
+    check: async (key, value) => {
+      const v = await verifyKey(key, value, fetchFn);
+      if (v.status === "invalid") {
+        throw new KeyCheckError("E_AI_KEY_INVALID", `${key} was rejected by ${KEY_PROVIDERS[key]} (HTTP ${v.httpStatus}) — not stored; check the key and run setup again`);
+      }
+      if (v.status === "unreachable") {
+        throw new KeyCheckError(
+          "E_AI_KEY_UNVERIFIED",
+          `${key} could not be verified with ${KEY_PROVIDERS[key]} (${v.reason}) — not stored; retry when online, or pass --no-verify to store it unverified`,
+        );
+      }
+      verdicts.set(key, v);
+      entered.set(key, value);
+    },
+  };
+}
+
+export interface FeatureKeyStatus {
+  required: CredentialKey[];
+  missing: CredentialKey[];
+  /** #268: where each key comes from (names and sources only). */
+  sources: KeySourceReport[];
+  /** #291: the live check per key (absent with --no-verify). */
+  verification?: KeyVerificationReport[];
+}
+
 export function registerAiCommands(program: Command, deps: CliDeps): void {
   const ai = program.command("ai").description("check or configure the model gateway credentials jevitate's AI features need");
 
   ai.command("status")
+    .description("which keys each AI feature uses, where each comes from (env or ~/.jevitate/credentials.json), and whether the provider accepts it (a live auth check; never prints a key)")
+    .option("--no-verify", "skip the live auth check (offline / CI): report presence and source only")
     .option("--json", "emit a JSON envelope")
-    .action(function (this: Command) {
-      const { json } = this.opts<{ json?: boolean }>();
+    .action(async function (this: Command) {
+      const { json, verify } = this.opts<{ json?: boolean; verify: boolean }>();
       const store = buildStore(deps.ai);
-      const data: Record<Feature, { required: CredentialKey[]; missing: CredentialKey[] }> =
-        {} as Record<Feature, { required: CredentialKey[]; missing: CredentialKey[] }>;
+      const { env, localConfig } = credentialInputs(deps.ai);
+      const fetchFn = deps.ai?.verifyFetch ?? realVerifyFetch;
+      const data = {} as Record<Feature, FeatureKeyStatus>;
       for (const feature of FEATURES) {
         const required = [...FEATURE_KEYS[feature]];
         const missing = required.filter((k) => !store.detect(k));
-        data[feature] = { required, missing };
+        const sources = keySources(feature, env, localConfig);
+        data[feature] = { required, missing, sources, ...(verify ? { verification: await verifyFeatureKeys(feature, store, fetchFn) } : {}) };
       }
+      // A key the provider refuses (or that could not be checked) is not "ready": exit 2, never 0.
+      const all = FEATURES.flatMap((f) => data[f].verification ?? []);
+      const problems = verificationProblems(all);
+      const exitCode = problems.invalid.length + problems.unreachable.length > 0 ? 2 : 0;
       const envelope = ok(data);
       if (json) {
-        emitJsonLine(program, envelope);
+        emitJsonOrRefusal(program, envelope, exitCode);
       } else {
         const out = program.configureOutput().writeOut;
-        // `withAliasHint`: e.g. "TYPESAFE_API_KEY (or TYPESAFE_JEV_API_KEY)" — an accepted env
-        // alias (issue #83) is worth surfacing here since this is exactly where a user decides
-        // what to set; unchanged for a key with no alias.
-        const withAliasHint = (k: CredentialKey) => {
-          const aliases = envAliasesFor(k);
-          return aliases.length === 0 ? k : `${k} (or ${aliases.join(", ")})`;
-        };
-        for (const feature of FEATURES) {
-          const { missing } = data[feature];
-          out?.(`${feature}: ${missing.length === 0 ? "ready" : `missing ${missing.map(withAliasHint).join(", ")}`}\n`);
-        }
-        process.exitCode = 0;
+        for (const feature of FEATURES) out?.(`${describeFeatureKeys(feature, data[feature].sources, data[feature].verification)}\n`);
+        if (problems.unreachable.length > 0) out?.("could not reach a provider to verify a key — retry when online, or pass --no-verify to skip the check\n");
+        process.exitCode = exitCode;
       }
     });
 
   ai.command("setup <feature>")
+    .description("enter (masked) and store the keys a feature needs in ~/.jevitate/credentials.json (0600); each key is verified with its provider before it is stored")
+    .option("--replace", "prompt for a new value even when a key is already stored (rotate / replace it)")
+    .option("--no-verify", "store the entered key without the live auth check (offline / CI)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, feature: string) {
-      const { json } = this.opts<{ json?: boolean }>();
+      const { json, replace, verify } = this.opts<{ json?: boolean; replace?: boolean; verify: boolean }>();
       if (feature !== "generation" && feature !== "judgment") {
         emitJsonLine(program, fail("E_INVALID_FEATURE", `unknown feature '${feature}' — expected 'generation' or 'judgment'`));
         return;
       }
       try {
         const store = buildStore(deps.ai);
-        const io = deps.ai?.secureIO ?? realSecureIO();
-        const collected = await collectMissingKeys(feature, store, io);
-        const envelope = ok({ feature, collected });
+        const { env, localConfig } = credentialInputs(deps.ai);
+        const injected = deps.ai?.secureIO;
+        const needsPrompt = replace === true || FEATURE_KEYS[feature].some((k) => !store.detect(k));
+        if (injected === undefined && needsPrompt && !(deps.ai?.isInteractive?.() ?? process.stdin.isTTY === true)) {
+          emitJsonLine(
+            program,
+            fail("E_AI_SETUP", `key entry needs an interactive terminal (stdin is not a TTY) — run \`jevitate ai setup ${feature}${replace === true ? " --replace" : ""}\` in a terminal, or set ${FEATURE_KEYS[feature].join(", ")} in the environment`),
+          );
+          return;
+        }
+        const io = injected ?? realSecureIO();
+        const fetchFn = deps.ai?.verifyFetch ?? realVerifyFetch;
+        const gate = enteredKeyCheck(fetchFn);
+        const collected = await collectKeys(feature, store, io, { replace: replace === true, ...(verify ? { check: gate.check } : {}) });
+        // What resolves NOW: the stored file plus what was just entered (env still wins).
+        const nowLocal = { ...localConfig, ...Object.fromEntries(gate.entered) };
+        const nowStore = envCredentialStore(env, nowLocal);
+        const sources = keySources(feature, env, verify ? nowLocal : { ...localConfig, ...Object.fromEntries(collected.map((k) => [k, "set"])) });
+        const warnings = shadowWarnings(collected, sources);
+        // Every key the feature uses is verified, including ones already present ("nothing missing").
+        const verification = verify ? await verifyFeatureKeys(feature, nowStore, fetchFn, gate.verdicts) : undefined;
+        const problems = verificationProblems(verification ?? []);
+        if (problems.invalid.length > 0 || problems.unreachable.length > 0) {
+          const line = describeFeatureKeys(feature, sources, verification);
+          emitJsonLine(
+            program,
+            fail(
+              problems.invalid.length > 0 ? "E_AI_KEY_INVALID" : "E_AI_KEY_UNVERIFIED",
+              problems.invalid.length > 0
+                ? `${line}`
+                : `${line} — retry when online, or pass --no-verify to skip the check`,
+            ),
+          );
+          return;
+        }
+        const envelope = ok({ feature, collected, sources, ...(verification === undefined ? {} : { verification }), ...(warnings.length === 0 ? {} : { warnings }) });
         if (json) {
           emitJsonLine(program, envelope);
         } else {
-          program.configureOutput().writeOut?.(`collected: ${collected.join(", ") || "(nothing missing)"}\n`);
+          const out = program.configureOutput().writeOut;
+          out?.(`collected: ${collected.join(", ") || "(nothing missing)"}\n`);
+          out?.(`${describeFeatureKeys(feature, sources, verification)}\n`);
+          for (const w of warnings) out?.(`warning: ${w}\n`);
           process.exitCode = 0;
         }
       } catch (err) {
-        emitJsonLine(program, fail("E_AI_SETUP", String(err instanceof Error ? err.message : err)));
+        if (err instanceof KeyCheckError) emitJsonLine(program, fail(err.code, err.message));
+        else emitJsonLine(program, fail("E_AI_SETUP", String(err instanceof Error ? err.message : err)));
       }
     });
 

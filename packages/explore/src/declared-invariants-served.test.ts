@@ -12,7 +12,10 @@ import { runFeatureMission } from "./missions/feature.js";
 import { runAdversarialMission } from "./missions/adversarial.js";
 import { runInductionMission } from "./missions/induction.js";
 import { verifyFix, type VerifySession } from "./verify-fix.js";
-import { ScriptedJudge } from "./testkit.js";
+import { ScriptedJudge, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #86 — app-declared invariants against a served fixture: an "Import" that charges credits but

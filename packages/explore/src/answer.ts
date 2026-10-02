@@ -77,6 +77,11 @@ export interface PageFacts extends PageHeadings {
   readonly controlNames?: readonly string[];
   /** #229: the text of the page's content links, in page order. */
   readonly contentLinks?: readonly string[];
+  /**
+   * #238: where the page's navigation links lead (their resolved hrefs: a `<nav>` / page header's
+   * links) — the first page that has any sets the run's top-level navigation, its absence-answer floor.
+   */
+  readonly navLinks?: readonly string[];
 }
 
 /** Control names kept per observed page (#223). */
@@ -108,7 +113,37 @@ export function controlFields(
  */
 export class ObservedPages {
   readonly #pages: ObservedPage[] = [];
+  /** #238: the top-level navigation's destinations (same-site paths), from the first page that had any. */
+  #topNav: string[] | null = null;
   constructor(private readonly secrets: readonly string[] = []) {}
+
+  /** #238: the paths the run's first navigated-from page links to in its navigation (empty when none seen). */
+  topNavigation(): readonly string[] {
+    return this.#topNav ?? [];
+  }
+
+  /** #239: values the run itself typed into form fields that no successful write has saved yet (folded). */
+  readonly #ownInputs = new Set<string>();
+
+  /**
+   * #239: the run typed `value` into a form field. Until a write the run fired after it succeeds
+   * (`confirmOwnInputs`), a field holding it shows what the run entered — never what the app recorded.
+   */
+  noteOwnInput(value: string): void {
+    // Kept as an observed field's value is (redacted, bounded), so the two compare.
+    const v = fold(redactContext(value, this.secrets).slice(0, OBSERVED_FIELD_CHARS));
+    if (v !== "") this.#ownInputs.add(v);
+  }
+
+  /** #239: a submit the run clicked fired writes that all succeeded (2xx): what it typed was sent and saved. */
+  confirmOwnInputs(): void {
+    this.#ownInputs.clear();
+  }
+
+  /** #239: the run's own typed, not-yet-saved values (folded). */
+  ownInputs(): ReadonlySet<string> {
+    return this.#ownInputs;
+  }
 
   add(url: string, text: string, fields: readonly ObservedField[] = [], headings: PageFacts = {}): void {
     const kept = fields.slice(0, MAX_OBSERVED_FIELDS).map((f) => ({
@@ -136,6 +171,10 @@ export class ObservedPages {
       ...(names.length === 0 ? {} : { controls: names }),
       ...(links.length === 0 ? {} : { contentLinks: links }),
     };
+    if (this.#topNav === null) {
+      const nav = navPaths(url, headings.navLinks ?? []).map((p) => redactContext(p, this.secrets));
+      if (nav.length > 0) this.#topNav = nav;
+    }
     if (page.text.trim() === "" && kept.length === 0) return;
     const same = (p: ObservedPage): boolean =>
       JSON.stringify(p.fields ?? []) === JSON.stringify(page.fields ?? []) &&
@@ -154,6 +193,38 @@ export class ObservedPages {
   pages(): readonly ObservedPage[] {
     return [...this.#pages].reverse();
   }
+}
+
+/** A URL's path (and query) for display and comparison; the URL itself when it does not parse. */
+function pathOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.pathname}${u.search}`;
+  } catch {
+    return url;
+  }
+}
+
+/** #238: the same-site paths (no query / fragment) a page's navigation links lead to, deduped, in order. */
+function navPaths(pageUrl: string, hrefs: readonly string[]): string[] {
+  let origin: string;
+  try {
+    origin = new URL(pageUrl).origin;
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const h of hrefs) {
+    try {
+      const u = new URL(h, pageUrl);
+      if (u.origin !== origin || !/^https?:$/.test(u.protocol)) continue;
+      const path = redactUrl(`${u.origin}${u.pathname}`).slice(origin.length) || "/";
+      if (!out.includes(path)) out.push(path);
+    } catch {
+      // an unparsable href leads nowhere checkable
+    }
+  }
+  return out;
 }
 
 /** One claim of an answer and the page text it rests on. */
@@ -183,6 +254,13 @@ export interface RunAnswer {
    * model saw it): the answer says it cannot be disclosed instead of stating it. Absent otherwise.
    */
   readonly withheld?: true;
+  /**
+   * #238: an absence answer — the goal asks whether something exists, none of the pages seen shows
+   * it, and the run covered enough of the app for that to be the answer. `searched` names the pages
+   * seen. Absent otherwise.
+   */
+  readonly absent?: true;
+  readonly searched?: readonly string[];
 }
 
 /** #219: what an answer whose grounds are a registered secret says in place of the value. */
@@ -200,6 +278,11 @@ export type AnswerVerdict =
        * label, an error page, or Jev's veto) — for the run, an answer not found. Absent otherwise.
        */
       readonly notAnswer?: true;
+      /**
+       * #238: "none exists" was the answer to give, but the run has not seen enough of the app to
+       * establish it (below the coverage floor) — the run proved nothing either way. Absent otherwise.
+       */
+      readonly absenceUncovered?: true;
     };
 
 /** Comparable form: lowercase, typographic quotes/dashes folded, whitespace collapsed. */
@@ -262,6 +345,23 @@ function numbersIn(s: string): string[] {
   return figuresIn(s).map((f) => f.value);
 }
 
+/**
+ * #236: an ordinal list marker at a line's start — `1.`, `2)`, `**3.**`, `- 4.` — is formatting, not a
+ * figure the text states. Only at a line's start and only when followed by a space, so "2.5 GB" and
+ * "$300." stay figures.
+ */
+const LIST_MARKER = /^([ \t]*(?:[-*+•][ \t]+)?(?:\*\*|__)?)\d{1,3}[.)](?:\*\*|__)?(?=[ \t])/gm;
+
+/** A text with its numbered-list markers removed (#236). */
+function withoutListMarkers(s: string): string {
+  return s.replace(LIST_MARKER, "$1");
+}
+
+/** The figures a claim / an answer STATES (#157, #236): numbered-list markers are not stated figures. */
+function statedFigures(s: string): Figure[] {
+  return figuresIn(withoutListMarkers(s));
+}
+
 /** "3" or `5 (in "5GB")` — the offending token quoted so the model can repair its answer. */
 function describeFigures(figs: readonly Figure[]): string {
   return figs.map((f) => (f.token === f.value ? f.value : `${f.value} (in "${f.token}")`)).join(", ");
@@ -279,15 +379,30 @@ function contentWords(s: string): string[] {
 }
 
 /**
+ * #236: a content word's stem — its inflection cut, never below 5 letters — so "subscribed" is said
+ * by a quote "No subscription". A word of 5 letters or fewer is its own stem.
+ */
+function stemOf(w: string): string {
+  return w.slice(0, Math.max(5, w.length - 3));
+}
+
+/** Where a quote was found: the page, its URL, and the source (page text / a control's value). */
+interface Located {
+  readonly page: ObservedPage;
+  readonly url: string;
+  readonly source: "page-text" | "control-value";
+  readonly control?: string;
+  /** For a control-value: the control's whole current value. */
+  readonly value?: string;
+}
+
+/**
  * Where a quote is observed: first in a page's visible text; else (#207) in a form control's current
  * value — the quote must be (part of) the value itself, or the value as the answer generator saw it
  * (`<label>: <value>`) while containing the whole value. A quote of only a control's LABEL is not a
  * value quote (a label is the control's name, not what it holds).
  */
-function locateQuote(
-  q: string,
-  pages: readonly ObservedPage[],
-): { readonly page: ObservedPage; readonly url: string; readonly source: "page-text" | "control-value"; readonly control?: string } | null {
+function locateQuote(q: string, pages: readonly ObservedPage[]): Located | null {
   const page = pages.find((p) => fold(p.text).includes(q));
   if (page !== undefined) return { page, url: page.url, source: "page-text" };
   // A quote copied from a control summary: `value="ada@example.test"`.
@@ -301,11 +416,55 @@ function locateQuote(
       // "bio: loves tea"), so the whole value is compared in the same bare form.
       const whole = bareQuote(f.value);
       if (value.includes(v) || ((q.includes(value) || (whole !== "" && q.includes(whole))) && line.includes(q))) {
-        return { page: p, url: p.url, source: "control-value", control: f.label };
+        return { page: p, url: p.url, source: "control-value", control: f.label, value: f.value };
       }
     }
   }
   return null;
+}
+
+/** The non-empty lines of a multi-line quote, each in comparable bare form (#234). */
+function quoteLines(quote: string): string[] {
+  return quote
+    .split(/\r?\n/)
+    .map((l) => bareQuote(l))
+    .filter((l) => l.replace(/\s/g, "") !== "");
+}
+
+/**
+ * #234: a multi-line quote whose EVERY line is on the same observed page's visible text, in the
+ * quote's order — the natural evidence of a list answer (a page's section headings, tabs, options),
+ * whose entries are real but not contiguous on the page. Every line must be a quote in its own right
+ * (≥ `MIN_QUOTE_CHARS`); a line found nowhere, or out of order, grounds nothing.
+ */
+function locateLines(quote: string, pages: readonly ObservedPage[]): Located | null {
+  const lines = quoteLines(quote);
+  if (lines.length < 2 || lines.some((l) => l.replace(/\s/g, "").length < MIN_QUOTE_CHARS)) return null;
+  for (const page of pages) {
+    const text = fold(page.text);
+    let at = 0;
+    let inOrder = true;
+    for (const line of lines) {
+      const i = text.indexOf(line, at);
+      if (i < 0) {
+        inOrder = false;
+        break;
+      }
+      at = i + line.length;
+    }
+    if (inOrder) return { page, url: page.url, source: "page-text" };
+  }
+  return null;
+}
+
+/**
+ * Why a quote was found nowhere (#234): a multi-line quote is told what a quote must be — one
+ * contiguous passage, or lines that each appear on ONE page in that order — so the model can repair it
+ * instead of resubmitting the same stitched text.
+ */
+function notFoundWhy(quote: string): string {
+  if (quoteLines(quote).length < 2) return "quote not found on any observed page";
+  return "quote not found on any observed page: its lines are not all on one page in that order — quote one contiguous passage, or give one claim per list entry, each quoting that entry";
 }
 
 /** Occurrences of `needle` in `hay` (non-overlapping). */
@@ -371,8 +530,9 @@ function groundClaim(
   given: ReadonlySet<string>,
   goal: string,
   answer: string,
+  own: ReadonlySet<string>,
 ): Grounded {
-  const r = groundClaimOn(claim, quote, pages, given, goal, answer);
+  const r = groundClaimOn(claim, quote, pages, given, goal, answer, own);
   return "evidence" in r ? r : { evidence: r, notAnswer: false };
 }
 
@@ -383,12 +543,15 @@ function groundClaimOn(
   given: ReadonlySet<string>,
   goal: string,
   answer: string,
+  own: ReadonlySet<string>,
 ): AnswerEvidence | Grounded {
   const q = bareQuote(quote);
   const base = { claim, quote };
   if (q.replace(/\s/g, "").length < MIN_QUOTE_CHARS) return { ...base, url: null, grounded: false, why: "no quote" };
-  const found = locateQuote(q, pages);
-  if (found === null) return { ...base, url: null, grounded: false, why: "quote not found on any observed page" };
+  // #234: a list answer ("which sections are there") quotes the page's entries one per line — real
+  // text, but not one contiguous passage (body text sits between the headings).
+  const found = locateQuote(q, pages) ?? locateLines(quote, pages);
+  if (found === null) return { ...base, url: null, grounded: false, why: notFoundWhy(quote) };
   const page = { url: found.url };
   const where = found.control === undefined ? { source: found.source } : { source: found.source, control: found.control };
   // #223: on the page is not the same as answering. An error page (404 / not found) holds no answer
@@ -397,12 +560,18 @@ function groundClaimOn(
   if (errorPage !== null) {
     return { evidence: { ...base, url: page.url, grounded: false, ...where, why: errorPage }, notAnswer: true };
   }
+  // #239: a field holding what the run itself typed (and never saved) shows what the run entered, not
+  // what the app recorded: "record a decision" was accepted on its own unsubmitted form values.
+  if (found.source === "control-value" && found.value !== undefined && own.has(fold(found.value))) {
+    const why = `the quote is the run's own typed input in "${found.control ?? "a form field"}", never saved — it shows what the run entered, not what the app recorded (submit it, then report what the app shows)`;
+    return { ...base, url: page.url, grounded: false, ...where, why };
+  }
   if (found.source === "page-text" && !CONTROL_GOAL.test(goal) && quoteIsOnlyControlNames(quote, found.page)) {
     const why = "the quote is only a control's label (a button, a field label or a navigation link), not page content that answers the question";
     return { evidence: { ...base, url: page.url, grounded: false, ...where, why }, notAnswer: true };
   }
   const quoted = new Set(numbersIn(q));
-  const missing = figuresIn(claim).filter((f) => !quoted.has(f.value) && !given.has(f.value));
+  const missing = statedFigures(claim).filter((f) => !quoted.has(f.value) && !given.has(f.value));
   if (missing.length > 0) {
     return { ...base, url: page.url, grounded: false, ...where, why: `figure ${describeFigures(missing)} is not in its quote` };
   }
@@ -413,7 +582,7 @@ function groundClaimOn(
   const words = contentWords(claim);
   // A control-value quote is checked against the value together with its label ("Email" + the address).
   const said = found.control === undefined ? q : `${fold(found.control)} ${q}`;
-  if (words.length > 0 && quoted.size === 0 && !words.some((w) => said.includes(w))) {
+  if (words.length > 0 && quoted.size === 0 && !words.some((w) => said.includes(w) || said.includes(stemOf(w)))) {
     return { ...base, url: page.url, grounded: false, ...where, why: "the quote does not say what the claim says" };
   }
   return { ...base, url: page.url, grounded: true, ...where };
@@ -434,12 +603,17 @@ export const NO_ANSWER_REASON = "no answer was found on the pages seen";
 export function groundAnswer(
   proposed: { readonly answer: string | null; readonly claims: ReadonlyArray<{ readonly claim: string; readonly quote: string }> },
   pages: readonly ObservedPage[],
-  opts: { readonly goal?: string } = {},
+  opts: {
+    readonly goal?: string;
+    /** #239: the run's own typed, not-yet-saved form values (folded) — a field holding one grounds nothing. */
+    readonly ownInputs?: ReadonlySet<string>;
+  } = {},
 ): AnswerVerdict {
   const text = (proposed.answer ?? "").trim();
   if (text === "" || (NO_ANSWER_TEXT.test(text) && proposed.claims.length === 0)) return { accept: false, reason: NO_ANSWER_REASON, answer: null };
   const given = new Set(numbersIn(opts.goal ?? ""));
-  const grounded_ = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given, opts.goal ?? "", text));
+  const own = opts.ownInputs ?? new Set<string>();
+  const grounded_ = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given, opts.goal ?? "", text, own));
   const evidence = grounded_.map((g) => g.evidence);
   const answer: RunAnswer = { text, evidence };
   if (evidence.length === 0) return { accept: false, reason: "the answer cites no page text", answer };
@@ -450,7 +624,7 @@ export function groundAnswer(
     return grounded_[badAt]!.notAnswer ? { accept: false, reason, answer, notAnswer: true } : { accept: false, reason, answer };
   }
   const grounded = new Set(evidence.flatMap((e) => numbersIn(e.quote)));
-  const invented = figuresIn(text).filter((f) => !grounded.has(f.value) && !given.has(f.value));
+  const invented = statedFigures(text).filter((f) => !grounded.has(f.value) && !given.has(f.value));
   if (invented.length > 0) {
     return { accept: false, reason: `the answer states ${describeFigures(invented)}, which no observed page shows`, answer };
   }
@@ -623,6 +797,15 @@ export class VetoedAnswers {
   has(answer: RunAnswer): boolean {
     return this.#keys.has(VetoedAnswers.#key(answer));
   }
+  /** #234: the (answer, quotes) pairs code rejected as ungrounded in this run. */
+  readonly #rejected = new Set<string>();
+  /** Notes a rejected answer; true when the very same answer on the same quotes was rejected before. */
+  rejectedAgain(answer: RunAnswer): boolean {
+    const key = VetoedAnswers.#key(answer);
+    if (this.#rejected.has(key)) return true;
+    this.#rejected.add(key);
+    return false;
+  }
   get size(): number {
     return this.#keys.size;
   }
@@ -681,6 +864,14 @@ export async function reportAnswer(
     readonly judge?: JudgmentPort;
     /** #229: the run's vetoed answers — a veto stands for the whole run, across reports. */
     readonly vetoes?: VetoedAnswers;
+    /**
+     * #238: the run's top-level navigation (`ObservedPages.topNavigation`). Given, a goal that admits
+     * "none exists" (`goalAdmitsAbsence`) and finds no answer gets an absence verdict on the pages'
+     * coverage; absent (a reply goal), no answer stays no answer.
+     */
+    readonly topNav?: readonly string[];
+    /** #239: the run's own typed, not-yet-saved form values (`ObservedPages.ownInputs`). */
+    readonly ownInputs?: ReadonlySet<string>;
   },
 ): Promise<AnswerVerdict> {
   const secrets = input.secrets ?? [];
@@ -699,23 +890,59 @@ export async function reportAnswer(
     answer: out.answer === null ? null : r(out.answer),
     claims: out.claims.map((c) => ({ claim: r(c.claim), quote: r(c.quote) })),
   });
+  const grounding = { goal: input.goal, ...(input.ownInputs === undefined ? {} : { ownInputs: input.ownInputs }) };
   const res = await gen.generate("goal.answer", ask);
-  const verdict = await vetoed(groundAnswer(scrub(res.output), input.pages, { goal: input.goal }), input.judge, vet, vetoes);
+  const verdict = await vetoed(groundAnswer(scrub(res.output), input.pages, grounding), input.judge, vet, vetoes);
   if (verdict.accept) return verdict;
+  if (verdict.notAnswer !== true && verdict.answer !== null) return rejectedAgain(verdict, vetoes);
+  // #238: for a goal that asks whether something exists, "no answer on the pages" IS the answer —
+  // once the run has seen enough of the app (code's coverage floor).
+  const absence = (v: AnswerVerdict): AnswerVerdict =>
+    input.topNav !== undefined && !v.accept && v.answer === null && v.reason === NO_ANSWER_REASON && goalAdmitsAbsence(input.goal)
+      ? absenceVerdict(input.pages, input.topNav)
+      : v;
   // #216 / #223: a `null` answer, or one that does not answer the question, is retried once with the
   // page's main heading / document title as a hint (never an error page's heading).
   const noAnswer = verdict.answer === null && verdict.reason === NO_ANSWER_REASON;
   if (!noAnswer && verdict.notAnswer !== true) return verdict;
   const hint = headingHint(input.pages[0], input.goal);
-  if (hint === null) return verdict;
+  if (hint === null) return absence(verdict);
   const retry = await gen.generate("goal.answer", { ...ask, hint: redactContext(hint, secrets) });
-  const retried = await vetoed(groundAnswer(scrub(retry.output), input.pages, { goal: input.goal }), input.judge, vet, vetoes);
+  const retried = await vetoed(groundAnswer(scrub(retry.output), input.pages, grounding), input.judge, vet, vetoes);
   // The retry repeated the answer just vetoed: the veto itself (with Jev's p) is the verdict to report.
-  return !retried.accept && retried.reason === ALREADY_VETOED_REASON && verdict.notAnswer === true ? verdict : retried;
+  return !retried.accept && retried.reason === ALREADY_VETOED_REASON && verdict.notAnswer === true ? verdict : absence(retried);
+}
+
+/** #234: what the reason of a re-report of an answer code already rejected in this run adds. */
+export const REJECTED_AGAIN_REASON = "the same answer on the same quotes was already rejected in this run — change the quotes, resubmitting them cannot ground";
+
+/**
+ * #234: an ungrounded answer resubmitted unchanged (same answer, same quotes) is told so — the model
+ * resubmitted an identical stitched quote 3× — so the rejection names the repeat, not only the cause.
+ */
+function rejectedAgain(verdict: Extract<AnswerVerdict, { accept: false }>, vetoes: VetoedAnswers): AnswerVerdict {
+  if (verdict.answer === null || verdict.answer.evidence.length === 0 || !vetoes.rejectedAgain(verdict.answer)) return verdict;
+  return { ...verdict, reason: `${verdict.reason} (${REJECTED_AGAIN_REASON})` };
 }
 
 /** Paths named in an "answer not found" reason (the rest are counted). */
 const NOT_FOUND_PATHS = 8;
+
+/** The observed pages' paths (with query), first seen first, deduped. */
+function pathsSeen(pages: readonly ObservedPage[]): string[] {
+  const paths: string[] = [];
+  for (const p of [...pages].reverse()) {
+    const path = pathOf(p.url);
+    if (!paths.includes(path)) paths.push(path);
+  }
+  return paths;
+}
+
+/** "a, b, c, +N more" — the first `NOT_FOUND_PATHS` paths named, the rest counted. */
+function listPaths(paths: readonly string[]): string {
+  const shown = paths.slice(0, NOT_FOUND_PATHS).join(", ");
+  return paths.length > NOT_FOUND_PATHS ? `${shown}, +${paths.length - NOT_FOUND_PATHS} more` : shown;
+}
 
 /**
  * The end reason of a run whose report found no answer (#207): "answer not found (pages seen: …)" —
@@ -723,19 +950,105 @@ const NOT_FOUND_PATHS = 8;
  * searched instead of a generic "no progress" / "blocked".
  */
 export function answerNotFoundReason(pages: readonly ObservedPage[]): string {
-  const paths: string[] = [];
-  for (const p of [...pages].reverse()) {
-    let path: string;
-    try {
-      const u = new URL(p.url);
-      path = `${u.pathname}${u.search}`;
-    } catch {
-      path = p.url;
-    }
-    if (!paths.includes(path)) paths.push(path);
-  }
+  const paths = pathsSeen(pages);
   if (paths.length === 0) return "answer not found (no page text was observed)";
-  const shown = paths.slice(0, NOT_FOUND_PATHS).join(", ");
-  const more = paths.length > NOT_FOUND_PATHS ? `, +${paths.length - NOT_FOUND_PATHS} more` : "";
-  return `answer not found (pages seen: ${shown}${more})`;
+  return `answer not found (pages seen: ${listPaths(paths)})`;
+}
+
+/**
+ * #238: a goal for which "there is none" is a valid answer — it asks WHETHER something exists ("check
+ * whether…", "is there…", "if any"), or says outright that none existing is an answer. Code-side and
+ * narrow: any other find-out whose answer is not on the pages stays "answer not found".
+ */
+const ABSENCE_GOAL =
+  /\bwhether\b|\b(?:is|are) there\b|\bif (?:there (?:is|are)|any)\b|\bif (?:it|they|you|the \w+) (?:has|have|shows?|offers?)\b|\bnone (?:exists?|is|are|at all)\b|\b(?:does ?n[o']t|do(?:es)? not) exist\b|\bno such\b/i;
+
+export function goalAdmitsAbsence(goal: string): boolean {
+  return ABSENCE_GOAL.test(goal);
+}
+
+/**
+ * #239: a goal that asks the run to WRITE something — its imperative is "record / save / create / add
+ * / invite / submit / send / post / publish / register / book / schedule" at a sentence's start
+ * or after "then" / "and" / "please". Code-side and narrow: "how do I add…" or "the saved decision" is
+ * not one.
+ */
+const WRITE_GOAL =
+  /(?:^\s*|[.!?;:]\s+|\b(?:then|and|please)\s+)(?:record|save|create|add|invite|submit|send|post|publish|register|book|schedule)\b/i;
+
+export function goalAsksToWrite(goal: string): boolean {
+  return WRITE_GOAL.test(goal);
+}
+
+/**
+ * #286: a goal that asks the run to REPORT what it found ("Finish by reporting the price shown",
+ * "report back which…"). With `--success` checks too, the checks holding is not the whole goal: the
+ * run must also end with a grounded answer — a check met by an unrelated page's load-time request
+ * once ended a run `succeeded` with no price reported.
+ */
+const REPORT_GOAL =
+  /\b(?:finish|end|then|and)\s+(?:by\s+)?report(?:ing)?\b|\breport(?:ing)?\s+(?:back\s+)?(?:the|what|which|how|whether|if|its|their|your|who|when|where)\b/i;
+
+export function goalAsksForReport(goal: string): boolean {
+  return REPORT_GOAL.test(goal);
+}
+
+/** #239: why a grounded report cannot settle a write goal before any write of the run succeeded. */
+export const UNSAVED_WRITE_REASON =
+  "the goal asks to record / save something, but no write request of this run has succeeded yet (no submit sent a write that answered 2xx) — a report cannot settle it before the change is saved: submit it, then report what the app shows";
+
+/** #238: pages a run without a known top-level navigation must have seen before "none exists" is an answer. */
+const ABSENCE_MIN_PAGES = 2;
+
+/** #238: whether the pages seen cover enough of the app for an absence answer, and what is still unseen. */
+export interface AbsenceCoverage {
+  readonly covered: boolean;
+  /** The pages seen (paths, first seen first). */
+  readonly seen: readonly string[];
+  /** The top-level navigation's destinations not yet seen (empty when none is known). */
+  readonly unseen: readonly string[];
+  /** The floor, in words ("3 of the 6 top-level navigation pages", "2 distinct pages"). */
+  readonly floor: string;
+}
+
+/**
+ * #238 — the coverage floor for an absence answer, by code: with a known top-level navigation (the
+ * links in the first page's `<nav>` / header), at least half of its destinations (never fewer than 2,
+ * never more than it has) must be among the pages seen; without one, at least `ABSENCE_MIN_PAGES`
+ * distinct pages. A run that answered "none" from the page it started on has not looked.
+ */
+export function absenceCoverage(pages: readonly ObservedPage[], topNav: readonly string[]): AbsenceCoverage {
+  const seen = pathsSeen(pages);
+  const seenPaths = new Set(seen.map((p) => p.split("?")[0] ?? p));
+  if (topNav.length === 0) {
+    return { covered: seenPaths.size >= ABSENCE_MIN_PAGES, seen, unseen: [], floor: `${ABSENCE_MIN_PAGES} distinct pages` };
+  }
+  const need = Math.min(topNav.length, Math.max(2, Math.ceil(topNav.length / 2)));
+  const visited = topNav.filter((p) => seenPaths.has(p));
+  const unseen = topNav.filter((p) => !seenPaths.has(p));
+  return { covered: visited.length >= need, seen, unseen, floor: `${need} of the ${topNav.length} top-level navigation pages` };
+}
+
+/** #238: what an accepted absence answer says — the verdict and what was searched. */
+function absenceAnswerText(seen: readonly string[]): string {
+  return `not present — none of the pages seen shows it (pages seen: ${listPaths(seen)})`;
+}
+
+/**
+ * #238 — the verdict on "there is none" for a goal that admits it (`goalAdmitsAbsence`): accepted
+ * as an absence answer (`absent`, with the pages searched) once the run's coverage meets the floor;
+ * else rejected as not yet established (`absenceUncovered`), naming the navigation still unseen.
+ */
+function absenceVerdict(pages: readonly ObservedPage[], topNav: readonly string[]): AnswerVerdict {
+  const c = absenceCoverage(pages, topNav);
+  if (c.covered) {
+    return { accept: true, answer: { text: absenceAnswerText(c.seen), evidence: [], absent: true, searched: c.seen } };
+  }
+  const where = c.unseen.length > 0 ? ` — not yet seen: ${listPaths(c.unseen)}` : " — open more of the app's pages first";
+  return {
+    accept: false,
+    reason: `"none exists" is not established yet: the run has seen ${c.seen.length === 0 ? "no page" : listPaths(c.seen)}, below the floor of ${c.floor}${where}`,
+    answer: null,
+    absenceUncovered: true,
+  };
 }

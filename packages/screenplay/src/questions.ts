@@ -54,7 +54,15 @@ export const IsVisible = {
       description: `visibility of ${target.description}`,
       async answeredBy(actor) {
         const page = actor.ability(BrowseTheWebToken).session.page;
-        return target.resolve(page).isVisible();
+        // #299: "visible" means at least one matching element is visible. A target that matches
+        // several elements (a list row) must not trip Playwright's strict mode and crash the check.
+        const locator = target.resolve(page);
+        const n = await locator.count();
+        if (n <= 1) return locator.isVisible();
+        for (let i = 0; i < n; i++) {
+          if (await locator.nth(i).isVisible()) return true;
+        }
+        return false;
       },
     };
   },

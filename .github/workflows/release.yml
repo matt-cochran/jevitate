@@ -1,73 +1,185 @@
 name: Release
 
-# Publishes @jevitate/cli and jevitate to npm via OIDC Trusted Publishing —
-# NO stored token (nothing to expire or leak), with build provenance.
+# Versions @jevitate/cli + jevitate with changesets, and keeps the npm OIDC
+# Trusted Publishing path ready. See RELEASING.md.
 #
-# PREREQUISITE (one-time, per package, on npmjs.com): configure a Trusted
-# Publisher for `@jevitate/cli` AND `jevitate` pointing at this repo
-# (matt-cochran/jevitate) and this workflow file (release.yml). Until that is
-# done, publishing here fails — see RELEASING.md. The FIRST publish is done by
-# hand (`bash scripts/release.sh`), because a Trusted Publisher can only be
-# configured for a package that already exists.
+# CURRENT STATE (manual publishing): npm rejects this repo's GitHub OIDC tokens
+# (immutable subject claims; npm/cli#9969), and by decision no NPM_TOKEN is
+# stored. Releases are published BY HAND with `bash scripts/release.sh`.
+# This workflow therefore:
+#   - on every push to `main`, picks a mode in plain shell (`plan` job):
+#       version  - pending .changeset/*.md: run `changeset version` and push the
+#                  `changeset-release/main` branch. Actions may not open PRs in
+#                  this repo (setting intentionally off), so the run prints the
+#                  compare URL and the `gh pr create` command instead of failing.
+#       publish  - main's version is NOT on npm yet: print a notice to publish
+#                  by hand. A push never publishes.
+#       none     - nothing pending, and main's version is already on npm.
+#   - publishes ONLY from a manual run (Actions -> Release -> Run workflow, with
+#     `publish` checked). Use that once npm fixes npm/cli#9969; until then the
+#     npm PUT fails (E404) and `scripts/release.sh` is the path.
 #
-# Trigger: the first publish (0.1.0) was done by hand and Trusted Publishers
-# are configured, so auto-publishing on merge to `main` is now enabled. A push
-# to `main` with no new package version is a no-op (changesets publishes only
-# bumped versions), so this is safe on every merge; `workflow_dispatch` stays
-# for manual runs. REQUIRES the Trusted Publisher for BOTH packages to be set
-# up on npmjs.com first (see RELEASING.md) — merge this only after that.
+# Actions are pinned to commit SHAs (version in the trailing comment). npm is
+# pinned to 11: OIDC needs npm >= 11.5.1, and npm 12 rejects the --git-checks
+# flag pnpm 9's publish passes through (EUNKNOWNCONFIG, #262).
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm via OIDC (works only once npm/cli#9969 is fixed; else use scripts/release.sh)"
+        type: boolean
+        default: false
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
+permissions:
+  contents: read
+
 jobs:
-  release:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      version: ${{ steps.mode.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Select mode (version | publish | none)
+        id: mode
+        run: |
+          version=$(node -p "require('./packages/cli/package.json').version")
+          pending=$(find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md' | wc -l)
+          if [ "$pending" -gt 0 ]; then
+            mode=version
+          elif [ -z "$(npm view "@jevitate/cli@${version}" version 2>/dev/null || true)" ]; then
+            mode=publish
+          else
+            mode=none
+          fi
+          echo "mode=${mode}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "mode=${mode} (pending changesets: ${pending}; main is at ${version})"
+
+      - name: Publishing is manual (npm/cli#9969)
+        if: steps.mode.outputs.mode == 'publish' && !(github.event_name == 'workflow_dispatch' && inputs.publish)
+        env:
+          VERSION: ${{ steps.mode.outputs.version }}
+        run: |
+          msg="@jevitate/cli@${VERSION} is not on npm yet. Publish it by hand from an up-to-date main: bash scripts/release.sh (see RELEASING.md)."
+          echo "::notice title=Release ${VERSION} is ready to publish::${msg}"
+          {
+            echo "### Release ${VERSION} is ready to publish"
+            echo
+            echo "${msg}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  version:
+    needs: plan
+    if: needs.plan.outputs.mode == 'version'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-      id-token: write # required for npm OIDC Trusted Publishing
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Version packages (push changeset-release/main)
+        id: version
+        # The action pushes the branch, then tries to open the PR. Opening it is
+        # refused in this repo, so that error is tolerated here; the next step
+        # fails the job if the branch itself wasn't pushed.
+        continue-on-error: true
+        uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          script: pnpm version-packages
+          commit-message: "chore: version packages"
+          pr-title: "chore: version packages"
+
+      - name: Open the version PR by hand
+        env:
+          PR_NUMBER: ${{ steps.version.outputs.pr-number }}
+        run: |
+          if ! git ls-remote --exit-code --heads origin changeset-release/main >/dev/null; then
+            echo "::error::changeset-release/main was not pushed; see the 'Version packages' step log."
+            exit 1
+          fi
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Version PR: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
+            exit 0
+          fi
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...changeset-release/main?expand=1"
+          cmd='gh pr create --head changeset-release/main --base main --title "chore: version packages" --fill'
+          echo "::notice title=Open the version PR by hand::${url} or run: ${cmd}"
+          {
+            echo "### Open the version PR by hand"
+            echo
+            echo "Actions may not create pull requests in this repo. \`changeset-release/main\` is pushed; open its PR:"
+            echo
+            echo "- ${url}"
+            echo "- \`${cmd}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    # Manual only. Ready for OIDC Trusted Publishing once npm/cli#9969 is fixed.
+    needs: plan
+    if: needs.plan.outputs.mode == 'publish' && github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # tags + GitHub releases
+      id-token: write # npm OIDC Trusted Publishing (+ provenance)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Ensure OIDC-capable npm
-        # npm OIDC Trusted Publishing needs npm >= 11.5.1; Node 22 bundles older. Pinned to npm 11:
-        # npm 12 rejects the --git-checks flag pnpm 9's publish passes through (EUNKNOWNCONFIG).
+        # npm >= 11.5.1 for OIDC; not 12 (rejects pnpm 9's --git-checks, #262).
         run: npm install -g npm@11
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm -r build
-
-      - name: Bundle @jevitate/cli
-        run: pnpm --filter @jevitate/cli run bundle
-
-      - name: Create release PR or publish to npm
-        uses: changesets/action@v1
+      - name: Publish to npm (changeset publish)
+        # `pnpm release` builds, bundles @jevitate/cli and runs `changeset publish`,
+        # which publishes only versions not yet on npm and tags them; the action
+        # pushes the tags and creates the GitHub releases.
+        uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          publish: pnpm release
-          version: pnpm version-packages
-          commit: "chore: version packages"
-          title: "chore: version packages"
+          script: pnpm release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No NPM_TOKEN: OIDC provides publish auth. Provenance is attached.
           NPM_CONFIG_PROVENANCE: "true"

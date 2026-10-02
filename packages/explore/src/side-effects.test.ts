@@ -6,7 +6,10 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { explore } from "./explore.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
 import { SideEffectGuard, SideEffectLog } from "./side-effects.js";
-import { withSession } from "./testkit.js";
+import { withSession, useSkippingTime } from "./testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #92 — the Preveti J7 shape: "Run the simulation →" POSTs a paid job; the loop waits a moment,
@@ -114,6 +117,7 @@ function fakeMonitor(): { monitor: PageMonitor; finish: (r: CapturedRequest) => 
       capture = null;
     },
     pending: () => [...inflight],
+    unfinished: () => [...inflight],
   } as unknown as PageMonitor;
   return { monitor, finish: (r) => capture?.add(r), inflight };
 }
@@ -232,6 +236,46 @@ describe("SideEffectGuard (#92)", () => {
   });
 });
 
+describe("SideEffectGuard — only the app's writes are guarded (#274, #284)", () => {
+  const APP = "http://app.example.test";
+  const beacon = (url: string): CapturedRequest => ({ method: "POST", url, path: new URL(url).pathname, status: 200, failed: false });
+
+  it("a third-party beacon is not the control's side effect: the safe control may be clicked again", () => {
+    const { monitor, finish, inflight } = fakeMonitor();
+    const g = new SideEffectGuard(monitor, { allowlist: [APP] });
+    g.beginClick("menu", "Open user menu", "/a", 0);
+    finish(beacon("https://m.stripe.com/6"));
+    finish(beacon("https://q.stripe.com/csp-report"));
+    inflight.push({ url: "https://third-party.example/csp-report", method: "POST", resourceType: "ping", startedAt: 10 });
+    g.settle();
+    expect(g.check("menu", "/a", PAGE)).toEqual({ refuse: false });
+    expect(g.inflight()).toEqual([]);
+    expect(g.lastClick()?.writes).toEqual([]);
+  });
+
+  it("a --settle-ignore'd request is not the control's side effect, even on the app's own origin", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor, { allowlist: [APP], ignoreRequests: (u) => u.includes("m.stripe.com") || u.endsWith("/telemetry") });
+    g.beginClick("nav", "Research", "/a", 0);
+    finish(beacon(`${APP}/telemetry`));
+    g.settle();
+    expect(g.check("nav", "/a", PAGE)).toEqual({ refuse: false });
+  });
+
+  it("still refuses a repeated first-party write fired alongside the beacons", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor, { allowlist: [APP] });
+    g.beginClick("run", "Run the simulation →", "/a", 0);
+    finish(beacon("https://m.stripe.com/6"));
+    finish({ ...post(202), url: `${APP}/api/simulations` });
+    g.settle();
+    const v = g.check("run", "/a", PAGE);
+    expect(v).toMatchObject({ refuse: true, inflight: false });
+    expect(v.refuse && v.reason).toContain("POST /api/simulations");
+    expect(v.refuse && v.reason).not.toContain("stripe");
+  });
+});
+
 describe("SideEffectLog (#116)", () => {
   it("attributes each write to the action that began before it, skips reads, and marks the risk", () => {
     let t = 0;
@@ -241,6 +285,7 @@ describe("SideEffectLog (#116)", () => {
       startCapture: () => ({ add: (r: CapturedRequest) => got.push(r), requests: () => [...got] }) as unknown as RequestCapture,
       stopCapture() {},
       pending: () => [...inflight],
+    unfinished: () => [...inflight],
     } as unknown as PageMonitor;
     const log = new SideEffectLog({ now: () => t });
     log.attach(monitor);

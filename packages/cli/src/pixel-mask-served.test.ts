@@ -9,6 +9,10 @@ import type { Page } from "playwright";
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
 import { DemoOverlay } from "@jevitate/explore";
 import { MaskUnavailableError, PIXEL_MASK_ATTR, SecretPixelMask, captureStepScreenshot, maskingPort } from "./demo-capture.js";
+import { useSkippingTime } from "../../explore/src/testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #250/#251 hard requirement — secrets masked in PIXELS, in real Chromium: a served page shows a

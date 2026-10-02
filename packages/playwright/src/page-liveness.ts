@@ -13,6 +13,8 @@
  */
 
 /** The slice of a Playwright `Page` the watchdog needs. */
+import { clock } from "@jevitate/domain";
+
 export interface LivenessPage {
   evaluate(fn: () => boolean): Promise<boolean>;
   isClosed(): boolean;
@@ -73,13 +75,13 @@ export class PageLivenessWatchdog {
     if (!Number.isFinite(this.#unresponsiveMs) || this.#unresponsiveMs <= 0) {
       throw new RangeError(`unresponsiveMs must be a positive number, got ${String(this.#unresponsiveMs)}`);
     }
-    this.#now = opts.now ?? Date.now;
+    this.#now = opts.now ?? clock.now;
     this.#onLost = opts.onLost;
     this.#lastAnswer = this.#now();
     const interval = opts.probeIntervalMs ?? Math.max(1, Math.min(5_000, Math.floor(this.#unresponsiveMs / 3)));
     page.on("close", () => this.stop());
     page.on("crash", () => this.stop());
-    this.#timer = setInterval(() => this.tick(), interval);
+    this.#timer = clock.setInterval(() => this.tick(), interval);
     // Never keep the process alive just for the watchdog.
     (this.#timer as { unref?: () => void }).unref?.();
   }
@@ -92,7 +94,7 @@ export class PageLivenessWatchdog {
   stop(): void {
     if (this.#stopped) return;
     this.#stopped = true;
-    clearInterval(this.#timer);
+    clock.clearInterval(this.#timer);
   }
 
   /** One interval: give up on a page silent for too long, else start a probe unless one is in flight. */

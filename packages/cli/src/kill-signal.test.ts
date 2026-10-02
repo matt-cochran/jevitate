@@ -281,7 +281,7 @@ describe("kill-signal — the killed run's result describes the run (#120, #112)
       steps: 5,
       transcript: live,
       transcriptPath: "/out/usability-X.transcript.json",
-      recordingPath: "/out/usability-X.recording.json",
+      recordingPaths: ["/out/usability-X.recording.json"],
       resultPath: "/out/usability-X.recording.result.json",
       missionOutcome: "inconclusive",
       exitCode: 143,

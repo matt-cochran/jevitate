@@ -1,3 +1,4 @@
+import { BranchReplayInputError, anchoredRecording, prefixFromBranch, prefixedOpener, recordedBranchOf, type JourneyPrefix, type PrefixFromBranchOptions, type RecordedBranch } from "./journey-prefix.js";
 import { readFile } from "node:fs/promises";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { existsSync } from "node:fs";
@@ -18,7 +19,7 @@ import {
 } from "./mission-fixtures.js";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { dirname as dirnameOf, join as joinPath, resolve as resolveFile } from "node:path";
-import { listVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { assertSameExtensionBuild, listVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import {
@@ -32,6 +33,7 @@ import {
 import { verifyServerLogDefect } from "./server-log-verify.js";
 import { defectSignalText, persistedDefect, replayWithEvidence, signalCheckable, type DefectEvidence } from "./defect-evidence.js";
 import { RunScreenshots, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * The programmatic surface behind `jevitate verify-fix` and the MCP `verify_fix` tool: loads a
@@ -56,6 +58,13 @@ export const VERIFY_FIX_EXIT_CODES: Readonly<Record<VerifyFixVerdict, number>> =
 export interface RunVerifyFixOptions {
   /** Path of the mission's `<stem>.result.json`. */
   readonly resultPath: string;
+  /**
+   * #293: a finding a journey-anchored run found (its result's `branch`) is replayed THROUGH the same
+   * Journey prefix — every replay session replays it first, and the finding's Recording starts on
+   * the live anchor page (its leading navigate becomes an assertion). These are the prefix's secret
+   * `--param`s (never persisted) and the site-policy database / environment seams it runs under.
+   */
+  readonly journeyPrefix?: PrefixFromBranchOptions;
   /** The defect (or hang) fingerprint to verify. */
   readonly fingerprint: string;
   /** Overrides the storageState recorded with the mission (CLI `--storage-state`). */
@@ -69,6 +78,8 @@ export interface RunVerifyFixOptions {
   readonly targets?: Readonly<Record<string, TargetConfig>>;
   /** Fresh-context replays for a non-hang defect signal (#74, CLI `--replays`). Default 3. */
   readonly replays?: number;
+  /** #303 `--action-deltas`: compare the replayed defect step's delta with the recorded one (evidence). */
+  readonly actionDeltas?: boolean;
   /**
    * Invariant files (CLI `--invariants`, #86) to re-check a declared-invariant defect with, instead of
    * the spec persisted with the mission. Validated against the MISSION's allowlist before any replay.
@@ -119,6 +130,10 @@ export interface VerifyFixEvidence {
 
 export interface VerifyFixReport extends VerifyFixResult {
   readonly exitCode: number;
+  /** #293: the Journey step the finding branched from, when its replays went through that prefix. */
+  readonly branch?: RecordedBranch;
+  /** #293: why the replays proved nothing — `journey-stale` when the prefix no longer replays. */
+  readonly failure?: { readonly kind: "journey-stale"; readonly message: string };
   readonly title?: string;
   /** The fixture every replay started from (#140/#144): the mission's identity and this run's setup/restore log. */
   readonly fixtures?: FixtureRecord & { readonly missionIdentity: string };
@@ -155,7 +170,14 @@ export interface PersistedFinding {
   /** For a declared-invariant defect (#86): the invariant id to re-check. */
   readonly invariantId?: string;
   /** For a `server-log` defect (#142): what to re-tail and match, from the defect's own `serverLog`. */
-  readonly serverLog?: { readonly sources: readonly string[]; readonly matcher: string; readonly normalizedMessage: string; readonly drainMs: number };
+  readonly serverLog?: {
+    readonly sources: readonly string[];
+    readonly matcher: string;
+    readonly normalizedMessage: string;
+    readonly drainMs: number;
+    /** #282: the run's `--log-scope`. */
+    readonly scope?: readonly string[];
+  };
 }
 
 const HANG_KINDS = new Set(["main-thread-unresponsive", "request-pending", "never-settled", "ui-no-progress"]);
@@ -199,6 +221,8 @@ interface PersistedMissionFixtures {
   readonly spec?: unknown;
   readonly hooks: { readonly before?: string; readonly after?: string };
   readonly outputs: Readonly<Record<string, string>>;
+  /** #243: the fixture identities the mission's steps authenticated as → storageState paths. */
+  readonly identities?: Readonly<Record<string, string>>;
 }
 
 function asPersistedFixtures(v: unknown): PersistedMissionFixtures | undefined {
@@ -213,6 +237,9 @@ function asPersistedFixtures(v: unknown): PersistedMissionFixtures | undefined {
       ...(typeof hooks.after === "string" ? { after: hooks.after } : {}),
     },
     outputs: Object.fromEntries(Object.entries(outputs).filter((e): e is [string, string] => typeof e[1] === "string")),
+    ...(isRecord(v.identities)
+      ? { identities: Object.fromEntries(Object.entries(v.identities).filter((e): e is [string, string] => typeof e[1] === "string")) }
+      : {}),
   };
 }
 
@@ -225,7 +252,10 @@ function asServerLog(v: unknown): PersistedFinding["serverLog"] | null {
   if (!isRecord(v)) return null;
   if (!Array.isArray(v.sources) || !v.sources.every((s): s is string => typeof s === "string")) return null;
   if (typeof v.matcher !== "string" || typeof v.normalizedMessage !== "string" || typeof v.drainMs !== "number") return null;
-  return { sources: v.sources, matcher: v.matcher, normalizedMessage: v.normalizedMessage, drainMs: v.drainMs };
+  // A scope that does not parse is refused (never dropped: that would widen what counts as a reproduction).
+  if (v.scope !== undefined && !(Array.isArray(v.scope) && v.scope.every((s): s is string => typeof s === "string"))) return null;
+  const scope = v.scope === undefined ? {} : { scope: v.scope as string[] };
+  return { sources: v.sources, matcher: v.matcher, normalizedMessage: v.normalizedMessage, drainMs: v.drainMs, ...scope };
 }
 
 function asFinding(v: unknown): PersistedFinding | null {
@@ -263,8 +293,9 @@ export function parsePersistedMission(raw: unknown): PersistedMission {
   // A run's own Recording (a coverage run has none; its findings carry their path).
   const recording = result.recording === null || result.recording === undefined ? null : RecordingSchema.parse(result.recording);
   const findings: PersistedFinding[] = [];
-  // `defects` holds every defect (#195); `serverLogDefects` is its deprecated server-log alias (and
-  // the only list a pre-#195 result has) — each fingerprint is taken once.
+  // `defects` holds every defect (#195). `serverLogDefects` is no longer written (removed in 0.3.0)
+  // but is still read: a 0.2.0 result carries it as an alias, a pre-#195 result as the only list
+  // of its server-log defects — each fingerprint is taken once.
   for (const list of [result.defects, result.hangs, result.serverLogDefects]) {
     if (!Array.isArray(list)) continue;
     for (const item of list) {
@@ -354,7 +385,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   // #245: every replay (and observer) session is shown/recorded alike — videos in
   // `verify-fix-<stamp>.videos/` beside the mission result (or under `--record-video <dir>`).
-  const vfArtifact = joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${artifactStamp(new Date().toISOString())}.json`);
+  const vfArtifact = joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${artifactStamp(clock.nowIso())}.json`);
   const videoDir = runVideoDir(opts.browser, vfArtifact);
   const shown = sessionLaunchOptions(opts.browser, videoDir);
   const perceiveOpts = {
@@ -362,8 +393,27 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     ...(target.settle === undefined ? {} : { settleConfig: target.settle }),
     ...(target.hangs === undefined ? {} : { hangConfig: target.hangs }),
   };
-  const recording = finding.recording ?? mission.recording;
-  if (recording === null) throw new VerifyFixInputError(`finding ${finding.fingerprint} has no Recording to replay`);
+  const found = finding.recording ?? mission.recording;
+  if (found === null) throw new VerifyFixInputError(`finding ${finding.fingerprint} has no Recording to replay`);
+  // #293: a finding from a branch point replays through its Journey prefix (resolved now, refused if
+  // its secret params are not given again), on the live anchor page — never from the anchor URL.
+  const branch = recordedBranchOf((raw as { result?: unknown } | null)?.result);
+  let prefix: JourneyPrefix | undefined;
+  if (branch !== undefined) {
+    try {
+      prefix = await prefixFromBranch(branch, { ...(opts.journeyPrefix ?? {}), ...(storageState === undefined ? {} : { storageState }) });
+    } catch (e) {
+      if (e instanceof BranchReplayInputError) throw new VerifyFixInputError(e.message);
+      throw e;
+    }
+  }
+  const recording = prefix === undefined ? found : anchoredRecording(found);
+  // #256: replay only under the extension build the finding was recorded with (none ⇔ none).
+  try {
+    assertSameExtensionBuild(recording.extensions, opts.browser, `finding ${finding.fingerprint}`);
+  } catch (e) {
+    throw new VerifyFixInputError(e instanceof Error ? e.message : String(e));
+  }
   // #149: replay under the finding's OWN recorded emulation by default — a 375px defect reproduces
   // at 375px, not the caller's desktop default. An explicit --viewport/--device that DIFFERS from
   // it fails closed (never silently "verifies fixed" at the wrong device) unless overridden.
@@ -406,7 +456,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   }
   const authTokenValues = [...(invariantAuthTokens?.values() ?? [])];
   const primaryActor = mission.target.actors?.find((a) => a.role === "primary")?.name;
-  const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, [...(opts.secrets ?? []), ...authTokenValues]);
+  const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, [...(opts.secrets ?? []), ...authTokenValues], target.personas);
   const declared =
     finding.kind === "invariant" && finding.invariantId !== undefined && invariantSpec !== undefined
       ? {
@@ -439,10 +489,13 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     const actor = CastActor.named("verify-fix").whoCan(new BrowseTheWeb(session, [...mission.target.allowlist]));
     return { page: session.page, actor, close: () => session.close() };
   };
+  // #293: every replay session first goes back through the finding's Journey prefix.
+  const prefixed = prefix === undefined ? undefined : prefixedOpener(openSession, prefix, mission.target.allowlist, opts.browser);
+  const branchOpen = prefixed?.open ?? openSession;
   // Each replay restores the mission's fixture state first; a failed setup makes that replay
   // "could not open a session" — no evidence, so never `fixed`.
   const replaySession =
-    fx === undefined ? openSession : fixtureReplayOpener(openSession, fx, recording.fixture?.outputs ?? mission.fixtures?.outputs ?? {});
+    fx === undefined ? branchOpen : fixtureReplayOpener(branchOpen, fx, recording.fixture?.outputs ?? mission.fixtures?.outputs ?? {});
   let result: VerifyFixResult;
   try {
     // A `server-log` defect (#142) is re-checked by REPLAYING and re-tailing the SAME log sources —
@@ -465,6 +518,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
           matcher: finding.serverLog.matcher,
           normalizedMessage: finding.serverLog.normalizedMessage,
           drainMs: finding.serverLog.drainMs,
+          ...(finding.serverLog.scope === undefined ? {} : { scope: finding.serverLog.scope }),
           // #142 follow-up: an explicit --allow-log-cmd wins; otherwise the operator's own
           // ~/.jevitate/targets.json entry for this origin may opt in (never an MCP argument).
           allowLogCmd: opts.allowLogCmd === true || target.allowLogCmd === true,
@@ -488,11 +542,17 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
         ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
         ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
         ...(opts.replays === undefined ? {} : { replays: opts.replays }),
+        ...(opts.actionDeltas === true ? { actionDeltas: true, secrets: [...(opts.secrets ?? []), ...authTokenValues] } : {}),
         openSession: replaySession,
       });
     }
   } finally {
     await fx?.restore();
+  }
+  // #293: a prefix that no longer replays proved nothing: a typed inconclusive, never `fixed`.
+  const stale = prefixed?.stale();
+  if (stale !== undefined) {
+    result = { ...result, verdict: "inconclusive", reason: `journey-stale: ${stale.message}` };
   }
   // #250/#251: the captioned "after" replay (video and/or screenshots), paired with the run's own clip.
   let evidence: VerifyFixEvidence | undefined;
@@ -512,7 +572,9 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
         ? { text: "After the fix: the defect no longer reproduces", ok: true }
         : { text: `After: ${result.verdict === "still-reproduces" ? "still reproduces" : result.verdict}`, ok: false };
     const after: DefectEvidence =
-      fx !== undefined || observers.length > 0
+      prefix !== undefined
+        ? { screenshots: [], skipped: "a finding from a Journey branch point: the after-clip replay does not replay the prefix" }
+        : fx !== undefined || observers.length > 0
         ? { screenshots: [], skipped: fx !== undefined ? "the run used mission fixtures: the after-clip replay does not restore them" : "a cross-actor defect: no after-clip replay" }
         : await replayWithEvidence({
             recording,
@@ -544,6 +606,8 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   return {
     ...result,
     exitCode: VERIFY_FIX_EXIT_CODES[result.verdict],
+    ...(branch === undefined ? {} : { branch }),
+    ...(stale === undefined ? {} : { failure: { kind: "journey-stale" as const, message: stale.message } }),
     ...(evidence === undefined ? {} : { evidence }),
     ...shotFields,
     ...(finding.title === undefined ? {} : { title: finding.title }),
@@ -563,9 +627,13 @@ function missionFixtures(
   flags: FixtureFlags,
   storageState: string | undefined,
   secrets: readonly string[],
+  /** #243: the origin's targets.json personas — bind a fixture identity no flag or saved path names. */
+  personas?: TargetConfig["personas"],
 ): MissionFixtures | undefined {
   const saved = mission.fixtures;
-  if (saved === undefined && flags.fixtures === undefined && flags.before === undefined && flags.after === undefined) return undefined;
+  if (saved === undefined && flags.fixtures === undefined && flags.before === undefined && flags.after === undefined && (flags.fixtureIdentity ?? []).length === 0) {
+    return undefined;
+  }
   const bounds = { allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl };
   const hooks = saved?.hooks ?? {};
   const given = {
@@ -600,6 +668,9 @@ function missionFixtures(
       secretFields,
       secrets,
       ...(spec === undefined ? {} : { spec }),
+      // #243: re-mint as the SAME identities (the saved paths), unless re-bound by flag or persona.
+      ...(saved?.identities === undefined ? {} : { identities: saved.identities }),
+      ...(personas === undefined ? {} : { personas }),
     });
   } catch (e) {
     if (e instanceof FixtureSpecError) throw new VerifyFixInputError(`mission fixtures: ${e.message}`);

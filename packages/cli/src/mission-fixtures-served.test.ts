@@ -175,7 +175,7 @@ describe("mission fixtures — setup, bound outputs, restore, verify-fix replays
         expect(items.size).toBe(0);
         expect(String(data.finalUrl)).toContain(`/items/${itemId}`);
         // The Recording carries the identity (non-secret outputs only).
-        const recording = JSON.parse(await readFile(String(data.recordingPath), "utf8")) as { fixture?: unknown };
+        const recording = JSON.parse(await readFile(String((data.recordingPaths as string[])[0]), "utf8")) as { fixture?: unknown };
         expect(recording.fixture).toEqual({ identity: fx.identity, specHash: fx.specHash, outputs: { itemId } });
 
         // verify-fix: plant a finding on the start step; every replay restores + re-runs setup and

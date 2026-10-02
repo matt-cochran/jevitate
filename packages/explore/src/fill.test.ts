@@ -141,3 +141,16 @@ describe("fill — one field, one value (#71)", () => {
     expect(valueStatedInGoal("Log in with password «redacted»", "Password", { tag: "input", inputType: "password" })).toBeNull();
   });
 });
+
+describe("#273 — select placeholders and loosely spelled options", () => {
+  it("recognises placeholder options, and nothing else", async () => {
+    const { isPlaceholderOption } = await import("./select-choice.js");
+    for (const p of ["—", "--", "…", "", "Select…", "-- Choose one --", "Please select"]) expect(isPlaceholderOption(p)).toBe(true);
+    for (const o of ["Under $10k", "$10k–$100k", "None", "Selected items only"]) expect(isPlaceholderOption(o)).toBe(false);
+  });
+  it("maps a hyphen / straight-quote spelling onto the page's option", async () => {
+    const { matchOption } = await import("./fill.js");
+    expect(matchOption("$10k-$100k", ["—", "$10k–$100k"])).toBe("$10k–$100k");
+    expect(matchOption("Owner's plan", ["Owner’s plan"])).toBe("Owner’s plan");
+  });
+});

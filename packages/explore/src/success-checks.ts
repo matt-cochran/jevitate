@@ -200,16 +200,33 @@ export function evaluateNetworkCheck(
       }`,
     };
   }
+  // #283: a request counts as MADE once it was sent — a unary RPC the server holds open for minutes
+  // has no response yet, but the app did issue it.
+  const inFlight = hits.filter((r) => r.pending === true).length;
   if (check.kind === "requestMade") {
-    return { check: spec, passed: true, detail: `${hits.length} matching request(s)` };
+    return {
+      check: spec,
+      passed: true,
+      detail: `${hits.length} matching request(s)${inFlight === 0 ? "" : ` (${inFlight} sent and still awaiting a response)`}`,
+    };
   }
-  const seen = hits.map((r) => (r.status === null ? "no response" : String(r.status)));
-  const bad = hits.filter((r) => r.status === null || !statusMatches(r.status, check.status));
+  // A status can only be judged on a response: requests still in flight are not judged (yet).
+  const answered = hits.filter((r) => r.pending !== true);
+  if (answered.length === 0) {
+    return {
+      check: spec,
+      passed: false,
+      detail: `expected ${describeStatus(check.status)}, but the ${inFlight} matching request(s) were sent and are still awaiting a response`,
+    };
+  }
+  const seen = answered.map((r) => (r.status === null ? "no response" : String(r.status)));
+  const bad = answered.filter((r) => r.status === null || !statusMatches(r.status, check.status));
+  const waiting = inFlight === 0 ? "" : ` (${inFlight} more still awaiting a response)`;
   return bad.length === 0
-    ? { check: spec, passed: true, detail: `${hits.length} matching request(s), status ${[...new Set(seen)].join(", ")}` }
+    ? { check: spec, passed: true, detail: `${answered.length} matching request(s), status ${[...new Set(seen)].join(", ")}${waiting}` }
     : {
         check: spec,
         passed: false,
-        detail: `expected ${describeStatus(check.status)}, got ${seen.join(", ")} for ${hits.length} matching request(s)${note}`,
+        detail: `expected ${describeStatus(check.status)}, got ${seen.join(", ")} for ${answered.length} matching request(s)${waiting}${note}`,
       };
 }

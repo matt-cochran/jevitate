@@ -2,6 +2,8 @@ import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import type { InvariantSpec, Recording } from "@jevitate/recording";
 import { RecordingInterpreter, type ReplayTargetFailure } from "@jevitate/interpreter";
+import { ReplayDeltas } from "./replay-deltas.js";
+import { deltaRecord } from "./action-delta.js";
 import { perceive, type PerceiveOptions } from "./perceive.js";
 import { observeAfterStep } from "./record.js";
 import type { HangSignal } from "./hang.js";
@@ -11,6 +13,7 @@ import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
 import { InvariantMonitor, type ObserverSessions } from "./declared-invariants.js";
+import { clock } from "@jevitate/domain";
 
 /**
  * verifyFix — "is this defect fixed?", answered by REPLAY, not by opinion.
@@ -100,6 +103,14 @@ export interface VerifyFixParams {
    * have been.
    */
   readonly occurrences?: number;
+  /**
+   * #303 `--action-deltas`: record what each replayed step changed and compare it with the delta the
+   * Recording stored; the defect step's comparison is attached to each attempt as EVIDENCE (a
+   * mismatch says the app now reacts differently there) — never the verdict. Off by default.
+   */
+  readonly actionDeltas?: boolean;
+  /** Secret values the replay's deltas are redacted of (`--secret`). */
+  readonly secrets?: readonly string[];
 }
 
 export interface VerifyInvariant {
@@ -152,6 +163,16 @@ export interface ReplayAttemptEvidence {
   readonly rule?: HangRule;
   /** A busy-indicator hang replay: busy indicators visible on the replayed page (#164). */
   readonly busyIndicators?: number;
+  /**
+   * #303 (`actionDeltas`): what the defect's step changed on this replay, and whether that matches
+   * the delta the Recording stored — evidence only.
+   */
+  readonly delta?: {
+    readonly verdict: string;
+    readonly matchesRecorded?: boolean;
+    readonly differences?: readonly string[];
+    readonly changes: readonly string[];
+  };
 }
 
 /**
@@ -227,6 +248,17 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
     }
     return { ...base, verdict: "fixed", observedFingerprints: [], replay, reason: `the replay settled within the bound (${attempt.detail})`, attempts };
   }
+  // #301: a markup-injection defect is found by DOM inspection for the run's inert canary, which a
+  // replay's signal fingerprints never carry — "fixed" from a replay alone would be a false pass.
+  if (params.defectKind === "markup-injection") {
+    return {
+      ...base,
+      verdict: "inconclusive",
+      observedFingerprints: [],
+      replay: { outcome: "failed", at: -1, error: "not replayed" },
+      reason: "a markup-injection defect is re-checked by re-running the adversarial mission (its canary check); a replay alone proves nothing",
+    };
+  }
   const declared = params.defectKind === "invariant" ? params.invariant : undefined;
   if (params.defectKind === "invariant" && (declared === undefined || !declared.spec.invariants.some((i) => i.id === declared.id))) {
     return {
@@ -250,7 +282,7 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
   }
   const last = runs[runs.length - 1] as SingleReplayAttempt;
   const observedFingerprints = [...new Set(runs.flatMap((r) => r.observed))];
-  const attempts: ReplayAttemptEvidence[] = runs.map((r) => ({ ran: r.ran, fired: r.fired, detail: r.detail }));
+  const attempts: ReplayAttemptEvidence[] = runs.map((r) => ({ ran: r.ran, fired: r.fired, detail: r.detail, ...(r.delta === undefined ? {} : { delta: r.delta }) }));
   const verdict = verifyReplayVerdict(runs);
   const ran = runs.filter((r) => r.ran).length;
   const fired = runs.filter((r) => r.ran && r.fired).length;
@@ -263,7 +295,23 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
         : verdict === "fixed"
           ? `the defect's fingerprint was absent on all ${ran}/${runs.length} replay(s) that ran${occNote}`
           : `the defect's fingerprint fired on ${fired}/${ran} replay(s) that ran — intermittent on the current code, never reported as fixed${occNote}`;
-  return { ...base, verdict, observedFingerprints, replay: last.replay, reason, attempts };
+  // #303: a replay whose defect step changed the page differently from the recording says so (evidence).
+  const differs = runs.find((r) => r.delta?.matchesRecorded === false)?.delta;
+  const withDelta = differs === undefined ? reason : `${reason}; the defect step's action delta differs from the recording (${(differs.differences ?? []).slice(0, 2).join("; ")})`;
+  return { ...base, verdict, observedFingerprints, replay: last.replay, reason: withDelta, attempts };
+}
+
+/** #303: the defect step's replayed delta as attempt evidence (null-safe). */
+function deltaEvidence(rd: ReplayDeltas, index: number): ReplayAttemptEvidence["delta"] | undefined {
+  const s = rd.at(index);
+  if (s === undefined) return undefined;
+  const r = deltaRecord(s.delta);
+  return {
+    verdict: r.verdict,
+    changes: r.changes.slice(0, 6),
+    ...(s.comparison === undefined ? {} : { matchesRecorded: s.comparison.matches }),
+    ...(s.comparison === undefined || s.comparison.matches ? {} : { differences: s.comparison.differences }),
+  };
 }
 
 /** Steps `0..index` of a Recording (flat order), so a resume stops at the defect's step. */
@@ -353,7 +401,7 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
     const failed = failedAt(stepResult);
     if (failed !== null) return failed;
     await settle();
-    await session.page.waitForTimeout(10);
+    await clock.sleep(10);
     // The original run already found the invariant applicable to this step: re-check exactly it.
     const checked = await monitor.after(session.actor, { ...stepAction(params.recording, index), url: actedOn, step: index }, { only: inv.id, force: true });
     const observed = checked.violations.map((v) => v.fingerprint);
@@ -414,9 +462,11 @@ async function runOneReplay(params: VerifyFixParams): Promise<SingleReplayAttemp
     // The oracle listens BEFORE the first replayed step, exactly as in the original run.
     const collector = new PageSignalCollector(session.page);
     await monitorFor(session.page).instrument();
+    // #303 (opt-in): the replay's deltas, compared with the Recording's (evidence, never the verdict).
+    const rd = params.actionDeltas === true ? new ReplayDeltas({ secrets: params.secrets ?? [], recorded: params.recording.pages.flatMap((p) => p.steps) }) : null;
     // The defect's step is replayed to OBSERVE what the app does next — its own postcondition is not
     // the verdict (a fixed app may legitimately behave differently after it); the signal check is.
-    const result = await new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params) }).runToCheckpoint(
+    const result = await new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params), ...(rd === null ? {} : { observer: rd.observer() }) }).runToCheckpoint(
       session.actor,
       observeAfterStep(params.recording, params.recordingStepIndex),
       params.recordingStepIndex,
@@ -425,8 +475,9 @@ async function runOneReplay(params: VerifyFixParams): Promise<SingleReplayAttemp
     await perceive(session.page, {
       ...(params.settleCeilingMs === undefined ? {} : { renderWaitMs: params.settleCeilingMs }),
     }).catch(() => undefined);
-    await session.page.waitForTimeout(10);
+    await clock.sleep(10);
     const observed = [...new Set(collector.drain().map(signalFingerprint))];
+    const delta = rd === null ? undefined : deltaEvidence(rd, params.recordingStepIndex);
     const replay: VerifyFixResult["replay"] =
       result.outcome === "completed"
         ? { outcome: "completed" }
@@ -453,7 +504,7 @@ async function runOneReplay(params: VerifyFixParams): Promise<SingleReplayAttemp
     }
     const fired = observed.includes(params.fingerprint);
     if (fired) {
-      return { ran: true, fired: true, observed, replay, detail: "the defect's fingerprint fired again on replay", targetMismatch: false };
+      return { ran: true, fired: true, observed, replay, detail: "the defect's fingerprint fired again on replay", targetMismatch: false, ...(delta === undefined ? {} : { delta }) };
     }
     if (replay.outcome === "failed") {
       // #213: the human REASON must show the real cause (e.g. net::ERR_CONNECTION_REFUSED) — not
@@ -474,6 +525,7 @@ async function runOneReplay(params: VerifyFixParams): Promise<SingleReplayAttemp
       replay,
       detail: "replay reached the defect's step and the fingerprint did not fire",
       targetMismatch: false,
+      ...(delta === undefined ? {} : { delta }),
     };
   } catch (e) {
     return {

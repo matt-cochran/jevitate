@@ -42,6 +42,33 @@ pnpm exec vitest run packages/regression/src                       # one package
 - The full suite (`pnpm exec vitest run`) is what CI runs on Linux. It starts real Chromium
   instances, so it is slow, and on WSL it can hang. Prefer path-scoped runs locally.
 
+#### Time in tests
+
+Node-side code never reads the wall clock or schedules a timer directly. It uses `clock` from
+`@jevitate/domain` (`packages/domain/src/clock.ts`): `clock.now()`, `clock.nowIso()`,
+`clock.monotonicMs()`, `clock.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval` and
+`clock.sleep(ms)`. By default these are the real platform timers. `pnpm lint` runs
+`scripts/check-clock.mjs`, which rejects a new `Date.now()`, `new Date()`, `performance.now()`,
+global timer or `page.waitForTimeout` in package source. Code that runs inside the browser (a
+function passed to `evaluate` or `addInitScript`, or a declaration documented `BROWSER CODE`) keeps
+the page's own timers.
+
+- **Unit tests:** `installClock(new FakeClock())`, then move time explicitly with `advanceBy(ms)`,
+  `next()` or `runUntilIdle()`. Pending sleeps and timeouts resolve in order, and awaited work runs
+  between them. Call `resetClock()` afterwards.
+- **Real-browser tests:** call `useSkippingTime()` from the explore testkit in the suite. It installs
+  a `TimeSkippingClock` and drives every opened page's `page.clock` with it. Time flows normally
+  while anything is happening. When the process is only waiting (a settle window on a quiet page, a
+  hang ceiling over a held request, a documented wait), time jumps to the next timer. A browser call
+  or a young request in flight blocks the jump. Use `{ pageClock: false }` for a page that spins on
+  `Date.now()`, and `{ per: "all" }` when a `beforeAll` opens a shared session.
+- **Real-time smoke tests:** some behaviour only exists in real time: a truly frozen renderer under
+  the watchdog, a server that really holds a request open, real launch and teardown. Those tests keep
+  the real clock with their thresholds scaled down (for example `JEVITATE_PAGE_UNRESPONSIVE_MS`), and
+  their `describe` name starts with `[realtime]`. Keep that set small.
+- The codemod that moved the code base onto the clock is `scripts/codemods/inject-clock.mjs`
+  (`--dry-run` prints the plan).
+
 ### The example app
 
 `apps/example-site` is the fixture app the end-to-end tests and the [demo](./docs/demo.md) run

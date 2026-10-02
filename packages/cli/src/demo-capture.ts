@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { rm } from "node:fs/promises";
 import type { BrowserContext, Frame, Locator, Page } from "playwright";
-import { secretForms } from "@jevitate/ai-core";
+import { REVEALED_SECRET_SELECTORS, REVEALED_SECRET_SHAPES, revealedSecretsIn, secretForms } from "@jevitate/ai-core";
 import { DEMO_OVERLAY_HIDE_STYLE } from "@jevitate/explore";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
 import type { BrowserPort } from "@jevitate/playwright";
+import { clock } from "@jevitate/domain";
 
 /**
  * #248 — the ONE place a demo screenshot is taken. The overlay is always hidden (Playwright's
@@ -70,14 +71,24 @@ export async function captureOptions(
   return { style: styles.join("\n"), mask, ...(maskColor === undefined ? {} : { maskColor }) };
 }
 
-/** Writes one step's PNG at `path`: the viewport, overlay hidden, every layer applied. Throws on failure. */
-export async function captureStepScreenshot(page: Page, path: string, ctx: CaptureContext, layers: readonly CaptureLayer[] = []): Promise<void> {
+/**
+ * Writes one step's PNG at `path`: the viewport (or `clip`, a page-coordinate region — #198's cropped
+ * finding shots), overlay hidden, every layer applied. Throws on failure.
+ */
+export async function captureStepScreenshot(
+  page: Page,
+  path: string,
+  ctx: CaptureContext,
+  layers: readonly CaptureLayer[] = [],
+  clip?: { readonly x: number; readonly y: number; readonly width: number; readonly height: number },
+): Promise<void> {
   const { style, mask, maskColor } = await captureOptions(page, ctx, layers);
   await page.screenshot({
     path,
     type: "png",
     animations: "disabled",
     style,
+    ...(clip === undefined ? {} : { clip: { ...clip } }),
     ...(mask.length === 0 ? {} : { mask }),
     ...(maskColor === undefined ? {} : { maskColor }),
   });
@@ -96,6 +107,22 @@ export const PIXEL_MASK_COLOR = "#FF00FF";
 
 /** The attribute marking the mask layer's host element (never hidden by the capture style). */
 export const PIXEL_MASK_ATTR = "data-jevitate-mask-layer";
+
+/**
+ * #298 — a secret the app REVEALS mid-run (a freshly minted API key, a one-time reveal panel, an
+ * invite or reset link) is not known in advance, so it cannot be registered with `--secret`. The
+ * pixel mask also covers, with no registration:
+ *
+ *  - elements the target marks as secret: these selectors (a target opts in with the
+ *    `data-jevitate-mask` attribute; the rest are common one-time-secret markers);
+ *  - text and field values shaped like a credential ({@link REVEALED_SECRET_SHAPES}).
+ *
+ * A value found either way is LEARNED for the rest of the run: masked wherever it appears later
+ * (another screen, a frame) and redacted from the screenshot index. Learned values live only in
+ * memory (the run's mask), never on disk. Limits (docs/safety.md): a secret with no marker and
+ * no credential shape (a short code, a plain word) is not masked; a password field shows dots.
+ */
+export { REVEALED_SECRET_SELECTORS, REVEALED_SECRET_SHAPES, revealedSecretsIn };
 
 /** The mask could not be applied or proven: the capture is skipped (fail closed), never written. */
 export class MaskUnavailableError extends Error {
@@ -128,6 +155,32 @@ export interface MaskCheck {
 const MASK_RUNTIME = String.raw`((cfg) => {
   if (window[cfg.name]) return true;
   const SECRETS = cfg.secrets.filter((s) => typeof s === "string" && s.trim().length > 0);
+  // #298: secrets the app reveals mid-run — marked elements and credential-shaped values — are
+  // learned into SECRETS (masked everywhere after) and reported to the run's mask via learned().
+  const SHAPES = cfg.shapes.map((src) => new RegExp(src, "g"));
+  const MARKERS = cfg.markers.join(",");
+  const LEARNED = [];
+  const learn = (v) => {
+    if (typeof v !== "string") return;
+    const t = v.trim();
+    if (t.length < 8 || SECRETS.includes(t)) return;
+    SECRETS.push(t);
+    LEARNED.push(t);
+  };
+  const learnShapes = (v) => {
+    if (typeof v !== "string" || v.length < 8) return;
+    for (const re of SHAPES) { re.lastIndex = 0; for (const m of v.matchAll(re)) learn(m[0]); }
+  };
+  // A marked element is masked whole; what is LEARNED from it (masked elsewhere too) is its field
+  // value, or its credential-like words: 12+ chars, no space, letters and digits (never a label
+  // word like "Generate", which would then be masked on every screen).
+  const learnMarked = (el) => {
+    const tag = el.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") { if (!/\s/.test(el.value)) learn(el.value); learnShapes(el.value); return; }
+    const text = el.textContent || "";
+    learnShapes(text);
+    for (const tok of text.split(/\s+/)) if (tok.length >= 12 && /[0-9]/.test(tok) && /[A-Za-z]/.test(tok)) learn(tok.replace(/^['"(]+|['")\].,;:]+$/g, ""));
+  };
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const PAD = 2;
   const CSS = ":host{all:initial}*{pointer-events:none !important;box-sizing:border-box}[hidden]{display:none !important}" +
@@ -177,8 +230,19 @@ const MASK_RUNTIME = String.raw`((cfg) => {
   };
   const collect = () => {
     const out = [];
-    if (SECRETS.length === 0) return out;
     const roots = [document];
+    // Marked elements first (#298): masked whole, and their secret learned before the text scan.
+    const marked = new Set();
+    const markRoot = (r) => {
+      if (MARKERS === "") return;
+      for (const el of Array.from(r.querySelectorAll(MARKERS))) {
+        if (el === host || SKIP.has(el.tagName) || marked.has(el)) continue;
+        marked.add(el);
+        learnMarked(el);
+        out.push({ kind: "el", el });
+      }
+    };
+    markRoot(document);
     const perSecretRanges = new Map();
     for (let i = 0; i < roots.length; i++) {
       const w = document.createTreeWalker(roots[i], NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
@@ -188,6 +252,7 @@ const MASK_RUNTIME = String.raw`((cfg) => {
           if (p !== null && SKIP.has(p.tagName)) continue;
           const v = n.nodeValue;
           if (!v) continue;
+          learnShapes(v);
           for (const s of SECRETS) {
             let at = v.indexOf(s);
             while (at >= 0) {
@@ -200,12 +265,14 @@ const MASK_RUNTIME = String.raw`((cfg) => {
         }
         const el = n;
         if (el === host) continue;
-        if (el.shadowRoot) roots.push(el.shadowRoot);
+        if (el.shadowRoot) { roots.push(el.shadowRoot); markRoot(el.shadowRoot); }
         if (SKIP.has(el.tagName)) continue;
+        if (marked.has(el)) continue;
         let hit = false;
         const tag = el.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") {
           const type = (el.getAttribute("type") || "").toLowerCase();
+          if (!(tag === "INPUT" && type === "password")) learnShapes(el.value);
           if (!(tag === "INPUT" && type === "password") && holds(el.value)) hit = true;
         } else if (tag === "SELECT") {
           const t = Array.from(el.selectedOptions || []).map((o) => o.text).join(" ");
@@ -247,12 +314,12 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     return [t.el.getBoundingClientRect()];
   };
   const fieldText = (el) => el.tagName === "SELECT" ? Array.from(el.selectedOptions || []).map((o) => o.text).join(" ") + " " + el.value : el.value;
+  const shaped = (v) => typeof v === "string" && v.length >= 8 && SHAPES.some((re) => { re.lastIndex = 0; return re.test(v); });
   const inputsChanged = () => {
-    if (SECRETS.length === 0) return false;
     const flagged = new Set(targets.filter((t) => t.kind === "el").map((t) => t.el));
     for (const el of Array.from(document.querySelectorAll("input, textarea, select"))) {
       if (el.tagName === "INPUT" && (el.getAttribute("type") || "").toLowerCase() === "password") continue;
-      if (holds(fieldText(el)) && !flagged.has(el)) return true;
+      if ((holds(fieldText(el)) || shaped(fieldText(el))) && !flagged.has(el)) return true;
     }
     return false;
   };
@@ -312,7 +379,7 @@ const MASK_RUNTIME = String.raw`((cfg) => {
         return { ok: false, occurrences: 0, masked: 0, reason: "the mask update failed: " + String((e && e.message) || e).slice(0, 200), rects: [] };
       }
       const problems = [];
-      if (SECRETS.length > 0) {
+      {
         if (host === null || !host.isConnected) problems.push("the mask layer is not attached");
         else {
           const cs = getComputedStyle(host);
@@ -332,6 +399,8 @@ const MASK_RUNTIME = String.raw`((cfg) => {
       if (problems.length > 0) out.reason = problems.join("; ");
       return out;
     },
+    learn(values) { if (Array.isArray(values)) for (const v of values) learn(v); dirty = true; return true; },
+    learned() { return LEARNED.slice(); },
     highlight(el) { highlightEl = el || null; try { update(); } catch (e) { /* presentation only */ } return highlightEl !== null; },
     clearHighlight() { highlightEl = null; try { update(); } catch (e) { /* presentation only */ } return true; },
   };
@@ -349,11 +418,11 @@ async function within<T>(p: Promise<T>, what: string): Promise<T> {
     return await Promise.race([
       p,
       new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new MaskUnavailableError(`${what} timed out after ${MASK_CALL_MS}ms`)), MASK_CALL_MS);
+        timer = clock.setTimeout(() => reject(new MaskUnavailableError(`${what} timed out after ${MASK_CALL_MS}ms`)), MASK_CALL_MS);
       }),
     ]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
   }
 }
 
@@ -361,7 +430,13 @@ function errText(e: unknown): string {
   return (e instanceof Error ? e.message : String(e)).split("\n")[0] ?? "unknown error";
 }
 
-type MaskApi = { verify(): MaskCheck; highlight(e: Element): boolean; clearHighlight(): boolean };
+type MaskApi = {
+  verify(): MaskCheck;
+  learn(values: string[]): boolean;
+  learned(): string[];
+  highlight(e: Element): boolean;
+  clearHighlight(): boolean;
+};
 
 /**
  * One run's pixel mask over its registered secrets (raw and URL-encoded forms, as `redactText`).
@@ -374,16 +449,26 @@ export class SecretPixelMask {
   readonly #source: string;
   readonly #name: string;
   readonly #contexts = new WeakSet<BrowserContext>();
-  /** True when there is at least one secret to mask. */
-  readonly active: boolean;
+  /** Secrets the app revealed mid-run (#298), learned by the page mask — in memory only, never written. */
+  readonly #learned = new Set<string>();
+  /**
+   * Always true (#298): even with no registered secret, a secret the app reveals mid-run (a marked
+   * element, a credential-shaped value) is masked, so every capture installs and proves the mask.
+   */
+  readonly active: boolean = true;
 
   constructor(secrets: readonly string[]) {
     const forms = [...new Set(secrets.filter((s) => typeof s === "string" && s.trim() !== "").flatMap((s) => [...secretForms(s)]))];
-    this.active = forms.length > 0;
     this.#name = `__jevitateMask_${randomBytes(8).toString("hex")}`;
     // JSON inside a JS expression (valid JS since ES2019); `<` escaped so no value can close a script context.
-    const cfg = JSON.stringify({ name: this.#name, secrets: forms, fill: PIXEL_MASK_COLOR, attr: PIXEL_MASK_ATTR })
-      .replace(/</g, "\\u003c");
+    const cfg = JSON.stringify({
+      name: this.#name,
+      secrets: forms,
+      shapes: REVEALED_SECRET_SHAPES,
+      markers: REVEALED_SECRET_SELECTORS,
+      fill: PIXEL_MASK_COLOR,
+      attr: PIXEL_MASK_ATTR,
+    }).replace(/</g, "\\u003c");
     this.#source = MASK_RUNTIME.replace("__CFG__", () => cfg);
   }
 
@@ -411,9 +496,40 @@ export class SecretPixelMask {
     }
   }
 
+  /**
+   * The secrets the app revealed during the run (#298), as learned so far — for redacting what the
+   * run writes about its captures (the screenshot index). Never persisted.
+   */
+  revealed(): readonly string[] {
+    return [...this.#learned];
+  }
+
+  /** Shares what the run learned with `frame`'s mask, and collects what that frame learned. */
+  async #sync(frame: Frame): Promise<void> {
+    const learned = await within(
+      frame.evaluate(
+        ([name, known]: [string, string[]]) => {
+          const api = (window as unknown as Record<string, MaskApi | undefined>)[name];
+          if (api === undefined) return null;
+          api.learn(known);
+          return api.learned();
+        },
+        [this.#name, [...this.#learned]] as [string, string[]],
+      ),
+      "syncing the pixel mask",
+    );
+    for (const v of learned ?? []) this.#learned.add(v);
+  }
+
   /** Proves the mask covers every visible secret occurrence in every frame of `page`, now. */
   async verify(page: Page): Promise<MaskCheck> {
-    if (!this.active) return { ok: true, occurrences: 0, masked: 0, rects: [] };
+    const known = this.#learned.size;
+    const r = await this.#verifyOnce(page);
+    // A secret one frame revealed (learned this pass) is re-checked in every frame once (#298).
+    return this.#learned.size > known ? this.#verifyOnce(page) : r;
+  }
+
+  async #verifyOnce(page: Page): Promise<MaskCheck> {
     let occurrences = 0;
     let masked = 0;
     let rects: MaskCheck["rects"] = [];
@@ -422,6 +538,7 @@ export class SecretPixelMask {
       if (frame.isDetached()) continue;
       try {
         await this.#inject(frame);
+        await this.#sync(frame);
         const r = await within(
           frame.evaluate((name: string) => (window as unknown as Record<string, MaskApi | undefined>)[name]?.verify() ?? null, this.#name),
           "verifying the pixel mask",
@@ -434,6 +551,7 @@ export class SecretPixelMask {
         masked += r.masked;
         if (frame === page.mainFrame()) rects = r.rects;
         if (!r.ok) reasons.push(r.reason ?? "the mask could not be proven");
+        await this.#sync(frame);
       } catch (e) {
         if (frame.isDetached()) continue;
         reasons.push(errText(e));
@@ -464,12 +582,15 @@ export class SecretPixelMask {
 
   /** Draws a capture highlight box around `target`'s first match (display-only). True when shown. */
   async highlight(page: Page, target: TargetDescriptor): Promise<boolean> {
+    return this.highlightLocator(page, descriptorToLocator(page, target));
+  }
+
+  /** #198: the same display-only highlight box around `locator`'s first match (a control or a quoted text). */
+  async highlightLocator(page: Page, locator: Locator): Promise<boolean> {
     try {
       await this.#inject(page.mainFrame());
       return await within(
-        descriptorToLocator(page, target)
-          .first()
-          .evaluate((el, name) => (window as unknown as Record<string, MaskApi | undefined>)[name]?.highlight(el) === true, this.#name, { timeout: 2_000 }),
+        locator.first().evaluate((el, name) => (window as unknown as Record<string, MaskApi | undefined>)[name]?.highlight(el) === true, this.#name, { timeout: 2_000 }),
         "highlighting the failing element",
       );
     } catch {

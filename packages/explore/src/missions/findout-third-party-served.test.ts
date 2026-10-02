@@ -7,7 +7,10 @@ import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
 import { requestEndpoint, thirdPartyOrigin } from "../authorized-targets.js";
 import type { SafetyConfig } from "../safety.js";
 import { FirstPartyOrigins, hasApiCredentials } from "../third-party.js";
-import { ScriptedJudge, withSession, type ScriptedStep } from "../testkit.js";
+import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "../testkit.js";
+
+// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+useSkippingTime({ per: "all" });
 
 /**
  * #194 on served pages. Dogfood (engine 8a71beb, a find-out goal): jevitate BLOCKED `POST /6` three

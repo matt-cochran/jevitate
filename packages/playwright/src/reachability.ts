@@ -1,5 +1,6 @@
 import { connect as netConnect, type Socket } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { clock } from "@jevitate/domain";
 
 /**
  * #213: a fast pre-flight "is anything listening at the target?" check before the first navigation.
@@ -64,11 +65,11 @@ export async function probeReachable(url: string, deps: ReachabilityDeps = {}): 
     const done = (reason: string | null): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clock.clearTimeout(timer);
       socket.destroy();
       resolve(reason);
     };
-    const timer = setTimeout(
+    const timer = clock.setTimeout(
       () =>
         done(
           loopback
