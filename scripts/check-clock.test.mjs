@@ -13,8 +13,9 @@ const c = performance.now();
 const t = setTimeout(() => undefined, 5);
 clearTimeout(t);
 import { setTimeout as sleep } from "node:timers/promises";
+await page.waitForTimeout(100);
 `),
-    ).toEqual(["Date.now()", "new Date()", "performance.now()", "global setTimeout", "global clearTimeout", "timers import from node:timers/promises"]);
+    ).toEqual(["Date.now()", "new Date()", "performance.now()", "global setTimeout", "global clearTimeout", "timers import from node:timers/promises", "waitForTimeout() (a real-time sleep)"]);
   });
 
   it("allows the clock, types, explicit dates, property names and locally bound names", () => {

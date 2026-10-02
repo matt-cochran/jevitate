@@ -9,6 +9,7 @@
 //   Date.now / performance.now as a value   → clock.now / clock.monotonicMs
 //   setTimeout / clearTimeout / setInterval / clearInterval   (the GLOBALS) → clock.<same>
 //   new Promise((r) => setTimeout(r, ms))   → clock.sleep(ms)
+//   page.waitForTimeout(ms)                 → clock.sleep(ms)   (Playwright's sleep is real time too)
 //   import { setTimeout as X } from "node:timers/promises";  X(ms)  → clock.sleep(ms)
 // and adds `import { clock } from "@jevitate/domain"` (aliased when `clock` is taken), plus the
 // @jevitate/domain dependency / tsconfig reference to a package that lacks it.
@@ -230,7 +231,17 @@ for (const project of PROJECTS) {
     const sf = program.getSourceFile(file);
     if (sf === undefined) continue;
     const edits = [];
-    const C = clockNameFor(sf);
+    // Already imported (a re-run of this codemod): reuse that binding, add no import.
+    const inDomainPkg = file.startsWith(join(REPO, "packages/domain/src"));
+    let existingClock;
+    for (const st of sf.statements) {
+      if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+      const fromClock = inDomainPkg ? /\/clock\.js$/.test(st.moduleSpecifier.text) : st.moduleSpecifier.text === "@jevitate/domain";
+      const named = st.importClause?.namedBindings;
+      if (!fromClock || named === undefined || !ts.isNamedImports(named)) continue;
+      for (const e of named.elements) if ((e.propertyName ?? e.name).text === "clock") existingClock = e.name.text;
+    }
+    const C = existingClock ?? clockNameFor(sf);
     const skip = (node, why) => {
       skipList.push(`${rel(file)}:${lineOf(sf, node.getStart(sf))}  ${node.getText(sf).split("\n")[0].slice(0, 70)}  [${why}]`);
     };
@@ -287,6 +298,11 @@ for (const project of PROJECTS) {
           return;
         }
       }
+      // page.waitForTimeout(ms) — Playwright's plain sleep, on the real clock → clock.sleep(ms)
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "waitForTimeout" && node.arguments.length === 1) {
+        if (guard(node)) add(node, `${C}.sleep(${node.arguments[0].getText(sf)})`, "waitForTimeout");
+        return;
+      }
       // Date.now / performance.now used as a value (a default `now` function, say)
       if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.name.text === "now" && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) {
         const obj = node.expression;
@@ -335,6 +351,10 @@ for (const project of PROJECTS) {
     };
     visit(sf);
     if (edits.length === 0) continue;
+    if (existingClock !== undefined) {
+      plans.push({ file, project, sf, edits });
+      continue;
+    }
 
     // import { clock } from "@jevitate/domain" (relative inside the domain package)
     const inDomain = file.startsWith(join(REPO, "packages/domain/src"));

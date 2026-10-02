@@ -7,6 +7,7 @@
 //   Date.now()   new Date() (no arguments)   performance.now()   (and Date.now / performance.now as values)
 //   setTimeout / clearTimeout / setInterval / clearInterval used as the global
 //   `setTimeout` imported from node:timers/promises
+//   `page.waitForTimeout(ms)` (Playwright's sleep, real time)
 //
 // Allowed (never flagged):
 //   - packages/domain/src/clock.ts itself;
@@ -113,6 +114,7 @@ export function checkSource(fileName, text) {
     if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.name.text === "now" && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) {
       if (node.expression.text === "Date" || node.expression.text === "performance") flag(node, `${node.expression.text}.now (as a value)`);
     }
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "waitForTimeout") flag(node, "waitForTimeout() (a real-time sleep)");
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Date" && (node.arguments === undefined || node.arguments.length === 0)) flag(node, "new Date()");
     if (ts.isIdentifier(node) && TIMERS.has(node.text) && !local.has(node.text)) {
       const p = node.parent;
