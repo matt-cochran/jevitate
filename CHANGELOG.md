@@ -5,6 +5,60 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.4.0] – unreleased
+
+0.4.0 makes a finding carry only the evidence that relates to it: with `--log-triage`, a run keeps a
+redacted timeline of every backend line and browser signal, code prefilters each defect's candidates,
+and Jev scores their relevance, so an issue or a fix session gets a handful of lines instead of the
+whole log. Campaigns now take every mission option, a single anchored mission can restore state with
+any strategy, and code-split routes no longer end runs `blocked`.
+
+### Behaviour changes
+
+- **Empty-settle grace (#310).** A page that settles before any interactive control has rendered is
+  given up to 3 s (scaled on a throttled host, never past the render ceiling) for one to appear
+  before it counts as blank. Lazily loaded routes no longer end a run `blocked` with "page settled
+  with no interactive controls"; a page with genuinely no controls is judged blank up to 3 s later.
+
+### Upgrade notes
+
+- **Stall watchdogs:** a very short `--stall-timeout` (a few seconds) can now fire on a step onto a
+  control-free page, because of the empty-settle grace (#310). The default (120 s) is unaffected.
+- **Campaign flags:** `campaign run` now accepts `--allow-destructive`, `--allow-writes`, `--deny`,
+  `--paid`, `--invariants`, the backend-log flags, `--evidence-video`, `--record-video`,
+  `--screenshots` and `--log-triage` and forwards them to every mission (#311). Drop any workaround
+  that ran lifecycle missions one at a time to pass them.
+- **Hook timeouts:** `--hook-timeout-ms` now reaches a campaign's and an `--at-step all|anchors`
+  sweep's hooks (#311). They used to run with the 60 s default whatever was given.
+
+### Added
+
+- **Signal triage (#313).** `explore --log-source … --log-triage` (every strategy) writes
+  `<run>.signals.jsonl` — backend lines at every level, the browser's console (every type), page
+  errors and failed requests, redacted and bounded — and attaches to each defect only its related
+  lines (`defects[].relatedLogs`, `keptBy: request-id | jev | window`). Code keeps the lines
+  correlated to the defect's request and prefilters its step's window; with `--real`, Jev scores each
+  candidate against the defect, its step's action and its correlated lines. Each issue draft gets a
+  `## Related logs` section; `report` / `get_report` / `report.md` carry each consolidated defect's
+  `relatedLogs`; the result gets a `signals` summary. Jev only selects evidence: it never adds or
+  drops a defect.
+- **`jevitate logs triage --result <r>` (#313):** re-triage a finished run from its saved timeline
+  (`--real` for Jev, `--threshold`, `--secret`).
+- **Per-target opt-in (#313):** `"logTriage": true` in `~/.jevitate/targets.json` (queued / MCP
+  runs) and on `check` suite items and targets. Sending log text to the judgment model is the
+  operator's choice per target; `--log-triage` is not an MCP argument, and MCP callers get the
+  output in every result.
+- **`campaign run` mission options (#311):** see Upgrade notes. MCP `run_campaign` takes the safety
+  and media options; log sources, hooks and triage stay operator-only.
+- **State restore on one anchored mission (#312):** `explore --from-journey <id> --at-step <anchor|n>`
+  accepts `--fixtures`, `--before`/`--after` with any strategy; it runs as a one-stop campaign (the
+  envelope has the sweep's shape, `sweep.mode: "step"`).
+
+### Fixed
+
+- `--hook-timeout-ms` was silently dropped for campaigns and sweeps (#311).
+- Code-split routes judged blank before their content rendered (#310).
+
 ## [0.3.0] – 2026-10-02
 
 0.3.0 lets a mission start from inside a promoted Journey (`--from-journey`/`--at-step`, Journey
