@@ -60,10 +60,15 @@ const SWEEP_APP = `<!doctype html><html><head><title>Editor</title></head><body>
   <p id="done" hidden>Done</p>
   <script>
     let timer = null;
+    function crash() { throw new Error("editor crashed"); }
     document.getElementById("phrase").addEventListener("input", (e) => {
       if (e.target.value !== "open sesame" || timer !== null) return;
       document.getElementById("editor").hidden = false;
-      timer = setInterval(() => { throw new Error("editor crashed"); }, 150);
+      // #319: it crashes on the next timer tick and then every 25 ms while the editor is open, all
+      // through the SAME function and timer path (one fingerprint). A 150 ms first crash could land
+      // after a fast replay's observation window had closed: verify-fix then saw nothing ("fixed").
+      setTimeout(crash, 0);
+      timer = setInterval(crash, 25);
     });
     document.getElementById("close").onclick = () => {
       clearInterval(timer);
@@ -458,7 +463,7 @@ describe("journey-anchored exploration (#293, served)", () => {
     served.length = 0;
     const r = await cli(["verify-fix", "--result", resultPath, "--fingerprint", fingerprint, "--replays", "1", "--json"]);
     expect(r.envelope?.ok, r.out + r.err).toBe(true);
-    expect(r.envelope?.data).toMatchObject({ verdict: "still-reproduces", branch: { journeyId: "editor", step: 2 } });
+    expect(r.envelope?.data, r.out).toMatchObject({ verdict: "still-reproduces", branch: { journeyId: "editor", step: 2 } });
     expect(r.exitCode).toBe(1);
     expect(served.filter((x) => x === "GET /editor").length).toBeGreaterThanOrEqual(1); // the prefix's own navigate
     // The Journey drifted (its passphrase field was renamed): the replay cannot reach the branch point.
