@@ -19,6 +19,15 @@ The authored Journey carries its `--success` check as its final assertion, so a 
 the flow stops reaching its goal. It is written unpromoted: promotion is always a deliberate human
 act. `--takes <n>` corroborates the flow over several takes.
 
+`--success` is repeatable (every check must hold) and takes the kinds `explore --success` takes,
+except `reloadThen`. A state-changing job with no stable on-page text can use its request as the
+check, for example `--success 'requestMade:POST /api.v1.Settings/Save'` or
+`--success 'responseStatus:POST /api.v1.Settings/Save=2xx'`. A page check becomes the Journey's last
+`assert` step. A network check is kept in `metadata.networkChecks`, and `journey run` and
+`source run` evaluate it over the requests that replay itself sent, after its last step. A replay
+whose steps all pass but whose request never went out, or got the wrong status, fails with the
+check named.
+
 ## Record a flow by demonstration
 
 ```bash

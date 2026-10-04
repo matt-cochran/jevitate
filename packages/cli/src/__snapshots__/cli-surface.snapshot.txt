@@ -318,7 +318,7 @@
     - flags=--name <name> required=true mandatory=false negate=false variadic=false default=null description=human-readable journey name
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways (requires keys)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist
-    - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=null description=independent success assertion, e.g. urlIncludes:/confirmed
+    - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=[] description=independent success check (repeatable; all must hold), any explore --success kind but reloadThen, e.g. urlIncludes:/confirmed or 'requestMade:POST /api/save': a page check becomes the Journey's last assert step, a requestMade/responseStatus check is re-checked over every replay's requests
     - flags=--takes <n> required=true mandatory=false negate=false variadic=false default=1 description=corroborating takes incl. discovery (default 1)
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=target URL (must be an authorized origin)
 

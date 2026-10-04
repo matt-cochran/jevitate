@@ -528,7 +528,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--name <name>` | human-readable journey name |  |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways (requires keys) | `false` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist |  |  |  |  |
-| `--success <spec>` | independent success assertion, e.g. urlIncludes:/confirmed |  |  |  |  |
+| `--success <spec>` | independent success check (repeatable; all must hold), any explore --success kind but reloadThen, e.g. urlIncludes:/confirmed or 'requestMade:POST /api/save': a page check becomes the Journey's last assert step, a requestMade/responseStatus check is re-checked over every replay's requests | `[]` |  |  |  |
 | `--takes <n>` | corroborating takes incl. discovery (default 1) | `1` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
 

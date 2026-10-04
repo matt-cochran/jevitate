@@ -3,17 +3,27 @@ import type { Assertion, AuthoringRecording, Recording } from "@jevitate/recordi
 import { diffTakes, applyPostdoc } from "@jevitate/recording";
 import type { GenerationPort, JudgmentPort } from "@jevitate/ai-core";
 import { deriveParamSchema } from "@jevitate/journey";
-import type { Journey, JourneyMetadata } from "@jevitate/journey";
+import type { Journey, JourneyMetadata, JourneyNetworkCheck } from "@jevitate/journey";
 import { runGoalBasedMission } from "../missions/goal-based.js";
 import type { Bounds } from "../bounds.js";
 import type { SafetyConfig } from "../safety.js";
+import { describeCheck, type SuccessCheck } from "../success-checks.js";
 import { ValueCapturingGenerationPort } from "./value-capturing-generation-port.js";
 import { autoDecidePostdoc } from "./auto-decide.js";
 import { clock } from "@jevitate/domain";
 
 export interface AuthorJourneyRequest {
   goal: string;
-  successAssertion: Assertion;
+  /** A page assertion the discovery must reach (and the Journey's last step asserts). */
+  successAssertion?: Assertion;
+  /**
+   * #322: more independent checks, ALL of which must hold with `successAssertion` — the goal
+   * mission's own kinds. A `page` check becomes an `assert` step at the Journey's end, as
+   * `successAssertion` does; a `requestMade`/`responseStatus` check becomes one of the Journey's
+   * `networkChecks`, evaluated over its replay's own requests. `reloadThen` is refused (a Journey
+   * cannot re-check after a reload yet). At least one check is required, from either field.
+   */
+  successChecks?: readonly SuccessCheck[];
   allowlist: readonly string[];
   /** Authorized start URL (must be on `allowlist`). */
   startUrl: string;
@@ -42,7 +52,7 @@ export type AuthorJourneyResult =
 
 /**
  * Authors a Journey by Jev-driving. Runs the goal-based exploration mission
- * to discover a path (adjudicated by the caller-supplied `successAssertion`
+ * to discover a path (adjudicated by the caller-supplied `successAssertion` / `successChecks`
  * — Jev's own "done" judgment is never trusted, matching ticket #1's
  * independent-oracle guardrail), then feeds the resulting take(s) through
  * RxD's existing diff/postdoc pipeline to produce a fully-materialized,
@@ -52,11 +62,21 @@ export type AuthorJourneyResult =
 export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJourneyResult> {
   const takes = req.takes ?? 1;
   if (takes < 1) throw new Error("authorJourney: takes must be >= 1");
+  const checks: SuccessCheck[] = [
+    ...(req.successAssertion === undefined ? [] : [{ kind: "page" as const, assertion: req.successAssertion }]),
+    ...(req.successChecks ?? []),
+  ];
+  if (checks.length === 0) throw new Error("authorJourney: a success check is required (successAssertion or successChecks)");
+  const reload = checks.find((c) => c.kind === "reloadThen");
+  if (reload !== undefined) {
+    throw new Error(`authorJourney: ${describeCheck(reload)} can't be authored into a Journey yet — use a page check or a requestMade/responseStatus check`);
+  }
+  const mission = { successChecks: checks };
 
   const discoveryGeneration = new ValueCapturingGenerationPort(req.generation);
   const discovery = await runGoalBasedMission({
     goal: req.goal,
-    successAssertion: req.successAssertion,
+    ...mission,
     allowlist: req.allowlist,
     startUrl: req.startUrl,
     bounds: req.bounds,
@@ -85,7 +105,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     const replayGeneration = new ValueCapturingGenerationPort(req.generation);
     const replay = await runGoalBasedMission({
       goal: req.goal,
-      successAssertion: req.successAssertion,
+      ...mission,
       allowlist: req.allowlist,
       startUrl: req.startUrl,
       bounds: req.bounds,
@@ -106,7 +126,18 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
   // condition that gated authoring — so a replay proves the outcome the goal was driving toward,
   // not just that navigation reached the final page. Jev's own "done" judgment is never trusted
   // (ticket #1); this bakes that same independent oracle into the artifact itself.
-  const parameterizedRecording = appendSuccessAssertion(materializedRecording, req.successAssertion);
+  // #322: every page check is asserted, in order; network checks go to `networkChecks`.
+  const parameterizedRecording = checks.reduce(
+    (r, c) => (c.kind === "page" ? appendSuccessAssertion(r, c.assertion) : r),
+    materializedRecording,
+  );
+  const networkChecks: JourneyNetworkCheck[] = checks.flatMap((c): JourneyNetworkCheck[] =>
+    c.kind === "requestMade"
+      ? [{ kind: "requestMade", method: c.method, pathGlob: c.pathGlob }]
+      : c.kind === "responseStatus"
+        ? [{ kind: "responseStatus", method: c.method, pathGlob: c.pathGlob, status: { ...c.status } }]
+        : [],
+  );
 
   const metadata: JourneyMetadata = {
     id: req.journeyId,
@@ -115,6 +146,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     params: deriveParamSchema(parameterizedRecording).required,
     authoredBy: "jev-driven",
     createdAtIso: clock.nowIso(),
+    ...(networkChecks.length === 0 ? {} : { networkChecks }),
   };
 
   return { outcome: "authored", journey: { metadata, recording: parameterizedRecording } };

@@ -4,6 +4,7 @@ import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
 import { sessionLaunchOptions } from "./browser-run-options.js";
+import { withNetworkChecks } from "./journey-network-checks.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult } from "@jevitate/runtime";
@@ -88,7 +89,8 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     const actor = CastActor.named("source-runner").whoCan(new BrowseTheWeb(session, allowedOrigins), ...gate.abilities);
     const runner = new JourneyRunner(actor, new RecordingInterpreter());
     try {
-      return await runner.run({ journey: file, params, policy });
+      // #322: a trusted remote Journey's network checks hold for its replay too.
+      return await withNetworkChecks(session.page, file.metadata.networkChecks, () => runner.run({ journey: file, params, policy }));
     } finally {
       await gate.done();
     }
