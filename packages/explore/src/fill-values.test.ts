@@ -249,3 +249,48 @@ describe("fill — a passage the goal quotes is typed verbatim, line breaks and 
     expect(inputs).toHaveLength(3);
   });
 });
+
+describe("fill — the goal's instruction is never a value to enter (#338)", () => {
+  const GOAL = "Add an answer to the knowledge base and test it with a sample question.";
+
+  it.each([
+    ["a clause of the goal", "add an answer and test it"],
+    ["the test instruction", "Test it with a sample question"],
+    ["a near-copy joined with 'then'", "Add an answer to the knowledge base, then test it"],
+  ])("rejects %s with a reason the model can act on", (_what, value) => {
+    expect(checkFieldValue(value, TEXTAREA, "Answer", GOAL)).toMatch(/that is the goal's instruction, not a value to enter/);
+  });
+
+  it("rejects it through the helper (never typed, never cached)", async () => {
+    const { gen } = valueGen("Test it with a sample question");
+    const r = await new FillHelper(gen).valueFor({ fieldLabel: "Answer", goal: GOAL, visibleContext: "", field: TEXTAREA });
+    expect(r.text).toBeNull();
+    expect(r.rejected).toMatch(/goal's instruction/);
+  });
+
+  it("a value the goal quotes or gives `exactly` passes (#281)", async () => {
+    const quoted = 'Add an answer "Test it with a sample question first" and save it.';
+    expect(checkFieldValue("Test it with a sample question first", TEXTAREA, "Answer", quoted)).toBeNull();
+    const exactly = "Set the note to exactly: check the logs before every deploy.";
+    expect(checkFieldValue("check the logs before every deploy", TEXTAREA, "Note", exactly)).toBeNull();
+    const { gen, inputs } = valueGen("ignored");
+    const r = await new FillHelper(gen).valueFor({ fieldLabel: "Answer", goal: quoted, visibleContext: "", field: TEXTAREA });
+    expect(r).toEqual({ text: "Test it with a sample question first", source: "goal" });
+    expect(inputs).toHaveLength(0);
+  });
+
+  it("short values and values that merely share words pass", () => {
+    expect(checkFieldValue("Test answer", TEXT, "Title", GOAL)).toBeNull();
+    expect(checkFieldValue("Add an answer", TEXT, "Title", GOAL)).toBeNull();
+    expect(checkFieldValue("Refunds take five business days to reach your card.", TEXTAREA, "Answer", GOAL)).toBeNull();
+    expect(checkFieldValue("How long do refunds take?", TEXT, "Sample question", GOAL)).toBeNull();
+    expect(checkFieldValue("A sample answer for the knowledge base", TEXTAREA, "Answer", GOAL)).toBeNull();
+  });
+
+  it("a run the goal introduces as a value (titled / saying / a colon) passes; prose without an instruction verb passes", () => {
+    expect(checkFieldValue("Update the pricing page copy", TEXT, "Title", "Create a task titled update the pricing page copy and save it")).toBeNull();
+    expect(checkFieldValue("check the logs before deploying", TEXT, "Note", "Post a note saying check the logs before deploying")).toBeNull();
+    expect(checkFieldValue("review the Q3 roadmap draft", TEXT, "Title", "Add a todo: review the Q3 roadmap draft")).toBeNull();
+    expect(checkFieldValue("the meeting moved to Friday", TEXT, "Message", "Write a note that the meeting moved to Friday")).toBeNull();
+  });
+});

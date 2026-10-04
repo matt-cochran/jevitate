@@ -139,6 +139,17 @@ jevitate explore --url http://localhost:8088/import --goal "Import this text and
   --type-fixture 'label=Paste your text=./fixtures/newsletter.txt' --success 'visible:text=Analysis ready'
 ```
 
+## Staying on the goal
+
+Code keeps a goal run on its goal (#338). A generated value that copies the goal's own instruction
+prose, such as "add an answer and test it" typed into the Answer field, is refused before it is
+typed. The model sees "that is the goal's instruction, not a value to enter" in its history and
+generates a value again. A value the goal quotes or gives with `exactly` is still typed as stated.
+Once the run has reached the goal's area (it opened a navigation item the goal names, or the URL
+path names one of the goal's words), navigation to sections the goal never names is listed last
+and marked `off-goal` in the decision. It is still offered, so a goal that names two sections can
+visit both.
+
 ## Rich-text editors
 
 A `contenteditable` element (a document editor's prose block) is also offered the `edit_text`

@@ -121,6 +121,8 @@ export function checkFieldValue(value: string, field: FieldShape, fieldLabel: st
   // A generated value (the goal is passed) must not be the goal itself (#71 reopen).
   const echo = goal === undefined ? null : echoesGoal(v, goal);
   if (echo !== null) return `echoes the goal instead of a value for this field — ${echo}`;
+  const instruction = goal === undefined ? null : copiesGoalInstruction(v, goal);
+  if (instruction !== null) return `that is the goal's instruction, not a value to enter (${instruction}) — type the content the instruction asks for`;
   const kind = fieldKind(fieldLabel, field);
   if (singleLine && (kind === "name" || kind === "search") && words(v).length > SHORT_FIELD_MAX_WORDS) {
     return `${words(v).length} words — too long for a ${kind} field`;
@@ -200,6 +202,73 @@ export function echoesGoal(value: string, goal: string): string | null {
     if (overlap > GOAL_ECHO_OVERLAP) return `it restates the goal (${Math.round(overlap * 100)}% of its words are the goal's)`;
   }
   return null;
+}
+
+/** #338: the fewest words a value needs before it can be called a copy of the goal's instruction. */
+const INSTRUCTION_MIN_WORDS = 4;
+/** #338: share of a value's words that must come from runs (2+ words) of the goal's prose. */
+const INSTRUCTION_COVERAGE = 0.8;
+/** #338: the imperatives a goal's instruction clause opens with ("add an answer", "test it with…"). */
+const INSTRUCTION_VERBS = new Set(
+  ("add create make set enter type fill write test check verify ensure confirm click open go navigate visit connect " +
+    "disconnect save submit send ask select choose change edit update delete remove upload try run start finish " +
+    "complete configure enable disable sign log invite import export publish")
+    .split(" "),
+);
+/** #338: words that open a run without being its verb ("and test it", "then save"). */
+const CLAUSE_OPENERS = new Set(["and", "then", "also", "please", "next", "finally", "first"]);
+/** #338: a goal word right before a run that introduces it as a value ("titled Update the copy", "saying …", ": …"). */
+const VALUE_MARKERS = new Set([":", "named", "called", "titled", "saying", "says", "reading", "reads", "text", "message", "content", "description", "title", "label", "value", "as"]);
+
+/**
+ * Independent code (#338): why `value` is a copy of the goal's own instruction prose — "add an answer
+ * and test it", typed into the answer field — rather than a value to enter, or null. A copy: 4+
+ * words, at least `INSTRUCTION_COVERAGE` of them taken from runs (2+ words) of the goal's unquoted
+ * prose, one run of 3+ words opening with an instruction verb. Exempt: a value inside a segment the goal
+ * quotes or gives `exactly` (#281), and a run the goal introduces as a value ("titled …", "saying …",
+ * "…: …"). A short value that only shares words with the goal is never a copy.
+ */
+function copiesGoalInstruction(value: string, goal: string): string | null {
+  const v = words(value);
+  if (v.length < INSTRUCTION_MIN_WORDS) return null;
+  const flatValue = v.join(" ");
+  if (quotedSegments(goal).some((q) => ` ${words(q).join(" ")} `.includes(` ${flatValue} `))) return null;
+  // The goal's prose: quoted segments removed (they are values, not instructions); a colon kept as a token.
+  const prose =
+    goal
+      .replace(/["“'‘\u0060]([^"”'’\u0060\n]{1,200})["”'’\u0060]/gu, " ; ")
+      .toLowerCase()
+      .match(/[\p{L}\p{N}$]+(?:['’][\p{L}]+)?|:/gu) ?? [];
+  const runAt = (i: number): { start: number; len: number } => {
+    let best = { start: -1, len: 0 };
+    for (let s = 0; s < prose.length; s++) {
+      let n = 0;
+      while (i + n < v.length && s + n < prose.length && prose[s + n] === v[i + n]) n++;
+      if (n > best.len) best = { start: s, len: n };
+    }
+    return best;
+  };
+  let covered = 0;
+  let instruction: string | null = null;
+  for (let i = 0; i < v.length; ) {
+    const run = runAt(i);
+    if (run.len < 2) {
+      // A clause opener between two copied runs ("…, then test it") is part of the copy.
+      if (CLAUSE_OPENERS.has(v[i]!)) covered++;
+      i++;
+      continue;
+    }
+    covered += run.len;
+    const runWords = v.slice(i, i + run.len);
+    const lead = runWords.findIndex((w) => !CLAUSE_OPENERS.has(w));
+    const introduced = VALUE_MARKERS.has(prose[run.start - 1] ?? "");
+    if (instruction === null && !introduced && lead >= 0 && INSTRUCTION_VERBS.has(runWords[lead]!) && run.len - lead >= 3) {
+      instruction = runWords.join(" ");
+    }
+    i += run.len;
+  }
+  if (instruction === null || covered / v.length < INSTRUCTION_COVERAGE) return null;
+  return `it copies "${instruction.slice(0, 60)}"`;
 }
 
 /** A value needs this many distinct content words before word overlap can call it an echo. */
