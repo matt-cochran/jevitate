@@ -8,14 +8,13 @@ import {
   ScopeUnderivableError,
   UnauthorizedExploreTargetError,
   resolveCoverageThresholds,
-  parseSecretField,
-  SecretFieldSpecError,
   TypeFixtureSpecError,
   validateDenyPatterns,
   type CoverageThresholds,
   type DialogPolicy,
   type SecretField,
   type SuccessCheck,
+  type SuccessWhen,
   type TypeFixture,
 } from "@jevitate/explore";
 import { loadTypeFixtures } from "./type-fixture-file.js";
@@ -119,6 +118,16 @@ import {
   type JourneyPrefix,
 } from "./journey-prefix.js";
 import { clock } from "@jevitate/domain";
+import type { ConversationOptions } from "./conversation-options.js";
+import {
+  GOAL_RUN_OPTIONS,
+  GoalRunFlagError,
+  conversationFromFlags,
+  dialogsFromFlags,
+  secretFieldsFromFlags,
+  successWhenFromFlags,
+  targetFlagsFromFlags,
+} from "./goal-run-flags.js";
 
 /**
  * #293: the flags a sweep sets on each of its missions itself (the rest of the command line is
@@ -210,22 +219,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option(
-      "--success-when <when>",
-      "when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast) | " +
-        "each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final",
-    )
-    .option(
-      "--allow-vacuous-checks",
-      "downgrade a vacuous --success check to a warning. By default a check satisfied before the run's first action — a page check that held on the seed page and never changed " +
-        "(an empty result container), a requestMade/responseStatus matched only by a page-load or polling request — FAILS: it cannot verify the goal",
-    )
-    .option(
-      "--action-deltas",
-      "opt-in (#303; every --strategy, not --feature): record what each action changed on the page — an accessibility snapshot before and after, announcements, " +
-        "the action's requests — redacted, with a code verdict per step (no-change | relevant-change | inconclusive) used by the goal loop's no-progress check and a persistence re-check after writes (goal), and as defect evidence (adversarial, coverage); " +
-        "adds `delta` to every transcript step (and Recording step, goal) and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one",
-    )
+    .addOption(GOAL_RUN_OPTIONS.successWhen())
+    .addOption(GOAL_RUN_OPTIONS.allowVacuousChecks())
+    .addOption(GOAL_RUN_OPTIONS.actionDeltas())
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
@@ -243,35 +239,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option(
-      "--secret <value|env:VAR>",
-      "REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable); env:VAR reads it from the environment (preferred: a literal is visible in the process list and shell history). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state)",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--secret-field <binding>",
-      "goal/usability strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}. " +
-        "A value delivered during the run (an emailed code): '<descriptor>=cmd:<command>' runs the command when the field is typed and types its stdout (needs --allow-secret-cmd)",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--totp <binding>",
-      "goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--type-fixture <binding>",
-      "goal strategy: '<label|testId|type|id|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--fixture <path>",
-      "local file the upload op attaches to a file input (goal and usability strategies); must exist",
-    )
+    .addOption(GOAL_RUN_OPTIONS.secret())
+    .addOption(GOAL_RUN_OPTIONS.secretField())
+    .addOption(GOAL_RUN_OPTIONS.totp())
+    .addOption(GOAL_RUN_OPTIONS.typeFixture())
+    .addOption(GOAL_RUN_OPTIONS.fixture())
     .option(
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
@@ -284,15 +256,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       (v: string, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option(
-      "--save-storage-state <file>",
-      "write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. " +
-        "Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, " +
-        "so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run. " +
-        "Written on every exit path -- a crash or a SIGTERM/SIGINT kill included (#159), not only a clean end -- but " +
-        "never over a good file with a session that already looks lost/logged-out; the last known-good state is used " +
-        "instead, or nothing is written if none was ever captured.",
-    )
+    .addOption(GOAL_RUN_OPTIONS.saveStorageState())
     .option("--max-actions <n>", "hard cap on executed actions", positiveIntArg)
     .option("--max-decisions <n>", "hard cap on model decisions", positiveIntArg)
     .option(
@@ -300,60 +264,15 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "--strategy coverage/exploratory and --feature: end the run inconclusive (stalled) when no step completes within this many seconds (default 120)",
       positiveNumberArg,
     )
-    .option(
-      "--reply-wait-ms <ms>",
-      "conversational pages: how long to keep waiting for a reply while the page shows no sign of working on one " +
-        "(goal and usability; default 60000). While a request the message started is in flight, a busy indicator shows, " +
-        "or the reply is still growing, the wait continues up to --reply-ceiling-ms",
-      positiveIntArg,
-    )
-    .option(
-      "--reply-quiet-ms <ms>",
-      "conversational pages: how long a reply must hold still (no new text, no busy sign) before it is read as complete " +
-        "(goal and usability; default 1000). Raise it for an assistant that answers in several parts (a sentence, then a card a moment later)",
-      positiveIntArg,
-    )
-    .option(
-      "--reply-ceiling-ms <ms>",
-      "conversational pages: hard ceiling on one reply wait, however busy the page stays (default 180000; never below --reply-wait-ms)",
-      positiveIntArg,
-    )
-    .option(
-      "--reply-max-chars <n>",
-      "conversational pages: cap on each generated chat message (goal and usability; default 300)",
-      intArg({ min: 20, max: 2000 }),
-    )
-    .option(
-      "--job-wait-ms <ms>",
-      "goal and usability: while the page shows an in-progress status (\"Simulating…\", aria-busy, a job \"is running\"), " +
-        "waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); " +
-        "it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, " +
-        "and a wait the page documents (\"usually takes a minute\") can raise it",
-      positiveIntArg,
-    )
-    .option(
-      "--deny <pattern>",
-      "a control no mission may click (repeatable): an accessible-name regex (/Archive/i or Archive) or a descriptor role=button;name=Archive. " +
-        "Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Run simulation, Generate, Send invite) controls are refused by default",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--paid <pattern>",
-      "an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze|Draft|Improve)\\b/i: treated like the built-in paid " +
-        "vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--allow-destructive",
-      "let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for",
-    )
-    .option(
-      "--dialogs <policy>",
-      "native window.confirm/prompt dialogs: dismiss (default) or accept. accept still dismisses one whose message names a session-ending, " +
-        "destructive or paid action the run may not take (without --allow-destructive or a goal asking for it); every dialog is logged",
-    )
+    .addOption(GOAL_RUN_OPTIONS.replyWaitMs())
+    .addOption(GOAL_RUN_OPTIONS.replyQuietMs())
+    .addOption(GOAL_RUN_OPTIONS.replyCeilingMs())
+    .addOption(GOAL_RUN_OPTIONS.replyMaxChars())
+    .addOption(GOAL_RUN_OPTIONS.jobWaitMs())
+    .addOption(GOAL_RUN_OPTIONS.deny())
+    .addOption(GOAL_RUN_OPTIONS.paid())
+    .addOption(GOAL_RUN_OPTIONS.allowDestructive())
+    .addOption(GOAL_RUN_OPTIONS.dialogs())
     .option(
       "--allow-writes",
       "let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow " +
@@ -367,13 +286,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option(
-      "--read-rpc <glob>",
-      "a POST request that only READS (repeatable): an RPC-method glob (Estimate*, pkg.Service/Preview*) or a path glob (/api/search*). " +
-        "gRPC-web/Connect Get*/List*/Search*/Find*/Watch*/Stream*/Count*/Describe*/Read* methods are reads already. Reads are never guarded or reported as duplicate writes",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
+    .addOption(GOAL_RUN_OPTIONS.readRpc())
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--out <dir>", "directory to write the emitted Recording")
@@ -382,30 +295,15 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only",
     )
     .option("--issue-repo <owner/name>", "the system-under-test repo findings for THIS target are filed to")
-    .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed)", nonNegativeIntArg)
+    .addOption(GOAL_RUN_OPTIONS.hangReplays())
     .option(
       "--hang-replay-writes",
       "let hang replays re-send a paid/destructive write the run sent (default: such a hang is reported inconclusive, never replayed)",
     )
-    .option(
-      "--settle-ignore <pattern>",
-      "a request URL pattern the target marks as background (never pending work; repeatable, * wildcard)",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option("--long-poll-ms <n>", "a request pending this long on an interactive page is a long-poll (default 5000)", nonNegativeIntArg)
-    .option(
-      "--api-prefix <path>",
-      "a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--ignore-no-progress <pattern>",
-      "a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard)",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
+    .addOption(GOAL_RUN_OPTIONS.settleIgnore())
+    .addOption(GOAL_RUN_OPTIONS.longPollMs())
+    .addOption(GOAL_RUN_OPTIONS.apiPrefix())
+    .addOption(GOAL_RUN_OPTIONS.ignoreNoProgress())
     .option("--jevitate-repo <owner/name>", "where jevitate engine findings are filed (default matt-cochran/jevitate)")
     .option(
       "--min-control-coverage <ratio>",
@@ -428,16 +326,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option(
-      "--allow-secret-cmd",
-      "opt-in: a --secret-field <descriptor>=cmd:<command> may run its command (in a shell, at type time, 60s timeout) and type its output (operator-declared only; refused otherwise)",
-      false,
-    )
-    .option(
-      "--secret-cmd-attempts <n>",
-      "#359: how many times one cmd: secret field's command may run in this run (default 3); past it, typing that field fails without running the command again (read-the-code commands usually have side effects)",
-      positiveIntArg,
-    )
+    .addOption(GOAL_RUN_OPTIONS.allowSecretCmd())
+    .addOption(GOAL_RUN_OPTIONS.secretCmdAttempts())
     .option(
       "--allow-log-cmd",
       "opt-in: a --log-source cmd:<command> may run as a subprocess (operator-declared only; refused otherwise)",
@@ -640,8 +530,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         return;
       }
       // #334: a mistyped --dialogs never silently means "dismiss".
-      if (o.dialogs !== undefined && o.dialogs !== "dismiss" && o.dialogs !== "accept") {
-        emitExplore(fail("E_EXPLORE_ARGS", `--dialogs must be dismiss or accept, got ${JSON.stringify(o.dialogs)}`));
+      let dialogs: DialogPolicy | undefined;
+      try {
+        dialogs = dialogsFromFlags(o);
+      } catch (err) {
+        if (!(err instanceof GoalRunFlagError)) throw err;
+        emitExplore(fail(err.code, err.message));
         return;
       }
 
@@ -849,25 +743,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // #120: a killed run prints what this command would have printed — the envelope with --json,
       // else the human summary (#210) — before it exits.
       setKillSwitchOutput(o.json === true ? "envelope" : "human");
-      const conversation = {
-        ...(o.replyWaitMs === undefined ? {} : { replyWaitMs: Number(o.replyWaitMs) }),
-        ...(o.replyQuietMs === undefined ? {} : { replyQuietMs: Number(o.replyQuietMs) }),
-        ...(o.replyCeilingMs === undefined ? {} : { replyCeilingMs: Number(o.replyCeilingMs) }),
-        ...(o.replyMaxChars === undefined ? {} : { replyMaxChars: Number(o.replyMaxChars) }),
-        ...(o.jobWaitMs === undefined ? {} : { jobWaitMs: Number(o.jobWaitMs) }),
-      };
-      if (
-        (conversation.replyWaitMs !== undefined && !(Number.isInteger(conversation.replyWaitMs) && conversation.replyWaitMs > 0)) ||
-        (conversation.replyCeilingMs !== undefined &&
-          !(Number.isInteger(conversation.replyCeilingMs) && conversation.replyCeilingMs > 0)) ||
-        (conversation.replyMaxChars !== undefined &&
-          !(Number.isInteger(conversation.replyMaxChars) && conversation.replyMaxChars >= 20 && conversation.replyMaxChars <= 2000))
-      ) {
-        emitExplore(fail("E_EXPLORE_ARGS", "--reply-wait-ms and --reply-ceiling-ms must be positive integers; --reply-max-chars an integer in 20..2000"));
-        return;
-      }
-      if (conversation.jobWaitMs !== undefined && !(Number.isInteger(conversation.jobWaitMs) && conversation.jobWaitMs > 0)) {
-        emitExplore(fail("E_EXPLORE_ARGS", "--job-wait-ms must be a positive integer"));
+      let conversation: ConversationOptions;
+      try {
+        conversation = conversationFromFlags(o);
+      } catch (err) {
+        if (!(err instanceof GoalRunFlagError)) throw err;
+        emitExplore(fail(err.code, err.message));
         return;
       }
       // #154: refused BEFORE any browser opens — `nonNegativeIntArg` already rejects a bad value at
@@ -915,20 +796,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       let target: TargetConfig | undefined;
       if (o.url !== undefined) {
         try {
-          target = resolveTargetConfig(loadTargetsFile(deps.explore?.targetsConfigPath), new URL(setupRefFreeUrl(o.url)).origin, {
-            settleIgnore: o.settleIgnore,
-            ignoreNoProgress: o.ignoreNoProgress,
-            apiPrefixes: o.apiPrefix,
-            deny: o.deny,
-            paid: o.paid,
-            readRpc: o.readRpc,
-            ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
-            ...(o.dialogs === undefined ? {} : { dialogs: o.dialogs as DialogPolicy }),
-            ...(o.allowWrites === true ? { allowWrites: true } : {}),
-            allowWrite: o.allowWrite,
-            ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
-            ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
-          });
+          target = resolveTargetConfig(
+            loadTargetsFile(deps.explore?.targetsConfigPath),
+            new URL(setupRefFreeUrl(o.url)).origin,
+            targetFlagsFromFlags(o, dialogs),
+          );
         } catch (err) {
           if (err instanceof TargetConfigError) {
             emitExplore(fail(err.code, err.message));
@@ -1093,12 +965,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           return;
         }
         try {
-          secretFields = [
-            ...o.secretField.map((s) => parseSecretField(s, "value", process.env, { allowCmd: o.allowSecretCmd === true })),
-            ...o.totp.map((s) => parseSecretField(s, "totp", process.env)),
-          ];
+          secretFields = secretFieldsFromFlags(o);
         } catch (err) {
-          if (!(err instanceof SecretFieldSpecError)) throw err;
+          if (!(err instanceof GoalRunFlagError)) throw err;
           emitExplore(fail(err.code, err.message));
           return;
         }
@@ -1476,11 +1345,14 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         emitExplore(fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
       }
-      if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final" && o.successWhen !== "each") {
-        emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "final", "held" or "each", got ${JSON.stringify(o.successWhen)}`));
+      let successWhen: SuccessWhen | undefined;
+      try {
+        successWhen = successWhenFromFlags(o);
+      } catch (err) {
+        if (!(err instanceof GoalRunFlagError)) throw err;
+        emitExplore(fail(err.code, err.message));
         return;
       }
-      const successWhen = o.successWhen === "held" || o.successWhen === "final" || o.successWhen === "each" ? o.successWhen : undefined;
       const allowlist = resolveExploreAllowlist(setupRefFreeUrl(o.url), o.allow);
       // Fixtures (#140/#144): the spec and every ${setup.x} reference are validated here, before any
       // browser or request; the setup itself runs just before the mission (below).

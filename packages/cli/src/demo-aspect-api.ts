@@ -331,6 +331,8 @@ export async function demoAspect(opts: DemoAspectOptions): Promise<DemoAspectRes
       successAssertion: opts.successAssertion,
       allowlist: env.allowedOrigins,
       journeysDir: join(work, "explored"),
+      // #369: the discovery take's own artifacts stay in the scratch dir with the rest.
+      outDir: join(work, "explored-runs"),
       journeyId: id,
       journeyName: aspect,
       takes: 1,
