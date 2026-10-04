@@ -265,6 +265,13 @@ export interface ExploreConfig {
    */
   readonly successCheckDeferred?: boolean;
   /**
+   * #377: the success checks hold on the page right now, read as they are — without `held`/`each`'s
+   * "must go from not holding to holding" rule. A `blocked` while they hold is never refused as
+   * "nothing tried yet" (#237): there is nothing left to try for, and the mission's final verdict
+   * decides whether a check that held before any action counts.
+   */
+  readonly successChecksHoldNow?: () => Promise<boolean>;
+  /**
    * #286: the goal asks the run to report what it found (`goalAsksForReport`) while `--success` checks
    * judge the rest: a `done` is no ending — the run ends with a grounded `report` — and neither a
    * `blocked` nor the "already met" signal is turned into "goal already met" (that has no answer).

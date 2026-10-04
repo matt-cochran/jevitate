@@ -617,7 +617,11 @@ async function adjudicatedRun(
             const ok = await holdsNow(c.assertion);
             if (!ok) eachSawNot[i] = true;
             else if (eachSawNot[i]) eachHeldAt[i] = settledSteps;
-            else if (settledSteps === 1) eachHeldAtStart[i] = true;
+            else if (settledSteps === 1) {
+              eachHeldAtStart[i] = true;
+              // #377: --allow-vacuous-checks — a check that already held on the start page counts.
+              if (allowVacuous) eachHeldAt[i] = 1;
+            }
           }
           return;
         }
@@ -625,13 +629,19 @@ async function adjudicatedRun(
         const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
         if (!ok) sawNotHolding = true;
         else if (sawNotHolding) heldAtStep = settledSteps;
-        else if (settledSteps === 1) heldAtStart = true;
+        else if (settledSteps === 1) {
+          heldAtStart = true;
+          // #377: --allow-vacuous-checks — checks that already held on the start page count (the
+          // run may succeed without acting), the same rule as under `final` and `each`.
+          if (allowVacuous) heldAtStep = 1;
+        }
       },
       ...(stopWhenHeld
         ? {
             successMetNow: async (): Promise<string | null> => {
-              // Never before an action: the start state proves nothing was done.
-              if (settledSteps < 2) return null;
+              // Never before an action: the start state proves nothing was done — unless
+              // --allow-vacuous-checks accepts exactly that (#377).
+              if (settledSteps < 2 && !allowVacuous) return null;
               if (pageChecks.length > 0 && (each ? eachHeldAt.some((at) => at === null) : heldAtStep === null)) return null;
               const requests = capture?.sent() ?? [];
               if (!networkChecks.every((c) => judgeNetworkCheck(c, requests, capture?.truncated ?? false, scope()).passed)) return null;
@@ -665,6 +675,17 @@ async function adjudicatedRun(
             ...(answerRequired ? { requireAnswer: true } : {}),
             // #235: only `reloadThen` checks — the in-run check below evaluates none of them.
             ...(checks.every((c) => c.kind === "reloadThen") ? { successCheckDeferred: true } : {}),
+            // #377: the checks as they read now (no held/each transition rule) — a `blocked` while
+            // they hold is not refused as "nothing tried yet".
+            ...(checks.every((c) => c.kind === "reloadThen")
+              ? {}
+              : {
+                  successChecksHoldNow: () =>
+                    evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
+                      (rs) => rs.every((r) => r.passed),
+                      () => false,
+                    ),
+                }),
             successCheck: () =>
               evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
                 (rs) =>

@@ -1,4 +1,4 @@
-import type { Assertion } from "@jevitate/recording";
+import type { Assertion, TargetDescriptor } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, CountOf, IsVisible, TextOf, ValueOf } from "@jevitate/screenplay";
 import { descriptorToTarget } from "./descriptor.js";
@@ -101,10 +101,8 @@ async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolea
       const page = actor.ability(BrowseTheWebToken).session.page;
       return page.url().includes(a.text);
     }
-    case "textIncludes": {
-      const text = await actor.asks(TextOf.target(descriptorToTarget(a.target)));
-      return text !== null && textIncludesCI(text, a.text);
-    }
+    case "textIncludes":
+      return textIncludesOnAnyMatch(actor, a.target, a.text);
     case "count": {
       const n = await actor.asks(CountOf.target(descriptorToTarget(a.target)));
       return (a.min === undefined || n >= a.min) && (a.max === undefined || n <= a.max);
@@ -112,6 +110,34 @@ async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolea
     case "valueEquals":
       return (await actor.asks(ValueOf.target(descriptorToTarget(a.target)))) === a.value;
   }
+}
+
+/** #376: how many matches of a multi-match `textIncludes` target are read, at most. */
+const MAX_TEXT_MATCHES = 50;
+
+/**
+ * #376: `textIncludes` over a target that matches several elements (`text=Coming soon` on a page of
+ * badges, one of them in a closed `<details>`) holds when ANY visible match's text includes the
+ * text — like `visible` (#299). Hidden matches are skipped (a collapsed copy never decides the
+ * check, and text a user cannot see never holds); at most MAX_TEXT_MATCHES are read.
+ */
+async function textIncludesOnAnyMatch(actor: Actor, target: TargetDescriptor, text: string): Promise<boolean> {
+  const t = descriptorToTarget(target);
+  const locator = t.resolve(actor.ability(BrowseTheWebToken).session.page);
+  const n = await locator.count();
+  if (n === 0) return false;
+  if (n === 1) {
+    if (!(await locator.isVisible().catch(() => false))) return false;
+    const read = await actor.asks(TextOf.target(t));
+    return read !== null && textIncludesCI(read, text);
+  }
+  for (let i = 0; i < Math.min(n, MAX_TEXT_MATCHES); i++) {
+    const el = locator.nth(i);
+    if (!(await el.isVisible().catch(() => false))) continue;
+    const read = await el.innerText({ timeout: 1_000 }).catch(() => null);
+    if (read !== null && textIncludesCI(read, text)) return true;
+  }
+  return false;
 }
 
 /**
