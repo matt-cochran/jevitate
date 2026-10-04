@@ -290,6 +290,7 @@
   SafetyPolicy: class
   ScopeUnderivableError: class
   SecretFieldSpecError: class
+  SecretSourceError: class
   SideEffectGuard: class
   SideEffectLog: class
   TARGET_FREE_ACTIONS: array
@@ -487,6 +488,7 @@
   resolveCoverageThresholds: function
   resolveMissionFixture: function
   resolveRouteScope: function
+  resolveSecretFieldValue: function
   routeOf: function
   runAdversarialMission: function
   runFeatureMission: function
