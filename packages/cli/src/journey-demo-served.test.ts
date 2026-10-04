@@ -263,12 +263,20 @@ describe("[realtime] jevitate journey demo — served (#248)", () => {
             }
             return out;
           },
-          { src: `data:video/webm;base64,${readFileSync(video).toString("base64")}`, times: [(first.start - 400) / 1000, (first.start + pace / 2) / 1000] },
+          // The frames around the first cue, both sides. A recorder on a loaded runner drops and shifts
+          // frames by a few hundred ms (CI saw the transition ~0.5 s either side of a single sample),
+          // so each side is a WINDOW of samples: the card must show somewhere in the second before
+          // the cue, the caption somewhere in the 1.5 s after it — still tight enough that a clock
+          // started seconds before the recorder had frames (the bug this guards) fails.
+          {
+            src: `data:video/webm;base64,${readFileSync(video).toString("base64")}`,
+            times: [-1000, -700, -400, -100, 300, 600, 900, 1200, 1500].map((d) => Math.max(0, first.start + d) / 1000),
+          },
         );
-        const [card, caption] = frames;
-        expect(card!.title, JSON.stringify(frames)).toBeGreaterThan(0.01);
-        expect(caption!.title, JSON.stringify(frames)).toBeLessThan(0.002);
-        expect(caption!.dark, JSON.stringify(frames)).toBeGreaterThan(0.004);
+        const before = frames.slice(0, 4);
+        const after = frames.slice(4);
+        expect(before.some((f) => f.title > 0.01), JSON.stringify(frames)).toBe(true);
+        expect(after.some((f) => f.title < 0.002 && f.dark > 0.004), JSON.stringify(frames)).toBe(true);
       } finally {
         await reader.close();
       }
