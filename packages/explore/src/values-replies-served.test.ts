@@ -74,6 +74,30 @@ const KEYS_HTML = `<!doctype html><html><body>
 </script>
 </body></html>`;
 
+/** #366: each "Reinstate …" mounts a NEW confirm dialog (removed again on submit) with an empty field. */
+const reinstated: Array<{ agency: string; confirm: string }> = [];
+const CONFIRM_HTML = `<!doctype html><html><body>
+<h1>Agencies</h1>
+<ul><li>Acme <button type="button" data-agency="Acme">Reinstate Acme</button></li>
+<li>Globex <button type="button" data-agency="Globex">Reinstate Globex</button></li></ul>
+<ul id="audit"></ul>
+<script>
+  for (const b of document.querySelectorAll("button[data-agency]")) b.addEventListener("click", () => {
+    const agency = b.dataset.agency;
+    const d = document.createElement("div");
+    d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Reinstate " + agency);
+    d.innerHTML = '<form><label for="cf">Confirmation</label> <input id="cf" required /><button type="submit">Confirm</button></form>';
+    d.querySelector("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      await fetch("/reinstate", { method: "POST", body: JSON.stringify({ agency, confirm: d.querySelector("input").value }) });
+      d.remove();
+      const li = document.createElement("li"); li.textContent = agency + " reinstated"; document.getElementById("audit").appendChild(li);
+    });
+    document.body.appendChild(d);
+  });
+</script>
+</body></html>`;
+
 /** Login first; "Sign up" (a mode toggle OUTSIDE the form) re-renders a signup form (#111). */
 const SIGNUP_HTML = `<!doctype html><html><body>
 <h1>Welcome</h1>
@@ -159,6 +183,13 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "POST" && path === "/reinstate") {
+      void body(req).then((b) => {
+        reinstated.push(JSON.parse(b) as { agency: string; confirm: string });
+        res.writeHead(201).end();
+      });
+      return;
+    }
     if (req.method === "POST" && path === "/signup") {
       void body(req).then((b) => {
         const { email, password } = JSON.parse(b) as { email: string; password: string };
@@ -169,7 +200,7 @@ beforeAll(async () => {
       return;
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(path === "/signup" ? SIGNUP_HTML : path === "/chat" ? CHAT_HTML : path === "/keys" ? KEYS_HTML : PARTICIPANTS_HTML);
+    res.end(path === "/signup" ? SIGNUP_HTML : path === "/chat" ? CHAT_HTML : path === "/keys" ? KEYS_HTML : path === "/agencies" ? CONFIRM_HTML : PARTICIPANTS_HTML);
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -294,6 +325,34 @@ describe("add-another flow: the second item is the next one, not the first again
       expect(nameAsks[1]?.input.alreadyUsed).toEqual(["Dana Ruiz"]);
       // Emails come from the goal's item list, in order, without the model.
       expect(inputs.filter((i) => i.kind === "form.value" && i.input.fieldLabel === "Email")).toHaveLength(0);
+    },
+    120_000,
+  );
+});
+
+describe("a reopened confirm dialog's new, empty field takes the same token again (#366)", () => {
+  it(
+    "REINSTATE typed into the second dialog instance is allowed — the repeat memory stays with the first",
+    async () => {
+      reinstated.length = 0;
+      const goal = "Reinstate two agencies, Acme and Globex: for each, open its reinstate dialog, type REINSTATE and confirm.";
+      const { gen } = scriptedGen({ form: () => "REINSTATE" });
+      const judge = new PickingJudge([
+        /click button "Reinstate Acme"/,
+        /type into textbox "Confirmation"/,
+        /click button "Confirm"/,
+        /click button "Reinstate Globex"/,
+        /type into textbox "Confirmation"/,
+        /click button "Confirm"/,
+        /^done$/,
+      ]);
+      const r = await run(judge, gen, "/agencies", goal, { successCheck: async () => reinstated.length >= 2 });
+      expect(r.transcript.filter((e) => e.reason?.startsWith("typed value rejected"))).toEqual([]);
+      expect(reinstated).toEqual([
+        { agency: "Acme", confirm: "REINSTATE" },
+        { agency: "Globex", confirm: "REINSTATE" },
+      ]);
+      expect(r.stop).toBe("done");
     },
     120_000,
   );

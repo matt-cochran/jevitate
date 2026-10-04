@@ -60,6 +60,12 @@ export async function viewPage(ctx: RunContext, step: Perceived): Promise<PageVi
     ctx.save.reset();
   }
   ctx.lastPath = path;
+  // #366: a text field that left the page and came back empty (a dialog reopened) is a new instance.
+  ctx.valueLog.observe(
+    snap.controls
+      .filter((c) => c.tag === "input" || c.tag === "textarea" || c.richText === true)
+      .map((c) => ({ label: c.name || c.summary, value: c.value })),
+  );
   if (ctx.listsSeveral && ctx.prevSignature !== null && ctx.prevSignature !== snap.signature) {
     const next = ctx.nextFrom.get(snap.signature);
     if (next !== undefined) {
