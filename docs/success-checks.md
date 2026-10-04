@@ -81,6 +81,13 @@ Once every check has held, code ends the run as done before the next action, so 
 keeps acting or writing past a met goal. `reloadThen` checks are always read on the final
 page.
 
+`--success-when each` (#337) is for a goal whose checks live on different pages, for example
+"connect payments (Connections shows Connected), then confirm Pricing shows Payments ready". No
+single page holds both, so neither `final` nor `held` (all together) can pass. Under `each`,
+every page check counts once it went from not holding to holding at some settled step, each at
+its own step and in any order. A check that held on the start page and never changed is vacuous,
+as under `held`. Once every check has held, code ends the run as done before the next action.
+
 **Vacuous checks (`--allow-vacuous-checks`).** A check that was already satisfied before the
 run did anything cannot verify the goal, so by default it **fails**, and the result names it
 (`checkWarnings`), e.g. `check 'visible:testId=list' held at step 0, before any action — it

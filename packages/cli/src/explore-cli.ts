@@ -211,7 +211,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     )
     .option(
       "--success-when <when>",
-      "when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast). reloadThen is always final",
+      "when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast) | " +
+        "each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final",
     )
     .option(
       "--allow-vacuous-checks",
@@ -1294,8 +1295,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           emitExplore(fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
           return;
         }
-        if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final") {
-          emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
+        if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final" && o.successWhen !== "each") {
+          emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "final", "held" or "each", got ${JSON.stringify(o.successWhen)}`));
           return;
         }
         if (uxSuccessChecks.length === 0 && (o.successWhen !== undefined || o.allowVacuousChecks === true)) {
@@ -1354,7 +1355,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...triagedServerLog(serverLog, uxJudge, o.real === true),
             ...withInvariants,
             ...(uxSuccessChecks.length === 0 ? {} : { successChecks: uxSuccessChecks }),
-            ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
+            ...(o.successWhen === "held" || o.successWhen === "final" || o.successWhen === "each" ? { successWhen: o.successWhen } : {}),
             ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
             ...withPrefix,
             ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
@@ -1448,11 +1449,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         emitExplore(fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
       }
-      if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final") {
-        emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
+      if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final" && o.successWhen !== "each") {
+        emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "final", "held" or "each", got ${JSON.stringify(o.successWhen)}`));
         return;
       }
-      const successWhen = o.successWhen === "held" || o.successWhen === "final" ? o.successWhen : undefined;
+      const successWhen = o.successWhen === "held" || o.successWhen === "final" || o.successWhen === "each" ? o.successWhen : undefined;
       const allowlist = resolveExploreAllowlist(setupRefFreeUrl(o.url), o.allow);
       // Fixtures (#140/#144): the spec and every ${setup.x} reference are validated here, before any
       // browser or request; the setup itself runs just before the mission (below).

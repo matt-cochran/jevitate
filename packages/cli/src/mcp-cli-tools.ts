@@ -256,7 +256,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         strategy: s("--strategy", { enum: ["goal", "coverage", "exploratory", "adversarial", "usability"] }),
         goal: s("--goal"),
         success: many("--success"),
-        successWhen: s("--success-when", { enum: ["final", "held"] }),
+        successWhen: s("--success-when", { enum: ["final", "held", "each"] }),
         allowVacuousChecks: b("--allow-vacuous-checks"),
         actionDeltas: b("--action-deltas"),
         feature: s("--feature"),
