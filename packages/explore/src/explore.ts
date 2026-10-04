@@ -41,6 +41,7 @@ import { type HostProbe } from "./host-pressure.js";
 import type { HostHealthSampler } from "./host-health.js";
 import { type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import {
+  type SecretCommandRunner,
   type SecretField,
 } from "./secret-fields.js";
 import { type SideEffect } from "./side-effects.js";
@@ -182,6 +183,11 @@ export interface ExploreConfig {
    * value (or TOTP code); the model sees only a placeholder, the Recording `{ redacted: true }`.
    */
   readonly secretFields?: readonly SecretField[];
+  /**
+   * #324: runs a `cmd:` secret field's command at type time (the CLI's, behind
+   * `--allow-secret-cmd`). Absent: a `cmd` binding cannot be typed (the step fails, saying so).
+   */
+  readonly secretCommand?: SecretCommandRunner;
   readonly missionContext?: string;
   /** Recording.site label. Defaults to the start origin. */
   readonly site?: string;

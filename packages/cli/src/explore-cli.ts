@@ -19,6 +19,7 @@ import {
   type TypeFixture,
 } from "@jevitate/explore";
 import { loadTypeFixtures } from "./type-fixture-file.js";
+import { secretCommandRunner } from "./secret-command.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { SessionFileInProjectError, assertSessionFileOutsideProject } from "./project-dir.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
@@ -250,7 +251,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     )
     .option(
       "--secret-field <binding>",
-      "goal/usability strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}",
+      "goal/usability strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}. " +
+        "A value delivered during the run (an emailed code): '<descriptor>=cmd:<command>' runs the command when the field is typed and types its stdout (needs --allow-secret-cmd)",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -427,6 +429,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       [] as string[],
     )
     .option(
+      "--allow-secret-cmd",
+      "opt-in: a --secret-field <descriptor>=cmd:<command> may run its command (in a shell, at type time, 60s timeout) and type its output (operator-declared only; refused otherwise)",
+      false,
+    )
+    .option(
       "--allow-log-cmd",
       "opt-in: a --log-source cmd:<command> may run as a subprocess (operator-declared only; refused otherwise)",
       false,
@@ -582,6 +589,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         secret: string[];
         secretField: string[];
         totp: string[];
+        allowSecretCmd?: boolean;
         typeFixture: string[];
         fixture?: string;
         storageState?: string;
@@ -1080,7 +1088,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         }
         try {
           secretFields = [
-            ...o.secretField.map((s) => parseSecretField(s, "value", process.env)),
+            ...o.secretField.map((s) => parseSecretField(s, "value", process.env, { allowCmd: o.allowSecretCmd === true })),
             ...o.totp.map((s) => parseSecretField(s, "totp", process.env)),
           ];
         } catch (err) {
@@ -1089,6 +1097,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           return;
         }
       }
+
+      // #324: a cmd: binding's command runs at type time; its output becomes a run secret at once.
+      const secretCommand = secretFields.some((f) => f.kind === "cmd") ? secretCommandRunner() : undefined;
 
       // #281: fields typed with a file's exact text — read (and checked) before any browser opens.
       let typeFixtures: TypeFixture[] = [];
@@ -1351,6 +1362,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,
             ...(secretFields.length > 0 ? { secretFields } : {}),
+            ...(secretCommand === undefined ? {} : { secretCommand }),
             fixture: o.fixture,
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
@@ -1541,6 +1553,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
           ...(secretFields.length > 0 ? { secretFields } : {}),
+          ...(secretCommand === undefined ? {} : { secretCommand }),
           ...(typeFixtures.length > 0 ? { typeFixtures } : {}),
           fixture: o.fixture,
           outDir: o.out,

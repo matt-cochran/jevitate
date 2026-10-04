@@ -9,7 +9,7 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { InvariantSpec } from "@jevitate/recording";
-import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
+import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type SecretCommandRunner, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
 import { a11yChecks, analyzeClaims, buildReport, calibrationCaveat, claimsCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AnalysisOutcome, type AppContext, type GuardProbe, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
 import { captureFindingShots, planGuardProbes, runGuardProbes, skippedProbes, withProbePage } from "./ux-claim-probe.js";
 import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
@@ -67,6 +67,8 @@ export interface RunUsabilityMissionOptions {
    * masked in every screenshot and redacted from the transcript, Recording and report.
    */
   readonly secretFields?: readonly SecretField[];
+  /** #324: runs a `cmd:` secret field's command at type time (CLI `--allow-secret-cmd`). */
+  readonly secretCommand?: SecretCommandRunner;
   /** Tuning of the run-signal oracles (#96), e.g. the hung-request floor. Defaults suit real apps. */
   readonly signals?: SignalOptions;
   /** Local file the `upload` op attaches (CLI `--fixture`); validated before any browser opens. */
@@ -396,6 +398,17 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     screenshotDir,
     secrets,
     ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
+    ...(opts.secretCommand === undefined
+      ? {}
+      : {
+          // #324: a value read mid-run joins this run's secrets at once (result, evidence, report).
+          secretCommand: async (command: string) => {
+            const out = await opts.secretCommand!(command);
+            const value = out.trim();
+            if (value !== "" && !secrets.includes(value)) secrets.push(value);
+            return out;
+          },
+        }),
   });
   armedCapture = capture;
   // The usability capture (screenshots) and the journal (crash-safe flush) are the EXISTING listener
