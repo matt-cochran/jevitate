@@ -277,7 +277,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (598 exports)
+# @jevitate/explore (601 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -570,6 +570,7 @@
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isBookkeepingRequest: function
   isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
@@ -738,6 +739,7 @@
   routeOf: function
   RouteScopeSource: type-alias
   RPC_CONTENT: variable
+  RPC_TRAILER_READ_MS: variable
   rpc5xxSignalOf: function
   rpcHttpEquivalent: function
   RpcResponseLike: interface
@@ -761,6 +763,7 @@
   scopeGlobs: function
   scopePredicate: function
   ScopeUnderivableError: class
+  screenState: function
   scrollPositionAt: function
   SecretCommandRunner: type-alias
   SecretField: interface

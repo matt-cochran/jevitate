@@ -172,7 +172,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (391 exports)
+# @jevitate/explore (394 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -282,6 +282,7 @@
   RENDER_WAIT_MS: const (number)
   REPLY_MAX_CHARS: const (number)
   RPC_CONTENT: object
+  RPC_TRAILER_READ_MS: const (number)
   ReadOnlyGuard: class
   ReplayDeltas: class
   RequestCapture: class
@@ -427,6 +428,7 @@
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isBookkeepingRequest: function
   isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
@@ -521,6 +523,7 @@
   sampleHeap: function
   scopeGlobs: function
   scopePredicate: function
+  screenState: function
   scrollPositionAt: function
   secretFieldContext: function
   secretFieldNeedsValue: function
