@@ -169,7 +169,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (373 exports)
+# @jevitate/explore (377 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -247,6 +247,8 @@
   MESSAGE_FIELD: object
   MissionSafety: class
   MissionSessions: class
+  NAVIGATION_RETRIES: const (number)
+  NAVIGATION_WAIT_MS: const (number)
   NOT_REPLAYED: object
   NO_ANSWER_REASON: const (string)
   NO_DESTRUCTIVE_NOTE: const (string)
@@ -262,6 +264,7 @@
   PROMPT_PAGE_TEXT_CHARS: const (number)
   PageDeltas: class
   PageMonitor: class
+  PageNavigatingError: class
   PageSignalCollector: class
   READ_ONLY_NOTE: const (string)
   REDACTION_MASK: const (string)
@@ -421,6 +424,7 @@
   isInScope: function
   isLoginLikeUrl: function
   isNavControl: function
+  isNavigationInterruption: function
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
   isPageUnresponsive: function

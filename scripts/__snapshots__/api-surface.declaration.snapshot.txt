@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (574 exports)
+# @jevitate/explore (578 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -565,6 +565,7 @@
   isInScope: function
   isLoginLikeUrl: function
   isNavControl: function
+  isNavigationInterruption: function
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
   isPageUnresponsive: function
@@ -610,6 +611,8 @@
   MisuseStep: interface
   MisuseStrategy: type-alias
   monitorFor: function
+  NAVIGATION_RETRIES: variable
+  NAVIGATION_WAIT_MS: variable
   NavigationTiming: interface
   NeverResponseHit: interface
   newIdentityToken: function
@@ -643,6 +646,7 @@
   PageFacts: interface
   PageHeadings: interface
   PageMonitor: class
+  PageNavigatingError: class
   pagesContext: function
   PageSignalCollector: class
   PageTiming: interface
