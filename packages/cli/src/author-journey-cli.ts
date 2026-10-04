@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
-import { UnauthorizedExploreTargetError } from "@jevitate/explore";
+import { UnauthorizedExploreTargetError, type SuccessCheck } from "@jevitate/explore";
 import { ok, fail } from "./envelope.js";
 import { positiveIntArg } from "./cli-args.js";
-import { runAuthorJourney, parseAssertionSpec, resolveExploreAllowlist } from "./explore-api.js";
+import { runAuthorJourney, parseSuccessSpec, resolveExploreAllowlist } from "./explore-api.js";
 import { allowWithExtensions } from "./browser-run-options.js";
 import {
   type CliDeps,
@@ -32,7 +32,13 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
   )
     .option("--url <url>", "target URL (must be an authorized origin)")
     .option("--goal <text>", "natural-language goal")
-    .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/confirmed")
+    .option(
+      "--success <spec>",
+      "independent success check (repeatable; all must hold), any explore --success kind but reloadThen, e.g. urlIncludes:/confirmed or " +
+        "'requestMade:POST /api/save': a page check becomes the Journey's last assert step, a requestMade/responseStatus check is re-checked over every replay's requests",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--id <id>", "journey id (used for the <id>.json filename in the store)")
     .option("--name <name>", "human-readable journey name")
     .option("--takes <n>", "corroborating takes incl. discovery (default 1)", positiveIntArg, 1)
@@ -56,7 +62,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
       const o = this.opts<{
         url?: string;
         goal?: string;
-        success?: string;
+        success: string[];
         id?: string;
         name?: string;
         takes: string;
@@ -74,13 +80,22 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         return;
       }
 
-      if (!o.url || !o.goal || !o.success || !o.id || !o.name) {
+      if (!o.url || !o.goal || o.success.length === 0 || !o.id || !o.name) {
         emitJson(program, fail("E_AUTHOR_ARGS", "--url, --goal, --success, --id and --name are all required"));
         return;
       }
-      let successAssertion;
+      // #322: every kind `explore --success` takes — page and network checks — but reloadThen.
+      const successChecks: SuccessCheck[] = [];
       try {
-        successAssertion = parseAssertionSpec(o.success);
+        for (const spec of o.success) {
+          const check = parseSuccessSpec(spec);
+          if (check.kind === "reloadThen") {
+            throw new Error(
+              `${JSON.stringify(spec)}: reloadThen can't be authored into a Journey yet — use a page check or a requestMade/responseStatus check`,
+            );
+          }
+          successChecks.push(check);
+        }
       } catch (err) {
         emitJson(program, fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
@@ -109,7 +124,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         const result = await runAuthorJourney({
           url: o.url,
           goal: o.goal,
-          successAssertion,
+          successChecks,
           allowlist,
           journeysDir: resolveJourneysDir(deps, o.journeysDir),
           journeyId: o.id,

@@ -973,7 +973,7 @@
   VisualAssertion: other
   VisualVerdict: other
 
-# @jevitate/journey (51 exports)
+# @jevitate/journey (53 exports)
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1002,11 +1002,13 @@
   journeyBranchPoint: function
   JourneyBranchPoint: interface
   JourneyMetadata: interface
+  JourneyNetworkCheck: type-alias
   JourneyParameter: interface
   JourneyPrecondition: interface
   journeyPrefix: function
   JourneyRegistry: class
   JourneySchema: variable
+  JourneyStatusSpec: type-alias
   journeyStepCount: function
   JourneyStepError: class
   JourneyStore: interface

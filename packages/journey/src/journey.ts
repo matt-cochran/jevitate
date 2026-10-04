@@ -41,7 +41,22 @@ export interface JourneyMetadata {
    * here changes a replay.
    */
   anchors?: JourneyAnchor[];
+  /**
+   * #322 — network checks the replay must satisfy, evaluated over the requests the replay itself
+   * sent, after its last step (a state-changing job often has no stable on-page text: the request
+   * is its only honest success signal). Authored from `explore-author-journey --success
+   * requestMade:…|responseStatus:…`. Additive: a Journey without them runs exactly as before.
+   */
+  networkChecks?: JourneyNetworkCheck[];
 }
+
+/** #322: an expected HTTP status — a class (`2xx`) or an exact code (`201`). */
+export type JourneyStatusSpec = { class: 1 | 2 | 3 | 4 | 5 } | { code: number };
+
+/** #322: a network check a Journey's replay must satisfy (the `requestMade`/`responseStatus` success checks). */
+export type JourneyNetworkCheck =
+  | { kind: "requestMade"; method: string; pathGlob: string }
+  | { kind: "responseStatus"; method: string; pathGlob: string; status: JourneyStatusSpec };
 
 /**
  * A Journey anchor (#293): the state reached after `step` top-level steps, by name, with the
@@ -118,6 +133,21 @@ const JourneyAnchorSchema = z.object({
   probes: z.array(z.string().min(1).max(500)).max(20).optional(),
 }).strict();
 
+const JourneyNetworkCheckSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("requestMade"), method: z.string().min(1).max(20), pathGlob: z.string().min(1).max(2000) }).strict(),
+  z
+    .object({
+      kind: z.literal("responseStatus"),
+      method: z.string().min(1).max(20),
+      pathGlob: z.string().min(1).max(2000),
+      status: z.union([
+        z.object({ class: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]) }).strict(),
+        z.object({ code: z.number().int().min(100).max(599) }).strict(),
+      ]),
+    })
+    .strict(),
+]);
+
 const SecretRefSchema = z.object({
   manager: z.string(), key: z.string(), origin: z.string(), field: z.string(),
 }).strict();
@@ -157,6 +187,7 @@ export const JourneySchema: ZodType<Journey> = z.object({
       .max(50)
       .refine((as) => new Set(as.map((a) => a.name)).size === as.length, { message: "anchors: duplicate name" })
       .optional(),
+    networkChecks: z.array(JourneyNetworkCheckSchema).max(20).optional(),
   }).strict(),
   recording: RecordingSchema,
 }).superRefine((j, ctx) => {
