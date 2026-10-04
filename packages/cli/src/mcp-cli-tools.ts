@@ -123,7 +123,7 @@ const many = (flag: string): CliParam => ({ kind: "string[]", flag });
 const path = (flag: string, extra: Partial<CliParam> = {}): CliParam => ({ kind: "path", flag, ...extra });
 const session = (flag: string): CliParam => ({ kind: "session", flag });
 const pos = (kind: CliParamKind = "string", extra: Partial<CliParam> = {}): CliParam => ({ kind, positional: true, required: true, ...extra });
-const EMULATION = { viewport: { kind: "viewport", flag: "--viewport" } as CliParam, device: s("--device") };
+const EMULATION = { viewport: { kind: "viewport", flag: "--viewport" } as CliParam, device: s("--device"), geolocation: s("--geolocation") };
 /** #256: unpacked browser extensions to load — confined like every path argument (a directory with manifest.json). */
 const EXTENSION = {
   extension: { kind: "path[]", flag: "--extension" } as CliParam,

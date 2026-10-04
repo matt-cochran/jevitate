@@ -1111,7 +1111,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (139 exports)
+# @jevitate/playwright (142 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1173,11 +1173,13 @@
   ExtensionLoadError: class
   extensionOrigin: function
   findOrphanBrowsers: function
+  GeolocationSpec: interface
   GovernanceConfig: interface
   governanceFromEnv: function
   GovernorTicket: interface
   HostLoadSample: interface
   HostSignalDeps: interface
+  InvalidGeolocationError: class
   isTransientSlotError: function
   jevitateBrowsers: function
   knownDeviceNames: function
@@ -1204,6 +1206,7 @@
   pageLostReason: function
   pageResourceLimit: function
   pageUnresponsiveMsFromEnv: function
+  parseGeolocation: function
   parseMeminfoBytes: function
   parseOwnerMarker: function
   parsePsiAvg10: function

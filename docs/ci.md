@@ -109,6 +109,9 @@ relative paths resolve against the suite file):
   target, it is the default for every item; set on a Journey (object form), goal or mission, it
   overrides that default for the item. An unknown device, or both on one entry, is refused before
   anything runs.
+- `geolocation` (`"41.6376,-70.9036"`, #329): the browser's position, at the same levels as
+  `viewport`/`device`; the permission is granted to the item's allowed origins only. A malformed
+  value is refused before anything runs.
 - `journeys`: promoted Journeys only. Each one must run on an origin in the target's allowlist.
   Journeys follow the site policy for their origin ([site policies](./journeys.md#site-policies)).
   A Journey's object form takes `env` (a name from `.jevitate/environments.json`) and/or `baseUrl`

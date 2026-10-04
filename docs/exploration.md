@@ -237,6 +237,14 @@ carry them too (optional `viewport`/`device` on MCP `queue_exploration`). The em
 replay at the same size by default, so a defect found at 375px never "verifies fixed" at desktop
 width. A different size on `verify-fix` is refused unless you pass `--allow-emulation-override`.
 
+**Geolocation (#329).** `--geolocation <lat>,<lng>` (an optional third value is the accuracy in
+metres), e.g. `--geolocation 41.6376,-70.9036`, places the browser at that position for "near me"
+pages. The `geolocation` permission is granted only to the run's allowed origins, so the page
+reads the position without a prompt and no other site can. A malformed or out-of-range value is
+refused before any browser opens. It is offered wherever `--viewport`/`--device` are, except a
+queued mission (`mission queue`), and over MCP as `geolocation` on `run_journey`, `verify_fix` and
+the CLI-mirroring tools. Fresh-context hang replays don't carry it.
+
 A **horizontal-overflow** hard signal (`document.scrollingElement.scrollWidth > innerWidth`,
 attributed to the widest offending element) runs by default when the emulated viewport is
 narrower than 1024px. It is reported as a defect in coverage, exploratory and adversarial runs
