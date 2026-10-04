@@ -6,6 +6,7 @@ import { redactPageText } from "./redact.js";
 import { backgroundEndpoints, endpointKey } from "./stuck-actions.js";
 import { clock } from "@jevitate/domain";
 import { clockBounded } from "./clock-bound.js";
+import { SUBMIT_NAME } from "./composer-evidence.js";
 
 /**
  * Conversational pages (chat composers, assistants, interview flows): the independent-code side of
@@ -36,7 +37,7 @@ export const MIN_REPLY_CHARS = 12;
 export const REPLY_KEEP_CHARS = 1_500;
 
 /** Names of controls that submit a composer (a chat Send button, a form's submit). */
-export const SUBMIT_NAME = /\b(send|submit|reply|ask|post)\b|[→➤➔↑]|^\s*(go|ok)\s*$/i;
+export { SUBMIT_NAME };
 
 /** Transient "the assistant is working" text — never a reply. */
 const BUSY_TEXT =
