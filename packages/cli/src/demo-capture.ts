@@ -2,18 +2,18 @@ import { randomBytes } from "node:crypto";
 import { rm } from "node:fs/promises";
 import type { BrowserContext, Frame, Locator, Page } from "playwright";
 import { REVEALED_SECRET_SELECTORS, REVEALED_SECRET_SHAPES, revealedSecretsIn, secretForms } from "@jevitate/ai-core";
-import { DEMO_OVERLAY_HIDE_STYLE } from "@jevitate/explore";
+import { DEMO_OVERLAY_HIDE_STYLE, hideDemoOverlayForCapture } from "@jevitate/explore";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
 import type { BrowserPort } from "@jevitate/playwright";
 import { clock } from "@jevitate/domain";
 
 /**
- * #248 — the ONE place a demo screenshot is taken. The overlay is always hidden (Playwright's
- * `screenshot({ style })`, applied only for the capture: the page's DOM is never touched), and the
+ * #248 — the ONE place a demo screenshot is taken. The overlay is always hidden (#336: through its
+ * shadow root's adopted sheets, applied only for the capture: the page's DOM is never touched), and the
  * capture is built from LAYERS so later safety passes plug in without touching the callers: pixel
  * masking of secret fields (#250/#251) is a layer contributing `mask` locators and/or extra `style`.
- * A layer cannot drop the overlay-hiding style: styles are concatenated, never replaced.
+ * A layer cannot un-hide the overlay: its styles are added to the capture, never replacing the hide.
  *
  * #250/#251 — the pixel mask ({@link SecretPixelMask}): every registered secret value the page
  * shows (text nodes, non-password input/textarea/select values, attribute-rendered text such as a
@@ -52,13 +52,17 @@ export interface CaptureLayer {
   confirm?(page: Page, ctx: CaptureContext): Promise<void>;
 }
 
-/** The screenshot options a set of layers produces (the overlay-hiding style always first). */
+/**
+ * The screenshot options a set of layers produces. #336: the overlay is no longer hidden with a
+ * `style` (see {@link captureStepScreenshot}); `style` is only what layers add, and is empty
+ * (omitted from the screenshot call) when none does.
+ */
 export async function captureOptions(
   page: Page,
   ctx: CaptureContext,
   layers: readonly CaptureLayer[],
 ): Promise<{ style: string; mask: Locator[]; maskColor?: string }> {
-  const styles = [DEMO_OVERLAY_HIDE_STYLE];
+  const styles: string[] = [];
   const mask: Locator[] = [];
   let maskColor: string | undefined;
   for (const layer of layers) {
@@ -82,16 +86,24 @@ export async function captureStepScreenshot(
   layers: readonly CaptureLayer[] = [],
   clip?: { readonly x: number; readonly y: number; readonly width: number; readonly height: number },
 ): Promise<void> {
-  const { style, mask, maskColor } = await captureOptions(page, ctx, layers);
-  await page.screenshot({
-    path,
-    type: "png",
-    animations: "disabled",
-    style,
-    ...(clip === undefined ? {} : { clip: { ...clip } }),
-    ...(mask.length === 0 ? {} : { mask }),
-    ...(maskColor === undefined ? {} : { maskColor }),
-  });
+  const { style: layerStyle, mask, maskColor } = await captureOptions(page, ctx, layers);
+  // #336: the overlay is hidden through the CSSOM, never an inline <style> a strict CSP blocks (and
+  // the console-error oracle then filed as an app defect). Only if that fails is the style used.
+  const hidden = await hideDemoOverlayForCapture(page, true);
+  const style = [hidden ? "" : DEMO_OVERLAY_HIDE_STYLE, layerStyle].filter((x) => x !== "").join("\n");
+  try {
+    await page.screenshot({
+      path,
+      type: "png",
+      animations: "disabled",
+      ...(style === "" ? {} : { style }),
+      ...(clip === undefined ? {} : { clip: { ...clip } }),
+      ...(mask.length === 0 ? {} : { mask }),
+      ...(maskColor === undefined ? {} : { maskColor }),
+    });
+  } finally {
+    await hideDemoOverlayForCapture(page, false);
+  }
   try {
     for (const layer of layers) await layer.confirm?.(page, ctx);
   } catch (err) {
