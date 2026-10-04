@@ -169,7 +169,7 @@ boolean, and a number is a JSON number.
 
 | Group | Options | Applies to |
 | --- | --- | --- |
-| Safety | `deny`, `paid`, `allowDestructive`, `allowWrites`, `allowWrite`, `readRpc`, `hangReplayWrites` | every goal and mission |
+| Safety | `deny`, `paid`, `allowDestructive`, `dialogs`, `allowWrites`, `allowWrite`, `readRpc`, `hangReplayWrites` | every goal and mission |
 | Settle and timing | `settleIgnore`, `longPollMs`, `apiPrefix`, `ignoreNoProgress` | every goal and mission |
 | Backend logs (#142) | `logSource`, `logDefect`, `logQuietOk`, `logIgnore`, `logScope`, `logCorrelationHeader`, `logIdPattern`, `allowLogCmd`, `serverLogDrainMs` | every goal and mission |
 | Sessions | `storageState` (a path, or `null` to start without the target's session), `saveStorageState`, `persona`, `personas` | every goal and mission |

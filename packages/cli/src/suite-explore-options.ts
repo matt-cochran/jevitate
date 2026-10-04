@@ -87,6 +87,7 @@ export const SUITE_EXPLORE_OPTIONS = {
   deny: { shape: "strings", appliesTo: ALL_KINDS },
   paid: { shape: "strings", appliesTo: ALL_KINDS },
   allowDestructive: { shape: "boolean", appliesTo: ALL_KINDS },
+  dialogs: { shape: "string", appliesTo: ALL_KINDS, oneOf: ["dismiss", "accept"] },
   allowWrites: { shape: "boolean", appliesTo: ALL_KINDS },
   allowWrite: { shape: "strings", appliesTo: ALL_KINDS },
   readRpc: { shape: "strings", appliesTo: ALL_KINDS },

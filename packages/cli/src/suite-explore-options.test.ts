@@ -124,6 +124,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     deny: { kind: "feature", set: ["/^Archive/i"] },
     paid: { kind: "feature", set: ["/^Analyze/"] },
     allowDestructive: { kind: "feature", set: true },
+    dialogs: { kind: "feature", set: "accept" },
     allowWrites: { kind: "goal", set: true },
     allowWrite: { kind: "goal", set: ["/api/drafts/**"] },
     readRpc: { kind: "goal", set: ["Estimate*"] },

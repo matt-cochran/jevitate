@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SafetyPolicy, actionName, controlRisk, goalAsksFor, goalAsksForAction, validateDenyPatterns } from "./safety.js";
+import { SafetyPolicy, actionName, controlRisk, goalAsksFor, goalAsksForAction, messageRisk, validateDenyPatterns } from "./safety.js";
 
 const btn = (name: string, extra: { testId?: string } = {}) => ({
   name,
@@ -113,5 +113,35 @@ describe("the shared safety policy (#116)", () => {
     const p = new SafetyPolicy();
     expect(p.refuses({ ...btn("No — every user must pay today, so there is no free cohort"), role: "radio" })).toBeNull();
     expect(p.refuses(btn("Generate customer research"))).not.toBeNull();
+  });
+});
+
+describe("native dialog verdicts (#334)", () => {
+  const confirm = (message: string) => ({ type: "confirm", message });
+
+  it("dismisses a confirm/prompt by default, accepts an alert, never confirms leaving the page", () => {
+    const p = new SafetyPolicy();
+    expect(p.dialogVerdict(confirm("Save changes?"))).toMatchObject({ action: "dismiss", why: expect.stringMatching(/--dialogs accept/) });
+    expect(p.dialogVerdict({ type: "prompt", message: "Name?" }).action).toBe("dismiss");
+    expect(p.dialogVerdict({ type: "alert", message: "Saved" }).action).toBe("accept");
+    expect(new SafetyPolicy({ dialogs: "accept" }).dialogVerdict({ type: "beforeunload", message: "" }).action).toBe("dismiss");
+  });
+
+  it("accept confirms, unless the message names a risky action the run may not take", () => {
+    const p = new SafetyPolicy({ dialogs: "accept" });
+    expect(p.dialogVerdict(confirm("Save changes?")).action).toBe("accept");
+    expect(p.dialogVerdict(confirm("Revoke consent? This can't be undone."))).toMatchObject({ action: "dismiss", why: expect.stringMatching(/destructive.*Revoke/) });
+    expect(p.dialogVerdict(confirm("Buy 50 credits for $10?")).action).toBe("dismiss");
+    expect(new SafetyPolicy({ dialogs: "accept", allowDestructive: true }).dialogVerdict(confirm("Revoke consent?")).action).toBe("accept");
+    expect(new SafetyPolicy({ dialogs: "accept" }, { goal: "Revoke the showcase consent" }).dialogVerdict(confirm("Revoke consent?")).action).toBe("accept");
+    expect(new SafetyPolicy({ dialogs: "accept", allowDestructive: true, deny: ["/archive/"] }).dialogVerdict(confirm("Archive it?"))).toMatchObject({
+      action: "dismiss",
+      why: expect.stringMatching(/--deny/),
+    });
+  });
+
+  it("classifies a dialog message with no label-length cap", () => {
+    expect(messageRisk("Are you sure? This will permanently delete the project and every report in it.")).toMatchObject({ risk: "destructive", matched: "delete" });
+    expect(messageRisk("Leave this page? Changes you made may not be saved.")).toBeNull();
   });
 });

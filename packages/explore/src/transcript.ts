@@ -5,6 +5,7 @@ import { REDACTION_MASK, redactText, redactUrl } from "./redact.js";
 import type { PageTiming, RequestTiming } from "./timing.js";
 import type { RunAnswer } from "./answer.js";
 import type { ActionDelta } from "./action-delta.js";
+import type { NativeDialogEvent } from "./native-dialogs.js";
 
 /**
  * The transcript's copy of a perception's timing: redacted, and WITHOUT the per-request sample list
@@ -142,6 +143,11 @@ export interface TranscriptEntry {
    * read the page, so it appears in the transcript file from the following step's flush on.
    */
   readonly delta?: ActionDelta;
+  /**
+   * #334 — the native dialogs (alert / confirm / prompt / beforeunload) this step's action raised,
+   * each with what the run did (accepted / dismissed) and why. Additive, attached like `delta`.
+   */
+  readonly dialogs?: readonly NativeDialogEvent[];
 }
 
 /** What came back after a message was sent. */
@@ -267,6 +273,17 @@ export class TranscriptLog {
     }
     if (e.delta !== undefined) return;
     this.#entries[i] = { ...e, delta: clean };
+  }
+
+  /**
+   * #334: attaches the native dialogs step `step`'s action raised (messages redacted here). Like
+   * `attachDelta`, the listener is not re-fired; the next flush carries them.
+   */
+  attachDialogs(step: number, dialogs: readonly NativeDialogEvent[]): void {
+    const e = this.#entries[step - 1];
+    if (e === undefined || dialogs.length === 0) return;
+    const clean = dialogs.map((d) => ({ ...d, message: redactText(d.message, this.#secrets) }));
+    this.#entries[step - 1] = { ...e, dialogs: [...(e.dialogs ?? []), ...clean] };
   }
 
   /** The number of the next step to be recorded. */
