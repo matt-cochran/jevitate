@@ -48,6 +48,35 @@ describe("the shared safety policy (#116)", () => {
     expect(controlRisk("Regenerate API key")?.risk).toBe("destructive");
   });
 
+  it("classifies resetting or switching off a credential or security factor as destructive (#333)", () => {
+    for (const n of [
+      "Reset authenticator",
+      "Reset authenticator app",
+      "Reset your password",
+      "Disable two-factor",
+      "Disable two-factor authentication",
+      "Turn off 2FA",
+      "Turn off MFA",
+      "Remove 2FA",
+      "Regenerate recovery codes",
+      "Revoke sessions",
+      "End all sessions",
+      "Delete passkey",
+      "Unlink security key",
+    ]) {
+      expect(controlRisk(n)?.risk, n).toBe("destructive");
+    }
+    // A bare reset, or a reset of something that is not a credential, is not one.
+    for (const n of ["Reset", "Reset filters", "Reset form", "Show password", "Two-factor settings", "Set up authenticator"]) {
+      expect(controlRisk(n), n).toBeNull();
+    }
+    const p = new SafetyPolicy();
+    expect(p.refuses(btn("Reset authenticator"))?.reason).toMatch(/is destructive.*--allow-destructive/);
+    expect(new SafetyPolicy({ allowDestructive: true }).refuses(btn("Reset authenticator"))).toBeNull();
+    expect(goalAsksFor("Reset my authenticator app", "Reset authenticator")).toBe(true);
+    expect(goalAsksFor("Check the security settings", "Reset authenticator")).toBe(false);
+  });
+
   it("refuses them by default, lifts them with allowDestructive, and a --deny pattern always holds", () => {
     const p = new SafetyPolicy();
     expect(p.refuses(btn("Sign out"))).toMatchObject({ risk: "session-end" });
