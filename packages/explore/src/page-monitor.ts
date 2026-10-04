@@ -4,6 +4,10 @@ import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-co
 import { visibleBusyIndicator } from "./hang.js";
 import { clock } from "@jevitate/domain";
 import { RPC_CONTENT, rpcStatusOfResponse, type RpcStatus } from "./rpc-status.js";
+import { clockBounded } from "./clock-bound.js";
+
+/** #378: how long a finished RPC's trailer read may hold its end back; past it the header status stands. */
+export const RPC_TRAILER_READ_MS = 2_000;
 
 /** The interactive-control selector (kept in step with `snapshot`). */
 const INTERACTIVE_SELECTOR =
@@ -474,7 +478,9 @@ export class PageMonitor {
         return;
       }
       this.#rpcReads.delete(r);
-      void read.then((s) => {
+      // Bounded: a body that never resolves (an aborted fetch, a closing context) must not leave a
+      // finished request pending — that would read as a request-pending hang.
+      void clockBounded(read, RPC_TRAILER_READ_MS, null).then((s) => {
         if (s !== null) this.#rpcStatuses.set(r, s);
         end(r, failed);
       });
