@@ -152,6 +152,15 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     });
   });
 
+  it("#325: a request path glob may use {a,b} alternation; every alternative must be rooted", () => {
+    expect(parseSuccessSpec("requestMade:POST /api.v1.Calendar/{Reschedule,Cancel}Appointment")).toEqual({
+      kind: "requestMade",
+      method: "POST",
+      pathGlob: "/api.v1.Calendar/{Reschedule,Cancel}Appointment",
+    });
+    expect(() => parseSuccessSpec("requestMade:POST /{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}")).toThrow(/more than 64 alternatives/);
+  });
+
   it("rejects malformed specs", () => {
     expect(() => parseAssertionSpec("nope")).toThrow();
     expect(() => parseAssertionSpec("urlIncludes:")).toThrow();
