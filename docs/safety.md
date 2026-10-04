@@ -25,7 +25,8 @@ security bug, and how to report one.
 
 **No dangerous clicks by default.**
 
-- Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Generate, Send
+- Session-ending (Sign out), destructive (Delete, Revoke, Rotate, and resetting or switching off a
+  credential: Reset authenticator, Disable two-factor, Reset password) and paid (Buy, Generate, Send
   invite) controls are refused by default. `--deny <pattern>` adds your own, and
   `--allow-destructive` lifts the default. A goal run may still click the one its goal asks for
   ("Delete the draft" → Delete; "Invite a teammate" → Send invite).

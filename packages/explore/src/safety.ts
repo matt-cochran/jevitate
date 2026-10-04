@@ -11,7 +11,8 @@ import type { Control } from "./snapshot.js";
  *
  * By default no mission clicks a control that
  *  - ends the session ("Sign out", "Log out") — the run loses its authentication;
- *  - is destructive ("Delete", "Remove", "Revoke", "Rotate key", "Close account"…);
+ *  - is destructive ("Delete", "Remove", "Revoke", "Rotate key", "Close account", "Reset authenticator",
+ *    "Disable two-factor"…);
  *  - costs money or reaches real people ("Buy", "Upgrade", "Run simulation", "Generate…",
  *    "Send invite"…);
  *  - matches an operator `--deny` pattern.
@@ -34,9 +35,21 @@ import type { Control } from "./snapshot.js";
 
 /** Ending the session would end the run's authentication. */
 export const SESSION_END = /\b(?:log ?out|sign ?out|log ?off|sign ?off)\b/i;
+/**
+ * #333: resetting or switching off a credential or security factor — "Reset authenticator",
+ * "Disable two-factor", "Turn off 2FA", "Reset password" — leaves the account half-enrolled or
+ * locked out. A bare "Reset" (a form's reset button) is not one: a security object must follow.
+ */
+const SECURITY_RESET =
+  "(?:reset|disable|turn off|switch off|unenroll|unlink|deregister)\\s+(?:(?:the|my|your|this|all)\\s+)?(?:[\\w-]+\\s+)?" +
+  "(?:authenticators?(?: app)?|2fa|two[- ]?factor(?: auth\\w*)?|mfa|multi[- ]?factor(?: auth\\w*)?|passwords?|passkeys?|security keys?|recovery codes?|totp)";
 /** Irreversible actions on a real account. */
-export const DESTRUCTIVE =
-  /\b(?:delete|remove|destroy|erase|purge|wipe|drop|deactivate|terminate|revoke|rotate|regenerate|unsubscribe|close (?:my |your |the )?account|cancel (?:my |your |the )?(?:subscription|plan|membership|order))\b/i;
+export const DESTRUCTIVE = new RegExp(
+  "\\b(?:delete|remove|destroy|erase|purge|wipe|drop|deactivate|terminate|revoke|rotate|regenerate|unsubscribe|" +
+    "close (?:my |your |the )?account|cancel (?:my |your |the )?(?:subscription|plan|membership|order)|" +
+    `end (?:all |other )?sessions|${SECURITY_RESET})\\b`,
+  "i",
+);
 /** Actions that cost money (a paid job, a purchase) or send something to real people. */
 export const PAID =
   /\b(?:buy|purchase|pay(?: now)?|checkout|check out|place (?:the |my |your |an? )?order|upgrade|subscribe|start (?:a |my |your |the )?(?:subscription|trial|plan)|simulat\w*|generate|send (?:an? |the )?(?:invites?|invitations?|interviews?|emails?|sms|texts?|campaigns?|newsletters?|reminders?))\b/i;
