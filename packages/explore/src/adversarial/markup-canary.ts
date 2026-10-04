@@ -84,6 +84,33 @@ export async function renderedCanaries(page: Page, prefix: string, authorized: (
   return out;
 }
 
+/** #319: how long a check waits for a just-submitted canary to render, and how often it looks. */
+export const CANARY_RENDER_WAIT_MS = 1_500;
+const CANARY_POLL_MS = 50;
+
+/**
+ * #319 — {@link renderedCanaries}, given the page a bounded moment to render what it renders
+ * asynchronously (a list fetched after a submit or a reload): it reads again until one of the
+ * `expected` (just-submitted) tokens is rendered, or `waitMs` has passed. With no expected token it
+ * reads once. A canary that never renders is simply absent: waiting changes no verdict, only when
+ * it is read.
+ */
+export async function renderedCanariesSettled(
+  page: Page,
+  prefix: string,
+  authorized: (url: string) => boolean,
+  expected: readonly string[],
+  waitMs = CANARY_RENDER_WAIT_MS,
+): Promise<Set<string>> {
+  const deadline = clock.monotonicMs() + waitMs;
+  let seen = await renderedCanaries(page, prefix, authorized);
+  while (expected.length > 0 && !expected.some((t) => seen.has(t)) && clock.monotonicMs() < deadline) {
+    await clock.sleep(CANARY_POLL_MS);
+    seen = await renderedCanaries(page, prefix, authorized);
+  }
+  return seen;
+}
+
 /** A `markup-injection` defect's stable identity: field + submitting route + payload kind (16 hex). */
 export function markupFingerprint(route: string, field: string, payload: "html" | "attribute"): string {
   return createHash("sha256").update(`markup-injection|${route}|${field}|${payload}`).digest("hex").slice(0, 16);
