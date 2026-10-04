@@ -13,7 +13,10 @@ Success checks can hold on different pages (`--success-when each`) and match par
 Runs can accept confirm dialogs (`--dialogs accept`), stand at a fixed location (`--geolocation`),
 wait for multi-part chat replies (`--reply-quiet-ms`) and type a code delivered mid-run (a `cmd:`
 secret source). A stuck status, an oscillating scroll, a job behind an in-progress status, date and
-time inputs and strict-CSP screenshots no longer end a run with the wrong outcome.
+time inputs and strict-CSP screenshots no longer end a run with the wrong outcome. A `cmd:` secret is now
+masked in screenshots and video as well as text, controls in open shadow roots are reachable,
+same-labelled controls on different screens are no longer mistaken for a repeat, and browsers no
+longer outlive a killed CLI.
 
 ### Behaviour changes
 
@@ -36,6 +39,21 @@ time inputs and strict-CSP screenshots no longer end a run with the wrong outcom
 - **Date and time inputs (#332).** A value written the way people write it (`8:00 AM`, `10/3/2026`)
   is typed in the input's wire format; one that can't be read is rejected with the format the field
   takes.
+- **Browsers never outlive the CLI (#326).** On SIGTERM, SIGINT and SIGHUP (exit 129), jevitate writes
+  its partial result, then terminates every browser it launched (their whole process trees, SIGKILL
+  after 1 s). A parent-death watchdog ends the run the same way when the process that started it
+  dies (Linux and macOS).
+- **Same-labelled controls are different actions (#356).** The repeat-side-effect guard identifies a
+  click by route, element and context (its form, container, dialog and the heading it sits under),
+  not by its label, so a second "Continue" on another screen of a single-page app is no longer
+  refused. A true repeat is still refused, and the refusal now names the request the earlier click
+  sent (method and templated path).
+- **Open shadow roots (#357).** Controls inside a web component's open shadow root are listed,
+  named, checked for covering overlays and clickable like any other control. Closed roots stay
+  out of reach.
+- **`cmd:` command runs are bounded (#359).** One field's command runs at most 3 times per run.
+  Past that, typing the field fails with a reason naming the limit, and the command doesn't run
+  again.
 
 ### Upgrade notes
 
@@ -46,6 +64,10 @@ time inputs and strict-CSP screenshots no longer end a run with the wrong outcom
   `textContains=` key where you meant part of it; a failing `text=` check now names that form (#335).
 - **Slow jobs:** raise `--job-wait-ms` for a job that legitimately shows its status longer than the
   budget, now that a stuck status ends the run (#328).
+- **`nohup` runs:** a run left behind with `nohup … &` now ends when its parent shell exits (#326).
+  Set `JEVITATE_PARENT_WATCHDOG=off` for it.
+- **Read-the-code commands:** a `cmd:` field's command runs at most 3 times per run (#359); raise it
+  with `--secret-cmd-attempts <n>` if a flow legitimately needs more reads.
 
 ### Added
 
@@ -70,9 +92,17 @@ time inputs and strict-CSP screenshots no longer end a run with the wrong outcom
   `--allow-secret-cmd` runs the command when the field is about to be typed and types its trimmed
   stdout (a one-time code from a test outbox). The model sees only `«secret:CMD_…»`; the value becomes
   a run secret when read; 60 s limit. Operator-only: never an MCP argument or a suite option.
+- **`--secret-cmd-attempts <n>` (#359):** the per-field bound on a `cmd:` secret source's command
+  runs (default 3). Operator-only, like `--allow-secret-cmd`.
 
 ### Fixed
 
+- **A `cmd:` secret is masked in screenshots and video (#360).** A code read mid-run was redacted in
+  text but shown in clear in pixels: the pixel mask took its secret list at the start of the run,
+  and a short code is below what the mask learns by itself. It now joins the mask in every live
+  page and every later document as soon as it is read, before it is typed.
+- A usability run can type a `cmd:` field: its command runner was dropped, so the field could never
+  be typed (#360).
 - Coverage `judgment-flagged-state` defects say what was judged: probability, the action before it
   and the controls shown (`judgment: {probability, after, shown}`), still advisory (#320).
 - Screenshots hide the demo overlay without an inline style, so a strict-CSP app no longer logs a CSP
