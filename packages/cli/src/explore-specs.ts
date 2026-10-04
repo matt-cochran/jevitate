@@ -10,7 +10,7 @@ import {
   type StyleProperty,
   type TargetDescriptor,
 } from "@jevitate/recording";
-import { normalizeAllowlist, type StatusSpec, type SuccessCheck } from "@jevitate/explore";
+import { expandBraces, normalizeAllowlist, type StatusSpec, type SuccessCheck } from "@jevitate/explore";
 
 /**
  * Compact assertion spec parser (a recording `Assertion`, checked on a page). Supported forms:
@@ -232,6 +232,10 @@ function parseRequestSpec(kind: string, text: string): { method: string; pathGlo
   }
   if (!pathGlob.startsWith("/")) {
     throw new Error(`${kind}: path glob must start with "/" (got ${JSON.stringify(pathGlob)})`);
+  }
+  // #325: `{a,b}` alternation — every alternative must be rooted too, and the expansion bounded.
+  for (const alt of expandBraces(pathGlob)) {
+    if (!alt.startsWith("/")) throw new Error(`${kind}: every {a,b} alternative of the path glob must start with "/" (got ${JSON.stringify(alt)})`);
   }
   return { method: method.toUpperCase(), pathGlob };
 }
