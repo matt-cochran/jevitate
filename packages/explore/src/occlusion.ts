@@ -20,6 +20,11 @@
  * the probe runs at its label's centre instead; the label, anything inside it, or the input itself
  * on top is the control's own surface, anything else covers it.
  *
+ * OPEN shadow roots (#357) are seen through: the hit-test drills into each open root under the point
+ * to the real topmost element, and "own content" is judged across shadow boundaries — so a control
+ * inside a web component is probed like a light-DOM one, and a cover inside a component is named
+ * from inside it. A CLOSED root is opaque: its host is the hit.
+ *
  * BROWSER CODE — serialized by `evaluate`: no imports, no closure over module scope.
  * Returns a description of the covering element (`[data-testid=…]` of its nearest test id, else
  * `<tag#id>`), or null when the control is not covered.
@@ -35,11 +40,29 @@ export function occluderOf(node: Node): string | null {
     const s = window.getComputedStyle(e as HTMLElement);
     return s.visibility !== "hidden" && s.display !== "none" && r.width > 0 && r.height > 0 ? r : null;
   };
+  // #357: `document.elementFromPoint` stops at a shadow host — drill through OPEN shadow roots to
+  // the real topmost element (a closed root's `shadowRoot` is null: its host is the hit).
+  const hitAt = (x: number, y: number): Element | null => {
+    let top = document.elementFromPoint(x, y);
+    for (let depth = 0; top !== null && top.shadowRoot !== null && depth < 32; depth += 1) {
+      const inner = top.shadowRoot.elementFromPoint(x, y);
+      if (inner === null || inner === top) break;
+      top = inner;
+    }
+    return top;
+  };
+  // Containment across open shadow boundaries: `a` is `b` or an ancestor of it in the composed tree.
+  const holds = (a: Element, b: Element): boolean => {
+    for (let n: Node | null = b; n !== null; n = n instanceof ShadowRoot ? n.host : n.parentNode) {
+      if (n === a) return true;
+    }
+    return false;
+  };
   const probe = (r: DOMRect, own: (top: Element) => boolean): string | null => {
     const x = r.left + r.width / 2;
     const y = r.top + r.height / 2;
     if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return null;
-    const top = document.elementFromPoint(x, y);
+    const top = hitAt(x, y);
     if (top === null || own(top)) return null;
     return describe(top);
   };
@@ -60,19 +83,19 @@ export function occluderOf(node: Node): string | null {
     if (srOnly) {
       const labelledBy = (el.getAttribute("aria-labelledby") ?? "")
         .split(/\s+/)
-        .map((id) => (id === "" ? null : document.getElementById(id)))
+        .map((id) => (id === "" ? null : (el.getRootNode() as Document | ShadowRoot).getElementById(id)))
         .filter((e): e is HTMLElement => e !== null);
       const candidates: Element[] = [...Array.from(el.labels ?? []), ...labelledBy];
       for (const label of candidates) {
         const box = boxOf(label);
         if (box === null) continue;
-        return probe(box, (top) => label === top || label.contains(top) || top === el || el.contains(top));
+        return probe(box, (top) => holds(label, top) || holds(el, top));
       }
     }
   }
   const rect = boxOf(el);
   if (rect === null) return null;
-  return probe(rect, (top) => top === el || el.contains(top));
+  return probe(rect, (top) => holds(el, top));
 }
 
 /**
@@ -107,7 +130,7 @@ export function coveredByInterceptors(node: Node, selectors: readonly string[]):
     if (srOnly) {
       const labelledBy = (el.getAttribute("aria-labelledby") ?? "")
         .split(/\s+/)
-        .map((id) => (id === "" ? null : document.getElementById(id)))
+        .map((id) => (id === "" ? null : (el.getRootNode() as Document | ShadowRoot).getElementById(id)))
         .filter((e): e is HTMLElement => e !== null);
       const candidates: Element[] = [...Array.from(el.labels ?? []), ...labelledBy];
       for (const label of candidates) {
@@ -166,7 +189,7 @@ export function srOnlyLabelOf(node: Node): null | { readonly for: string; readon
     if (ls.visibility === "hidden" || ls.display === "none" || lr.width <= 1 || lr.height <= 1) continue;
     if (label.contains(el)) return { wrap: true };
     if (el.id !== "" && label.htmlFor === el.id) {
-      const all = Array.from(document.querySelectorAll(`label[for="${CSS.escape(el.id)}"]`));
+      const all = Array.from((el.getRootNode() as Document | ShadowRoot).querySelectorAll(`label[for="${CSS.escape(el.id)}"]`));
       return { for: el.id, nth: Math.max(0, all.indexOf(label)) };
     }
   }

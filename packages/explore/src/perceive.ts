@@ -114,12 +114,22 @@ const RENDERED_CONTROL = [
   "[contenteditable=true]",
 ].join(",");
 
-/** BROWSER CODE — true once any interactive control has a rendered box. */
+/**
+ * BROWSER CODE — true once any interactive control has a rendered box, in the document or in any
+ * OPEN shadow root (#357; the snapshot's Playwright locator pierces open roots, so this must too).
+ */
 function hasRenderedControl(selector: string): boolean {
-  for (const el of Array.from(document.querySelectorAll(selector))) {
-    const r = (el as HTMLElement).getBoundingClientRect();
-    const style = window.getComputedStyle(el as HTMLElement);
-    if (r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none") return true;
+  const roots: Array<Document | ShadowRoot> = [document];
+  for (let i = 0; i < roots.length && i < 1_000; i += 1) {
+    const root = roots[i]!;
+    for (const el of Array.from(root.querySelectorAll(selector))) {
+      const r = (el as HTMLElement).getBoundingClientRect();
+      const style = window.getComputedStyle(el as HTMLElement);
+      if (r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none") return true;
+    }
+    for (const host of Array.from(root.querySelectorAll("*"))) {
+      if (host.shadowRoot !== null) roots.push(host.shadowRoot);
+    }
   }
   return false;
 }
