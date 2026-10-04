@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import { visibleBusyIndicator } from "./hang.js";
 
 /**
  * The page's STATUS TEXT — what a user reads to learn why nothing happened, which is not a control
@@ -190,6 +191,15 @@ function inProgressInPage(words: string): string | null {
 /** The in-progress status the page shows, or null (a page that cannot be read shows none). */
 export async function readInProgressStatus(page: Page): Promise<string | null> {
   return page.evaluate(inProgressInPage, IN_PROGRESS_WORDS).catch(() => null);
+}
+
+/**
+ * #379: the busy/progress overlay the page shows — a busy indicator (`aria-busy`, an indeterminate
+ * `role=progressbar`, a spinner) or an in-progress status ("Preparing…") — described, or null.
+ */
+export async function busyOverlay(page: Page): Promise<string | null> {
+  const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
+  return busy ?? (await readInProgressStatus(page));
 }
 
 /**

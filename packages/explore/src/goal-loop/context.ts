@@ -373,6 +373,12 @@ export interface RunContext {
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   jobWaitedMs: number;
   /**
+   * #379: how long the run has waited on a busy/progress overlay with no visible control (bounded by
+   * `jobWaitMs`); reset once a page renders controls again, so an overlay that keeps coming back over
+   * an empty page still ends.
+   */
+  overlayWaitedMs: number;
+  /**
    * How long a hang signal has been deferred because the page is visibly WORKING (#153): never reset,
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
    */
@@ -793,6 +799,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.jobWaitExplicit = cfg.jobWaitMs !== undefined;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   ctx.jobWaitedMs = 0;
+  ctx.overlayWaitedMs = 0;
   /**
    * How long a hang signal has been deferred because the page is visibly WORKING (#153): never reset,
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.

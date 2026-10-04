@@ -441,6 +441,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       const settled = await checkSettled(ctx, seen);
       if (settled === "stop") break;
+      if (settled === "continue") continue;
 
       const progressed = await checkProgress(ctx, seen);
       if (progressed === "stop") break;
