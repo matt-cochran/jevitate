@@ -34,10 +34,21 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
 
   // #172 — a scroll that MOVED the page is progress (the model is reading a long page), even
   // though the control set — the signature — is the same; bounded, so a scroll loop still stops.
+  // #323 — the bound counts every moving scroll of the streak that landed on a state the streak has
+  // already seen (the same signature, or one it scrolled past before): scrolling up and down beside
+  // the target (A→B→A→B…) used to change the signature every time and reset the bound forever. A
+  // scroll that reveals a NEW state is still progress and does not add to it; any other action
+  // ends the streak.
   const scrolledMoved = (ctx.lastActedOp === "scroll_down" || ctx.lastActedOp === "scroll_up") && ctx.lastScrollMoved;
-  if (!scrolledMoved || snap.signature !== ctx.movingScrollsSignature) ctx.movingScrolls = 0;
+  if (!scrolledMoved) {
+    ctx.movingScrolls = 0;
+    ctx.scrollStreakSignatures.clear();
+  } else {
+    if (ctx.scrollStreakSignatures.size === 0 && ctx.movingScrollsSignature !== null) ctx.scrollStreakSignatures.add(ctx.movingScrollsSignature);
+    if (ctx.scrollStreakSignatures.has(snap.signature)) ctx.movingScrolls += 1;
+    else ctx.scrollStreakSignatures.add(snap.signature);
+  }
   ctx.movingScrollsSignature = snap.signature;
-  if (scrolledMoved) ctx.movingScrolls += 1;
   const scrollProgress = scrolledMoved && ctx.movingScrolls <= MAX_MOVING_SCROLLS;
   if (scrollProgress) ctx.noProgress.progress(snap.signature);
   ctx.lastChanceTurn = false;
@@ -46,7 +57,14 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   // streak, `inconclusive` holds it; without one the page signature decides, as before.
   const verdictNow = ctx.deltaVerdict;
   ctx.deltaVerdict = null;
-  if (ctx.lastActedOp !== null && !scrollProgress && ctx.noProgress.noteDelta(ctx.lastActedOp, snap.signature, verdictNow)) {
+  // #323: past the bound, a moving scroll is no progress even when the signature changed (a
+  // virtualized list renders other rows at each position) — it only revisits what it has seen.
+  const scrollStalled = scrolledMoved && !scrollProgress;
+  if (
+    ctx.lastActedOp !== null &&
+    !scrollProgress &&
+    (scrollStalled ? ctx.noProgress.stalled(snap.signature) : ctx.noProgress.noteDelta(ctx.lastActedOp, snap.signature, verdictNow))
+  ) {
     // Is the APP stuck (not the explorer)? The page is alive, the last page-changing action
     // sent it BACK to a state it had already been in (it changed, then reverted — an action
     // that silently undid itself, like an import that never starts), and it stays there for
