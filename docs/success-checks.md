@@ -61,7 +61,11 @@ In these specs:
 - `flashed` needs its recorder installed before the action that triggers the flash; the goal
   mission installs it at the start of any run with a `flashed` check. Canvas pixels are not read:
   expose canvas state through DOM/ARIA/`data-*` and check that.
-- Path globs match the request path: `*` within one segment, `**` across segments.
+- Path globs match the request path: `*` within one segment, `**` across segments, and
+  `{a,b}` either alternative (#325), e.g.
+  `requestMade:POST /api.v1.Calendar/{Reschedule,Cancel}Appointment` for "move or cancel".
+  Braces nest; a brace group with no comma (`/users/{id}`) is literal. A pattern may expand to at
+  most 64 alternatives.
   A method of `*` matches any method. **The glob must start with `/`** (it matches the
   request's path, not a full URL) — `requestMade:POST */Foo` is rejected with
   `path glob must start with "/" (got "*/Foo")`, not the generic shape error.
