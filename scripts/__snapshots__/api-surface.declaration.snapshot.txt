@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (568 exports)
+# @jevitate/explore (571 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
