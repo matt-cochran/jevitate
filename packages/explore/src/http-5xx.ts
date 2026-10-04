@@ -4,6 +4,7 @@ import type { DefectSignal } from "./adversarial/defect-oracle.js";
 import { defectTitle, normalizeRoute, signalFingerprint } from "./adversarial/defect-fingerprint.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { clock } from "@jevitate/domain";
+import { RPC_CONTENT, effectiveStatus, rpcStatusOfResponse, type RpcStatus } from "./rpc-status.js";
 
 /**
  * The HTTP 5xx HARD SIGNAL, shared by every strategy (#208). One place decides "this response is an
@@ -25,19 +26,50 @@ export type Http5xxSignal = Extract<DefectSignal, { kind: "http-5xx" }>;
 /**
  * A response's `http-5xx` signal, or null when it is not an app defect: a status below 500, or a
  * response from a third-party origin (`firstParty` given — without it every origin counts).
+ *
+ * #378: with `rpc` (the gRPC-web / Connect status the response carried), the status judged is the
+ * EFFECTIVE one — an HTTP 200 whose RPC failed with INTERNAL / UNAVAILABLE / UNKNOWN / … is its
+ * HTTP equivalent (500, 503, …), and its detail names the gRPC code.
  */
 export function http5xxSignalOf(
   response: { status(): number; url(): string },
   firstParty?: FirstPartyOrigins,
   headers?: Readonly<Record<string, string>>,
   method?: string,
+  rpc?: RpcStatus | null,
 ): Http5xxSignal | null {
-  const status = response.status();
+  const httpStatus = response.status();
+  const status = effectiveStatus({ status: httpStatus, ...(rpc === undefined || rpc === null ? {} : { rpcStatus: rpc }) }) ?? httpStatus;
   if (status < 500) return null;
   if (firstParty !== undefined && firstParty.thirdParty(response.url(), headers) !== null) return null;
   const url = redactUrl(response.url());
+  const rpcNote = status === httpStatus || rpc === undefined || rpc === null ? "" : ` (HTTP ${httpStatus}, grpc-status ${rpc.code} ${rpc.name})`;
   // #250: the request's method (`PUT`, …) rides along for evidence captions; never part of the fingerprint.
-  return { kind: "http-5xx", detail: `${status} ${url}`, url, status, ...(method === undefined ? {} : { method: method.toUpperCase() }) };
+  return { kind: "http-5xx", detail: `${status} ${url}${rpcNote}`, url, status, ...(method === undefined ? {} : { method: method.toUpperCase() }) };
+}
+
+/**
+ * #378: the `http-5xx` signal of a gRPC-web / Connect response whose HTTP status is not a 5xx but
+ * whose RPC failed server-side — resolved once the response's (bounded) trailer read is done. Null
+ * for anything else (an HTTP 5xx is `http5xxSignalOf`'s, synchronously).
+ */
+export async function rpc5xxSignalOf(
+  response: Response,
+  firstParty?: FirstPartyOrigins,
+  headers?: Readonly<Record<string, string>>,
+  method?: string,
+): Promise<Http5xxSignal | null> {
+  if (response.status() >= 500) return null;
+  let rpcCandidate = false;
+  try {
+    const h = response.headers();
+    rpcCandidate = RPC_CONTENT.test(h["content-type"] ?? "") || h["grpc-status"] !== undefined;
+  } catch {
+    return null;
+  }
+  if (!rpcCandidate) return null;
+  const rpc = await rpcStatusOfResponse(response);
+  return rpc === null || rpc.code === 0 ? null : http5xxSignalOf(response, firstParty, headers, method, rpc);
 }
 
 /** Request headers without throwing (a stub request may not expose them). */
@@ -109,15 +141,25 @@ export class Http5xxOracle {
     });
     page.on("response", (response: Response) => {
       const request = response.request();
-      const signal = http5xxSignalOf(response, this.#firstParty, requestHeadersOf(request));
-      if (signal === null) return;
       // A document's own 5xx (the start page itself) fires before `page.url()` moves to it.
       const isDocument = request.isNavigationRequest() && request.frame() === page.mainFrame();
-      this.#observed.push({
-        signal,
-        method: request.method().toUpperCase(),
-        pageUrl: isDocument ? signal.url : redactUrl(page.url()),
-        startedAt: this.#started.get(request) ?? this.#now(),
+      const pageUrl = redactUrl(page.url());
+      const record = (signal: Http5xxSignal): void => {
+        this.#observed.push({
+          signal,
+          method: request.method().toUpperCase(),
+          pageUrl: isDocument ? signal.url : pageUrl,
+          startedAt: this.#started.get(request) ?? this.#now(),
+        });
+      };
+      const signal = http5xxSignalOf(response, this.#firstParty, requestHeadersOf(request));
+      if (signal !== null) {
+        record(signal);
+        return;
+      }
+      // #378: an HTTP 200 RPC that failed server-side (grpc-status 13/14/2/…) is the same hard signal.
+      void rpc5xxSignalOf(response, this.#firstParty, requestHeadersOf(request)).then((s) => {
+        if (s !== null) record(s);
       });
     });
   }

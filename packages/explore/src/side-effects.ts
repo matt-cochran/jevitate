@@ -3,6 +3,7 @@ import { urlTemplate, writeClassifier, type WriteClassifier } from "@jevitate/re
 import { requestEndpoint } from "./authorized-targets.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
+import { effectiveStatus } from "./rpc-status.js";
 import type { ControlRisk } from "./safety.js";
 import { clock } from "@jevitate/domain";
 
@@ -227,12 +228,10 @@ export class SideEffectGuard {
     const inflightAny = unfinished.some((r) => r.startedAt >= o.at);
     const done: FiredWrite[] = requests
       .filter((r: CapturedRequest) => this.#write(r) && this.#ours(r.url))
-      .map((r) => ({
-        method: r.method.toUpperCase(),
-        path: this.#name(r.url),
-        status: r.status,
-        rejected: (r.status !== null && r.status >= 400) || (r.status === null && r.failed),
-      }));
+      .map((r) => {
+        const status = effectiveStatus(r); // #378: a 200 whose gRPC-web/Connect RPC failed is rejected
+        return { method: r.method.toUpperCase(), path: this.#name(r.url), status, rejected: (status !== null && status >= 400) || (status === null && r.failed) };
+      });
     const inflight = unfinished.filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r.url));
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
     this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending] };
@@ -468,7 +467,7 @@ export class SideEffectLog {
       for (const r of capture.requests()) {
         if (!this.#isWrite({ method: r.method, path: r.path, contentType: r.requestContentType ?? null })) continue;
         const m = this.#owner(r.startedAt);
-        if (m !== undefined) push(m, r.method, r.url, r.status, r.startedAt ?? m.at);
+        if (m !== undefined) push(m, r.method, r.url, effectiveStatus(r), r.startedAt ?? m.at);
       }
       for (const r of monitor.unfinished()) {
         const path = pathOf(r.url);

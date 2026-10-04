@@ -277,7 +277,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (583 exports)
+# @jevitate/explore (598 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -438,6 +438,7 @@
   describeExpected: function
   describeFailure: function
   describeStatus: function
+  describeStatusWithRpc: function
   describeUnreachable: function
   DESTRUCTIVE: variable
   detectClipping: function
@@ -457,6 +458,7 @@
   draftForHang: function
   echoesGoal: function
   editCandidates: function
+  effectiveStatus: function
   EMPTY_SETTLE_GRACE_MS: variable
   emptyRecording: function
   endpointOf: function
@@ -518,6 +520,7 @@
   goalResultDiagnostics: function
   groundAnswer: function
   groupStepSignals: function
+  GRPC_CODE_NAMES: variable
   HANG_PROBE_MS: variable
   HangAttempt: interface
   HangConfig: interface
@@ -606,6 +609,7 @@
   MAX_QUIET_WAITS: variable
   MAX_REPEAT_TYPE_SIGNALS: variable
   MAX_REPORT_REJECTIONS: variable
+  MAX_RPC_BODY_BYTES: variable
   MAX_SIDE_EFFECTS: variable
   measurePageTiming: function
   MESSAGE_FIELD: variable
@@ -661,7 +665,10 @@
   PageTimingStat: interface
   PAID: variable
   parseAria: function
+  parseConnectEndStream: function
+  parseConnectUnaryError: function
   parseFirstNumber: function
+  parseGrpcWebTrailer: function
   parseInterceptor: function
   parseNumbers: function
   parseSecretField: function
@@ -730,6 +737,14 @@
   resolveSecretFieldValue: function
   routeOf: function
   RouteScopeSource: type-alias
+  RPC_CONTENT: variable
+  rpc5xxSignalOf: function
+  rpcHttpEquivalent: function
+  RpcResponseLike: interface
+  RpcStatus: interface
+  rpcStatusFromBody: function
+  rpcStatusFromHeaders: function
+  rpcStatusOfResponse: function
   runAdversarialMission: function
   RunAnswer: interface
   runFeatureMission: function

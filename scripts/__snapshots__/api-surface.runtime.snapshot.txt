@@ -172,7 +172,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (378 exports)
+# @jevitate/explore (391 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -229,6 +229,7 @@
   GOAL_IS_SIGN_IN_QUESTION: const (string)
   GOAL_MET_INSTRUCTIONS: const (string)
   GOAL_MET_QUESTION: const (string)
+  GRPC_CODE_NAMES: array
   HANG_PROBE_MS: const (number)
   HOST_SAMPLE_INTERVAL_MS: const (number)
   HeapLog: class
@@ -246,6 +247,7 @@
   MAX_QUIET_WAITS: const (number)
   MAX_REPEAT_TYPE_SIGNALS: const (number)
   MAX_REPORT_REJECTIONS: const (number)
+  MAX_RPC_BODY_BYTES: const (number)
   MAX_SIDE_EFFECTS: const (number)
   MESSAGE_FIELD: object
   MissionSafety: class
@@ -279,6 +281,7 @@
   RENDER_TREND_RENDERS: const (number)
   RENDER_WAIT_MS: const (number)
   REPLY_MAX_CHARS: const (number)
+  RPC_CONTENT: object
   ReadOnlyGuard: class
   ReplayDeltas: class
   RequestCapture: class
@@ -371,6 +374,7 @@
   describeExpected: function
   describeFailure: function
   describeStatus: function
+  describeStatusWithRpc: function
   describeUnreachable: function
   detectClipping: function
   detectForms: function
@@ -382,6 +386,7 @@
   draftForHang: function
   echoesGoal: function
   editCandidates: function
+  effectiveStatus: function
   emptyRecording: function
   endpointOf: function
   errorPageReason: function
@@ -460,7 +465,10 @@
   p50: function
   pagesContext: function
   parseAria: function
+  parseConnectEndStream: function
+  parseConnectUnaryError: function
   parseFirstNumber: function
+  parseGrpcWebTrailer: function
   parseInterceptor: function
   parseNumbers: function
   parseSecretField: function
@@ -500,6 +508,11 @@
   resolveRouteScope: function
   resolveSecretFieldValue: function
   routeOf: function
+  rpc5xxSignalOf: function
+  rpcHttpEquivalent: function
+  rpcStatusFromBody: function
+  rpcStatusFromHeaders: function
+  rpcStatusOfResponse: function
   runAdversarialMission: function
   runFeatureMission: function
   runGoalBasedMission: function
