@@ -169,7 +169,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (371 exports)
+# @jevitate/explore (372 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -193,6 +193,7 @@
   DEFAULT_HANG_REPLAYS: const (number)
   DEFAULT_LONG_POLL_MS: const (number)
   DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: const (number)
+  DEFAULT_SECRET_COMMAND_ATTEMPTS: const (number)
   DEFAULT_STALL_MS: const (number)
   DEFAULT_VERIFY_REPLAYS: const (number)
   DEFERRED_EFFECT_MAX_MS: const (number)

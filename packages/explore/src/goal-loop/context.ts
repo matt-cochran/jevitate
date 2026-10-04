@@ -85,6 +85,8 @@ export interface RunContext {
   readonly startOrigin: string;
   readonly fixture: string | null;
   readonly secrets: string[];
+  /** #359: how many times each `cmd:` binding's command has run this run (by descriptor). */
+  readonly secretCommandRuns: Map<string, number>;
   readonly secretContext: string | null;
   readonly missionContext: string | undefined;
   readonly bounds: Bounds;
@@ -376,6 +378,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
 
   // A bound secret field's value (or TOTP seed) is a run secret: every redaction seam scrubs it.
   ctx.secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
+  ctx.secretCommandRuns = new Map();
   ctx.secretContext = secretFieldContext(cfg.secretFields);
   ctx.missionContext = [
       cfg.missionContext,

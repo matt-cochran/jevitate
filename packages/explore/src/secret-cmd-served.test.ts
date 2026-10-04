@@ -39,6 +39,11 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.url === "/two") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(`<!doctype html><html><body><h1>Two codes</h1>
+<label for="a">Email code</label> <input id="a" autocomplete="off" /> <label for="b">SMS code</label> <input id="b" autocomplete="off" /></body></html>`);
+      return;
+    }
     // Loading the page "sends the email": a fresh code lands in the outbox now, after the run started.
     code = String(randomInt(100_000, 1_000_000));
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(PAGE);
@@ -117,5 +122,82 @@ describe("cmd: secret source (#324)", () => {
     expect(typed?.actOk).toBe(false);
     expect(typed?.reason).toMatch(/«secret:CMD_VERIFICATION_CODE»: its command printed nothing/);
     expect(result.recording.pages.flatMap((p) => p.steps).filter((s) => s.step.kind === "fill")).toEqual([]);
+  }, 60_000);
+
+  it("#359: a failing command runs at most --secret-cmd-attempts times per field; the next type fails without running it", async () => {
+    const secretFields = [
+      parseSecretField("label=Verification code=cmd:./read-code.sh", "value", {}, { allowCmd: true }),
+    ];
+    let runs = 0;
+    // The model keeps retrying the field; the command fails every time (an empty outbox).
+    const judge = new ScriptedJudge([
+      { op: "type", target: "0" },
+      { op: "type", target: "0" },
+      { op: "type", target: "0" },
+      { op: "type", target: "0" },
+      { op: "done" },
+    ]);
+    const result = await withSession(
+      "secret-cmd-cap-",
+      async (session) =>
+        runGoalBasedMission({
+          actor: CastActor.named("verifier").whoCan(new BrowseTheWeb(session, [origin])),
+          judge,
+          gen: new FakeGenerationGateway(),
+          goal: "Verify your email with the code we sent",
+          allowlist: [origin],
+          startUrl: `${origin}/verify-email`,
+          secretFields,
+          secretCommand: async () => {
+            runs += 1;
+            return "";
+          },
+          secretCommandAttempts: 2,
+          successChecks: [{ kind: "page", assertion: { kind: "visible", target: { testId: "ok" } } }],
+          oracleTimeoutMs: 500,
+        }),
+      origin,
+    );
+    expect(runs).toBe(2);
+    const typed = result.transcript.filter((e) => e.op === "type");
+    expect(typed.length).toBeGreaterThanOrEqual(3);
+    expect(typed.every((e) => e.actOk === false)).toBe(true);
+    expect(typed.at(-1)?.reason).toMatch(/«secret:CMD_VERIFICATION_CODE»: its command already ran 2 time\(s\) this run, the limit \(--secret-cmd-attempts 2\); not running it again/);
+  }, 60_000);
+
+  it("#359: the limit is per field — a spent field does not stop another cmd: field's command", async () => {
+    const secretFields = [
+      parseSecretField("label=Email code=cmd:./email-code.sh", "value", {}, { allowCmd: true }),
+      parseSecretField("label=SMS code=cmd:./sms-code.sh", "value", {}, { allowCmd: true }),
+    ];
+    const runs: string[] = [];
+    // [0] Email code, [1] SMS code. Email's command fails and is spent after one run; SMS still runs.
+    const judge = new ScriptedJudge([{ op: "type", target: "0" }, { op: "type", target: "0" }, { op: "type", target: "1" }, { op: "done" }]);
+    const result = await withSession(
+      "secret-cmd-perfield-",
+      async (session) =>
+        runGoalBasedMission({
+          actor: CastActor.named("verifier").whoCan(new BrowseTheWeb(session, [origin])),
+          judge,
+          gen: new FakeGenerationGateway(),
+          goal: "Enter both codes",
+          allowlist: [origin],
+          startUrl: `${origin}/two`,
+          secretFields,
+          secretCommand: async (command) => {
+            runs.push(command);
+            return command.includes("sms") ? "654321\n" : "";
+          },
+          secretCommandAttempts: 1,
+          successChecks: [{ kind: "page", assertion: { kind: "visible", target: { testId: "never" } } }],
+          oracleTimeoutMs: 500,
+        }),
+      origin,
+    );
+    expect(runs).toEqual(["./email-code.sh", "./sms-code.sh"]);
+    const typed = result.transcript.filter((e) => e.op === "type");
+    expect(typed[1]?.reason).toMatch(/«secret:CMD_EMAIL_CODE»: its command already ran 1 time\(s\)/);
+    expect(typed[2]?.actOk).toBe(true);
+    expect(JSON.stringify(result.transcript)).not.toContain("654321");
   }, 60_000);
 });

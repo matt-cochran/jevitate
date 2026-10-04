@@ -188,6 +188,13 @@ export interface ExploreConfig {
    * `--allow-secret-cmd`). Absent: a `cmd` binding cannot be typed (the step fails, saying so).
    */
   readonly secretCommand?: SecretCommandRunner;
+  /**
+   * #359: how many times one `cmd:` binding's command may run in this run (default
+   * {@link DEFAULT_SECRET_COMMAND_ATTEMPTS}). A read-the-code command usually has side effects (it
+   * consumes a one-time code, polls a rate-limited outbox), so retries are bounded; past the cap the
+   * type step fails without spawning it again.
+   */
+  readonly secretCommandAttempts?: number;
   readonly missionContext?: string;
   /** Recording.site label. Defaults to the start origin. */
   readonly site?: string;

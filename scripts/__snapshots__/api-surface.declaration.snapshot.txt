@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (571 exports)
+# @jevitate/explore (572 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -390,6 +390,7 @@
   DEFAULT_HANG_REPLAYS: variable
   DEFAULT_LONG_POLL_MS: variable
   DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: variable
+  DEFAULT_SECRET_COMMAND_ATTEMPTS: variable
   DEFAULT_STALL_MS: variable
   DEFAULT_VERIFY_REPLAYS: variable
   defaultLoadPerCore: function

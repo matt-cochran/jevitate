@@ -434,6 +434,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       false,
     )
     .option(
+      "--secret-cmd-attempts <n>",
+      "#359: how many times one cmd: secret field's command may run in this run (default 3); past it, typing that field fails without running the command again (read-the-code commands usually have side effects)",
+      positiveIntArg,
+    )
+    .option(
       "--allow-log-cmd",
       "opt-in: a --log-source cmd:<command> may run as a subprocess (operator-declared only; refused otherwise)",
       false,
@@ -590,6 +595,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         secretField: string[];
         totp: string[];
         allowSecretCmd?: boolean;
+        secretCmdAttempts?: number;
         typeFixture: string[];
         fixture?: string;
         storageState?: string;
@@ -1363,6 +1369,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             secrets: o.secret.length > 0 ? o.secret : undefined,
             ...(secretFields.length > 0 ? { secretFields } : {}),
             ...(secretCommand === undefined ? {} : { secretCommand }),
+          ...(o.secretCmdAttempts === undefined ? {} : { secretCommandAttempts: o.secretCmdAttempts }),
             fixture: o.fixture,
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
@@ -1554,6 +1561,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           secrets: o.secret.length > 0 ? o.secret : undefined,
           ...(secretFields.length > 0 ? { secretFields } : {}),
           ...(secretCommand === undefined ? {} : { secretCommand }),
+          ...(o.secretCmdAttempts === undefined ? {} : { secretCommandAttempts: o.secretCmdAttempts }),
           ...(typeFixtures.length > 0 ? { typeFixtures } : {}),
           fixture: o.fixture,
           outDir: o.out,

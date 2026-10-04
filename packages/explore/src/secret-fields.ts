@@ -182,6 +182,9 @@ const MAX_CMD_VALUE_CHARS = 4_096;
  * now through `run` (trimmed; an empty or oversized output is refused). Throws `SecretSourceError`
  * (never quoting the output) when it cannot be read.
  */
+/** #359: the default bound on one `cmd:` binding's command runs per run. */
+export const DEFAULT_SECRET_COMMAND_ATTEMPTS = 3;
+
 export async function resolveSecretFieldValue(f: SecretField, atMs: number, run?: SecretCommandRunner): Promise<string> {
   if (f.kind !== "cmd") return secretFieldValue(f, atMs);
   if (run === undefined || f.command === undefined) throw new SecretSourceError(`${secretPlaceholder(f)}: no command runner was configured`);

@@ -73,10 +73,14 @@ APP_API_TOKEN=… jevitate explore --url https://app.example.test/ --goal "…" 
   with `--allow-secret-cmd` binds the field to a command that code runs in a shell when the field
   is about to be typed, for example a script that reads the code from your test mail outbox. Its
   trimmed stdout is typed like any bound value (the model sees `«secret:CMD_<LABEL>»`). It becomes
-  a run secret the moment it is read, so a page that echoes it is redacted too. The command has
-  60 s. A failure, a timeout or empty output fails that type step with a reason that never quotes
-  the output, and the model may wait and type again. It is operator-only: never an MCP argument,
-  never read from a suite file.
+  a run secret the moment it is read, so a page that echoes it is redacted too, in text and in
+  pixels: it joins the screenshot and video mask before it is typed, whatever its length (#360).
+  The command has 60 s. A failure, a timeout or empty output fails that type step with a reason
+  that never quotes the output, and the model may wait and type again, but one field's command
+  runs at most 3 times per run (`--secret-cmd-attempts <n>`, #359). Past that, typing the field
+  fails without running the command again, since a read-the-code command usually has side effects
+  (it consumes the code or polls a rate-limited outbox). This works with the goal and usability
+  strategies. It is operator-only: never an MCP argument, never read from a suite file.
 
   ```bash
   jevitate explore --url https://app.example.test/verify --goal "verify your email" \
