@@ -169,7 +169,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (365 exports)
+# @jevitate/explore (366 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -402,6 +402,7 @@
   hangRoute: function
   hasApiCredentials: function
   headingHint: function
+  hideDemoOverlayForCapture: function
   hostProbe: function
   hotp: function
   http5xxSignalOf: function

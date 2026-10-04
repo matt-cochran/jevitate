@@ -24,7 +24,8 @@ import { clock } from "@jevitate/domain";
  *  - its later updates happen INSIDE the shadow root, which a document `MutationObserver` does not
  *    see (settle/quiet windows are unaffected); the highlight follows its target with
  *    `requestAnimationFrame` + a CSS fade — never a page timer (the page monitor wraps `setTimeout`);
- *  - screenshots hide it with {@link DEMO_OVERLAY_HIDE_STYLE} (Playwright's `screenshot({ style })`).
+ *  - screenshots hide it with {@link hideDemoOverlayForCapture} (#336: through its shadow root's
+ *    adopted sheets — a strict CSP blocks the inline `<style>` Playwright's `screenshot({ style })` adds).
  * All text is redacted with the run's secrets before it reaches the page, and set via `textContent`.
  * Every overlay call is best-effort and bounded: a failure never changes the run.
  */
@@ -32,8 +33,33 @@ import { clock } from "@jevitate/domain";
 /** The attribute marking the overlay's host element. */
 export const DEMO_OVERLAY_ATTR = "data-jevitate-overlay";
 
-/** CSS that hides the overlay; pass as `page.screenshot({ style })` so captures never contain it. */
+/**
+ * CSS that hides the overlay. Kept for a capture whose CSSOM hide failed ({@link hideDemoOverlayForCapture}):
+ * Playwright's `screenshot({ style })` injects it as an inline `<style>`, which a strict CSP
+ * (`style-src 'self'`) blocks and reports as a console error — so it is never the default (#336).
+ */
 export const DEMO_OVERLAY_HIDE_STYLE = `[${DEMO_OVERLAY_ATTR}]{display:none !important;visibility:hidden !important}`;
+
+/**
+ * #336 — hides the demo overlay for one capture (`hidden: true`) and shows it again (`false`),
+ * without an inline `<style>` (Playwright's `screenshot({ style })` injects one; a strict-CSP app
+ * blocks it and the console-error oracle filed jevitate's own style as an app defect) and without
+ * touching the page's DOM: a window flag the overlay runtime reads, applied through its closed
+ * shadow root's adopted style sheets. A page with no overlay is unchanged but for that flag (set
+ * first, so an overlay created mid-capture starts hidden). Resolves false when an overlay exists
+ * and could not be hidden — the caller then falls back to {@link DEMO_OVERLAY_HIDE_STYLE}.
+ */
+export async function hideDemoOverlayForCapture(page: Page, hidden: boolean): Promise<boolean> {
+  const ok = await bounded(
+    page.evaluate((on) => {
+      Object.defineProperty(window, "__jevitateCaptureHidden", { value: on, enumerable: false, configurable: true, writable: true });
+      const api = (window as unknown as { __jevitateOverlay?: { capture?: () => boolean } }).__jevitateOverlay;
+      if (api === undefined) return true;
+      return typeof api.capture === "function" ? api.capture() : false;
+    }, hidden),
+  );
+  return ok === true;
+}
 
 /** How long the target is highlighted before the action is dispatched (ms). */
 export const DEMO_HIGHLIGHT_MS = 400;
@@ -98,6 +124,25 @@ const OVERLAY_RUNTIME = String.raw`(() => {
   let host = null;
   let parts = null;
   let tracking = 0;
+  // #336: hidden for a capture through the shadow root's own adopted sheets — never an inline
+  // <style> (a strict CSP blocks it and logs a violation) and never a light-DOM mutation.
+  let shadowRoot = null;
+  let hideSheet = null;
+  const capturing = () => window.__jevitateCaptureHidden === true;
+  const applyCapture = () => {
+    if (shadowRoot === null) return true;
+    try {
+      if (hideSheet === null) {
+        hideSheet = new CSSStyleSheet();
+        hideSheet.replaceSync(":host{display:none !important;visibility:hidden !important}");
+      }
+      const rest = Array.from(shadowRoot.adoptedStyleSheets).filter((x) => x !== hideSheet);
+      shadowRoot.adoptedStyleSheets = capturing() ? rest.concat([hideSheet]) : rest;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
   const ensure = () => {
     if (host !== null && host.isConnected && parts !== null) return parts;
     const root = document.documentElement;
@@ -120,6 +165,8 @@ const OVERLAY_RUNTIME = String.raw`(() => {
       s.textContent = CSS;
       shadow.appendChild(s);
     }
+    shadowRoot = shadow;
+    applyCapture();
     const mk = (cls) => { const d = document.createElement("div"); d.className = cls; d.hidden = true; shadow.appendChild(d); return d; };
     const panel = mk("panel");
     const head = document.createElement("div"); head.className = "head";
@@ -134,6 +181,10 @@ const OVERLAY_RUNTIME = String.raw`(() => {
     return parts;
   };
   const api = {
+    // #336: re-reads window.__jevitateCaptureHidden; false when the overlay could not be hidden.
+    capture() {
+      return applyCapture();
+    },
     panel(s) {
       const p = ensure();
       if (p === null) return false;

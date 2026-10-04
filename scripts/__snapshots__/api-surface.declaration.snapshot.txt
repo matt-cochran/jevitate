@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (562 exports)
+# @jevitate/explore (563 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -522,6 +522,7 @@
   hasApiCredentials: function
   headingHint: function
   HeapLog: class
+  hideDemoOverlayForCapture: function
   HOST_SAMPLE_INTERVAL_MS: variable
   HostHealthOptions: interface
   HostHealthSampler: class
