@@ -710,7 +710,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (90 exports)
+# @jevitate/playwright (91 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -799,6 +799,7 @@
   sharedBrowserPool: function
   sharedResourceGovernor: function
   systemProcessTable: function
+  terminateOwnBrowsersSync: function
   throttleDecision: function
   withOpenDeadline: function
 
