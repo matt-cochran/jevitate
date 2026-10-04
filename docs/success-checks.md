@@ -24,6 +24,19 @@ decides it. `--success` can be repeated, and every check must hold:
 | `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing). A request counts once it is sent, even when its response has not arrived (a long-running RPC the server holds open) |
 | `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status (requests still awaiting a response are not judged; the check fails if none has answered) |
 
+**gRPC-web and Connect calls.** gRPC-web answers HTTP 200 even for an RPC that failed: the real
+result is `grpc-status`, in a response header (a trailers-only response) or in the trailer frame at
+the end of the body. For a response whose content type is `application/grpc-web` (`+proto`,
+`+json`, `-text`) or `application/connect+…`, jevitate reads that status and judges
+`responseStatus` on the call's **effective** status: OK (0) keeps the HTTP status; any other code
+maps to its standard HTTP equivalent (e.g. `INTERNAL` → 500, `UNAVAILABLE` → 503,
+`FAILED_PRECONDITION` → 400, `PERMISSION_DENIED` → 403). So `responseStatus:POST /pkg.Svc/Method=2xx`
+does not hold for an HTTP 200 carrying grpc-status 13, and its detail says
+`200 (grpc-status 13 internal)`. The same effective status decides whether a write was rejected
+(the repeated-write guard then allows a retry) and whether the call is an HTTP 5xx defect. Only the
+status code is kept — never `grpc-message` or any body byte. A Connect unary error already has a
+non-2xx HTTP status and is judged on it.
+
 In these specs:
 
 - `<d>` is `testId=…;role=…;name=…;label=…;text=…;css=…` (key=value pairs joined by `;`). It is
