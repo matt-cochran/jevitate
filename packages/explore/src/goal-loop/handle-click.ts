@@ -95,7 +95,8 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
         ctx.replies.add(snap.url, reply.text);
       }
       ctx.awaitingReply = !reply.received;
-      ctx.busyWaitedMs = reply.waitedMs;
+      ctx.busyWaitedMs = 0;
+      ctx.replyWaitedMs = reply.waitedMs;
       ctx.lastTurn = { baseline, sent: message, sentAt: at, background: turnBackground };
       ctx.offerBaseline = new Set(keys.keys());
       ctx.history.push(

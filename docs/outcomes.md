@@ -183,6 +183,9 @@ A render is the page's own time: a navigation's DOMContentLoaded, or an action's
 `--reply-ceiling-ms`), a job wait (`--job-wait-ms`), a `wait` decision (#368). That wait is reported
 on its own as the step timing's `waitedMs`. A reply that never arrives is the run's own finding: the
 goal reason starts `no reply within 30s to the last message sent ("…")`, never an environment verdict.
+`--reply-ceiling-ms` bounds the total wait for one sent message's reply — the send's own wait plus
+every `wait` decision after it, never one wait cycle at a time (#373): once it is spent, another
+`wait` ends the run (`no-progress`) with that reason instead of listening on.
 
 A starved sample explains the 15 s after it. Then:
 

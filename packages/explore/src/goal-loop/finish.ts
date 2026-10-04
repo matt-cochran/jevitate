@@ -52,7 +52,7 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
   // run's own finding (named with the wait it was given), never folded into a generic stop reason.
   if (ctx.awaitingReply && ctx.answer === undefined && ctx.failure === undefined && (ctx.stop === "no-progress" || ctx.stop === "blocked" || ctx.stop === "exhausted")) {
     const sent = ctx.lastTurn?.sent;
-    const missing = `no reply within ${Math.round(ctx.busyWaitedMs / 1000)}s to the last message sent${sent === undefined || sent === "" ? "" : ` (${quote(sent, 80)})`}`;
+    const missing = `no reply within ${Math.round(ctx.replyWaitedMs / 1000)}s to the last message sent${sent === undefined || sent === "" ? "" : ` (${quote(sent, 80)})`}`;
     ctx.incomplete = `${missing}; ${incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker)}`;
   }
 

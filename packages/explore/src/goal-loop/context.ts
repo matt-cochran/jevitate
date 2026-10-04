@@ -204,6 +204,11 @@ export interface RunContext {
   idleSince: number | null;
   /** How long consecutive `wait`s have waited on a still-busy app (bounded by `replyWaitMs`). */
   busyWaitedMs: number;
+  /**
+   * #373: how long the run has waited, in total, for the reply to the last message sent — the send's
+   * own wait plus every later `wait` / report listen on that turn. Bounded by `replyCeilingMs`.
+   */
+  replyWaitedMs: number;
   /** The last message sent got no reply yet (a slow LLM turn): `wait`s are patience, bounded. */
   awaitingReply: boolean;
   /** The page text before the last message, and the message — to keep listening for its reply. */
@@ -543,6 +548,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.idleSince = null;
   /** How long consecutive `wait`s have waited on a still-busy app (bounded by `replyWaitMs`). */
   ctx.busyWaitedMs = 0;
+  ctx.replyWaitedMs = 0;
   /** The last message sent got no reply yet (a slow LLM turn): `wait`s are patience, bounded. */
   ctx.awaitingReply = false;
   /** The page text before the last message, and the message — to keep listening for its reply. */

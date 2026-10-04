@@ -104,7 +104,8 @@ export const GOAL_RUN_OPTIONS = {
   replyCeilingMs: () =>
     new Option(
       "--reply-ceiling-ms <ms>",
-      "conversational pages: hard ceiling on one reply wait, however busy the page stays (default 180000; never below --reply-wait-ms)",
+      "conversational pages: hard ceiling on the TOTAL wait for one sent message's reply — the send's own wait plus every later 'wait' — " +
+        "however busy the page stays; once spent the run ends naming the missing reply (default 180000; never below --reply-wait-ms)",
     ).argParser(positiveIntArg),
   replyMaxChars: () =>
     new Option("--reply-max-chars <n>", "conversational pages: cap on each generated chat message (goal and usability; default 300)").argParser(

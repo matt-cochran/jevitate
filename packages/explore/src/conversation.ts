@@ -361,7 +361,9 @@ async function listenForReply(page: Page, opts: ReplyWaitOptions): Promise<Reply
     endedBy,
   });
   for (;;) {
-    if (remaining() <= 0) return result(false, "ceiling");
+    // #373: a ceiling reached with no sign of work for the idle patience is idle, not "still busy"
+    // (a listen whose idle patience equals its ceiling would otherwise never read as idle).
+    if (remaining() <= 0) return result(false, clock.now() - lastActivity >= idleMs ? "idle" : "ceiling");
     const text = await readPageText(page, secrets);
     const fresh = newTurnText(opts.baseline, text, sent);
     const t = clock.now();
