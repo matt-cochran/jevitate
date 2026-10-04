@@ -145,6 +145,16 @@ Code keeps a goal run on its goal (#338). A generated value that copies the goal
 prose, such as "add an answer and test it" typed into the Answer field, is refused before it is
 typed. The model sees "that is the goal's instruction, not a value to enter" in its history and
 generates a value again. A value the goal quotes or gives with `exactly` is still typed as stated.
+Words the goal dictates as the value are value material, not instruction (#371): quoted text,
+a parenthesised list, and the text after "a short description of", "describing", "saying" or
+"about". So "answer with a short description of the barber shop (classic cuts, hot-towel shaves,
+walk-ins welcome)" lets the answer reuse those words; copying the goal's instruction prose
+around them is still refused.
+
+When the goal lists several items, a value already submitted into a field is refused there, so
+the next item is used. That memory belongs to the live field (#366): a field that left the page
+and came back empty (a confirm dialog reopened) starts fresh, and a literal the field's label,
+placeholder or dialog text asks for ("Type REINSTATE to confirm") is never a repeat.
 Once the run has reached the goal's area (it opened a navigation item the goal names, or the URL
 path names one of the goal's words), navigation to sections the goal never names is listed last
 and marked `off-goal` in the decision. It is still offered, so a goal that names two sections can
