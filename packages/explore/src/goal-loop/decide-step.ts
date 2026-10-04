@@ -16,6 +16,10 @@ export async function decideStep(ctx: RunContext, step: Perceived, view: PageVie
   const { perception, snap } = step;
   const { modelControls, offered, unsubmitted, visibleText } = view;
   let decision: Awaited<ReturnType<typeof decide>>;
+  // #338: once the goal's area is reached, navigation to sections the goal never names is off-goal
+  // (listed last and marked — never removed: a goal may cross the sections it names).
+  ctx.goalFocus.noteUrl(snap.url);
+  const offGoal = ctx.goalFocus.offGoal(modelControls, ctx.chrome);
   try {
     // #192: the choice cap is bounded in decide(); should the API still refuse the count (a
     // lower limit than documented), retry with a tighter budget instead of ending the run.
@@ -38,6 +42,7 @@ export async function decideStep(ctx: RunContext, step: Perceived, view: PageVie
         ...(maxChoices === undefined ? {} : { maxChoices }),
         ...(ctx.findOut ? { pageText: visibleText } : {}),
         ...(ctx.deltas === null ? {} : { actionDeltas: true }),
+        ...(offGoal.size === 0 ? {} : { offGoal }),
       });
     decision = await decideWith().catch(async (e: unknown) => {
       const refusal = firstLine(e);

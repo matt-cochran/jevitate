@@ -55,6 +55,7 @@ import {
 import { RunRecorder } from "../record.js";
 import { resolveMissionFixture } from "../fixture.js";
 import { ChromeTracker } from "../feature/relevance.js";
+import { GoalFocus } from "./goal-focus.js";
 import { REPLY_MAX_CHARS, WAIT_OP_MS } from "./limits.js";
 import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 import { TranscriptLog } from "../transcript.js";
@@ -338,6 +339,8 @@ export interface RunContext {
   readonly documentStatus: Map<string, number>;
   /** #223: controls repeated across pages (global chrome) — their link text is not page content. */
   readonly chrome: ChromeTracker;
+  /** #338: the goal's area — once reached, navigation to sections the goal never names is off-goal. */
+  readonly goalFocus: GoalFocus;
   readonly docKey: (u: string) => string;
   readonly onDocumentResponse: (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown; }; }) => void;
   readonly effectLog: SideEffectLog;
@@ -712,6 +715,8 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.documentStatus = new Map<string, number>();
   /** #223: controls repeated across pages (global chrome) — their link text is not page content. */
   ctx.chrome = new ChromeTracker();
+  /** #338: the goal's area — once reached, navigation to sections the goal never names is off-goal. */
+  ctx.goalFocus = new GoalFocus(cfg.goal);
   ctx.docKey = (u: string): string => u.split("#")[0] ?? u;
   ctx.onDocumentResponse = (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown } }): void => {
     try {
