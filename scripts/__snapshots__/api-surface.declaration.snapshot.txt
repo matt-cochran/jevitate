@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (566 exports)
+# @jevitate/explore (568 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -456,6 +456,7 @@
   errorPageReason: function
   evaluateNetworkCheck: function
   exactLiterals: function
+  expandBraces: function
   expectedChange: function
   ExpectedChange: interface
   expectedResultFromDelta: function
@@ -588,6 +589,7 @@
   matchGlob: function
   matchOption: function
   MAX_DONE_REJECTIONS: variable
+  MAX_GLOB_ALTERNATIVES: variable
   MAX_IDLE_STEPS: variable
   MAX_MOVING_SCROLLS: variable
   MAX_QUIET_WAITS: variable
