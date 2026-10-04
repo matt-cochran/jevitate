@@ -13,6 +13,8 @@ Typed-value guards stop refusing values the goal or the field itself asks for. A
 as a chat composer only when the page shows a conversation. A reply wait is no longer mistaken for a
 starved host, and a redirecting start page no longer crashes the run. `explore-author-journey` now
 runs the same goal run as `explore`, takes its run-shaping flags, and says why a goal wasn't reached.
+Reply waits are bounded per message, gRPC-web failures are read from their trailers, busy overlays
+are waited out, and links the OS handles are no longer filed as failed requests.
 
 ### Behaviour changes
 
@@ -45,6 +47,33 @@ runs the same goal run as `explore`, takes its run-shaping flags, and says why a
   ("the page kept navigating"), not `crashed`.
 - **Authoring runs the goal run (#369).** Every `explore-author-journey` take is the same goal run as
   `explore --strategy goal`, each in a fresh browser.
+- **Reply waits are bounded per message (#373).** The total time a run spends waiting for one sent
+  message's reply, across every `wait` and report listen, is capped by `--reply-ceiling-ms`. When
+  it's spent, the run ends `no-progress` with "no reply within Ns to the last message sent". A quiet
+  wait with nothing in flight ends early again (#241). Before, each `wait` restarted the budget and a
+  run could listen for 20 minutes.
+- **The repeat guard ignores bookkeeping requests and follows the clicked region (#374, #380).** A
+  click that only fired an analytics event, a read marker (`Mark*Read`, `Record*Event`, …), a ping
+  or a beacon is not a side effect, so it can be clicked again. A same-labelled control that sent a
+  write may fire again once its own part of the page (its section, card, form or dialog) has changed
+  since and the earlier write got a response. A change elsewhere on the page, such as a menu or a
+  toast, doesn't count. Paid and destructive controls, in-flight writes and true repeats are still
+  refused.
+- **gRPC-web and Connect status (#378).** An RPC's effective status comes from `grpc-status` (a header,
+  or the trailer frame of a gRPC-web or Connect body), not the HTTP 200 it travelled in.
+  `responseStatus:` checks, the repeat guard and the HTTP-5xx oracle use it, so `grpc-status 13` is a
+  500.
+- **A busy overlay is waited out (#379).** A page whose controls are all hidden by a progress overlay
+  (a spinner, `role=progressbar`, a "Preparing…" status) is a job in progress, not "no interactive
+  controls". It is waited out within the render ceiling and `--job-wait-ms`, and past that the run ends
+  `no-progress` naming the overlay. `--ignore-no-progress` patterns also match the indicator's text.
+- **Text checks and vacuous checks (#376, #377).** `text=` holds when any visible element whose whole
+  text matches is on the page, even when several match (hidden copies never count). With
+  `--allow-vacuous-checks`, a check that already held on the start page counts under `held` and
+  `each` too, and a `blocked` report while the checks hold is no longer refused as "nothing tried
+  yet".
+- **Links the OS handles are not failed requests (#375).** A click on an `sms:`, `tel:`, `mailto:` or
+  app deep link is no longer filed as a failed request, in adversarial runs or in action deltas.
 
 ### Upgrade notes
 
@@ -57,6 +86,10 @@ runs the same goal run as `explore`, takes its run-shaping flags, and says why a
 - **Chat widgets with no markup:** a chat whose field has no transcript yet and whose only send
   control is an unlabelled icon button is now typed as a form field (#370). Give the send button an
   accessible name, or a message log a `role=log`.
+- **Reply ceiling:** a chat that legitimately answers after more than `--reply-ceiling-ms` (default 3
+  min) in total now ends the run; raise it for slow assistants (#373).
+- **Hidden text:** a `textIncludes:` check no longer holds on a hidden element alone (#376); check
+  what is actually shown.
 
 ### Added
 
