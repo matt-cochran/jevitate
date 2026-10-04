@@ -24,7 +24,7 @@ export async function handleWaitOrScroll(ctx: RunContext, step: Step): Promise<F
       // listening, bounded by what is left of the reply wait, and records the reply if it lands.
       const t0 = ctx.now();
       const listen = Math.min(ctx.replyWaitMs - ctx.busyWaitedMs, 20_000);
-      const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen });
+      const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen, quietMs: ctx.replyQuietMs });
       ctx.busyWaitedMs += ctx.now() - t0;
       if (reply.received) {
         ctx.conversation.latestReply = reply.text;

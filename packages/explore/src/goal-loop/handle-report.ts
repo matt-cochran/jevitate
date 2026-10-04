@@ -18,7 +18,7 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
     if (ctx.awaitingReply && ctx.lastTurn !== null && ctx.busyWaitedMs < ctx.replyWaitMs) {
       const t0 = ctx.now();
       const listen = ctx.replyWaitMs - ctx.busyWaitedMs;
-      const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen });
+      const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen, quietMs: ctx.replyQuietMs });
       ctx.busyWaitedMs += ctx.now() - t0;
       if (reply.received) {
         ctx.conversation.latestReply = reply.text;

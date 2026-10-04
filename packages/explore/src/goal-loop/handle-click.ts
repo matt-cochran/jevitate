@@ -86,6 +86,7 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
         background: turnBackground,
         timeoutMs: ctx.replyWaitMs,
         ceilingMs: ctx.replyCeilingMs,
+        quietMs: ctx.replyQuietMs,
       });
       if (reply.received) {
         ctx.conversation.latestReply = reply.text;

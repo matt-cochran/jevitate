@@ -80,6 +80,7 @@ export const SUITE_EXPLORE_OPTIONS = {
   // pacing and conversation
   stallTimeout: { shape: "positive", appliesTo: ["coverage", "exploratory", "feature"] },
   replyWaitMs: { shape: "integer", appliesTo: GOAL_UX },
+  replyQuietMs: { shape: "integer", appliesTo: GOAL_UX },
   replyCeilingMs: { shape: "integer", appliesTo: GOAL_UX },
   replyMaxChars: { shape: "integer", appliesTo: GOAL_UX, range: [20, 2000] },
   jobWaitMs: { shape: "integer", appliesTo: GOAL_UX },
