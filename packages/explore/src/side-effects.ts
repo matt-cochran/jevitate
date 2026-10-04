@@ -49,15 +49,16 @@ import { clock } from "@jevitate/domain";
  * repeat (`isBookkeepingRequest`). An app-specific one is declared with `--read-rpc` (or
  * `--settle-ignore` when it is background traffic). A real write fired alongside is still guarded.
  *
- * The screen moved on (#380): the guard cannot know which request a click will send before it
- * fires, and one control may send another request in another screen state ("I've changed my
+ * The control's region moved on (#380): the guard cannot know which request a click will send
+ * before it fires, and one control may send another request in another state ("I've changed my
  * nameservers" sends `RefreshShareDomain`, then `RetryShareDomain` once the check has run). So a
- * finished write's control may be clicked again when the screen state (`screenState`: the controls it
- * offers + its visible text, digits masked; never the inputs' values) differs from BOTH the state the click was made in and
- * the state its window closed on — the app has moved on by itself since. A true repeat — the same
- * control on an unchanged screen (or one back where it was) after its write went through — is still
- * refused. The caller passes no state for a paid / destructive control, so this never lifts the
- * guard on one; a write whose outcome is unknown (no response) never lifts it either.
+ * finished write's control may be clicked again when its own REGION's state (`screenState` over its
+ * nearest dialog / form / section / card / row, falling back to `main`, never the whole page: the
+ * controls it offers + its visible text, digits masked, never a value) differs from BOTH the state
+ * the click was made in and the one its window closed on. A menu or a toast elsewhere is no change,
+ * so "Add to cart → open a menu → Add to cart" is still refused, as is the same control on an
+ * unchanged region (or one back where it was). The caller passes no state for a paid / destructive
+ * control, so this never lifts the guard on one; a write with no response never lifts it either.
  */
 
 /**
@@ -68,7 +69,7 @@ import { clock } from "@jevitate/domain";
 const BOOKKEEPING_RPC =
   /^(?:(?:Record|Track|Log|Report|Send|Emit|Capture|Ingest)\w*(?:Event|Events|Analytics|Telemetry|Metric|Metrics|Impression|Impressions|PageView|PageViews)|Mark\w*(?:Read|Seen|Viewed|Opened)|Ping|Heartbeat|KeepAlive)$/;
 /** A path segment that names an analytics / telemetry endpoint. */
-const BOOKKEEPING_SEGMENT = /^(?:analytics|telemetry|tracking|track|beacons?|collect|rum|web-vitals|vitals|heartbeat|ping)$/i;
+const BOOKKEEPING_SEGMENT = /^(?:analytics|telemetry|beacons?|metrics|rum)$/i;
 /** A last path segment that marks something read / seen (an idempotent marker). */
 const READ_MARKER_SEGMENT = /^(?:mark[-_]?(?:as[-_]?)?)?(?:read|seen|viewed)$/i;
 
@@ -83,7 +84,7 @@ export function isBookkeepingRequest(r: { readonly path: string; readonly resour
 }
 
 /**
- * #380: a screen state's digest — which controls the screen offers (`controls`: their role, name,
+ * #380: a region's state digest — which controls it offers (`controls`: their role, name,
  * enabled state — never an input's value: what the inputs hold is the values rule's, #123) and its
  * visible text (whitespace collapsed, digits masked so a ticking clock or counter is no new state).
  * Only the digest is kept: page text never sits in the guard's memory.
@@ -146,7 +147,7 @@ interface Fired {
   readonly inflight: InflightRequest[];
   /** The input values in effect when it was clicked (`#valuesKey`). */
   readonly values: string;
-  /** #380: the screen state it was clicked in, and the one its window closed on (when known). */
+  /** #380: its region's state when it was clicked, and when its window closed (when known). */
   readonly before?: string;
   readonly after?: string;
 }
@@ -247,7 +248,7 @@ export class SideEffectGuard {
   /**
    * A click on `id` (a bare string = an element with no known context) is about to be dispatched:
    * watch what it sends. `label` only names it in reasons and drives the sign-in / back rules.
-   * `state` (#380) is the screen state it is clicked in (`screenState`), when the caller read it.
+   * `state` (#380) is its region's state as it is clicked (`screenState`), when the caller read it.
    */
   beginClick(id: string | ActionIdentity, label: string, route: string, at: number, state?: string): void {
     const identity = identityOf(id);
@@ -262,13 +263,13 @@ export class SideEffectGuard {
   /**
    * The click's window closes (the next perception has settled the page): the writes it fired are
    * the ones that finished since, plus those still in flight that started after it. `state` (#380)
-   * is the screen state the window closed on, when the caller read it.
+   * is the clicked control's region state the window closed on, when the caller read it.
    */
   settle(state?: string): void {
     this.#closeOpen(state);
   }
 
-  /** Whether a click's window is open (the caller reads the screen state for `settle` only then). */
+  /** Whether a click's window is open (the caller reads the region state for `settle` only then). */
   clickOpen(): boolean {
     return this.#open !== null;
   }
@@ -351,7 +352,7 @@ export class SideEffectGuard {
 
   /**
    * May `key` be clicked on `route` now? `page` is what the page shows: its control names and alerts
-   * (a visible retry affordance, or an error alert, re-allows it). `state` (#380) is the screen state
+   * (a visible retry affordance, or an error alert, re-allows it). `state` (#380) is the control's region state
    * now (`screenState`): one that differs from both the state the earlier click was made in and the
    * one its window closed on has moved on, and re-allows a click whose writes all finished. Omit it
    * (a paid / destructive control) and only the rules above apply.
@@ -389,11 +390,11 @@ export class SideEffectGuard {
     if (retryOffered) return { refuse: false };
     // The inputs now hold different values: the repeat sends something new.
     if (f.values !== this.#valuesKey()) return { refuse: false };
-    // #380: the screen moved on by itself since that click (neither the state it was clicked in nor
+    // #380: the control's region moved on since that click (neither the state it was clicked in nor
     // the one it produced) and its writes all finished: the same control may now send another request.
     const known = page.state !== undefined && f.before !== undefined && f.after !== undefined;
     if (known && page.state !== f.before && page.state !== f.after && f.writes.every((w) => w.status !== null)) return { refuse: false };
-    const unchanged = known ? " (the screen has not moved on since)" : "";
+    const unchanged = known ? " (its part of the page has not moved on since)" : "";
     const retyped = this.#values.size > 0 ? " (the inputs hold the same values as when it was sent — nothing new would be submitted)" : "";
     return {
       refuse: true,

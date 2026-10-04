@@ -12,7 +12,7 @@ import { monitorFor } from "../page-monitor.js";
 import { awaitWrites } from "../side-effects.js";
 import { backgroundEndpoints, writesStartedSince } from "../stuck-actions.js";
 import type { RunContext } from "./context.js";
-import { TOGGLE_ROLES, actionIdentityOf, buttonLike, keyOf, noReply, quote, readScreenState, safePath } from "./helpers.js";
+import { TOGGLE_ROLES, actionIdentityOf, buttonLike, keyOf, noReply, quote, readRegionState, safePath } from "./helpers.js";
 import type { Flow } from "./step.js";
 import { type ActStep } from "./step.js";
 
@@ -34,11 +34,11 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
   const identity = actionIdentityOf(control);
   const pageNow = { controlNames: snap.controls.map((c) => c.name), alerts: ctx.status.alerts };
   let repeat = ctx.sideEffects.check(identity, safePath(snap.url), pageNow);
-  // #380: a finished write's control may be clicked again once the screen has moved on since it
-  // (another screen state may send another request) — never a paid / destructive one.
+  // #380: a finished write's control may be clicked again once its own region has moved on since it
+  // (another state may send another request) — never a paid / destructive one.
   const stateless = ctx.safety.riskOf(control) !== null;
   const readState = (): Promise<string | undefined> =>
-    stateless ? Promise.resolve(undefined) : readScreenState(ctx.page, snap, ctx.secrets);
+    stateless ? Promise.resolve(undefined) : readRegionState(ctx.page, control, ctx.secrets);
   if (repeat.refuse && !repeat.inflight && !stateless) {
     const state = await readState();
     repeat = ctx.sideEffects.check(identity, safePath(snap.url), { ...pageNow, ...(state === undefined ? {} : { state }) });
@@ -56,6 +56,7 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
   }
   const baseline = turn ? await readPageText(ctx.page, ctx.secrets) : "";
   const before = await readState();
+  ctx.clickedRegion = readState;
   ctx.sideEffects.beginClick(identity, control.name || control.summary, safePath(snap.url), ctx.now(), before);
   const r = await act(cfg.actor, { op: "click", control });
   let reply: ReplyResult | undefined;

@@ -384,9 +384,20 @@ describe("SideEffectGuard — bookkeeping is not a side effect (#374)", () => {
       "/telemetry",
       "/api/messages/42/read",
       "/api/notifications/7/mark-as-seen",
+      "/api/metrics",
+      "/v1/rum/batch",
     ])
       expect(isBookkeepingRequest({ path }), path).toBe(true);
     expect(isBookkeepingRequest({ path: "/api/whatever", resourceType: "ping" })).toBe(true);
+    // …so the guard still refuses re-firing them.
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    for (const [k, path] of [["pay", "/payments/collect"], ["track", "/orders/1/track"]] as const) {
+      g.beginClick(k, k, "/a", 0);
+      finish({ method: "POST", url: `http://x${path}`, path, status: 200, failed: false });
+      g.settle();
+      expect(g.check(k, "/a", PAGE), path).toMatchObject({ refuse: true, inflight: false });
+    }
     for (const path of [
       "/share.v1.ShareService/RetryShareDomain",
       "/cal.v1.CalendarService/CreateEvent",
@@ -394,6 +405,10 @@ describe("SideEffectGuard — bookkeeping is not a side effect (#374)", () => {
       "/api/notes",
       "/read",
       "/api/simulations",
+      // Real writes whose path merely names a tracking-ish word (#374 review): never bookkeeping.
+      "/payments/collect",
+      "/orders/1/track",
+      "/api/telemetryx/settings",
     ])
       expect(isBookkeepingRequest({ path }), path).toBe(false);
   });
@@ -447,7 +462,7 @@ describe("SideEffectGuard — the screen moved on (#380)", () => {
     const same = g.check("changed", "/domain", page(S1));
     expect(same).toMatchObject({ refuse: true, inflight: false });
     expect(same.refuse && same.reason).toContain("POST /share.v1.ShareService/RefreshShareDomain");
-    expect(same.refuse && same.reason).toContain("the screen has not moved on since");
+    expect(same.refuse && same.reason).toContain("its part of the page has not moved on since");
     // Back where it was clicked (a toast gone, a reload): still the same action.
     expect(g.check("changed", "/domain", page(S0)).refuse).toBe(true);
     // No state given (a paid / destructive control): the rule never applies.

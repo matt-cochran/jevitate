@@ -101,19 +101,21 @@ security bug, and how to report one.
   earlier click sent (method + templated path, such as `POST /api/items/:id`). While that
   control's write is still in flight, the run waits for it, even if the screen around it changed.
   Bookkeeping requests never count as a click's side effect: a first-party analytics or telemetry
-  event (an RPC such as `RecordShowcaseEvent` or `TrackPageView`, a POST under `/analytics/` or
-  `/telemetry`, a `navigator.sendBeacon` ping), a heartbeat, and an idempotent read marker (an RPC
-  such as `MarkConversationRead`, a POST to `…/read` or `…/mark-as-seen`). Opening a chat or a
-  conversation row again is therefore allowed. Declare an app-specific one with `--read-rpc`
-  (for example `--read-rpc 'Log*'` or `--read-rpc '/api/stats/*'`). A real write fired by the same
-  click is still guarded.
+  event (an RPC such as `RecordShowcaseEvent` or `TrackPageView`, a POST to a path with an
+  `analytics`, `telemetry`, `beacon`, `metrics` or `rum` segment, a `navigator.sendBeacon` ping), a
+  heartbeat, and an idempotent read marker (an RPC such as `MarkConversationRead`, a POST to `…/read`
+  or `…/mark-as-seen`). Opening a chat or a conversation row again is therefore allowed. Paths such
+  as `/payments/collect` or `/orders/1/track` are still writes. Declare an app-specific bookkeeping
+  request with `--read-rpc` (for example `--read-rpc 'Log*'` or `--read-rpc '/api/stats/*'`). A
+  real write fired by the same click is still guarded.
   The run cannot know which request a click will send before it fires, and one button may send
-  another request in another screen state ("I've changed my nameservers" sends
-  `RefreshShareDomain`, and later `RetryShareDomain`). So a control whose write finished may be
-  clicked again once the screen has moved on: the controls it offers or its visible text (digits
-  and typed values ignored) differ from both the screen it was clicked on and the screen its click
-  produced. The same control on an
-  unchanged screen, or on the screen it was first clicked on, is still refused. This never applies
+  another request in another state ("I've changed my nameservers" sends `RefreshShareDomain`, and
+  later `RetryShareDomain`). So a control whose write got a response may be clicked again once its
+  own part of the page has moved on. That part is the control's nearest dialog, form, section,
+  card, list item or table row (else `main`, never the whole page). Its visible text (digits
+  ignored) or the controls it offers must differ from both how it looked when the control was
+  clicked and how it looked after the click. A menu or a toast elsewhere on the page is no change, so
+  "Add to cart", then opening a menu, then "Add to cart" again is still refused. This never applies
   to a paid or destructive control, or to a write whose outcome is unknown.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.

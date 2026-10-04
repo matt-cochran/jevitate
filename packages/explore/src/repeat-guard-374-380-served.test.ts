@@ -12,9 +12,9 @@ useSkippingTime({ per: "all" });
 /**
  * #374 — a click whose only first-party write is bookkeeping (an analytics event RPC, a
  * `Mark*Read` marker, an `/analytics` POST) is not a side effect: re-clicking it is allowed.
- * #380 — "I've changed my nameservers" sends `RefreshShareDomain`; once the screen has moved on the
- * same button sends `RetryShareDomain` and goes through; a true repeat on an unchanged screen is
- * still refused, named by the request it sent.
+ * #380 — "I've changed my nameservers" sends `RefreshShareDomain`; once its section has moved on the
+ * same button sends `RetryShareDomain` and goes through; a true repeat on an unchanged section (or
+ * after a change elsewhere, a menu opened) is still refused, named by the request it sent.
  */
 const connect = (method: string): string =>
   `fetch("${method}", { method: "POST", headers: { "content-type": "application/connect+json" }, body: "{}" })`;
@@ -39,10 +39,12 @@ const INBOX = `<!doctype html><html><body>
 </body></html>`;
 
 const DOMAIN = `<!doctype html><html><body>
-<h1>Connect your domain</h1>
-<p id="status">Point your nameservers at ns1.example.net, then tell us.</p>
-<button type="button" id="changed">I've changed my nameservers</button>
-<button type="button" id="check">Check status</button>
+<header><button type="button" id="check">Check status</button></header>
+<main><h1>Connect your domain</h1>
+<section>
+  <p id="status">Point your nameservers at ns1.example.net, then tell us.</p>
+  <button type="button" id="changed">I've changed my nameservers</button>
+</section></main>
 <script>
   let checked = false;
   const status = document.getElementById("status");
@@ -63,6 +65,26 @@ const DOMAIN = `<!doctype html><html><body>
 </script>
 </body></html>`;
 
+/** #92 × #380: a product card's write; an unrelated menu elsewhere is no change to the card. */
+const SHOP = `<!doctype html><html><body>
+<header><button type="button" id="menu" aria-expanded="false">Open account menu</button>
+<ul id="items" hidden><li>Orders</li><li>Profile</li></ul></header>
+<main><h1>Shop</h1>
+<article><h2>Blue mug</h2><p id="note">In stock</p><button type="button" id="add">Add to cart</button></article>
+</main>
+<script>
+  document.getElementById("menu").addEventListener("click", () => {
+    const items = document.getElementById("items");
+    items.hidden = !items.hidden;
+    document.getElementById("menu").setAttribute("aria-expanded", String(!items.hidden));
+  });
+  document.getElementById("add").addEventListener("click", async () => {
+    await fetch("/api/cart/items", { method: "POST", body: "{}" });
+    document.getElementById("note").textContent = "In stock. Added to your cart.";
+  });
+</script>
+</body></html>`;
+
 const hits = new Map<string, number>();
 const count = (k: string): number => hits.get(k) ?? 0;
 let server: Server;
@@ -75,7 +97,7 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "application/json" }).end("{}");
       return;
     }
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(path === "/domain" ? DOMAIN : INBOX);
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(path === "/domain" ? DOMAIN : path === "/shop" ? SHOP : INBOX);
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -141,8 +163,8 @@ describe("#374 — bookkeeping requests never make a click a repeated side effec
   }, 90_000);
 });
 
-describe("#380 — one control, another request once the screen has moved on", () => {
-  it("RefreshShareDomain, then (screen moved on) RetryShareDomain goes through; a true repeat is still refused", async () => {
+describe("#380 — one control, another request once its region has moved on", () => {
+  it("RefreshShareDomain, then (its section moved on) RetryShareDomain goes through; a true repeat is still refused", async () => {
     const r = await run("/domain", "connect the domain", [
       /I've changed my nameservers/,
       /Check status/,
@@ -159,10 +181,10 @@ describe("#380 — one control, another request once the screen has moved on", (
     expect(clicks[3]?.actOk).toBe(false);
     expect(clicks[3]?.reason).toMatch(/repeated side effect refused/);
     expect(clicks[3]?.reason).toContain("POST /share.v1.ShareService/RetryShareDomain");
-    expect(clicks[3]?.reason).toContain("the screen has not moved on since");
+    expect(clicks[3]?.reason).toContain("its part of the page has not moved on since");
   }, 90_000);
 
-  it("a true repeat right after the first write (the screen it produced, unchanged) is refused", async () => {
+  it("a true repeat right after the first write (the section it produced, unchanged) is refused", async () => {
     const r = await run("/domain", "connect the domain", [/I've changed my nameservers/, /I've changed my nameservers/, /^blocked$/]);
     const clicks = r.transcript.filter((e) => e.op === "click");
     expect(clicks[0]?.actOk).toBe(true);
@@ -170,5 +192,15 @@ describe("#380 — one control, another request once the screen has moved on", (
     expect(clicks[1]?.reason).toContain("POST /share.v1.ShareService/RefreshShareDomain");
     expect(count("POST /share.v1.ShareService/RefreshShareDomain")).toBe(1);
     expect(count("POST /share.v1.ShareService/RetryShareDomain")).toBe(0);
+  }, 90_000);
+
+  it("Add to cart → open an unrelated menu → Add to cart again: refused (a change elsewhere is no change)", async () => {
+    const r = await run("/shop", "add the blue mug to the cart", [/Add to cart/, /Open account menu/, /Add to cart/, /^blocked$/]);
+    const clicks = r.transcript.filter((e) => e.op === "click");
+    expect(clicks.slice(0, 2).map((e) => e.actOk)).toEqual([true, true]);
+    expect(clicks[2]?.actOk).toBe(false);
+    expect(clicks[2]?.reason).toMatch(/repeated side effect refused/);
+    expect(clicks[2]?.reason).toContain("POST /api/cart/items");
+    expect(count("POST /api/cart/items")).toBe(1);
   }, 90_000);
 });

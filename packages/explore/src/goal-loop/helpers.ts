@@ -11,7 +11,9 @@ import { visibleBusyIndicator } from "../hang.js";
 import { isCredentialField } from "../auth-completion.js";
 import { screenState, type ActionIdentity, type LastClick } from "../side-effects.js";
 import { sendable } from "../actions.js";
-import { isSubmitControl, readPageText, type ReplyResult } from "../conversation.js";
+import { isSubmitControl, type ReplyResult } from "../conversation.js";
+import { descriptorToLocator } from "@jevitate/recorder";
+import { redactPageText } from "../redact.js";
 import type { ChromeTracker } from "../feature/relevance.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { MAX_DOCUMENTED_WAIT_MS, readDocumentedWait, readInProgressStatus } from "../status.js";
@@ -168,11 +170,40 @@ export const actionIdentityOf = (c: Control): ActionIdentity => ({
 });
 
 /**
- * #380: the screen state the repeat guard compares (`screenState`): the controls the snapshot offers
- * and the page's visible text (read redacted of every registered secret; only its digest is kept).
+ * BROWSER CODE — #380: the clicked control's own region — its nearest dialog / form / region / group /
+ * tabpanel / section / article / list item / table row / card-like container, else the nearest
+ * landmark (`main`), never the whole document — as its visible text and the controls it offers
+ * (role, name, enabled; never a value). Null when the control sits in none.
  */
-export async function readScreenState(page: Page, snap: Pick<Snapshot, "controls">, secrets: readonly string[]): Promise<string> {
-  return screenState(snap.controls, await readPageText(page, secrets));
+function regionOf(el: Element): { text: string; controls: Array<{ role: string; name: string; enabled: boolean }> } | null {
+  const REGION =
+    'dialog,[role=dialog],[role=alertdialog],form,[role=form],[role=region],[role=group],[role=tabpanel],section,article,li,tr,[role=row],[role=listitem],[class*="card" i],[data-card]';
+  const LANDMARK = "main,[role=main]";
+  const region = el.parentElement?.closest(REGION) ?? el.closest(LANDMARK);
+  if (region === null || region === undefined || region === document.body || region === document.documentElement) return null;
+  const CONTROL = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=tab],[role=checkbox],[role=switch],[role=menuitem],[role=option]';
+  const controls = [...region.querySelectorAll(CONTROL)]
+    .filter((c) => (c as HTMLElement).offsetParent !== null || c.getClientRects().length > 0)
+    .map((c) => {
+      const h = c as HTMLInputElement;
+      const name = (c.getAttribute("aria-label") ?? (h.type === "submit" || h.type === "button" ? h.value : "") ?? "") || ((c as HTMLElement).innerText ?? c.textContent ?? "");
+      return { role: c.getAttribute("role") ?? c.tagName.toLowerCase(), name: name.replace(/\s+/g, " ").trim(), enabled: !h.disabled && c.getAttribute("aria-disabled") !== "true" };
+    });
+  return { text: (region as HTMLElement).innerText ?? region.textContent ?? "", controls };
+}
+
+/**
+ * #380: the state the repeat guard compares (`screenState`) — the clicked control's REGION (see
+ * `regionOf`), never the whole page, so a menu or a toast elsewhere is no change. Its text is
+ * redacted of every registered secret and only the digest is kept. Undefined when the control is
+ * gone or sits in no region (the guard then never re-allows on state).
+ */
+export async function readRegionState(page: Page, control: Pick<Control, "descriptor">, secrets: readonly string[]): Promise<string | undefined> {
+  const region = await descriptorToLocator(page, control.descriptor)
+    .first()
+    .evaluate(regionOf, undefined, { timeout: 1_000 })
+    .catch(() => null);
+  return region === null ? undefined : screenState(region.controls, redactPageText(region.text, secrets));
 }
 
 /** History text for a reply wait that ended without a reply — and why it stopped waiting (#93). */

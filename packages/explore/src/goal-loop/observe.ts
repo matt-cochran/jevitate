@@ -8,7 +8,6 @@ import { deltaPromptLine, deltaQuotableText, deltaRecord } from "../action-delta
 import { hangRoute } from "../hang.js";
 import { monitorFor } from "../page-monitor.js";
 import { perceive } from "../perceive.js";
-import { readScreenState } from "./helpers.js";
 import { maskSecretFields } from "../secret-fields.js";
 import { markTypeFixtures } from "../type-fixtures.js";
 import type { RunContext } from "./context.js";
@@ -32,8 +31,10 @@ export async function perceiveStep(ctx: RunContext): Promise<Perceived> {
     ctx.transcript.attachDialogs(ctx.transcript.nextStep - 1, dialogs);
   }
   // The last click's window closes here: what it wrote is now known (#92).
-  // #380: with the screen state it closed on (a repeat is re-allowed once the screen moves on).
-  ctx.sideEffects.settle(ctx.sideEffects.clickOpen() ? await readScreenState(ctx.page, perception.snapshot, ctx.secrets) : undefined);
+  // #380: with the clicked control's region state it closed on (a repeat is re-allowed once it moves on).
+  const region = ctx.clickedRegion;
+  ctx.clickedRegion = null;
+  ctx.sideEffects.settle(ctx.sideEffects.clickOpen() && region !== null ? await region() : undefined);
   // #239: a click whose writes all succeeded saved what the run had typed — from here those values
   // are the app's, and the run has written (a write goal's report may settle it).
   {
