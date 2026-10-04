@@ -8,6 +8,12 @@ export interface TargetDescriptor {
   name?: string;
   label?: string;
   text?: string;
+  /**
+   * #335: how `text` matches. Absent: an element's WHOLE text, exactly (a recorded descriptor's
+   * identity). `"contains"`: an element whose text contains it, case-insensitively (Playwright's
+   * `getByText` default) — a user-written success check's `textContains=`.
+   */
+  textMatch?: "contains";
   css?: string;
   frameUrl?: string;
   /**
@@ -368,6 +374,7 @@ export const TargetDescriptorSchema: z.ZodType<TargetDescriptor> = z
     name: z.string().optional(),
     label: z.string().optional(),
     text: z.string().optional(),
+    textMatch: z.literal("contains").optional(),
     css: z.string().optional(),
     frameUrl: z.string().optional(),
     ordinal: z.number().int().nonnegative().optional(),

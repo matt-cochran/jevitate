@@ -39,7 +39,8 @@ export function rungLocator(page: Page, d: TargetDescriptor): Locator {
     return page.getByRole(d.role as Parameters<Page["getByRole"]>[0], { name: d.name, exact: true });
   }
   if (d.label) return page.getByLabel(d.label, { exact: true });
-  if (d.text) return page.getByText(d.text, { exact: true });
+  // #335: `textMatch: "contains"` (a success check's `textContains=`) matches a substring.
+  if (d.text) return page.getByText(d.text, { exact: d.textMatch !== "contains" });
   if (d.css) return page.locator(d.css);
   throw new Error(`TargetDescriptor has no usable selector: ${JSON.stringify(d)}`);
 }
@@ -62,7 +63,7 @@ function describe(d: TargetDescriptor): string {
   if (d.testId) return `testId=${d.testId}`;
   if (d.role && d.name) return `role=${d.role} name=${JSON.stringify(d.name)}`;
   if (d.label) return `label=${JSON.stringify(d.label)}`;
-  if (d.text) return `text=${JSON.stringify(d.text)}`;
+  if (d.text) return `${d.textMatch === "contains" ? "textContains" : "text"}=${JSON.stringify(d.text)}`;
   return `css=${d.css ?? "?"}`;
 }
 

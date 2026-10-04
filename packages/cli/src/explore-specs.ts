@@ -290,6 +290,10 @@ function parseDescriptorSpec(s: string): TargetDescriptor {
     const v = pair.slice(eq + 1);
     if ((keys as readonly string[]).includes(k) && v !== "") {
       (d as Record<string, string>)[k] = v;
+    } else if (k === "textContains" && v !== "") {
+      // #335: `text=` matches an element's WHOLE text exactly; `textContains=` a substring.
+      d.text = v;
+      d.textMatch = "contains";
     }
   }
   if (d.testId || d.role || d.label || d.text || d.css) return d;
@@ -335,4 +339,4 @@ function looksLikeBareCssSelector(raw: string): boolean {
 }
 
 const DESCRIPTOR_HINT =
-  'use css=<selector>, label=<text>, testId=<id>, role=<role>;name=<name>, or text=<text> (e.g. "css=h1" or "label=Display name")';
+  'use css=<selector>, label=<text>, testId=<id>, role=<role>;name=<name>, text=<whole text> or textContains=<part of the text> (e.g. "css=h1" or "label=Display name")';
