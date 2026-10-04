@@ -306,6 +306,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       positiveIntArg,
     )
     .option(
+      "--reply-quiet-ms <ms>",
+      "conversational pages: how long a reply must hold still (no new text, no busy sign) before it is read as complete " +
+        "(goal and usability; default 1000). Raise it for an assistant that answers in several parts (a sentence, then a card a moment later)",
+      positiveIntArg,
+    )
+    .option(
       "--reply-ceiling-ms <ms>",
       "conversational pages: hard ceiling on one reply wait, however busy the page stays (default 180000; never below --reply-wait-ms)",
       positiveIntArg,
@@ -584,6 +590,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         maxDecisions?: string;
         stallTimeout?: string | number;
         replyWaitMs?: string;
+        replyQuietMs?: string;
         replyCeilingMs?: string;
         replyMaxChars?: string;
         jobWaitMs?: string;
@@ -830,6 +837,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       setKillSwitchOutput(o.json === true ? "envelope" : "human");
       const conversation = {
         ...(o.replyWaitMs === undefined ? {} : { replyWaitMs: Number(o.replyWaitMs) }),
+        ...(o.replyQuietMs === undefined ? {} : { replyQuietMs: Number(o.replyQuietMs) }),
         ...(o.replyCeilingMs === undefined ? {} : { replyCeilingMs: Number(o.replyCeilingMs) }),
         ...(o.replyMaxChars === undefined ? {} : { replyMaxChars: Number(o.replyMaxChars) }),
         ...(o.jobWaitMs === undefined ? {} : { jobWaitMs: Number(o.jobWaitMs) }),

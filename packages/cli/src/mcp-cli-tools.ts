@@ -299,6 +299,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         longPollMs: n("--long-poll-ms"),
         jobWaitMs: n("--job-wait-ms"),
         replyWaitMs: n("--reply-wait-ms"),
+        replyQuietMs: n("--reply-quiet-ms"),
         replyCeilingMs: n("--reply-ceiling-ms"),
         replyMaxChars: n("--reply-max-chars"),
         hangReplays: n("--hang-replays"),

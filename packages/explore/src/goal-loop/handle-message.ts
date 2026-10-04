@@ -129,6 +129,7 @@ export async function handleMessage(ctx: RunContext, step: ActStep, op: Decision
       background: sendBackground,
       timeoutMs: Math.max(1, ctx.replyWaitMs - checkedMs),
       ceilingMs: Math.max(1, ctx.replyCeilingMs - checkedMs),
+      quietMs: ctx.replyQuietMs,
     });
     const reply: ReplyResult = { ...listened, waitedMs: listened.waitedMs + checkedMs };
     if (reply.received) {

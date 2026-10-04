@@ -118,6 +118,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     personas: { kind: "feature", set: "personas.json" },
     stallTimeout: { kind: "feature", set: 5 },
     replyWaitMs: { kind: "goal", set: 1000 },
+    replyQuietMs: { kind: "goal", set: 2500 },
     replyCeilingMs: { kind: "goal", set: 2000 },
     replyMaxChars: { kind: "goal", set: 100 },
     jobWaitMs: { kind: "goal", set: 3000 },

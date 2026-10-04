@@ -42,6 +42,7 @@ import {
 } from "../answer.js";
 import {
   REPLY_CEILING_MS,
+  REPLY_QUIET_MS,
   REPLY_WAIT_MS,
   STUCK_TURNS,
   UnsubmittedTypeTracker,
@@ -284,6 +285,8 @@ export interface RunContext {
    */
   readonly noteFailedAct: (c: Control, reason: string | undefined) => Promise<boolean>;
   readonly replyWaitMs: number;
+  /** #331: how long a reply must hold still before it is complete (`replyQuietMs`). */
+  readonly replyQuietMs: number;
   readonly replyCeilingMs: number;
   readonly replyMaxChars: number;
   readonly waitOpMs: number;
@@ -649,6 +652,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
     return true;
   };
   ctx.replyWaitMs = cfg.replyWaitMs ?? REPLY_WAIT_MS;
+  ctx.replyQuietMs = cfg.replyQuietMs ?? REPLY_QUIET_MS;
   ctx.replyCeilingMs = Math.max(ctx.replyWaitMs, cfg.replyCeilingMs ?? REPLY_CEILING_MS);
   ctx.replyMaxChars = cfg.replyMaxChars ?? REPLY_MAX_CHARS;
   ctx.waitOpMs = cfg.waitOpMs ?? WAIT_OP_MS;

@@ -129,6 +129,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
   const withSecrets = setup?.secrets === undefined ? {} : { secrets: setup.secrets };
   const conversation = {
     ...(x.replyWaitMs === undefined ? {} : { replyWaitMs: x.replyWaitMs }),
+    ...(x.replyQuietMs === undefined ? {} : { replyQuietMs: x.replyQuietMs }),
     ...(x.replyCeilingMs === undefined ? {} : { replyCeilingMs: x.replyCeilingMs }),
     ...(x.replyMaxChars === undefined ? {} : { replyMaxChars: x.replyMaxChars }),
     ...(x.jobWaitMs === undefined ? {} : { jobWaitMs: x.jobWaitMs }),

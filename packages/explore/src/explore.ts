@@ -271,6 +271,12 @@ export interface ExploreConfig {
    * indicator, reply still growing) the wait continues up to `replyCeilingMs` (#93).
    */
   readonly replyWaitMs?: number;
+  /**
+   * #331: how long a reply must hold still (no new text, no busy sign, the page settled) before it is
+   * read as complete. Default `REPLY_QUIET_MS` (1s); raise it for an assistant that answers in
+   * several parts (a sentence, then a card a moment later).
+   */
+  readonly replyQuietMs?: number;
   /** Hard ceiling (ms) on one reply wait. Default `REPLY_CEILING_MS` (180s); never below `replyWaitMs`. */
   readonly replyCeilingMs?: number;
   /** Cap (chars) on each generated chat message. Default `REPLY_MAX_CHARS`. */
