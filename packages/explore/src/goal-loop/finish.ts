@@ -61,10 +61,15 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
   ctx.page.off("response", ctx.onDocumentResponse);
   const finished = ctx.recorder.tryFinish({ intent: cfg.goal });
   const cause = ctx.blockingCause();
+  // #371: a stop whose own reason already quotes the latest failed action's reason (a stuck type
+  // probe, a failed-actions streak) does not repeat it as its "last blocker".
+  const latest = ctx.blockers.latest;
+  const reasonCause =
+    cause !== null && latest !== null && cause === latest.text && ctx.incomplete !== null && ctx.incomplete.includes(latest.reason) ? null : cause;
   const finalOutcome: RunOutcome =
     ctx.stop === "done" && ctx.outcome !== null && finished.ok
       ? ctx.outcome
-      : { status: "incomplete", reason: withCause(incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker), ctx.stop, cause) };
+      : { status: "incomplete", reason: withCause(incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker), ctx.stop, reasonCause) };
   if (!finished.ok) {
     // The Recording itself failed its fail-closed checks (schema / a surviving secret). It is not
     // written; the run is reported crashed so this can never read as a pass.

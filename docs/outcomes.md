@@ -94,7 +94,7 @@ the `goalOutcome` above; not separately exit-coded):
 | `done` | the loop ended on the model's `done`: code accepted the proposal (the transcript says "done accepted provisionally" when a check — a `reloadThen`, or one holding since before any action — is still left to the final verdict, which may still fail it: `goalOutcome: "failed"`), or code rejected it repeatedly until it stopped taking proposals (`goalOutcome: "failed"`) |
 | `blocked` | the model decided it could not proceed |
 | `exhausted` | the action or decision budget ran out |
-| `no-progress` | the same state repeated with no forward movement (the no-progress detector) |
+| `no-progress` | the same state repeated with no forward movement (the no-progress detector), or the run went round a loop: for 4 round trips it alternated between at most two actions and two page states (a link and its Back link, a disclosure toggled open and shut, scrolls flipping between the same positions) with no write request sent and nothing new on the page — the reason names the loop. A no-progress reason's `last blocker` is the latest failed or rejected action |
 | `hang` | the app under test hung |
 | `inconclusive` | a required decision round-trip stayed unavailable |
 | `crashed` | the engine failed |
