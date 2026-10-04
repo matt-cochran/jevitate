@@ -81,8 +81,13 @@ export interface PageTiming {
   /** `navigation`: a new document loaded; `transition`: an action changed the page in place; `idle`: neither. */
   readonly kind: "navigation" | "transition" | "idle";
   readonly navigation?: NavigationTiming;
-  /** Action-to-settled time (ms) for a transition. */
+  /** Action-to-settled time (ms) for a transition — without `waitedMs` (#368). */
   readonly settleMs?: number;
+  /**
+   * #368: time (ms) between the action and the settle spent in an explicit wait the run chose (a chat
+   * reply wait, a job wait) — waiting on the app's backend, not rendering; excluded from `settleMs`.
+   */
+  readonly waitedMs?: number;
   /** Whether the page settled within the ceiling. */
   readonly settled: boolean;
   readonly requests: {
@@ -154,10 +159,13 @@ export async function measurePageTiming(
     readonly actionAt: number | null;
     readonly settle: SettleResult;
     readonly settleEndedAt: number;
+    /** #368: explicit-wait time inside the window (excluded from `settleMs`). */
+    readonly waitedMs?: number;
     readonly apiPrefixes?: readonly string[];
   },
 ): Promise<{ timing: PageTiming; docId: string | null }> {
   const apiPrefixes = window.apiPrefixes ?? [];
+  const waitedMs = Math.max(0, window.waitedMs ?? 0);
   const side = await page.evaluate(readPageTiming).catch((): PageSideTiming => ({ docId: null, nav: null, lcp: null }));
   const now = window.settleEndedAt;
   const all = [
@@ -171,7 +179,8 @@ export async function measurePageTiming(
     route: normalizeRoute(redactUrl(page.url())),
     kind,
     ...(newDocument && side.nav !== null ? { navigation: side.nav } : {}),
-    ...(window.actionAt !== null ? { settleMs: Math.max(0, window.settleEndedAt - window.actionAt) } : {}),
+    ...(window.actionAt !== null ? { settleMs: Math.max(0, window.settleEndedAt - window.actionAt - waitedMs) } : {}),
+    ...(window.actionAt !== null && waitedMs > 0 ? { waitedMs } : {}),
     settled: window.settle.settled,
     requests: {
       count: window.completed.length,
