@@ -402,6 +402,7 @@
   hangRoute: function
   hasApiCredentials: function
   headingHint: function
+  hideDemoOverlayForCapture: function
   hostProbe: function
   hotp: function
   http5xxSignalOf: function
