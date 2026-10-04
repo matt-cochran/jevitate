@@ -174,6 +174,9 @@ function inProgressInPage(words: string): string | null {
     if (!shown(el)) continue;
     const text = norm((el as HTMLElement).innerText || el.getAttribute("aria-valuetext") || el.getAttribute("aria-label"));
     if (text !== "" && loose.test(text)) return `status "${cut(text)}"`;
+    // #330: in a live region, any "<verb>ing … …" with a trailing ellipsis is in progress
+    // ("Designing variations…", "Composing your reply...") — the app's own words, not our list.
+    if (text !== "" && /^\W*[a-z]{3,}ing\b[^.!?]{0,60}(?:…|\.\.\.)\s*$/i.test(text)) return `status "${cut(text)}"`;
   }
   const body = document.body ? document.body.innerText : "";
   for (const raw of body.split(/\n+/)) {

@@ -7,11 +7,17 @@
 import { sampleHeap } from "../crash-report.js";
 import { type HangSignal } from "../hang.js";
 import { assertTargetAnswering } from "../mission-failure.js";
-import { readDocumentedWait, readWorkingStatus } from "../status.js";
+import { readDocumentedWait, readInProgressStatus, readWorkingStatus } from "../status.js";
 import type { RunContext } from "./context.js";
 import { JOB_WAIT_SLICE_MS, documentedWaitBudgetMs, liveBusyWork, stillShowsWork, waitOutJob } from "./helpers.js";
 import type { Flow, Perceived } from "./step.js";
 import { clock } from "@jevitate/domain";
+
+/** #330: the in-progress status shown while a request is pending, described for the transcript. */
+async function statusWhilePending(page: Parameters<typeof readInProgressStatus>[0]): Promise<string | null> {
+  const status = await readInProgressStatus(page);
+  return status === null ? null : `${status} while its request is in flight (within --job-wait-ms)`;
+}
 
 export async function checkHang(ctx: RunContext, step: Perceived): Promise<Flow> {
   const { perceiveStartedAt, perception, snap } = step;
@@ -31,7 +37,11 @@ export async function checkHang(ctx: RunContext, step: Perceived): Promise<Flow>
     const working =
       (await readWorkingStatus(ctx.page)) ??
       (documented === null ? null : `a documented wait ("${documented.text}")`) ??
-      (perception.hang.kind === "ui-no-progress" ? await liveBusyWork(ctx.page, perception.busyWait) : null);
+      (perception.hang.kind === "ui-no-progress" ? await liveBusyWork(ctx.page, perception.busyWait) : null) ??
+      // #330: a request still in flight while the page SAYS it is working ("Designing variations…")
+      // is the long job the operator sized with --job-wait-ms: waited out within that budget. Without
+      // the flag a bare status is not enough (a stuck page looks exactly like that, #153).
+      (perception.hang.kind === "request-pending" && ctx.jobWaitExplicit ? await statusWhilePending(ctx.page) : null);
     if (working !== null) {
       const w = await waitOutJob(ctx.page, Math.min(workBudgetMs - ctx.hangWorkWaitedMs, JOB_WAIT_SLICE_MS), stillShowsWork);
       // The perception's own wait counts too (its whole time, the busy-indicator wait included): the
