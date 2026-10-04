@@ -54,7 +54,7 @@ import { type SourceApiDeps } from "./source-api.js";
 import { type RunResolvedJourney } from "./source-run-api.js";
 import { FsTrustStore, FsAckStore, DEFAULT_LOCK_PATH, type GitExec, type GhPort } from "@jevitate/sources";
 import type { BrowserLaunchOptions, BrowserPort, BrowserSession } from "@jevitate/playwright";
-import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
+import { parseGeolocation, parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
 import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
 import { resourceLimitsFromFlags, withResourcePreflight, type GovernanceFlags } from "./resource-preflight.js";
 import { HEADED_DEFAULT_SLOW_MO_MS, assertHeadedDisplay, headedFromEnv, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
@@ -398,10 +398,11 @@ export function browserOption(o: BrowserLaunchFlags): { browser?: BrowserLaunchO
   return launch === undefined ? {} : { browser: launch };
 }
 
-/** Raw commander values of the shared `--viewport`/`--device` emulation flags (#149). */
+/** Raw commander values of the shared `--viewport`/`--device` emulation flags (#149) and `--geolocation` (#329). */
 export interface EmulationFlags {
   viewport?: string;
   device?: string;
+  geolocation?: string;
 }
 
 /**
@@ -410,13 +411,21 @@ export interface EmulationFlags {
  * and `regression capture`/`run`. Absent both: Playwright's default (desktop) viewport, documented
  * in each command's `--help`.
  */
-export function withEmulationFlags(cmd: Command): Command {
-  return cmd
+export function withEmulationFlags(cmd: Command, opts: { readonly geolocation?: boolean } = {}): Command {
+  const out = cmd
     .option("--viewport <WxH>", "emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)")
     .option(
       "--device <name>",
       'emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)',
     );
+  // #329: a fixed position for "near me" pages; the permission is granted to the allowed origins only.
+  return opts.geolocation === false
+    ? out
+    : out.option(
+        "--geolocation <lat,lng>",
+        "place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); " +
+          "the geolocation permission is granted to the run's allowed origins only",
+      );
 }
 
 /**
@@ -429,6 +438,8 @@ export function emulationFromFlags(o: EmulationFlags): EmulationSpec | undefined
   const spec: EmulationSpec = {
     ...(o.viewport !== undefined ? { viewport: parseViewport(o.viewport) } : {}),
     ...(o.device !== undefined ? { device: o.device } : {}),
+    // #329: refused here (InvalidGeolocationError) when malformed, before any browser opens.
+    ...(o.geolocation !== undefined ? { geolocation: parseGeolocation(o.geolocation) } : {}),
   };
   if (Object.keys(spec).length === 0) return undefined;
   resolveEmulation(spec); // throws UnknownDeviceError / ConflictingEmulationError before any browser opens

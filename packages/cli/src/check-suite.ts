@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
+import { parseGeolocation, parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
 import { validateDenyPatterns } from "@jevitate/explore";
 import {
   SUITE_EXPLORE_OPTIONS,
@@ -276,10 +276,16 @@ class Reader {
   emulation(obj: Json, path: string): EmulationSpec | undefined {
     const viewport = this.string(obj, "viewport", path, true);
     const device = this.string(obj, "device", path, true);
-    if (viewport === undefined && device === undefined) return undefined;
+    // #329: "geolocation": "<lat>,<lng>[,<accuracy m>]", as the CLI flag.
+    const geolocation = this.string(obj, "geolocation", path, true);
+    if (viewport === undefined && device === undefined && geolocation === undefined) return undefined;
     let spec: EmulationSpec;
     try {
-      spec = { ...(viewport === undefined ? {} : { viewport: parseViewport(viewport) }), ...(device === undefined ? {} : { device }) };
+      spec = {
+        ...(viewport === undefined ? {} : { viewport: parseViewport(viewport) }),
+        ...(device === undefined ? {} : { device }),
+        ...(geolocation === undefined ? {} : { geolocation: parseGeolocation(geolocation) }),
+      };
       resolveEmulation(spec);
     } catch (e) {
       return this.fail(path, e instanceof Error ? e.message : String(e));
@@ -315,10 +321,10 @@ const NO_LITERAL = "a suite never carries a literal secret; the value is read fr
  * option (`SUITE_EXPLORE_OPTIONS`).
  */
 export const SUITE_FIELDS = {
-  target: ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix", "viewport", "device"],
-  journey: ["id", "params", "routes", "viewport", "device", "storageState", "env", "baseUrl"],
-  goal: ["name", "goal", "success", "url", "successWhen", "routes", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields", "fixtures"],
-  mission: ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "success", "successWhen", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields", "fromJourney", "atStep", "params", "env", "baseUrl"],
+  target: ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix", "viewport", "device", "geolocation"],
+  journey: ["id", "params", "routes", "viewport", "device", "geolocation", "storageState", "env", "baseUrl"],
+  goal: ["name", "goal", "success", "url", "successWhen", "routes", "maxActions", "maxDecisions", "viewport", "device", "geolocation", "storageState", "secretFields", "fixtures"],
+  mission: ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "success", "successWhen", "maxActions", "maxDecisions", "viewport", "device", "geolocation", "storageState", "secretFields", "fromJourney", "atStep", "params", "env", "baseUrl"],
   verifyFix: ["name", "result", "fingerprint", "replays", "storageState"],
 } as const satisfies Record<string, readonly string[]>;
 

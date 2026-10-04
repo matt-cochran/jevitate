@@ -288,6 +288,7 @@ the one human approval of a DRAFT demo: shows the Journey and its annotations, r
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
@@ -331,6 +332,7 @@ explore a named non-production environment toward <aspect> (checked by --success
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--id <id>` | the Journey id (default: demo-<aspect slug>) |  |  |  |  |
@@ -430,6 +432,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--from-journey <id>` | journey-anchored exploration (#293): start from a PROMOTED Journey instead of --url — its first --at-step steps are replayed in the mission's own browser context (page, form contents and session kept; fail-closed, never self-healed; --env/--base-url apply), then the mission starts on the live page. A replay that stops before the anchor ends the run inconclusive (failure.kind journey-stale, exit 2). Strategies: goal, coverage, exploratory, adversarial, usability |  |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--goal <text>` | natural-language goal / job (required for --strategy goal and usability) |  |  |  |  |
 | `--hang-replay-writes` | let hang replays re-send a paid/destructive write the run sent (default: such a hang is reported inconclusive, never replayed) |  |  |  |  |
 | `--hang-replays <n>` | fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed) |  |  |  |  |
@@ -819,6 +822,7 @@ draft each step's objective/expected result (and the goal/success criteria when 
 | `--fake-ai` | draft with the deterministic fake generator (pipeline smoke only) | `false` |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -862,6 +866,7 @@ replay a Journey as a narrated demo (goal, step objectives as captions, target h
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--guide <file>` | write a Markdown guide here (.md), screenshots in <name>.assets/ beside it |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
@@ -983,6 +988,7 @@ jevitate journey run [options] <id>
 | `--fake-ai` | use deterministic fake gateways for self-heal (pipeline smoke only) | `false` |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
@@ -1111,6 +1117,7 @@ jevitate load run [options] <journeyId>
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--iterations <n>` | iterations per actor | `1` |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -1556,6 +1563,7 @@ jevitate regression capture [options]
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--force` | overwrite an existing regression id's committed files (default: refused, #213) | `false` |  |  |  |
 | `--from <file>` | path to the schema-valid failing Recording JSON to capture |  |  | yes |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--id <id>` | regression id (used for the committed <id>.recording.json/<id>.meta.json filenames) |  |  | yes |  |
@@ -1595,6 +1603,7 @@ jevitate regression run [options] <id>
 | `--dir <path>` | regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -1809,6 +1818,7 @@ run a Journey from a trusted remote source through the run-gate
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
@@ -1937,6 +1947,7 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--fingerprint <fp>` | the defect/hang fingerprint to verify |  |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--hang-replay-writes` | let a hang's replay re-send a paid/destructive write the run sent (default: the verdict is inconclusive, never replayed) |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |

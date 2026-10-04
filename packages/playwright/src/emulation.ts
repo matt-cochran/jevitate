@@ -15,10 +15,47 @@ export interface ViewportSize {
   readonly height: number;
 }
 
-/** What a caller asks for: at most one of `viewport` / `device` (mutually exclusive). */
+/** #329: a fixed browser position (`--geolocation <lat>,<lng>[,<accuracy m>]`). */
+export interface GeolocationSpec {
+  readonly latitude: number;
+  readonly longitude: number;
+  /** Metres; Playwright's default (0) when absent. */
+  readonly accuracy?: number;
+}
+
+/**
+ * What a caller asks for: at most one of `viewport` / `device` (mutually exclusive), and (#329) an
+ * optional `geolocation` — the context's position, with the `geolocation` permission granted to the
+ * session's allowed origins only.
+ */
 export interface EmulationSpec {
   readonly viewport?: ViewportSize;
   readonly device?: string;
+  readonly geolocation?: GeolocationSpec;
+}
+
+export class InvalidGeolocationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidGeolocationError";
+  }
+}
+
+/**
+ * #329: `<lat>,<lng>` or `<lat>,<lng>,<accuracy>` (decimal degrees; accuracy in metres) — e.g.
+ * `41.6376,-70.9036`. Refused with a precise message when malformed or out of range, never guessed.
+ */
+export function parseGeolocation(text: string): GeolocationSpec {
+  const parts = text.split(",").map((p) => p.trim());
+  const nums = parts.map((p) => (p === "" ? Number.NaN : Number(p)));
+  if ((parts.length !== 2 && parts.length !== 3) || nums.some((n) => !Number.isFinite(n))) {
+    throw new InvalidGeolocationError(`--geolocation expects <lat>,<lng>[,<accuracy m>] in decimal degrees, e.g. 41.6376,-70.9036 (got ${JSON.stringify(text)})`);
+  }
+  const [latitude, longitude, accuracy] = nums as [number, number, number | undefined];
+  if (latitude < -90 || latitude > 90) throw new InvalidGeolocationError(`--geolocation latitude must be within -90..90 (got ${latitude})`);
+  if (longitude < -180 || longitude > 180) throw new InvalidGeolocationError(`--geolocation longitude must be within -180..180 (got ${longitude})`);
+  if (accuracy !== undefined && accuracy < 0) throw new InvalidGeolocationError(`--geolocation accuracy must be >= 0 metres (got ${accuracy})`);
+  return { latitude, longitude, ...(accuracy === undefined ? {} : { accuracy }) };
 }
 
 /** What a spec resolves to — Playwright `BrowserContextOptions` fields, plus the device name (if any) for recording. */

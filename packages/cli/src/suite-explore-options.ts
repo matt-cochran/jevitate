@@ -183,6 +183,7 @@ export const SUITE_DEDICATED_EXPLORE_OPTIONS: Readonly<Record<string, DedicatedO
   maxDecisions: { key: "maxDecisions", at: ["goal", "mission"] },
   viewport: { key: "viewport", at: ["target", "journey", "goal", "mission"] },
   device: { key: "device", at: ["target", "journey", "goal", "mission"] },
+  geolocation: { key: "geolocation", at: ["target", "journey", "goal", "mission"] },
   // #293 journey-anchored missions: the promoted Journey and step a mission item branches off.
   fromJourney: { key: "fromJourney", at: ["mission"] },
   atStep: { key: "atStep", at: ["mission"] },
