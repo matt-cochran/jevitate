@@ -5,6 +5,78 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.6.0] – unreleased
+
+0.6.0 fixes what a release-gate sweep of goal runs on 0.5.0 found. Runs stop on a click or scroll
+loop instead of spending the whole decision budget, and say which action actually blocked them.
+Typed-value guards stop refusing values the goal or the field itself asks for. A field is treated
+as a chat composer only when the page shows a conversation. A reply wait is no longer mistaken for a
+starved host, and a redirecting start page no longer crashes the run. `explore-author-journey` now
+runs the same goal run as `explore`, takes its run-shaping flags, and says why a goal wasn't reached.
+
+### Behaviour changes
+
+- **Loops end the run (#367).** When the last 8 steps used at most two actions and landed on at most
+  two page states, with no write request between them (click ping-pong such as "Show site" ↔ "Back",
+  a disclosure toggled open and shut, a scroll back and forth), the run ends `no-progress` naming the
+  loop. A page state includes its visible text and scroll position, so real change still counts as
+  progress. A scroll that doesn't move the page no longer ends the #323 scroll streak.
+- **The no-progress reason names the latest blocker (#371).** Every failed or refused action is
+  recorded, and the most recent one is named (`type "Your answer" rejected: …`), not a disabled
+  control from many steps earlier.
+- **Value guards and what the goal or the field asks for (#366, #371).** The repeat guard refuses a
+  value only when it was already submitted into the same live field (a dialog that reopens with an
+  empty field starts fresh), and never refuses a value the field's label, dialog or page text asks
+  for ("Type REINSTATE to confirm"). The goal-echo guard counts only the goal's instruction words:
+  quoted text, `exactly:` literals, parenthesised lists and text after "a short description of",
+  "describing", "saying" or "about" are value material, so an answer built from them passes. A
+  copied instruction is still refused.
+- **Chat composers need a conversation (#370).** A message-named field ("Chat answer", "Message") is
+  driven with `send` only when the page shows a transcript (`role=log`, a live region with messages,
+  message items) or a Send button next to it. Otherwise it is a form field: typed, then the form's own
+  buttons are pressed.
+- **A reply wait is not render time (#368).** Time spent in an explicit wait (`--reply-wait-ms`, a
+  `wait` step, `--job-wait-ms`) is left out of a step's render timing and reported as `waitedMs`. A
+  slow render counts as host starvation only when host load is at least 1 runnable task per core. A
+  run that ends still waiting on a reply says `no reply within Ns`.
+- **A navigation during a page read is retried (#372).** When a navigation (a server redirect then a
+  client `location.replace`) replaces the page while its controls are read, the read waits for the page
+  to settle and tries again, up to 3 times. A page that never stops navigating ends the run `blocked`
+  ("the page kept navigating"), not `crashed`.
+- **Authoring runs the goal run (#369).** Every `explore-author-journey` take is the same goal run as
+  `explore --strategy goal`, each in a fresh browser.
+
+### Upgrade notes
+
+- **Author secrets:** a field `explore-author-journey` typed from a `--secret-field` or `--totp` binding
+  becomes a secret Journey param (`secret1`, …). Supply it with `journey run --param secret1=…`. Before,
+  authoring such a goal failed (#369).
+- **Two-view comparisons:** a run that alternates between two views that never change, with no write
+  request, now stops after four round trips (#367). Make the goal's success check observable on one of
+  them.
+- **Chat widgets with no markup:** a chat whose field has no transcript yet and whose only send
+  control is an unlabelled icon button is now typed as a form field (#370). Give the send button an
+  accessible name, or a message log a `role=log`.
+
+### Added
+
+- **`explore-author-journey` flag parity (#369):** `--secret`, `--secret-field` (with
+  `--allow-secret-cmd` / `--secret-cmd-attempts`), `--totp`, `--type-fixture`, `--fixture`,
+  `--success-when`, `--allow-vacuous-checks`, `--action-deltas`, `--dialogs`, `--deny`, `--paid`,
+  `--allow-destructive`, `--read-rpc`, the reply and job waits, `--hang-replays`, the settle options,
+  `--save-storage-state`, `--viewport` / `--device` / `--geolocation`, `--screenshots` and `--out`.
+  MCP `author_journey` takes the same arguments, except the operator-only secret ones.
+- **Author diagnostics (#369):** a not-reached result's `reason` is the discovery run's own
+  (`discovery mission <outcome>: <reason>`), with a `discovery` block (stop reason, each check's
+  verdict, decision and action counts, final URL, and the result, transcript, Recording and screenshots
+  paths) and `takes` counts. The human summary prints them.
+
+### Fixed
+
+- `reloadThen:` in `explore-author-journey` is refused before any browser opens with a message that
+  names the inner check to author instead (a Journey has no reload step) (#369).
+- A field read cut off by a navigation could leave a partial snapshot of the old page (#372).
+
 ## [0.5.0] – 2026-10-04
 
 0.5.0 makes goal runs end with the truth more often and gives them the controls real apps need.
