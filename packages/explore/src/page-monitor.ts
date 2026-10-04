@@ -2,7 +2,7 @@ import { redactUrl } from "@jevitate/ai-core";
 import type { Page, Request } from "playwright";
 import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
 import { visibleBusyIndicator } from "./hang.js";
-import { clock } from "@jevitate/domain";
+import { clock, isExternalSchemeUrl } from "@jevitate/domain";
 
 /** The interactive-control selector (kept in step with `snapshot`). */
 const INTERACTIVE_SELECTOR =
@@ -367,6 +367,9 @@ export class PageMonitor {
     this.#lastNetworkActivity = now();
     this.#lastNavigation = now();
     page.on("request", (r) => {
+      // #375: an sms:/tel:/mailto:/deep-link navigation is handed to the OS, never fetched — not
+      // pending work, not a failed request, not a document navigation of the page.
+      if (isExternalSchemeUrl(r.url())) return;
       const startedAt = this.#now();
       if (r.isNavigationRequest() && r.frame() === page.mainFrame()) this.#documentNavStartedAt = startedAt;
       const requestContentType = requestContentTypeOf(r);

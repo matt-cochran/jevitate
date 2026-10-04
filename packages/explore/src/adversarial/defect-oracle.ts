@@ -2,7 +2,7 @@ import type { Page, Request } from "playwright";
 import { redactUrl } from "@jevitate/ai-core";
 import { http5xxSignalOf, requestHeadersOf } from "../http-5xx.js";
 import { FirstPartyOrigins } from "../third-party.js";
-import { clock } from "@jevitate/domain";
+import { clock, isExternalSchemeUrl } from "@jevitate/domain";
 
 /**
  * The adversarial mission's TRUSTED HARD-SIGNAL defect oracle (spec §3.1/§9).
@@ -218,6 +218,10 @@ export class PageSignalCollector {
       this.buffer.push(signal);
     });
     page.on("requestfailed", (request) => {
+      // #375: an `sms:`/`tel:`/`mailto:`/app-deep-link navigation is handed to the OS, never fetched;
+      // headless Chromium (no handler) reports it as ERR_ABORTED. Not a request of the system under
+      // test — decided on the ORIGINAL url's scheme (redaction would hide it).
+      if (isExternalSchemeUrl(request.url())) return;
       const errorText = request.failure()?.errorText ?? "request failed";
       if (errorText === ERR_ABORTED) {
         // A response was already received: the client aborted after reading it (connect-web/gRPC-web).

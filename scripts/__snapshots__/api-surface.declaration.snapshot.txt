@@ -163,7 +163,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (109 exports)
+# @jevitate/domain (112 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
@@ -184,6 +184,7 @@
   EnvironmentDegraded: type-alias
   EnvironmentDegradedSchema: variable
   evaluateGate: function
+  externalSchemeOf: function
   FakeClock: class
   FakeClockOptions: interface
   fileDraft: function
@@ -207,6 +208,7 @@
   installClock: function
   InteractionPolicy: type-alias
   isBrokenRun: function
+  isExternalSchemeUrl: function
   isGoalOutcome: function
   IssueDraft: interface
   IssueFilerPort: interface
@@ -272,6 +274,7 @@
   TimingProfile: interface
   TypingModel: type-alias
   UnsafeNameError: class
+  urlSchemeOf: function
   worstOutcome: function
 
 # @jevitate/explore (583 exports)
