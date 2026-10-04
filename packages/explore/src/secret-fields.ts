@@ -22,6 +22,12 @@ import { decodeBase32, totp } from "./totp.js";
  *
  * The binding's value is resolved from the environment by the caller (the CLI); this module never
  * reads `process.env` and never puts a value in an error message.
+ *
+ * #324: a value DELIVERED during the run (an emailed or texted one-time code) can't be read at
+ * start. `--secret-field 'label=Verification code=cmd:<command>'` (operator opt-in,
+ * `--allow-secret-cmd`; never an MCP argument) binds the field to a command the caller runs at TYPE
+ * time: its trimmed stdout is typed like any bound secret and registered as a run secret the moment
+ * it is read. This module never runs it: the caller supplies the runner.
  */
 
 /** What a binding matches: a control's label, test id, input type, element id or name attribute. */
@@ -38,9 +44,25 @@ export interface SecretField {
   readonly matcher: FieldMatcher;
   /** The environment variable the value came from: the placeholder's name. */
   readonly name: string;
-  /** `value` types `secret` as is; `totp` types the current code for the base32 seed `secret`. */
-  readonly kind: "value" | "totp";
+  /**
+   * `value` types `secret` as is; `totp` types the current code for the base32 seed `secret`;
+   * `cmd` (#324) types what `command` prints, run at type time (`secret` is empty until then).
+   */
+  readonly kind: "value" | "totp" | "cmd";
   readonly secret: string;
+  /** #324: the operator's command for a `cmd` binding (never shown to a model). */
+  readonly command?: string;
+}
+
+/** #324: runs a `cmd` binding's command and returns its stdout (the caller bounds and gates it). */
+export type SecretCommandRunner = (command: string) => Promise<string>;
+
+/** #324: a `cmd` binding whose value could not be read (the message never carries the output). */
+export class SecretSourceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SecretSourceError";
+  }
 }
 
 export class SecretFieldSpecError extends Error {
@@ -62,8 +84,26 @@ export function parseSecretField(
   spec: string,
   kind: "value" | "totp",
   env: Readonly<Record<string, string | undefined>>,
+  opts: { readonly allowCmd?: boolean } = {},
 ): SecretField {
   const flag = kind === "totp" ? "--totp" : "--secret-field";
+  // #324: `<key>=<value>=cmd:<command>` — a value read at type time, behind the operator's opt-in.
+  const cmdAt = kind === "value" ? spec.indexOf("=cmd:") : -1;
+  if (cmdAt !== -1) {
+    const descriptor = spec.slice(0, cmdAt);
+    const command = spec.slice(cmdAt + "=cmd:".length).trim();
+    const eq = descriptor.indexOf("=");
+    const key = eq === -1 ? "" : descriptor.slice(0, eq).trim();
+    const value = eq === -1 ? "" : descriptor.slice(eq + 1).trim();
+    if (!MATCHER_KEYS.has(key) || value === "" || command === "") {
+      throw new SecretFieldSpecError(`${flag} expects '<label|testId|type|id|name>=<value>=cmd:<command>' (e.g. 'label=Verification code=cmd:./read-code.sh')`);
+    }
+    if (opts.allowCmd !== true) {
+      throw new SecretFieldSpecError(`${flag} ${key}=${value}: a cmd: source runs an operator command at type time — pass --allow-secret-cmd to allow it`);
+    }
+    const name = `CMD_${value.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "VALUE"}`;
+    return { descriptor: `${key}=${value}`, matcher: { key: key as FieldMatcherKey, value }, name, kind: "cmd", secret: "", command };
+  }
   const at = spec.lastIndexOf("=env:");
   const descriptor = at === -1 ? "" : spec.slice(0, at);
   const name = at === -1 ? "" : spec.slice(at + "=env:".length);
@@ -93,9 +133,12 @@ export function secretPlaceholder(f: SecretField): string {
   return f.kind === "totp" ? `«totp:${f.name}»` : `«secret:${f.name}»`;
 }
 
-/** The run secrets a binding registers (its value, or its TOTP seed) — redacted everywhere. */
+/**
+ * The run secrets a binding registers (its value, or its TOTP seed) — redacted everywhere. A `cmd`
+ * binding (#324) has none yet: its value is registered when it is read.
+ */
 export function secretFieldSecrets(fields: readonly SecretField[] | undefined): string[] {
-  return (fields ?? []).map((f) => f.secret);
+  return (fields ?? []).filter((f) => f.kind !== "cmd").map((f) => f.secret);
 }
 
 const normLabel = (s: string): string => s.replace(/[*:]+\s*$/g, "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -127,7 +170,31 @@ export function boundSecretField(c: Control, fields: readonly SecretField[] | un
 
 /** The value code types for a binding now (a TOTP code for `atMs`). Never logged, never returned to a model. */
 export function secretFieldValue(f: SecretField, atMs: number): string {
+  if (f.kind === "cmd") throw new SecretSourceError(`${secretPlaceholder(f)} is read by a command: use resolveSecretFieldValue`);
   return f.kind === "totp" ? totp(f.secret, atMs) : f.secret;
+}
+
+/** #324: one line of a command's output is the value; more than this is not a field value. */
+const MAX_CMD_VALUE_CHARS = 4_096;
+
+/**
+ * The value code types for a binding now — for a `cmd` binding (#324), what its command prints, run
+ * now through `run` (trimmed; an empty or oversized output is refused). Throws `SecretSourceError`
+ * (never quoting the output) when it cannot be read.
+ */
+export async function resolveSecretFieldValue(f: SecretField, atMs: number, run?: SecretCommandRunner): Promise<string> {
+  if (f.kind !== "cmd") return secretFieldValue(f, atMs);
+  if (run === undefined || f.command === undefined) throw new SecretSourceError(`${secretPlaceholder(f)}: no command runner was configured`);
+  let out: string;
+  try {
+    out = await run(f.command);
+  } catch (e) {
+    throw new SecretSourceError(`${secretPlaceholder(f)}: its command failed (${e instanceof Error ? e.message.split("\n")[0] : String(e)})`);
+  }
+  const value = out.trim();
+  if (value === "") throw new SecretSourceError(`${secretPlaceholder(f)}: its command printed nothing (the value may not have arrived yet)`);
+  if (value.length > MAX_CMD_VALUE_CHARS) throw new SecretSourceError(`${secretPlaceholder(f)}: its command printed ${value.length} chars — not a field value`);
+  return value;
 }
 
 /**

@@ -196,6 +196,7 @@ export const SUITE_DEDICATED_EXPLORE_OPTIONS: Readonly<Record<string, DedicatedO
 };
 
 export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = {
+  allowSecretCmd: "#324: a cmd: secret source runs an operator command at type time — explore --secret-field with --allow-secret-cmd only, never from a suite file",
   browserExecutable: "a check launches every item's browser the same way: pass --browser-executable to `jevitate check`",
   browserChannel: "a check launches every item's browser the same way: pass --browser-channel to `jevitate check`",
   browserArg: "a check launches every item's browser the same way: pass --browser-arg to `jevitate check`",

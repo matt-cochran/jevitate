@@ -68,6 +68,22 @@ APP_API_TOKEN=… jevitate explore --url https://app.example.test/ --goal "…" 
   For an app that forces enrolment on signup, a storageState saved after
   enrolment avoids the flow entirely.
 
+- **A code delivered during the run (#324).** An emailed or texted one-time code, or a
+  verify link, does not exist when the run starts. `--secret-field '<descriptor>=cmd:<command>'`
+  with `--allow-secret-cmd` binds the field to a command that code runs in a shell when the field
+  is about to be typed, for example a script that reads the code from your test mail outbox. Its
+  trimmed stdout is typed like any bound value (the model sees `«secret:CMD_<LABEL>»`). It becomes
+  a run secret the moment it is read, so a page that echoes it is redacted too. The command has
+  60 s. A failure, a timeout or empty output fails that type step with a reason that never quotes
+  the output, and the model may wait and type again. It is operator-only: never an MCP argument,
+  never read from a suite file.
+
+  ```bash
+  jevitate explore --url https://app.example.test/verify --goal "verify your email" \
+    --secret-field 'label=Verification code=cmd:./read-code.sh --to ada@example.test' \
+    --allow-secret-cmd --success 'visible:testId=verified'
+  ```
+
 The bound value and the seed are registered as run secrets, so the existing
 redaction seams scrub them everywhere.
 

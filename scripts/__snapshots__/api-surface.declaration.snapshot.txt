@@ -712,6 +712,7 @@
   resolveCoverageThresholds: function
   resolveMissionFixture: function
   resolveRouteScope: function
+  resolveSecretFieldValue: function
   routeOf: function
   RouteScopeSource: type-alias
   runAdversarialMission: function
@@ -731,6 +732,7 @@
   scopePredicate: function
   ScopeUnderivableError: class
   scrollPositionAt: function
+  SecretCommandRunner: type-alias
   SecretField: interface
   secretFieldContext: function
   secretFieldNeedsValue: function
@@ -740,6 +742,7 @@
   secretFieldsToFill: function
   secretFieldValue: function
   secretPlaceholder: function
+  SecretSourceError: class
   seedPath: function
   SeedRedirect: interface
   seedRedirectReason: function
