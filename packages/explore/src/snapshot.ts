@@ -24,6 +24,10 @@ import { TEMPORAL_FORMATS, isTemporalInputType } from "./temporal-value.js";
  * surfaced with role `file-input` (plus its `accept` filter) so the model can
  * target it with the `upload` op. No other hidden element is exposed.
  *
+ * Controls inside an OPEN shadow root (a web component) are perceived like light-DOM ones (#357):
+ * the Playwright locator pierces open roots, and the visibility, modal, reachability and occlusion
+ * checks see through them. A CLOSED shadow root is opaque — its controls are never offered.
+ *
  * A control whose value cannot be described (`computeDescriptor` throws) is
  * dropped, never guessed. Candidates past `maxCandidates` are truncated and
  * therefore un-selectable — a target Jev never sees, it can never pick.
@@ -266,6 +270,14 @@ function readControlFacts(node: Node): ControlFacts {
   const norm = (s: string | null): string => (s === null ? "" : s.replace(/\s+/g, " ").trim());
   const tag = el.tagName.toLowerCase();
   const inputType = tag === "input" ? String((el as HTMLInputElement).type || "").toLowerCase() : null;
+  // #357: a control inside an OPEN shadow root has ancestors across the boundary (its host, and the
+  // host's own ancestors) — fixed panels, modals and landmarks are judged through it.
+  const parentOf = (a: Element): Element | null =>
+    a.parentElement ?? (a.parentNode instanceof ShadowRoot ? a.parentNode.host : null);
+  const holds = (a: Element, b: Element): boolean => {
+    for (let n: Element | null = b; n !== null; n = parentOf(n)) if (n === a) return true;
+    return false;
+  };
 
   const style = window.getComputedStyle(el as HTMLElement);
   const rect = (el as HTMLElement).getBoundingClientRect();
@@ -296,13 +308,13 @@ function readControlFacts(node: Node): ControlFacts {
     // A non-modal `<dialog open>` blocks the page only when it is drawn as an overlay (fixed, large).
     return modal || (ms.position === "fixed" && mr.width * mr.height >= 0.25 * window.innerWidth * window.innerHeight);
   });
-  const outsideModal = modals.length > 0 && !modals.some((m) => m === el || m.contains(el));
+  const outsideModal = modals.length > 0 && !modals.some((m) => holds(m, el));
   // #294: wholly outside what scrolling can ever bring into view.
   let unreachable = false;
   if (!clippedOffscreen && rect.width > 0 && rect.height > 0) {
     let fixedBox: DOMRect | null = null;
     let scroller = false;
-    for (let a: Element | null = el; a !== null && a !== document.documentElement; a = a.parentElement) {
+    for (let a: Element | null = el; a !== null && a !== document.documentElement; a = parentOf(a)) {
       const s = window.getComputedStyle(a as HTMLElement);
       if (s.position === "fixed") {
         fixedBox = (a as HTMLElement).getBoundingClientRect();
@@ -458,7 +470,7 @@ function readControlFacts(node: Node): ControlFacts {
   // Chrome landmark: a <nav>/role=navigation anywhere up the tree, or a PAGE-level <header>/<footer>
   // (one inside an article/section/main/aside is that region's own header, not page chrome).
   let landmark: "navigation" | "banner" | "contentinfo" | null = null;
-  for (let a: Element | null = el.parentElement; a !== null; a = a.parentElement) {
+  for (let a: Element | null = parentOf(el); a !== null; a = parentOf(a)) {
     const r = (a.getAttribute("role") ?? "").toLowerCase();
     const t = a.tagName.toLowerCase();
     if (r === "navigation" || t === "nav") {
