@@ -152,3 +152,12 @@ export function normalizeTemporalValue(inputType: string, value: string): string
       return value;
   }
 }
+
+/**
+ * #332: a value for a date/time input in that input's wire format (`8:00 AM` → `08:00` for a
+ * `time` input), so Playwright's fill never throws "Malformed value". Any other field: unchanged.
+ */
+export function inWireFormat(field: { readonly tag: string; readonly inputType: string | null }, value: string): string {
+  const type = field.tag === "input" ? (field.inputType ?? "").toLowerCase() : "";
+  return isTemporalInputType(type) ? (normalizeTemporalValue(type, value.trim()) ?? value) : value;
+}

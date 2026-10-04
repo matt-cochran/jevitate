@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTemporalValue, isTemporalInputType } from "./temporal-value.js";
-import { checkFieldValue, inWireFormat } from "./fill.js";
+import { inWireFormat, normalizeTemporalValue, isTemporalInputType } from "./temporal-value.js";
+import { checkFieldValue } from "./fill.js";
 
 describe("date/time input values in their wire format (#332)", () => {
   it("normalizes human time spellings to HH:MM", () => {

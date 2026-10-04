@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { CHAT_REPLY_STUCK_INSTRUCTIONS, FORM_VALUE_INSTRUCTIONS, type GenerationPort } from "@jevitate/ai-core";
 import { redactContext, redactUrl } from "./redact.js";
-import { TEMPORAL_FORMATS, isTemporalInputType, normalizeTemporalValue } from "./temporal-value.js";
+import { TEMPORAL_FORMATS, inWireFormat, isTemporalInputType, normalizeTemporalValue } from "./temporal-value.js";
 
 /**
  * fill: the generative-text helper discipline for a `type` op (guardrail #3).
@@ -542,15 +542,6 @@ export class FillHelper {
     this.#cacheKey = null;
     this.#cacheValue = null;
   }
-}
-
-/**
- * #332: a value for a date/time input in that input's wire format (`8:00 AM` → `08:00` for a
- * `time` input), so Playwright's fill never throws "Malformed value". Any other field: unchanged.
- */
-export function inWireFormat(field: FieldShape, value: string): string {
-  const type = field.tag === "input" ? (field.inputType ?? "").toLowerCase() : "";
-  return isTemporalInputType(type) ? (normalizeTemporalValue(type, value.trim()) ?? value) : value;
 }
 
 /**
