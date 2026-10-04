@@ -169,7 +169,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (377 exports)
+# @jevitate/explore (378 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -400,6 +400,7 @@
   goalAsksForReport: function
   goalAsksToWrite: function
   goalListsSeveral: function
+  goalResultDiagnostics: function
   groundAnswer: function
   groupStepSignals: function
   hangDetail: function
