@@ -5,6 +5,7 @@ import { contentHash, clock } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
 import { redactControl, redactUrl } from "./redact.js";
+import { TEMPORAL_FORMATS, isTemporalInputType } from "./temporal-value.js";
 
 /**
  * perceive: turn a live `Page` into an indexed table of interactive controls,
@@ -526,6 +527,8 @@ function summarize(facts: DescribedFacts): string {
   if (facts.expanded === false) bits.push("collapsed");
   if (facts.value !== null && facts.value !== "") bits.push(`value="${facts.value}"`);
   if (facts.richText) bits.push("rich text");
+  // #332: a date/time input takes only its wire format — say which, so the model types `08:00`, not `8:00 AM`.
+  if (facts.tag === "input" && isTemporalInputType(facts.inputType)) bits.push(`format ${TEMPORAL_FORMATS[facts.inputType!.toLowerCase()]!.split(" ")[0]}`);
   if (facts.accept !== null && facts.accept !== "") bits.push(`accept=${facts.accept}`);
   if (facts.selected !== null && facts.selected !== "") bits.push(`selected="${facts.selected}"`);
   if (facts.options !== null && facts.options.length > 0) {

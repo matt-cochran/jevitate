@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { CHAT_REPLY_STUCK_INSTRUCTIONS, FORM_VALUE_INSTRUCTIONS, type GenerationPort } from "@jevitate/ai-core";
 import { redactContext, redactUrl } from "./redact.js";
+import { TEMPORAL_FORMATS, isTemporalInputType, normalizeTemporalValue } from "./temporal-value.js";
 
 /**
  * fill: the generative-text helper discipline for a `type` op (guardrail #3).
@@ -113,6 +114,10 @@ export function checkFieldValue(value: string, field: FieldShape, fieldLabel: st
   if (type === "email" && !/^[^\s@,;]+@[^\s@,;]+$/.test(v)) return "not an email address";
   if (type === "url" && !/^[a-z][a-z0-9+.-]*:\/\/\S+$/i.test(v)) return "not an absolute URL";
   if (type === "number" && !Number.isFinite(Number(v))) return "not a number";
+  // #332: a date/time input takes only its wire format; a human spelling is normalized before typing.
+  if (isTemporalInputType(type) && normalizeTemporalValue(type, v) === null) {
+    return `not a ${type} value — this field takes ${TEMPORAL_FORMATS[type]}`;
+  }
   // A generated value (the goal is passed) must not be the goal itself (#71 reopen).
   const echo = goal === undefined ? null : echoesGoal(v, goal);
   if (echo !== null) return `echoes the goal instead of a value for this field — ${echo}`;
@@ -487,7 +492,7 @@ export class FillHelper {
     if (field !== undefined) {
       const stated = valuesStatedInGoal(input.goal, input.fieldLabel, field);
       const pick = several ? stated.find((v) => !isUsed(v)) : stated.length === 1 ? stated[0] : undefined;
-      if (pick !== undefined && checkFieldValue(pick, field, input.fieldLabel) === null) return { text: pick, source: "goal" };
+      if (pick !== undefined && checkFieldValue(pick, field, input.fieldLabel) === null) return { text: inWireFormat(field, pick), source: "goal" };
     }
     const key = JSON.stringify(input);
     if (this.#cacheKey === key) {
@@ -522,7 +527,7 @@ export class FillHelper {
           : null);
       // A rejected value is never cached: the next ask (its history now carries the rejection) regenerates.
       if (rejected !== null) return { text: null, rejected, source: "model" };
-      const value = field.tag === "input" ? text.trim() : text;
+      const value = field.tag === "input" ? inWireFormat(field, text.trim()) : text;
       this.#cacheKey = key;
       this.#cacheValue = value;
       return { text: value, source: "model" };
@@ -537,6 +542,15 @@ export class FillHelper {
     this.#cacheKey = null;
     this.#cacheValue = null;
   }
+}
+
+/**
+ * #332: a value for a date/time input in that input's wire format (`8:00 AM` → `08:00` for a
+ * `time` input), so Playwright's fill never throws "Malformed value". Any other field: unchanged.
+ */
+export function inWireFormat(field: FieldShape, value: string): string {
+  const type = field.tag === "input" ? (field.inputType ?? "").toLowerCase() : "";
+  return isTemporalInputType(type) ? (normalizeTemporalValue(type, value.trim()) ?? value) : value;
 }
 
 /**
