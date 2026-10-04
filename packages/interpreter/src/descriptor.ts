@@ -36,6 +36,6 @@ function targetName(d: TargetDescriptor): string {
   if (d.testId) return `testId=${d.testId}`;
   if (d.role && d.name) return `role=${d.role} name=${d.name}`;
   if (d.label) return `label=${d.label}`;
-  if (d.text) return `text=${d.text}`;
+  if (d.text) return `${d.textMatch === "contains" ? "textContains" : "text"}=${d.text}`;
   return `css=${d.css ?? "?"}`;
 }

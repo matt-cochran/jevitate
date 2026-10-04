@@ -41,6 +41,12 @@ In these specs:
   example — never a silent guess.
   At least one of `testId`, `role`, `label`, `text` or `css` must be set (`name` alone only narrows
   a `role`). Because pairs split at `;`, a `css=` value cannot contain `;`.
+- `text=` matches an element whose **whole** text is exactly that text. `textContains=` (#335)
+  matches an element whose text contains it, case-insensitively, wherever it is on the page
+  (including below the fold). `textIncludes:textContains=This demo has|This demo has` holds on
+  `<h1>This demo has ended</h1>`, while `text=This demo has` finds no element there. When an exact
+  `text=` check fails but some element contains the text, the failure says so and names the
+  `textContains=` form to use.
 - The last `|` separates the descriptor from the text or value (for `style` too). The other
   visual kinds split the descriptor off at the first `|`.
 - Visual-state checks are read by fixed built-in page functions and decided by code, never a
