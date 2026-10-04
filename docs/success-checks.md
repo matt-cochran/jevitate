@@ -46,7 +46,9 @@ In these specs:
   (including below the fold). `textIncludes:textContains=This demo has|This demo has` holds on
   `<h1>This demo has ended</h1>`, while `text=This demo has` finds no element there. When an exact
   `text=` check fails but some element contains the text, the failure says so and names the
-  `textContains=` form to use.
+  `textContains=` form to use. When the target matches several elements, `textIncludes` holds if
+  any **visible** match includes the text (#376); a hidden match (a closed `<details>`, `display:
+  none`) never makes it hold.
 - The last `|` separates the descriptor from the text or value (for `style` too). The other
   visual kinds split the descriptor off at the first `|`.
 - Visual-state checks are read by fixed built-in page functions and decided by code, never a
@@ -80,7 +82,8 @@ In these specs:
 on the final page. `--success-when held` also accepts the checks holding all together at any
 settled step, for a state that does not last (a one-time secret, a toast). A held check
 counts only once it went from not holding to holding: one that already held on the start
-page and never changed fails as vacuous, with a warning in the result (`checkWarnings`).
+page and never changed fails as vacuous, with a warning in the result (`checkWarnings`),
+unless `--allow-vacuous-checks` (below).
 Once every check has held, code ends the run as done before the next action, so it never
 keeps acting or writing past a met goal. `reloadThen` checks are always read on the final
 page.
@@ -107,8 +110,11 @@ Use a check the goal's own work must change instead: `count:<item d>|min=1` for 
 should gain an entry, `textIncludes:<d>|<text>` for the content, `reloadThen:…` for
 persistence. `--allow-vacuous-checks` (suite: `"allowVacuousChecks": true` on a goal item or
 target) downgrades a vacuous check to a warning — it then counts as a pass, and network checks
-count every captured request again. Under `--success-when held` this is the same rule as the
-start-page rule above.
+count every captured request again. Under `--success-when held` and `each` it lifts the
+start-page rule above too (#377): a check that already held on the start page counts, so a run
+whose start page already shows the goal succeeds without acting (the warning still names it, as
+allowed). A model's `blocked` before any action is refused ("nothing was tried yet", #237) only
+while the success checks do not hold on the page.
 
 The result lists each check with what the oracle saw, so a failing run names the
 check that caught it. A failing `textIncludes` or `valueEquals` (including `reloadThen:valueEquals`)
