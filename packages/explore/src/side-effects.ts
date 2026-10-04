@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { urlTemplate, writeClassifier, type WriteClassifier } from "@jevitate/recording";
+import { rpcMethodOf, urlTemplate, writeClassifier, type WriteClassifier } from "@jevitate/recording";
 import { requestEndpoint } from "./authorized-targets.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
@@ -42,7 +42,61 @@ import { clock } from "@jevitate/domain";
  * `POST /api/b`) are two actions; the same control on the same screen is still refused. A write
  * still in flight is waited for whatever the context (the element alone on the route matches), so
  * a screen that changed while its write runs never lets the same control re-fire it.
+ *
+ * Bookkeeping is not a side effect (#374): a first-party analytics event (`POST /…/RecordShowcaseEvent`,
+ * `/api/analytics/…`, a `navigator.sendBeacon` ping) or an idempotent read marker
+ * (`POST /…/MarkConversationRead`, `POST /api/messages/:id/read`) a click fires is fire-and-forget
+ * bookkeeping — repeating it changes nothing the user sees — so it never makes the control a guarded
+ * repeat (`isBookkeepingRequest`). An app-specific one is declared with `--read-rpc` (or
+ * `--settle-ignore` when it is background traffic). A real write fired alongside is still guarded.
+ *
+ * The control's region moved on (#380): the guard cannot know which request a click will send
+ * before it fires, and one control may send another request in another state ("I've changed my
+ * nameservers" sends `RefreshShareDomain`, then `RetryShareDomain` once the check has run). So a
+ * finished write's control may be clicked again when its own REGION's state (`screenState` over its
+ * nearest dialog / form / section / card / row, falling back to `main`, never the whole page: the
+ * controls it offers + its visible text, digits masked, never a value) differs from BOTH the state
+ * the click was made in and the one its window closed on. A menu or a toast elsewhere is no change,
+ * so "Add to cart → open a menu → Add to cart" is still refused, as is the same control on an
+ * unchanged region (or one back where it was). The caller passes no state for a paid / destructive
+ * control, so this never lifts the guard on one; a write with no response never lifts it either.
  */
+
+/**
+ * #374: a first-party request that is bookkeeping, not the control's side effect — an analytics /
+ * telemetry event, a beacon, a heartbeat, or an idempotent "mark as read/seen" marker. Decided by
+ * code from the request's RPC method / path segments (and a `ping` resource type), never the model.
+ */
+const BOOKKEEPING_RPC =
+  /^(?:(?:Record|Track|Log|Report|Send|Emit|Capture|Ingest)\w*(?:Event|Events|Analytics|Telemetry|Metric|Metrics|Impression|Impressions|PageView|PageViews)|Mark\w*(?:Read|Seen|Viewed|Opened)|Ping|Heartbeat|KeepAlive)$/;
+/** A path segment that names an analytics / telemetry endpoint. */
+const BOOKKEEPING_SEGMENT = /^(?:analytics|telemetry|beacons?|metrics|rum)$/i;
+/** A last path segment that marks something read / seen (an idempotent marker). */
+const READ_MARKER_SEGMENT = /^(?:mark[-_]?(?:as[-_]?)?)?(?:read|seen|viewed)$/i;
+
+export function isBookkeepingRequest(r: { readonly path: string; readonly resourceType?: string }): boolean {
+  if (r.resourceType === "ping") return true;
+  const rpc = rpcMethodOf(r.path);
+  if (rpc !== null) return BOOKKEEPING_RPC.test(rpc.method);
+  const segments = pathOf(r.path).split("/").filter((x) => x !== "");
+  if (segments.some((x) => BOOKKEEPING_SEGMENT.test(x))) return true;
+  const last = segments[segments.length - 1];
+  return last !== undefined && segments.length > 1 && READ_MARKER_SEGMENT.test(last);
+}
+
+/**
+ * #380: a region's state digest — which controls it offers (`controls`: their role, name,
+ * enabled state — never an input's value: what the inputs hold is the values rule's, #123) and its
+ * visible text (whitespace collapsed, digits masked so a ticking clock or counter is no new state).
+ * Only the digest is kept: page text never sits in the guard's memory.
+ */
+export function screenState(
+  controls: readonly { readonly role: string; readonly name: string; readonly enabled: boolean }[],
+  visibleText: string,
+): string {
+  const offered = JSON.stringify(controls.map((c) => [c.role, c.name, c.enabled]));
+  return digest(`${offered}\n${visibleText.replace(/\s+/g, " ").replace(/\d+/g, "#").trim()}`);
+}
 
 /** #356: what a click acts on — the element, and the context (form / dialog / screen) it sits in. */
 export interface ActionIdentity {
@@ -94,6 +148,9 @@ interface Fired {
   readonly inflight: InflightRequest[];
   /** The input values in effect when it was clicked (`#valuesKey`). */
   readonly values: string;
+  /** #380: its region's state when it was clicked, and when its window closed (when known). */
+  readonly before?: string;
+  readonly after?: string;
 }
 
 interface Open {
@@ -104,6 +161,7 @@ interface Open {
   readonly at: number;
   readonly capture: RequestCapture;
   readonly values: string;
+  readonly before?: string;
 }
 
 /** Whether the most recently closed click sent any request (#130a). */
@@ -167,9 +225,12 @@ export class SideEffectGuard {
     this.#ignored = opts.ignoreRequests ?? (() => false);
   }
 
-  /** Is this request the app's own (#274/#284): first-party and not declared background? */
-  #ours(url: string): boolean {
-    return this.#firstParty.thirdParty(url) === null && !this.#ignored(url);
+  /**
+   * Is this request the app's own side effect (#274/#284/#374): first-party, not declared
+   * background, and not bookkeeping (analytics, a beacon, a read marker)?
+   */
+  #ours(r: { readonly url: string; readonly resourceType?: string }): boolean {
+    return this.#firstParty.thirdParty(r.url) === null && !this.#ignored(r.url) && !isBookkeepingRequest({ path: pathOf(r.url), ...(r.resourceType === undefined ? {} : { resourceType: r.resourceType }) });
   }
 
   /** How a request is named (#194): path on an allowed origin, else origin + path. */
@@ -188,23 +249,30 @@ export class SideEffectGuard {
   /**
    * A click on `id` (a bare string = an element with no known context) is about to be dispatched:
    * watch what it sends. `label` only names it in reasons and drives the sign-in / back rules.
+   * `state` (#380) is its region's state as it is clicked (`screenState`), when the caller read it.
    */
-  beginClick(id: string | ActionIdentity, label: string, route: string, at: number): void {
+  beginClick(id: string | ActionIdentity, label: string, route: string, at: number, state?: string): void {
     const identity = identityOf(id);
     this.#closeOpen();
     // A back / start-over control abandons the flow on this route: its earlier submits may be redone.
     if (BACK_NAME.test(label)) {
       for (const [k, f] of this.#fired) if (f.route === route) this.#fired.delete(k);
     }
-    this.#open = { key: recordKey(route, identity), element: identity.element, label, route, at, capture: this.#monitor.startCapture(), values: this.#valuesKey() };
+    this.#open = { key: recordKey(route, identity), element: identity.element, label, route, at, capture: this.#monitor.startCapture(), values: this.#valuesKey(), ...(state === undefined ? {} : { before: state }) };
   }
 
   /**
    * The click's window closes (the next perception has settled the page): the writes it fired are
-   * the ones that finished since, plus those still in flight that started after it.
+   * the ones that finished since, plus those still in flight that started after it. `state` (#380)
+   * is the clicked control's region state the window closed on, when the caller read it.
    */
-  settle(): void {
-    this.#closeOpen();
+  settle(state?: string): void {
+    this.#closeOpen(state);
+  }
+
+  /** Whether a click's window is open (the caller reads the region state for `settle` only then). */
+  clickOpen(): boolean {
+    return this.#open !== null;
   }
 
   /**
@@ -215,7 +283,7 @@ export class SideEffectGuard {
     return this.#lastClick;
   }
 
-  #closeOpen(): void {
+  #closeOpen(after?: string): void {
     const o = this.#open;
     if (o === null) return;
     this.#open = null;
@@ -227,16 +295,25 @@ export class SideEffectGuard {
     const unfinished = this.#monitor.unfinished();
     const inflightAny = unfinished.some((r) => r.startedAt >= o.at);
     const done: FiredWrite[] = requests
-      .filter((r: CapturedRequest) => this.#write(r) && this.#ours(r.url))
+      .filter((r: CapturedRequest) => this.#write(r) && this.#ours(r))
       .map((r) => {
         const status = effectiveStatus(r); // #378: a 200 whose gRPC-web/Connect RPC failed is rejected
         return { method: r.method.toUpperCase(), path: this.#name(r.url), status, rejected: (status !== null && status >= 400) || (status === null && r.failed) };
       });
-    const inflight = unfinished.filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r.url));
+    const inflight = unfinished.filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r));
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
     this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending] };
     if (done.length + pending.length === 0) return;
-    this.#fired.set(o.key, { label: o.label, route: o.route, element: o.element, writes: [...done, ...pending], inflight, values: o.values });
+    this.#fired.set(o.key, {
+      label: o.label,
+      route: o.route,
+      element: o.element,
+      writes: [...done, ...pending],
+      inflight,
+      values: o.values,
+      ...(o.before === undefined ? {} : { before: o.before }),
+      ...(after === undefined ? {} : { after }),
+    });
   }
 
   /** Writes fired by this run's clicks that are still in flight now. */
@@ -274,12 +351,15 @@ export class SideEffectGuard {
 
   /**
    * May `key` be clicked on `route` now? `page` is what the page shows: its control names and alerts
-   * (a visible retry affordance, or an error alert, re-allows it).
+   * (a visible retry affordance, or an error alert, re-allows it). `state` (#380) is the control's region state
+   * now (`screenState`): one that differs from both the state the earlier click was made in and the
+   * one its window closed on has moved on, and re-allows a click whose writes all finished. Omit it
+   * (a paid / destructive control) and only the rules above apply.
    */
   check(
     id: string | ActionIdentity,
     route: string,
-    page: { readonly controlNames: readonly string[]; readonly alerts: readonly string[] },
+    page: { readonly controlNames: readonly string[]; readonly alerts: readonly string[]; readonly state?: string },
   ): RepeatVerdict {
     const identity = identityOf(id);
     // A write still in flight from this element on this route is waited for, whatever its context
@@ -309,11 +389,16 @@ export class SideEffectGuard {
     if (retryOffered) return { refuse: false };
     // The inputs now hold different values: the repeat sends something new.
     if (f.values !== this.#valuesKey()) return { refuse: false };
+    // #380: the control's region moved on since that click (neither the state it was clicked in nor
+    // the one it produced) and its writes all finished: the same control may now send another request.
+    const known = page.state !== undefined && f.before !== undefined && f.after !== undefined;
+    if (known && page.state !== f.before && page.state !== f.after && f.writes.every((w) => w.status !== null)) return { refuse: false };
+    const unchanged = known ? " (its part of the page has not moved on since)" : "";
     const retyped = this.#values.size > 0 ? " (the inputs hold the same values as when it was sent — nothing new would be submitted)" : "";
     return {
       refuse: true,
       inflight: false,
-      reason: `repeated side effect refused: "${f.label}" already sent ${what} on this page and the page does not offer a retry — clicking it again would repeat that action${retyped}`,
+      reason: `repeated side effect refused: "${f.label}" already sent ${what} on this page and the page does not offer a retry — clicking it again would repeat that action${retyped}${unchanged}`,
     };
   }
 }
