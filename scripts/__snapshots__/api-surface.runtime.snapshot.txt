@@ -105,7 +105,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (62 exports)
+# @jevitate/domain (65 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEGRADED_FINDINGS: array
@@ -143,6 +143,7 @@
   contentHash: function
   currentClock: function
   evaluateGate: function
+  externalSchemeOf: function
   fileDraft: function
   fingerprintMarker: function
   foldGoalOutcome: function
@@ -151,6 +152,7 @@
   hasOwnFrame: function
   installClock: function
   isBrokenRun: function
+  isExternalSchemeUrl: function
   isGoalOutcome: function
   isUnboundedHeapGrowth: function
   isWithinQuietHours: function
@@ -167,9 +169,10 @@
   seedFrom: function
   simulateTiming: function
   targetsFor: function
+  urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (373 exports)
+# @jevitate/explore (394 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -226,6 +229,7 @@
   GOAL_IS_SIGN_IN_QUESTION: const (string)
   GOAL_MET_INSTRUCTIONS: const (string)
   GOAL_MET_QUESTION: const (string)
+  GRPC_CODE_NAMES: array
   HANG_PROBE_MS: const (number)
   HOST_SAMPLE_INTERVAL_MS: const (number)
   HeapLog: class
@@ -243,10 +247,13 @@
   MAX_QUIET_WAITS: const (number)
   MAX_REPEAT_TYPE_SIGNALS: const (number)
   MAX_REPORT_REJECTIONS: const (number)
+  MAX_RPC_BODY_BYTES: const (number)
   MAX_SIDE_EFFECTS: const (number)
   MESSAGE_FIELD: object
   MissionSafety: class
   MissionSessions: class
+  NAVIGATION_RETRIES: const (number)
+  NAVIGATION_WAIT_MS: const (number)
   NOT_REPLAYED: object
   NO_ANSWER_REASON: const (string)
   NO_DESTRUCTIVE_NOTE: const (string)
@@ -262,6 +269,7 @@
   PROMPT_PAGE_TEXT_CHARS: const (number)
   PageDeltas: class
   PageMonitor: class
+  PageNavigatingError: class
   PageSignalCollector: class
   READ_ONLY_NOTE: const (string)
   REDACTION_MASK: const (string)
@@ -273,6 +281,8 @@
   RENDER_TREND_RENDERS: const (number)
   RENDER_WAIT_MS: const (number)
   REPLY_MAX_CHARS: const (number)
+  RPC_CONTENT: object
+  RPC_TRAILER_READ_MS: const (number)
   ReadOnlyGuard: class
   ReplayDeltas: class
   RequestCapture: class
@@ -365,6 +375,7 @@
   describeExpected: function
   describeFailure: function
   describeStatus: function
+  describeStatusWithRpc: function
   describeUnreachable: function
   detectClipping: function
   detectForms: function
@@ -376,6 +387,7 @@
   draftForHang: function
   echoesGoal: function
   editCandidates: function
+  effectiveStatus: function
   emptyRecording: function
   endpointOf: function
   errorPageReason: function
@@ -397,6 +409,7 @@
   goalAsksForReport: function
   goalAsksToWrite: function
   goalListsSeveral: function
+  goalResultDiagnostics: function
   groundAnswer: function
   groupStepSignals: function
   hangDetail: function
@@ -415,12 +428,14 @@
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isBookkeepingRequest: function
   isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
   isInScope: function
   isLoginLikeUrl: function
   isNavControl: function
+  isNavigationInterruption: function
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
   isPageUnresponsive: function
@@ -452,7 +467,10 @@
   p50: function
   pagesContext: function
   parseAria: function
+  parseConnectEndStream: function
+  parseConnectUnaryError: function
   parseFirstNumber: function
+  parseGrpcWebTrailer: function
   parseInterceptor: function
   parseNumbers: function
   parseSecretField: function
@@ -492,6 +510,11 @@
   resolveRouteScope: function
   resolveSecretFieldValue: function
   routeOf: function
+  rpc5xxSignalOf: function
+  rpcHttpEquivalent: function
+  rpcStatusFromBody: function
+  rpcStatusFromHeaders: function
+  rpcStatusOfResponse: function
   runAdversarialMission: function
   runFeatureMission: function
   runGoalBasedMission: function
@@ -500,6 +523,7 @@
   sampleHeap: function
   scopeGlobs: function
   scopePredicate: function
+  screenState: function
   scrollPositionAt: function
   secretFieldContext: function
   secretFieldNeedsValue: function

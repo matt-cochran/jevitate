@@ -2,7 +2,12 @@ import { redactUrl } from "@jevitate/ai-core";
 import type { Page, Request } from "playwright";
 import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
 import { visibleBusyIndicator } from "./hang.js";
-import { clock } from "@jevitate/domain";
+import { clock, isExternalSchemeUrl } from "@jevitate/domain";
+import { RPC_CONTENT, rpcStatusOfResponse, type RpcStatus } from "./rpc-status.js";
+import { clockBounded } from "./clock-bound.js";
+
+/** #378: how long a finished RPC's trailer read may hold its end back; past it the header status stands. */
+export const RPC_TRAILER_READ_MS = 2_000;
 
 /** The interactive-control selector (kept in step with `snapshot`). */
 const INTERACTIVE_SELECTOR =
@@ -257,6 +262,12 @@ export interface CapturedRequest {
    * `RequestCapture.sent()` lists these; `status` is null.
    */
   readonly pending?: true;
+  /**
+   * #378: a gRPC-web / Connect call's own result (`grpc-status`, from a header or the body's trailer
+   * frame) — an HTTP 200 can carry a failed RPC. See `effectiveStatus`. Absent when not an RPC (or
+   * its status could not be read).
+   */
+  readonly rpcStatus?: RpcStatus;
 }
 
 /** Most requests a capture keeps; past it the oldest are dropped and `truncated` is set. */
@@ -349,6 +360,9 @@ export class PageMonitor {
   readonly #wakers = new Set<Wake>();
   readonly #statuses = new WeakMap<Request, number>();
   readonly #contentTypes = new WeakMap<Request, string>();
+  /** #378: the RPC-status read of a gRPC-web / Connect response (its end waits for it). */
+  readonly #rpcReads = new WeakMap<Request, Promise<RpcStatus | null>>();
+  readonly #rpcStatuses = new WeakMap<Request, RpcStatus>();
   readonly #now: () => number;
   #lastNetworkActivity: number;
   /** The last main-frame navigation (activity no request filter can discount). */
@@ -367,6 +381,9 @@ export class PageMonitor {
     this.#lastNetworkActivity = now();
     this.#lastNavigation = now();
     page.on("request", (r) => {
+      // #375: an sms:/tel:/mailto:/deep-link navigation is handed to the OS, never fetched — not
+      // pending work, not a failed request, not a document navigation of the page.
+      if (isExternalSchemeUrl(r.url())) return;
       const startedAt = this.#now();
       if (r.isNavigationRequest() && r.frame() === page.mainFrame()) this.#documentNavStartedAt = startedAt;
       const requestContentType = requestContentTypeOf(r);
@@ -424,6 +441,7 @@ export class PageMonitor {
         const abortedAfterResponse = failed && status !== null;
         const endedAt = this.#now();
         const contentType = this.#contentTypes.get(r) ?? null;
+        const rpcStatus = this.#rpcStatuses.get(r);
         this.#completed.push({
           ...started,
           status,
@@ -446,6 +464,7 @@ export class PageMonitor {
             contentType,
             startedAt: started.startedAt,
             ...(started.requestContentType === undefined ? {} : { requestContentType: started.requestContentType }),
+            ...(rpcStatus === undefined ? {} : { rpcStatus }),
           });
         }
       } else {
@@ -453,13 +472,30 @@ export class PageMonitor {
       }
       if (!ignored) this.#touch();
     };
-    page.on("requestfinished", (r) => end(r, false));
-    page.on("requestfailed", (r) => end(r, true));
+    // #378: a gRPC-web / Connect response's status may be in its body's trailer frame — its end is
+    // recorded once that (bounded, one-shot) read is done, so every capture sees the RPC's result.
+    const finish = (r: Request, failed: boolean): void => {
+      const read = this.#rpcReads.get(r);
+      if (read === undefined) {
+        end(r, failed);
+        return;
+      }
+      this.#rpcReads.delete(r);
+      // Bounded: a body that never resolves (an aborted fetch, a closing context) must not leave a
+      // finished request pending — that would read as a request-pending hang.
+      void clockBounded(read, RPC_TRAILER_READ_MS, null).then((s) => {
+        if (s !== null) this.#rpcStatuses.set(r, s);
+        end(r, failed);
+      });
+    };
+    page.on("requestfinished", (r) => finish(r, false));
+    page.on("requestfailed", (r) => finish(r, true));
     page.on("response", (res) => {
       this.#statuses.set(res.request(), res.status());
       // SSE over fetch/XHR never "finishes": it is a long-lived connection, not pending work.
       const type = res.headers()["content-type"] ?? "";
       if (type !== "") this.#contentTypes.set(res.request(), type);
+      if (RPC_CONTENT.test(type) || res.headers()["grpc-status"] !== undefined) this.#rpcReads.set(res.request(), rpcStatusOfResponse(res));
       if (STREAMING_CONTENT.test(type)) {
         this.#background.set(res.request(), "stream");
         this.#touch(); // wake a settle wait that was counting it as pending
@@ -606,16 +642,38 @@ export class PageMonitor {
   #windowStart: number | null = null;
   #actionAt: number | null = null;
   #lastDocId: string | null = null;
+  /** #368: time spent since the action inside a wait the run chose (a reply wait, a job wait). */
+  #waitedMs = 0;
+  #waitDepth = 0;
 
   /** Called by `act()` when it dispatches a page-changing action: the start of a transition. */
   markAction(): void {
     this.#actionAt = this.#now();
+    this.#waitedMs = 0;
+  }
+
+  /**
+   * #368: runs an EXPLICIT wait the run chose (a chat reply wait `--reply-wait-ms`, a job wait
+   * `--job-wait-ms`, a `wait` decision) and books its duration as waiting, not as the page's render:
+   * the transition's `settleMs` excludes it, so a 30s reply wait never reads as a 30s render (and
+   * never feeds the host-health render trend). Nested waits count once.
+   */
+  async explicitWait<T>(wait: () => Promise<T>): Promise<T> {
+    const started = this.#now();
+    this.#waitDepth += 1;
+    try {
+      return await wait();
+    } finally {
+      this.#waitDepth -= 1;
+      if (this.#waitDepth === 0) this.#waitedMs += Math.max(0, this.#now() - started);
+    }
   }
 
   /** The open timing window (since the previous perception, or since the monitor started). */
-  window(): { start: number; actionAt: number | null; lastDocId: string | null } {
+  window(): { start: number; actionAt: number | null; lastDocId: string | null; waitedMs: number } {
     const start = this.#windowStart ?? 0;
-    return { start, actionAt: this.#actionAt !== null && this.#actionAt >= start ? this.#actionAt : null, lastDocId: this.#lastDocId };
+    const actionAt = this.#actionAt !== null && this.#actionAt >= start ? this.#actionAt : null;
+    return { start, actionAt, lastDocId: this.#lastDocId, waitedMs: actionAt === null ? 0 : this.#waitedMs };
   }
 
   /**
@@ -628,6 +686,7 @@ export class PageMonitor {
   closeWindow(at: number, docId: string | null): void {
     this.#windowStart = at;
     this.#actionAt = null;
+    this.#waitedMs = 0;
     if (docId !== null) this.#lastDocId = docId;
     const keepFrom = at - RECENT_REQUESTS_MS;
     for (let i = this.#completed.length - 1; i >= 0; i--) {

@@ -19,13 +19,18 @@ export async function handleWaitOrScroll(ctx: RunContext, step: Step): Promise<F
     // No recorded mutation — but visible to history (J-4), and an idle streak is a stuck signal.
     let changed: boolean;
     let note: string;
-    if (decision.op === "wait" && ctx.awaitingReply && ctx.lastTurn !== null && ctx.busyWaitedMs < ctx.replyWaitMs) {
-      // Still listening for the last message's reply (a slow LLM turn): this wait keeps
-      // listening, bounded by what is left of the reply wait, and records the reply if it lands.
+    if (decision.op === "wait" && ctx.awaitingReply && ctx.lastTurn !== null) {
+      // Still listening for the last message's reply (a slow LLM turn): this wait keeps listening,
+      // bounded by what is left of the reply ceiling, and records the reply if it lands.
+      // #373: the ceiling bounds the TOTAL wait for this one message's reply — the send's own wait
+      // plus every `wait` after it — never one wait cycle at a time. Once it is spent the run stops
+      // naming the missing reply (finish.ts) instead of re-entering the wait.
+      const left = ctx.replyCeilingMs - ctx.replyWaitedMs;
+      if (left <= 0) return replyCeilingSpent(ctx, step, false);
       const t0 = ctx.now();
-      const listen = Math.min(ctx.replyWaitMs - ctx.busyWaitedMs, 20_000);
+      const listen = Math.min(left, 20_000);
       const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen, quietMs: ctx.replyQuietMs });
-      ctx.busyWaitedMs += ctx.now() - t0;
+      ctx.replyWaitedMs += ctx.now() - t0;
       if (reply.received) {
         ctx.conversation.latestReply = reply.text;
         ctx.replies.add(snap.url, reply.text);
@@ -43,6 +48,10 @@ export async function handleWaitOrScroll(ctx: RunContext, step: Step): Promise<F
       changed = !idle;
       ctx.quietWaits = idle ? ctx.quietWaits + 1 : 0;
       record(true, note, reply.received ? { reply } : {});
+      if (!reply.received && ctx.replyWaitedMs >= ctx.replyCeilingMs) {
+        ctx.history.push(note);
+        return replyCeilingSpent(ctx, step, true);
+      }
     } else if (decision.op === "wait" && ctx.jobWaitedMs < ctx.jobWaitMs && (await readInProgressStatus(ctx.page)) !== null) {
       // The page shows an in-progress status (#92: "Simulating…", aria-busy, a job "is running")
       // — pending work even with no request in flight (the app polls). Wait it out with backoff,
@@ -149,4 +158,22 @@ export async function handleWaitOrScroll(ctx: RunContext, step: Step): Promise<F
       return "stop";
     }
     return "continue";
+}
+
+/**
+ * #373: the reply ceiling for the last message sent is spent with no reply — another `wait` cannot
+ * help. The run stops here (no-progress); `finishRun` names the missing reply and the wait it got.
+ */
+function replyCeilingSpent(ctx: RunContext, step: Step, recorded: boolean): Flow {
+  const reason = `stuck: the reply wait is spent — ${Math.round(ctx.replyWaitedMs / 1000)}s waited in total for the reply, the ${Math.round(
+    ctx.replyCeilingMs / 1000,
+  )}s reply ceiling (raise --reply-ceiling-ms for a slower reply)`;
+  // A wait that listened is already recorded (with what it saw); one refused outright is recorded here.
+  if (!recorded) step.record(false, reason, { origin: "engine" });
+  ctx.history.push(reason);
+  ctx.lastActedOp = step.decision.op;
+  ctx.statusAfter = "waiting";
+  ctx.incomplete = reason;
+  ctx.stop = "no-progress";
+  return "stop";
 }

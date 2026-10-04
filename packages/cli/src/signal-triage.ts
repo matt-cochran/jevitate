@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { fingerprintMarker } from "@jevitate/domain";
+import { fingerprintMarker, isExternalSchemeUrl } from "@jevitate/domain";
 import { assertNoSecretInPayload, redactCredentialShapes, redactText, redactUrl, type JudgmentPort, type JudgmentState, type Question } from "@jevitate/ai-core";
 import { normalizeLogMessage } from "./log-lines.js";
 
@@ -138,6 +138,9 @@ export function observeBrowserSignals(page: unknown, sink: RawBrowserSignal[], n
     const method = call(req, "method");
     const failure = call(req, "failure") as { errorText?: unknown } | null | undefined;
     if (typeof url !== "string") return;
+    // #375: an sms:/tel:/mailto:/deep-link navigation the browser hands to the OS is not a failed
+    // request (headless Chromium aborts it for want of a handler).
+    if (isExternalSchemeUrl(url)) return;
     const why = typeof failure?.errorText === "string" ? failure.errorText : "failed";
     push({ source: "requestfailed", level: "error", text: `${typeof method === "string" ? method : "GET"} ${redactUrl(url)} — ${why}` });
   });

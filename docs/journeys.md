@@ -20,13 +20,34 @@ the flow stops reaching its goal. It is written unpromoted: promotion is always 
 act. `--takes <n>` corroborates the flow over several takes.
 
 `--success` is repeatable (every check must hold) and takes the kinds `explore --success` takes,
-except `reloadThen`. A state-changing job with no stable on-page text can use its request as the
+except `reloadThen` (below). A state-changing job with no stable on-page text can use its request as the
 check, for example `--success 'requestMade:POST /api.v1.Settings/Save'` or
 `--success 'responseStatus:POST /api.v1.Settings/Save=2xx'`. A page check becomes the Journey's last
 `assert` step. A network check is kept in `metadata.networkChecks`, and `journey run` and
 `source run` evaluate it over the requests that replay itself sent, after its last step. A replay
 whose steps all pass but whose request never went out, or got the wrong status, fails with the
 check named.
+
+A `reloadThen:` check is refused before any browser opens (exit 64, `E_EXPLORE_ASSERTION`): a
+Journey has no reload step to re-check after. Author with its inner check (`reloadThen:visible:…`
+becomes `visible:…`) and prove persistence with `jevitate explore --success 'reloadThen:…'`.
+
+Each take (the discovery and every corroborating one) is a full `explore --strategy goal` run, so
+the author command takes the same run-shaping flags: `--secret`, `--secret-field` (including
+`cmd:` sources with `--allow-secret-cmd` and `--secret-cmd-attempts`), `--totp`, `--type-fixture`,
+`--fixture`, `--success-when`, `--allow-vacuous-checks`, `--action-deltas`, `--dialogs`, `--deny`,
+`--paid`, `--allow-destructive`, `--read-rpc`, the `--reply-*`/`--job-wait-ms` waits, the settle and
+hang flags, `--save-storage-state`, `--viewport`/`--device`/`--geolocation` and `--screenshots`.
+Reproduce whatever setup the goal run needed. A field that code typed (a `--secret-field` or
+`--totp` binding) is never kept in the Journey: it becomes a secret parameter (`secret1`, …,
+declared `secret: true`) that `journey run --param secret1=…` supplies.
+
+Every take writes its own result, transcript and Recording (under `--out`, default
+`.jevitate/logs/<date>`). When the discovery take does not reach the goal, the `not-reached` result
+says why and where to look: `reason` (`discovery mission <outcome>: <the goal run's own reason>`),
+`discovery` (its `stop`, `runOutcome`, each check's verdict, `resultPath`, `transcriptPath`,
+`recordingPaths`, `screenshotsDir`), and `takes` (requested / run / succeeded). The human summary
+prints the same.
 
 ## Record a flow by demonstration
 

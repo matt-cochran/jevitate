@@ -129,19 +129,60 @@ describe("HostHealthSampler — starvation judged from the injected host", () =>
     expect(sampler.degraded).toBe(false);
   });
 
-  it("a run-wide render slowdown against the run's own baseline counts as starvation; one slow page does not", async () => {
-    const { sampler } = fakeHost();
+  const render = (ms: number, waitedMs?: number): TranscriptEntry =>
+    entry({
+      timing: { route: "/", kind: "transition", settleMs: ms, ...(waitedMs === undefined ? {} : { waitedMs }), settled: true, requests: { count: 0, pending: 0, slowest: [], samples: [] } },
+    });
+
+  it("#368: a run-wide render slowdown counts as starvation only with load corroborating it; one slow page never does", async () => {
+    // Busy but under the starved threshold: no idle core (≥1/core) — the slowdown is the host's.
+    const { sampler } = fakeHost({ host: { ...calm, loadPerCore: 1.5 } });
     await sampler.sample();
-    const render = (ms: number): TranscriptEntry =>
-      entry({ timing: { route: "/", kind: "transition", settleMs: ms, settled: true, requests: { count: 0, pending: 0, slowest: [], samples: [] } } });
     for (const ms of [200, 250, 300]) sampler.noteStep(render(ms));
     sampler.noteStep(render(9_000)); // one slow route
     sampler.noteStep(render(260));
     sampler.noteStep(render(240));
     expect(sampler.starvedNow()).toBeNull();
     for (const ms of [4_000, 5_000, 6_000]) sampler.noteStep(render(ms));
-    expect(sampler.starvedNow()).toBe("renders 5000ms vs the run's baseline 250ms (>=5x)");
+    expect(sampler.starvedNow()).toBe("renders 5000ms vs the run's baseline 250ms (>=5x) at load 1.50/core");
     expect(sampler.summary()).toMatchObject({ slowestRenderMs: 9_000, baselineRenderMs: 250 });
+  });
+
+  it("#368: the same slowdown on a HEALTHY host (spare cores) is the app's timing, never a starved host", async () => {
+    // The issue's host: 0.14 load/core, plenty of memory. A genuinely slow app stays the app's: the
+    // slow renders are reported (slowestRenderMs, the timing summary), any hang/no-progress they
+    // cause is judged as an app finding — the host is never blamed without host evidence.
+    const { sampler } = fakeHost({ host: { ...calm, loadPerCore: 0.14 } });
+    await sampler.sample();
+    for (const ms of [500, 511, 520, 30_079, 30_082, 30_050]) sampler.noteStep(render(ms));
+    expect(sampler.starvedNow()).toBeNull();
+    expect((await sampler.judge()).starved).toBeNull();
+    expect(sampler.summary()).toMatchObject({ slowestRenderMs: 30_082, degradedSteps: 0, degraded: false, starvation: [] });
+  });
+
+  it("#368: no load reading at all never corroborates a slowdown", async () => {
+    const { sampler } = fakeHost({ host: { sample: null, overThreshold: null } });
+    await sampler.sample();
+    for (const ms of [200, 250, 300, 6_000, 6_000, 6_000]) sampler.noteStep(render(ms));
+    expect(sampler.starvedNow()).toBeNull();
+  });
+
+  it("#368: a reply wait booked as waiting (not render time) never feeds the render trend, even on a busy host", async () => {
+    const { sampler } = fakeHost({ host: { ...calm, loadPerCore: 1.5 } });
+    await sampler.sample();
+    for (const ms of [500, 511, 520]) sampler.noteStep(render(ms));
+    // Three sends whose reply never came: 30s waited each, the page itself settled in ~600ms.
+    for (let i = 0; i < 3; i++) sampler.noteStep(render(600, 30_000));
+    expect(sampler.starvedNow()).toBeNull();
+    expect(sampler.summary()).toMatchObject({ slowestRenderMs: 600, degradedSteps: 0 });
+  });
+
+  it("#368: a starved host still is starved — the sample's own pressure stands without any render evidence", async () => {
+    const { sampler } = fakeHost({ host: { ...calm, loadPerCore: 3 } });
+    await sampler.sample();
+    for (let i = 0; i < 3; i++) sampler.noteStep(render(600, 30_000));
+    expect(sampler.starvedNow()).toBe("load 3/core > 2");
+    expect(sampler.summary()).toMatchObject({ degradedSteps: 3, degraded: true });
   });
 
   it("with attribution off (JEVITATE_HOST_STARVATION=off) the host is sampled and reported, never judged", async () => {

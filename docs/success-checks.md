@@ -24,6 +24,19 @@ decides it. `--success` can be repeated, and every check must hold:
 | `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing). A request counts once it is sent, even when its response has not arrived (a long-running RPC the server holds open) |
 | `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status (requests still awaiting a response are not judged; the check fails if none has answered) |
 
+**gRPC-web and Connect calls.** gRPC-web answers HTTP 200 even for an RPC that failed: the real
+result is `grpc-status`, in a response header (a trailers-only response) or in the trailer frame at
+the end of the body. For a response whose content type is `application/grpc-web` (`+proto`,
+`+json`, `-text`) or `application/connect+…`, jevitate reads that status and judges
+`responseStatus` on the call's **effective** status: OK (0) keeps the HTTP status; any other code
+maps to its standard HTTP equivalent (e.g. `INTERNAL` → 500, `UNAVAILABLE` → 503,
+`FAILED_PRECONDITION` → 400, `PERMISSION_DENIED` → 403). So `responseStatus:POST /pkg.Svc/Method=2xx`
+does not hold for an HTTP 200 carrying grpc-status 13, and its detail says
+`200 (grpc-status 13 internal)`. The same effective status decides whether a write was rejected
+(the repeated-write guard then allows a retry) and whether the call is an HTTP 5xx defect. Only the
+status code is kept — never `grpc-message` or any body byte. A Connect unary error already has a
+non-2xx HTTP status and is judged on it.
+
 In these specs:
 
 - `<d>` is `testId=…;role=…;name=…;label=…;text=…;css=…` (key=value pairs joined by `;`). It is
@@ -46,7 +59,9 @@ In these specs:
   (including below the fold). `textIncludes:textContains=This demo has|This demo has` holds on
   `<h1>This demo has ended</h1>`, while `text=This demo has` finds no element there. When an exact
   `text=` check fails but some element contains the text, the failure says so and names the
-  `textContains=` form to use.
+  `textContains=` form to use. When the target matches several elements, `textIncludes` holds if
+  any **visible** match includes the text (#376); a hidden match (a closed `<details>`, `display:
+  none`) never makes it hold.
 - The last `|` separates the descriptor from the text or value (for `style` too). The other
   visual kinds split the descriptor off at the first `|`.
 - Visual-state checks are read by fixed built-in page functions and decided by code, never a
@@ -80,7 +95,8 @@ In these specs:
 on the final page. `--success-when held` also accepts the checks holding all together at any
 settled step, for a state that does not last (a one-time secret, a toast). A held check
 counts only once it went from not holding to holding: one that already held on the start
-page and never changed fails as vacuous, with a warning in the result (`checkWarnings`).
+page and never changed fails as vacuous, with a warning in the result (`checkWarnings`),
+unless `--allow-vacuous-checks` (below).
 Once every check has held, code ends the run as done before the next action, so it never
 keeps acting or writing past a met goal. `reloadThen` checks are always read on the final
 page.
@@ -107,8 +123,11 @@ Use a check the goal's own work must change instead: `count:<item d>|min=1` for 
 should gain an entry, `textIncludes:<d>|<text>` for the content, `reloadThen:…` for
 persistence. `--allow-vacuous-checks` (suite: `"allowVacuousChecks": true` on a goal item or
 target) downgrades a vacuous check to a warning — it then counts as a pass, and network checks
-count every captured request again. Under `--success-when held` this is the same rule as the
-start-page rule above.
+count every captured request again. Under `--success-when held` and `each` it lifts the
+start-page rule above too (#377): a check that already held on the start page counts, so a run
+whose start page already shows the goal succeeds without acting (the warning still names it, as
+allowed). A model's `blocked` before any action is refused ("nothing was tried yet", #237) only
+while the success checks do not hold on the page.
 
 The result lists each check with what the oracle saw, so a failing run names the
 check that caught it. A failing `textIncludes` or `valueEquals` (including `reloadThen:valueEquals`)
@@ -145,6 +164,16 @@ Code keeps a goal run on its goal (#338). A generated value that copies the goal
 prose, such as "add an answer and test it" typed into the Answer field, is refused before it is
 typed. The model sees "that is the goal's instruction, not a value to enter" in its history and
 generates a value again. A value the goal quotes or gives with `exactly` is still typed as stated.
+Words the goal dictates as the value are value material, not instruction (#371): quoted text,
+a parenthesised list, and the text after "a short description of", "describing", "saying" or
+"about". So "answer with a short description of the barber shop (classic cuts, hot-towel shaves,
+walk-ins welcome)" lets the answer reuse those words; copying the goal's instruction prose
+around them is still refused.
+
+When the goal lists several items, a value already submitted into a field is refused there, so
+the next item is used. That memory belongs to the live field (#366): a field that left the page
+and came back empty (a confirm dialog reopened) starts fresh, and a literal the field's label,
+placeholder or dialog text asks for ("Type REINSTATE to confirm") is never a repeat.
 Once the run has reached the goal's area (it opened a navigation item the goal names, or the URL
 path names one of the goal's words), navigation to sections the goal never names is listed last
 and marked `off-goal` in the decision. It is still offered, so a goal that names two sections can

@@ -20,7 +20,7 @@ import { join } from "node:path";
 import type { Locator, Page, Request } from "playwright";
 import { DEMO_OVERLAY_HIDE_STYLE, endpointOf, hideDemoOverlayForCapture, redactText, redactUrl, type SecretField, type Snapshot, type TranscriptEntry } from "@jevitate/explore";
 import type { RunSignalCapture, SignalRequest, SignalScreen, SignalStep } from "@jevitate/ux";
-import { clock } from "@jevitate/domain";
+import { clock, isExternalSchemeUrl } from "@jevitate/domain";
 
 /** Secret-bearing inputs — the same predicate as `@jevitate/recorder`'s `isSecretField`, in CSS. */
 export const SECRET_INPUT_SELECTOR = [
@@ -218,6 +218,9 @@ export class UsabilityCapture {
 
   readonly #onRequest = (r: Request): void => {
     if (!KEPT_TYPES.has(r.resourceType())) return;
+    // #375: an sms:/tel:/mailto:/deep-link navigation is handed to the OS, never fetched — not a
+    // request of the app (headless Chromium aborts it, which would read as a failed request).
+    if (isExternalSchemeUrl(r.url())) return;
     const endpoint = this.#redact(endpointOf(r.method(), r.url()));
     const payloadKey = WRITE_METHODS.has(r.method().toUpperCase()) ? payloadDigest(r.method(), endpoint, postDataOf(r), this.#opts.secrets) : undefined;
     const rec: LiveRequest = {

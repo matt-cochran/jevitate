@@ -8,7 +8,7 @@ import { FakeJudgmentGateway, type Answer, type JudgmentPort } from "@jevitate/a
 import { fingerprintMarker } from "@jevitate/domain";
 import type { TranscriptEntry } from "@jevitate/explore";
 import { openServerLogRuntime } from "./log-correlation.js";
-import { RELATED_LOGS_HEADING, SIGNAL_LIMITS, prefilter, readSignals, signalsPathFor, triageDefects, triageRunResult, writeSignals, type SignalEntry } from "./signal-triage.js";
+import { RELATED_LOGS_HEADING, SIGNAL_LIMITS, observeBrowserSignals, prefilter, readSignals, signalsPathFor, triageDefects, triageRunResult, writeSignals, type SignalEntry } from "./signal-triage.js";
 
 /**
  * #313 — signal triage: the run's whole signal timeline, a code prefilter per defect, and (only with
@@ -237,5 +237,19 @@ describe("#313: targets.json logTriage — the operator's opt-in for runs withou
     expect(triagedServerLog(base, judge, true).serverLog?.triage?.judge).toBe(judge);
     expect(triagedServerLog(base, judge, false).serverLog?.triage?.judge).toBeUndefined();
     expect(triagedServerLog({ sources: [], logDefect: [] }, judge, true).serverLog?.triage).toBeUndefined();
+  });
+});
+
+describe("observeBrowserSignals — external-scheme links (#375)", () => {
+  it("an sms:/tel:/mailto: navigation the browser hands to the OS is not a failed request; a real http one still is", () => {
+    const page = new EventEmitter();
+    const sink: Parameters<typeof observeBrowserSignals>[1] = [];
+    observeBrowserSignals(page, sink, () => 0, () => undefined);
+    const aborted = { errorText: "net::ERR_ABORTED" };
+    page.emit("requestfailed", { url: () => "sms:+15555550100?body=hi", method: () => "GET", failure: () => aborted });
+    page.emit("requestfailed", { url: () => "tel:+15555550100", method: () => "GET", failure: () => aborted });
+    page.emit("requestfailed", { url: () => "mailto:a@b.test", method: () => "GET", failure: () => aborted });
+    page.emit("requestfailed", { url: () => "http://x.test/api/broken", method: () => "GET", failure: () => ({ errorText: "net::ERR_CONNECTION_REFUSED" }) });
+    expect(sink.map((s) => s.text)).toEqual(["GET http://x.test/api/broken — net::ERR_CONNECTION_REFUSED"]);
   });
 });

@@ -13,7 +13,7 @@ import { emptyRecording } from "../record.js";
 import { redactText, redactUrl } from "../redact.js";
 import { summarizeTimings } from "../timing.js";
 import type { RunContext } from "./context.js";
-import { incompleteReason, safeUrl, withCause } from "./helpers.js";
+import { incompleteReason, quote, safeUrl, withCause } from "./helpers.js";
 
 export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
   const { cfg } = ctx;
@@ -48,15 +48,28 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ctx.incomplete = answerNotFoundReason(ctx.observed.pages());
   }
 
+  // #368 — the run ended still waiting on the reply to its last message: that missing reply is the
+  // run's own finding (named with the wait it was given), never folded into a generic stop reason.
+  if (ctx.awaitingReply && ctx.answer === undefined && ctx.failure === undefined && (ctx.stop === "no-progress" || ctx.stop === "blocked" || ctx.stop === "exhausted")) {
+    const sent = ctx.lastTurn?.sent;
+    const missing = `no reply within ${Math.round(ctx.replyWaitedMs / 1000)}s to the last message sent${sent === undefined || sent === "" ? "" : ` (${quote(sent, 80)})`}`;
+    ctx.incomplete = `${missing}; ${incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker)}`;
+  }
+
   await ctx.readOnly?.disarm();
   ctx.page.off("request", ctx.onRequestSeen);
   ctx.page.off("response", ctx.onDocumentResponse);
   const finished = ctx.recorder.tryFinish({ intent: cfg.goal });
   const cause = ctx.blockingCause();
+  // #371: a stop whose own reason already quotes the latest failed action's reason (a stuck type
+  // probe, a failed-actions streak) does not repeat it as its "last blocker".
+  const latest = ctx.blockers.latest;
+  const reasonCause =
+    cause !== null && latest !== null && cause === latest.text && ctx.incomplete !== null && ctx.incomplete.includes(latest.reason) ? null : cause;
   const finalOutcome: RunOutcome =
     ctx.stop === "done" && ctx.outcome !== null && finished.ok
       ? ctx.outcome
-      : { status: "incomplete", reason: withCause(incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker), ctx.stop, cause) };
+      : { status: "incomplete", reason: withCause(incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker), ctx.stop, reasonCause) };
   if (!finished.ok) {
     // The Recording itself failed its fail-closed checks (schema / a surviving secret). It is not
     // written; the run is reported crashed so this can never read as a pass.

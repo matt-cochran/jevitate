@@ -3,32 +3,33 @@ import type { Recording } from "@jevitate/recording";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
 import { authorJourney } from "./author-journey.js";
 
-// `discoveredRecording` is referenced inside the hoisted `vi.mock` factory, so
-// it must itself be hoisted (a plain top-level const would not be initialized
-// when the hoisted mock factory runs).
-const { discoveredRecording } = vi.hoisted(() => ({
-  discoveredRecording: {
-    version: "1.0",
-    site: "https://example.test",
-    pages: [
-      {
-        url: "/search",
-        steps: [
-          { step: { kind: "navigate", url: "/search", expect: { kind: "visible", target: { testId: "box" } } } },
-          { step: { kind: "fill", target: { testId: "q" }, value: { redacted: true, length: 7 }, expect: { kind: "visible", target: { testId: "results" } } } },
-        ],
-      },
-    ],
-  } as Recording,
+// `recordingWith` is referenced inside the hoisted `vi.mock` factory, so it must itself be hoisted
+// (a plain top-level const would not be initialized when the hoisted mock factory runs).
+const { recordingWith } = vi.hoisted(() => ({
+  recordingWith: (value: string): Recording =>
+    ({
+      version: "1.0",
+      site: "https://example.test",
+      pages: [
+        {
+          url: "/search",
+          steps: [
+            { step: { kind: "navigate", url: "/search", expect: { kind: "visible", target: { testId: "box" } } } },
+            { step: { kind: "fill", target: { testId: "q" }, value: { redacted: false, value }, expect: { kind: "visible", target: { testId: "results" } } } },
+          ],
+        },
+      ],
+    }) as Recording,
 }));
+const discoveredRecording = recordingWith("widgets");
 
-// The real `runGoalBasedMission` drives generation for each fill/select step it
-// executes; the mock simulates that so `ValueCapturingGenerationPort` (inside
-// `authorJourney`) captures a value for the single fill step of the recording.
+// The real `runGoalBasedMission` drives generation for each fill/select step it executes and records
+// the generated value in the clear; the mock does the same for the recording's single fill step.
 vi.mock("../missions/goal-based.js", () => ({
   runGoalBasedMission: vi.fn(async (cfg: { goal: string; gen: GenerationPort }) => {
-    await cfg.gen.generate("form.value", { fieldLabel: "q", goal: cfg.goal, visibleContext: "", history: [] });
-    return { outcome: "succeeded", assertionPassed: true, recording: discoveredRecording, transcript: [], finalUrl: "https://example.test/search", run: {} };
+    const res = await cfg.gen.generate("form.value", { fieldLabel: "q", goal: cfg.goal, visibleContext: "", history: [] });
+    const text = (res.output as { text: string }).text;
+    return { outcome: "succeeded", assertionPassed: true, checks: [], recording: recordingWith(text), transcript: [], finalUrl: "https://example.test/search", run: {} };
   }),
 }));
 
@@ -93,7 +94,8 @@ test("returns not-reached when the discovery mission does not succeed", async ()
     recording: discoveredRecording,
     transcript: [],
     finalUrl: "https://example.test/search",
-    run: {},
+    reason: "the model stopped: blocked by the paid-control guard (Run simulation)",
+    run: { stop: "blocked", decisions: 3, actions: 2, outcome: { status: "incomplete", reason: "blocked" } },
   });
 
   const result = await authorJourney({
@@ -109,7 +111,12 @@ test("returns not-reached when the discovery mission does not succeed", async ()
     journeyName: "Explore: search",
   });
 
-  expect(result).toEqual({ outcome: "not-reached", reason: "discovery mission blocked" });
+  expect(result).toMatchObject({
+    outcome: "not-reached",
+    reason: "discovery mission blocked: the model stopped: blocked by the paid-control guard (Run simulation)",
+    discovery: { outcome: "blocked", stop: "blocked", decisions: 3, actions: 2, runOutcome: { status: "incomplete", reason: "blocked" } },
+    takes: { requested: 1, run: 1, succeeded: 0 },
+  });
 });
 
 test("multi-take authoring (takes: 2) promotes a value that differs across takes to a variable", async () => {
@@ -202,4 +209,72 @@ test("#322: reloadThen is refused, and a success check is required", async () =>
     /reloadThen:visible:testId=x can't be authored into a Journey yet/,
   );
   await expect(authorJourney(base)).rejects.toThrow(/a success check is required/);
+});
+
+const take = (outcome: string, recording: Recording, diagnostics: Record<string, unknown> = {}) => ({
+  outcome,
+  recording,
+  diagnostics: { outcome, ...diagnostics },
+});
+
+test("#369: a runTake take's not-reached result carries its artifact paths and concrete reason", async () => {
+  const diagnostics = {
+    reason: "the success check did not hold: textIncludes:testId=status|Saved (saw \"Error\")",
+    stop: "done",
+    resultPath: "/logs/explore-1.result.json",
+    transcriptPath: "/logs/explore-1.transcript.json",
+    recordingPaths: ["/logs/explore-1.json"],
+    screenshotsDir: "/logs/explore-1.screenshots",
+  };
+  const runTake = vi.fn(async () => take("failed", discoveredRecording, diagnostics));
+  const result = await authorJourney({
+    goal: "save",
+    successAssertion: { kind: "visible", target: { testId: "results" } },
+    allowlist: ["https://example.test"],
+    startUrl: "https://example.test/search",
+    runTake,
+    takes: 3,
+    journeyId: "j",
+    journeyName: "J",
+  });
+  expect(runTake).toHaveBeenCalledTimes(1);
+  expect(result).toEqual({
+    outcome: "not-reached",
+    reason: `discovery mission failed: ${diagnostics.reason}`,
+    discovery: { outcome: "failed", ...diagnostics },
+    takes: { requested: 3, run: 1, succeeded: 0 },
+  });
+});
+
+test("#369: a code-typed (redacted) field becomes a secret parameter, never a kept value", async () => {
+  const withSecret: Recording = {
+    ...discoveredRecording,
+    pages: [
+      {
+        ...discoveredRecording.pages[0],
+        steps: [
+          ...discoveredRecording.pages[0].steps,
+          { step: { kind: "fill", target: { label: "Password" }, value: { redacted: true, length: 9 }, expect: { kind: "visible", target: { testId: "results" } } } },
+        ],
+      },
+    ],
+  };
+  const result = await authorJourney({
+    goal: "sign in and search",
+    successAssertion: { kind: "visible", target: { testId: "results" } },
+    allowlist: ["https://example.test"],
+    startUrl: "https://example.test/search",
+    runTake: async () => take("succeeded", withSecret, { resultPath: "/logs/r.result.json" }),
+    journeyId: "j",
+    journeyName: "J",
+  });
+  if (result.outcome !== "authored") throw new Error(`not authored: ${JSON.stringify(result)}`);
+  const steps = result.journey.recording.pages[0].steps.map((s) => s.step);
+  expect(steps[1]).toMatchObject({ kind: "fill", value: { redacted: false, value: "widgets" } });
+  expect(steps[2]).toMatchObject({ kind: "fill", value: { var: "secret1" } });
+  expect(result.journey.metadata.params).toEqual(["secret1"]);
+  expect(result.journey.metadata.parameters).toEqual([expect.objectContaining({ name: "secret1", secret: true })]);
+  expect(JSON.stringify(result.journey)).not.toContain("jevitate:code-typed-secret");
+  expect(result.discovery).toEqual({ outcome: "succeeded", resultPath: "/logs/r.result.json" });
+  expect(result.takes).toEqual({ requested: 1, run: 1, succeeded: 1 });
 });

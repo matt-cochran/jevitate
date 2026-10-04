@@ -51,7 +51,13 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
   // told to explore) while the page offers controls; a model that insists ends `inconclusive`.
   const untried = modelControls.filter((c) => c.enabled);
   // A find-out goal that already made a grounded report attempt here searched the page (#207).
-  if (ctx.actionAttempts === 0 && untried.length > 0 && ctx.reportRejections === 0) {
+  // #377: never refused while the success checks already hold on this page — only when they do not.
+  if (
+    ctx.actionAttempts === 0 &&
+    untried.length > 0 &&
+    ctx.reportRejections === 0 &&
+    !(await (ctx.cfg.successChecksHoldNow?.() ?? Promise.resolve(false)).catch(() => false))
+  ) {
     ctx.earlyBlocked += 1;
     if (ctx.earlyBlocked <= MAX_EARLY_BLOCKED_REFUSALS) {
       const nav = [...untried.filter((c) => (c.landmark ?? null) !== null), ...untried.filter((c) => (c.landmark ?? null) === null)];
