@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [0.5.0] – unreleased
+## [0.5.0] – 2026-10-04
 
 0.5.0 makes goal runs end with the truth more often and gives them the controls real apps need.
 Success checks can hold on different pages (`--success-when each`) and match part of a text
