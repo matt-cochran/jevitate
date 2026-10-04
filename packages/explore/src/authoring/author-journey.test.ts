@@ -142,3 +142,64 @@ test("multi-take authoring (takes: 2) promotes a value that differs across takes
   const fillStep = result.journey.recording.pages[0].steps[1].step;
   if (fillStep.kind === "fill") expect(fillStep.value).toEqual({ var: expect.any(String) });
 });
+
+test("#322: network success checks author a Journey — kept as networkChecks, page checks asserted in order", async () => {
+  const result = await authorJourney({
+    goal: "save the settings",
+    successChecks: [
+      { kind: "requestMade", method: "POST", pathGlob: "/api.v1.Settings/Save" },
+      { kind: "responseStatus", method: "POST", pathGlob: "/api.v1.Settings/Save", status: { class: 2 } },
+    ],
+    allowlist: ["https://example.test"],
+    startUrl: "https://example.test/search",
+    actor: {} as never,
+    judgment: fakeJudgment,
+    generation: fakeGeneration,
+    takes: 1,
+    journeyId: "save-settings",
+    journeyName: "Save settings",
+  });
+  expect(result.outcome).toBe("authored");
+  if (result.outcome !== "authored") throw new Error("unreachable");
+  expect(result.journey.metadata.networkChecks).toEqual([
+    { kind: "requestMade", method: "POST", pathGlob: "/api.v1.Settings/Save" },
+    { kind: "responseStatus", method: "POST", pathGlob: "/api.v1.Settings/Save", status: { class: 2 } },
+  ]);
+  // No page check: no assert step is appended.
+  const steps = result.journey.recording.pages.flatMap((p) => p.steps.map((s) => s.step.kind));
+  expect(steps).not.toContain("assert");
+
+  const both = await authorJourney({
+    goal: "search for widgets",
+    successAssertion: { kind: "visible", target: { testId: "results" } },
+    successChecks: [{ kind: "page", assertion: { kind: "urlIncludes", text: "/search" } }, { kind: "requestMade", method: "GET", pathGlob: "/api/search" }],
+    allowlist: ["https://example.test"],
+    startUrl: "https://example.test/search",
+    actor: {} as never,
+    judgment: fakeJudgment,
+    generation: fakeGeneration,
+    journeyId: "search",
+    journeyName: "Search",
+  });
+  if (both.outcome !== "authored") throw new Error("unreachable");
+  const asserts = both.journey.recording.pages.flatMap((p) => p.steps.map((s) => s.step)).filter((s) => s.kind === "assert");
+  expect(asserts.map((s) => (s.kind === "assert" ? s.check.kind : null))).toEqual(["visible", "urlIncludes"]);
+  expect(both.journey.metadata.networkChecks).toEqual([{ kind: "requestMade", method: "GET", pathGlob: "/api/search" }]);
+});
+
+test("#322: reloadThen is refused, and a success check is required", async () => {
+  const base = {
+    goal: "save",
+    allowlist: ["https://example.test"],
+    startUrl: "https://example.test/search",
+    actor: {} as never,
+    judgment: fakeJudgment,
+    generation: fakeGeneration,
+    journeyId: "j",
+    journeyName: "J",
+  };
+  await expect(authorJourney({ ...base, successChecks: [{ kind: "reloadThen", assertion: { kind: "visible", target: { testId: "x" } } }] })).rejects.toThrow(
+    /reloadThen:visible:testId=x can't be authored into a Journey yet/,
+  );
+  await expect(authorJourney(base)).rejects.toThrow(/a success check is required/);
+});

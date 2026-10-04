@@ -16,6 +16,7 @@ import { JourneyRunner, type JourneyRunResult, type SelfHealer, type SiteGateDep
 import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
+import { withNetworkChecks } from "./journey-network-checks.js";
 
 /**
  * Distinct from `@jevitate/journey`'s `ParamValidationError` so CLI/API callers
@@ -281,7 +282,13 @@ export async function runJourneyProgrammatically(
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer);
       let result: JourneyRunResult;
       try {
-        result = redactSecretParams(await runner.run({ journey, params, policy }), journey, params);
+        // #322: a full replay (never an anchored prefix) must also satisfy the Journey's network checks.
+        const networkChecks = journey === full ? journey.metadata.networkChecks : undefined;
+        result = redactSecretParams(
+          await withNetworkChecks(session.page, networkChecks, () => runner.run({ journey, params, policy })),
+          journey,
+          params,
+        );
       } finally {
         await gate.done();
       }

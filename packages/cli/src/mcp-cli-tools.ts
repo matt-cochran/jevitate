@@ -384,7 +384,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       params: { ...EXTENSION,
         url: s("--url"),
         goal: s("--goal"),
-        success: s("--success"),
+        success: many("--success"),
         allow: many("--allow"),
         id: s("--id"),
         name: s("--name"),
