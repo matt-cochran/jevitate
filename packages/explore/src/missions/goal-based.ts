@@ -931,6 +931,21 @@ function hangResult(run: ExploreRun, h: NonNullable<ExploreRun["hang"]>, reprodu
  * requests from BEFORE the oracle's own reload, and (#202) only those sent after the run's first
  * action — only what the run did counts. Results keep the order the checks were given in.
  */
+/**
+ * #335: an exact `text=` target that matched no element while some element CONTAINS that text —
+ * the usual reason a visible text "did not hold" (`text=` compares an element's whole text). Says
+ * so, with the substring form to use. Empty for any other target or failure.
+ */
+async function exactTextHint(page: Page, assertion: Assertion): Promise<string> {
+  const target = "target" in assertion ? assertion.target : undefined;
+  if (target === undefined || target.text === undefined || target.textMatch === "contains" || target.testId !== undefined || (target.role !== undefined && target.name !== undefined) || target.label !== undefined) return "";
+  const exact = await page.getByText(target.text, { exact: true }).count().catch(() => -1);
+  if (exact !== 0) return "";
+  const containing = await page.getByText(target.text).count().catch(() => 0);
+  if (containing === 0) return "";
+  return ` (no element's whole text is exactly ${JSON.stringify(target.text)} — text= matches an element's whole text — but ${containing} element(s) contain it: use textContains=${target.text})`;
+}
+
 async function evaluateChecks(
   cfg: GoalBasedMissionConfig,
   checks: readonly SuccessCheck[],
@@ -962,7 +977,9 @@ async function evaluateChecks(
     // (page text or a form value is untrusted, and may carry a secret) — never a full-page dump.
     const read = await readAssertionText(actor, assertion);
     const detail =
-      read === null ? `did not hold ${when}` : `did not hold ${when} (read: ${quoteRead(redactText(read, cfg.secrets ?? []))})`;
+      read === null
+        ? `did not hold ${when}${await exactTextHint(page, assertion)}`
+        : `did not hold ${when} (read: ${quoteRead(redactText(read, cfg.secrets ?? []))})`;
     return { check: describeCheck(check), passed, detail };
   };
 

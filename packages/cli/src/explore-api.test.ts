@@ -152,6 +152,16 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     });
   });
 
+  it("#335: textContains= matches part of an element's text; text= stays exact", () => {
+    expect(parseAssertionSpec("textIncludes:textContains=This demo has|This demo has")).toEqual({
+      kind: "textIncludes",
+      target: { text: "This demo has", textMatch: "contains" },
+      text: "This demo has",
+    });
+    expect(parseAssertionSpec("visible:text=Saved")).toEqual({ kind: "visible", target: { text: "Saved" } });
+    expect(() => parseAssertionSpec("visible:Saved banner")).toThrow(/textContains=<part of the text>/);
+  });
+
   it("rejects malformed specs", () => {
     expect(() => parseAssertionSpec("nope")).toThrow();
     expect(() => parseAssertionSpec("urlIncludes:")).toThrow();
@@ -174,7 +184,7 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
   it("#213: a bare descriptor that is not valid lowercase CSS is refused with a key=value hint, never guessed as text or CSS", () => {
     // "Display name" — an accessible-name phrase, not a tag name: the capital letters refuse it.
     expect(() => parseAssertionSpec("visible:Display name")).toThrow(
-      /no usable selector — use css=<selector>, label=<text>, testId=<id>, role=<role>;name=<name>, or text=<text>/,
+      /no usable selector — use css=<selector>, label=<text>, testId=<id>, role=<role>;name=<name>, text=<whole text> or textContains=<part of the text>/,
     );
     expect(() => parseAssertionSpec("visible:Save button")).toThrow(/no usable selector/);
   });
