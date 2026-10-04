@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (574 exports)
+# @jevitate/explore (579 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -316,6 +316,10 @@
   authorJourney: function
   AuthorJourneyRequest: interface
   AuthorJourneyResult: type-alias
+  AuthorTake: interface
+  AuthorTakeCounts: interface
+  AuthorTakeDiagnostics: interface
+  AuthorTakeRunner: type-alias
   autoDecidePostdoc: function
   awaitWrites: function
   BlockedWrite: interface
@@ -508,6 +512,7 @@
   GoalBasedOutcome: type-alias
   GoalBasedResult: interface
   goalListsSeveral: function
+  goalResultDiagnostics: function
   groundAnswer: function
   groupStepSignals: function
   HANG_PROBE_MS: variable
