@@ -88,6 +88,7 @@ export function redactControl<
     readonly summary: string;
     readonly value?: string | null;
     readonly scope?: string | null;
+    readonly heading?: string | null;
     readonly href?: string | null;
   },
 >(c: C, secrets: readonly string[]): C {
@@ -99,6 +100,7 @@ export function redactControl<
     summary: r(c.summary),
     ...(c.value === undefined || c.value === null ? {} : { value: r(c.value) }),
     ...(c.scope === undefined || c.scope === null ? {} : { scope: r(c.scope) }),
+    ...(c.heading === undefined || c.heading === null ? {} : { heading: r(c.heading) }),
     ...(c.href === undefined || c.href === null ? {} : { href: r(c.href) }),
   };
 }

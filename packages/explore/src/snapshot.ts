@@ -78,6 +78,13 @@ export interface Control {
    * vs "Analyze" the confirm); never part of the signature or the descriptor.
    */
   readonly scope?: string | null;
+  /**
+   * #356: the text of the nearest VISIBLE heading before the control in document order (the
+   * heading of the screen / section it sits under), or null. Part of the repeat guard's action
+   * identity: two same-labelled controls under different headings on one route (an SPA's two
+   * screens) are different actions. Never part of the signature or the descriptor.
+   */
+  readonly heading?: string | null;
   /** True for a control that submits its form (a submit button / `<input type=submit|image>`). */
   readonly submits?: boolean;
   /** A link's resolved destination (`a[href]`), so a mission can tell where it leads without clicking. */
@@ -219,6 +226,8 @@ interface ControlFacts {
   readonly container: string | null;
   /** The nearest named dialog/region, as the model reads it. See `Control.scope`. */
   readonly scope: string | null;
+  /** The nearest visible heading before the control. See `Control.heading`. */
+  readonly heading: string | null;
   /** Whether activating the control submits its form. */
   readonly submits: boolean;
   /** A link's resolved `href`, or null. */
@@ -457,6 +466,15 @@ function readControlFacts(node: Node): ControlFacts {
     const label = (norm(scopeEl.getAttribute("aria-label")) || labelledBy || heading).slice(0, 60);
     scope = label === "" ? kind : `${kind} "${label}"`;
   }
+  // #356: the heading the control sits under — the last visible heading before it in document
+  // order (a heading that CONTAINS the control is not before it). A hidden screen's heading is skipped.
+  let sectionHeading: string | null = null;
+  for (const h of Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]'))) {
+    if (h.contains(el)) continue;
+    if ((h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) === 0) break;
+    const t = norm(h.textContent);
+    if (t !== "" && h.getClientRects().length > 0) sectionHeading = t.slice(0, 120);
+  }
   const buttonType = tag === "button" ? (el.getAttribute("type") ?? "submit").toLowerCase() : null;
   const submits =
     owner !== null && (buttonType === "submit" || inputType === "submit" || inputType === "image");
@@ -503,6 +521,7 @@ function readControlFacts(node: Node): ControlFacts {
     form,
     container,
     scope,
+    heading: sectionHeading,
     submits,
     href,
     ariaHasPopup,
@@ -718,6 +737,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         form: facts.form,
         container: facts.container,
         scope: facts.scope,
+        heading: facts.heading,
         submits: facts.submits,
         // Only the path matters (scope checks); sensitive query values are masked like every URL.
         href: facts.href === null ? null : redactUrl(facts.href),

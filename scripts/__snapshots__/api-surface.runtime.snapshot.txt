@@ -484,6 +484,7 @@
   reproductionStatus: function
   requestEndpoint: function
   requestHeadersOf: function
+  requestSignature: function
   resolveBounds: function
   resolveCoverageSufficiencyThresholds: function
   resolveCoverageThresholds: function
