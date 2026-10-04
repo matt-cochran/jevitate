@@ -86,6 +86,8 @@ export interface RunExplorationOptions {
   readonly secretFields?: readonly SecretField[];
   /** #324: runs a `cmd:` secret field's command at type time (CLI `--allow-secret-cmd`). */
   readonly secretCommand?: SecretCommandRunner;
+  /** #359: `--secret-cmd-attempts`: runs of one `cmd:` binding's command per run (default 3). */
+  readonly secretCommandAttempts?: number;
   /** #281: fields typed with a file's exact text (CLI `--type-fixture`, read by the CLI). */
   readonly typeFixtures?: readonly TypeFixture[];
   /**
@@ -399,6 +401,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
           const out = await runSecretCommand(command);
           const value = out.trim();
           if (value !== "" && secrets !== undefined && !secrets.includes(value)) secrets.push(value);
+          // #360: masked in every screenshot and video frame from now on — before the value is typed.
+          if (value !== "") await capture.mask.addSecret(value);
           return out;
         };
   // The state the mission starts from — replays restore THIS fixture and rebind its recorded outputs.
@@ -523,6 +527,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       secrets,
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
       ...(secretCommand === undefined ? {} : { secretCommand }),
+      ...(opts.secretCommandAttempts === undefined ? {} : { secretCommandAttempts: opts.secretCommandAttempts }),
       ...(opts.typeFixtures === undefined ? {} : { typeFixtures: opts.typeFixtures }),
       site: origin,
       fixture,

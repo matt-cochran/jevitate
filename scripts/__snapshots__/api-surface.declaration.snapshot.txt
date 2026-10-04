@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (571 exports)
+# @jevitate/explore (574 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -283,6 +283,7 @@
   ActionDeltas: class
   ActionDeltasOptions: interface
   ActionDeltaStats: interface
+  ActionIdentity: interface
   actionName: function
   ActResult: interface
   AdversarialCoverage: interface
@@ -390,6 +391,7 @@
   DEFAULT_HANG_REPLAYS: variable
   DEFAULT_LONG_POLL_MS: variable
   DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: variable
+  DEFAULT_SECRET_COMMAND_ATTEMPTS: variable
   DEFAULT_STALL_MS: variable
   DEFAULT_VERIFY_REPLAYS: variable
   defaultLoadPerCore: function
@@ -706,6 +708,7 @@
   requestEndpoint: function
   requestHeadersOf: function
   RequestKind: type-alias
+  requestSignature: function
   RequestTiming: interface
   resolveBounds: function
   resolveCoverageSufficiencyThresholds: function
@@ -1117,7 +1120,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (142 exports)
+# @jevitate/playwright (145 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1204,6 +1207,8 @@
   OpenOptions: interface
   OrphanCleanup: interface
   orphanReason: function
+  OwnBrowserTeardown: interface
+  OwnBrowserTeardownDeps: interface
   OWNER_MARKER_SWITCH: variable
   OwnerMarker: interface
   ownerMarkerArg: function
@@ -1250,6 +1255,7 @@
   SlotHolder: interface
   SlotState: interface
   systemProcessTable: function
+  terminateOwnBrowsersSync: function
   throttleDecision: function
   ThrottleDecision: interface
   ThrottleLevel: type-alias

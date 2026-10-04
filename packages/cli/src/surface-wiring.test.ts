@@ -184,6 +184,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
+    secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
     hostHealth: SEAM,
     successChecks: "a queued goal carries one successAssertion",
     successWhen: QUEUE_NARROW,
@@ -233,6 +234,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── check suites ────────────────────────────────────────────────────────────────────────────
   "check-execute.ts runExploration": {
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
+    secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
     hostHealth: SEAM,
     typeFixtures: "#281: a file typed verbatim is an explore --type-fixture binding; a suite goal declares none",
     successAssertion: "a suite goal passes success specs as successChecks",
@@ -257,6 +259,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "check-execute.ts runUsabilityMission": {
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
+    secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
     hostHealth: SEAM,
     env: SEAM,
     configPath: SEAM,

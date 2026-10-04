@@ -7,6 +7,7 @@
 import { act } from "../act.js";
 import { redactText } from "../redact.js";
 import {
+  DEFAULT_SECRET_COMMAND_ATTEMPTS,
   boundSecretField,
   resolveSecretFieldValue,
   secretFieldNeedsValue,
@@ -24,6 +25,15 @@ import type { ActStep, Flow } from "./step.js";
  * now is registered as a run secret at once, so every redaction seam scrubs it from here on.
  */
 async function boundValue(ctx: RunContext, binding: SecretField, at: number): Promise<{ readonly ok: true; readonly value: string } | { readonly ok: false; readonly reason: string }> {
+  // #359: a cmd: command runs at most N times per binding per run — never again once spent.
+  if (binding.kind === "cmd") {
+    const max = ctx.cfg.secretCommandAttempts ?? DEFAULT_SECRET_COMMAND_ATTEMPTS;
+    const runs = ctx.secretCommandRuns.get(binding.descriptor) ?? 0;
+    if (runs >= max) {
+      return { ok: false, reason: `${secretPlaceholder(binding)}: its command already ran ${runs} time(s) this run, the limit (--secret-cmd-attempts ${max}); not running it again` };
+    }
+    ctx.secretCommandRuns.set(binding.descriptor, runs + 1);
+  }
   try {
     const value = await resolveSecretFieldValue(binding, at, ctx.cfg.secretCommand);
     if (binding.kind === "cmd" && !ctx.secrets.includes(value)) ctx.secrets.push(value);

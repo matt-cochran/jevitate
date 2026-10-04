@@ -323,6 +323,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         "--secret-field": OMIT.envSecret,
         "--totp": OMIT.envSecret,
         "--allow-secret-cmd": OMIT.envSecret,
+        "--secret-cmd-attempts": OMIT.envSecret,
         "--allow-log-cmd": OMIT.logCmd,
         "--log-source": OMIT.logCmd,
         "--log-defect": OMIT.logCmd,

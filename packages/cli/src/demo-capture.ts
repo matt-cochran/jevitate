@@ -412,6 +412,8 @@ const MASK_RUNTIME = String.raw`((cfg) => {
       return out;
     },
     learn(values) { if (Array.isArray(values)) for (const v of values) learn(v); dirty = true; return true; },
+    // #360: a secret the run itself read mid-run (a cmd: secret source): masked from now on, whatever its length.
+    add(values) { if (Array.isArray(values)) for (const v of values) if (typeof v === "string" && v.trim() !== "" && !SECRETS.includes(v)) SECRETS.push(v); dirty = true; return true; },
     learned() { return LEARNED.slice(); },
     highlight(el) { highlightEl = el || null; try { update(); } catch (e) { /* presentation only */ } return highlightEl !== null; },
     clearHighlight() { highlightEl = null; try { update(); } catch (e) { /* presentation only */ } return true; },
@@ -445,6 +447,7 @@ function errText(e: unknown): string {
 type MaskApi = {
   verify(): MaskCheck;
   learn(values: string[]): boolean;
+  add(values: string[]): boolean;
   learned(): string[];
   highlight(e: Element): boolean;
   clearHighlight(): boolean;
@@ -461,6 +464,10 @@ export class SecretPixelMask {
   readonly #source: string;
   readonly #name: string;
   readonly #contexts = new WeakSet<BrowserContext>();
+  /** The contexts the mask is installed in, to reach their frames when a secret is added mid-run (#360). */
+  readonly #installed = new Set<BrowserContext>();
+  /** #360: secrets the run read mid-run (a cmd: source), every form — in memory only, never written. */
+  readonly #added = new Set<string>();
   /** Secrets the app revealed mid-run (#298), learned by the page mask — in memory only, never written. */
   readonly #learned = new Set<string>();
   /**
@@ -494,6 +501,10 @@ export class SecretPixelMask {
         throw new MaskUnavailableError(`could not install the pixel mask: ${errText(e)}`);
       }
       this.#contexts.add(ctx);
+      this.#installed.add(ctx);
+      ctx.once("close", () => this.#installed.delete(ctx));
+      // A secret added before this context existed (#360) is masked in its documents from the first paint.
+      if (this.#added.size > 0) await this.#addInitScript(ctx, [...this.#added]);
     }
     for (const p of ctx.pages()) for (const f of p.frames()) await this.#inject(f);
   }
@@ -509,6 +520,49 @@ export class SecretPixelMask {
   }
 
   /**
+   * #360: masks `value` from now on — a secret the run read mid-run (a `cmd:` secret source), so it
+   * never had a place in the constructor's list. Every installed context gets it for its future
+   * documents (an init script) and every current frame at once; each capture re-syncs it before it
+   * proves the mask. Call it before the value is typed, so no frame shows it unmasked. Throws
+   * {@link MaskUnavailableError} when a live frame cannot take it (the capture then fails closed).
+   */
+  async addSecret(value: string): Promise<void> {
+    const fresh = [...secretForms(value)].filter((f) => f.trim() !== "" && !this.#added.has(f));
+    if (fresh.length === 0) return;
+    for (const f of fresh) this.#added.add(f);
+    for (const ctx of this.#installed) {
+      await this.#addInitScript(ctx, fresh);
+      for (const p of ctx.pages()) for (const frame of p.frames()) await this.#addTo(frame, fresh);
+    }
+  }
+
+  async #addInitScript(ctx: BrowserContext, values: readonly string[]): Promise<void> {
+    // JSON inside a JS expression; `<` escaped as for the runtime's own config.
+    const args = JSON.stringify([this.#name, values]).replace(/</g, "\\u003c");
+    try {
+      await within(ctx.addInitScript({ content: `((a) => { const api = window[a[0]]; if (api) api.add(a[1]); })(${args})` }), "adding a secret to the pixel mask");
+    } catch (e) {
+      throw new MaskUnavailableError(`could not add a secret to the pixel mask: ${errText(e)}`);
+    }
+  }
+
+  async #addTo(frame: Frame, values: readonly string[]): Promise<void> {
+    if (frame.isDetached()) return;
+    try {
+      await within(
+        frame.evaluate(
+          ([name, vals]: [string, string[]]) => (window as unknown as Record<string, MaskApi | undefined>)[name]?.add(vals) ?? false,
+          [this.#name, [...values]] as [string, string[]],
+        ),
+        "adding a secret to the pixel mask",
+      );
+    } catch (e) {
+      if (frame.isDetached()) return;
+      throw new MaskUnavailableError(`could not add a secret to the pixel mask in a frame: ${errText(e)}`);
+    }
+  }
+
+  /**
    * The secrets the app revealed during the run (#298), as learned so far — for redacting what the
    * run writes about its captures (the screenshot index). Never persisted.
    */
@@ -520,13 +574,14 @@ export class SecretPixelMask {
   async #sync(frame: Frame): Promise<void> {
     const learned = await within(
       frame.evaluate(
-        ([name, known]: [string, string[]]) => {
+        ([name, known, added]: [string, string[], string[]]) => {
           const api = (window as unknown as Record<string, MaskApi | undefined>)[name];
           if (api === undefined) return null;
           api.learn(known);
+          api.add(added);
           return api.learned();
         },
-        [this.#name, [...this.#learned]] as [string, string[]],
+        [this.#name, [...this.#learned], [...this.#added]] as [string, string[], string[]],
       ),
       "syncing the pixel mask",
     );

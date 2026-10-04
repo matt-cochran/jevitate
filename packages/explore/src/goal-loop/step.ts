@@ -87,6 +87,8 @@ export function newStep(ctx: RunContext, input: StepInput) {
     if (op === "type" || op === "send") ctx.auth.noteTyped(target, snap.url, actOk, target !== null && ctx.isBound(target));
     // #225: typed credentials make the pending submit a sign-in, never a save.
     if ((op === "type" || op === "send") && actOk && target !== null && (ctx.isBound(target) || isCredentialField(target))) ctx.save.noteCredential();
+    // #338: a click into a section the goal names puts the run in the goal's area.
+    if (actOk && target !== null && op === "click") ctx.goalFocus.noteClicked(target, ctx.chrome);
     if (actOk && target !== null && (op === "click" || op === "type" || op === "select")) {
       const steps = ctx.nextFrom.get(snap.signature) ?? [];
       // The first visit's steps only: a return must not overwrite what the state led to.

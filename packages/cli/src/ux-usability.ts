@@ -69,6 +69,8 @@ export interface RunUsabilityMissionOptions {
   readonly secretFields?: readonly SecretField[];
   /** #324: runs a `cmd:` secret field's command at type time (CLI `--allow-secret-cmd`). */
   readonly secretCommand?: SecretCommandRunner;
+  /** #359: `--secret-cmd-attempts`: runs of one `cmd:` binding's command per run (default 3). */
+  readonly secretCommandAttempts?: number;
   /** Tuning of the run-signal oracles (#96), e.g. the hung-request floor. Defaults suit real apps. */
   readonly signals?: SignalOptions;
   /** Local file the `upload` op attaches (CLI `--fixture`); validated before any browser opens. */
@@ -391,6 +393,20 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
     }),
   });
+  // #324: the engine runs a cmd: binding's command at type time. A value read mid-run joins this
+  // run's secrets at once (screenshots' scan, result, evidence, report) and — #360 — the run's pixel
+  // mask, before the value is typed. (It was once handed to UsabilityCapture, which has no such
+  // option, so a usability run could not type a cmd: field at all.)
+  const uxSecretCommand: SecretCommandRunner | undefined =
+    opts.secretCommand === undefined
+      ? undefined
+      : async (command: string) => {
+          const out = await opts.secretCommand!(command);
+          const value = out.trim();
+          if (value !== "" && !secrets.includes(value)) secrets.push(value);
+          if (value !== "") await runCapture.mask.addSecret(value);
+          return out;
+        };
   // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
   const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const capture = new UsabilityCapture({
@@ -398,17 +414,6 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     screenshotDir,
     secrets,
     ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
-    ...(opts.secretCommand === undefined
-      ? {}
-      : {
-          // #324: a value read mid-run joins this run's secrets at once (result, evidence, report).
-          secretCommand: async (command: string) => {
-            const out = await opts.secretCommand!(command);
-            const value = out.trim();
-            if (value !== "" && !secrets.includes(value)) secrets.push(value);
-            return out;
-          },
-        }),
   });
   armedCapture = capture;
   // The usability capture (screenshots) and the journal (crash-safe flush) are the EXISTING listener
@@ -468,6 +473,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       hostHealth: health,
       demoOverlay: demoOverlayOf(opts.browser),
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
+      ...(uxSecretCommand === undefined ? {} : { secretCommand: uxSecretCommand }),
+      ...(opts.secretCommandAttempts === undefined ? {} : { secretCommandAttempts: opts.secretCommandAttempts }),
       actor,
       judge: opts.judge,
       gen: opts.gen,
@@ -828,7 +835,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         analysisUnavailable: why,
       };
       // Persisted like every other mission's typed result, so MCP `get_mission_result` can read it (#117).
-      return await withRunEvidence({ ...unavailable, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, unavailable.exitCode, unavailable, runUsage) }, evidenceOf(opts, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]), triageOf(opts, serverLogRun, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]));
+      return await withRunEvidence({ ...unavailable, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, unavailable.exitCode, unavailable, runUsage) }, evidenceOf(opts, secrets), triageOf(opts, serverLogRun, secrets));
     }
     const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
       minConfidence,
@@ -839,7 +846,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     const reviewed = { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
-    return await withRunEvidence({ ...reviewed, resultPath: writeMissionResult(journal.recordingPath, runOutcome, reviewed.exitCode, reviewed, runUsage) }, evidenceOf(opts, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]), triageOf(opts, serverLogRun, [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)]));
+    return await withRunEvidence({ ...reviewed, resultPath: writeMissionResult(journal.recordingPath, runOutcome, reviewed.exitCode, reviewed, runUsage) }, evidenceOf(opts, secrets), triageOf(opts, serverLogRun, secrets));
   } finally {
     capture.detach();
     disarmKillSwitch();
