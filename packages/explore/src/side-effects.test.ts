@@ -5,7 +5,7 @@ import { FakeGenerationGateway, type Answer, type JudgmentPort, type JudgmentSta
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { explore } from "./explore.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
-import { SideEffectGuard, SideEffectLog, requestSignature } from "./side-effects.js";
+import { SideEffectGuard, SideEffectLog, isBookkeepingRequest, requestSignature, screenState } from "./side-effects.js";
 import { withSession, useSkippingTime } from "./testkit.js";
 
 // #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
@@ -361,5 +361,115 @@ describe("SideEffectGuard — an action is what it is and does, not its label (#
   it("requestSignature: method + templated path, carrying an RPC method", () => {
     expect(requestSignature("post", "/api/items/42")).toBe("POST /api/items/:id");
     expect(requestSignature("POST", "/pkg.v1.ShareService/RetryShareDomain")).toBe("POST /pkg.v1.ShareService/RetryShareDomain");
+  });
+});
+
+describe("SideEffectGuard — bookkeeping is not a side effect (#374)", () => {
+  const req = (path: string, extra: Partial<CapturedRequest> = {}): CapturedRequest => ({
+    method: "POST",
+    url: `http://x${path}`,
+    path,
+    status: 200,
+    failed: false,
+    requestContentType: "application/connect+json",
+    ...extra,
+  });
+
+  it("classifies analytics events, beacons and read markers — never a real write", () => {
+    for (const path of [
+      "/showcase.v1.ShowcaseService/RecordShowcaseEvent",
+      "/inbox.v1.InboxService/MarkConversationRead",
+      "/app.v1.Telemetry/TrackPageView",
+      "/api/analytics/events",
+      "/telemetry",
+      "/api/messages/42/read",
+      "/api/notifications/7/mark-as-seen",
+    ])
+      expect(isBookkeepingRequest({ path }), path).toBe(true);
+    expect(isBookkeepingRequest({ path: "/api/whatever", resourceType: "ping" })).toBe(true);
+    for (const path of [
+      "/share.v1.ShareService/RetryShareDomain",
+      "/cal.v1.CalendarService/CreateEvent",
+      "/api/events",
+      "/api/notes",
+      "/read",
+      "/api/simulations",
+    ])
+      expect(isBookkeepingRequest({ path }), path).toBe(false);
+  });
+
+  it("a click that only fired bookkeeping may be clicked again; a real write fired alongside is still guarded", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("chat", "Chat with us", "/a", 0);
+    finish(req("/showcase.v1.ShowcaseService/RecordShowcaseEvent"));
+    finish(req("/api/analytics/events", { requestContentType: "application/json" }));
+    g.settle();
+    expect(g.check("chat", "/a", PAGE)).toEqual({ refuse: false });
+    expect(g.lastClick()?.writes).toEqual([]);
+    g.beginClick("row", "Alex Morgan", "/a", 10);
+    finish(req("/inbox.v1.InboxService/MarkConversationRead"));
+    g.settle();
+    expect(g.check("row", "/a", PAGE)).toEqual({ refuse: false });
+    g.beginClick("send", "Send", "/a", 20);
+    finish(req("/inbox.v1.InboxService/MarkConversationRead"));
+    finish(req("/inbox.v1.InboxService/SendMessage"));
+    g.settle();
+    const v = g.check("send", "/a", PAGE);
+    expect(v).toMatchObject({ refuse: true, inflight: false });
+    expect(v.refuse && v.reason).toContain("SendMessage");
+    expect(v.refuse && v.reason).not.toContain("MarkConversationRead");
+  });
+});
+
+describe("SideEffectGuard — the screen moved on (#380)", () => {
+  const CONTROLS = [{ role: "button", name: "I've changed my nameservers", enabled: true }];
+  const rpc = (method: string, status: number | null = 200): CapturedRequest => ({
+    method: "POST",
+    url: `http://x/share.v1.ShareService/${method}`,
+    path: `/share.v1.ShareService/${method}`,
+    status,
+    // null + not failed: the outcome is unknown (the page navigated away) — the server may have run it.
+    failed: false,
+  });
+  const S0 = screenState(CONTROLS, "Point your nameservers at ns1, then tell us.");
+  const S1 = screenState(CONTROLS, "Checking your nameservers.");
+  const S2 = screenState(CONTROLS, "The nameservers still point elsewhere. Tell us again.");
+  const page = (state?: string) => ({ ...PAGE, ...(state === undefined ? {} : { state }) });
+
+  it("re-allows a finished write's control once the screen differs from before AND after it", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("changed", "I've changed my nameservers", "/domain", 0, S0);
+    finish(rpc("RefreshShareDomain"));
+    g.settle(S1);
+    // The screen it produced, unchanged: a true repeat.
+    const same = g.check("changed", "/domain", page(S1));
+    expect(same).toMatchObject({ refuse: true, inflight: false });
+    expect(same.refuse && same.reason).toContain("POST /share.v1.ShareService/RefreshShareDomain");
+    expect(same.refuse && same.reason).toContain("the screen has not moved on since");
+    // Back where it was clicked (a toast gone, a reload): still the same action.
+    expect(g.check("changed", "/domain", page(S0)).refuse).toBe(true);
+    // No state given (a paid / destructive control): the rule never applies.
+    expect(g.check("changed", "/domain", page()).refuse).toBe(true);
+    // The screen moved on: allowed — and the next click is recorded by what IT sends.
+    expect(g.check("changed", "/domain", page(S2))).toEqual({ refuse: false });
+    g.beginClick("changed", "I've changed my nameservers", "/domain", 10, S2);
+    finish(rpc("RetryShareDomain"));
+    const S3 = screenState(CONTROLS, "Domain connected.");
+    g.settle(S3);
+    const again = g.check("changed", "/domain", page(S3));
+    expect(again.refuse && again.reason).toContain("RetryShareDomain");
+  });
+
+  it("a write with no known outcome never lifts it, and digits alone are no new state", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("changed", "I've changed my nameservers", "/domain", 0, S0);
+    finish(rpc("RefreshShareDomain", null));
+    g.settle(S1);
+    expect(g.check("changed", "/domain", page(S2)).refuse).toBe(true);
+    expect(screenState(CONTROLS, "Last checked 12 s ago")).toBe(screenState(CONTROLS, "Last checked  9 s ago"));
+    expect(screenState(CONTROLS, "a")).not.toBe(screenState([{ role: "button", name: "Check status", enabled: true }], "a"));
   });
 });

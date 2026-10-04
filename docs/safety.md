@@ -100,6 +100,21 @@ security bug, and how to report one.
   not block a different "Continue" that sends `POST /api/b`. A refusal names the request the
   earlier click sent (method + templated path, such as `POST /api/items/:id`). While that
   control's write is still in flight, the run waits for it, even if the screen around it changed.
+  Bookkeeping requests never count as a click's side effect: a first-party analytics or telemetry
+  event (an RPC such as `RecordShowcaseEvent` or `TrackPageView`, a POST under `/analytics/` or
+  `/telemetry`, a `navigator.sendBeacon` ping), a heartbeat, and an idempotent read marker (an RPC
+  such as `MarkConversationRead`, a POST to `…/read` or `…/mark-as-seen`). Opening a chat or a
+  conversation row again is therefore allowed. Declare an app-specific one with `--read-rpc`
+  (for example `--read-rpc 'Log*'` or `--read-rpc '/api/stats/*'`). A real write fired by the same
+  click is still guarded.
+  The run cannot know which request a click will send before it fires, and one button may send
+  another request in another screen state ("I've changed my nameservers" sends
+  `RefreshShareDomain`, and later `RetryShareDomain`). So a control whose write finished may be
+  clicked again once the screen has moved on: the controls it offers or its visible text (digits
+  and typed values ignored) differ from both the screen it was clicked on and the screen its click
+  produced. The same control on an
+  unchanged screen, or on the screen it was first clicked on, is still refused. This never applies
+  to a paid or destructive control, or to a write whose outcome is unknown.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
 - **Inert markup canaries (#301).** The adversarial boundary values include an HTML-injection canary

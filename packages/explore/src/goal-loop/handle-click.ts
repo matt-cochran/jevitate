@@ -12,7 +12,7 @@ import { monitorFor } from "../page-monitor.js";
 import { awaitWrites } from "../side-effects.js";
 import { backgroundEndpoints, writesStartedSince } from "../stuck-actions.js";
 import type { RunContext } from "./context.js";
-import { TOGGLE_ROLES, actionIdentityOf, buttonLike, keyOf, noReply, quote, safePath } from "./helpers.js";
+import { TOGGLE_ROLES, actionIdentityOf, buttonLike, keyOf, noReply, quote, readScreenState, safePath } from "./helpers.js";
 import type { Flow } from "./step.js";
 import { type ActStep } from "./step.js";
 
@@ -32,10 +32,17 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
   // unless the page offers a retry. Refused — never clicked — and the reason is recorded.
   // #356: identified by element + context (form / dialog / screen heading), never by the label alone.
   const identity = actionIdentityOf(control);
-  const repeat = ctx.sideEffects.check(identity, safePath(snap.url), {
-    controlNames: snap.controls.map((c) => c.name),
-    alerts: ctx.status.alerts,
-  });
+  const pageNow = { controlNames: snap.controls.map((c) => c.name), alerts: ctx.status.alerts };
+  let repeat = ctx.sideEffects.check(identity, safePath(snap.url), pageNow);
+  // #380: a finished write's control may be clicked again once the screen has moved on since it
+  // (another screen state may send another request) — never a paid / destructive one.
+  const stateless = ctx.safety.riskOf(control) !== null;
+  const readState = (): Promise<string | undefined> =>
+    stateless ? Promise.resolve(undefined) : readScreenState(ctx.page, snap, ctx.secrets);
+  if (repeat.refuse && !repeat.inflight && !stateless) {
+    const state = await readState();
+    repeat = ctx.sideEffects.check(identity, safePath(snap.url), { ...pageNow, ...(state === undefined ? {} : { state }) });
+  }
   if (repeat.refuse) {
     let note = repeat.reason;
     if (repeat.inflight) {
@@ -48,7 +55,8 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
     return "continue";
   }
   const baseline = turn ? await readPageText(ctx.page, ctx.secrets) : "";
-  ctx.sideEffects.beginClick(identity, control.name || control.summary, safePath(snap.url), ctx.now());
+  const before = await readState();
+  ctx.sideEffects.beginClick(identity, control.name || control.summary, safePath(snap.url), ctx.now(), before);
   const r = await act(cfg.actor, { op: "click", control });
   let reply: ReplyResult | undefined;
   let message: string | undefined;

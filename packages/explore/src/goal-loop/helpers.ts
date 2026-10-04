@@ -9,9 +9,9 @@ import type { Perception } from "../perceive.js";
 import { monitorFor } from "../page-monitor.js";
 import { visibleBusyIndicator } from "../hang.js";
 import { isCredentialField } from "../auth-completion.js";
-import type { ActionIdentity, LastClick } from "../side-effects.js";
+import { screenState, type ActionIdentity, type LastClick } from "../side-effects.js";
 import { sendable } from "../actions.js";
-import { isSubmitControl, type ReplyResult } from "../conversation.js";
+import { isSubmitControl, readPageText, type ReplyResult } from "../conversation.js";
 import type { ChromeTracker } from "../feature/relevance.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { MAX_DOCUMENTED_WAIT_MS, readDocumentedWait, readInProgressStatus } from "../status.js";
@@ -166,6 +166,14 @@ export const actionIdentityOf = (c: Control): ActionIdentity => ({
   element: keyOf(c),
   context: JSON.stringify([c.form ?? null, c.container ?? null, c.scope ?? null, c.heading ?? null]),
 });
+
+/**
+ * #380: the screen state the repeat guard compares (`screenState`): the controls the snapshot offers
+ * and the page's visible text (read redacted of every registered secret; only its digest is kept).
+ */
+export async function readScreenState(page: Page, snap: Pick<Snapshot, "controls">, secrets: readonly string[]): Promise<string> {
+  return screenState(snap.controls, await readPageText(page, secrets));
+}
 
 /** History text for a reply wait that ended without a reply — and why it stopped waiting (#93). */
 export function noReply(r: ReplyResult): string {

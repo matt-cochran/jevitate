@@ -169,7 +169,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (378 exports)
+# @jevitate/explore (380 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -419,6 +419,7 @@
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isBookkeepingRequest: function
   isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
@@ -505,6 +506,7 @@
   sampleHeap: function
   scopeGlobs: function
   scopePredicate: function
+  screenState: function
   scrollPositionAt: function
   secretFieldContext: function
   secretFieldNeedsValue: function

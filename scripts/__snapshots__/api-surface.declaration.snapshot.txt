@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (583 exports)
+# @jevitate/explore (585 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -564,6 +564,7 @@
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isBookkeepingRequest: function
   isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
@@ -743,6 +744,7 @@
   scopeGlobs: function
   scopePredicate: function
   ScopeUnderivableError: class
+  screenState: function
   scrollPositionAt: function
   SecretCommandRunner: type-alias
   SecretField: interface
