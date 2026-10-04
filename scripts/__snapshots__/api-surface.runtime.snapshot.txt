@@ -169,7 +169,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (371 exports)
+# @jevitate/explore (372 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -483,6 +483,7 @@
   reproductionStatus: function
   requestEndpoint: function
   requestHeadersOf: function
+  requestSignature: function
   resolveBounds: function
   resolveCoverageSufficiencyThresholds: function
   resolveCoverageThresholds: function

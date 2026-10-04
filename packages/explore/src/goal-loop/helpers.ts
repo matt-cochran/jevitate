@@ -9,7 +9,7 @@ import type { Perception } from "../perceive.js";
 import { monitorFor } from "../page-monitor.js";
 import { visibleBusyIndicator } from "../hang.js";
 import { isCredentialField } from "../auth-completion.js";
-import type { LastClick } from "../side-effects.js";
+import type { ActionIdentity, LastClick } from "../side-effects.js";
 import { sendable } from "../actions.js";
 import { isSubmitControl, type ReplyResult } from "../conversation.js";
 import type { ChromeTracker } from "../feature/relevance.js";
@@ -150,6 +150,17 @@ export const buttonLike = (c: Control): boolean =>
 
 /** A control's identity across snapshots (indexes are per-snapshot only). */
 export const keyOf = (c: Control): string => JSON.stringify(c.descriptor);
+
+/**
+ * #356: the repeat guard's identity of a click — the element (its descriptor, `keyOf`) and its
+ * context on the route: its form / form-like container / named dialog and the screen heading above
+ * it. Two same-labelled controls on two screens of one route are two actions; the label alone never
+ * identifies one unless the page offers nothing else.
+ */
+export const actionIdentityOf = (c: Control): ActionIdentity => ({
+  element: keyOf(c),
+  context: JSON.stringify([c.form ?? null, c.container ?? null, c.scope ?? null, c.heading ?? null]),
+});
 
 /** History text for a reply wait that ended without a reply — and why it stopped waiting (#93). */
 export function noReply(r: ReplyResult): string {

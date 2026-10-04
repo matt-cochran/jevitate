@@ -94,6 +94,12 @@ security bug, and how to report one.
   for writes. The repeat guard counts only the app's own writes: a third-party write (a vendor's
   telemetry or `csp-report` beacon, Stripe.js's `m.stripe.com` beacon) and a request matched by
   `--settle-ignore` are listed but never make a control unclickable a second time.
+  The guard identifies an action by the route, the element, and its context (its form or
+  dialog, and the screen heading above it), never by the label alone. Two same-labelled
+  controls on different screens are two actions, so a "Continue" that sent `POST /api/a` does
+  not block a different "Continue" that sends `POST /api/b`. A refusal names the request the
+  earlier click sent (method + templated path, such as `POST /api/items/:id`). While that
+  control's write is still in flight, the run waits for it, even if the screen around it changed.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
 - **Inert markup canaries (#301).** The adversarial boundary values include an HTML-injection canary
