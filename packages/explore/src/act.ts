@@ -8,6 +8,7 @@ import type { Op } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { occluderOf, srOnlyLabelOf } from "./occlusion.js";
 import { monitorFor } from "./page-monitor.js";
+import { withDialogPolicy } from "./native-dialogs.js";
 import { isSubmitControl } from "./conversation.js";
 import { clock } from "@jevitate/domain";
 
@@ -468,9 +469,10 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
   const page = actor.ability(BrowseTheWebToken).session.page;
   // A page-changing action that passed its gate starts a transition: the next perception measures
   // action-to-settled with the shared settle rule.
+  // #334: a native dialog the action raises is answered by the run's dialog policy (when installed).
   const dispatch = (action: () => Promise<void>): Promise<ActResult> => {
     monitorFor(page).markAction();
-    return attempt(action);
+    return withDialogPolicy(page, () => attempt(action));
   };
 
   switch (args.op) {

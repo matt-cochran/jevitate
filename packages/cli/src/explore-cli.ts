@@ -13,6 +13,7 @@ import {
   TypeFixtureSpecError,
   validateDenyPatterns,
   type CoverageThresholds,
+  type DialogPolicy,
   type SecretField,
   type SuccessCheck,
   type TypeFixture,
@@ -340,6 +341,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for",
     )
     .option(
+      "--dialogs <policy>",
+      "native window.confirm/prompt dialogs: dismiss (default) or accept. accept still dismisses one whose message names a session-ending, " +
+        "destructive or paid action the run may not take (without --allow-destructive or a goal asking for it); every dialog is logged",
+    )
+    .option(
       "--allow-writes",
       "let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow " +
         "(checkout, upgrade, create, save, submit…) are refused and the write requests an action fires are blocked, unless the goal itself asks for a change",
@@ -583,6 +589,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         deny: string[];
         paid: string[];
         allowDestructive?: boolean;
+        dialogs?: string;
         allowWrites?: boolean;
         allowWrite: string[];
         hangReplayWrites?: boolean;
@@ -608,6 +615,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // mission. Checked first, ahead of every other validation below.
       if (o.strategy !== undefined && !EXPLORE_STRATEGIES.includes(o.strategy as (typeof EXPLORE_STRATEGIES)[number])) {
         emitExplore(fail("E_EXPLORE_ARGS", `unknown strategy ${JSON.stringify(o.strategy)} (one of ${EXPLORE_STRATEGIES.join(", ")})`));
+        return;
+      }
+      // #334: a mistyped --dialogs never silently means "dismiss".
+      if (o.dialogs !== undefined && o.dialogs !== "dismiss" && o.dialogs !== "accept") {
+        emitExplore(fail("E_EXPLORE_ARGS", `--dialogs must be dismiss or accept, got ${JSON.stringify(o.dialogs)}`));
         return;
       }
 
@@ -888,6 +900,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             paid: o.paid,
             readRpc: o.readRpc,
             ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
+            ...(o.dialogs === undefined ? {} : { dialogs: o.dialogs as DialogPolicy }),
             ...(o.allowWrites === true ? { allowWrites: true } : {}),
             allowWrite: o.allowWrite,
             ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
