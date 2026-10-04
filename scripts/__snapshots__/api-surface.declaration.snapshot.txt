@@ -1120,7 +1120,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (142 exports)
+# @jevitate/playwright (145 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1207,6 +1207,8 @@
   OpenOptions: interface
   OrphanCleanup: interface
   orphanReason: function
+  OwnBrowserTeardown: interface
+  OwnBrowserTeardownDeps: interface
   OWNER_MARKER_SWITCH: variable
   OwnerMarker: interface
   ownerMarkerArg: function
@@ -1253,6 +1255,7 @@
   SlotHolder: interface
   SlotState: interface
   systemProcessTable: function
+  terminateOwnBrowsersSync: function
   throttleDecision: function
   ThrottleDecision: interface
   ThrottleLevel: type-alias

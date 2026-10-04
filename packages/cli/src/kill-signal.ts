@@ -2,8 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, writeSync } from "node:fs";
 import type { UsageCounts, UsageLedger } from "@jevitate/ai-core";
 import type { TranscriptEntry } from "@jevitate/explore";
-import { MISSION_RESULT_SCHEMA_VERSION, type HostHealthSummary, type ResultStrategy } from "@jevitate/domain";
-import { closeSharedBrowserPool } from "@jevitate/playwright";
+import { clock, MISSION_RESULT_SCHEMA_VERSION, type HostHealthSummary, type ResultStrategy } from "@jevitate/domain";
+import { closeSharedBrowserPool, terminateOwnBrowsersSync } from "@jevitate/playwright";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { ok } from "./envelope.js";
 import { formatMissionHuman } from "./cli-output.js";
@@ -22,9 +22,10 @@ import { listVideos } from "./browser-run-options.js";
  * A single process-level handler is installed lazily, once, the first time any mission arms it
  * (`armMissionKillSwitch`). On SIGTERM/SIGINT it writes a partial typed result — `outcome:
  * "inconclusive"`, `reason: "interrupted by SIG… after N steps"` — built from whatever the journal
- * already flushed, starts closing the shared browser pool, then exits with the conventional code
- * (130 SIGINT / 143 SIGTERM) — all SYNCHRONOUSLY, in the same turn the signal arrives, without
- * awaiting the browser close. Playwright installs its OWN SIGTERM/SIGINT handler on the browsers it
+ * already flushed, starts closing the shared browser pool, terminates every browser process tree
+ * this process launched (#326: bounded SIGTERM, then SIGKILL — a blocking wait, never an `await`),
+ * then exits with the conventional code (129 SIGHUP or parent death / 130 SIGINT / 143 SIGTERM) —
+ * all SYNCHRONOUSLY, in the same turn the signal arrives. Playwright installs its OWN SIGTERM/SIGINT handler on the browsers it
  * launched; the instant that fires, any in-flight page operation starts rejecting, and the killed
  * mission's own error handling can turn that into a normal (non-killed) result and call
  * `process.exit` on its own terms — an `await` here, even a fast one, is enough of a window for
@@ -101,7 +102,8 @@ export interface KillableMission {
  */
 export type KillSwitchOutput = "envelope" | "human" | "none";
 
-const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } as const;
+/** 128 + the signal number, the shell convention. SIGHUP (#326) also stands for "the parent died". */
+const SIGNAL_EXIT_CODE = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 } as const;
 export type KillSignal = keyof typeof SIGNAL_EXIT_CODE;
 
 /** The seams a test fakes: nothing here touches the real process/filesystem/browser pool. */
@@ -111,6 +113,17 @@ export interface KillSwitchDeps {
   readonly writeResult: (recordingPath: string, missionOutcome: string, exitCode: number, result: unknown, usage?: UsageLedger) => string;
   readonly readTranscript: (transcriptPath: string) => { steps: number; transcript: readonly TranscriptEntry[] };
   readonly onSignal: (signal: KillSignal, handler: () => void) => void;
+  /**
+   * #326: closes every browser this process launched SYNCHRONOUSLY (bounded SIGTERM, then SIGKILL of
+   * each browser's process tree) before `exit`. Playwright's own `exit` hook only kills the browsers
+   * it still tracks; this makes "no Chromium outlives the CLI" not depend on it.
+   */
+  readonly terminateBrowsers?: () => void;
+  /**
+   * #326: calls `onGone` once if this process's parent dies (it is re-parented), so a CLI whose
+   * wrapper/harness was SIGKILLed tears down like a SIGHUP instead of running on with its browsers.
+   */
+  readonly watchParent?: (onGone: () => void) => void;
   /** This build's identity, stamped on the killed run's result like every other result (#112). */
   readonly engine?: () => EngineInfo;
   /** SYNCHRONOUS stdout write — the process exits in the same turn, so nothing may be buffered. */
@@ -134,9 +147,41 @@ function readTranscriptFile(transcriptPath: string): { steps: number; transcript
   return { steps: 0, transcript: [] };
 }
 
+/**
+ * #326: the parent-death watchdog. Linux/macOS only (Windows has no re-parenting). Polls
+ * `process.ppid` (one cheap syscall) every `intervalMs` on an unref'd timer, so it never keeps
+ * the process alive; when the parent changes (the CLI was re-parented to init or a subreaper) it
+ * stops and calls `onGone` once. Off with `JEVITATE_PARENT_WATCHDOG=off` (a run deliberately left
+ * behind by `nohup … &`), and when started with no real parent (ppid ≤ 1). Returns the stop function.
+ */
+export function watchParentDeath(
+  onGone: () => void,
+  opts: { readonly ppid?: () => number; readonly platform?: NodeJS.Platform; readonly env?: NodeJS.ProcessEnv; readonly intervalMs?: number } = {},
+): (() => void) | undefined {
+  const platform = opts.platform ?? process.platform;
+  const env = opts.env ?? process.env;
+  if (platform === "win32" || env.JEVITATE_PARENT_WATCHDOG === "off") return undefined;
+  const ppid = opts.ppid ?? (() => process.ppid);
+  const original = ppid();
+  if (original <= 1) return undefined;
+  const timer = clock.setInterval(() => {
+    if (ppid() === original) return;
+    clock.clearInterval(timer);
+    onGone();
+  }, opts.intervalMs ?? 1_000);
+  timer.unref();
+  return () => clock.clearInterval(timer);
+}
+
 const realDeps: KillSwitchDeps = {
   exit: (code) => process.exit(code),
   closeBrowsers: closeSharedBrowserPool,
+  terminateBrowsers: () => {
+    terminateOwnBrowsersSync();
+  },
+  watchParent: (onGone) => {
+    watchParentDeath(onGone);
+  },
   writeResult: writeMissionResult,
   readTranscript: readTranscriptFile,
   onSignal: (signal, handler) => {
@@ -236,9 +281,9 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
  * a normal (non-killed) `crashed` result and call `process.exit` on its OWN terms. Racing that with
  * an `await` here (even a fast one) is enough for the mission's own completion to win — so this
  * writes the partial result (already synchronous: `writeFileSync`) and calls `deps.exit` in the
- * SAME synchronous turn, before anything else gets a chance to run. Browser teardown is started but
- * deliberately not awaited; a close that doesn't finish in time is left to the OS / Playwright's own
- * process-group cleanup on the same signal.
+ * SAME synchronous turn, before anything else gets a chance to run. The graceful pool close is
+ * started but deliberately not awaited; #326: what it cannot finish, `deps.terminateBrowsers` ends
+ * synchronously (a bounded blocking wait, then SIGKILL), so no Chromium outlives the process.
  */
 function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
   const code = SIGNAL_EXIT_CODE[signal];
@@ -310,6 +355,14 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
   deps.closeBrowsers().catch(() => {
     // Best-effort: a failed teardown must never keep the process from having honored the signal.
   });
+  // #326: the result is on disk; now make sure no browser outlives the process, synchronously
+  // (bounded: SIGTERM, a short grace, then SIGKILL of each browser's process tree), so nothing the
+  // mission does can run in between and the exit below still happens in this same turn.
+  try {
+    deps.terminateBrowsers?.();
+  } catch {
+    // Best-effort, like the close above.
+  }
   deps.exit(code);
 }
 
@@ -318,6 +371,10 @@ function install(deps: KillSwitchDeps): void {
   installed = true;
   deps.onSignal("SIGTERM", () => onKillSignal("SIGTERM", deps));
   deps.onSignal("SIGINT", () => onKillSignal("SIGINT", deps));
+  // #326: a hang-up (a closed terminal, the `jevitate` alias forwarding one) ends the run the same
+  // way; so does the parent's death, which no signal announces.
+  deps.onSignal("SIGHUP", () => onKillSignal("SIGHUP", deps));
+  deps.watchParent?.(() => onKillSignal("SIGHUP", deps));
 }
 
 /**
