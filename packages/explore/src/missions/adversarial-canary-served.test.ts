@@ -6,6 +6,8 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runAdversarialMission, type AdversarialMissionParams, type AdversarialOutcome } from "./adversarial.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
 import { withSession, useSkippingTime } from "../testkit.js";
+import { renderedCanaries, renderedCanariesSettled } from "../adversarial/markup-canary.js";
+import { CANARY_ATTRIBUTE } from "../adversarial/input-strategy.js";
 
 // #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
 useSkippingTime({ per: "all" });
@@ -73,6 +75,13 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(list));
       return;
     }
+    // #319: a canary the page renders only once a slow list fetch answers.
+    if (path === "/api/slow") return void setTimeout(() => res.writeHead(200, { "content-type": "application/json" }).end('["abcd12340"]'), 300);
+    if (path === "/late") {
+      return html(`<!doctype html><html><body><ul id="l"></ul><script>
+        fetch('/api/slow').then((r) => r.json()).then((ts) => { for (const t of ts) document.getElementById('l').insertAdjacentHTML('beforeend', '<li><i ${CANARY_ATTRIBUTE}="' + t + '">x</i></li>'); });
+      </script></body></html>`);
+    }
     if (path === "/comments/unsafe") return html(COMMENTS("unsafe"));
     if (path === "/comments/safe") return html(COMMENTS("safe"));
     res.writeHead(404).end();
@@ -110,6 +119,23 @@ async function hunt(
     origin,
   );
 }
+
+describe("#319 — a just-submitted canary that renders late is still read", () => {
+  it("waits (bounded) for an expected canary instead of reading once", async () => {
+    await withSession(
+      "adv-319-",
+      async (session) => {
+        await session.page.goto(`${origin}/late`, { waitUntil: "domcontentloaded" });
+        const all = (): boolean => true;
+        expect([...(await renderedCanaries(session.page, "abcd1234", all))]).toEqual([]);
+        expect([...(await renderedCanariesSettled(session.page, "abcd1234", all, ["abcd12340"], 5_000))]).toEqual(["abcd12340"]);
+        // Nothing expected: one read, no wait.
+        expect([...(await renderedCanariesSettled(session.page, "ffff0000", all, []))]).toEqual([]);
+      },
+      origin,
+    );
+  }, 60_000);
+});
 
 describe("#301 — the inert markup canary", () => {
   it(
