@@ -1,4 +1,5 @@
 import type { Control } from "./snapshot.js";
+import { MESSAGE_FIELD as MESSAGE_FIELD_NAME, MESSAGE_INPUT_TYPES } from "./composer-evidence.js";
 
 /**
  * The action vocabulary shared by every mission (goal/usability explore, adversarial,
@@ -96,27 +97,25 @@ export function affordedOp(c: Pick<Control, "tag" | "inputType" | "role">): Targ
   return "click";
 }
 
-/** Free-text input types a message can be written into (not passwords, numbers, dates, emails…). */
-const MESSAGE_INPUT_TYPES: ReadonlySet<string> = new Set(["", "text", "search"]);
 
 /**
  * True when a control can take a typed-and-submitted message (`send`): a message-shaped (see
- * `MESSAGE_FIELD`) textarea, free-text input, or `textbox` role (contenteditable composers).
- * Structured and form fields are never offered it.
+ * `MESSAGE_FIELD`) textarea, free-text input, or `textbox` role (contenteditable composers) on a
+ * page that shows conversational evidence (`conversational`, #370: a transcript or a paired Send
+ * control — the word "chat" in a label is not enough). Structured and form fields are never
+ * offered it; a control without the evidence fact (built outside `snapshot`) is not either.
  */
-export function sendable(c: Pick<Control, "tag" | "inputType" | "role" | "enabled" | "name">): boolean {
-  if (!c.enabled || !MESSAGE_FIELD.test(c.name)) return false;
+export function sendable(
+  c: Pick<Control, "tag" | "inputType" | "role" | "enabled" | "name" | "conversational">,
+): boolean {
+  if (!c.enabled || !MESSAGE_FIELD_NAME.test(c.name) || c.conversational !== true) return false;
   if (c.tag === "textarea") return true;
   if (c.tag === "input") return MESSAGE_INPUT_TYPES.has(c.inputType ?? "");
   return c.role === "textbox";
 }
 
-/**
- * A field whose text is a message to someone (a chat/inquiry composer: "Type a reply", "Ask…",
- * "Start a new inquiry"), not a form value ("Rationale", "Your name"). Only these are offered `send`
- * and written by `chat.reply` — a form field keeps `type` + its form's own submit.
- */
-export const MESSAGE_FIELD = /\b(reply|message|ask|chat|inquiry|prompt|say|talk|conversation)\b/i;
+/** A message-shaped field name (see `composer-evidence.ts`): necessary for `send`, never sufficient. */
+export const MESSAGE_FIELD: RegExp = MESSAGE_FIELD_NAME;
 
 /** One complete action on the current page: an op plus (for target ops) its control. */
 export type CandidateAction =

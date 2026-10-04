@@ -156,7 +156,14 @@ describe("messages and options", () => {
   });
 
   it("send is offered only on free-text fields; Send-named buttons submit", () => {
-    const f = (tag: string, inputType: string | null, name: string) => ({ tag, inputType, role: "textbox", enabled: true, name });
+    const f = (tag: string, inputType: string | null, name: string, conversational = true) => ({
+      tag,
+      inputType,
+      role: "textbox",
+      enabled: true,
+      name,
+      conversational,
+    });
     expect(sendable(f("textarea", null, "Type a reply"))).toBe(true);
     expect(sendable(f("input", "text", "Start a new inquiry"))).toBe(true);
     expect(sendable(f("input", "password", "Type a reply"))).toBe(false);
@@ -164,6 +171,9 @@ describe("messages and options", () => {
     // Form fields (dogfood J3: "Rationale (required)", "Your name") are typed, never "sent" as chat.
     expect(sendable(f("textarea", null, "Rationale (required)"))).toBe(false);
     expect(sendable(f("input", "text", "Your name"))).toBe(false);
+    // #370: a message-shaped name without conversational evidence on the page is a form field.
+    expect(sendable(f("textarea", null, "Chat answer", false))).toBe(false);
+    expect(sendable({ tag: "textarea", inputType: null, role: "textbox", enabled: true, name: "Type a reply" })).toBe(false);
     expect(isSubmitControl({ role: "button", tag: "button", inputType: null, name: "Send" })).toBe(true);
     expect(isSubmitControl({ role: "button", tag: "button", inputType: null, name: "Close inspector" })).toBe(false);
     expect(isSubmitControl({ role: "link", tag: "a", inputType: null, name: "Send feedback" })).toBe(false);

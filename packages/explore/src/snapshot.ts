@@ -4,6 +4,7 @@ import type { TargetDescriptor } from "@jevitate/recording";
 import { contentHash, clock } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
+import { MESSAGE_FIELD, MESSAGE_INPUT_TYPES, PAIRED_SUBMIT_DISTANCE, SUBMIT_NAME, composerEvidence } from "./composer-evidence.js";
 import { redactControl, redactUrl } from "./redact.js";
 import { TEMPORAL_FORMATS, isTemporalInputType } from "./temporal-value.js";
 
@@ -112,6 +113,13 @@ export interface Control {
    * is also offered `edit_text`: an edit INSIDE its text (at a quoted anchor), not a full retype.
    */
   readonly richText?: boolean;
+  /**
+   * #370: for a message-named (`MESSAGE_FIELD`) text field only — whether the page shows
+   * conversational evidence around it (a transcript, or a Send control paired with it; see
+   * `composerEvidence`). Only such a field is a chat composer (`sendable`); absent on every other
+   * control, and on controls built outside `snapshot`.
+   */
+  readonly conversational?: boolean;
   /**
    * True when the element's own box is clipped to near-nothing or pulled far off-screen by a
    * large NEGATIVE offset — the classic sr-only "skip to content" clipping idiom (#75, #161).
@@ -789,6 +797,15 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
           ? await handle.evaluate(readControlValue)
           : null;
       const facts: DescribedFacts = { ...raw, value };
+      // #370: a message-named text field is a composer only with conversational evidence on the page.
+      const textEntry =
+        raw.tag === "textarea" || (raw.tag === "input" && MESSAGE_INPUT_TYPES.has(raw.inputType ?? "")) || raw.role === "textbox";
+      const conversational =
+        textEntry && MESSAGE_FIELD.test(raw.name)
+          ? await handle
+              .evaluate(composerEvidence, { submit: SUBMIT_NAME.source, distance: PAIRED_SUBMIT_DISTANCE })
+              .catch(() => false)
+          : null;
       // computeDescriptor validates against the live page and throws if nothing
       // resolves uniquely — an un-describable control is dropped, never guessed.
       const computed = await computeDescriptor(page, handle, { primaryOnly: true });
@@ -820,6 +837,7 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
         step: facts.step,
         landmark: facts.landmark,
         ...(facts.richText ? { richText: true } : {}),
+        ...(conversational === null ? {} : { conversational }),
         ...(facts.clippedOffscreen ? { clippedOffscreen: true } : {}),
       };
       controls.push(redactControl(control, opts?.secrets ?? []));
