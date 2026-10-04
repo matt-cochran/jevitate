@@ -153,6 +153,16 @@ export class NoProgressDetector {
   }
 
   /**
+   * #323: records a step that made NO progress although the signature changed — a scroll that only
+   * revisited states its streak had already seen (A→B→A→B…), past the moving-scroll bound.
+   */
+  stalled(signature: string): boolean {
+    this.#streak += 1;
+    this.#lastSignature = signature;
+    return this.#streak >= this.limit;
+  }
+
+  /**
    * Records a step that made progress the signature cannot show (#172: a scroll that MOVED the
    * page — the control set is the same, the viewport is not): the streak restarts from here.
    */

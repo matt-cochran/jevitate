@@ -117,6 +117,8 @@ export interface RunContext {
   lastScrollMoved: boolean;
   movingScrolls: number;
   movingScrollsSignature: string | null;
+  /** #323: the page signatures this streak of moving scrolls has seen (a revisit is no progress). */
+  scrollStreakSignatures: Set<string>;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   lastChanceGiven: boolean;
   /** #172: this decision is the last-chance turn. */
@@ -422,6 +424,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.lastScrollMoved = false;
   ctx.movingScrolls = 0;
   ctx.movingScrollsSignature = null;
+  ctx.scrollStreakSignatures = new Set<string>();
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   ctx.lastChanceGiven = false;
   /** #172: this decision is the last-chance turn. */
