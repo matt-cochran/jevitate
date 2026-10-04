@@ -104,6 +104,19 @@ export interface DefectRecord {
    * never sets the mission outcome or exit code on its own. Absent on a hard-signal defect.
    */
   readonly advisory?: true;
+  /**
+   * #320: on a `judgment-flagged-state`, what the advisory judgment saw: its probability, the action
+   * that led to the state, and the page's controls it was shown (redacted, bounded) — so a flag can
+   * be triaged without replaying it. The judgment returns a yes/no with a probability, never a claim
+   * of its own: this is its evidence, not an explanation it wrote.
+   */
+  readonly judgment?: {
+    readonly probability: number;
+    /** `<op> "<control name>"` — the action whose result was judged. */
+    readonly after: string;
+    /** The first controls of the judged state, as the judgment was shown them (redacted). */
+    readonly shown: readonly string[];
+  };
 }
 
 /** One transition whose result landed outside the mission's target scope (#89) — recorded, never
