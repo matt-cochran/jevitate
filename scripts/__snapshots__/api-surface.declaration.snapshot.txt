@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (572 exports)
+# @jevitate/explore (574 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -283,6 +283,7 @@
   ActionDeltas: class
   ActionDeltasOptions: interface
   ActionDeltaStats: interface
+  ActionIdentity: interface
   actionName: function
   ActResult: interface
   AdversarialCoverage: interface
@@ -707,6 +708,7 @@
   requestEndpoint: function
   requestHeadersOf: function
   RequestKind: type-alias
+  requestSignature: function
   RequestTiming: interface
   resolveBounds: function
   resolveCoverageSufficiencyThresholds: function
