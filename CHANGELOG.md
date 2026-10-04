@@ -15,8 +15,8 @@ wait for multi-part chat replies (`--reply-quiet-ms`) and type a code delivered 
 secret source). A stuck status, an oscillating scroll, a job behind an in-progress status, date and
 time inputs and strict-CSP screenshots no longer end a run with the wrong outcome. A `cmd:` secret is now
 masked in screenshots and video as well as text, controls in open shadow roots are reachable,
-same-labelled controls on different screens are no longer mistaken for a repeat, and browsers no
-longer outlive a killed CLI.
+same-labelled controls on different screens are no longer mistaken for a repeat, browsers no longer
+outlive a killed CLI, and goal runs stay on the sections the goal names.
 
 ### Behaviour changes
 
@@ -54,6 +54,12 @@ longer outlive a killed CLI.
 - **`cmd:` command runs are bounded (#359).** One field's command runs at most 3 times per run.
   Past that, typing the field fails with a reason naming the limit, and the command doesn't run
   again.
+- **Goal runs stay on the goal (#338).** A value that copies the goal's own instruction (four or more
+  words, mostly from the goal's unquoted text, led by an instruction verb) is refused as a typed
+  value, and the model is told why. Quoted and `exactly:` values (#281) and text the goal introduces
+  as a value ("titled …", "called …", "saying …", ": …") still pass. Once the run reaches the goal's
+  area (it opened a section the goal names, or the URL matches a goal word), navigation to sections
+  the goal never names is marked off-goal and listed last. It is never removed.
 
 ### Upgrade notes
 
@@ -68,6 +74,8 @@ longer outlive a killed CLI.
   Set `JEVITATE_PARENT_WATCHDOG=off` for it.
 - **Read-the-code commands:** a `cmd:` field's command runs at most 3 times per run (#359); raise it
   with `--secret-cmd-attempts <n>` if a flow legitimately needs more reads.
+- **Instruction-like values:** an unquoted value that reads like the goal's own instruction is now
+  refused (#338). Quote it in the goal, or introduce it ("titled …", "saying …"), to type it as is.
 
 ### Added
 
