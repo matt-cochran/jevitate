@@ -57,6 +57,9 @@ import { secretFieldSecrets } from "../secret-fields.js";
  * went from NOT holding to holding — one that already held on the start page and never changed is
  * vacuous (failed, with a warning) — and once every check held (no `reloadThen` declared) the run
  * stops before its next action, verified by the success condition, never acting past a met goal.
+ * `each` (#337) is `held` per check: every page check went from not holding to holding at SOME
+ * settled step, each at its own and in any order (checks that live on different pages); the run
+ * stops once all have.
  *
  * #202 generalises #174's rule to every check, under either `successWhen`: a check satisfied BEFORE
  * the run's first action cannot verify the goal. A page/reloadThen check that already held on the
@@ -157,8 +160,12 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
   readonly missionBrief?: string;
 }
 
-/** When the goal mission's page checks must hold. */
-export type SuccessWhen = "held" | "final";
+/**
+ * When the goal mission's page checks must hold. `each` (#337): every page check went from not
+ * holding to holding at SOME settled step, each at its own (a goal whose checks live on different
+ * pages: "Connected" on Connections, then "Payments ready" on Pricing); the run stops once all have.
+ */
+export type SuccessWhen = "held" | "final" | "each";
 
 /** Bound (ms) on each per-step page-check evaluation under `successWhen: "held"` (a quick look). */
 const HELD_CHECK_TIMEOUT_MS = 250;
@@ -315,8 +322,8 @@ export async function runGoalBasedMission(
   const page = cfg.actor.ability(BrowseTheWebToken).session.page;
   // Network checks look at every request the run makes, from before the first navigation.
   const needsNetwork = checks.some((c) => c.kind === "requestMade" || c.kind === "responseStatus");
-  if (cfg.successWhen !== undefined && cfg.successWhen !== "held" && cfg.successWhen !== "final") {
-    throw new Error(`runGoalBasedMission: successWhen must be "held" or "final", got ${JSON.stringify(cfg.successWhen)}`);
+  if (cfg.successWhen !== undefined && cfg.successWhen !== "held" && cfg.successWhen !== "final" && cfg.successWhen !== "each") {
+    throw new Error(`runGoalBasedMission: successWhen must be "held", "final" or "each", got ${JSON.stringify(cfg.successWhen)}`);
   }
   const capture = needsNetwork ? monitorFor(page).startCapture() : null;
   // A transient-state check (#148 `flashed`) needs the flash recorder BEFORE the triggering action:
@@ -494,6 +501,15 @@ async function adjudicatedRun(
   let settledSteps = 0;
   const held = cfg.successWhen === "held" && pageChecks.length > 0;
   /**
+   * #337 `each`: per page check (by its index in `pageChecks`) — seen NOT holding at a settled step,
+   * the first settled step it held at AFTER that (the transition), and whether it held on the start.
+   */
+  const each = cfg.successWhen === "each" && pageChecks.length > 0;
+  const eachSawNot = pageChecks.map(() => false);
+  const eachHeldAt: Array<number | null> = pageChecks.map(() => null);
+  const eachHeldAtStart = pageChecks.map(() => false);
+  const pageIndexOf = (r: SuccessCheckResult): number => pageChecks.findIndex((c) => describeCheck(c) === r.check);
+  /**
    * #174: a held page check counts only once it CHANGED from not holding to holding — never because
    * it already held on the start page (a placeholder that is there before anything was done).
    */
@@ -524,7 +540,7 @@ async function adjudicatedRun(
   // past a met goal. `reloadThen` is final-only, so a run that declares one keeps the model's `done`.
   // #286: a goal that also asks for a report needs its grounded answer — checks holding never stop it.
   const answerRequired = checks.length > 0 && goalAsksForReport(cfg.goal);
-  const stopWhenHeld = cfg.successWhen === "held" && checks.length > 0 && !checks.some((c) => c.kind === "reloadThen") && !answerRequired;
+  const stopWhenHeld = (cfg.successWhen === "held" || cfg.successWhen === "each") && checks.length > 0 && !checks.some((c) => c.kind === "reloadThen") && !answerRequired;
   // A find-out goal (#130d) has no page/network check to independently ground `done` with: it is
   // verified instead by a grounded `report` (#101), which `explore()` grounds on its own regardless
   // of `successCheck`. Leaving `successCheck` unset here (rather than wiring one that vacuously
@@ -549,6 +565,9 @@ async function adjudicatedRun(
     heldAtStep = null;
     sawNotHolding = false;
     heldAtStart = false;
+    eachSawNot.fill(false);
+    eachHeldAt.fill(null);
+    eachHeldAtStart.fill(false);
     seedHeld.clear();
     changedSinceSeed.clear();
     firstActionAt = null;
@@ -591,6 +610,17 @@ async function adjudicatedRun(
             if (seedHeld.has(i) && !changedSinceSeed.has(i) && !(await holdsNow(c.assertion))) changedSinceSeed.add(i);
           }
         }
+        // #337 `each`: every page check on its own — it counts once it went from not holding to holding.
+        if (each) {
+          for (const [i, c] of pageChecks.entries()) {
+            if (c.kind !== "page" || eachHeldAt[i] !== null) continue;
+            const ok = await holdsNow(c.assertion);
+            if (!ok) eachSawNot[i] = true;
+            else if (eachSawNot[i]) eachHeldAt[i] = settledSteps;
+            else if (settledSteps === 1) eachHeldAtStart[i] = true;
+          }
+          return;
+        }
         if (!held || heldAtStep !== null) return;
         const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
         if (!ok) sawNotHolding = true;
@@ -602,12 +632,15 @@ async function adjudicatedRun(
             successMetNow: async (): Promise<string | null> => {
               // Never before an action: the start state proves nothing was done.
               if (settledSteps < 2) return null;
-              if (pageChecks.length > 0 && heldAtStep === null) return null;
+              if (pageChecks.length > 0 && (each ? eachHeldAt.some((at) => at === null) : heldAtStep === null)) return null;
               const requests = capture?.sent() ?? [];
               if (!networkChecks.every((c) => judgeNetworkCheck(c, requests, capture?.truncated ?? false, scope()).passed)) return null;
+              if (each && pageChecks.length > 0) {
+                return `every --success check held (the page checks at settled steps ${eachHeldAt.join(", ")}; --success-when each)`;
+              }
               return pageChecks.length > 0
                 ? `every --success check held (the page checks at settled step ${heldAtStep}; --success-when held)`
-                : "every --success check held (--success-when held)";
+                : `every --success check held (--success-when ${cfg.successWhen})`;
             },
           }
         : {}),
@@ -636,10 +669,13 @@ async function adjudicatedRun(
               evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
                 (rs) =>
                   rs.every((r) =>
-                    held && isPageCheck(r, pageChecks)
-                      ? // #174: under `held` a page check counts once it went from not holding to holding.
-                        heldAtStep !== null || (r.passed && sawNotHolding)
-                      : r.passed,
+                    each && isPageCheck(r, pageChecks)
+                      ? // #337: under `each` a page check counts once IT went from not holding to holding.
+                        eachHeldAt[pageIndexOf(r)] !== null || (r.passed && eachSawNot[pageIndexOf(r)] === true)
+                      : held && isPageCheck(r, pageChecks)
+                        ? // #174: under `held` a page check counts once it went from not holding to holding.
+                          heldAtStep !== null || (r.passed && sawNotHolding)
+                        : r.passed,
                   ),
                 () => false,
               ),
@@ -765,6 +801,21 @@ async function adjudicatedRun(
         ? { ...r, passed: true, detail: `held at settled step ${step} (--success-when held); ${r.detail}` }
         : r,
     );
+  }
+  // #337 `each`: a page check that failed on the final page passes when it went from not holding to
+  // holding at a settled step of the run (each at its own) — and says so. One that held on the start
+  // page and never stopped holding is vacuous (as under `held`), unless --allow-vacuous-checks.
+  if (each) {
+    results = results.map((r) => {
+      const i = pageIndexOf(r);
+      if (i === -1) return r;
+      const at = eachHeldAt[i];
+      if (!r.passed && at !== null && at !== undefined) return { ...r, passed: true, detail: `held at settled step ${at} (--success-when each); ${r.detail}` };
+      if (r.passed && eachHeldAtStart[i] === true && eachSawNot[i] !== true && !allowVacuous) {
+        return { ...r, passed: false, detail: "vacuous: already held on the start page before any action and never changed (--success-when each needs it to go from not holding to holding)" };
+      }
+      return r;
+    });
   }
   // #174: under `held`, page checks that already held on the start page and never stopped holding
   // prove nothing was done — vacuous, never a pass (not even on the final page).

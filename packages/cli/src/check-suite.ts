@@ -100,7 +100,7 @@ export interface SuiteGoal extends SuiteItemOverrides {
   readonly goal: string;
   readonly success: readonly string[];
   readonly url?: string;
-  readonly successWhen?: "final" | "held";
+  readonly successWhen?: "final" | "held" | "each";
   readonly routes?: readonly string[];
   readonly maxActions?: number;
   readonly maxDecisions?: number;
@@ -120,7 +120,7 @@ export interface SuiteMission extends SuiteItemOverrides {
   readonly appClass?: string;
   /** #225 — `usability`: independent completion checks on the job (goal-item semantics); none by default. */
   readonly success?: readonly string[];
-  readonly successWhen?: "final" | "held";
+  readonly successWhen?: "final" | "held" | "each";
   readonly maxActions?: number;
   readonly maxDecisions?: number;
   /**
@@ -473,7 +473,7 @@ function goalOf(r: Reader, v: unknown, path: string, i: number): SuiteGoal {
   const success = r.strings(v, "success", path);
   if (success.length === 0) r.fail(`${path}.success`, "at least one success check is required (a goal without one proves nothing)");
   const successWhen = v.successWhen;
-  if (successWhen !== undefined && successWhen !== "final" && successWhen !== "held") r.fail(`${path}.successWhen`, 'must be "final" or "held"');
+  if (successWhen !== undefined && successWhen !== "final" && successWhen !== "held" && successWhen !== "each") r.fail(`${path}.successWhen`, 'must be "final", "held" or "each"');
   const routes = r.strings(v, "routes", path);
   const url = r.url(v, "url", path, true);
   const maxActions = r.number(v, "maxActions", path, { integer: true });
@@ -509,7 +509,7 @@ function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
   const success = r.strings(v, "success", path);
   const successWhen = v.successWhen;
   if ((success.length > 0 || successWhen !== undefined) && s !== "usability") r.fail(`${path}.success`, "applies only to goal items and usability missions");
-  if (successWhen !== undefined && successWhen !== "final" && successWhen !== "held") r.fail(`${path}.successWhen`, 'must be "final" or "held"');
+  if (successWhen !== undefined && successWhen !== "final" && successWhen !== "held" && successWhen !== "each") r.fail(`${path}.successWhen`, 'must be "final", "held" or "each"');
   if (successWhen !== undefined && success.length === 0) r.fail(`${path}.successWhen`, "needs at least one success check");
   const routes = r.strings(v, "routes", path);
   const url = r.url(v, "url", path, true);
@@ -546,7 +546,7 @@ function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
     ...(goal === undefined ? {} : { goal }),
     ...(appClass === undefined ? {} : { appClass }),
     ...(success.length === 0 ? {} : { success }),
-    ...(successWhen === "final" || successWhen === "held" ? { successWhen } : {}),
+    ...(successWhen === "final" || successWhen === "held" || successWhen === "each" ? { successWhen } : {}),
     ...(maxActions === undefined ? {} : { maxActions }),
     ...(maxDecisions === undefined ? {} : { maxDecisions }),
   };
