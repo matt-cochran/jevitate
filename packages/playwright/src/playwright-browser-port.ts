@@ -189,6 +189,25 @@ function marked<T extends { args?: string[] | readonly string[] }>(options: T | 
  * `persistentProfile` is the explicit opt-in for a real on-disk Chromium
  * profile (its own browser process, outside the pool).
  */
+/**
+ * #329: with a `geolocation`, the `geolocation` permission is granted to the session's allowed
+ * origins only (http(s) origins; a pattern or a non-web origin is skipped), so the page reads the
+ * position without a prompt — and no other site can.
+ */
+async function grantGeolocation(context: BrowserContext, opts: OpenOptions): Promise<void> {
+  if (opts.geolocation === undefined) return;
+  const origins = new Set<string>();
+  for (const o of [...opts.allowedOrigins, opts.baseUrl]) {
+    try {
+      const u = new URL(o);
+      if (u.protocol === "http:" || u.protocol === "https:") origins.add(u.origin);
+    } catch {
+      // not a URL (e.g. a wildcard pattern): nothing to grant it
+    }
+  }
+  for (const origin of origins) await context.grantPermissions(["geolocation"], { origin });
+}
+
 export class PlaywrightBrowserPort implements BrowserPort {
   readonly #launch: Launch;
   readonly #launchPersistent: LaunchPersistentContext;
@@ -262,11 +281,13 @@ export class PlaywrightBrowserPort implements BrowserPort {
         baseURL: opts.baseUrl,
         ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
         ...(emulation === undefined ? {} : emulationContextOptions(emulation)),
+        ...(opts.geolocation === undefined ? {} : { geolocation: { ...opts.geolocation } }),
         ...(opts.recordVideo === undefined ? {} : { recordVideo: { dir: opts.recordVideo.dir } }),
       },
     );
     let page: Page;
     try {
+      await grantGeolocation(lease.context, opts);
       page = await withOpenDeadline(
         lease.context.newPage(),
         this.#openTimeoutMs,
@@ -306,12 +327,14 @@ export class PlaywrightBrowserPort implements BrowserPort {
         ...(channel !== undefined ? { channel } : {}),
         ...(opts.slowMo !== undefined && opts.slowMo > 0 ? { slowMo: opts.slowMo } : {}),
         ...(emulation === undefined ? {} : emulationContextOptions(emulation)),
+        ...(opts.geolocation === undefined ? {} : { geolocation: { ...opts.geolocation } }),
         ...(opts.recordVideo === undefined ? {} : { recordVideo: { dir: opts.recordVideo.dir } }),
       });
     } catch (err) {
       throw explainLaunchFailure(err, { executablePath: opts.executablePath, channel });
     }
     try {
+      await grantGeolocation(context, opts);
       if (opts.storageState !== undefined) await context.setStorageState(opts.storageState);
       await confirmExtensionsLoaded(context, extensions, this.#openTimeoutMs);
     } catch (err) {

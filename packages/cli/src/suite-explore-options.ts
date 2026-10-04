@@ -80,6 +80,7 @@ export const SUITE_EXPLORE_OPTIONS = {
   // pacing and conversation
   stallTimeout: { shape: "positive", appliesTo: ["coverage", "exploratory", "feature"] },
   replyWaitMs: { shape: "integer", appliesTo: GOAL_UX },
+  replyQuietMs: { shape: "integer", appliesTo: GOAL_UX },
   replyCeilingMs: { shape: "integer", appliesTo: GOAL_UX },
   replyMaxChars: { shape: "integer", appliesTo: GOAL_UX, range: [20, 2000] },
   jobWaitMs: { shape: "integer", appliesTo: GOAL_UX },
@@ -87,6 +88,7 @@ export const SUITE_EXPLORE_OPTIONS = {
   deny: { shape: "strings", appliesTo: ALL_KINDS },
   paid: { shape: "strings", appliesTo: ALL_KINDS },
   allowDestructive: { shape: "boolean", appliesTo: ALL_KINDS },
+  dialogs: { shape: "string", appliesTo: ALL_KINDS, oneOf: ["dismiss", "accept"] },
   allowWrites: { shape: "boolean", appliesTo: ALL_KINDS },
   allowWrite: { shape: "strings", appliesTo: ALL_KINDS },
   readRpc: { shape: "strings", appliesTo: ALL_KINDS },
@@ -183,6 +185,7 @@ export const SUITE_DEDICATED_EXPLORE_OPTIONS: Readonly<Record<string, DedicatedO
   maxDecisions: { key: "maxDecisions", at: ["goal", "mission"] },
   viewport: { key: "viewport", at: ["target", "journey", "goal", "mission"] },
   device: { key: "device", at: ["target", "journey", "goal", "mission"] },
+  geolocation: { key: "geolocation", at: ["target", "journey", "goal", "mission"] },
   // #293 journey-anchored missions: the promoted Journey and step a mission item branches off.
   fromJourney: { key: "fromJourney", at: ["mission"] },
   atStep: { key: "atStep", at: ["mission"] },
@@ -193,6 +196,8 @@ export const SUITE_DEDICATED_EXPLORE_OPTIONS: Readonly<Record<string, DedicatedO
 };
 
 export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = {
+  allowSecretCmd: "#324: a cmd: secret source runs an operator command at type time — explore --secret-field with --allow-secret-cmd only, never from a suite file",
+  secretCmdAttempts: "#359: the bound on a cmd: secret source's command runs — goes with --allow-secret-cmd, which is never a suite option",
   browserExecutable: "a check launches every item's browser the same way: pass --browser-executable to `jevitate check`",
   browserChannel: "a check launches every item's browser the same way: pass --browser-channel to `jevitate check`",
   browserArg: "a check launches every item's browser the same way: pass --browser-arg to `jevitate check`",

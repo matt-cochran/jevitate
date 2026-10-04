@@ -41,6 +41,7 @@ import { type HostProbe } from "./host-pressure.js";
 import type { HostHealthSampler } from "./host-health.js";
 import { type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import {
+  type SecretCommandRunner,
   type SecretField,
 } from "./secret-fields.js";
 import { type SideEffect } from "./side-effects.js";
@@ -182,6 +183,18 @@ export interface ExploreConfig {
    * value (or TOTP code); the model sees only a placeholder, the Recording `{ redacted: true }`.
    */
   readonly secretFields?: readonly SecretField[];
+  /**
+   * #324: runs a `cmd:` secret field's command at type time (the CLI's, behind
+   * `--allow-secret-cmd`). Absent: a `cmd` binding cannot be typed (the step fails, saying so).
+   */
+  readonly secretCommand?: SecretCommandRunner;
+  /**
+   * #359: how many times one `cmd:` binding's command may run in this run (default
+   * {@link DEFAULT_SECRET_COMMAND_ATTEMPTS}). A read-the-code command usually has side effects (it
+   * consumes a one-time code, polls a rate-limited outbox), so retries are bounded; past the cap the
+   * type step fails without spawning it again.
+   */
+  readonly secretCommandAttempts?: number;
   readonly missionContext?: string;
   /** Recording.site label. Defaults to the start origin. */
   readonly site?: string;
@@ -271,6 +284,12 @@ export interface ExploreConfig {
    * indicator, reply still growing) the wait continues up to `replyCeilingMs` (#93).
    */
   readonly replyWaitMs?: number;
+  /**
+   * #331: how long a reply must hold still (no new text, no busy sign, the page settled) before it is
+   * read as complete. Default `REPLY_QUIET_MS` (1s); raise it for an assistant that answers in
+   * several parts (a sentence, then a card a moment later).
+   */
+  readonly replyQuietMs?: number;
   /** Hard ceiling (ms) on one reply wait. Default `REPLY_CEILING_MS` (180s); never below `replyWaitMs`. */
   readonly replyCeilingMs?: number;
   /** Cap (chars) on each generated chat message. Default `REPLY_MAX_CHARS`. */

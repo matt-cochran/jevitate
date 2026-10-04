@@ -41,6 +41,12 @@ In these specs:
   example — never a silent guess.
   At least one of `testId`, `role`, `label`, `text` or `css` must be set (`name` alone only narrows
   a `role`). Because pairs split at `;`, a `css=` value cannot contain `;`.
+- `text=` matches an element whose **whole** text is exactly that text. `textContains=` (#335)
+  matches an element whose text contains it, case-insensitively, wherever it is on the page
+  (including below the fold). `textIncludes:textContains=This demo has|This demo has` holds on
+  `<h1>This demo has ended</h1>`, while `text=This demo has` finds no element there. When an exact
+  `text=` check fails but some element contains the text, the failure says so and names the
+  `textContains=` form to use.
 - The last `|` separates the descriptor from the text or value (for `style` too). The other
   visual kinds split the descriptor off at the first `|`.
 - Visual-state checks are read by fixed built-in page functions and decided by code, never a
@@ -55,7 +61,11 @@ In these specs:
 - `flashed` needs its recorder installed before the action that triggers the flash; the goal
   mission installs it at the start of any run with a `flashed` check. Canvas pixels are not read:
   expose canvas state through DOM/ARIA/`data-*` and check that.
-- Path globs match the request path: `*` within one segment, `**` across segments.
+- Path globs match the request path: `*` within one segment, `**` across segments, and
+  `{a,b}` either alternative (#325), e.g.
+  `requestMade:POST /api.v1.Calendar/{Reschedule,Cancel}Appointment` for "move or cancel".
+  Braces nest; a brace group with no comma (`/users/{id}`) is literal. A pattern may expand to at
+  most 64 alternatives.
   A method of `*` matches any method. **The glob must start with `/`** (it matches the
   request's path, not a full URL) — `requestMade:POST */Foo` is rejected with
   `path glob must start with "/" (got "*/Foo")`, not the generic shape error.
@@ -74,6 +84,13 @@ page and never changed fails as vacuous, with a warning in the result (`checkWar
 Once every check has held, code ends the run as done before the next action, so it never
 keeps acting or writing past a met goal. `reloadThen` checks are always read on the final
 page.
+
+`--success-when each` (#337) is for a goal whose checks live on different pages, for example
+"connect payments (Connections shows Connected), then confirm Pricing shows Payments ready". No
+single page holds both, so neither `final` nor `held` (all together) can pass. Under `each`,
+every page check counts once it went from not holding to holding at some settled step, each at
+its own step and in any order. A check that held on the start page and never changed is vacuous,
+as under `held`. Once every check has held, code ends the run as done before the next action.
 
 **Vacuous checks (`--allow-vacuous-checks`).** A check that was already satisfied before the
 run did anything cannot verify the goal, so by default it **fails**, and the result names it
@@ -121,6 +138,17 @@ The Recording keeps the typed text, so a Journey replays it exactly. If the text
 jevitate explore --url http://localhost:8088/import --goal "Import this text and analyze it" \
   --type-fixture 'label=Paste your text=./fixtures/newsletter.txt' --success 'visible:text=Analysis ready'
 ```
+
+## Staying on the goal
+
+Code keeps a goal run on its goal (#338). A generated value that copies the goal's own instruction
+prose, such as "add an answer and test it" typed into the Answer field, is refused before it is
+typed. The model sees "that is the goal's instruction, not a value to enter" in its history and
+generates a value again. A value the goal quotes or gives with `exactly` is still typed as stated.
+Once the run has reached the goal's area (it opened a navigation item the goal names, or the URL
+path names one of the goal's words), navigation to sections the goal never names is listed last
+and marked `off-goal` in the decision. It is still offered, so a goal that names two sections can
+visit both.
 
 ## Rich-text editors
 

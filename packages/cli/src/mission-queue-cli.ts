@@ -68,6 +68,8 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
       .option("--screenshots [mode]", "masked screenshots + index.md next to the result: screens (default, one per distinct screen) | steps (one per step)")
       .option("--evidence-video", "per defect: a captioned evidence clip of its minimal repro + before/at screenshots (defects[].evidence)")
       .option("--persona <name>", "run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path"),
+    // #329: a queued mission persists only viewport/device; --geolocation is not offered here.
+    { geolocation: false },
   )
     .option("--dir <path>", QUEUE_DIR_HELP)
     .option("--targets-dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")

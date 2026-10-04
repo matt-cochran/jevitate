@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { InvariantSpec } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
-import { assertAuthorizedExploreTarget, matchGlob, parseSecretField, resolveCoverageThresholds, secretFieldSecrets, SecretFieldSpecError, type CoverageThresholds, type SecretField, type SuccessCheck } from "@jevitate/explore";
+import { assertAuthorizedExploreTarget, matchGlob, parseSecretField, resolveCoverageThresholds, secretFieldSecrets, SecretFieldSpecError, type CoverageThresholds, type DialogPolicy, type SecretField, type SuccessCheck } from "@jevitate/explore";
 import { buildMissionFixtures, checkSetupRefs, type FixtureFlags } from "./fixture-cli.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
@@ -216,7 +216,7 @@ interface ItemSetup {
 }
 
 const TARGET_FLAG_KEYS = [
-  "deny", "paid", "allowDestructive", "allowWrites", "allowWrite", "readRpc", "hangReplayWrites", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
+  "deny", "paid", "allowDestructive", "dialogs", "allowWrites", "allowWrite", "readRpc", "hangReplayWrites", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
 ] as const;
 
 function envSecret(ref: string, env: Readonly<Record<string, string | undefined>>): string {
@@ -261,6 +261,7 @@ function itemSetup(
       ...(x.paid === undefined ? {} : { paid: x.paid }),
       ...(x.readRpc === undefined ? {} : { readRpc: x.readRpc }),
       ...(x.allowDestructive === true ? { allowDestructive: true } : {}),
+      ...(x.dialogs === undefined ? {} : { dialogs: x.dialogs as DialogPolicy }),
       ...(x.allowWrites === true ? { allowWrites: true } : {}),
       ...(x.allowWrite === undefined ? {} : { allowWrite: x.allowWrite }),
       ...(x.hangReplayWrites === true ? { hangReplayWrites: true } : {}),

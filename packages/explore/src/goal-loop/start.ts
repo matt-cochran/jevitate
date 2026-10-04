@@ -13,6 +13,7 @@ import {
 } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { NO_DESTRUCTIVE_NOTE, READ_ONLY_NOTE } from "../read-only.js";
+import { installDialogPolicy } from "../native-dialogs.js";
 import type { RunContext } from "./context.js";
 import { FirstNavigationFailedSentinel, firstLine } from "./helpers.js";
 
@@ -20,6 +21,8 @@ export async function openRun(ctx: RunContext): Promise<void> {
   const { cfg } = ctx;
   // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
   await monitorFor(ctx.page).instrument();
+  // #334: native dialogs an action raises are answered by the run's safety policy and logged.
+  installDialogPolicy(ctx.page, (d) => ctx.safety.dialogVerdict(d));
   await ctx.deltas?.enable();
   ctx.effectLog.attach(monitorFor(ctx.page));
   // Initial navigation (authorized above).

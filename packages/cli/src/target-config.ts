@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
-import type { HangConfig, SafetyConfig, SettleConfig, TimingConfig } from "@jevitate/explore";
+import type { DialogPolicy, HangConfig, SafetyConfig, SettleConfig, TimingConfig } from "@jevitate/explore";
 import { resolveDataDir } from "./data-dir.js";
 import { sessionFileInProjectRefusal } from "./project-dir.js";
 
@@ -237,6 +237,9 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     if (f.hangReplayWrites !== undefined && typeof f.hangReplayWrites !== "boolean") {
       throw new TargetConfigError(`${where}.safety.hangReplayWrites must be a boolean`);
     }
+    if (f.dialogs !== undefined && f.dialogs !== "dismiss" && f.dialogs !== "accept") {
+      throw new TargetConfigError(`${where}.safety.dialogs must be "dismiss" or "accept"`);
+    }
     out.safety = {
       ...(f.deny === undefined ? {} : { deny: strings(f.deny, `${where}.safety.deny`) }),
       ...(f.paid === undefined ? {} : { paid: strings(f.paid, `${where}.safety.paid`) }),
@@ -244,6 +247,7 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
       ...(typeof f.allowWrites === "boolean" ? { allowWrites: f.allowWrites } : {}),
       ...(Array.isArray(f.allowWrites) ? { allowWriteRequests: strings(f.allowWrites, `${where}.safety.allowWrites`) } : {}),
       ...(f.hangReplayWrites === undefined ? {} : { hangReplayWrites: f.hangReplayWrites as boolean }),
+      ...(f.dialogs === undefined ? {} : { dialogs: f.dialogs as DialogPolicy }),
       ...(f.readRequests === undefined ? {} : { readRequests: strings(f.readRequests, `${where}.safety.readRequests`) }),
     };
   }
@@ -292,6 +296,8 @@ export interface TargetFlags {
   readonly readRpc?: readonly string[];
   /** `--hang-replay-writes` (#153; true wins over the file). */
   readonly hangReplayWrites?: boolean;
+  /** `--dialogs` (#334; the flag wins over the file's `safety.dialogs`). */
+  readonly dialogs?: DialogPolicy;
 }
 
 /** The config for one origin: the file's entry, with flag patterns ADDED and flag numbers winning. */
@@ -312,6 +318,7 @@ export function resolveTargetConfig(
   const allowWrites = flags.allowWrites === true || base.safety?.allowWrites === true;
   const allowWriteRequests = [...(base.safety?.allowWriteRequests ?? []), ...(flags.allowWrite ?? [])];
   const hangReplayWrites = flags.hangReplayWrites === true || base.safety?.hangReplayWrites === true;
+  const dialogs = flags.dialogs ?? base.safety?.dialogs;
   const safety: SafetyConfig = {
     ...(deny.length === 0 ? {} : { deny }),
     ...(paid.length === 0 ? {} : { paid }),
@@ -320,6 +327,7 @@ export function resolveTargetConfig(
     ...(allowWrites ? { allowWrites } : {}),
     ...(allowWriteRequests.length === 0 ? {} : { allowWriteRequests }),
     ...(hangReplayWrites ? { hangReplayWrites } : {}),
+    ...(dialogs === undefined ? {} : { dialogs }),
   };
   return {
     ...(Object.keys(safety).length === 0 ? {} : { safety }),

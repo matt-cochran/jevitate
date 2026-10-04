@@ -130,6 +130,11 @@ describe("runInductionMission — defect judgment is advisory only", () => {
     expect(result.coverage.defects.length).toBeGreaterThan(0);
     for (const d of result.coverage.defects) {
       expect(d.recording.pages.length).toBeGreaterThan(0);
+      // #320: the flag says what the judgment saw — never the bare "judgment flagged defect".
+      expect(d.reason).toMatch(/^advisory: the judgment flagged a possible defect \(p=0\.9\) after (click|type|select) ".*" on https?:\/\/\S+$/);
+      expect(d.judgment?.probability).toBe(0.9);
+      expect(d.judgment?.after).toMatch(/^(click|type|select) "/);
+      expect(d.judgment!.shown.length).toBeLessThanOrEqual(8);
     }
   }, 30_000);
 });

@@ -123,7 +123,7 @@ const many = (flag: string): CliParam => ({ kind: "string[]", flag });
 const path = (flag: string, extra: Partial<CliParam> = {}): CliParam => ({ kind: "path", flag, ...extra });
 const session = (flag: string): CliParam => ({ kind: "session", flag });
 const pos = (kind: CliParamKind = "string", extra: Partial<CliParam> = {}): CliParam => ({ kind, positional: true, required: true, ...extra });
-const EMULATION = { viewport: { kind: "viewport", flag: "--viewport" } as CliParam, device: s("--device") };
+const EMULATION = { viewport: { kind: "viewport", flag: "--viewport" } as CliParam, device: s("--device"), geolocation: s("--geolocation") };
 /** #256: unpacked browser extensions to load — confined like every path argument (a directory with manifest.json). */
 const EXTENSION = {
   extension: { kind: "path[]", flag: "--extension" } as CliParam,
@@ -256,7 +256,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         strategy: s("--strategy", { enum: ["goal", "coverage", "exploratory", "adversarial", "usability"] }),
         goal: s("--goal"),
         success: many("--success"),
-        successWhen: s("--success-when", { enum: ["final", "held"] }),
+        successWhen: s("--success-when", { enum: ["final", "held", "each"] }),
         allowVacuousChecks: b("--allow-vacuous-checks"),
         actionDeltas: b("--action-deltas"),
         feature: s("--feature"),
@@ -285,6 +285,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         repeat: n("--repeat"),
         minAgreement: n("--min-agreement"),
         allowDestructive: b("--allow-destructive"),
+        dialogs: s("--dialogs", { enum: ["dismiss", "accept"] }),
         allowWrites: b("--allow-writes"),
         allowWrite: many("--allow-write"),
         deny: many("--deny"),
@@ -298,6 +299,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         longPollMs: n("--long-poll-ms"),
         jobWaitMs: n("--job-wait-ms"),
         replyWaitMs: n("--reply-wait-ms"),
+        replyQuietMs: n("--reply-quiet-ms"),
         replyCeilingMs: n("--reply-ceiling-ms"),
         replyMaxChars: n("--reply-max-chars"),
         hangReplays: n("--hang-replays"),
@@ -320,6 +322,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         "--secret": OMIT.envSecret,
         "--secret-field": OMIT.envSecret,
         "--totp": OMIT.envSecret,
+        "--allow-secret-cmd": OMIT.envSecret,
+        "--secret-cmd-attempts": OMIT.envSecret,
         "--allow-log-cmd": OMIT.logCmd,
         "--log-source": OMIT.logCmd,
         "--log-defect": OMIT.logCmd,
@@ -384,7 +388,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       params: { ...EXTENSION,
         url: s("--url"),
         goal: s("--goal"),
-        success: s("--success"),
+        success: many("--success"),
         allow: many("--allow"),
         id: s("--id"),
         name: s("--name"),

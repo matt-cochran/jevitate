@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEntry } from "@jevitate/explore";
 import { UsageTracker } from "@jevitate/ai-core";
-import { MissionResultSchema, PersistedMissionResultSchema } from "@jevitate/domain";
+import { FakeClock, installClock, MissionResultSchema, PersistedMissionResultSchema, resetClock } from "@jevitate/domain";
 import {
   armMissionKillSwitch,
   armedMissionCount,
@@ -9,6 +9,7 @@ import {
   runWithMissionKillListener,
   setKillSwitchOutput,
   setKillSummary,
+  watchParentDeath,
   __resetKillSwitchForTests,
   type KillSwitchDeps,
 } from "./kill-signal.js";
@@ -69,7 +70,7 @@ describe("kill-signal — crash-safe SIGTERM/SIGINT (#94)", () => {
     };
     armMissionKillSwitch({ recordingPath: "/tmp/a.json" }, counting)();
     armMissionKillSwitch({ recordingPath: "/tmp/b.json" }, counting)();
-    expect(onSignalCalls).toEqual(["SIGTERM", "SIGINT"]);
+    expect(onSignalCalls).toEqual(["SIGTERM", "SIGINT", "SIGHUP"]);
     expect(handlers.SIGTERM).toBeTypeOf("function");
     expect(handlers.SIGINT).toBeTypeOf("function");
   });
@@ -516,5 +517,94 @@ describe("kill-signal — the killed partial is a unified result; an orchestrato
     second.handlers.SIGTERM?.();
     await vi.waitFor(() => expect(second.calls.exit).toEqual([143]));
     expect(out2).toEqual(["BETWEEN 0\n"]);
+  });
+});
+
+describe("kill-signal — no browser outlives the CLI (#326)", () => {
+  it("terminates this process's browsers synchronously, after the result is written and before the exit", () => {
+    const { deps, handlers, calls } = fakeDeps();
+    const order: string[] = [];
+    const tracking: KillSwitchDeps = {
+      ...deps,
+      writeResult: (...args) => {
+        order.push("write");
+        return deps.writeResult(...args);
+      },
+      terminateBrowsers: () => {
+        order.push("terminate");
+      },
+      exit: (code) => {
+        order.push("exit");
+        deps.exit(code);
+      },
+    };
+    armMissionKillSwitch({ recordingPath: "/tmp/explore-t.json" }, tracking);
+    handlers.SIGTERM?.();
+    // Synchronous: everything happened in the signal's own turn, nothing awaited.
+    expect(order).toEqual(["write", "terminate", "exit"]);
+    expect(calls.exit).toEqual([143]);
+  });
+
+  it("a teardown that throws never keeps the process from exiting", () => {
+    const { deps, handlers, calls } = fakeDeps();
+    armMissionKillSwitch(
+      { recordingPath: "/tmp/explore-u.json" },
+      {
+        ...deps,
+        terminateBrowsers: () => {
+          throw new Error("boom");
+        },
+      },
+    );
+    handlers.SIGTERM?.();
+    expect(calls.exit).toEqual([143]);
+    expect(calls.writeResult).toHaveLength(1);
+  });
+
+  it("on SIGHUP: writes the partial result and exits 129", () => {
+    const { deps, handlers, calls } = fakeDeps();
+    armMissionKillSwitch({ recordingPath: "/tmp/explore-h.json" }, deps);
+    handlers.SIGHUP?.();
+    expect(calls.exit).toEqual([129]);
+    expect(calls.writeResult[0]?.[3]).toMatchObject({ reason: "interrupted by SIGHUP after 0 steps", signal: "SIGHUP", exitCode: 129 });
+  });
+
+  it("the parent's death ends the run like a SIGHUP", () => {
+    const { deps, calls } = fakeDeps();
+    let parentGone: (() => void) | undefined;
+    armMissionKillSwitch({ recordingPath: "/tmp/explore-p.json" }, { ...deps, watchParent: (onGone) => (parentGone = onGone) });
+    expect(parentGone).toBeTypeOf("function");
+    parentGone?.();
+    expect(calls.exit).toEqual([129]);
+    expect(calls.writeResult).toHaveLength(1);
+  });
+});
+
+describe("watchParentDeath (#326)", () => {
+  beforeEach(() => () => resetClock());
+
+  it("polls on the installed clock: unchanged parent → nothing; changed → onGone exactly once", async () => {
+    const fake = new FakeClock();
+    installClock(fake);
+    let ppid = 4242;
+    let gone = 0;
+    watchParentDeath(() => (gone += 1), { ppid: () => ppid, platform: "linux", env: {}, intervalMs: 1000 });
+    await fake.advanceBy(3000);
+    expect(gone).toBe(0);
+    ppid = 1;
+    await fake.advanceBy(1000);
+    expect(gone).toBe(1);
+    ppid = 7;
+    await fake.advanceBy(5000);
+    expect(gone).toBe(1);
+  });
+
+  it("is off on Windows, with JEVITATE_PARENT_WATCHDOG=off, and with no real parent", () => {
+    const never = () => {
+      throw new Error("must not fire");
+    };
+    expect(watchParentDeath(never, { ppid: () => 4242, platform: "win32", env: {} })).toBeUndefined();
+    expect(watchParentDeath(never, { ppid: () => 4242, platform: "linux", env: { JEVITATE_PARENT_WATCHDOG: "off" } })).toBeUndefined();
+    expect(watchParentDeath(never, { ppid: () => 1, platform: "linux", env: {} })).toBeUndefined();
   });
 });

@@ -42,6 +42,7 @@ import {
 } from "../answer.js";
 import {
   REPLY_CEILING_MS,
+  REPLY_QUIET_MS,
   REPLY_WAIT_MS,
   STUCK_TURNS,
   UnsubmittedTypeTracker,
@@ -54,6 +55,7 @@ import {
 import { RunRecorder } from "../record.js";
 import { resolveMissionFixture } from "../fixture.js";
 import { ChromeTracker } from "../feature/relevance.js";
+import { GoalFocus } from "./goal-focus.js";
 import { REPLY_MAX_CHARS, WAIT_OP_MS } from "./limits.js";
 import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 import { TranscriptLog } from "../transcript.js";
@@ -84,6 +86,8 @@ export interface RunContext {
   readonly startOrigin: string;
   readonly fixture: string | null;
   readonly secrets: string[];
+  /** #359: how many times each `cmd:` binding's command has run this run (by descriptor). */
+  readonly secretCommandRuns: Map<string, number>;
   readonly secretContext: string | null;
   readonly missionContext: string | undefined;
   readonly bounds: Bounds;
@@ -117,6 +121,8 @@ export interface RunContext {
   lastScrollMoved: boolean;
   movingScrolls: number;
   movingScrollsSignature: string | null;
+  /** #323: the page signatures this streak of moving scrolls has seen (a revisit is no progress). */
+  scrollStreakSignatures: Set<string>;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   lastChanceGiven: boolean;
   /** #172: this decision is the last-chance turn. */
@@ -282,6 +288,8 @@ export interface RunContext {
    */
   readonly noteFailedAct: (c: Control, reason: string | undefined) => Promise<boolean>;
   readonly replyWaitMs: number;
+  /** #331: how long a reply must hold still before it is complete (`replyQuietMs`). */
+  readonly replyQuietMs: number;
   readonly replyCeilingMs: number;
   readonly replyMaxChars: number;
   readonly waitOpMs: number;
@@ -331,6 +339,8 @@ export interface RunContext {
   readonly documentStatus: Map<string, number>;
   /** #223: controls repeated across pages (global chrome) — their link text is not page content. */
   readonly chrome: ChromeTracker;
+  /** #338: the goal's area — once reached, navigation to sections the goal never names is off-goal. */
+  readonly goalFocus: GoalFocus;
   readonly docKey: (u: string) => string;
   readonly onDocumentResponse: (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown; }; }) => void;
   readonly effectLog: SideEffectLog;
@@ -343,6 +353,8 @@ export interface RunContext {
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
   readonly readOnly: ReadOnlyGuard | null;
   readonly jobWaitMs: number;
+  /** #330: the operator set `--job-wait-ms` (the job-wait budget is theirs, not the default). */
+  readonly jobWaitExplicit: boolean;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   jobWaitedMs: number;
   /**
@@ -369,6 +381,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
 
   // A bound secret field's value (or TOTP seed) is a run secret: every redaction seam scrubs it.
   ctx.secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
+  ctx.secretCommandRuns = new Map();
   ctx.secretContext = secretFieldContext(cfg.secretFields);
   ctx.missionContext = [
       cfg.missionContext,
@@ -422,6 +435,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.lastScrollMoved = false;
   ctx.movingScrolls = 0;
   ctx.movingScrollsSignature = null;
+  ctx.scrollStreakSignatures = new Set<string>();
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   ctx.lastChanceGiven = false;
   /** #172: this decision is the last-chance turn. */
@@ -644,6 +658,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
     return true;
   };
   ctx.replyWaitMs = cfg.replyWaitMs ?? REPLY_WAIT_MS;
+  ctx.replyQuietMs = cfg.replyQuietMs ?? REPLY_QUIET_MS;
   ctx.replyCeilingMs = Math.max(ctx.replyWaitMs, cfg.replyCeilingMs ?? REPLY_CEILING_MS);
   ctx.replyMaxChars = cfg.replyMaxChars ?? REPLY_MAX_CHARS;
   ctx.waitOpMs = cfg.waitOpMs ?? WAIT_OP_MS;
@@ -700,6 +715,8 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.documentStatus = new Map<string, number>();
   /** #223: controls repeated across pages (global chrome) — their link text is not page content. */
   ctx.chrome = new ChromeTracker();
+  /** #338: the goal's area — once reached, navigation to sections the goal never names is off-goal. */
+  ctx.goalFocus = new GoalFocus(cfg.goal);
   ctx.docKey = (u: string): string => u.split("#")[0] ?? u;
   ctx.onDocumentResponse = (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown } }): void => {
     try {
@@ -740,6 +757,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
         })
       : null;
   ctx.jobWaitMs = cfg.jobWaitMs ?? ctx.replyCeilingMs;
+  ctx.jobWaitExplicit = cfg.jobWaitMs !== undefined;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   ctx.jobWaitedMs = 0;
   /**

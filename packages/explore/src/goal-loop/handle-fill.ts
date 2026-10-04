@@ -10,6 +10,7 @@ import { sendable } from "../actions.js";
 import { isCredentialField } from "../auth-completion.js";
 import { capFormText } from "../fill.js";
 import { monitorFor } from "../page-monitor.js";
+import { redactContext } from "../redact.js";
 import { backgroundEndpoints } from "../stuck-actions.js";
 import type { RunContext } from "./context.js";
 import { MAX_TYPE_NO_EFFECT, firstLine, keyOf, quote, searchLike, stateBesides } from "./helpers.js";
@@ -122,12 +123,22 @@ export async function handleFill(ctx: RunContext, step: ActStep): Promise<Flow> 
     ctx.history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
     ctx.cleared(control);
   } else {
-    ctx.history.push(`${decision.op} failed: ${ctx.failNote(r.reason, control)}`);
+    ctx.history.push(`${decision.op} failed: ${ctx.failNote(r.reason, control)}${attempted(ctx, control, text)}`);
   }
-  record(r.ok, r.ok ? r.reason : ctx.failNote(r.reason, control), { value: text });
+  record(r.ok, r.ok ? r.reason : `${ctx.failNote(r.reason, control)}${attempted(ctx, control, text)}`, { value: text });
   if (!r.ok && (await ctx.noteFailedAct(control, r.reason))) {
     ctx.lastActedOp = decision.op;
     return "stop";
   }
   return "next";
+}
+
+/**
+ * #332: the value a failed type/select tried, for the history the model sees and the step's reason
+ * ("Malformed value" alone hides that `8:00 AM` was typed into a time input). A credential field's
+ * value is never shown, and registered secrets are masked.
+ */
+function attempted(ctx: RunContext, control: ActStep["control"], text: string): string {
+  if (isCredentialField(control)) return " (the value is redacted)";
+  return ` (tried ${quote(redactContext(text, ctx.secrets), 80)})`;
 }

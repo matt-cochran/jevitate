@@ -58,7 +58,7 @@ instead. It follows the same verdict contract as a single result:
 |---|---|
 | `missionOutcome` | The canonical verdict. Each run's `missionOutcome` is voted (a goal run's own ending folds first, so `exhausted` and `blocked` runs agree on `defects-found`). With personas it is the shared outcome when they agree, else the most severe persona's. `inconclusive` while runs are pending or after a kill. |
 | `goalOutcome` | `--goal` multi-runs only: the goal ending the runs agreed on, else the canonical outcome. |
-| `exitCode` | The exit code of `missionOutcome` (130/143 for a killed multi-run). |
+| `exitCode` | The exit code of `missionOutcome` (129/130/143 for a killed multi-run). |
 | `engine` | The build that produced the aggregate. |
 | `outcome` | The runs' own agreed ending (a goal's `succeeded`, …), or `"mixed"` when personas disagree. Not the portable verdict. |
 

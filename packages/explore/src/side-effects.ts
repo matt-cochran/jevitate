@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
+import { urlTemplate, writeClassifier, type WriteClassifier } from "@jevitate/recording";
 import { requestEndpoint } from "./authorized-targets.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
@@ -32,7 +32,35 @@ import { clock } from "@jevitate/domain";
  * target declares background (`--settle-ignore`) is not the control's side effect, so it never makes
  * a safe control (a menu, a nav link) unclickable a second time. It is still listed in the result's
  * `sideEffects` (`SideEffectLog`, marked `thirdParty`).
+ *
+ * An action is identified by what it IS and DOES, never by its label alone (#356): the route, the
+ * element (its descriptor) and the context it sits in (its form / container / dialog and the screen
+ * heading above it — `ActionIdentity`), and the guard names it by the request it actually issued
+ * (`requestSignature`: method + templated path, which carries an RPC method). Two same-labelled
+ * controls on two screens of one route ("Continue" → `POST /api/a`, then "Continue" →
+ * `POST /api/b`) are two actions; the same control on the same screen is still refused. A write
+ * still in flight is waited for whatever the context (the element alone on the route matches), so
+ * a screen that changed while its write runs never lets the same control re-fire it.
  */
+
+/** #356: what a click acts on — the element, and the context (form / dialog / screen) it sits in. */
+export interface ActionIdentity {
+  /** The element's stable locator (its descriptor) — label-based only when nothing better exists. */
+  readonly element: string;
+  /** Its context on the route: form / container / dialog, and the heading above it. "" = unknown. */
+  readonly context: string;
+}
+
+/**
+ * #356: a request's signature — method + templated path (`POST /api/items/:id`; a gRPC-web/Connect
+ * path carries its RPC method, `POST /pkg.Svc/RetryShareDomain`). No query, never a value.
+ */
+export function requestSignature(method: string, path: string): string {
+  return `${method.toUpperCase()} ${urlTemplate(path)}`;
+}
+
+const identityOf = (id: string | ActionIdentity): ActionIdentity => (typeof id === "string" ? { element: id, context: "" } : id);
+const recordKey = (route: string, id: ActionIdentity): string => JSON.stringify([route, id.element, id.context]);
 
 /** The request methods that change server state. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -59,6 +87,7 @@ export interface FiredWrite {
 interface Fired {
   readonly label: string;
   readonly route: string;
+  readonly element: string;
   readonly writes: FiredWrite[];
   /** The writes that were still in flight when the click's window closed (identity-tracked). */
   readonly inflight: InflightRequest[];
@@ -68,6 +97,7 @@ interface Fired {
 
 interface Open {
   readonly key: string;
+  readonly element: string;
   readonly label: string;
   readonly route: string;
   readonly at: number;
@@ -96,7 +126,7 @@ export type RepeatVerdict =
       readonly inflight: boolean;
     };
 
-const describeWrite = (w: FiredWrite): string => `${w.method} ${w.path}${w.status === null ? "" : ` → ${w.status}`}`;
+const describeWrite = (w: FiredWrite): string => `${requestSignature(w.method, w.path)}${w.status === null ? "" : ` → ${w.status}`}`;
 
 /** A value digest: a typed secret never sits in the guard's memory in clear. */
 const digest = (v: string): string => createHash("sha256").update(v).digest("hex").slice(0, 16);
@@ -154,14 +184,18 @@ export class SideEffectGuard {
     return this.#isWrite({ method: r.method, path: r.path, contentType: r.requestContentType ?? null });
   }
 
-  /** A click on `key` is about to be dispatched: watch what it sends. */
-  beginClick(key: string, label: string, route: string, at: number): void {
+  /**
+   * A click on `id` (a bare string = an element with no known context) is about to be dispatched:
+   * watch what it sends. `label` only names it in reasons and drives the sign-in / back rules.
+   */
+  beginClick(id: string | ActionIdentity, label: string, route: string, at: number): void {
+    const identity = identityOf(id);
     this.#closeOpen();
     // A back / start-over control abandons the flow on this route: its earlier submits may be redone.
     if (BACK_NAME.test(label)) {
       for (const [k, f] of this.#fired) if (f.route === route) this.#fired.delete(k);
     }
-    this.#open = { key, label, route, at, capture: this.#monitor.startCapture(), values: this.#valuesKey() };
+    this.#open = { key: recordKey(route, identity), element: identity.element, label, route, at, capture: this.#monitor.startCapture(), values: this.#valuesKey() };
   }
 
   /**
@@ -203,7 +237,7 @@ export class SideEffectGuard {
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
     this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending] };
     if (done.length + pending.length === 0) return;
-    this.#fired.set(o.key, { label: o.label, route: o.route, writes: [...done, ...pending], inflight, values: o.values });
+    this.#fired.set(o.key, { label: o.label, route: o.route, element: o.element, writes: [...done, ...pending], inflight, values: o.values });
   }
 
   /** Writes fired by this run's clicks that are still in flight now. */
@@ -243,22 +277,32 @@ export class SideEffectGuard {
    * May `key` be clicked on `route` now? `page` is what the page shows: its control names and alerts
    * (a visible retry affordance, or an error alert, re-allows it).
    */
-  check(key: string, route: string, page: { readonly controlNames: readonly string[]; readonly alerts: readonly string[] }): RepeatVerdict {
-    const f = this.#fired.get(key);
-    if (f === undefined || f.route !== route) return { refuse: false };
-    // Repeating a sign-in creates nothing (a retry after "Back to sign in", a 2FA restart).
-    if (SIGN_IN_NAME.test(f.label)) return { refuse: false };
+  check(
+    id: string | ActionIdentity,
+    route: string,
+    page: { readonly controlNames: readonly string[]; readonly alerts: readonly string[] },
+  ): RepeatVerdict {
+    const identity = identityOf(id);
+    // A write still in flight from this element on this route is waited for, whatever its context
+    // now says (#356 never weakens #92: a screen that changed mid-write is not a different action).
     const live = new Set(this.#monitor.unfinished());
-    const stillInFlight = f.inflight.filter((r) => live.has(r));
-    const what = f.writes.map(describeWrite).join(", ");
-    if (stillInFlight.length > 0) {
-      const w = stillInFlight.map((r) => `${r.method.toUpperCase()} ${this.#name(r.url)}`).join(", ");
+    for (const g of this.#fired.values()) {
+      if (g.route !== route || g.element !== identity.element || SIGN_IN_NAME.test(g.label)) continue;
+      const stillInFlight = g.inflight.filter((r) => live.has(r));
+      if (stillInFlight.length === 0) continue;
+      const w = stillInFlight.map((r) => requestSignature(r.method, this.#name(r.url))).join(", ");
       return {
         refuse: true,
         inflight: true,
-        reason: `repeated side effect refused: "${f.label}" already sent ${w}, still in flight — waiting for it instead of re-clicking`,
+        reason: `repeated side effect refused: "${g.label}" already sent ${w}, still in flight — waiting for it instead of re-clicking`,
       };
     }
+    // The same action: same route, same element, same context (#356 — never the label alone).
+    const f = this.#fired.get(recordKey(route, identity));
+    if (f === undefined) return { refuse: false };
+    // Repeating a sign-in creates nothing (a retry after "Back to sign in", a 2FA restart).
+    if (SIGN_IN_NAME.test(f.label)) return { refuse: false };
+    const what = f.writes.map(describeWrite).join(", ");
     // Every write it fired was rejected: the side effect did not land, so trying again is fair.
     if (f.writes.every((w) => w.rejected)) return { refuse: false };
     const retryOffered =

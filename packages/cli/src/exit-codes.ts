@@ -16,7 +16,7 @@ import { MISSION_EXIT_CODES, type MissionOutcome } from "@jevitate/domain";
  *  | 4    | intermittent  | a signal fired on some but not every replay                                    |
  *  | 64   | usage         | bad flags/arguments or unusable input (unknown id, invalid file, missing keys, |
  *  |      |               | refused target) — nothing ran. `EX_USAGE` from sysexits.h.                     |
- *  | 130/143 | killed     | SIGINT / SIGTERM (kill-signal.ts); the partial result is still written         |
+ *  | 129/130/143 | killed | SIGHUP (or parent death) / SIGINT / SIGTERM (kill-signal.ts); partial result written |
  *
  * 0–4 are the pre-existing mission codes (`MISSION_EXIT_CODES`, @jevitate/domain) unchanged; the
  * mission outcome → code mapping stays THERE (one place), and this table only names the classes.

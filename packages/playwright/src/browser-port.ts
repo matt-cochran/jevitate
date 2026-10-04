@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import type { AdmissionRecord } from "./browser-pool.js";
-import type { ViewportSize } from "./emulation.js";
+import type { GeolocationSpec, ViewportSize } from "./emulation.js";
 import type { UnpackedExtension } from "./extensions.js";
 import type { ResourceLimits } from "./resource-governor.js";
 
@@ -96,6 +96,11 @@ export interface OpenOptions extends BrowserLaunchOptions {
   baseUrl: string;
   viewport?: ViewportSize;
   device?: string;
+  /**
+   * #329: the context's geolocation; the `geolocation` permission is granted to `allowedOrigins`
+   * only (never every origin), so the page reads this position without a prompt.
+   */
+  geolocation?: GeolocationSpec;
   /** #245: record a Playwright video of this session's context into `dir` (see `BrowserSession.videoPath`). */
   recordVideo?: { dir: string };
 }

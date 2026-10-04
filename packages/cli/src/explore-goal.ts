@@ -11,7 +11,7 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
-import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
+import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { foldGoalOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
@@ -84,6 +84,10 @@ export interface RunExplorationOptions {
    * by code, never by the model; each value/seed is also a run secret (redacted everywhere).
    */
   readonly secretFields?: readonly SecretField[];
+  /** #324: runs a `cmd:` secret field's command at type time (CLI `--allow-secret-cmd`). */
+  readonly secretCommand?: SecretCommandRunner;
+  /** #359: `--secret-cmd-attempts`: runs of one `cmd:` binding's command per run (default 3). */
+  readonly secretCommandAttempts?: number;
   /** #281: fields typed with a file's exact text (CLI `--type-fixture`, read by the CLI). */
   readonly typeFixtures?: readonly TypeFixture[];
   /**
@@ -385,7 +389,22 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // the invariant monitor's own evidence.
   const authTokenValues = [...(opts.invariantAuthTokens?.values() ?? [])];
   const bound = [...secretFieldSecrets(opts.secretFields), ...(opts.fixtures?.secrets() ?? []), ...authTokenValues];
-  const secrets = opts.secrets === undefined && bound.length === 0 ? undefined : [...(opts.secrets ?? []), ...bound];
+  const hasCmdField = (opts.secretFields ?? []).some((f) => f.kind === "cmd");
+  const secrets = opts.secrets === undefined && bound.length === 0 && !hasCmdField ? undefined : [...(opts.secrets ?? []), ...bound];
+  // #324: a value a cmd: binding reads mid-run joins this run's secrets at once, so everything this
+  // command writes (result, evidence, issue drafts) is scrubbed of it too, not only the loop's own.
+  const runSecretCommand = opts.secretCommand;
+  const secretCommand: SecretCommandRunner | undefined =
+    runSecretCommand === undefined
+      ? undefined
+      : async (command) => {
+          const out = await runSecretCommand(command);
+          const value = out.trim();
+          if (value !== "" && secrets !== undefined && !secrets.includes(value)) secrets.push(value);
+          // #360: masked in every screenshot and video frame from now on — before the value is typed.
+          if (value !== "") await capture.mask.addSecret(value);
+          return out;
+        };
   // The state the mission starts from — replays restore THIS fixture and rebind its recorded outputs.
   const fx = opts.fixtures;
   const missionFixture = fx === undefined ? undefined : { record: fx.record(), persisted: fx.persisted() };
@@ -507,6 +526,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       bounds: opts.bounds,
       secrets,
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
+      ...(secretCommand === undefined ? {} : { secretCommand }),
+      ...(opts.secretCommandAttempts === undefined ? {} : { secretCommandAttempts: opts.secretCommandAttempts }),
       ...(opts.typeFixtures === undefined ? {} : { typeFixtures: opts.typeFixtures }),
       site: origin,
       fixture,
