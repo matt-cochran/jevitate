@@ -343,6 +343,8 @@ export interface RunContext {
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
   readonly readOnly: ReadOnlyGuard | null;
   readonly jobWaitMs: number;
+  /** #330: the operator set `--job-wait-ms` (the job-wait budget is theirs, not the default). */
+  readonly jobWaitExplicit: boolean;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   jobWaitedMs: number;
   /**
@@ -740,6 +742,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
         })
       : null;
   ctx.jobWaitMs = cfg.jobWaitMs ?? ctx.replyCeilingMs;
+  ctx.jobWaitExplicit = cfg.jobWaitMs !== undefined;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   ctx.jobWaitedMs = 0;
   /**
