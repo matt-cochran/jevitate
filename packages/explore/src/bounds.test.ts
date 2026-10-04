@@ -88,3 +88,14 @@ describe("NoProgressDetector — 3 consecutive non-wait steps, unchanged signatu
     expect(d.note("scroll_down", "s")).toBe(true);
   });
 });
+
+describe("NoProgressDetector.stalled (#323)", () => {
+  it("counts a step as no progress even when the signature changed", () => {
+    const d = new NoProgressDetector(3);
+    expect(d.stalled("A")).toBe(false);
+    expect(d.stalled("B")).toBe(false);
+    expect(d.stalled("A")).toBe(true);
+    d.progress("C");
+    expect(d.streak).toBe(0);
+  });
+});

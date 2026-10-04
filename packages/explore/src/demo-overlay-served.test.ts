@@ -13,7 +13,7 @@ import { monitorFor } from "./page-monitor.js";
 import { occluderOf } from "./occlusion.js";
 import { runInductionMission, type InductionRunResult } from "./missions/induction.js";
 import { runAdversarialMission, type AdversarialOutcome } from "./missions/adversarial.js";
-import { DEMO_OVERLAY_ATTR, DEMO_OVERLAY_HIDE_STYLE, DemoOverlay, demoOverlayFor } from "./demo-overlay.js";
+import { DEMO_OVERLAY_ATTR, DEMO_OVERLAY_HIDE_STYLE, DemoOverlay, demoOverlayFor, hideDemoOverlayForCapture } from "./demo-overlay.js";
 import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "./testkit.js";
 
 // #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
@@ -55,6 +55,8 @@ beforeAll(async () => {
     const path = (req.url ?? "").split("?")[0] ?? "";
     if (path === "/app") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(APP);
     if (path === "/done") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(DONE);
+    // #336: the same app behind a strict style CSP (no 'unsafe-inline').
+    if (path === "/csp") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": "style-src 'self'" }).end(APP);
     res.writeHead(404).end();
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -260,12 +262,12 @@ describe("#245 demo overlay — invisible to jevitate (served, real Chromium)", 
 });
 
 describe("#245 demo overlay — hit-testing, screenshots, settle and redaction (direct)", () => {
-  async function onPage<T>(body: (page: Page, overlay: DemoOverlay) => Promise<T>): Promise<T> {
+  async function onPage<T>(body: (page: Page, overlay: DemoOverlay) => Promise<T>, path = "/app"): Promise<T> {
     return withSession(
       "demo-overlay-direct-",
       async (session) => {
         await session.page.addInitScript(SHADOW_SPY);
-        await session.page.goto(`${base}/app`);
+        await session.page.goto(`${base}${path}`);
         return body(session.page, new DemoOverlay([SECRET]));
       },
       base,
@@ -344,6 +346,49 @@ describe("#245 demo overlay — hit-testing, screenshots, settle and redaction (
       // The style is scoped to the capture: the overlay is back on screen afterwards.
       expect((await page.screenshot({ animations: "disabled" })).equals(raw)).toBe(true);
     });
+  }, 60_000);
+
+  it("(e2) #336: hideDemoOverlayForCapture hides it for a capture without touching the DOM, and shows it again", async () => {
+    await onPage(async (page, overlay) => {
+      await monitorFor(page).instrument();
+      const clean = await page.screenshot({ animations: "disabled" });
+      await overlay.announce(page, { step: 3, strategy: "goal", op: "click", target: "Continue", why: "move on" });
+      await overlay.finish("jevitate · done — done", true);
+      const raw = await page.screenshot({ animations: "disabled" });
+      const before = await page.evaluate(() => (window as unknown as { __jevitateMonitor: { lastMutation: number } }).__jevitateMonitor.lastMutation);
+      expect(await hideDemoOverlayForCapture(page, true)).toBe(true);
+      const hidden = await page.screenshot({ animations: "disabled" });
+      expect(await hideDemoOverlayForCapture(page, false)).toBe(true);
+      const after = await page.evaluate(() => (window as unknown as { __jevitateMonitor: { lastMutation: number } }).__jevitateMonitor.lastMutation);
+      expect(raw.equals(clean)).toBe(false);
+      expect(hidden.equals(clean)).toBe(true);
+      expect(after).toBe(before); // no light-DOM mutation: settle/quiet windows are unaffected
+      expect((await page.screenshot({ animations: "disabled" })).equals(raw)).toBe(true);
+      // A page with no overlay: nothing to hide, nothing fails.
+      await page.goto(`${base}/done`);
+      expect(await hideDemoOverlayForCapture(page, true)).toBe(true);
+      expect(await hideDemoOverlayForCapture(page, false)).toBe(true);
+    });
+  }, 60_000);
+
+  it("(e3) #336: on a strict-CSP page the capture hide raises no CSP violation (the inline style did)", async () => {
+    await onPage(async (page, overlay) => {
+      const csp: string[] = [];
+      page.on("console", (m) => {
+        if (/Content Security Policy/i.test(m.text())) csp.push(m.text());
+      });
+      const clean = await page.screenshot({ animations: "disabled" });
+      await overlay.announce(page, { step: 1, strategy: "goal", op: "click", target: "Save" });
+      expect(await hideDemoOverlayForCapture(page, true)).toBe(true);
+      const hidden = await page.screenshot({ animations: "disabled" });
+      await hideDemoOverlayForCapture(page, false);
+      expect(hidden.equals(clean)).toBe(true);
+      await page.waitForTimeout(100);
+      expect(csp).toEqual([]);
+      // The old way — Playwright's screenshot({ style }) — is exactly what the strict CSP reports.
+      await page.screenshot({ animations: "disabled", style: DEMO_OVERLAY_HIDE_STYLE });
+      await expect.poll(() => csp.length).toBeGreaterThan(0);
+    }, "/csp");
   }, 60_000);
 
   it("(f) the panel and banner are redacted, and page-controlled text is set as text, never markup", async () => {

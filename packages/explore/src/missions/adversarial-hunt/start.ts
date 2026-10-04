@@ -10,7 +10,7 @@ import { act, type ActResult } from "../../act.js";
 import { affordedOp } from "../../actions.js";
 import { normalizeRoute } from "../../adversarial/defect-fingerprint.js";
 import type { MisuseStep } from "../../adversarial/form-misuse.js";
-import { markupFingerprint, renderedCanaries } from "../../adversarial/markup-canary.js";
+import { markupFingerprint, renderedCanariesSettled } from "../../adversarial/markup-canary.js";
 import type { MisuseStrategy } from "../../adversarial/misuse.js";
 import { isAuthorizedExploreTarget } from "../../authorized-targets.js";
 import { controlIdentity } from "../../coverage/fingerprint.js";
@@ -112,7 +112,9 @@ export function startHunt(ctx: HuntState, params: AdversarialMissionParams): voi
     const submitted = [...ctx.chainCanaries];
     ctx.chainCanaries.clear();
     const authorized = (u: string): boolean => isAuthorizedExploreTarget(u, params.allowlist);
-    const afterSubmit = await renderedCanaries(ctx.sessions.page, ctx.canaries.prefix, authorized);
+    // #319: a just-submitted canary may render a moment after the step settled (a list fetched
+    // after the POST); it is given a bounded wait, here and after the reload.
+    const afterSubmit = await renderedCanariesSettled(ctx.sessions.page, ctx.canaries.prefix, authorized, submitted);
     const submittedOn = redactUrl(ctx.sessions.page.url());
     let afterReload = new Set<string>();
     let reloadedOn = submittedOn;
@@ -123,7 +125,7 @@ export function startHunt(ctx: HuntState, params: AdversarialMissionParams): voi
       ctx.recorder.navigate(url, ctx.now());
       ctx.lastRecordedTarget = null;
       await ctx.perceiveNow().catch(() => undefined);
-      afterReload = await renderedCanaries(ctx.sessions.page, ctx.canaries.prefix, authorized);
+      afterReload = await renderedCanariesSettled(ctx.sessions.page, ctx.canaries.prefix, authorized, submitted);
       reloadedOn = redactUrl(ctx.sessions.page.url());
     }
     const found: StepFinding[] = [];

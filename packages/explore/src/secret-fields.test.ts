@@ -6,8 +6,10 @@ import {
   maskSecretFields,
   parseSecretField,
   secretFieldContext,
+  secretFieldSecrets,
   secretFieldValue,
   secretFieldsToFill,
+  resolveSecretFieldValue,
 } from "./secret-fields.js";
 import { decodeBase32, totp } from "./totp.js";
 
@@ -129,5 +131,28 @@ describe("bound fields code types on its own (#111)", () => {
     // The control a `type` was chosen on goes through the normal bound path instead.
     expect(secretFieldsToFill([pw], fields, { submitting: null, status: invalid, exclude: pw })).toEqual([]);
     expect(secretFieldsToFill([pw], undefined, { submitting: submit, status: invalid })).toEqual([]);
+  });
+});
+
+describe("cmd: secret source (#324)", () => {
+  it("is refused without the operator's opt-in, and parsed with it", () => {
+    expect(() => parseSecretField("label=Verification code=cmd:./read-code.sh", "value", {})).toThrow(/--allow-secret-cmd/);
+    expect(() => parseSecretField("label=Code=cmd:", "value", {}, { allowCmd: true })).toThrow(SecretFieldSpecError);
+    const f = parseSecretField("label=Verification code=cmd:./read-code.sh --to a@b.test", "value", {}, { allowCmd: true });
+    expect(f).toMatchObject({ kind: "cmd", name: "CMD_VERIFICATION_CODE", command: "./read-code.sh --to a@b.test", secret: "", descriptor: "label=Verification code" });
+    // Nothing to register before it is read; the sync accessor refuses it.
+    expect(secretFieldSecrets([f])).toEqual([]);
+    expect(() => secretFieldValue(f, 0)).toThrow(/resolveSecretFieldValue/);
+  });
+
+  it("resolves at type time: trimmed stdout; empty output, a failed command or no runner is an error that never quotes output", async () => {
+    const f = parseSecretField("label=Code=cmd:read", "value", {}, { allowCmd: true });
+    expect(await resolveSecretFieldValue(f, 0, async () => " 123456\n")).toBe("123456");
+    await expect(resolveSecretFieldValue(f, 0, async () => "\n")).rejects.toThrow(/printed nothing/);
+    await expect(resolveSecretFieldValue(f, 0, async () => { throw new Error("it exited with code 3"); })).rejects.toThrow(/its command failed \(it exited with code 3\)/);
+    await expect(resolveSecretFieldValue(f, 0)).rejects.toThrow(/no command runner/);
+    // A value or TOTP binding resolves as before.
+    const v = parseSecretField("label=Password=env:PW", "value", { PW: "s3cret" });
+    expect(await resolveSecretFieldValue(v, 0)).toBe("s3cret");
   });
 });

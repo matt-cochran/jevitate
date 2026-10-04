@@ -5,7 +5,7 @@ import { FakeGenerationGateway, type Answer, type JudgmentPort, type JudgmentSta
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { explore } from "./explore.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
-import { SideEffectGuard, SideEffectLog } from "./side-effects.js";
+import { SideEffectGuard, SideEffectLog, requestSignature } from "./side-effects.js";
 import { withSession, useSkippingTime } from "./testkit.js";
 
 // #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
@@ -304,5 +304,62 @@ describe("SideEffectLog (#116)", () => {
       ],
       truncated: 0,
     });
+  });
+});
+
+describe("SideEffectGuard — an action is what it is and does, not its label (#356)", () => {
+  const at = (path: string, status = 200): CapturedRequest => ({ method: "POST", url: `http://x${path}`, path, status, failed: false });
+  const PAGE2 = { controlNames: ["Continue"], alerts: [] as string[] };
+
+  it("a same-labelled control in another context on the same route is a different action", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    const el = JSON.stringify({ role: "button", name: "Continue" });
+    const a = { element: el, context: JSON.stringify([null, null, null, "Step 1"]) };
+    const b = { element: el, context: JSON.stringify([null, null, null, "Step 2"]) };
+    g.beginClick(a, "Continue", "/flow", 0);
+    finish(at("/api/a"));
+    g.settle();
+    // Screen B's "Continue" is not screen A's: allowed.
+    expect(g.check(b, "/flow", PAGE2)).toEqual({ refuse: false });
+    g.beginClick(b, "Continue", "/flow", 10);
+    finish(at("/api/b"));
+    g.settle();
+    // The SAME action (route + element + context) is still refused, named by the request it sent.
+    const again = g.check(b, "/flow", PAGE2);
+    expect(again).toMatchObject({ refuse: true, inflight: false });
+    expect(again.refuse && again.reason).toContain("POST /api/b");
+    expect(again.refuse && again.reason).not.toContain("/api/a");
+    expect(g.check(a, "/flow", PAGE2)).toMatchObject({ refuse: true, inflight: false });
+  });
+
+  it("a write still in flight is waited for whatever the context now says", () => {
+    const { monitor, inflight } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    const el = JSON.stringify({ role: "button", name: "Run" });
+    g.beginClick({ element: el, context: '"before"' }, "Run", "/a", 100);
+    inflight.push({ url: "http://x/api/simulations", method: "POST", resourceType: "fetch", startedAt: 150 });
+    g.settle();
+    expect(g.check({ element: el, context: '"after"' }, "/a", PAGE)).toMatchObject({ refuse: true, inflight: true });
+    // Another element is never held up by it.
+    expect(g.check({ element: "other", context: '"after"' }, "/a", PAGE)).toEqual({ refuse: false });
+  });
+
+  it("a record on one route is not overwritten by the same element on another", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("k", "Continue", "/one", 0);
+    finish(at("/api/a"));
+    g.settle();
+    g.beginClick("k", "Continue", "/two", 10);
+    finish(at("/api/b"));
+    g.settle();
+    expect(g.check("k", "/one", PAGE2)).toMatchObject({ refuse: true });
+    expect(g.check("k", "/two", PAGE2)).toMatchObject({ refuse: true });
+  });
+
+  it("requestSignature: method + templated path, carrying an RPC method", () => {
+    expect(requestSignature("post", "/api/items/42")).toBe("POST /api/items/:id");
+    expect(requestSignature("POST", "/pkg.v1.ShareService/RetryShareDomain")).toBe("POST /pkg.v1.ShareService/RetryShareDomain");
   });
 });

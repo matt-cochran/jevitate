@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SafetyPolicy, actionName, controlRisk, goalAsksFor, goalAsksForAction, validateDenyPatterns } from "./safety.js";
+import { SafetyPolicy, actionName, controlRisk, goalAsksFor, goalAsksForAction, messageRisk, validateDenyPatterns } from "./safety.js";
 
 const btn = (name: string, extra: { testId?: string } = {}) => ({
   name,
@@ -46,6 +46,35 @@ describe("the shared safety policy (#116)", () => {
     }
     for (const n of ["Save", "Show details", "Log in", "Send", "Invite", "Dropdown menu"]) expect(controlRisk(n), n).toBeNull();
     expect(controlRisk("Regenerate API key")?.risk).toBe("destructive");
+  });
+
+  it("classifies resetting or switching off a credential or security factor as destructive (#333)", () => {
+    for (const n of [
+      "Reset authenticator",
+      "Reset authenticator app",
+      "Reset your password",
+      "Disable two-factor",
+      "Disable two-factor authentication",
+      "Turn off 2FA",
+      "Turn off MFA",
+      "Remove 2FA",
+      "Regenerate recovery codes",
+      "Revoke sessions",
+      "End all sessions",
+      "Delete passkey",
+      "Unlink security key",
+    ]) {
+      expect(controlRisk(n)?.risk, n).toBe("destructive");
+    }
+    // A bare reset, or a reset of something that is not a credential, is not one.
+    for (const n of ["Reset", "Reset filters", "Reset form", "Show password", "Two-factor settings", "Set up authenticator"]) {
+      expect(controlRisk(n), n).toBeNull();
+    }
+    const p = new SafetyPolicy();
+    expect(p.refuses(btn("Reset authenticator"))?.reason).toMatch(/is destructive.*--allow-destructive/);
+    expect(new SafetyPolicy({ allowDestructive: true }).refuses(btn("Reset authenticator"))).toBeNull();
+    expect(goalAsksFor("Reset my authenticator app", "Reset authenticator")).toBe(true);
+    expect(goalAsksFor("Check the security settings", "Reset authenticator")).toBe(false);
   });
 
   it("refuses them by default, lifts them with allowDestructive, and a --deny pattern always holds", () => {
@@ -113,5 +142,35 @@ describe("the shared safety policy (#116)", () => {
     const p = new SafetyPolicy();
     expect(p.refuses({ ...btn("No — every user must pay today, so there is no free cohort"), role: "radio" })).toBeNull();
     expect(p.refuses(btn("Generate customer research"))).not.toBeNull();
+  });
+});
+
+describe("native dialog verdicts (#334)", () => {
+  const confirm = (message: string) => ({ type: "confirm", message });
+
+  it("dismisses a confirm/prompt by default, accepts an alert, never confirms leaving the page", () => {
+    const p = new SafetyPolicy();
+    expect(p.dialogVerdict(confirm("Save changes?"))).toMatchObject({ action: "dismiss", why: expect.stringMatching(/--dialogs accept/) });
+    expect(p.dialogVerdict({ type: "prompt", message: "Name?" }).action).toBe("dismiss");
+    expect(p.dialogVerdict({ type: "alert", message: "Saved" }).action).toBe("accept");
+    expect(new SafetyPolicy({ dialogs: "accept" }).dialogVerdict({ type: "beforeunload", message: "" }).action).toBe("dismiss");
+  });
+
+  it("accept confirms, unless the message names a risky action the run may not take", () => {
+    const p = new SafetyPolicy({ dialogs: "accept" });
+    expect(p.dialogVerdict(confirm("Save changes?")).action).toBe("accept");
+    expect(p.dialogVerdict(confirm("Revoke consent? This can't be undone."))).toMatchObject({ action: "dismiss", why: expect.stringMatching(/destructive.*Revoke/) });
+    expect(p.dialogVerdict(confirm("Buy 50 credits for $10?")).action).toBe("dismiss");
+    expect(new SafetyPolicy({ dialogs: "accept", allowDestructive: true }).dialogVerdict(confirm("Revoke consent?")).action).toBe("accept");
+    expect(new SafetyPolicy({ dialogs: "accept" }, { goal: "Revoke the showcase consent" }).dialogVerdict(confirm("Revoke consent?")).action).toBe("accept");
+    expect(new SafetyPolicy({ dialogs: "accept", allowDestructive: true, deny: ["/archive/"] }).dialogVerdict(confirm("Archive it?"))).toMatchObject({
+      action: "dismiss",
+      why: expect.stringMatching(/--deny/),
+    });
+  });
+
+  it("classifies a dialog message with no label-length cap", () => {
+    expect(messageRisk("Are you sure? This will permanently delete the project and every report in it.")).toMatchObject({ risk: "destructive", matched: "delete" });
+    expect(messageRisk("Leave this page? Changes you made may not be saved.")).toBeNull();
   });
 });

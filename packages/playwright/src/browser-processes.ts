@@ -360,3 +360,100 @@ export function measureOwnBrowserMemory(opts: { readonly table?: ProcessTable; r
   }
   return processes === 0 ? undefined : { bytes, metric, processes, roots };
 }
+
+export interface OwnBrowserTeardown {
+  /** False on a platform with no supported process reader (nothing was looked at or signalled). */
+  readonly supported: boolean;
+  /** Marked browser roots this process owned when the teardown began. */
+  readonly roots: readonly number[];
+  /** Processes (roots + descendants) still running after the grace period, then sent SIGKILL. */
+  readonly killed: readonly number[];
+}
+
+/** The seams a test fakes for `terminateOwnBrowsersSync` (signals and the synchronous wait). */
+export interface OwnBrowserTeardownDeps {
+  readonly table?: ProcessTable;
+  readonly ownerPid?: number;
+  /** Total grace before SIGKILL (default 1000 ms), polled in `pollMs` steps (default 25 ms). */
+  readonly graceMs?: number;
+  readonly pollMs?: number;
+  /** Signals a pid (negative = its process group). Defaults to `process.kill`. */
+  readonly kill?: (pid: number, signal: NodeJS.Signals) => void;
+  /** Is the pid still running? Defaults to `processAlive`. */
+  readonly alive?: (pid: number) => boolean;
+  /** Blocks the thread for `ms` (default: `Atomics.wait` on a private buffer — no timer, no event loop). */
+  readonly sleepSync?: (ms: number) => void;
+}
+
+/**
+ * Running, and not a zombie: a browser root is OUR child, and while the kill switch blocks the event
+ * loop nothing reaps it, so an exited root lingers as a zombie that `kill(pid, 0)` still reports.
+ */
+function runningNotZombie(pid: number): boolean {
+  if (!processAlive(pid)) return false;
+  return process.platform !== "linux" || statFields(pid)?.[0] !== "Z";
+}
+
+function atomicsSleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * #326: closes every browser THIS process launched, SYNCHRONOUSLY — for the kill switch, which must
+ * not yield the event loop before it exits (kill-signal.ts). Each marked root (`--jevitate-owner=`
+ * naming this pid) and every descendant is sent SIGTERM — the root's whole process group first
+ * (Playwright launches Chromium `detached`, as the leader of its own group, so a signal to the CLI's
+ * group never reaches it) — then, after at most `graceMs`, SIGKILL for whatever still runs. Only
+ * marked processes and their descendants are ever signalled. Never throws: a teardown is best effort
+ * and must never keep the process from exiting.
+ */
+export function terminateOwnBrowsersSync(deps: OwnBrowserTeardownDeps = {}): OwnBrowserTeardown {
+  const table = deps.table ?? systemProcessTable();
+  const ownerPid = deps.ownerPid ?? process.pid;
+  const kill = deps.kill ?? ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal));
+  const alive = deps.alive ?? runningNotZombie;
+  const sleepSync = deps.sleepSync ?? atomicsSleep;
+  const graceMs = deps.graceMs ?? 1_000;
+  const pollMs = Math.max(1, deps.pollMs ?? 25);
+  let procs: ProcessInfo[] | undefined;
+  try {
+    procs = table.list();
+  } catch {
+    procs = undefined;
+  }
+  if (procs === undefined) return { supported: false, roots: [], killed: [] };
+  const listing = procs;
+  const roots = markedBrowsers(listing)
+    .filter((b) => b.owner.pid === ownerPid)
+    .map((b) => b.pid);
+  if (roots.length === 0) return { supported: true, roots: [], killed: [] };
+  let tree: number[];
+  try {
+    // From the one listing taken above: `childrenOf` is not needed for a single synchronous pass.
+    tree = descendants(roots, { ...table, childrenOf: undefined }, () => listing).filter((pid) => pid !== ownerPid);
+  } catch {
+    tree = [...roots];
+  }
+  const signal = (sig: NodeJS.Signals, pids: readonly number[]): void => {
+    for (const root of roots) {
+      try {
+        kill(-root, sig);
+      } catch {
+        // not a group leader (or already gone): the per-pid signals below still reach it
+      }
+    }
+    for (const pid of pids) {
+      try {
+        kill(pid, sig);
+      } catch {
+        // already gone
+      }
+    }
+  };
+  signal("SIGTERM", tree);
+  // Counted steps, not a clock read: the wait is bounded by construction and never touches a timer.
+  for (let waited = 0; waited < graceMs && tree.some((pid) => alive(pid)); waited += pollMs) sleepSync(pollMs);
+  const survivors = tree.filter((pid) => alive(pid));
+  if (survivors.length > 0) signal("SIGKILL", survivors);
+  return { supported: true, roots, killed: survivors };
+}

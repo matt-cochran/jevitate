@@ -8,6 +8,8 @@ import {
   parseOwnerMarker,
   processAlive,
   systemProcessTable,
+  terminateOwnBrowsersSync,
+  type ProcessInfo,
   type ProcessTable,
 } from "./browser-processes.js";
 
@@ -123,5 +125,70 @@ describe("unsupported platform", () => {
     expect(table.list()).toBeUndefined();
     expect(await cleanupOrphanBrowsers({ table })).toEqual({ orphans: [], supported: false });
     expect(measureOwnBrowserMemory({ table })).toBeUndefined();
+  });
+});
+
+describe("terminateOwnBrowsersSync (#326)", () => {
+  /** A fake table: `procs` is the whole machine; signals and the wait are recorded, never real. */
+  function fake(procs: ProcessInfo[], opts: { exitsOn?: NodeJS.Signals } = {}) {
+    const running = new Set(procs.map((p) => p.pid));
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    let slept = 0;
+    const table: ProcessTable = { list: () => procs.filter((p) => running.has(p.pid)), startOf: () => "1", memoryOf: () => undefined };
+    const kill = (pid: number, sig: NodeJS.Signals): void => {
+      signals.push([pid, sig]);
+      if (sig === "SIGKILL" || sig === opts.exitsOn) {
+        if (pid < 0) {
+          // a group signal: the leader and its descendants in this fake all share the group
+          for (const p of procs) if (p.pid === -pid || p.ppid === -pid || procs.some((q) => q.pid === p.ppid && q.ppid === -pid)) running.delete(p.pid);
+        } else running.delete(pid);
+      }
+    };
+    return { table, kill, signals, alive: (pid: number) => running.has(pid), sleepSync: (ms: number) => (slept += ms), slept: () => slept, running };
+  }
+  const browser = (pid: number, owner: number): ProcessInfo => ({ pid, ppid: owner, argv: [`chrome --headless --jevitate-owner=${owner}@1 --no-sandbox`] });
+  const child = (pid: number, ppid: number): ProcessInfo => ({ pid, ppid, argv: ["chrome", "--type=renderer"] });
+
+  it("SIGTERMs its own browser trees (group + every descendant) and stops waiting once they are gone", () => {
+    const f = fake([browser(100, 7), child(101, 100), child(102, 101), browser(200, 8), child(201, 200), { pid: 300, ppid: 7, argv: ["unrelated"] }], { exitsOn: "SIGTERM" });
+    const r = terminateOwnBrowsersSync({ table: f.table, ownerPid: 7, kill: f.kill, alive: f.alive, sleepSync: f.sleepSync });
+    expect(r).toEqual({ supported: true, roots: [100], killed: [] });
+    expect(f.signals.filter(([, s]) => s === "SIGTERM").map(([p]) => p)).toEqual([-100, 100, 101, 102]);
+    expect(f.signals.some(([, s]) => s === "SIGKILL")).toBe(false);
+    // Another owner's browser and an unmarked sibling are never touched.
+    expect(f.running.has(200) && f.running.has(201) && f.running.has(300)).toBe(true);
+    expect(f.slept()).toBe(0);
+  });
+
+  it("SIGKILLs what still runs after the bounded grace", () => {
+    const f = fake([browser(100, 7), child(101, 100)]);
+    const r = terminateOwnBrowsersSync({ table: f.table, ownerPid: 7, kill: f.kill, alive: f.alive, sleepSync: f.sleepSync, graceMs: 100, pollMs: 25 });
+    expect(r.killed).toEqual([100, 101]);
+    expect(f.slept()).toBe(100);
+    expect(f.signals.filter(([, s]) => s === "SIGKILL").map(([p]) => p)).toEqual([-100, 100, 101]);
+    expect(f.running.size).toBe(0);
+  });
+
+  it("no browsers, an unsupported platform, or failing signals: returns without throwing", () => {
+    const f = fake([{ pid: 5, ppid: 7, argv: ["node"] }]);
+    expect(terminateOwnBrowsersSync({ table: f.table, ownerPid: 7, kill: f.kill, alive: f.alive, sleepSync: f.sleepSync })).toEqual({ supported: true, roots: [], killed: [] });
+    expect(f.signals).toEqual([]);
+    const unsupported: ProcessTable = { list: () => undefined, startOf: () => undefined, memoryOf: () => undefined };
+    expect(terminateOwnBrowsersSync({ table: unsupported }).supported).toBe(false);
+    const g = fake([browser(100, 7)]);
+    const throwing = () => {
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    };
+    expect(() => terminateOwnBrowsersSync({ table: g.table, ownerPid: 7, kill: throwing, alive: g.alive, sleepSync: g.sleepSync, graceMs: 50 })).not.toThrow();
+  });
+
+  it.runIf(linux)("real processes: a marked tree owned by this process is gone after the call", async () => {
+    const owner = 2_000_000_000; // a fake owner pid, so only this test's processes match
+    const p = fakeProcess([`--jevitate-owner=${owner}@1`]);
+    await waitFor(() => p.pid !== undefined && processAlive(p.pid));
+    const table = restricted(() => (p.pid === undefined ? [] : [p.pid]));
+    const r = terminateOwnBrowsersSync({ table, ownerPid: owner, graceMs: 2000 });
+    expect(r.roots).toEqual([p.pid]);
+    await waitFor(() => p.exitCode !== null || p.signalCode !== null);
   });
 });

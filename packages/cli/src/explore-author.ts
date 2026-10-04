@@ -4,7 +4,7 @@ import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } fr
 import { sessionLaunchOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion } from "@jevitate/recording";
-import type { SafetyConfig } from "@jevitate/explore";
+import type { SafetyConfig, SuccessCheck } from "@jevitate/explore";
 import {
   authorJourney,
   assertAuthorizedExploreTarget,
@@ -22,7 +22,9 @@ export interface AuthorViaBrowserArgs {
   readonly url: string;
   readonly origin: string;
   readonly goal: string;
-  readonly successAssertion: Assertion;
+  readonly successAssertion?: Assertion;
+  /** #322: the success checks (`--success`, repeatable): page and network kinds. */
+  readonly successChecks?: readonly SuccessCheck[];
   readonly allowlist: readonly string[];
   readonly judge?: JudgmentPort;
   readonly gen?: GenerationPort;
@@ -46,7 +48,9 @@ export interface AuthorViaBrowserArgs {
 export interface RunAuthorJourneyOptions {
   readonly url: string;
   readonly goal: string;
-  readonly successAssertion: Assertion;
+  readonly successAssertion?: Assertion;
+  /** #322: the success checks (`--success`, repeatable): page and network kinds. */
+  readonly successChecks?: readonly SuccessCheck[];
   readonly allowlist: readonly string[];
   /** Where the authored Journey is persisted (via `FsJourneyStore`). */
   readonly journeysDir: string;
@@ -96,7 +100,8 @@ export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<A
     url: opts.url,
     origin,
     goal: opts.goal,
-    successAssertion: opts.successAssertion,
+    ...(opts.successAssertion === undefined ? {} : { successAssertion: opts.successAssertion }),
+    ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
     allowlist: opts.allowlist,
     judge: opts.judge,
     gen: opts.gen,
@@ -144,7 +149,8 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
     const actor = CastActor.named("author").whoCan(new BrowseTheWeb(session, [...args.allowlist]));
     return await authorJourney({
       goal: args.goal,
-      successAssertion: args.successAssertion,
+      ...(args.successAssertion === undefined ? {} : { successAssertion: args.successAssertion }),
+      ...(args.successChecks === undefined ? {} : { successChecks: args.successChecks }),
       allowlist: args.allowlist,
       startUrl: args.url,
       bounds: args.bounds,

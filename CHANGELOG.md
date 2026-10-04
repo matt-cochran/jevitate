@@ -5,6 +5,120 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.5.0] – unreleased
+
+0.5.0 makes goal runs end with the truth more often and gives them the controls real apps need.
+Success checks can hold on different pages (`--success-when each`) and match part of a text
+(`textContains=`), authored Journeys keep network success checks, and request globs take `{a,b}`.
+Runs can accept confirm dialogs (`--dialogs accept`), stand at a fixed location (`--geolocation`),
+wait for multi-part chat replies (`--reply-quiet-ms`) and type a code delivered mid-run (a `cmd:`
+secret source). A stuck status, an oscillating scroll, a job behind an in-progress status, date and
+time inputs and strict-CSP screenshots no longer end a run with the wrong outcome. A `cmd:` secret is now
+masked in screenshots and video as well as text, controls in open shadow roots are reachable,
+same-labelled controls on different screens are no longer mistaken for a repeat, browsers no longer
+outlive a killed CLI, and goal runs stay on the sections the goal names.
+
+### Behaviour changes
+
+- **Security resets are destructive (#333).** "Reset authenticator", "Disable two-factor", "Turn off
+  2FA", "Reset password", "Unlink security key", "End all sessions" and similar controls are refused
+  without `--allow-destructive` (or a goal that asks for that action), like "Delete" and "Revoke". A
+  bare "Reset" or "Reset filters" is unaffected.
+- **A stuck status ends the run (#328).** When the same in-progress status is still shown after the
+  job-wait budget and no request is in flight, the next `wait` ends the run `no-progress`, naming the
+  status and the budget, instead of running until `exhausted`.
+- **An oscillating scroll is no progress (#323).** Scrolls that only revisit states the current
+  scroll streak has seen count toward the moving-scroll bound, so a back-and-forth scroll stops as
+  `no-progress` instead of running to the wall-clock cap.
+- **`--job-wait-ms` covers a pending request under an in-progress status (#330).** Such a request is
+  waited out within that budget instead of being reported as a `request-pending` hang at 15 s. A
+  live region reading "<verb>ing …" now counts as an in-progress status.
+- **Native dialogs are logged (#334).** Every dialog an action raises is recorded on the step
+  (`dialogs`: type, message, accepted or dismissed, and why) and shown to the model. The default
+  policy stays `dismiss`.
+- **Date and time inputs (#332).** A value written the way people write it (`8:00 AM`, `10/3/2026`)
+  is typed in the input's wire format; one that can't be read is rejected with the format the field
+  takes.
+- **Browsers never outlive the CLI (#326).** On SIGTERM, SIGINT and SIGHUP (exit 129), jevitate writes
+  its partial result, then terminates every browser it launched (their whole process trees, SIGKILL
+  after 1 s). A parent-death watchdog ends the run the same way when the process that started it
+  dies (Linux and macOS).
+- **Same-labelled controls are different actions (#356).** The repeat-side-effect guard identifies a
+  click by route, element and context (its form, container, dialog and the heading it sits under),
+  not by its label, so a second "Continue" on another screen of a single-page app is no longer
+  refused. A true repeat is still refused, and the refusal now names the request the earlier click
+  sent (method and templated path).
+- **Open shadow roots (#357).** Controls inside a web component's open shadow root are listed,
+  named, checked for covering overlays and clickable like any other control. Closed roots stay
+  out of reach.
+- **`cmd:` command runs are bounded (#359).** One field's command runs at most 3 times per run.
+  Past that, typing the field fails with a reason naming the limit, and the command doesn't run
+  again.
+- **Goal runs stay on the goal (#338).** A value that copies the goal's own instruction (four or more
+  words, mostly from the goal's unquoted text, led by an instruction verb) is refused as a typed
+  value, and the model is told why. Quoted and `exactly:` values (#281) and text the goal introduces
+  as a value ("titled …", "called …", "saying …", ": …") still pass. Once the run reaches the goal's
+  area (it opened a section the goal names, or the URL matches a goal word), navigation to sections
+  the goal never names is marked off-goal and listed last. It is never removed.
+
+### Upgrade notes
+
+- **MCP `author_journey`:** its `success` argument is now an array of strings (#322).
+- **Security-reset flows:** a goal that must reset a credential or security factor needs
+  `--allow-destructive`, or a goal that names that action (#333).
+- **Exact text checks:** `text=` still matches an element's whole text. Switch to the new
+  `textContains=` key where you meant part of it; a failing `text=` check now names that form (#335).
+- **Slow jobs:** raise `--job-wait-ms` for a job that legitimately shows its status longer than the
+  budget, now that a stuck status ends the run (#328).
+- **`nohup` runs:** a run left behind with `nohup … &` now ends when its parent shell exits (#326).
+  Set `JEVITATE_PARENT_WATCHDOG=off` for it.
+- **Read-the-code commands:** a `cmd:` field's command runs at most 3 times per run (#359); raise it
+  with `--secret-cmd-attempts <n>` if a flow legitimately needs more reads.
+- **Instruction-like values:** an unquoted value that reads like the goal's own instruction is now
+  refused (#338). Quote it in the goal, or introduce it ("titled …", "saying …"), to type it as is.
+
+### Added
+
+- **`--success-when each` (#337):** every page check counts once it went from not holding to holding
+  at some settled step, each on its own page and in any order; the run stops as soon as all have held.
+  Also `successWhen` in suite items and the MCP `run_exploration` argument.
+- **`textContains=` (#335, #327):** a case-insensitive substring key for visible-text checks, including
+  below-the-fold content.
+- **Network checks in authored Journeys (#322):** `explore-author-journey` takes every success check
+  `explore` takes except `reloadThen`; `--success` is repeatable. A network check is stored as
+  `metadata.networkChecks`, and `journey run` / `source run` evaluate it over the replay's own requests.
+- **`{a,b}` alternation in request path globs (#325):** nested, combinable with `*` and `**`, at most 64
+  alternatives; `{id}` with no comma stays literal. Also in `--route` capability scopes.
+- **`--dialogs dismiss|accept` (#334):** `accept` confirms a `window.confirm` or `prompt` raised by an
+  action; a dialog that names a destructive, session-ending or paid action the run may not take, or
+  matches `--deny`, is still dismissed. Also `"dialogs"` in a target's `safety` in targets.json.
+- **`--geolocation <lat>,<lng>[,<accuracy m>]` (#329):** a fixed browser position, the permission
+  granted only to the allowed origins; wherever `--viewport`/`--device` are, and over MCP.
+- **`--reply-quiet-ms <ms>` (#331):** how long a chat reply must hold still before it counts as
+  complete (default 1000); goal and usability strategies, suite items, MCP `run_exploration`.
+- **`cmd:` secret sources (#324):** `--secret-field 'label=Verification code=cmd:<command>'` with
+  `--allow-secret-cmd` runs the command when the field is about to be typed and types its trimmed
+  stdout (a one-time code from a test outbox). The model sees only `«secret:CMD_…»`; the value becomes
+  a run secret when read; 60 s limit. Operator-only: never an MCP argument or a suite option.
+- **`--secret-cmd-attempts <n>` (#359):** the per-field bound on a `cmd:` secret source's command
+  runs (default 3). Operator-only, like `--allow-secret-cmd`.
+
+### Fixed
+
+- **A `cmd:` secret is masked in screenshots and video (#360).** A code read mid-run was redacted in
+  text but shown in clear in pixels: the pixel mask took its secret list at the start of the run,
+  and a short code is below what the mask learns by itself. It now joins the mask in every live
+  page and every later document as soon as it is read, before it is typed.
+- A usability run can type a `cmd:` field: its command runner was dropped, so the field could never
+  be typed (#360).
+- Coverage `judgment-flagged-state` defects say what was judged: probability, the action before it
+  and the controls shown (`judgment: {probability, after, shown}`), still advisory (#320).
+- Screenshots hide the demo overlay without an inline style, so a strict-CSP app no longer logs a CSP
+  violation that was filed as an app defect (#336).
+- The adversarial markup canary waits (up to 1.5 s) for a submitted canary to render after the submit
+  and after the reload, so a stored injection on a loaded host is no longer missed (#319).
+- A failed type or select names the value it tried (secrets masked) (#332).
+
 ## [0.4.0] – 2026-10-02
 
 0.4.0 makes a finding carry only the evidence that relates to it: with `--log-triage`, a run keeps a

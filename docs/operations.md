@@ -25,6 +25,15 @@ partial report (a usability review's observed screens). Before the process exits
 is printed as the envelope with `--json`, or as the human summary without it. That holds from the
 moment the run starts, while the browser is still launching (0 steps) included.
 
+SIGHUP (a closed terminal, or one forwarded by the `jevitate` alias) is handled the same way and
+exits 129. So is the death of the CLI's parent: if the process that started jevitate is killed
+without forwarding a signal, jevitate notices within about a second and exits 129 with
+`signal: "SIGHUP"`. Set `JEVITATE_PARENT_WATCHDOG=off` for a run you leave behind on purpose
+(`nohup jevitate explore … &`). Before any of these exits, jevitate closes every browser it
+launched. It sends each browser's process tree SIGTERM, waits up to 1 s, then sends SIGKILL, so a
+signal sent only to the CLI's pid (Node's `spawnSync(…, { timeout })`, `kill <pid>`) leaves no
+Chromium running.
+
 ## Usage accounting
 
 Every result that made model calls carries `usage`: exploration missions (goal,
@@ -212,8 +221,8 @@ browser-driving command, once per process, jevitate closes such orphans (SIGTERM
 after 2 s) and clears stale slots. Only marked processes are candidates; nothing jevitate did not
 launch is ever signalled. `jevitate doctor` shows the host's level, the machine slots and their
 holders, and the jevitate browsers and orphans. `jevitate doctor --cleanup` closes the orphans and
-clears the stale slots on demand. On a normal exit, including SIGTERM and SIGINT, browsers are
-closed and slots released as before.
+clears the stale slots on demand. On a normal exit, including SIGTERM, SIGINT, SIGHUP and the
+parent's death, browsers are closed and slots released as before.
 
 `JEVITATE_RESOURCE_GOVERNANCE=off` turns off the automatic parts: the default cap and ceiling,
 throttling, the starved-host refusal and the startup sweep. An explicit `--max-browsers` or

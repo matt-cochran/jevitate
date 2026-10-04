@@ -24,7 +24,7 @@ export async function handleWaitOrScroll(ctx: RunContext, step: Step): Promise<F
       // listening, bounded by what is left of the reply wait, and records the reply if it lands.
       const t0 = ctx.now();
       const listen = Math.min(ctx.replyWaitMs - ctx.busyWaitedMs, 20_000);
-      const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen });
+      const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen, quietMs: ctx.replyQuietMs });
       ctx.busyWaitedMs += ctx.now() - t0;
       if (reply.received) {
         ctx.conversation.latestReply = reply.text;
@@ -58,6 +58,21 @@ export async function handleWaitOrScroll(ctx: RunContext, step: Step): Promise<F
       changed = true;
       ctx.quietWaits = 0;
       record(true, note);
+    } else if (decision.op === "wait" && ctx.jobWaitedMs >= ctx.jobWaitMs && ctx.sideEffects.inflight().length === 0 && (await readInProgressStatus(ctx.page)) !== null) {
+      // #328: the job-wait budget is spent and the page STILL shows the same kind of in-progress
+      // status, with nothing of the run's in flight: a status that never completes (an app defect),
+      // not work to wait on. Another `wait` would only burn the decision budget — the run stops here,
+      // naming the status (raise --job-wait-ms for a job that legitimately takes longer).
+      const job = (await readInProgressStatus(ctx.page)) ?? "an in-progress status";
+      const reason = `stuck: the page still shows ${job} after ${Math.round(ctx.jobWaitedMs / 1000)}s of waiting — past the ${Math.round(
+        ctx.jobWaitMs / 1000,
+      )}s job-wait budget, with no request of the run in flight (a status that never completes); raise --job-wait-ms if this job legitimately takes longer`;
+      record(false, reason, { origin: "engine" });
+      ctx.history.push(reason);
+      ctx.lastActedOp = decision.op;
+      ctx.incomplete = reason;
+      ctx.stop = "no-progress";
+      return "stop";
     } else if (decision.op === "wait" && ctx.jobWaitedMs < ctx.jobWaitMs && ctx.sideEffects.inflight().length > 0) {
       // #283: a write an earlier click fired is still in flight (a unary RPC the server holds open
       // while its job runs, past the long-poll threshold): pending work, wherever the page shows

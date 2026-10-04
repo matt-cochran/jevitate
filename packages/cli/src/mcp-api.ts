@@ -539,13 +539,14 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const shots = optScreenshots(args, pathRoots);
     const viewport = optViewport(args);
     const device = optString(args, "device");
+    const geolocation = optString(args, "geolocation");
     const extension = optExtensions(args, pathRoots);
     const governance = governanceArgs(args);
     const actionDeltas = optBool(args, "actionDeltas");
     try {
       const browser = browserRunFromFlags({ browserArg: [], ...governance, ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
       const screenshots = parseScreenshotsArg(shots);
-      const emulation = emulationFromFlags({ ...(viewport === undefined ? {} : { viewport }), ...(device === undefined ? {} : { device }) });
+      const emulation = emulationFromFlags({ ...(viewport === undefined ? {} : { viewport }), ...(device === undefined ? {} : { device }), ...(geolocation === undefined ? {} : { geolocation }) });
       return {
         ...(storageState === undefined ? {} : { storageState }),
         ...(replays === undefined ? {} : { replays }),
@@ -650,7 +651,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       screenshots = parseScreenshotsArg(optScreenshots(args, pathRoots));
       const viewport = optViewport(args);
       const device = optString(args, "device");
-      emulation = emulationFromFlags({ ...(viewport === undefined ? {} : { viewport }), ...(device === undefined ? {} : { device }) });
+      const geolocation = optString(args, "geolocation");
+      emulation = emulationFromFlags({ ...(viewport === undefined ? {} : { viewport }), ...(device === undefined ? {} : { device }), ...(geolocation === undefined ? {} : { geolocation }) });
     } catch (err) {
       if (err instanceof McpArgError || argErrorBody(err) !== undefined) throw err;
       throw new McpArgError(err instanceof Error ? err.message : String(err));
@@ -714,7 +716,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       description:
         "Replay a finding's reproduction (by mission result id — or a finished queue_exploration missionId — + fingerprint) N times in fresh browsers (default 3) — `jevitate verify-fix`. status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass). " +
         "#255 (same as the CLI flags): 'replays' (>= 1); 'recordVideo' (true or a directory: the before/after evidence pair — `evidence.before` is the run's own clip, `evidence.after` a captioned replay — plus videoPaths); 'screenshots'; 'headed'/'slowMo'; " +
-        "'storageState' (a path inside the project or ~/.jevitate, never a repo's .jevitate/; overrides the mission's session); 'viewport' {width,height} or 'device' (refused when it differs from the finding's recorded emulation unless 'allowEmulationOverride'); " +
+        "'storageState' (a path inside the project or ~/.jevitate, never a repo's .jevitate/; overrides the mission's session); 'viewport' {width,height} or 'device' (refused when it differs from the finding's recorded emulation unless 'allowEmulationOverride'); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); " +
         "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'fixtureIdentity' (#243: 'name=<storageState path>' entries re-binding a fixture step's auth.identity; default: the identities the mission recorded); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with); 'actionDeltas' (#303, opt-in: the defect step's replayed delta vs the recorded one, as evidence on each attempt); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
       inputSchema: {
         type: "object",
@@ -730,6 +732,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           storageState: { type: "string" },
           viewport: { type: "object", properties: { width: { type: "integer" }, height: { type: "integer" } }, required: ["width", "height"] },
           device: { type: "string" },
+          geolocation: { type: "string" },
           allowEmulationOverride: { type: "boolean" },
           invariants: { type: "array", items: { type: "string" } },
           fixtures: { type: "string" },
@@ -761,7 +764,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "server's own browser, never returned or logged. A Journey that declares metadata.requiresAuth refuses " +
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
-        "'viewport' {width,height} or 'device' (mutually exclusive); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
+        "'viewport' {width,height} or 'device' (mutually exclusive); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
         "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
@@ -777,6 +780,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           screenshots: { type: ["boolean", "string"] },
           viewport: { type: "object", properties: { width: { type: "integer" }, height: { type: "integer" } }, required: ["width", "height"] },
           device: { type: "string" },
+          geolocation: { type: "string" },
           fixtures: { type: "string" },
           fixtureIdentity: { type: "array", items: { type: "string" } },
           selfHeal: { type: "string", enum: ["fail-closed", "hybrid", "full"] },

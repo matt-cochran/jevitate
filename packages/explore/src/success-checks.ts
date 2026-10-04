@@ -46,7 +46,7 @@ function descriptorSpec(d: TargetDescriptor): string {
   const keys = ["role", "name", "label", "text", "css"] as const;
   return keys
     .filter((k) => d[k] !== undefined)
-    .map((k) => `${k}=${d[k] ?? ""}`)
+    .map((k) => `${k === "text" && d.textMatch === "contains" ? "textContains" : k}=${d[k] ?? ""}`)
     .join(";");
 }
 

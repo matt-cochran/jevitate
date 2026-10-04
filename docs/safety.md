@@ -25,13 +25,21 @@ security bug, and how to report one.
 
 **No dangerous clicks by default.**
 
-- Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Generate, Send
+- Session-ending (Sign out), destructive (Delete, Revoke, Rotate, and resetting or switching off a
+  credential: Reset authenticator, Disable two-factor, Reset password) and paid (Buy, Generate, Send
   invite) controls are refused by default. `--deny <pattern>` adds your own, and
   `--allow-destructive` lifts the default. A goal run may still click the one its goal asks for
   ("Delete the draft" → Delete; "Invite a teammate" → Send invite).
   The paid classifier reads only short, verb-led button and link labels: a chat question card or
   a radio/checkbox answer that merely contains "pay", "trial" or "upgrade" is not refused unless
   its label names a charge. A refused control is not offered to the model again in that run.
+- Native dialogs (`window.confirm`, `prompt`) raised by an action are dismissed by default, as
+  Playwright does, but each one is now logged in the transcript (`dialogs`) and told to the model.
+  `--dialogs accept` (or `"dialogs": "accept"` in a target's `safety`) confirms them, except a
+  dialog whose message names a session-ending, destructive or paid action the run may not take
+  (no `--allow-destructive`, and the goal doesn't ask for it), or matches a `--deny` pattern: that
+  one is still dismissed. An `alert` is always accepted; a `beforeunload` prompt is always
+  dismissed.
 - The built-in vocabulary cannot know your app's own paid controls ("Analyze", "Draft the page").
   `--paid <pattern>` (repeatable, same syntax as `--deny`; `safety.paid` in
   `~/.jevitate/targets.json`) puts them in the paid category: a declared `budget` guard sees them,
@@ -86,6 +94,12 @@ security bug, and how to report one.
   for writes. The repeat guard counts only the app's own writes: a third-party write (a vendor's
   telemetry or `csp-report` beacon, Stripe.js's `m.stripe.com` beacon) and a request matched by
   `--settle-ignore` are listed but never make a control unclickable a second time.
+  The guard identifies an action by the route, the element, and its context (its form or
+  dialog, and the screen heading above it), never by the label alone. Two same-labelled
+  controls on different screens are two actions, so a "Continue" that sent `POST /api/a` does
+  not block a different "Continue" that sends `POST /api/b`. A refusal names the request the
+  earlier click sent (method + templated path, such as `POST /api/items/:id`). While that
+  control's write is still in flight, the run waits for it, even if the screen around it changed.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
 - **Inert markup canaries (#301).** The adversarial boundary values include an HTML-injection canary

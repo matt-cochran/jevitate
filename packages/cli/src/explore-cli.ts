@@ -13,11 +13,13 @@ import {
   TypeFixtureSpecError,
   validateDenyPatterns,
   type CoverageThresholds,
+  type DialogPolicy,
   type SecretField,
   type SuccessCheck,
   type TypeFixture,
 } from "@jevitate/explore";
 import { loadTypeFixtures } from "./type-fixture-file.js";
+import { secretCommandRunner } from "./secret-command.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { SessionFileInProjectError, assertSessionFileOutsideProject } from "./project-dir.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
@@ -210,7 +212,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     )
     .option(
       "--success-when <when>",
-      "when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast). reloadThen is always final",
+      "when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast) | " +
+        "each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final",
     )
     .option(
       "--allow-vacuous-checks",
@@ -248,7 +251,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     )
     .option(
       "--secret-field <binding>",
-      "goal/usability strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}",
+      "goal/usability strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}. " +
+        "A value delivered during the run (an emailed code): '<descriptor>=cmd:<command>' runs the command when the field is typed and types its stdout (needs --allow-secret-cmd)",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -304,6 +308,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       positiveIntArg,
     )
     .option(
+      "--reply-quiet-ms <ms>",
+      "conversational pages: how long a reply must hold still (no new text, no busy sign) before it is read as complete " +
+        "(goal and usability; default 1000). Raise it for an assistant that answers in several parts (a sentence, then a card a moment later)",
+      positiveIntArg,
+    )
+    .option(
       "--reply-ceiling-ms <ms>",
       "conversational pages: hard ceiling on one reply wait, however busy the page stays (default 180000; never below --reply-wait-ms)",
       positiveIntArg,
@@ -338,6 +348,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option(
       "--allow-destructive",
       "let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for",
+    )
+    .option(
+      "--dialogs <policy>",
+      "native window.confirm/prompt dialogs: dismiss (default) or accept. accept still dismisses one whose message names a session-ending, " +
+        "destructive or paid action the run may not take (without --allow-destructive or a goal asking for it); every dialog is logged",
     )
     .option(
       "--allow-writes",
@@ -412,6 +427,16 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "backend log source (repeatable; every strategy, incl. usability): file:<path> (tailed from its current end) | docker:<container> (docker logs -f --since 0s) | cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
+    )
+    .option(
+      "--allow-secret-cmd",
+      "opt-in: a --secret-field <descriptor>=cmd:<command> may run its command (in a shell, at type time, 60s timeout) and type its output (operator-declared only; refused otherwise)",
+      false,
+    )
+    .option(
+      "--secret-cmd-attempts <n>",
+      "#359: how many times one cmd: secret field's command may run in this run (default 3); past it, typing that field fails without running the command again (read-the-code commands usually have side effects)",
+      positiveIntArg,
     )
     .option(
       "--allow-log-cmd",
@@ -569,6 +594,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         secret: string[];
         secretField: string[];
         totp: string[];
+        allowSecretCmd?: boolean;
+        secretCmdAttempts?: number;
         typeFixture: string[];
         fixture?: string;
         storageState?: string;
@@ -577,12 +604,14 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         maxDecisions?: string;
         stallTimeout?: string | number;
         replyWaitMs?: string;
+        replyQuietMs?: string;
         replyCeilingMs?: string;
         replyMaxChars?: string;
         jobWaitMs?: string;
         deny: string[];
         paid: string[];
         allowDestructive?: boolean;
+        dialogs?: string;
         allowWrites?: boolean;
         allowWrite: string[];
         hangReplayWrites?: boolean;
@@ -608,6 +637,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // mission. Checked first, ahead of every other validation below.
       if (o.strategy !== undefined && !EXPLORE_STRATEGIES.includes(o.strategy as (typeof EXPLORE_STRATEGIES)[number])) {
         emitExplore(fail("E_EXPLORE_ARGS", `unknown strategy ${JSON.stringify(o.strategy)} (one of ${EXPLORE_STRATEGIES.join(", ")})`));
+        return;
+      }
+      // #334: a mistyped --dialogs never silently means "dismiss".
+      if (o.dialogs !== undefined && o.dialogs !== "dismiss" && o.dialogs !== "accept") {
+        emitExplore(fail("E_EXPLORE_ARGS", `--dialogs must be dismiss or accept, got ${JSON.stringify(o.dialogs)}`));
         return;
       }
 
@@ -817,6 +851,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       setKillSwitchOutput(o.json === true ? "envelope" : "human");
       const conversation = {
         ...(o.replyWaitMs === undefined ? {} : { replyWaitMs: Number(o.replyWaitMs) }),
+        ...(o.replyQuietMs === undefined ? {} : { replyQuietMs: Number(o.replyQuietMs) }),
         ...(o.replyCeilingMs === undefined ? {} : { replyCeilingMs: Number(o.replyCeilingMs) }),
         ...(o.replyMaxChars === undefined ? {} : { replyMaxChars: Number(o.replyMaxChars) }),
         ...(o.jobWaitMs === undefined ? {} : { jobWaitMs: Number(o.jobWaitMs) }),
@@ -888,6 +923,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             paid: o.paid,
             readRpc: o.readRpc,
             ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
+            ...(o.dialogs === undefined ? {} : { dialogs: o.dialogs as DialogPolicy }),
             ...(o.allowWrites === true ? { allowWrites: true } : {}),
             allowWrite: o.allowWrite,
             ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
@@ -1058,7 +1094,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         }
         try {
           secretFields = [
-            ...o.secretField.map((s) => parseSecretField(s, "value", process.env)),
+            ...o.secretField.map((s) => parseSecretField(s, "value", process.env, { allowCmd: o.allowSecretCmd === true })),
             ...o.totp.map((s) => parseSecretField(s, "totp", process.env)),
           ];
         } catch (err) {
@@ -1067,6 +1103,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           return;
         }
       }
+
+      // #324: a cmd: binding's command runs at type time; its output becomes a run secret at once.
+      const secretCommand = secretFields.some((f) => f.kind === "cmd") ? secretCommandRunner() : undefined;
 
       // #281: fields typed with a file's exact text — read (and checked) before any browser opens.
       let typeFixtures: TypeFixture[] = [];
@@ -1281,8 +1320,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           emitExplore(fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
           return;
         }
-        if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final") {
-          emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
+        if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final" && o.successWhen !== "each") {
+          emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "final", "held" or "each", got ${JSON.stringify(o.successWhen)}`));
           return;
         }
         if (uxSuccessChecks.length === 0 && (o.successWhen !== undefined || o.allowVacuousChecks === true)) {
@@ -1329,6 +1368,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,
             ...(secretFields.length > 0 ? { secretFields } : {}),
+            ...(secretCommand === undefined ? {} : { secretCommand }),
+          ...(o.secretCmdAttempts === undefined ? {} : { secretCommandAttempts: o.secretCmdAttempts }),
             fixture: o.fixture,
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
@@ -1341,7 +1382,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...triagedServerLog(serverLog, uxJudge, o.real === true),
             ...withInvariants,
             ...(uxSuccessChecks.length === 0 ? {} : { successChecks: uxSuccessChecks }),
-            ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
+            ...(o.successWhen === "held" || o.successWhen === "final" || o.successWhen === "each" ? { successWhen: o.successWhen } : {}),
             ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
             ...withPrefix,
             ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
@@ -1435,11 +1476,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         emitExplore(fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
       }
-      if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final") {
-        emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
+      if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final" && o.successWhen !== "each") {
+        emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "final", "held" or "each", got ${JSON.stringify(o.successWhen)}`));
         return;
       }
-      const successWhen = o.successWhen === "held" || o.successWhen === "final" ? o.successWhen : undefined;
+      const successWhen = o.successWhen === "held" || o.successWhen === "final" || o.successWhen === "each" ? o.successWhen : undefined;
       const allowlist = resolveExploreAllowlist(setupRefFreeUrl(o.url), o.allow);
       // Fixtures (#140/#144): the spec and every ${setup.x} reference are validated here, before any
       // browser or request; the setup itself runs just before the mission (below).
@@ -1519,6 +1560,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
           ...(secretFields.length > 0 ? { secretFields } : {}),
+          ...(secretCommand === undefined ? {} : { secretCommand }),
+          ...(o.secretCmdAttempts === undefined ? {} : { secretCommandAttempts: o.secretCmdAttempts }),
           ...(typeFixtures.length > 0 ? { typeFixtures } : {}),
           fixture: o.fixture,
           outDir: o.out,

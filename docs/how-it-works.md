@@ -24,8 +24,9 @@ A model can suggest where to look. It never decides whether the software passed.
 ```
 
 1. A **mission** opens Chromium through Playwright, restricted to the origins you authorize, and
-   acts on the controls it finds. Every action goes through one gated `act()` path (scope,
-   safety policy, repeat guard).
+   acts on the controls it finds — including controls inside a web component's open shadow root
+   (a closed shadow root is opaque, so its controls are never offered). Every action goes through
+   one gated `act()` path (scope, safety policy, repeat guard).
 2. After every action, the **oracles** read what happened: responses, console, uncaught
    exceptions, request failures, DOM state, hangs, your declared checks. A defect is concluded
    only from these.

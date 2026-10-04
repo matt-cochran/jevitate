@@ -419,7 +419,7 @@ describe("suite validation", () => {
 
   it("refuses a typo'd field, a goal without success checks or a bad budget, and resolves paths against the suite file", () => {
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, jouneys: [] }] })).toBe(
-      "s.json: $.targets[0].jouneys: unknown field (allowed: name, url, allow, storageState, secretFields, fixtures, invariants, journeysDir, journeys, goals, missions, verifyFix, viewport, device; and explore's options by camelCase name, e.g. deny, apiPrefix, logSource)",
+      "s.json: $.targets[0].jouneys: unknown field (allowed: name, url, allow, storageState, secretFields, fixtures, invariants, journeysDir, journeys, goals, missions, verifyFix, viewport, device, geolocation; and explore's options by camelCase name, e.g. deny, apiPrefix, logSource)",
     );
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, goals: [{ goal: "g" }] }] })).toMatch(/goals\[0\]\.success: at least one success check/);
     expect(refuse({ version: 2, targets: [{ name: "a", url: URL0 }] })).toBe("s.json: $.version: must be 1");

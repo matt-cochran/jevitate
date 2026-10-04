@@ -7,16 +7,41 @@
 import { act } from "../act.js";
 import { redactText } from "../redact.js";
 import {
+  DEFAULT_SECRET_COMMAND_ATTEMPTS,
   boundSecretField,
+  resolveSecretFieldValue,
   secretFieldNeedsValue,
-  secretFieldValue,
   secretFieldsToFill,
   secretPlaceholder,
+  type SecretField,
 } from "../secret-fields.js";
 import { boundTypeFixture, typeFixturePlaceholder } from "../type-fixtures.js";
 import type { RunContext } from "./context.js";
 import { keyOf, submitsAForm } from "./helpers.js";
 import type { ActStep, Flow } from "./step.js";
+
+/**
+ * The value code types for a binding now (#324: a `cmd` binding runs its command here). A value read
+ * now is registered as a run secret at once, so every redaction seam scrubs it from here on.
+ */
+async function boundValue(ctx: RunContext, binding: SecretField, at: number): Promise<{ readonly ok: true; readonly value: string } | { readonly ok: false; readonly reason: string }> {
+  // #359: a cmd: command runs at most N times per binding per run — never again once spent.
+  if (binding.kind === "cmd") {
+    const max = ctx.cfg.secretCommandAttempts ?? DEFAULT_SECRET_COMMAND_ATTEMPTS;
+    const runs = ctx.secretCommandRuns.get(binding.descriptor) ?? 0;
+    if (runs >= max) {
+      return { ok: false, reason: `${secretPlaceholder(binding)}: its command already ran ${runs} time(s) this run, the limit (--secret-cmd-attempts ${max}); not running it again` };
+    }
+    ctx.secretCommandRuns.set(binding.descriptor, runs + 1);
+  }
+  try {
+    const value = await resolveSecretFieldValue(binding, at, ctx.cfg.secretCommand);
+    if (binding.kind === "cmd" && !ctx.secrets.includes(value)) ctx.secrets.push(value);
+    return { ok: true, value };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 export async function handleCodeTypedField(ctx: RunContext, step: ActStep): Promise<Flow> {
   const { cfg } = ctx;
@@ -35,8 +60,14 @@ export async function handleCodeTypedField(ctx: RunContext, step: ActStep): Prom
     for (const { control: field, field: binding, why } of due) {
       if (!ctx.tracker.mayAct() || !(await secretFieldNeedsValue(ctx.page, field))) continue;
       const t = ctx.now();
-      const value = secretFieldValue(binding, t);
       const placeholder = secretPlaceholder(binding);
+      const read = await boundValue(ctx, binding, t);
+      if (!read.ok) {
+        ctx.history.push(`could not type ${placeholder} into ${field.name}: ${read.reason}`);
+        record(false, read.reason, { op: "type", control: field, strategy: "secret-field", value: placeholder });
+        continue;
+      }
+      const value = read.value;
       const r = await act(cfg.actor, { op: "type", control: field, value });
       const cause = why === "submit" ? `before submitting with ${control.name || control.summary}` : "a validation message names it";
       if (r.ok) {
@@ -60,8 +91,17 @@ export async function handleCodeTypedField(ctx: RunContext, step: ActStep): Prom
   // history and transcript see only the placeholder, the Recording `{ redacted: true }`.
   const bound = decision.op === "type" ? boundSecretField(control, cfg.secretFields) : null;
   if (bound !== null) {
-    const value = secretFieldValue(bound, at);
     const placeholder = secretPlaceholder(bound);
+    const read = await boundValue(ctx, bound, at);
+    if (!read.ok) {
+      // #324: the value could not be read (the code has not arrived yet, the command failed): the
+      // model sees why, never a value; it may wait and type again.
+      ctx.history.push(`could not type ${placeholder} into ${control.name}: ${read.reason}`);
+      record(false, read.reason, { value: placeholder });
+      ctx.lastActedOp = decision.op;
+      return "continue";
+    }
+    const value = read.value;
     const r = await act(cfg.actor, { op: "type", control, value });
     if (r.ok) {
       ctx.recorder.fill(control.descriptor, { redacted: true, length: value.length }, at);
