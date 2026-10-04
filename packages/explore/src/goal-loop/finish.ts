@@ -13,7 +13,7 @@ import { emptyRecording } from "../record.js";
 import { redactText, redactUrl } from "../redact.js";
 import { summarizeTimings } from "../timing.js";
 import type { RunContext } from "./context.js";
-import { incompleteReason, safeUrl, withCause } from "./helpers.js";
+import { incompleteReason, quote, safeUrl, withCause } from "./helpers.js";
 
 export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
   const { cfg } = ctx;
@@ -46,6 +46,14 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
   // gave up, ends saying so and what it searched — not a generic "no progress" / "blocked".
   if (ctx.lastReportNotFound && ctx.answer === undefined && (ctx.stop === "no-progress" || ctx.stop === "blocked") && ctx.failure === undefined) {
     ctx.incomplete = answerNotFoundReason(ctx.observed.pages());
+  }
+
+  // #368 — the run ended still waiting on the reply to its last message: that missing reply is the
+  // run's own finding (named with the wait it was given), never folded into a generic stop reason.
+  if (ctx.awaitingReply && ctx.answer === undefined && ctx.failure === undefined && (ctx.stop === "no-progress" || ctx.stop === "blocked" || ctx.stop === "exhausted")) {
+    const sent = ctx.lastTurn?.sent;
+    const missing = `no reply within ${Math.round(ctx.busyWaitedMs / 1000)}s to the last message sent${sent === undefined || sent === "" ? "" : ` (${quote(sent, 80)})`}`;
+    ctx.incomplete = `${missing}; ${incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker)}`;
   }
 
   await ctx.readOnly?.disarm();

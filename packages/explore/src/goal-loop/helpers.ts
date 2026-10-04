@@ -52,6 +52,11 @@ export async function waitOutJob(
   budgetMs: number,
   stillWorking: (page: Page) => Promise<boolean> = async (p) => (await readInProgressStatus(p)) !== null,
 ): Promise<{ cleared: boolean; waitedMs: number }> {
+  // #368: a job wait (`--job-wait-ms`) is the run's chosen patience, never the page's render time.
+  return monitorFor(page).explicitWait(() => sitOutJob(page, budgetMs, stillWorking));
+}
+
+async function sitOutJob(page: Page, budgetMs: number, stillWorking: (page: Page) => Promise<boolean>): Promise<{ cleared: boolean; waitedMs: number }> {
   const started = clock.now();
   const url = safeUrl(page);
   let delay = 1_000;

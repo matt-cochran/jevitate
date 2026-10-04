@@ -606,16 +606,38 @@ export class PageMonitor {
   #windowStart: number | null = null;
   #actionAt: number | null = null;
   #lastDocId: string | null = null;
+  /** #368: time spent since the action inside a wait the run chose (a reply wait, a job wait). */
+  #waitedMs = 0;
+  #waitDepth = 0;
 
   /** Called by `act()` when it dispatches a page-changing action: the start of a transition. */
   markAction(): void {
     this.#actionAt = this.#now();
+    this.#waitedMs = 0;
+  }
+
+  /**
+   * #368: runs an EXPLICIT wait the run chose (a chat reply wait `--reply-wait-ms`, a job wait
+   * `--job-wait-ms`, a `wait` decision) and books its duration as waiting, not as the page's render:
+   * the transition's `settleMs` excludes it, so a 30s reply wait never reads as a 30s render (and
+   * never feeds the host-health render trend). Nested waits count once.
+   */
+  async explicitWait<T>(wait: () => Promise<T>): Promise<T> {
+    const started = this.#now();
+    this.#waitDepth += 1;
+    try {
+      return await wait();
+    } finally {
+      this.#waitDepth -= 1;
+      if (this.#waitDepth === 0) this.#waitedMs += Math.max(0, this.#now() - started);
+    }
   }
 
   /** The open timing window (since the previous perception, or since the monitor started). */
-  window(): { start: number; actionAt: number | null; lastDocId: string | null } {
+  window(): { start: number; actionAt: number | null; lastDocId: string | null; waitedMs: number } {
     const start = this.#windowStart ?? 0;
-    return { start, actionAt: this.#actionAt !== null && this.#actionAt >= start ? this.#actionAt : null, lastDocId: this.#lastDocId };
+    const actionAt = this.#actionAt !== null && this.#actionAt >= start ? this.#actionAt : null;
+    return { start, actionAt, lastDocId: this.#lastDocId, waitedMs: actionAt === null ? 0 : this.#waitedMs };
   }
 
   /**
@@ -628,6 +650,7 @@ export class PageMonitor {
   closeWindow(at: number, docId: string | null): void {
     this.#windowStart = at;
     this.#actionAt = null;
+    this.#waitedMs = 0;
     if (docId !== null) this.#lastDocId = docId;
     const keepFrom = at - RECENT_REQUESTS_MS;
     for (let i = this.#completed.length - 1; i >= 0; i--) {

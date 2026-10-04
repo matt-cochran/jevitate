@@ -176,7 +176,13 @@ run's own baseline. The thresholds (`packages/explore/src/host-health.ts`) are:
 | admission sample | over the browser pool's own thresholds (memory pressure, < 400 MiB available, CPU PSI > 80%) |
 | load average | > 2 runnable tasks per core (every task gets ≤ half a core) |
 | driver event-loop lag | > 500 ms (longer than the settle rule's quiet window) **and** load ≥ 1 runnable task per core. The lag histogram also counts the driver's own synchronous work, so lag with idle cores (e.g. 506 ms at 0.70/core) is self-inflicted and never counts (#213) |
-| render trend | the median of the last 3 renders ≥ 5x the run's baseline (median of its first 3) and ≥ 3 s |
+| render trend | the median of the last 3 renders ≥ 5x the run's baseline (median of its first 3) and ≥ 3 s, **and** a host sample in the last 15 s at load ≥ 1 runnable task per core (#368). A slow render is a symptom, not host evidence: on a healthy host (spare cores, free memory) slow renders are the app's own timing — reported in `slowestRenderMs` and the timing summary, and a hang or no-progress stop they cause is judged as an app finding — never "the host was starved" |
+
+A render is the page's own time: a navigation's DOMContentLoaded, or an action's time to settle
+**without** any explicit wait the run chose in between — a chat reply wait (`--reply-wait-ms` /
+`--reply-ceiling-ms`), a job wait (`--job-wait-ms`), a `wait` decision (#368). That wait is reported
+on its own as the step timing's `waitedMs`. A reply that never arrives is the run's own finding: the
+goal reason starts `no reply within 30s to the last message sent ("…")`, never an environment verdict.
 
 A starved sample explains the 15 s after it. Then:
 

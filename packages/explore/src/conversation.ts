@@ -295,6 +295,29 @@ export async function readPageHeadings(page: Page, secrets: readonly string[] = 
   return { heading: redactPageText(h.heading, secrets), title: redactPageText(h.title, secrets) };
 }
 
+/** The options of one `waitForReply`. */
+interface ReplyWaitOptions {
+  readonly baseline: string;
+  readonly sent: string;
+  /** #219: registered secrets — the page text is read redacted (`baseline` must be read the same way). */
+  readonly secrets?: readonly string[];
+  /** Idle patience (ms): give up after this long with no sign of activity. Default `REPLY_WAIT_MS`. */
+  readonly timeoutMs?: number;
+  /** Hard ceiling (ms), however busy the page stays. Default `REPLY_CEILING_MS` (never below `timeoutMs`). */
+  readonly ceilingMs?: number;
+  readonly quietMs?: number;
+  readonly pollMs?: number;
+  /**
+   * When the message was sent (ms), and the endpoints the page was already requesting before it
+   * (`backgroundEndpoints` at the send, without the run's own earlier writes). Given, a request the
+   * send started counts as its work however long ago that was — a later `wait` on the same turn
+   * still sees the send's own write in flight (#241 × #283). Omitted: requests started from
+   * `SEND_REQUEST_SLACK_MS` before this wait, against the endpoints requested before then.
+   */
+  readonly sentAt?: number;
+  readonly background?: ReadonlySet<string>;
+}
+
 /**
  * Waits for the conversational reply to a message just sent: new page text (not the echoed message,
  * not busy text) that then holds still for the quiet window with no request in flight and no busy
@@ -307,30 +330,12 @@ export async function readPageHeadings(page: Page, secrets: readonly string[] = 
  * patience). A slow LLM turn (60–100s) is therefore awaited in full, while a page that is doing
  * nothing is not waited on for minutes.
  */
-export async function waitForReply(
-  page: Page,
-  opts: {
-    readonly baseline: string;
-    readonly sent: string;
-    /** #219: registered secrets — the page text is read redacted (`baseline` must be read the same way). */
-    readonly secrets?: readonly string[];
-    /** Idle patience (ms): give up after this long with no sign of activity. Default `REPLY_WAIT_MS`. */
-    readonly timeoutMs?: number;
-    /** Hard ceiling (ms), however busy the page stays. Default `REPLY_CEILING_MS` (never below `timeoutMs`). */
-    readonly ceilingMs?: number;
-    readonly quietMs?: number;
-    readonly pollMs?: number;
-    /**
-     * When the message was sent (ms), and the endpoints the page was already requesting before it
-     * (`backgroundEndpoints` at the send, without the run's own earlier writes). Given, a request the
-     * send started counts as its work however long ago that was — a later `wait` on the same turn
-     * still sees the send's own write in flight (#241 × #283). Omitted: requests started from
-     * `SEND_REQUEST_SLACK_MS` before this wait, against the endpoints requested before then.
-     */
-    readonly sentAt?: number;
-    readonly background?: ReadonlySet<string>;
-  },
-): Promise<ReplyResult> {
+export async function waitForReply(page: Page, opts: ReplyWaitOptions): Promise<ReplyResult> {
+  // #368: the reply wait is the run's own wait on the backend, never the page's render time.
+  return monitorFor(page).explicitWait(() => listenForReply(page, opts));
+}
+
+async function listenForReply(page: Page, opts: ReplyWaitOptions): Promise<ReplyResult> {
   const idleMs = opts.timeoutMs ?? REPLY_WAIT_MS;
   const ceilingMs = Math.max(idleMs, opts.ceilingMs ?? REPLY_CEILING_MS);
   const quietMs = opts.quietMs ?? REPLY_QUIET_MS;
@@ -408,6 +413,11 @@ export async function waitForReply(
  * loop: give an async update the chance to land, instead of a fixed 250ms nap the model repeats.
  */
 export async function waitForChange(page: Page, timeoutMs: number): Promise<boolean> {
+  // #368: a `wait` is the run's chosen patience, never the page's render time.
+  return monitorFor(page).explicitWait(() => watchForChange(page, timeoutMs));
+}
+
+async function watchForChange(page: Page, timeoutMs: number): Promise<boolean> {
   const before = await readPageText(page);
   const changed = page
     .waitForFunction((b) => (document.body ? document.body.innerText : "") !== b, before, {

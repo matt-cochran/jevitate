@@ -304,6 +304,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     actionAt: win.actionAt,
     settle,
     settleEndedAt,
+    waitedMs: win.waitedMs,
     ...(opts.timingConfig?.apiPrefixes === undefined ? {} : { apiPrefixes: opts.timingConfig.apiPrefixes }),
   });
   monitor.closeWindow(settleEndedAt, docId);
