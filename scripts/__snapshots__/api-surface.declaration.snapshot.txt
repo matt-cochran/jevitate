@@ -274,7 +274,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (562 exports)
+# @jevitate/explore (565 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -436,6 +436,8 @@
   detectForms: function
   detectOverflow: function
   DetectOverflowOptions: interface
+  DialogPolicy: type-alias
+  DialogVerdict: interface
   diffAria: function
   disambiguate: function
   DisclosureMemory: interface
@@ -594,6 +596,7 @@
   measurePageTiming: function
   MESSAGE_FIELD: variable
   messageClass: function
+  messageRisk: function
   MissionRouteScope: interface
   MissionSafety: class
   MissionSessions: class

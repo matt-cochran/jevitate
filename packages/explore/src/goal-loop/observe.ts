@@ -13,6 +13,7 @@ import { markTypeFixtures } from "../type-fixtures.js";
 import type { RunContext } from "./context.js";
 import type { Flow, Perceived } from "./step.js";
 import { clock } from "@jevitate/domain";
+import { dialogHistoryLine, takeDialogEvents } from "../native-dialogs.js";
 
 /** Perceives the page and closes the previous action's windows (the start of every step). */
 export async function perceiveStep(ctx: RunContext): Promise<Perceived> {
@@ -22,6 +23,13 @@ export async function perceiveStep(ctx: RunContext): Promise<Perceived> {
   const perceiveStartedAt = clock.now();
   const perception = await perceive(ctx.page, ctx.perceiveOpts);
   ctx.timings.push(perception.timing);
+  // #334: the native dialogs the last action raised — what the run answered is told to the model
+  // and kept on that action's transcript step.
+  const dialogs = takeDialogEvents(ctx.page);
+  if (dialogs.length > 0) {
+    for (const d of dialogs) ctx.history.push(dialogHistoryLine(d));
+    ctx.transcript.attachDialogs(ctx.transcript.nextStep - 1, dialogs);
+  }
   // The last click's window closes here: what it wrote is now known (#92).
   ctx.sideEffects.settle();
   // #239: a click whose writes all succeeded saved what the run had typed — from here those values

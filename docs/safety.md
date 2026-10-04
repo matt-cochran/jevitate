@@ -33,6 +33,13 @@ security bug, and how to report one.
   The paid classifier reads only short, verb-led button and link labels: a chat question card or
   a radio/checkbox answer that merely contains "pay", "trial" or "upgrade" is not refused unless
   its label names a charge. A refused control is not offered to the model again in that run.
+- Native dialogs (`window.confirm`, `prompt`) raised by an action are dismissed by default, as
+  Playwright does, but each one is now logged in the transcript (`dialogs`) and told to the model.
+  `--dialogs accept` (or `"dialogs": "accept"` in a target's `safety`) confirms them, except a
+  dialog whose message names a session-ending, destructive or paid action the run may not take
+  (no `--allow-destructive`, and the goal doesn't ask for it), or matches a `--deny` pattern: that
+  one is still dismissed. An `alert` is always accepted; a `beforeunload` prompt is always
+  dismissed.
 - The built-in vocabulary cannot know your app's own paid controls ("Analyze", "Draft the page").
   `--paid <pattern>` (repeatable, same syntax as `--deny`; `safety.paid` in
   `~/.jevitate/targets.json`) puts them in the paid category: a declared `budget` guard sees them,

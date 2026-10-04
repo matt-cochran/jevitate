@@ -138,6 +138,23 @@ export interface SafetyConfig {
    * run sent (`--hang-replay-writes`, #153). Off by default: such a hang is reported inconclusive.
    */
   readonly hangReplayWrites?: boolean;
+  /**
+   * #334: what a native `window.confirm` / `prompt` dialog gets. `dismiss` (the default, as before):
+   * Cancel. `accept`: OK — unless its message names a session-ending, destructive or paid action
+   * (the built-in vocabulary, or a `--deny` pattern) that the run may not do: then it is still
+   * dismissed, exactly as the control would have been refused. An `alert` only has OK; a
+   * `beforeunload` "leave the page?" prompt is always dismissed (the run stays on its page).
+   */
+  readonly dialogs?: DialogPolicy;
+}
+
+/** #334: the native-dialog policy (`--dialogs`). */
+export type DialogPolicy = "dismiss" | "accept";
+
+/** #334: what the run does with one native dialog, and why (shown to the model and in the transcript). */
+export interface DialogVerdict {
+  readonly action: "accept" | "dismiss";
+  readonly why: string;
 }
 
 /**
@@ -161,6 +178,23 @@ export function controlRisk(
     ["paid", PAID],
   ] as const) {
     const m = re.exec(trimmed);
+    if (m !== null) return { risk, matched: m[0] };
+  }
+  return null;
+}
+
+/**
+ * #334: the risky action a native dialog's MESSAGE names ("Revoke consent? This can't be undone." →
+ * destructive "Revoke"). Unlike a control's label, a message is a sentence: no length cap applies.
+ */
+export function messageRisk(message: string): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string } | null {
+  const text = message.replace(/\s+/g, " ").trim();
+  for (const [risk, re] of [
+    ["session-end", SESSION_END],
+    ["destructive", DESTRUCTIVE],
+    ["paid", PAID],
+  ] as const) {
+    const m = re.exec(text);
     if (m !== null) return { risk, matched: m[0] };
   }
   return null;
@@ -260,12 +294,14 @@ export class SafetyPolicy {
   readonly #paid: DenyMatcher[];
   readonly #allowDestructive: boolean;
   readonly #goal: string | null;
+  readonly #dialogs: DialogPolicy;
 
   constructor(cfg: SafetyConfig = {}, opts: { readonly goal?: string } = {}) {
     this.#deny = (cfg.deny ?? []).map((pattern) => ({ pattern, match: compileDeny(pattern) }));
     this.#paid = (cfg.paid ?? []).map(compileDeny);
     this.#allowDestructive = cfg.allowDestructive === true;
     this.#goal = opts.goal ?? null;
+    this.#dialogs = cfg.dialogs ?? "dismiss";
   }
 
   /** The built-in category, else `paid` when an operator `--paid` pattern matches (#181). */
@@ -299,5 +335,27 @@ export class SafetyPolicy {
       risk: r.risk,
       reason: `refused by the safety policy: "${name}" ${what} (${r.risk}); pass --allow-destructive to permit it`,
     };
+  }
+
+  /**
+   * #334: accept or dismiss a native dialog. `alert` → accept (OK is its only button);
+   * `beforeunload` → dismiss (stay on the page); `confirm`/`prompt` → the `dialogs` policy, where
+   * `accept` still dismisses a message that names an action this run may not take.
+   */
+  dialogVerdict(d: { readonly type: string; readonly message: string }): DialogVerdict {
+    if (d.type === "alert") return { action: "accept", why: "an alert only has OK" };
+    if (d.type === "beforeunload") return { action: "dismiss", why: "the run stays on its page" };
+    if (this.#dialogs !== "accept") return { action: "dismiss", why: "--dialogs dismiss is the default; pass --dialogs accept to confirm native dialogs" };
+    const message = d.message.replace(/\s+/g, " ").trim();
+    for (const p of this.#deny) {
+      if (p.match({ name: message, role: "dialog", descriptor: {} })) return { action: "dismiss", why: `its message matches --deny ${JSON.stringify(p.pattern)}` };
+    }
+    if (!this.#allowDestructive) {
+      const r = messageRisk(message);
+      if (r !== null && !(this.#goal !== null && goalAsksFor(this.#goal, r.matched))) {
+        return { action: "dismiss", why: `its message names a ${r.risk} action ("${r.matched}"); pass --allow-destructive to confirm it` };
+      }
+    }
+    return { action: "accept", why: "--dialogs accept" };
   }
 }

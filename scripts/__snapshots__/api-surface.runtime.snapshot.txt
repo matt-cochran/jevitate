@@ -169,7 +169,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (365 exports)
+# @jevitate/explore (366 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -435,6 +435,7 @@
   matchOption: function
   measurePageTiming: function
   messageClass: function
+  messageRisk: function
   monitorFor: function
   newIdentityToken: function
   noActionShortfall: function

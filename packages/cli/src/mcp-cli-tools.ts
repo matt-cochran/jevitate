@@ -285,6 +285,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         repeat: n("--repeat"),
         minAgreement: n("--min-agreement"),
         allowDestructive: b("--allow-destructive"),
+        dialogs: s("--dialogs", { enum: ["dismiss", "accept"] }),
         allowWrites: b("--allow-writes"),
         allowWrite: many("--allow-write"),
         deny: many("--deny"),
