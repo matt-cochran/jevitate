@@ -277,7 +277,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (605 exports)
+# @jevitate/explore (606 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -539,6 +539,7 @@
   hasApiCredentials: function
   headingHint: function
   HeapLog: class
+  HeldInputs: type-alias
   hideDemoOverlayForCapture: function
   HOST_SAMPLE_INTERVAL_MS: variable
   HostHealthOptions: interface

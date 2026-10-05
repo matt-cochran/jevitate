@@ -23,7 +23,7 @@ import { RunRecorder } from "../../record.js";
 import type { TranscriptEntry } from "../../transcript.js";
 import type { AdversarialMissionParams } from "../adversarial.js";
 import type { HuntState } from "./context.js";
-import { stepAdvisory, type StepAdvisory, type StepFinding } from "./helpers.js";
+import { stepAdvisory, type EarlierSubmit, type StepAdvisory, type StepFinding } from "./helpers.js";
 
 /** Installs the oracle's closures (and its fired-action log) on `ctx`. */
 export function installOracle(ctx: HuntState, params: AdversarialMissionParams): void {
@@ -110,7 +110,7 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
    */
   ctx.adjudicate = async (
     action: InvariantAction | null = null,
-    opts: { readonly identitySwitched?: boolean } = {},
+    opts: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null } = {},
   ): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
     // #300: after an identity switch no invariant is judged — they were declared for the original
     // identity — and what the monitor observed for this action is dropped. Hard signals still count.
@@ -118,6 +118,13 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
     if (skip) ctx.declared?.discardPending();
     const invariantResult: { ok: boolean; reason?: string } =
       !skip && params.userInvariant ? await params.userInvariant(ctx.sessions.page) : { ok: true };
+    // An unsettled sequence's pending submit is judged as its own action now that the sequence
+    // settled, against the before-snapshot armed at the sequence's start (never mid-flight).
+    const earlier = opts.earlierSubmit ?? null;
+    const earlierResult =
+      ctx.declared === null || skip || earlier === null || !ctx.armed
+        ? null
+        : await ctx.declared.after(ctx.sessions.actor, earlier.action, { earlier: true, inputsAsOf: earlier.inputs });
     const declaredResult = ctx.declared === null || skip ? null : await ctx.declared.after(ctx.sessions.actor, ctx.armed ? action : null);
     ctx.armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
@@ -159,11 +166,15 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
         invariantReason: reason,
       });
     }
+    for (const v of earlierResult?.violations ?? []) {
+      findings.push({ ...ctx.declaredFinding(v), origin: { step: earlier?.step ?? 0, recordingStepIndex: earlier?.recordingStepIndex ?? 0 } });
+    }
     for (const v of declaredResult?.violations ?? []) findings.push(ctx.declaredFinding(v));
     if (findings.length === 0 && stepAdvisories.length === 0) return null;
     const reasons = [
       ...hardSignals.map((s) => s.detail),
       invariantResult.ok ? undefined : invariantResult.reason,
+      ...(earlierResult?.violations ?? []).map((v) => `${v.reason} (the submit at step ${earlier?.step ?? 0}, judged once its sequence settled)`),
       ...(declaredResult?.violations ?? []).map((v) => v.reason),
     ]
       .filter((r): r is string => Boolean(r))
@@ -258,7 +269,7 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
     for (const f of findings) {
       // #250: an HTTP 5xx belongs to the action whose request it answered, not to the step that
       // drained it (a submit left pending while the next step ran blamed that next step).
-      const origin = ctx.requestOrigin(f);
+      const origin = f.origin ?? ctx.requestOrigin(f);
       const step = origin === undefined ? drainedAt : Math.min(drainedAt, origin.step);
       const known = [...ctx.defects.values()].find((d) => d.fingerprint === f.fingerprint || d.related.has(f.fingerprint));
       if (known !== undefined) {
@@ -271,8 +282,9 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
       const summary =
         f.kind === "invariant" ? (f.invariantReason ?? f.title) : f.kind === "markup-injection" ? f.title : f.signals.map((s) => s.detail).join("; ");
       const triage = await tryTriage(params.generation, { failureSummary: summary, url: f.url });
+      const { origin: _origin, ...finding } = f;
       ctx.defects.set(f.fingerprint, {
-        ...f,
+        ...finding,
         related: new Set(f.related),
         epoch: ctx.segments.indexOf(ctx.recorder),
         firstSeenStep: step,

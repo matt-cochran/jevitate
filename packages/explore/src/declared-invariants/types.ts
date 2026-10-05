@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import type { ObservedValue } from "@jevitate/recording";
+import type { EvalValue, ObservedValue } from "@jevitate/recording";
 
 /**
  * A value as it appears in a finding: the observed scalar, that it could not be read, or — for a
@@ -142,7 +142,22 @@ export interface AfterOptions {
    * once per step — the goal mission). Keeps probes to one read per action.
    */
   readonly rearm?: boolean;
+  /**
+   * Judges an EARLIER action of a sequence that did not wait for it to settle (a submit left
+   * pending while the next step ran), once the sequence settled: only its `require`/`always`
+   * invariants (no `never`, no cross-actor), the armed before-snapshot is kept for the sequence's
+   * own final action, and the action is not counted again.
+   */
+  readonly earlier?: boolean;
+  /**
+   * Input values as they were before the run's own later steps changed them (`inputValues`): used in
+   * place of the settled read, so a field edited after the submit is judged as it was submitted.
+   */
+  readonly inputsAsOf?: HeldInputs;
 }
+
+/** `dom` observables that read an input's `value`, by name (`InvariantMonitor.inputValues`). */
+export type HeldInputs = ReadonlyMap<string, { readonly value: EvalValue; readonly evidence?: string }>;
 
 export interface AfterResult {
   readonly violations: InvariantViolation[];
