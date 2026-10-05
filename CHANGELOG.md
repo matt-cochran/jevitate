@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [Unreleased]
+
+### Fixed
+
+- **Adversarial invariants are judged after the save is answered (#388).** A misuse step waits (up
+  to 5 s) for its requests before its declared invariants are checked, so a rejected save is no
+  longer reported as a violation because the previous save's "Saved" was still showing. The Save an
+  act-while-pending sequence leaves in flight is now judged once the sequence settles, so a page that
+  says "Saved" over an HTTP 500 is reported as an invariant violation that verify-fix and
+  `regression capture` can replay.
+
 ## [0.6.0] – 2026-10-05
 
 0.6.0 fixes what a release-gate sweep of goal runs on 0.5.0 found. Runs stop on a click or scroll
