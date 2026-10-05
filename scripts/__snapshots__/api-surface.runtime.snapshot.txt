@@ -172,7 +172,8 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (394 exports)
+# @jevitate/explore (398 exports)
+  ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -272,6 +273,8 @@
   PageNavigatingError: class
   PageSignalCollector: class
   READ_ONLY_NOTE: const (string)
+  RECURRING_MIN_COMPLETIONS: const (number)
+  RECURRING_WINDOW_MS: const (number)
   REDACTION_MASK: const (string)
   REJECTED_AGAIN_REASON: const (string)
   RELOAD_TIMEOUT_MS: const (number)
@@ -439,6 +442,7 @@
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
   isPageUnresponsive: function
+  isRecurringRead: function
   isResourceLoadEcho: function
   isSecretLike: function
   isTargetUnresponsive: function

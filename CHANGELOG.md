@@ -74,6 +74,11 @@ are waited out, and links the OS handles are no longer filed as failed requests.
   yet".
 - **Links the OS handles are not failed requests (#375).** A click on an `sms:`, `tel:`, `mailto:` or
   app deep link is no longer filed as a failed request, in adversarial runs or in action deltas.
+- **Background requests don't keep a wait busy (#383).** A read the page repeats on a timer (a
+  balance or notification poll), or one it starts on its own more than 1.5 s after the run's last
+  action, no longer counts as the app working. So after a send that started nothing, quiet waits end
+  the run as #241 intended, whatever the poll's timing. Writes, reads the action started, and any
+  visible busy indicator still count.
 
 ### Upgrade notes
 

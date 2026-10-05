@@ -64,3 +64,21 @@ describe("PageMonitor.explicitWait — #368", () => {
     expect(monitor.window().waitedMs).toBe(2_000);
   });
 });
+
+describe("isRecurringRead — #383: the page's own poll is not pending work", () => {
+  const done = (method: string, url: string) => ({ method, url });
+  it("a GET whose path already completed twice recently is a poll (query ignored)", async () => {
+    const { isRecurringRead } = await import("./page-monitor.js");
+    const recent = [done("GET", "https://a.test/api/balance?t=1"), done("GET", "https://a.test/api/balance?t=2")];
+    expect(isRecurringRead({ method: "GET", url: "https://a.test/api/balance?t=3" }, recent)).toBe(true);
+  });
+  it("a first or second occurrence, another path, or a write is not", async () => {
+    const { isRecurringRead } = await import("./page-monitor.js");
+    const once = [done("GET", "https://a.test/api/balance")];
+    expect(isRecurringRead({ method: "GET", url: "https://a.test/api/balance" }, once)).toBe(false);
+    const twice = [done("GET", "https://a.test/api/balance"), done("GET", "https://a.test/api/balance")];
+    expect(isRecurringRead({ method: "GET", url: "https://a.test/api/apply" }, twice)).toBe(false);
+    const posts = [done("POST", "https://a.test/api/apply"), done("POST", "https://a.test/api/apply")];
+    expect(isRecurringRead({ method: "POST", url: "https://a.test/api/apply" }, posts)).toBe(false);
+  });
+});
