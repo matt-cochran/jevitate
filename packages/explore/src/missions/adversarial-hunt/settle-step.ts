@@ -101,7 +101,11 @@ export async function settleMisuseStep(ctx: HuntState, ep: EpisodeState, turn: T
     ctx.snapTiming = undefined;
     return "stop";
   }
-  const verdict = await ctx.adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step });
+  // The submit an unsettled sequence left pending is judged too, when this step was not itself a
+  // submit (that one is judged as this step): it is the action that said "Saved" or not.
+  const earlierSubmit = s.submitsForm === undefined ? ep.earlierSubmit : null;
+  ep.earlierSubmit = null;
+  const verdict = await ctx.adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step }, { earlierSubmit });
   const soft = verdict === null ? await ctx.softJudgment(ep.stepSnap) : {};
   const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
   ctx.transcript.record({

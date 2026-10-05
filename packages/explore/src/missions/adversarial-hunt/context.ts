@@ -40,7 +40,7 @@ import type {
   ScopeDeparture,
 } from "../adversarial.js";
 import { installFinish } from "./finish.js";
-import type { MutableAdvisory, MutableDefect, StepAdvisory, StepFinding } from "./helpers.js";
+import type { EarlierSubmit, MutableAdvisory, MutableDefect, StepAdvisory, StepFinding } from "./helpers.js";
 import { DEFAULT_TIME_BUDGET_MS } from "./helpers.js";
 import { installOracle } from "./oracle.js";
 import { installSessions } from "./sessions.js";
@@ -149,7 +149,7 @@ export interface HuntContext {
    * `action`; with no action only its `never`s apply). Returns the transcript reason and the step's
    * findings, or null when nothing broke.
    */
-  readonly adjudicate: (action?: InvariantAction | null, opts?: { readonly identitySwitched?: boolean; }) => Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[]; } | null>;
+  readonly adjudicate: (action?: InvariantAction | null, opts?: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null; }) => Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[]; } | null>;
   /**
    * Signals that land AFTER a step was adjudicated — while the next page loads and settles (a 500
    * fired by the page the action opened) — belong to that step: drained and folded into it, so a

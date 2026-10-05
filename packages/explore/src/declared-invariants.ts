@@ -83,6 +83,7 @@ import type {
   AfterOptions,
   AfterResult,
   CrossActorEvidence,
+  HeldInputs,
   InvariantAction,
   InvariantMonitorOptions,
   InvariantReport,
@@ -399,6 +400,31 @@ export class InvariantMonitor {
   }
 
   /**
+   * The current value of every `dom` observable that reads an input's `value` (read once, no wait):
+   * what a submit sent, before a later step of the same unsettled sequence types over it.
+   */
+  async inputValues(actor: Actor): Promise<HeldInputs> {
+    const page = pageOf(actor);
+    const names = new Set(
+      this.#invariants
+        .filter((c) => c.gate === null)
+        .flatMap((c) => c.afterNames)
+        .filter((n) => {
+          const o = this.#spec.observe?.[n];
+          return o !== undefined && "dom" in o && o.dom.read === "value";
+        }),
+    );
+    const out = new Map<string, { value: EvalValue; evidence?: string }>();
+    for (const name of names) {
+      const o = this.#spec.observe?.[name];
+      if (o === undefined) continue;
+      const read = await this.#read(page, name, o).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
+      out.set(name, read.evidence === undefined ? { value: read.value } : { value: read.value, evidence: read.evidence });
+    }
+    return out;
+  }
+
+  /**
    * Snapshots again after the action settled and evaluates every invariant that applies to it
    * (`when`), plus every `never`. A violated `settle` invariant is re-checked until it holds or its
    * window closes; only then is it a violation. Never throws: an observable that cannot be read is
@@ -407,15 +433,26 @@ export class InvariantMonitor {
   async after(actor: Actor, action: InvariantAction | null, opts: AfterOptions = {}): Promise<AfterResult> {
     const page = pageOf(actor);
     this.attach(page);
+    const earlier = opts.earlier === true;
     const before = this.#before ?? { values: new Map<string, EvalValue>(), evidence: new Map<string, string>() };
-    this.#before = null;
+    if (!earlier) this.#before = null;
     const applicable = this.#invariants.filter(
-      (c) => c.gate === null && (opts.only === undefined || c.decl.id === opts.only) && (opts.force === true || this.#applies(c.decl, action)),
+      (c) =>
+        c.gate === null &&
+        !(earlier && c.decl.never !== undefined) &&
+        (opts.only === undefined || c.decl.id === opts.only) &&
+        (opts.force === true || this.#applies(c.decl, action)),
     );
     const afterNames = new Set(applicable.flatMap((c) => c.afterNames));
     const beforeNames = new Set(this.#invariants.filter((c) => c.gate === null).flatMap((c) => c.beforeNames));
     if (opts.rearm === true) for (const n of beforeNames) afterNames.add(n);
     const after = await this.#snapshot(page, afterNames);
+    for (const [name, held] of opts.inputsAsOf ?? []) {
+      if (!afterNames.has(name)) continue;
+      after.values.set(name, held.value);
+      if (held.evidence === undefined) after.evidence.delete(name);
+      else after.evidence.set(name, held.evidence);
+    }
     let polled = false;
     const violations: InvariantViolation[] = [];
     const unknown: string[] = [];
@@ -423,7 +460,9 @@ export class InvariantMonitor {
     const pageUrl = safeUrl(page);
     this.#lastPage = page;
     // #195: the responses a `never.response` drains now happened during this action (or the page load).
-    if (action !== null && action.op !== null) {
+    if (earlier) {
+      // An earlier action of the sequence: already counted when the sequence's own steps ran.
+    } else if (action !== null && action.op !== null) {
       this.#actions += 1;
       this.#lastStep = action.step ?? this.#actions;
       this.#stepLabel = action.control === null ? action.op : `${action.op} ${JSON.stringify(this.#redact(action.control))}`;
@@ -449,6 +488,7 @@ export class InvariantMonitor {
     }
     // A settle window may have run for a while: then the page moved on, so snapshot it afresh.
     if (opts.rearm === true) this.#before = polled ? await this.#snapshot(page, beforeNames) : after;
+    if (earlier) return { violations, unknown, held };
     // #147: bind what this action produced, then run every cross-actor check whose capture is now bound.
     const cross = await this.#crossActor(actor, action, opts);
     return { violations: [...violations, ...cross.violations], unknown: [...unknown, ...cross.unknown], held: [...held, ...cross.held] };
