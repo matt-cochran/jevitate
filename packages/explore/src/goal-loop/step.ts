@@ -27,8 +27,14 @@ import {
 
 import {
   fieldValuesOf,
+  keyOf,
   quote,
 } from "./helpers.js";
+
+/** #371: the ops that act on a target — their failures are blockers. */
+const TARGET_OPS: ReadonlySet<string> = new Set(["click", "type", "send", "select", "upload", "edit_text"]);
+/** #367: the ops the loop-cycle detector counts as steps (a wait is patience, never a step of a loop). */
+const CYCLE_OPS: ReadonlySet<string> = new Set([...TARGET_OPS, "scroll_up", "scroll_down", "reload"]);
 
 import type { Perception } from "../perceive.js";
 import type { RunContext } from "./context.js";
@@ -84,6 +90,15 @@ export function newStep(ctx: RunContext, input: StepInput) {
     const op = extra.op ?? decision.op;
     const target = extra.control === undefined ? decision.control : extra.control;
     if (!actOk && extra.origin === "engine") ctx.refusedSinceMutation += 1;
+    // #371: a failed / refused target action is the latest blocker (named in a no-progress reason).
+    if (!actOk && target !== null && TARGET_OPS.has(op)) ctx.noteFailure(op, target, reason, extra.origin === "engine");
+    // #367: what this step did, for the loop-cycle detector (read at the next progress check).
+    if (CYCLE_OPS.has(op)) {
+      ctx.cycleAction = {
+        action: `${op} ${target === null ? "" : keyOf(target)} ${actOk ? "ok" : "failed"}`,
+        label: target === null ? op.replace("_", " ") : `${op} ${quote(target.name || target.summary, 60)}`,
+      };
+    }
     if (op === "type" || op === "send") ctx.auth.noteTyped(target, snap.url, actOk, target !== null && ctx.isBound(target));
     // #225: typed credentials make the pending submit a sign-in, never a save.
     if ((op === "type" || op === "send") && actOk && target !== null && (ctx.isBound(target) || isCredentialField(target))) ctx.save.noteCredential();

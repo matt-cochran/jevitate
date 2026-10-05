@@ -71,6 +71,21 @@ const NO_ANCHORED_HERE = "#293: a journey-anchored mission is an `explore --from
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
   "explore-cli.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
+  // #369: every explore-author-journey take is explore's goal run — what authoring leaves out, and why.
+  "explore-author.ts runExploration": {
+    hostHealth: SEAM,
+    nowIso: SEAM,
+    successAssertion: "authorJourney hands every check (successAssertion included) to the take as successChecks",
+    actors: "an authored Journey drives one session: multi-actor (--actor) missions are explore's",
+    evidenceVideo: "authoring files nothing: a take's issue drafts stay next to its result; `explore --evidence-video` attaches media",
+    filing: "authoring files nothing: a take's issue drafts stay next to its result (drafts only)",
+    issueFiler: "authoring files nothing: a take's issue drafts stay next to its result (drafts only)",
+    fixtures: "mission fixtures (--fixtures/--before/--after) run operator hooks around one mission; an author run starts from --storage-state",
+    invariants: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
+    invariantAuthTokens: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
+    journeyPrefix: NO_ANCHORED_HERE,
+    serverLog: "backend log sources are operator-declared `explore --log-source`; authoring needs only the goal's checks",
+  },
   "explore-cli.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
   "explore-cli.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "explore-cli.ts runFeatureCliMission": { hostHealth: SEAM, nowIso: SEAM },

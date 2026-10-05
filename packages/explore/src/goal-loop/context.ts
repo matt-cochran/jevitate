@@ -71,6 +71,7 @@ import { typeFixtureContext } from "../type-fixtures.js";
 import { FirstPartyOrigins } from "../third-party.js";
 import { HeapLog } from "../crash-report.js";
 import { FailedActionStreak, openOverlayName } from "../stuck-actions.js";
+import { LoopCycleDetector } from "../loop-cycle.js";
 import { ActionDeltas, type DeltaVerdict } from "../action-delta.js";
 import {
   keyOf,
@@ -123,6 +124,12 @@ export interface RunContext {
   movingScrollsSignature: string | null;
   /** #323: the page signatures this streak of moving scrolls has seen (a revisit is no progress). */
   scrollStreakSignatures: Set<string>;
+  /** #367: the loop-cycle detector (period ≤ 2 alternation with no request and nothing new). */
+  readonly cycles: LoopCycleDetector;
+  /** #367: the action the latest recorded step took (identity + label), consumed by the progress check. */
+  cycleAction: { action: string; label: string } | null;
+  /** #367: when the last progress check ran — a write started after it is the next step's. */
+  cycleMark: number;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   lastChanceGiven: boolean;
   /** #172: this decision is the last-chance turn. */
@@ -176,6 +183,8 @@ export interface RunContext {
   lastAbsenceUncovered: string | null;
   /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */
   settledClick: ReturnType<SideEffectGuard["lastClick"]>;
+  /** #380: reads the clicked control's region state when its window closes (null when no click is open). */
+  clickedRegion: (() => Promise<string | undefined>) | null;
   wroteOk: boolean;
   /** #239: a write goal ("record a decision…") is not settled by a report before the run saved anything. */
   readonly writeGoal: boolean;
@@ -197,6 +206,11 @@ export interface RunContext {
   idleSince: number | null;
   /** How long consecutive `wait`s have waited on a still-busy app (bounded by `replyWaitMs`). */
   busyWaitedMs: number;
+  /**
+   * #373: how long the run has waited, in total, for the reply to the last message sent — the send's
+   * own wait plus every later `wait` / report listen on that turn. Bounded by `replyCeilingMs`.
+   */
+  replyWaitedMs: number;
   /** The last message sent got no reply yet (a slow LLM turn): `wait`s are patience, bounded. */
   awaitingReply: boolean;
   /** The page text before the last message, and the message — to keep listening for its reply. */
@@ -264,7 +278,15 @@ export interface RunContext {
   refusedSinceMutation: number;
   scrollsSinceMutation: number;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
-  readonly blockers: { failClosed: string | null; target: { key: string; text: string } | null };
+  readonly blockers: {
+    failClosed: string | null;
+    /** `step`: the transcript step it was met at (#371: the latest blocker is named, not the first). */
+    target: { key: string; text: string; step: number } | null;
+    /** #371: the latest failed / rejected target action — its text, its own reason, and its step. */
+    latest: { key: string; text: string; reason: string; step: number } | null;
+  };
+  /** #371: records a failed or refused target action as the latest blocker. */
+  readonly noteFailure: (op: string, c: Control, reason: string | undefined, refused: boolean) => void;
   /**
    * The most concrete cause known now, in #84's priority order; null when there is none. An invalid
    * field is named ONLY when the last action taken was a click that sent no request at all (#130a) —
@@ -358,6 +380,12 @@ export interface RunContext {
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   jobWaitedMs: number;
   /**
+   * #379: how long the run has waited on a busy/progress overlay with no visible control (bounded by
+   * `jobWaitMs`); reset once a page renders controls again, so an overlay that keeps coming back over
+   * an empty page still ends.
+   */
+  overlayWaitedMs: number;
+  /**
    * How long a hang signal has been deferred because the page is visibly WORKING (#153): never reset,
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
    */
@@ -436,6 +464,9 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.movingScrolls = 0;
   ctx.movingScrollsSignature = null;
   ctx.scrollStreakSignatures = new Set<string>();
+  ctx.cycles = new LoopCycleDetector();
+  ctx.cycleAction = null;
+  ctx.cycleMark = clock.now();
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   ctx.lastChanceGiven = false;
   /** #172: this decision is the last-chance turn. */
@@ -501,6 +532,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.lastAbsenceUncovered = null;
   /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */
   ctx.settledClick = null;
+  ctx.clickedRegion = null;
   ctx.wroteOk = false;
   /** #239: a write goal ("record a decision…") is not settled by a report before the run saved anything. */
   ctx.writeGoal = goalAsksToWrite(cfg.goal);
@@ -525,6 +557,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.idleSince = null;
   /** How long consecutive `wait`s have waited on a still-busy app (bounded by `replyWaitMs`). */
   ctx.busyWaitedMs = 0;
+  ctx.replyWaitedMs = 0;
   /** The last message sent got no reply yet (a slow LLM turn): `wait`s are patience, bounded. */
   ctx.awaitingReply = false;
   /** The page text before the last message, and the message — to keep listening for its reply. */
@@ -598,6 +631,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.blockers = {
     failClosed: null,
     target: null,
+    latest: null,
   };
   /**
    * The most concrete cause known now, in #84's priority order; null when there is none. An invalid
@@ -609,7 +643,11 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
    */
   ctx.blockingCause = (): string | null => {
     if (ctx.blockers.failClosed !== null) return ctx.blockers.failClosed;
-    if (ctx.blockers.target !== null) return ctx.blockers.target.text;
+    // #371: of the failed target actions, the LATEST is named — a disabled hint button met at step 3
+    // never stands in for the rejected types at steps 38–41. A tie (one step) keeps the target's text.
+    const { target, latest } = ctx.blockers;
+    if (latest !== null && (target === null || latest.step > target.step)) return latest.text;
+    if (target !== null) return target.text;
     const alert = ctx.status.alerts[0];
     if (alert !== undefined) return `the page shows alert ${quote(alert)}`;
     const field = ctx.status.invalid[0];
@@ -626,7 +664,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
     const r = reason ?? "?";
     if (r !== "target not enabled" && r !== "target not visible") return r;
     const name = quote(c.name || c.summary, 120);
-    ctx.blockers.target = { key: keyOf(c), text: `${r === "target not enabled" ? "target disabled" : "target not visible"} — ${name}` };
+    ctx.blockers.target = { key: keyOf(c), text: `${r === "target not enabled" ? "target disabled" : "target not visible"} — ${name}`, step: ctx.transcript.nextStep };
     return r === "target not enabled"
       ? `${r}: ${name} is disabled — its label may say what it needs first`
       : `${r}: ${name}`;
@@ -634,6 +672,16 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   /** A control acted on successfully is no longer the blocker. */
   ctx.cleared = (c: Control): void => {
     if (ctx.blockers.target?.key === keyOf(c)) ctx.blockers.target = null;
+    if (ctx.blockers.latest?.key === keyOf(c)) ctx.blockers.latest = null;
+  };
+  ctx.noteFailure = (op: string, c: Control, reason: string | undefined, refused: boolean): void => {
+    const why = (reason ?? "?").replace(/^typed value rejected:\s*/, "");
+    ctx.blockers.latest = {
+      key: keyOf(c),
+      text: `${op} ${quote(c.name || c.summary, 80)} ${refused ? "rejected" : "failed"}: ${quote(why, 200).slice(1, -1)}`,
+      reason: reason ?? "?",
+      step: ctx.transcript.nextStep,
+    };
   };
   /**
    * #272 / #294: a REAL action on `c` failed (act ran, `ok: false`). Tells the model when the target
@@ -760,6 +808,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.jobWaitExplicit = cfg.jobWaitMs !== undefined;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   ctx.jobWaitedMs = 0;
+  ctx.overlayWaitedMs = 0;
   /**
    * How long a hang signal has been deferred because the page is visibly WORKING (#153): never reset,
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.

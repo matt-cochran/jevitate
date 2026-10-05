@@ -19,7 +19,7 @@ import { clock } from "@jevitate/domain";
  *  2. the 1-minute load average per core;
  *  3. the DRIVER's own event-loop lag (this process — a late timer is a late CDP reply);
  *  4. the run's render trend against its OWN baseline (every page slowing down together is the
- *     machine, not one slow route).
+ *     machine, not one slow route) — #368: only when a host sample in the window corroborates it.
  *
  * A finding met while starved is `environment-degraded`: advisory, never a defect/hang finding,
  * never failing the run. A run most of whose steps ran starved proved nothing: its caller reports it
@@ -65,6 +65,16 @@ export const RENDER_TREND_RENDERS = 3;
  */
 export const RENDER_SLOWDOWN_FACTOR = 5;
 export const RENDER_SLOWDOWN_FLOOR_MS = 3_000;
+
+/**
+ * #368: a render slowdown is a SYMPTOM, not host evidence — a slow backend, a page that waits on a
+ * reply that never comes, or a genuinely slow route slow every render down on an idle machine too.
+ * It counts as starvation only when the host corroborates it like event-loop lag does (#213): a
+ * sample inside `STARVATION_WINDOW_MS` at ≥ this load per core (no idle core). On a healthy host a
+ * slow render is the app's timing (reported in `hostHealth.slowestRenderMs` and the timing summary),
+ * never "the host was starved"; a hang or no-progress it causes is judged as an app finding.
+ */
+const RENDER_CORROBORATING_LOAD_PER_CORE = LAG_CORROBORATING_LOAD_PER_CORE;
 
 /**
  * How long a starved sample explains what happens after it. Load average is itself a 1-minute
@@ -222,12 +232,18 @@ export class HostHealthSampler {
   starvedNow(): string | null {
     if (!this.#attribute) return null;
     const since = this.#now() - STARVATION_WINDOW_MS;
+    let corroborating: number | null = null;
     for (let i = this.#samples.length - 1; i >= 0; i--) {
       const s = this.#samples[i]!;
       if (s.at < since) break;
       if (s.starved !== null) return s.starved;
+      const load = s.host.loadPerCore;
+      if (load !== undefined && load >= RENDER_CORROBORATING_LOAD_PER_CORE) corroborating = Math.max(corroborating ?? 0, load);
     }
-    return this.#renderTrend();
+    // #368: a slow render alone never blames the host — only with load corroborating it.
+    if (corroborating === null) return null;
+    const trend = this.#renderTrend();
+    return trend === null ? null : `${trend} at load ${fmt(corroborating)}/core`;
   }
 
   /**

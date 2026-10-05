@@ -28,7 +28,9 @@ import { TEMPORAL_FORMATS, inWireFormat, isTemporalInputType, normalizeTemporalV
  *     sentence typed into a name field).
  *  5. **The next item, not the first again (#123).** The values this run already submitted into the
  *     same field go to the model (`alreadyUsed`), and when the goal names several items a value
- *     identical to one of them is rejected in code.
+ *     identical to one submitted into the same LIVE field is rejected in code (#366: a field that
+ *     remounted empty — a reopened dialog — holds none, and a literal the field's own prompt asks
+ *     for, "Type CONFIRM to continue", is never a repeat).
  *
  * The gateway itself only ever returns text (never a real recipient), and may
  * return `{ text: null }` for a required value it cannot honestly supply; the
@@ -51,6 +53,14 @@ export interface FillRequest {
   readonly field?: FieldShape;
   /** Values this run already submitted into this same field (#123), oldest first. */
   readonly alreadyUsed?: readonly string[];
+  /**
+   * #366: the subset of `alreadyUsed` submitted into the field's CURRENT instance (a reopened dialog's
+   * field holds none). Only these are refused as a repeat — plus a goal-listed item while another
+   * listed item is still unused. Defaults to `alreadyUsed`.
+   */
+  readonly liveUsed?: readonly string[];
+  /** #366: text around the field (its dialog / section name) that may ask for a literal ("Type CONFIRM to continue"). */
+  readonly prompt?: string;
 }
 
 /** Guidance sent with a select's options. */
@@ -174,30 +184,79 @@ export function exactLiterals(goal: string): string[] {
   return [...goal.matchAll(re)].map((m) => (m[1] ?? m[2] ?? "").trim()).filter((v) => v !== "");
 }
 
+/** #338: the imperatives a goal's instruction clause opens with (see `INSTRUCTION_VERBS`). */
+const INSTRUCTION_VERB_LIST =
+  "add create make set enter type fill write test check verify ensure confirm click open go navigate visit connect " +
+  "disconnect save submit send ask select choose change edit update delete remove upload try run start finish " +
+  "complete configure enable disable sign log invite import export publish";
+
+/** #371: a lead-in after which the goal dictates the value's content ("with a short description of …"). */
+const VALUE_SPAN_MARKER = String.raw`\b(?:(?:an?|the|some|one)\s+)?(?:(?:short|brief|quick|simple|one-line|one-sentence|few-word)\s+)?(?:description|summary|explanation|bio|blurb|overview|pitch)\s+(?:of|about|for)\b|\b(?:describing|saying|explaining|mentioning|stating|about|that\s+says)\b`;
+/**
+ * #371: where such a span ends — a clause break outside parentheses, `then`, or `and` + an instruction
+ * verb ("about refunds and test it" — the instruction after it is never value material).
+ */
+const VALUE_SPAN = String.raw`\s*[:,]?\s*((?:\([^()\n]{0,300}\)|[^,;:.()\n])+?)(?=\s*(?:[,;:\n]|\.(?:\s|$))|\s+(?:and\s+)?then\s|\s+and\s+(?:${INSTRUCTION_VERB_LIST.replace(/ /g, "|")})\b|\s*$)`;
+
+/**
+ * #371: the spans of the goal that dictate a value — quoted text, `exactly` literals, parenthesised
+ * lists, and the text after a value lead-in ("with a short description of the shop (…)", "saying …",
+ * "about …") — and the goal's remaining instruction `prose`, each span replaced by a clause break.
+ */
+function goalValueSpans(goal: string): { spans: string[]; prose: string } {
+  const spans: string[] = [];
+  const cut = (re: RegExp, s: string): string =>
+    s.replace(re, (m: string, ...g: unknown[]) => {
+      const span = typeof g[0] === "string" ? g[0] : "";
+      if (span.trim() === "") return m;
+      spans.push(span.trim());
+      const at = m.lastIndexOf(span);
+      return `${m.slice(0, at)} ; ${m.slice(at + span.length)}`;
+    });
+  let prose = cut(/["“'‘\u0060]([^"”'’\u0060\n]{1,200})["”'’\u0060]/gu, goal);
+  for (const literal of exactLiterals(goal)) {
+    spans.push(literal);
+    prose = prose.split(literal).join(" ; ");
+  }
+  prose = cut(new RegExp(String.raw`(?:${VALUE_SPAN_MARKER})${VALUE_SPAN}`, "giu"), prose);
+  prose = cut(/\(([^()\n]{1,300})\)/gu, prose);
+  return { spans, prose };
+}
+
 /**
  * Independent code (#71 reopen): why `value` is the goal (or a large part of it) echoed rather than a
  * value for one field, or null. Echo = the same words as the goal; a run of 5+ of the goal's words
  * spanning `GOAL_ECHO_RUN_CHARS`+ characters; or (6+ distinct content words) more than
  * `GOAL_ECHO_OVERLAP` of the value's content words taken from the goal — a paraphrase of it. A value
  * the goal itself quotes is exempt; a short value (a name, a term) is judged by the first two only.
+ * #371: the goal's value spans (`goalValueSpans`) are value material — a run must carry 2+ of the
+ * goal's instruction words, and only instruction words count toward the overlap.
  */
 export function echoesGoal(value: string, goal: string): string | null {
   const v = words(value);
   const g = words(goal);
   if (v.length === 0 || g.length === 0) return null;
   const flat = v.join(" ");
-  const goalFlat = ` ${g.join(" ")} `;
   if (flat === g.join(" ")) return "it is the goal text";
-  if (quotedSegments(goal).some((q) => words(q).join(" ") === flat)) return null;
+  // #371: what the goal dictates as the value (quoted, parenthesised, after "a description of" /
+  // "saying" / "about" …) is value material: only the goal's INSTRUCTION prose can be echoed.
+  const { spans, prose } = goalValueSpans(goal);
+  if (spans.some((q) => words(q).join(" ") === flat)) return null;
+  const valueWords = new Set(spans.flatMap(words));
+  const instructionWords = new Set(words(prose).filter((w) => !valueWords.has(w) && !ECHO_STOP_WORDS.has(w)));
+  const goalFlat = ` ${g.join(" ")} `;
   for (let i = 0; i < v.length; i++) {
     let j = i;
     while (j < v.length && goalFlat.includes(` ${v.slice(i, j + 1).join(" ")} `)) j++;
-    const run = v.slice(i, j).join(" ");
-    if (j - i >= 5 && run.length >= GOAL_ECHO_RUN_CHARS) return `it copies the goal ("${run.slice(0, 60)}")`;
+    const runWords = v.slice(i, j);
+    const run = runWords.join(" ");
+    // #371: a run of the goal's VALUE words (its description, its quoted title) is the value, not an echo.
+    const instructional = new Set(runWords.filter((w) => instructionWords.has(w))).size >= 2;
+    if (j - i >= 5 && run.length >= GOAL_ECHO_RUN_CHARS && instructional) return `it copies the goal ("${run.slice(0, 60)}")`;
   }
   const vs = new Set(v.filter((w) => !ECHO_STOP_WORDS.has(w)));
   if (vs.size >= ECHO_MIN_WORDS) {
-    const gs = new Set(g);
+    const gs = instructionWords;
     const overlap = [...vs].filter((w) => gs.has(w)).length / vs.size;
     if (overlap > GOAL_ECHO_OVERLAP) return `it restates the goal (${Math.round(overlap * 100)}% of its words are the goal's)`;
   }
@@ -209,12 +268,7 @@ const INSTRUCTION_MIN_WORDS = 4;
 /** #338: share of a value's words that must come from runs (2+ words) of the goal's prose. */
 const INSTRUCTION_COVERAGE = 0.8;
 /** #338: the imperatives a goal's instruction clause opens with ("add an answer", "test it with…"). */
-const INSTRUCTION_VERBS = new Set(
-  ("add create make set enter type fill write test check verify ensure confirm click open go navigate visit connect " +
-    "disconnect save submit send ask select choose change edit update delete remove upload try run start finish " +
-    "complete configure enable disable sign log invite import export publish")
-    .split(" "),
-);
+const INSTRUCTION_VERBS = new Set(INSTRUCTION_VERB_LIST.split(" "));
 /** #338: words that open a run without being its verb ("and test it", "then save"). */
 const CLAUSE_OPENERS = new Set(["and", "then", "also", "please", "next", "finally", "first"]);
 /** #338: a goal word right before a run that introduces it as a value ("titled Update the copy", "saying …", ": …"). */
@@ -232,11 +286,12 @@ function copiesGoalInstruction(value: string, goal: string): string | null {
   const v = words(value);
   if (v.length < INSTRUCTION_MIN_WORDS) return null;
   const flatValue = v.join(" ");
-  if (quotedSegments(goal).some((q) => ` ${words(q).join(" ")} `.includes(` ${flatValue} `))) return null;
+  const { spans, prose: instructionProse } = goalValueSpans(goal);
+  if (spans.some((q) => ` ${words(q).join(" ")} `.includes(` ${flatValue} `))) return null;
   // The goal's prose: quoted segments removed (they are values, not instructions); a colon kept as a token.
+  // #371: so are the spans the goal dictates as a value (parenthesised, after "a description of" …).
   const prose =
-    goal
-      .replace(/["“'‘\u0060]([^"”'’\u0060\n]{1,200})["”'’\u0060]/gu, " ; ")
+    instructionProse
       .toLowerCase()
       .match(/[\p{L}\p{N}$]+(?:['’][\p{L}]+)?|:/gu) ?? [];
   const runAt = (i: number): { start: number; len: number } => {
@@ -325,6 +380,13 @@ export class FieldValueLog {
   readonly #used = new Map<string, string[]>();
   /** What the latest submit sent, per field — undone by a reload (#184). */
   readonly #lastBatch = new Map<string, string>();
+  /**
+   * #366: the values submitted into each field's CURRENT instance — forgotten when the field left
+   * the page and came back empty (a confirm dialog closed and reopened): a new instance holds none.
+   */
+  readonly #live = new Map<string, string[]>();
+  /** #366: fields with live values that were absent from the latest page view. */
+  readonly #gone = new Set<string>();
 
   static key(label: string): string {
     return bareLabel(label).toLowerCase();
@@ -340,11 +402,35 @@ export class FieldValueLog {
     if (this.#pending.size > 0) this.#lastBatch.clear();
     for (const [k, v] of this.#pending) {
       this.#lastBatch.set(k, v);
-      const list = this.#used.get(k) ?? [];
-      if (!list.some((u) => sameValue(u, v))) list.push(v);
-      this.#used.set(k, list);
+      for (const memory of [this.#used, this.#live]) {
+        const list = memory.get(k) ?? [];
+        if (!list.some((u) => sameValue(u, v))) list.push(v);
+        memory.set(k, list);
+      }
+      this.#gone.delete(k);
     }
     this.#pending.clear();
+  }
+
+  /**
+   * #366: the text fields on the page now (label and current value). A field with submitted values
+   * that left the page and is back EMPTY is a new instance (a dialog reopened, a form remounted):
+   * its live values are forgotten, so the same value may be typed into it again. `used` keeps them.
+   */
+  observe(fields: ReadonlyArray<{ readonly label: string; readonly value: string | null | undefined }>): void {
+    const present = new Map<string, boolean>();
+    for (const f of fields) {
+      const k = FieldValueLog.key(f.label);
+      present.set(k, (present.get(k) ?? false) || (f.value ?? "").trim() === "");
+    }
+    for (const k of [...this.#live.keys()]) {
+      const empty = present.get(k);
+      if (empty === undefined) this.#gone.add(k);
+      else if (this.#gone.has(k)) {
+        this.#gone.delete(k);
+        if (empty) this.#live.delete(k);
+      }
+    }
   }
 
   /**
@@ -352,12 +438,14 @@ export class FieldValueLog {
    * used item — retyping the same value is allowed again.
    */
   reloaded(): void {
-    for (const [k, list] of this.#used) {
-      const last = this.#lastBatch.get(k);
-      if (last === undefined) continue;
-      const rest = list.filter((u) => !sameValue(u, last));
-      if (rest.length === 0) this.#used.delete(k);
-      else this.#used.set(k, rest);
+    for (const memory of [this.#used, this.#live]) {
+      for (const [k, list] of memory) {
+        const last = this.#lastBatch.get(k);
+        if (last === undefined) continue;
+        const rest = list.filter((u) => !sameValue(u, last));
+        if (rest.length === 0) memory.delete(k);
+        else memory.set(k, rest);
+      }
     }
     this.#lastBatch.clear();
     this.#pending.clear();
@@ -366,6 +454,11 @@ export class FieldValueLog {
   /** The values already submitted into `label`, oldest first. */
   used(label: string): readonly string[] {
     return this.#used.get(FieldValueLog.key(label)) ?? [];
+  }
+
+  /** #366: the values already submitted into `label`'s current instance (see `observe`), oldest first. */
+  liveUsed(label: string): readonly string[] {
+    return this.#live.get(FieldValueLog.key(label)) ?? [];
   }
 }
 
@@ -504,6 +597,18 @@ export function typedPassages(goal: string): string[] {
 /** #281: a quoted text shorter than this (on one line) is a name or a title, not a passage to type. */
 const PASSAGE_MIN_WORDS = 6;
 
+/**
+ * #366: true when the field's own label / placeholder / nearby prompt literally asks for `value` —
+ * "Type CONFIRM to continue", "To confirm, type `my-project` below", "Enter DELETE": a confirm token
+ * typed into every such dialog is what the dialog wants each time, never a repeated list item.
+ */
+function promptAsksFor(value: string, texts: readonly string[]): boolean {
+  const verb = String.raw`\b(?:type|enter|write|input)\s+(?:in\s+)?(?:the\s+(?:word|text|phrase|name|code)\s+)?`;
+  const quoted = new RegExp(String.raw`${verb}["“'‘\u0060]([^"”'’\u0060\n]{1,80})["”'’\u0060]`, "giu");
+  const bare = new RegExp(String.raw`${verb}([^\s"“”'‘’\u0060]{1,80}?)[.,:;!]?(?=\s+(?:to|below|here|in|into|and|if|for|then)\b|[^\S\n]*(?:\n|$)|[.,:;!]\s)`, "giu");
+  return texts.some((t) => [...t.matchAll(quoted), ...t.matchAll(bare)].some((m) => sameValue(m[1] ?? "", value)));
+}
+
 /** The generation gateway's documented input ceiling for `visibleContext`. */
 const CONTEXT_CEILING = 4000;
 
@@ -556,6 +661,16 @@ export class FillHelper {
     };
     const several = goalListsSeveral(input.goal);
     const isUsed = (v: string): boolean => used.some((u) => sameValue(u, v));
+    const live = req.liveUsed === undefined ? used : req.liveUsed.map((u) => redactContext(u, secrets).slice(0, 200));
+    // #366: a repeat is refused only into the same live field, or when it is a goal-listed item while
+    // another listed item is still unused — and never when the field itself asks for that literal.
+    const repeats = (v: string): boolean => {
+      if (!isUsed(v)) return false;
+      if (promptAsksFor(v, [input.fieldLabel, redactContext(req.prompt ?? "", secrets)])) return false;
+      if (live.some((u) => sameValue(u, v))) return true;
+      const stated = field === undefined ? [] : valuesStatedInGoal(input.goal, input.fieldLabel, field);
+      return stated.some((s) => sameValue(s, v)) && stated.some((s) => !isUsed(s));
+    };
     // A value the (redacted) goal states verbatim for this field needs no model at all. When the goal
     // lists several items for it (an add-another flow, #123), the next one not yet used.
     if (field !== undefined) {
@@ -591,7 +706,7 @@ export class FillHelper {
     if (field !== undefined && text !== null) {
       const rejected =
         checkFieldValue(text, field, input.fieldLabel, input.goal) ??
-        (several && isUsed(text)
+        (several && repeats(text)
           ? `repeats ${JSON.stringify(text.trim().slice(0, 80))}, already submitted into this field — the goal lists several items: use the next one`
           : null);
       // A rejected value is never cached: the next ask (its history now carries the rejection) regenerates.

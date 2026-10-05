@@ -2,6 +2,7 @@ import type { Page, Response } from "playwright";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { globRegex, matchesPattern, walkExpression, type CaptureWhen, type EvalValue, type ExprNode, type ObservedList } from "@jevitate/recording";
 import type { InvariantAction, InvariantValue } from "./types.js";
+import { parseConnectUnaryError } from "../rpc-status.js";
 
 /**
  * Constants and free helpers used by `InvariantMonitor` (in `../declared-invariants.ts`). None were
@@ -68,13 +69,7 @@ export async function connectCodeOf(response: Response): Promise<string | null> 
   if (response.status() < 400 || !(headers["content-type"] ?? "").includes("json")) return null;
   const buf = await response.body().catch(() => null);
   if (buf === null || buf.length > MAX_BODY_BYTES) return null;
-  try {
-    const body: unknown = JSON.parse(buf.toString("utf8"));
-    const code = body !== null && typeof body === "object" && "code" in body ? (body as { code: unknown }).code : null;
-    return typeof code === "string" && /^[a-z_]+$/.test(code) ? code : null;
-  } catch {
-    return null;
-  }
+  return parseConnectUnaryError(buf.toString("utf8"));
 }
 
 export function pageOf(actor: Actor): Page {

@@ -94,7 +94,7 @@ the `goalOutcome` above; not separately exit-coded):
 | `done` | the loop ended on the model's `done`: code accepted the proposal (the transcript says "done accepted provisionally" when a check — a `reloadThen`, or one holding since before any action — is still left to the final verdict, which may still fail it: `goalOutcome: "failed"`), or code rejected it repeatedly until it stopped taking proposals (`goalOutcome: "failed"`) |
 | `blocked` | the model decided it could not proceed |
 | `exhausted` | the action or decision budget ran out |
-| `no-progress` | the same state repeated with no forward movement (the no-progress detector) |
+| `no-progress` | the same state repeated with no forward movement (the no-progress detector), or the run went round a loop: for 4 round trips it alternated between at most two actions and two page states (a link and its Back link, a disclosure toggled open and shut, scrolls flipping between the same positions) with no write request sent and nothing new on the page — the reason names the loop. A no-progress reason's `last blocker` is the latest failed or rejected action |
 | `hang` | the app under test hung |
 | `inconclusive` | a required decision round-trip stayed unavailable |
 | `crashed` | the engine failed |
@@ -176,7 +176,16 @@ run's own baseline. The thresholds (`packages/explore/src/host-health.ts`) are:
 | admission sample | over the browser pool's own thresholds (memory pressure, < 400 MiB available, CPU PSI > 80%) |
 | load average | > 2 runnable tasks per core (every task gets ≤ half a core) |
 | driver event-loop lag | > 500 ms (longer than the settle rule's quiet window) **and** load ≥ 1 runnable task per core. The lag histogram also counts the driver's own synchronous work, so lag with idle cores (e.g. 506 ms at 0.70/core) is self-inflicted and never counts (#213) |
-| render trend | the median of the last 3 renders ≥ 5x the run's baseline (median of its first 3) and ≥ 3 s |
+| render trend | the median of the last 3 renders ≥ 5x the run's baseline (median of its first 3) and ≥ 3 s, **and** a host sample in the last 15 s at load ≥ 1 runnable task per core (#368). A slow render is a symptom, not host evidence: on a healthy host (spare cores, free memory) slow renders are the app's own timing — reported in `slowestRenderMs` and the timing summary, and a hang or no-progress stop they cause is judged as an app finding — never "the host was starved" |
+
+A render is the page's own time: a navigation's DOMContentLoaded, or an action's time to settle
+**without** any explicit wait the run chose in between — a chat reply wait (`--reply-wait-ms` /
+`--reply-ceiling-ms`), a job wait (`--job-wait-ms`), a `wait` decision (#368). That wait is reported
+on its own as the step timing's `waitedMs`. A reply that never arrives is the run's own finding: the
+goal reason starts `no reply within 30s to the last message sent ("…")`, never an environment verdict.
+`--reply-ceiling-ms` bounds the total wait for one sent message's reply — the send's own wait plus
+every `wait` decision after it, never one wait cycle at a time (#373): once it is spent, another
+`wait` ends the run (`no-progress`) with that reason instead of listening on.
 
 A starved sample explains the 15 s after it. Then:
 

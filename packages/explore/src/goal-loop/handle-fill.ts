@@ -36,7 +36,14 @@ export async function handleFill(ctx: RunContext, step: ActStep): Promise<Flow> 
       // A text field's value is field-scoped and checked before it is typed (#71); in an
       // add-another flow it is the next item, not one already submitted into this field (#123).
       ...(decision.op === "type"
-        ? { field: { tag: control.tag, inputType: control.inputType }, alreadyUsed: ctx.valueLog.used(control.name || control.summary) }
+        ? {
+            field: { tag: control.tag, inputType: control.inputType },
+            alreadyUsed: ctx.valueLog.used(control.name || control.summary),
+            // #366: only a repeat into this same live field is refused (a reopened dialog's field is new),
+            // and never a literal the field's own prompt asks for ("Type CONFIRM to continue").
+            liveUsed: ctx.valueLog.liveUsed(control.name || control.summary),
+            prompt: [control.scope, control.heading, step.visibleText].filter((t): t is string => typeof t === "string" && t !== "").join("\n"),
+          }
         : {}),
     }));
   } catch (e) {

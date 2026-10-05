@@ -2,6 +2,7 @@ import type { Assertion, TargetDescriptor } from "@jevitate/recording";
 import { matchGlob } from "./feature/capability-scope.js";
 import type { CapturedRequest } from "./page-monitor.js";
 import { classifyRequest } from "./timing.js";
+import { describeStatusWithRpc, effectiveStatus } from "./rpc-status.js";
 
 /**
  * The goal mission's INDEPENDENT success oracle (#65): one or more checks, ALL of which must hold.
@@ -163,17 +164,17 @@ function nearMissHint(requests: readonly CapturedRequest[], method: string, path
   const sameMethodSimilarPath = m === "*" ? [] : pool.filter((r) => r.method === m && similarPath(r.path, pathGlob) && !matchGlob(pathGlob, r.path));
   const candidates = samePathOtherMethod.length > 0 ? samePathOtherMethod : sameMethodSimilarPath;
   if (candidates.length === 0) return null;
-  const groups = new Map<string, { method: string; path: string; status: number | null; count: number }>();
+  const groups = new Map<string, { method: string; path: string; status: string; count: number }>();
   for (const r of candidates) {
-    const key = `${r.method} ${r.path} ${r.status ?? "none"}`;
+    const status = describeStatusWithRpc(r);
+    const key = `${r.method} ${r.path} ${status}`;
     const g = groups.get(key);
-    if (g === undefined) groups.set(key, { method: r.method, path: r.path, status: r.status, count: 1 });
+    if (g === undefined) groups.set(key, { method: r.method, path: r.path, status, count: 1 });
     else g.count += 1;
   }
   const top = [...groups.values()].sort((a, b) => b.count - a.count)[0];
   if (top === undefined) return null;
-  const statusText = top.status === null ? "no response" : String(top.status);
-  return `saw ${top.method} ${top.path} → ${statusText} (${top.count}×)`;
+  return `saw ${top.method} ${top.path} → ${top.status} (${top.count}×)`;
 }
 
 /**
@@ -219,8 +220,12 @@ export function evaluateNetworkCheck(
       detail: `expected ${describeStatus(check.status)}, but the ${inFlight} matching request(s) were sent and are still awaiting a response`,
     };
   }
-  const seen = answered.map((r) => (r.status === null ? "no response" : String(r.status)));
-  const bad = answered.filter((r) => r.status === null || !statusMatches(r.status, check.status));
+  // #378: judged on the EFFECTIVE status — an HTTP 200 whose gRPC-web/Connect RPC failed is not a 2xx.
+  const seen = answered.map(describeStatusWithRpc);
+  const bad = answered.filter((r) => {
+    const status = effectiveStatus(r);
+    return status === null || !statusMatches(status, check.status);
+  });
   const waiting = inFlight === 0 ? "" : ` (${inFlight} more still awaiting a response)`;
   return bad.length === 0
     ? { check: spec, passed: true, detail: `${answered.length} matching request(s), status ${[...new Set(seen)].join(", ")}${waiting}` }

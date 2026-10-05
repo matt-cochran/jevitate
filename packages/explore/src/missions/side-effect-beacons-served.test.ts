@@ -14,7 +14,8 @@ useSkippingTime({ per: "all" });
  * #274 / #284 on a served page (real Chromium). A safe control — a button that toggles a user menu
  * — fires no write of its own, but on every click a third-party SDK posts telemetry to ITS origin
  * (`navigator.sendBeacon` to a csp-report endpoint, a Stripe.js-like `fetch` beacon) and the app's
- * own analytics posts to `/telemetry/collect`, which the target declares background
+ * own analytics posts to `/api/ux/hits` (a name #374's built-in bookkeeping check does not know),
+ * which the target declares background
  * (`--settle-ignore`). Before the fix the repeated-side-effect guard counted those beacons as the
  * menu's side effect and refused the second click ("repeated side effect refused: … already sent
  * POST https://<vendor>/csp-report → 200"), so the run could not reopen the menu.
@@ -47,7 +48,7 @@ const pageHtml = (): string => `<!doctype html><html><body>
     navigator.sendBeacon("http://localhost:${tpPort}/csp-report", JSON.stringify({ "csp-report": {} }));
     fetch("http://localhost:${tpPort}/6", { method: "POST", mode: "no-cors", body: "sig" }).catch(() => {});
     // The app's own analytics, declared background by the target.
-    fetch("/telemetry/collect", { method: "POST", body: "{}" }).catch(() => {});
+    fetch("/api/ux/hits", { method: "POST", body: "{}" }).catch(() => {});
   });
 </script>
 </body></html>`;
@@ -60,7 +61,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => tp.listen(0, "127.0.0.1", resolve));
   tpPort = (tp.address() as AddressInfo).port;
   app = createServer((req, res) => {
-    if (req.method === "POST" && req.url === "/telemetry/collect") {
+    if (req.method === "POST" && req.url === "/api/ux/hits") {
       telemetry += 1;
       res.writeHead(204).end();
       return;
@@ -115,7 +116,7 @@ describe("third-party / --settle-ignore beacons are not a control's side effect 
       // Controls: [0] Open user menu.
       const result = await run(
         [{ op: "click", target: "0" }, { op: "click", target: "0" }, { op: "click", target: "0" }, { op: "report" }],
-        { ignoreRequests: ["/telemetry/*"] },
+        { ignoreRequests: ["/api/ux/*"] },
       );
       expect(refusals(result)).toEqual([]);
       const clicks = result.transcript.filter((e) => e.op === "click");
@@ -138,7 +139,7 @@ describe("third-party / --settle-ignore beacons are not a control's side effect 
       const result = await run([{ op: "click", target: "0" }, { op: "click", target: "0" }, { op: "report" }]);
       const refused = refusals(result);
       expect(refused.length).toBeGreaterThanOrEqual(1);
-      expect(refused[0]).toContain("POST /telemetry/collect");
+      expect(refused[0]).toContain("POST /api/ux/hits");
       // The third-party beacons are never named as the control's side effect.
       expect(refused.join("\n")).not.toContain(`localhost:${tpPort}`);
     },

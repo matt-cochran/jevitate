@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import { snapshot, type Snapshot } from "./snapshot.js";
+import { PageNavigatingError, snapshot, type Snapshot } from "./snapshot.js";
 import { monitorFor, SETTLE_QUIET_MS, type SettleResult } from "./page-monitor.js";
 import { measurePageTiming, unreadablePageTiming, type PageTiming } from "./timing.js";
 import {
@@ -15,6 +15,7 @@ import { contentHash, clock } from "@jevitate/domain";
 import { clockBounded } from "./clock-bound.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { redactUrl } from "@jevitate/ai-core";
+import { busyOverlay } from "./status.js";
 import { resourceSettleFactor } from "@jevitate/playwright";
 
 /**
@@ -163,7 +164,10 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   const requestBoundMs = opts.requestBoundMs ?? ceiling / 2;
   const monitor = monitorFor(page);
   monitor.configure(opts.settleConfig);
-  const ignoreNoProgress = textMatcher(opts.hangConfig?.ignoreNoProgress);
+  const ignoreDeclared = textMatcher(opts.hangConfig?.ignoreNoProgress);
+  // #379: a declared pattern ("Preparing*") matches the indicator's description or its own words
+  // (the quoted text of `role=status "Preparing design directions…"`).
+  const ignoreNoProgress = (desc: string): boolean => ignoreDeclared(desc) || ignoreDeclared(/"(.*)"/.exec(desc)?.[1] ?? desc);
 
   // 1. Is the page's main thread answering at all? If not, nothing else can be read (every page
   //    API would block too): that is a hang of its own kind.
@@ -304,10 +308,51 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     actionAt: win.actionAt,
     settle,
     settleEndedAt,
+    waitedMs: win.waitedMs,
     ...(opts.timingConfig?.apiPrefixes === undefined ? {} : { apiPrefixes: opts.timingConfig.apiPrefixes }),
   });
   monitor.closeWindow(settleEndedAt, docId);
-  const snap = await snapshot(page, snapOpts);
+  // #372: a navigation that replaces the page while its controls are read (a client redirect on
+  // load, after a server redirect) is waited out with the same settle rule, and the read retried —
+  // bounded inside `snapshot` (its retries; their waits within one more render ceiling). A page that
+  // never stops navigating fails closed (`rendered: false`), never as a crash.
+  const read = (): Promise<Snapshot> =>
+    snapshot(page, {
+      ...snapOpts,
+      navigationWaitMs: Math.max(1, ceiling),
+      awaitNavigation: async (remainingMs) => {
+        await monitor.waitSettled({ quietMs, ceilingMs: Math.max(1, remainingMs) });
+      },
+    });
+  let snap: Snapshot;
+  try {
+    snap = await read();
+    // #379: no visible control while a busy/progress overlay is up (a fullscreen spinner, a
+    // `role=status` "Preparing…" that covers or replaces every control — occluded controls are
+    // dropped) is a job in progress, not an empty page: wait for it to clear within the rest of the
+    // ceiling, settle, and read again. Still up → `rendered: false`; the caller's job wait decides.
+    if (snap.controls.length === 0 && stuckBusy === null) {
+      const left = (): number => ceiling - (clock.now() - started);
+      if (left() > 0 && (await busyOverlay(page)) !== null) {
+        while (left() > 0 && !page.isClosed() && (await busyOverlay(page)) !== null) await clock.sleep(Math.min(250, Math.max(1, left())));
+        if (left() > 0 && !page.isClosed()) {
+          settle = await monitor.waitSettled({ quietMs, ceilingMs: Math.max(1, left()) });
+          snap = await read();
+        }
+      }
+    }
+  } catch (e) {
+    if (!(e instanceof PageNavigatingError)) throw e;
+    const url = redactUrl(page.url());
+    return {
+      rendered: false,
+      snapshot: { url: page.url(), controls: [], truncated: false, signature: contentHash({ url, navigating: true }) },
+      settle,
+      timing,
+      hang: null,
+      reason: `${e.message} within ${ceiling}ms`,
+    };
+  }
 
   // 4. Classify (pure rule) — a hang is evidence, never a guess.
   const evidence = pendingEvidence(settle.pending, settleEndedAt);

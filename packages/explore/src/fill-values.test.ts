@@ -294,3 +294,136 @@ describe("fill — the goal's instruction is never a value to enter (#338)", () 
     expect(checkFieldValue("the meeting moved to Friday", TEXT, "Message", "Write a note that the meeting moved to Friday")).toBeNull();
   });
 });
+
+describe("fill — a value built from what the goal dictates is not an echo (#371)", () => {
+  // Recorded (#371, 0.5.0): every answer was refused "it restates the goal (83% of its words are the goal's)".
+  const BARBER_GOAL =
+    "Start a new site for a barber shop, choose that they don't have a website, answer any remaining question with a short description of the barber shop (classic cuts, hot-towel shaves, walk-ins welcome), then click Prepare design directions and wait for the design directions to appear.";
+  const BARBER_ANSWER = "Classic barber shop offering classic cuts, hot-towel shaves, and walk-ins welcome for everyone.";
+
+  it("the barber-shop answer passes the echo and instruction checks, and is typed", async () => {
+    expect(echoesGoal(BARBER_ANSWER, BARBER_GOAL)).toBeNull();
+    expect(checkFieldValue(BARBER_ANSWER, TEXT, "Your answer", BARBER_GOAL)).toBeNull();
+    const { gen } = valueGen(BARBER_ANSWER);
+    const r = await new FillHelper(gen).valueFor({ fieldLabel: "Your answer", goal: BARBER_GOAL, visibleContext: "", field: TEXT });
+    expect(r).toEqual({ text: BARBER_ANSWER, source: "model" });
+  });
+
+  it("the issue's bakery repro, and the other value lead-ins (describing / saying / about), pass", () => {
+    const bakery = "type a short description of a bakery (sourdough bread, morning buns, custom cakes) into Your answer and send it";
+    expect(checkFieldValue("A neighbourhood bakery with sourdough bread, morning buns and custom cakes made to order.", TEXT, "Your answer", bakery)).toBeNull();
+    const describing = "Fill in the bio describing a family-run bakery that bakes sourdough bread and morning buns every day, then save it";
+    expect(checkFieldValue("A family-run bakery that bakes sourdough bread and morning buns every day.", TEXTAREA, "Bio", describing)).toBeNull();
+    const about = "Post a message about the new sourdough bread and the morning buns we bake daily, then close the chat";
+    expect(checkFieldValue("We now bake new sourdough bread and morning buns daily!", TEXTAREA, "Message", about)).toBeNull();
+  });
+
+  it("copying the goal's instruction prose is still refused, beside a value span", () => {
+    expect(checkFieldValue("answer any remaining question with a short description", TEXTAREA, "Your answer", BARBER_GOAL)).toMatch(
+      /echoes the goal|goal's instruction/,
+    );
+    expect(checkFieldValue("then click Prepare design directions and wait for the design directions", TEXTAREA, "Your answer", BARBER_GOAL)).toMatch(
+      /echoes the goal|goal's instruction/,
+    );
+    expect(checkFieldValue(BARBER_GOAL, TEXTAREA, "Your answer", BARBER_GOAL)).toMatch(/echoes the goal/);
+    // An `about` span ends at the next instruction: "test it …" after it is still the goal's instruction (#338).
+    const faq = "Add an answer about refund timing and test it with a sample question.";
+    expect(checkFieldValue("Test it with a sample question", TEXTAREA, "Answer", faq)).toMatch(/goal's instruction/);
+    expect(checkFieldValue("Refunds reach your card within five business days.", TEXTAREA, "Answer", faq)).toBeNull();
+  });
+});
+
+describe("fill — a repeat is refused only into the same live field (#366)", () => {
+  const SUSPEND_GOAL =
+    "Suspend the agency (type SUSPEND and a reason), check it shows Suspended, then Reinstate it (type REINSTATE and a reason), then do the same for the second agency.";
+  const confirmAsk = (helper: FillHelper, log: FieldValueLog, label: string, prompt = "") =>
+    helper.valueFor({
+      fieldLabel: label,
+      goal: SUSPEND_GOAL,
+      visibleContext: "",
+      field: TEXT,
+      alreadyUsed: log.used(label),
+      liveUsed: log.liveUsed(label),
+      prompt,
+    });
+
+  it("REINSTATE typed twice into a remounted confirm dialog's empty field passes", async () => {
+    expect(goalListsSeveral(SUSPEND_GOAL)).toBe(true);
+    const log = new FieldValueLog();
+    const label = "Confirmation";
+    log.observe([{ label, value: "" }]);
+    log.typed(label, "REINSTATE");
+    log.submitted();
+    log.observe([]); // the dialog closed
+    log.observe([{ label, value: null }]); // reopened: a new, empty field
+    expect(log.used(label)).toEqual(["REINSTATE"]);
+    expect(log.liveUsed(label)).toEqual([]);
+    const { gen } = valueGen("REINSTATE");
+    const r = await confirmAsk(new FillHelper(gen), log, label);
+    expect(r).toEqual({ text: "REINSTATE", source: "model" });
+  });
+
+  it("a literal the field's label or prompt asks for is exempt, even into the same live field", async () => {
+    const log = new FieldValueLog();
+    for (const [label, prompt] of [
+      ["Type REINSTATE to confirm", ""],
+      ["Confirmation", 'alertdialog "Reinstate agency"\nTo confirm, type "REINSTATE" below.'],
+      ["Confirmation", "Enter REINSTATE"],
+    ] as const) {
+      log.typed(label, "REINSTATE");
+      log.submitted();
+      const { gen } = valueGen("REINSTATE");
+      const r = await confirmAsk(new FillHelper(gen), log, label, prompt);
+      expect(r.text).toBe("REINSTATE");
+    }
+  });
+
+  it("a true repeat into the same live field is still refused", async () => {
+    const log = new FieldValueLog();
+    log.observe([{ label: "Name", value: "" }]);
+    log.typed("Name", "Dana Ruiz");
+    log.submitted();
+    log.observe([{ label: "Name", value: "" }]); // the form stayed on the page (cleared, never left)
+    expect(log.liveUsed("Name")).toEqual(["Dana Ruiz"]);
+    const { gen } = valueGen("Dana Ruiz");
+    const r = await new FillHelper(gen).valueFor({
+      fieldLabel: "Name",
+      goal: "Add two customers as private participant contacts.",
+      visibleContext: "",
+      field: TEXT,
+      alreadyUsed: log.used("Name"),
+      liveUsed: log.liveUsed("Name"),
+      prompt: "Type a name for the participant",
+    });
+    expect(r.text).toBeNull();
+    expect(r.rejected).toMatch(/repeats "Dana Ruiz", already submitted into this field/);
+  });
+
+  it("a field back with its old value is the same instance; a goal-listed item is refused again while the next is unused", async () => {
+    const log = new FieldValueLog();
+    log.observe([{ label: "Name", value: "" }]);
+    log.typed("Name", "Dana Ruiz");
+    log.submitted();
+    log.observe([]);
+    log.observe([{ label: "Name", value: "Dana Ruiz" }]);
+    expect(log.liveUsed("Name")).toEqual(["Dana Ruiz"]);
+    // Remounted empty, but the goal lists the items for this field and the next is still unused.
+    const listed = new FieldValueLog();
+    listed.typed("Name", "Dana Ruiz");
+    listed.submitted();
+    listed.observe([]);
+    listed.observe([{ label: "Name", value: "" }]);
+    expect(listed.liveUsed("Name")).toEqual([]);
+    const { gen } = valueGen("Dana Ruiz");
+    const r = await new FillHelper(gen).valueFor({
+      fieldLabel: "Name",
+      goal: 'Add two customers: Name "Dana Ruiz" and Name "Lee Park".',
+      visibleContext: "",
+      field: TEXT,
+      alreadyUsed: listed.used("Name"),
+      liveUsed: listed.liveUsed("Name"),
+    });
+    // The goal-stated pre-pass already takes the next listed item, without the model.
+    expect(r).toEqual({ text: "Lee Park", source: "goal" });
+  });
+});

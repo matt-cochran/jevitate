@@ -74,6 +74,13 @@ mission and reading the result honestly.
   "<goal>" --success <check> --id <journey-id> --name "<name>" [--storage-state <file>] --real
   --json` writes an UNPROMOTED Journey whose last step asserts `--success`. Promotion
   (`jevitate journey promote <id>`) is the human's decision.
+  Each take is the same goal run as `explore`, so pass the same run-shaping flags the goal run
+  needed (`--secret-field`/`--totp`, `cmd:` sources with `--allow-secret-cmd`, `--type-fixture`,
+  `--fixture`, `--success-when`, `--allow-vacuous-checks`, `--dialogs`, `--reply-wait-ms`,
+  `--viewport`/`--device`/`--geolocation`, …). A bound secret field becomes a secret Journey param
+  (`secret1`). A `not-reached` result carries `discovery` (stop reason, checks, `resultPath`,
+  `transcriptPath`, `recordingPaths`, `screenshotsDir`): read the transcript before retrying. A
+  `reloadThen:` check is refused (64) before any browser: author with its inner check.
 
 ## MCP
 

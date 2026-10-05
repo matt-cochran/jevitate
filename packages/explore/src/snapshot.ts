@@ -4,6 +4,7 @@ import type { TargetDescriptor } from "@jevitate/recording";
 import { contentHash, clock } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
+import { MESSAGE_FIELD, MESSAGE_INPUT_TYPES, PAIRED_SUBMIT_DISTANCE, SUBMIT_NAME, composerEvidence } from "./composer-evidence.js";
 import { redactControl, redactUrl } from "./redact.js";
 import { TEMPORAL_FORMATS, isTemporalInputType } from "./temporal-value.js";
 
@@ -113,6 +114,13 @@ export interface Control {
    */
   readonly richText?: boolean;
   /**
+   * #370: for a message-named (`MESSAGE_FIELD`) text field only — whether the page shows
+   * conversational evidence around it (a transcript, or a Send control paired with it; see
+   * `composerEvidence`). Only such a field is a chat composer (`sendable`); absent on every other
+   * control, and on controls built outside `snapshot`.
+   */
+  readonly conversational?: boolean;
+  /**
    * True when the element's own box is clipped to near-nothing or pulled far off-screen by a
    * large NEGATIVE offset — the classic sr-only "skip to content" clipping idiom (#75, #161).
    * Mirrors `act.ts`'s `isClippedOrPulledOffscreen` (the gate's own click-time check), computed
@@ -156,6 +164,51 @@ export interface SnapshotOptions {
    * stall watchdog. Default `SNAPSHOT_BUDGET_MS`.
    */
   readonly budgetMs?: number;
+  /**
+   * #372: re-reads after a navigation replaced the page mid-read (an "execution context destroyed"
+   * error). Default `NAVIGATION_RETRIES`; past it the read fails with `PageNavigatingError`.
+   */
+  readonly navigationRetries?: number;
+  /** #372: bound (ms) on all the navigation waits of one snapshot. Default `NAVIGATION_WAIT_MS`. */
+  readonly navigationWaitMs?: number;
+  /**
+   * #372: how to wait for the navigation that interrupted a read to settle, given the time left
+   * (ms). Default: the new document's `load`. `perceive` passes its shared settle rule.
+   */
+  readonly awaitNavigation?: (remainingMs: number) => Promise<void>;
+}
+
+/** Re-reads a snapshot gets after a navigation interrupted it (#372). */
+export const NAVIGATION_RETRIES = 3;
+
+/** Default bound (ms) on the navigation waits of one snapshot (#372) — the default render ceiling. */
+export const NAVIGATION_WAIT_MS = 15_000;
+
+/**
+ * #372: the page kept navigating — every read of its controls (`NAVIGATION_RETRIES` re-reads after
+ * waiting for the navigation to settle) was cut off by another navigation. A typed signal the
+ * caller turns into a fail-closed outcome; never an engine crash.
+ */
+export class PageNavigatingError extends Error {
+  override readonly name = "PageNavigatingError";
+  constructor(
+    readonly url: string,
+    readonly attempts: number,
+    cause: unknown,
+  ) {
+    super(`the page kept navigating: its controls could not be read in ${attempts} attempts (last at ${redactUrl(url)})`, { cause });
+  }
+}
+
+/**
+ * #372: true when `e` is a page read cut off because a NAVIGATION replaced the document (its
+ * execution context was destroyed) — a signal to wait and re-read. A closed page, context or
+ * browser ("Target page, context or browser has been closed") is NOT this: it propagates.
+ */
+export function isNavigationInterruption(e: unknown): boolean {
+  const message = e instanceof Error ? e.message : String(e);
+  if (/Target page, context or browser has been closed|Target closed/i.test(message)) return false;
+  return /Execution context was destroyed|Cannot find context with specified id/.test(message);
 }
 
 /** Default bound (ms) on reading a snapshot's controls (#278). */
@@ -634,7 +687,33 @@ function readCheapNames(els: Element[]): string[] {
   });
 }
 
+/**
+ * Reads the page's controls. #372: the ONE place a read cut off by a navigation (a server redirect
+ * then a client `location.replace` on load) is retried — every caller (`perceive`, so every
+ * mission; invariants; screenshots) gets it. Bounded: `navigationRetries` re-reads, all waits within
+ * `navigationWaitMs`; then `PageNavigatingError`. Any other error propagates unchanged.
+ */
 export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snapshot> {
+  const retries = opts?.navigationRetries ?? NAVIGATION_RETRIES;
+  const deadline = clock.now() + (opts?.navigationWaitMs ?? NAVIGATION_WAIT_MS);
+  const awaitNavigation =
+    opts?.awaitNavigation ??
+    (async (remainingMs: number): Promise<void> => {
+      await page.waitForLoadState("load", { timeout: Math.max(1, remainingMs) }).catch(() => undefined);
+    });
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await readSnapshot(page, opts);
+    } catch (e) {
+      if (!isNavigationInterruption(e)) throw e;
+      const remaining = deadline - clock.now();
+      if (attempt > retries || remaining <= 0 || page.isClosed()) throw new PageNavigatingError(page.url(), attempt, e);
+      await awaitNavigation(remaining);
+    }
+  }
+}
+
+async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapshot> {
   const maxCandidates = opts?.maxCandidates ?? DEFAULT_BOUNDS.maxCandidates;
   const url = page.url();
   const viewport = page.viewportSize();
@@ -718,6 +797,15 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
           ? await handle.evaluate(readControlValue)
           : null;
       const facts: DescribedFacts = { ...raw, value };
+      // #370: a message-named text field is a composer only with conversational evidence on the page.
+      const textEntry =
+        raw.tag === "textarea" || (raw.tag === "input" && MESSAGE_INPUT_TYPES.has(raw.inputType ?? "")) || raw.role === "textbox";
+      const conversational =
+        textEntry && MESSAGE_FIELD.test(raw.name)
+          ? await handle
+              .evaluate(composerEvidence, { submit: SUBMIT_NAME.source, distance: PAIRED_SUBMIT_DISTANCE })
+              .catch(() => false)
+          : null;
       // computeDescriptor validates against the live page and throws if nothing
       // resolves uniquely — an un-describable control is dropped, never guessed.
       const computed = await computeDescriptor(page, handle, { primaryOnly: true });
@@ -749,11 +837,14 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         step: facts.step,
         landmark: facts.landmark,
         ...(facts.richText ? { richText: true } : {}),
+        ...(conversational === null ? {} : { conversational }),
         ...(facts.clippedOffscreen ? { clippedOffscreen: true } : {}),
       };
       controls.push(redactControl(control, opts?.secrets ?? []));
       keptFacts.push(facts);
-    } catch {
+    } catch (e) {
+      // #372: the document itself was replaced — the whole read is stale; `snapshot` re-reads.
+      if (isNavigationInterruption(e)) throw e;
       // not describable / detached mid-read — skip it.
     } finally {
       await handle.dispose().catch(() => undefined);

@@ -116,3 +116,28 @@ describe("network success checks (#65)", () => {
     );
   });
 });
+
+describe("#378 responseStatus judges a gRPC-web/Connect RPC's effective status", () => {
+  const rpc = (code: number, name: string): CapturedRequest => ({
+    ...req("POST", "/pkg.Svc/Method", 200, false, { contentType: "application/grpc-web+proto" }),
+    rpcStatus: { protocol: "grpc-web", code, name },
+  });
+  const check = (status: { class: number } | { code: number }) =>
+    ({ kind: "responseStatus", method: "POST", pathGlob: "/pkg.Svc/Method", status }) as const;
+
+  it("HTTP 200 + grpc-status 13 is not a 2xx (nor a 200); it is a 5xx", () => {
+    expect(evaluateNetworkCheck(check({ class: 2 }), [rpc(13, "internal")])).toEqual({
+      check: "responseStatus:POST /pkg.Svc/Method=2xx",
+      passed: false,
+      detail: "expected 2xx, got 200 (grpc-status 13 internal) for 1 matching request(s)",
+    });
+    expect(evaluateNetworkCheck(check({ code: 200 }), [rpc(13, "internal")]).passed).toBe(false);
+    expect(evaluateNetworkCheck(check({ class: 5 }), [rpc(13, "internal")]).passed).toBe(true);
+    expect(evaluateNetworkCheck(check({ class: 4 }), [rpc(9, "failed_precondition")]).passed).toBe(true);
+  });
+
+  it("an OK RPC still holds =2xx; requestMade is unaffected", () => {
+    expect(evaluateNetworkCheck(check({ class: 2 }), [rpc(0, "ok")])).toMatchObject({ passed: true, detail: "1 matching request(s), status 200" });
+    expect(evaluateNetworkCheck({ kind: "requestMade", method: "POST", pathGlob: "/pkg.Svc/Method" }, [rpc(13, "internal")]).passed).toBe(true);
+  });
+});

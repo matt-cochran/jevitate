@@ -137,7 +137,8 @@ export async function handleMessage(ctx: RunContext, step: ActStep, op: Decision
       ctx.replies.add(snap.url, reply.text);
     }
     ctx.awaitingReply = !reply.received;
-    ctx.busyWaitedMs = reply.waitedMs;
+    ctx.busyWaitedMs = 0;
+    ctx.replyWaitedMs = reply.waitedMs;
     ctx.lastTurn = { baseline, sent: message, sentAt: at, background: sendBackground };
     ctx.offerBaseline = before;
     ctx.history.push(

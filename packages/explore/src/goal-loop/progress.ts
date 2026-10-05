@@ -4,7 +4,13 @@
  * run gets one last-chance turn before it stops. Moved out of `explore.ts` unchanged (#232).
  */
 
+import { createHash } from "node:crypto";
+import { scrollPositionAt } from "../act.js";
+import { readPageText } from "../conversation.js";
 import { sampleHeap } from "../crash-report.js";
+import { describeCycle } from "../loop-cycle.js";
+import { monitorFor } from "../page-monitor.js";
+import { backgroundEndpoints, writesStartedSince } from "../stuck-actions.js";
 import { hangRoute, probeResponsive, type HangSignal } from "../hang.js";
 import { assertTargetAnswering } from "../mission-failure.js";
 import { HANG_PROBE_MS, perceive } from "../perceive.js";
@@ -39,11 +45,15 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   // the target (A→B→A→B…) used to change the signature every time and reset the bound forever. A
   // scroll that reveals a NEW state is still progress and does not add to it; any other action
   // ends the streak.
-  const scrolledMoved = (ctx.lastActedOp === "scroll_down" || ctx.lastActedOp === "scroll_up") && ctx.lastScrollMoved;
-  if (!scrolledMoved) {
+  // #367 — a scroll that did NOT move is part of the streak too: down (moved), down (did not move),
+  // up (moved), up (did not move)… used to restart the bound at every unmoved scroll, so each moved
+  // one counted as progress again and the run scrolled to its decision cap.
+  const scrolled = ctx.lastActedOp === "scroll_down" || ctx.lastActedOp === "scroll_up";
+  const scrolledMoved = scrolled && ctx.lastScrollMoved;
+  if (!scrolled) {
     ctx.movingScrolls = 0;
     ctx.scrollStreakSignatures.clear();
-  } else {
+  } else if (scrolledMoved) {
     if (ctx.scrollStreakSignatures.size === 0 && ctx.movingScrollsSignature !== null) ctx.scrollStreakSignatures.add(ctx.movingScrollsSignature);
     if (ctx.scrollStreakSignatures.has(snap.signature)) ctx.movingScrolls += 1;
     else ctx.scrollStreakSignatures.add(snap.signature);
@@ -146,8 +156,41 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
       return "stop";
     }
   }
+  // #367 — a loop the signature cannot show: the run alternates between at most two actions and two
+  // page states (A→B→A→B…, a disclosure toggled open and shut, scrolls flipping between the same two
+  // positions) with no request sent — every step "changed" the page, none made progress.
+  const cycle = await noteCycle(ctx, snap);
+  if (cycle !== null) {
+    ctx.history.push(cycle);
+    ctx.incomplete = cycle;
+    ctx.stop = "no-progress";
+    return "stop";
+  }
   // Progress was made: a later stuck episode gets its own last chance.
   if (ctx.noProgress.streak === 0) ctx.lastChanceGiven = false;
   ctx.seen.add(snap.signature);
   return "next";
+}
+
+/**
+ * #367: feeds the step just taken to the loop-cycle detector — its action, the page state it landed
+ * on (signature, visible-text hash, scroll position) and whether it sent a write (background traffic
+ * excluded) — and returns the no-progress reason once the run is going round a cycle, else null.
+ */
+async function noteCycle(ctx: RunContext, snap: Perceived["snap"]): Promise<string | null> {
+  const step = ctx.cycleAction;
+  ctx.cycleAction = null;
+  const mark = ctx.cycleMark;
+  ctx.cycleMark = ctx.now();
+  if (step === null) return null;
+  const monitor = monitorFor(ctx.page);
+  const background = backgroundEndpoints(monitor, mark, ctx.turnWrites);
+  const wrote = writesStartedSince(monitor, mark, ctx.isWrite).some((k) => !background.has(k));
+  const text = await readPageText(ctx.page).catch(() => "");
+  const viewport = ctx.page.viewportSize();
+  const pt = { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
+  const scroll = await ctx.page.evaluate(scrollPositionAt, pt).catch(() => null);
+  const state = `${snap.signature}|${createHash("sha1").update(text).digest("hex").slice(0, 16)}|${scroll ?? "?"}`;
+  const verdict = ctx.cycles.note({ ...step, state, progress: wrote });
+  return verdict === null ? null : describeCycle(verdict);
 }
