@@ -30,12 +30,16 @@ export interface FiredStep {
 export async function settleMisuseStep(ctx: HuntState, ep: EpisodeState, turn: Turn, s: MisuseStep, fired: FiredStep): Promise<"stop" | "next"> {
   const { ran, planning } = turn;
   const { actedOn, firedAt, result, reason, entry, step } = fired;
+  // A settled step is judged on what it produced: wait (bounded) for the requests it sent to come
+  // back first. Read mid-flight, a save the server rejects still shows the previous save's "Saved",
+  // and a declared invariant reports a violation no replay reproduces. A page that never settles
+  // is left to the hang check that follows the verdict.
+  await monitorFor(ctx.sessions.page).waitSettled({ ceilingMs: 5_000 }).catch(() => undefined);
   // #303 (opt-in): what this settled action changed — on its transcript step, and kept as
   // evidence for a defect first seen at this step.
   if (ctx.deltaArmed !== null) {
     const dl = ctx.deltaArmed;
     ctx.deltaArmed = null;
-    await monitorFor(ctx.sessions.page).waitSettled({ ceilingMs: 5_000 }).catch(() => undefined);
     const d = await dl.perceived(normalizeRoute(redactUrl(ctx.sessions.page.url()))).catch(() => null);
     if (d !== null) {
       ctx.stepDeltas.set(step, d.delta);
