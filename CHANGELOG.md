@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [0.6.0] – unreleased
+## [0.6.0] – 2026-10-05
 
 0.6.0 fixes what a release-gate sweep of goal runs on 0.5.0 found. Runs stop on a click or scroll
 loop instead of spending the whole decision budget, and say which action actually blocked them.
