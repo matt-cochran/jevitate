@@ -15,11 +15,11 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
   if (ctx.replyGoal) {
     // #200 — a reply still on its way is listened for (what is left of the reply wait) before
     // the report is judged; then the current page's post-send text is taken in.
-    if (ctx.awaitingReply && ctx.lastTurn !== null && ctx.busyWaitedMs < ctx.replyWaitMs) {
+    if (ctx.awaitingReply && ctx.lastTurn !== null && ctx.replyWaitedMs < ctx.replyWaitMs) {
       const t0 = ctx.now();
-      const listen = ctx.replyWaitMs - ctx.busyWaitedMs;
+      const listen = ctx.replyWaitMs - ctx.replyWaitedMs;
       const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen, quietMs: ctx.replyQuietMs });
-      ctx.busyWaitedMs += ctx.now() - t0;
+      ctx.replyWaitedMs += ctx.now() - t0;
       if (reply.received) {
         ctx.conversation.latestReply = reply.text;
         ctx.replies.add(snap.url, reply.text);

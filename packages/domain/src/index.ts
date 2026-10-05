@@ -13,3 +13,4 @@ export * from "./issue-filing.js";
 export * from "./mission-result.js";
 export * from "./safe-path.js";
 export * from "./clock.js";
+export * from "./external-scheme.js";

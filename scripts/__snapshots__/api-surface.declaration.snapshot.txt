@@ -163,7 +163,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (109 exports)
+# @jevitate/domain (112 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
@@ -184,6 +184,7 @@
   EnvironmentDegraded: type-alias
   EnvironmentDegradedSchema: variable
   evaluateGate: function
+  externalSchemeOf: function
   FakeClock: class
   FakeClockOptions: interface
   fileDraft: function
@@ -207,6 +208,7 @@
   installClock: function
   InteractionPolicy: type-alias
   isBrokenRun: function
+  isExternalSchemeUrl: function
   isGoalOutcome: function
   IssueDraft: interface
   IssueFilerPort: interface
@@ -272,13 +274,15 @@
   TimingProfile: interface
   TypingModel: type-alias
   UnsafeNameError: class
+  urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (574 exports)
+# @jevitate/explore (605 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
   ActArgs: interface
+  ACTION_CAUSED_MS: variable
   ActionDelta: interface
   ActionDeltas: class
   ActionDeltasOptions: interface
@@ -316,6 +320,10 @@
   authorJourney: function
   AuthorJourneyRequest: interface
   AuthorJourneyResult: type-alias
+  AuthorTake: interface
+  AuthorTakeCounts: interface
+  AuthorTakeDiagnostics: interface
+  AuthorTakeRunner: type-alias
   autoDecidePostdoc: function
   awaitWrites: function
   BlockedWrite: interface
@@ -431,6 +439,7 @@
   describeExpected: function
   describeFailure: function
   describeStatus: function
+  describeStatusWithRpc: function
   describeUnreachable: function
   DESTRUCTIVE: variable
   detectClipping: function
@@ -450,6 +459,7 @@
   draftForHang: function
   echoesGoal: function
   editCandidates: function
+  effectiveStatus: function
   EMPTY_SETTLE_GRACE_MS: variable
   emptyRecording: function
   endpointOf: function
@@ -508,8 +518,10 @@
   GoalBasedOutcome: type-alias
   GoalBasedResult: interface
   goalListsSeveral: function
+  goalResultDiagnostics: function
   groundAnswer: function
   groupStepSignals: function
+  GRPC_CODE_NAMES: variable
   HANG_PROBE_MS: variable
   HangAttempt: interface
   HangConfig: interface
@@ -559,15 +571,18 @@
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isBookkeepingRequest: function
   isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
   isInScope: function
   isLoginLikeUrl: function
   isNavControl: function
+  isNavigationInterruption: function
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
   isPageUnresponsive: function
+  isRecurringRead: function
   isResourceLoadEcho: function
   isSecretLike: function
   isTargetUnresponsive: function
@@ -597,6 +612,7 @@
   MAX_QUIET_WAITS: variable
   MAX_REPEAT_TYPE_SIGNALS: variable
   MAX_REPORT_REJECTIONS: variable
+  MAX_RPC_BODY_BYTES: variable
   MAX_SIDE_EFFECTS: variable
   measurePageTiming: function
   MESSAGE_FIELD: variable
@@ -610,6 +626,8 @@
   MisuseStep: interface
   MisuseStrategy: type-alias
   monitorFor: function
+  NAVIGATION_RETRIES: variable
+  NAVIGATION_WAIT_MS: variable
   NavigationTiming: interface
   NeverResponseHit: interface
   newIdentityToken: function
@@ -643,13 +661,17 @@
   PageFacts: interface
   PageHeadings: interface
   PageMonitor: class
+  PageNavigatingError: class
   pagesContext: function
   PageSignalCollector: class
   PageTiming: interface
   PageTimingStat: interface
   PAID: variable
   parseAria: function
+  parseConnectEndStream: function
+  parseConnectUnaryError: function
   parseFirstNumber: function
+  parseGrpcWebTrailer: function
   parseInterceptor: function
   parseNumbers: function
   parseSecretField: function
@@ -673,6 +695,8 @@
   ReadOnlyMode: type-alias
   recordCoverageHang: function
   recordingStepCount: function
+  RECURRING_MIN_COMPLETIONS: variable
+  RECURRING_WINDOW_MS: variable
   redactAriaLine: function
   redactContext: other
   redactControl: function
@@ -718,6 +742,15 @@
   resolveSecretFieldValue: function
   routeOf: function
   RouteScopeSource: type-alias
+  RPC_CONTENT: variable
+  RPC_TRAILER_READ_MS: variable
+  rpc5xxSignalOf: function
+  rpcHttpEquivalent: function
+  RpcResponseLike: interface
+  RpcStatus: interface
+  rpcStatusFromBody: function
+  rpcStatusFromHeaders: function
+  rpcStatusOfResponse: function
   runAdversarialMission: function
   RunAnswer: interface
   runFeatureMission: function
@@ -734,6 +767,7 @@
   scopeGlobs: function
   scopePredicate: function
   ScopeUnderivableError: class
+  screenState: function
   scrollPositionAt: function
   SecretCommandRunner: type-alias
   SecretField: interface

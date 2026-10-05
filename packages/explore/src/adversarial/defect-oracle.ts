@@ -1,8 +1,8 @@
 import type { Page, Request } from "playwright";
 import { redactUrl } from "@jevitate/ai-core";
-import { http5xxSignalOf, requestHeadersOf } from "../http-5xx.js";
+import { http5xxSignalOf, requestHeadersOf, rpc5xxSignalOf, type Http5xxSignal } from "../http-5xx.js";
 import { FirstPartyOrigins } from "../third-party.js";
-import { clock } from "@jevitate/domain";
+import { clock, isExternalSchemeUrl } from "@jevitate/domain";
 
 /**
  * The adversarial mission's TRUSTED HARD-SIGNAL defect oracle (spec §3.1/§9).
@@ -211,13 +211,27 @@ export class PageSignalCollector {
       noteResponse(response.status(), redactUrl(response.url()));
       // The shared HTTP 5xx rule (#208): the same signal every strategy records.
       const request = response.request();
-      const signal = http5xxSignalOf(response, firstParty, firstParty === undefined ? undefined : requestHeadersOf(request), methodOf(request));
-      if (signal === null) return;
-      const started = requestStarted.get(request);
-      if (started !== undefined) this.startedAt.set(signal, started);
-      this.buffer.push(signal);
+      const headers = firstParty === undefined ? undefined : requestHeadersOf(request);
+      const push = (signal: Http5xxSignal): void => {
+        const started = requestStarted.get(request);
+        if (started !== undefined) this.startedAt.set(signal, started);
+        this.buffer.push(signal);
+      };
+      const signal = http5xxSignalOf(response, firstParty, headers, methodOf(request));
+      if (signal !== null) {
+        push(signal);
+        return;
+      }
+      // #378: an HTTP 200 gRPC-web/Connect RPC that failed server-side is the same hard signal.
+      void rpc5xxSignalOf(response, firstParty, headers, methodOf(request)).then((s) => {
+        if (s !== null) push(s);
+      });
     });
     page.on("requestfailed", (request) => {
+      // #375: an `sms:`/`tel:`/`mailto:`/app-deep-link navigation is handed to the OS, never fetched;
+      // headless Chromium (no handler) reports it as ERR_ABORTED. Not a request of the system under
+      // test — decided on the ORIGINAL url's scheme (redaction would hide it).
+      if (isExternalSchemeUrl(request.url())) return;
       const errorText = request.failure()?.errorText ?? "request failed";
       if (errorText === ERR_ABORTED) {
         // A response was already received: the client aborted after reading it (connect-web/gRPC-web).
