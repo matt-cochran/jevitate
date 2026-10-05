@@ -332,6 +332,31 @@ export class RequestCapture {
   }
 }
 
+/**
+ * #383: a read (GET/HEAD) the page starts on its own more than this long after the run's last action
+ * was not caused by it: the page's own background activity (a first poll, a refresh timer), never
+ * the app working on what the run did. Writes always count.
+ */
+export const ACTION_CAUSED_MS = 1_500;
+const isRead = (r: Pick<InflightRequest, "method">): boolean => ["GET", "HEAD"].includes(r.method.toUpperCase());
+
+/** #383: how far back, and how often, a read must have completed to count as the page's own poll. */
+export const RECURRING_WINDOW_MS = 30_000;
+export const RECURRING_MIN_COMPLETIONS = 2;
+
+/**
+ * #383: is `r` (in flight) a recurring read — a GET/HEAD whose method + path completed at least
+ * {@link RECURRING_MIN_COMPLETIONS} times among `recent`? Query strings are ignored (a cache-buster).
+ */
+export function isRecurringRead(r: Pick<InflightRequest, "method" | "url">, recent: readonly Pick<CompletedRequest, "method" | "url">[]): boolean {
+  const method = r.method.toUpperCase();
+  if (!isRead(r)) return false;
+  const path = pathOf(r.url);
+  let n = 0;
+  for (const c of recent) if (c.method.toUpperCase() === method && pathOf(c.url) === path && ++n >= RECURRING_MIN_COMPLETIONS) return true;
+  return false;
+}
+
 function pathOf(url: string): string {
   try {
     return new URL(url).pathname;
@@ -557,6 +582,21 @@ export class PageMonitor {
     for (const [r] of this.#inflight) if (this.#ignore(r.url())) this.#background.set(r, "ignored");
   }
 
+  /**
+   * #383: pending work minus the page's own polling — an in-flight read (GET/HEAD) whose method and
+   * path already completed {@link RECURRING_MIN_COMPLETIONS} times in the last
+   * {@link RECURRING_WINDOW_MS} is a periodic poll (a balance, a notification count), not the app
+   * working on what the run did; so is a read the page started on its own more than
+   * {@link ACTION_CAUSED_MS} after the run's last action. A write always counts. What a quiet `wait`
+   * asks (#241).
+   */
+  pendingWork(): InflightRequest[] {
+    const now = this.#now();
+    const recent = this.#completed.filter((c) => c.endedAt >= now - RECURRING_WINDOW_MS);
+    const since = this.#lastActionAt;
+    return this.pending().filter((r) => !isRecurringRead(r, recent) && !(isRead(r) && since !== null && r.startedAt > since + ACTION_CAUSED_MS));
+  }
+
   /** Requests that are pending WORK: long-lived connections and background requests excluded. */
   pending(): InflightRequest[] {
     return [...this.#inflight.entries()]
@@ -641,6 +681,8 @@ export class PageMonitor {
   // ---- the timing window: from one perception to the next (owner ruling 6) ----
   #windowStart: number | null = null;
   #actionAt: number | null = null;
+  /** #383: the run's most recent action, kept across windows (what "caused by the run" is measured from). */
+  #lastActionAt: number | null = null;
   #lastDocId: string | null = null;
   /** #368: time spent since the action inside a wait the run chose (a reply wait, a job wait). */
   #waitedMs = 0;
@@ -649,6 +691,7 @@ export class PageMonitor {
   /** Called by `act()` when it dispatches a page-changing action: the start of a transition. */
   markAction(): void {
     this.#actionAt = this.#now();
+    this.#lastActionAt = this.#actionAt;
     this.#waitedMs = 0;
   }
 

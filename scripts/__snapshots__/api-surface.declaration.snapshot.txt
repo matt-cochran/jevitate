@@ -277,11 +277,12 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (601 exports)
+# @jevitate/explore (605 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
   ActArgs: interface
+  ACTION_CAUSED_MS: variable
   ActionDelta: interface
   ActionDeltas: class
   ActionDeltasOptions: interface
@@ -581,6 +582,7 @@
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
   isPageUnresponsive: function
+  isRecurringRead: function
   isResourceLoadEcho: function
   isSecretLike: function
   isTargetUnresponsive: function
@@ -693,6 +695,8 @@
   ReadOnlyMode: type-alias
   recordCoverageHang: function
   recordingStepCount: function
+  RECURRING_MIN_COMPLETIONS: variable
+  RECURRING_WINDOW_MS: variable
   redactAriaLine: function
   redactContext: other
   redactControl: function

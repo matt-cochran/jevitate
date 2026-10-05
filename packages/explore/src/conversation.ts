@@ -441,7 +441,8 @@ async function watchForChange(page: Page, timeoutMs: number): Promise<boolean> {
  * `wait` that saw no change while the app is still busy is patience, not idleness.
  */
 export async function stillBusy(page: Page): Promise<boolean> {
-  if (monitorFor(page).pending().length > 0) return true;
+  // #383: the page's own periodic poll in flight is not the app working (#241) — only other pending work.
+  if (monitorFor(page).pendingWork().length > 0) return true;
   return (await page.evaluate(visibleBusyIndicator).catch(() => null)) !== null;
 }
 
