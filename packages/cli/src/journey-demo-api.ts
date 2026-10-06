@@ -1,6 +1,7 @@
 import { expectedResultFromDelta } from "@jevitate/explore";
 import type { ActionDeltaRecord } from "@jevitate/recording";
 import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { JOURNEEZE_GUIDE_FOOTER, promotionsEnabled } from "./promotions.js";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
@@ -71,6 +72,12 @@ export interface DemoJourneyOptions extends Omit<RunJourneyProgrammaticallyOptio
   annotations?: AnnotationDraft;
   /** #249: an unapproved demo — a `DRAFT` watermark on the overlay, and every output marked DRAFT. */
   draft?: boolean;
+  /**
+   * The Journeeze line at the end of the guide. Default: {@link promotionsEnabled} (on unless
+   * `JEVITATE_PROMOTIONS=0` or `"promotions": false` in the config). Never in the video, subtitles
+   * or JSON.
+   */
+  promotions?: boolean;
 }
 
 /** #249: the mark every output of an unapproved demo carries. */
@@ -148,7 +155,7 @@ function oneLine(s: string): string {
  * The Markdown guide (all text already redacted); `assets` is the screenshots folder's name. A draft
  * (#249) carries `DRAFT` in its title and a watermark line under it.
  */
-export function demoGuide(journey: Journey, title: string, steps: readonly DemoStep[], assets: string, redact: (s: string) => string, draft = false): string {
+export function demoGuide(journey: Journey, title: string, steps: readonly DemoStep[], assets: string, redact: (s: string) => string, draft = false, footer?: string): string {
   const m = journey.metadata;
   const lines: string[] = [`# ${draft ? `${DEMO_DRAFT_MARK}: ` : ""}${oneLine(redact(m.name))}`, ""];
   if (draft) lines.push(`> **${DEMO_DRAFT_MARK}** — not yet approved. Review it, then run \`jevitate demo approve ${m.id}\` to promote the Journey and render the final demo.`, "");
@@ -172,6 +179,7 @@ export function demoGuide(journey: Journey, title: string, steps: readonly DemoS
   }
   const criteria = (m.successCriteria ?? []).map((c) => `- ${oneLine(redact(c.description))}`);
   if (criteria.length > 0) lines.push("## When it worked", "", ...criteria, "");
+  if (footer !== undefined) lines.push("---", "", footer, "");
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
@@ -294,6 +302,8 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
     throw new DemoArgsError(`--video must be a .webm file (Playwright records WebM; convert it afterwards, e.g. with ffmpeg): ${opts.video}`);
   }
   if (opts.guide !== undefined && !/\.md$/i.test(opts.guide)) throw new DemoArgsError(`--guide must be a Markdown (.md) file: ${opts.guide}`);
+  // Resolved before the replay: a malformed config fails the call up front, never after the run.
+  const guideFooter = opts.guide !== undefined && (opts.promotions ?? promotionsEnabled()) ? JOURNEEZE_GUIDE_FOOTER : undefined;
   const pace = opts.paceMs ?? DEMO_DEFAULT_PACE_MS;
   if (!Number.isSafeInteger(pace) || pace < 0 || pace > DEMO_MAX_PACE_MS) throw new DemoArgsError(`--pace must be an integer from 0 to ${DEMO_MAX_PACE_MS} (got ${pace})`);
 
@@ -391,7 +401,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
       },
     };
 
-    const { video, guide, paceMs: _pace, captureLayers: _layers, annotations: _annotations, draft: _draft, ...runOpts } = opts;
+    const { video, guide, paceMs: _pace, captureLayers: _layers, annotations: _annotations, draft: _draft, promotions: _promotions, ...runOpts } = opts;
     const browser = video === undefined ? opts.browser : { ...opts.browser, recordVideo: { dir: work } };
     const run = await runJourneyProgrammatically({
       ...runOpts,
@@ -460,7 +470,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
           return { ...s, screenshot: to };
         }),
       );
-      const md = demoGuide(journey, title, placed, basename(assets), redact, draft);
+      const md = demoGuide(journey, title, placed, basename(assets), redact, draft, guideFooter);
       assertNoSecretInPayload(md, secrets, "demo guide");
       await writeFile(guide, md);
       Object.assign(result, { guide, steps: placed });

@@ -46,3 +46,9 @@ full flag list, or see the generated [CLI reference](./cli.md).
 
 The website, [jevitate.com](https://jevitate.com), has guides and the same reference in a
 browsable form.
+
+**Related:** [Journeeze](https://journeeze.dev) (coming soon) adds human comprehension feedback
+(likes, dislikes, "I don't understand") to the same journeys, clustered into GitHub issues.
+[Early access](mailto:contact@journeeze.dev?subject=Journeeze%20early%20access). Demo guides end
+with one line about it; turn that off with `JEVITATE_PROMOTIONS=0` or `"promotions": false` in
+`~/.jevitate/config.json`.
