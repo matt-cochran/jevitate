@@ -428,8 +428,16 @@ function readControlFacts(node: Node): ControlFacts {
     else role = roleByTag[tag] ?? "";
   }
 
-  // Accessible-name approximation: aria-label -> label -> text -> placeholder -> value(button-ish).
+  // Accessible-name approximation in accname order: aria-label -> aria-labelledby -> label ->
+  // own text -> placeholder -> value(button-ish) -> nested img alt -> title (#396).
   const ariaLabel = norm(el.getAttribute("aria-label"));
+  // #396: accname resolves aria-labelledby to the space-joined text of the referenced ids.
+  const labelledby = norm(
+    (el.getAttribute("aria-labelledby") ?? "")
+      .split(/\s+/)
+      .map((id) => norm(id === "" ? null : (document.getElementById(id)?.textContent ?? null)))
+      .join(" "),
+  );
   let labelText = "";
   const labels = (el as unknown as { labels?: NodeListOf<HTMLLabelElement> }).labels;
   // A label that WRAPS a select also "contains" every option's text: strip the control's own text.
@@ -445,13 +453,21 @@ function readControlFacts(node: Node): ControlFacts {
   }
   const placeholder = norm(el.getAttribute("placeholder"));
   const buttonish = inputType === "button" || inputType === "submit" || inputType === "reset";
+  // A select's own text is every option label run together — never its name.
+  const own = tag === "select" ? "" : norm(el.textContent);
+  // #396: an icon-only control carries its name in a nested <img alt> (own text empty), or last in
+  // its own `title` attribute.
+  const imgAlt = own === "" ? norm(el.querySelector("img[alt]")?.getAttribute("alt") ?? null) : "";
+  const title = norm(el.getAttribute("title"));
   const nameCandidates = [
     ariaLabel,
+    labelledby,
     labelText,
-    // A select's own text is every option label run together — never its name.
-    tag === "select" ? "" : norm(el.textContent),
+    own,
     placeholder,
     buttonish ? norm((el as HTMLInputElement).value) : "",
+    imgAlt,
+    title,
   ];
   const name = nameCandidates.find((c) => c !== "") ?? "";
 
@@ -673,16 +689,25 @@ function readListItems(els: Element[], roles: string[]): Array<{ list: number; n
   });
 }
 
-/** BROWSER CODE — each candidate's approximate accessible name (aria-label, label, text, placeholder). */
+/** BROWSER CODE — each candidate's approximate accessible name (aria-label, aria-labelledby, label, text, placeholder, title). */
 function readCheapNames(els: Element[]): string[] {
   const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
   return els.map((el) => {
     const labels = (el as unknown as { labels?: NodeListOf<HTMLLabelElement> }).labels;
+    // #396: agree with readControlFacts on aria-labelledby and the trailing title fallback.
+    const labelledby = norm(
+      (el.getAttribute("aria-labelledby") ?? "")
+        .split(/\s+/)
+        .map((id) => (id === "" ? "" : norm(document.getElementById(id)?.textContent)))
+        .join(" "),
+    );
     return (
       norm(el.getAttribute("aria-label")) ||
+      labelledby ||
       norm(labels?.[0]?.textContent) ||
       (el.tagName.toLowerCase() === "select" ? "" : norm(el.textContent)) ||
-      norm(el.getAttribute("placeholder"))
+      norm(el.getAttribute("placeholder")) ||
+      norm(el.getAttribute("title"))
     ).slice(0, 200);
   });
 }

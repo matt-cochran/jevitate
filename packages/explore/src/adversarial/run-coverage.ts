@@ -278,11 +278,19 @@ export function safetyRefusalsFromTranscript(
   const out = new Map<string, string>();
   for (const e of entries) {
     if (e.strategy !== "safety-policy" || e.actOk !== false || typeof e.reason !== "string") continue;
-    const m = /^refused by the safety policy: "(.*)" ((?:ends the session|is destructive|may cost money|matches --deny).*)$/.exec(e.reason);
+    const m =
+      /^refused by the safety policy: "(.*)" ((?:ends the session|is destructive|may cost money|matches --deny).*)$/.exec(e.reason) ??
+      /^refused by the safety policy: (a control with no accessible name)\b.*$/.exec(e.reason);
     if (m === null) continue;
     const name = m[1] ?? "";
     const rest = m[2] ?? "";
-    const risk = /matches --deny/.test(rest) ? "denied" : (/\((session-end|destructive|paid)\)/.exec(rest)?.[1] ?? "refused");
+    // #396: the nameless-control refusal has no quoted name; it is always a --deny/--paid guard.
+    const risk =
+      m[2] === undefined
+        ? "denied"
+        : /matches --deny/.test(rest)
+          ? "denied"
+          : (/\((session-end|destructive|paid)\)/.exec(rest)?.[1] ?? "refused");
     if (!out.has(name)) out.set(name, risk);
   }
   return [...out].map(([name, risk]) => ({ name, risk }));
