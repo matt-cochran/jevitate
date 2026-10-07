@@ -278,6 +278,8 @@ describe("journey-anchored exploration (#293, served)", () => {
     const data = r.envelope!.data!;
     expect(data).toMatchObject({ missionOutcome: "inconclusive", failure: { kind: "journey-stale" }, branch: { journeyId: "order-stale", step: 3, anchor: "review" }, failedStep: 3 });
     expect(String((data.failure as { message: string }).message)).toMatch(/is stale: it no longer reaches step 3 \(anchor review\)/);
+    // #398: the failed step is named 1-based, like `failedStep` and `--at-step` (the runner's index is 0-based).
+    expect(String((data.failure as { message: string }).message)).toMatch(/— step 3 failed: replay-target-not-found/);
     expect(served.filter((s) => s === "GET /wizard")).toHaveLength(1); // the replay's own load; no restart from the URL
     expect(existsSync(out) ? readdirSync(out).filter((f) => f.endsWith(".result.json")) : []).toEqual([]);
   }, 120_000);

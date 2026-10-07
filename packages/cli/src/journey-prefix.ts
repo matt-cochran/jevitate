@@ -206,7 +206,14 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
       }
       if (run.outcome !== "ok") {
         const failed = run.outcome === "quarantined" && run.at !== undefined ? run.at + 1 : undefined;
-        const reason = run.outcome === "quarantined" ? run.reason : "the replay healed a step (a self-healed prefix is never a branch point)";
+        // #398: the runner names the failed step by its 0-based index; this message speaks 1-based Journey
+        // steps (like `--at-step` and `failedStep`), so "reaches step 3 — step 2 failed" never misleads.
+        const reason =
+          run.outcome === "quarantined"
+            ? failed === undefined
+              ? run.reason
+              : run.reason.replace(/^step \d+ failed:/, `step ${failed} failed:`)
+            : "the replay healed a step (a self-healed prefix is never a branch point)";
         throw new JourneyPrefixStaleError(`journey '${opts.id}' is stale: it no longer reaches ${where} — ${reason}`, branch, failed);
       }
       return session.page.url();
