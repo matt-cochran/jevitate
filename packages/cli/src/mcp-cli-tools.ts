@@ -107,6 +107,7 @@ export const OMIT = {
   branchParams:
     "#293: a branch-point finding replays through its Journey prefix with the params its result recorded (non-secret ones); a secret param is re-supplied by the operator on the CLI, never sent as an MCP argument",
   tou: "accepting a third-party source's Terms of Use is a person's decision (like approve_action): MCP can add, pull and run a source, never accept for them",
+  acceptWeak: "#401: promoting a Journey whose assertions cannot prove its outcome is a reviewer's waiver (recorded on the Journey): a person's decision on the CLI, never a request's",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
@@ -148,7 +149,13 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "promote_journey",
     description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
-    command: { path: "journey promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "journey promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, ...JSON_FLAG } },
+  },
+  {
+    name: "lint_journey",
+    description:
+      "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding.",
+    command: { path: "journey lint", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "journey_anchors",
@@ -188,6 +195,25 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...ENVIRONMENT,
         ...EMULATION,
         ...DEMO_SHOW,
+      },
+      omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "verify_journey",
+    description:
+      "`jevitate journey verify <id> --mutate` (#402): prove each assertion can fail. Replays the Journey once (it must pass), then once per mutation — a write step skipped, its write request aborted, a typed value left empty — and reports each assertion as sensitive (failed for the right reason), insensitive (still passed: vacuous), cascade, not-applied or unpaired. Mutations only skip steps or abort the app's own writes; nothing is fabricated. Exit 1 when any paired assertion is insensitive, 2 when nothing could be proven. Set mutate: true.",
+    command: {
+      path: "journey verify",
+      params: {
+        id: pos(),
+        ...EXTENSION,
+        mutate: b("--mutate"),
+        params: { kind: "params", flag: "--param" },
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        ...ENVIRONMENT,
       },
       omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },

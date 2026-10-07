@@ -700,6 +700,11 @@ const LIST_GOAL =
   /\b(?:first|second|third|fourth|fifth|last|next|previous|top|bottom|\d+(?:st|nd|rd|th)|each|every|all|any|list(?:ed|s)?|how many|which (?:one|of)|among)\b/i;
 /** #229: a goal about the ONE thing a page shows: "this item", "the current page", "this record". */
 const SINGLE_GOAL = /\b(?:this|the current|the open(?:ed)?|the shown|the displayed)\s+([a-z][a-z-]*)\b/i;
+/**
+ * #395: "this text" / "this snippet" name content the goal supplies or types, not an entity a page shows.
+ * Nouns that can also be a page's one entity ("this note", "this message", "this comment") stay out.
+ */
+const INPUT_CONTENT_NOUNS = new Set(["text", "value", "content", "input", "string", "prompt", "snippet", "paragraph", "sentence", "word", "words"]);
 
 /** "item" → ["items"], "entry" → ["entries"], "box" → ["boxes"]: the plural forms a list heading uses. */
 function plurals(noun: string): string[] {
@@ -722,6 +727,8 @@ export function headingHint(page: ObservedPage | undefined, goal: string): strin
   if (errorPageReason(page) !== null) return null;
   const single = SINGLE_GOAL.exec(goal);
   if (single === null || LIST_GOAL.test(goal)) return null;
+  // #395: "import this text" supplies content; the page heading is not that content's title.
+  if (INPUT_CONTENT_NOUNS.has(single[1]!.toLowerCase())) return null;
   const listOf = plurals(single[1]!);
   const namesList = (h: string | undefined): boolean => h !== undefined && (fold(h).match(/[a-z][a-z'-]*/g) ?? []).some((w) => listOf.includes(w));
   if (namesList(page.heading) || (page.heading === undefined && namesList(page.title))) return null;
@@ -910,7 +917,13 @@ export async function reportAnswer(
   const retry = await gen.generate("goal.answer", { ...ask, hint: redactContext(hint, secrets) });
   const retried = await vetoed(groundAnswer(scrub(retry.output), input.pages, grounding), input.judge, vet, vetoes);
   // The retry repeated the answer just vetoed: the veto itself (with Jev's p) is the verdict to report.
-  return !retried.accept && retried.reason === ALREADY_VETOED_REASON && verdict.notAnswer === true ? verdict : absence(retried);
+  if (!retried.accept && retried.reason === ALREADY_VETOED_REASON && verdict.notAnswer === true) return verdict;
+  const final = absence(retried);
+  // #395: a retry that found NO answer never replaces a first answer's rejection — that one names the
+  // claim and why it was rejected (a veto, a label-only quote), so the model can correct it; "no
+  // answer was found" would be false (one was) and the same report would be re-sent unchanged.
+  const noneOnRetry = !final.accept && final.answer === null && final.reason === NO_ANSWER_REASON;
+  return noneOnRetry && verdict.answer !== null ? verdict : final;
 }
 
 /** #234: what the reason of a re-report of an answer code already rejected in this run adds. */

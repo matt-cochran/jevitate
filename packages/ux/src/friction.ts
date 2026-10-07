@@ -147,10 +147,25 @@ export function detectFriction(capture: RunSignalCapture, outcome?: JourneyOutco
   }
 
   // Error: a request the user's action triggered answered 4xx/5xx or failed.
+  // #393: an in-flight request the run's own action aborted (net::ERR_ABORTED) is not friction.
+  const navigated = (s: number): boolean => {
+    if (capture.requests.some((r) => r.resourceType === "document" && r.step === s)) return true;
+    const after = capture.screens.filter((sc) => sc.step > s).sort((a, b) => a.step - b.step)[0];
+    const before = capture.screens.filter((sc) => sc.step <= s).sort((a, b) => a.step - b.step).at(-1);
+    const page = (u: string): string => u.split("#")[0]!;
+    return after !== undefined && before !== undefined && page(after.url) !== page(before.url);
+  };
   const errors = new Map<number, SignalRequest[]>();
   for (const r of capture.requests) {
     if (r.step < 1 || !(API_TYPES.has(r.resourceType) || r.resourceType === "document")) continue;
-    if (r.failed === true || (r.status !== null && r.status >= 400)) errors.set(r.step, [...(errors.get(r.step) ?? []), r]);
+    if (r.status !== null && r.status >= 400) {
+      errors.set(r.step, [...(errors.get(r.step) ?? []), r]);
+      continue;
+    }
+    if (r.failed !== true) continue;
+    if (r.status !== null) continue; // #73: a received <400 response, then requestfailed, is not an error
+    if (r.aborted === true && navigated(r.step)) continue; // #393: the run's own navigation aborted it
+    errors.set(r.step, [...(errors.get(r.step) ?? []), r]);
   }
   for (const [step, reqs] of errors) {
     const blocking = reqs.some((r) => WRITE_METHODS.has(r.method.toUpperCase()) && (r.failed === true || (r.status ?? 0) >= 500));

@@ -137,8 +137,11 @@ export function looksDestructiveRequest(method: string, url: string, body: strin
   return DESTRUCTIVE_WORD.test(words(text)) || (body !== null && DESTRUCTIVE_WORD.test(words(body.slice(0, 4_096))));
 }
 
-/** What the guard holds back: every write (`read-only`, #158) or only a destructive one (#270). */
-export type ReadOnlyMode = "read-only" | "no-destructive";
+/**
+ * What the guard holds back: every write (`read-only`, #158), only a destructive one (#270), or — in
+ * an adversarial mission (#403) — every write to an origin outside `--allow` (`off-allowlist`).
+ */
+export type ReadOnlyMode = "read-only" | "no-destructive" | "off-allowlist";
 
 /** Auth-refresh endpoints a read-only run never blocks (a blocked rotating refresh signs the run out). */
 export const DEFAULT_ALLOWED_WRITES: readonly string[] = ["**/refresh*", "**/token*", "**/oauth/**", "**/auth/**/refresh*"];
@@ -193,6 +196,8 @@ export class ReadOnlyGuard {
   #armed = false;
   /** A model-chosen action's window is open (from its act until the page settled after it). */
   #inAction = false;
+  /** #402: how a held main-frame write navigation is stopped (default: answered `204` in the browser). */
+  readonly #navigationWrites: "no-content" | "abort";
   readonly #handler = (route: Route, request: Request): Promise<void> => this.#route(route, request);
 
   constructor(
@@ -203,9 +208,15 @@ export class ReadOnlyGuard {
       readonly firstParty?: FirstPartyOrigins;
       /** Default `read-only` (#158); `no-destructive` holds back only destructive writes (#270). */
       readonly mode?: ReadOnlyMode;
+      /**
+       * #402: `abort` aborts a held main-frame write navigation too, instead of answering it `204` —
+       * a mutation proof never answers a write with anything that could read as a success.
+       */
+      readonly navigationWrites?: "no-content" | "abort";
     } = {},
   ) {
     this.#isWrite = isWrite;
+    this.#navigationWrites = opts.navigationWrites ?? "no-content";
     this.#mode = opts.mode ?? "read-only";
     this.#origins = opts.allowlist ?? [];
     this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
@@ -231,6 +242,8 @@ export class ReadOnlyGuard {
 
   /** Why an op on a control may not run under this guard, or null when it may. */
   refuses(op: string, control: Pick<Control, "name" | "role" | "submits"> | null): string | null {
+    // #403: an off-allowlist guard decides by the request's origin alone, at the network.
+    if (this.#mode === "off-allowlist") return null;
     const name = (control?.name ?? "").replace(/\s+/g, " ").trim();
     if (this.#mode === "no-destructive") {
       // #270: no goal-word lift — a goal without a success check never destroys on a name match.
@@ -257,7 +270,10 @@ export class ReadOnlyGuard {
 
   /** From now on, a write request that starts inside an action window is aborted before it leaves the browser. */
   async arm(page: Page): Promise<void> {
-    if (this.#armed) return;
+    if (this.#armed && this.#page === page) return;
+    // A run that moved to a fresh page (a reset) re-arms on it; the old page lets go of the handler.
+    const old = this.#page;
+    if (old !== null && old !== page && !old.isClosed()) await old.unroute("**/*", this.#handler).catch(() => undefined);
     this.#armed = true;
     this.#page = page;
     await page.route("**/*", this.#handler);
@@ -276,16 +292,38 @@ export class ReadOnlyGuard {
     // (reads too), so a backend the page authenticates to is first-party from then on.
     const thirdParty = this.#firstParty.thirdParty(request.url(), request.headers()) !== null;
     const endpoint = requestEndpoint(request.url(), this.#origins);
+    if (this.#mode === "off-allowlist") {
+      // #403: a write the misuse fired to an origin outside --allow never leaves the browser, whoever
+      // that origin is (a credential-free third party included: it would carry the misuse values).
+      // Only an origin-qualified --allow-write glob lets one through.
+      const off = this.#offAllowlist(request.url());
+      if (!write || off === null || !this.#inAction || this.#exempt(path, request.url(), true)) {
+        await route.fallback().catch(() => undefined);
+        return;
+      }
+      this.#blocked.push({
+        method: request.method().toUpperCase(),
+        path: endpoint,
+        hint: `${off} is not an --allow origin: a write the run's misuse fired to it was blocked — if it is the app's add it to --allow; to let it through deliberately pass --allow-write "${off}/<path glob>"`,
+      });
+      await this.#refuse(route, request);
+      return;
+    }
     const held = this.#mode === "read-only" || isDestructiveRequest(request.method(), path);
     if (!write || !held || thirdParty || !this.#inAction || this.#exempt(path, request.url())) {
       await route.fallback().catch(() => undefined);
       return;
     }
     this.#blocked.push({ method: request.method().toUpperCase(), path: endpoint, ...this.#hint(request.url()) });
+    await this.#refuse(route, request);
+  }
+
+  /** Stops a held write in the browser: answered or aborted, it never reaches a server. */
+  async #refuse(route: Route, request: Request): Promise<void> {
     // #253: a native form POST is a main-frame NAVIGATION — aborting it would leave the page on the
     // browser's error page. A `204 No Content` answer (from the browser, never the server) keeps the
     // page where it was, per the HTML navigation rules; any other write is aborted.
-    if (this.#mainFrameNavigation(request)) {
+    if (this.#navigationWrites === "no-content" && this.#mainFrameNavigation(request)) {
       await route.fulfill({ status: 204, body: "" }).catch(() => undefined);
       return;
     }
@@ -305,7 +343,7 @@ export class ReadOnlyGuard {
    * request's origin + path (#194: `--allow-write "https://x.supabase.co/rest/v1/**"`); any other
    * glob matches the path on every origin.
    */
-  #exempt(path: string, url: string): boolean {
+  #exempt(path: string, url: string, originQualifiedOnly = false): boolean {
     let full = path;
     try {
       const u = new URL(url);
@@ -313,7 +351,19 @@ export class ReadOnlyGuard {
     } catch {
       /* path only */
     }
-    return this.#allowed.some((g) => g.re.test(g.full ? full : path));
+    return this.#allowed.some((g) => (g.full ? g.re.test(full) : !originQualifiedOnly && g.re.test(path)));
+  }
+
+  /** #403: the request's origin when it is not an `--allow` origin, else null (no allowlist: none is off). */
+  #offAllowlist(url: string): string | null {
+    let o: string;
+    try {
+      o = new URL(url).origin;
+    } catch {
+      return null;
+    }
+    if (o === "null" || this.#origins.length === 0) return null;
+    return normalizeAllowlist(this.#origins).includes(o) ? null : o;
   }
 
   /** A blocked write off the `--allow` origins: how to declare it the app's, or let it through. */

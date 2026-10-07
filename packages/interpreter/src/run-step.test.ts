@@ -276,6 +276,64 @@ test("runStep: navigate whose expect fails rejects with PostconditionFailed (aft
   }
 });
 
+// #399: `${param}` placeholders in navigate.url.
+test("runStep: navigate resolves ${param} placeholders from the vars, strictly encoded", async () => {
+  const page = fakePage(fakeLocator(), "https://example.test/accept?token=a%2Fb%20c");
+  const actor = actorWithPage(page);
+  const rec: RecordedStep = {
+    step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } },
+  };
+  await runStep(actor as any, rec, new Map([["inviteToken", "a/b c"]]));
+  expect(page.goto).toHaveBeenCalledWith("/accept?token=a%2Fb%20c");
+});
+
+test("runStep: a navigate placeholder with no var fails closed before navigating", async () => {
+  const page = fakePage(fakeLocator());
+  const actor = actorWithPage(page);
+  const rec: RecordedStep = {
+    step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } },
+  };
+  await expect(runStep(actor as any, rec, new Map())).rejects.toThrow(/unknown variable: inviteToken/);
+  expect(page.goto).not.toHaveBeenCalled();
+});
+
+test("runStep: a navigation error never echoes a substituted value (raw or encoded)", async () => {
+  const secret = "s3cr3t tok/en";
+  const page = fakePage(fakeLocator());
+  page.goto = vi.fn(async (url: string) => {
+    throw new Error(`page.goto: net::ERR_CONNECTION_REFUSED at https://example.test${url}\n  navigating to "https://example.test${url}" (${secret})`);
+  });
+  const actor = actorWithPage(page);
+  const rec: RecordedStep = {
+    step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } },
+  };
+  const err = await runStep(actor as any, rec, new Map([["inviteToken", secret]])).catch((e: unknown) => e as Error);
+  expect(err).toBeInstanceOf(Error);
+  expect(err.message).toContain("ERR_CONNECTION_REFUSED");
+  expect(err.message).toContain("<param inviteToken>");
+  expect(err.message).not.toContain(secret);
+  expect(err.message).not.toContain(encodeURIComponent(secret));
+  expect(String(err.stack)).not.toContain(secret);
+  expect((err as Error & { cause?: unknown }).cause).toBeUndefined();
+});
+
+test("runStep: a failed navigate postcondition names the template, never the value", async () => {
+  vi.useFakeTimers();
+  try {
+    const page = fakePage(fakeLocator(), "https://example.test/elsewhere");
+    const actor = actorWithPage(page);
+    const rec: RecordedStep = {
+      step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } },
+    };
+    const result = runStep(actor as any, rec, new Map([["inviteToken", "tok-123"]]));
+    const expectation = expect(result).rejects.toThrow(/navigate to \/accept\?token=<param inviteToken>/);
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("runStep: waitFor calls the resolved locator's waitFor with the given state", async () => {
   const locator = fakeLocator();
   const actor = actorWithPage(fakePage(locator));

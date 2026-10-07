@@ -16,6 +16,8 @@ export interface SignalRequest {
   readonly endedAt: number | null;
   readonly status: number | null;
   readonly failed?: boolean;
+  /** #393: the request ended as `requestfailed` `net::ERR_ABORTED`. */
+  readonly aborted?: true;
   /** The step whose action it followed (`0` = before the first decision). */
   readonly step: number;
   /** The REQUEST's content type, when it sent one (tells a gRPC-web/Connect read, #110). */

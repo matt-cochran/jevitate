@@ -19,6 +19,7 @@ export function installFinish(ctx: HuntState): void {
     stop: AdversarialStop,
     failure?: MissionFailure,
   ): AdversarialOutcome => {
+    ctx.blockedWrites.push(...ctx.offAllowlist.drain());
     const finished = (ctx.segments[0] as RunRecorder).tryFinish({ intent: "adversarial" });
     const later = ctx.segments.map((r, i) => {
       if (i === 0) return null;
@@ -55,6 +56,7 @@ export function installFinish(ctx: HuntState): void {
       ...(ctx.identityChanges.length === 0 ? {} : { identityChanges: [...ctx.identityChanges] }),
       ...(ctx.pageDeltas === null ? {} : { actionDeltas: deltaStatsOf([...ctx.stepDeltas.values()]) }),
       ...ctx.safety.result(),
+      ...(ctx.blockedWrites.length === 0 ? {} : { blockedWrites: [...ctx.blockedWrites] }),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
             crash: buildCrashReport(finalFailure, ctx.crashWatch.signals(), ctx.heap.samples(), {

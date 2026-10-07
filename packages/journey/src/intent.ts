@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { RecordedStep, Step } from "@jevitate/recording";
+import { describeNavigateUrl } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 
 /**
@@ -75,7 +76,7 @@ export function describeStep(step: Step): string {
   const label = step.label === undefined ? "" : ` (${step.label})`;
   switch (step.kind) {
     case "navigate":
-      return `navigate to ${step.url}${label}`;
+      return `navigate to ${describeNavigateUrl(step.url)}${label}`;
     case "click":
       return `click ${describeTarget(step.target)}${label}`;
     case "fill":

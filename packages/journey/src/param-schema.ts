@@ -1,10 +1,19 @@
-import { boundVariables, type Recording } from "@jevitate/recording";
+import { boundVariables, navigateUrlParams, type Recording } from "@jevitate/recording";
+import type { Journey } from "./journey.js";
 
 export interface ParamSchema { required: string[] }
 export class ParamValidationError extends Error {}
 
+/** The params a Recording takes: its bound variables, then (#399) any `${name}` in a navigate URL. */
 export function deriveParamSchema(rec: Recording): ParamSchema {
-  return { required: boundVariables(rec) };
+  const required = boundVariables(rec);
+  for (const page of rec.pages) {
+    for (const { step } of page.steps) {
+      if (step.kind !== "navigate") continue;
+      for (const name of navigateUrlParams(step.url)) if (!required.includes(name)) required.push(name);
+    }
+  }
+  return { required };
 }
 
 export function validateParams(schema: ParamSchema, params: Record<string, string>): void {
@@ -16,4 +25,15 @@ export function validateParams(schema: ParamSchema, params: Record<string, strin
       `param mismatch — missing: [${missing.join(", ")}], unknown: [${unknown.join(", ")}]`,
     );
   }
+}
+
+/**
+ * #399: every `--param` a Journey takes, for listings (`journey find`, MCP `find_capabilities`, the
+ * named tools): its declared `params`, then any required one only its steps name (a navigate
+ * `${placeholder}` declared in `parameters` alone).
+ */
+export function journeyRunParams(journey: Journey): string[] {
+  const out = [...journey.metadata.params];
+  for (const p of deriveParamSchema(journey.recording).required) if (!out.includes(p)) out.push(p);
+  return out;
 }

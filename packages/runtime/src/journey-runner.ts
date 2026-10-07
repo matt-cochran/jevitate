@@ -1,7 +1,7 @@
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, EnterSecret } from "@jevitate/screenplay";
 import type { RunPolicy } from "@jevitate/domain";
-import { deriveParamSchema, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
+import { deriveParamSchema, secretParamValues, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
 import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult } from "@jevitate/interpreter";
 import type { Recording } from "@jevitate/recording";
 import {
@@ -136,7 +136,7 @@ export class JourneyRunner {
       }
 
       if (result.outcome === "failed") {
-        const healed = await this.tryHeal(req.policy, recording, result.at, healedIndices);
+        const healed = await this.tryHeal(req, recording, result.at, healedIndices);
         if (healed) {
           healedAt = result.at;
           healedIndices.add(result.at);
@@ -148,7 +148,7 @@ export class JourneyRunner {
         }
         // Invariant #4: no heal (refused, none wired, write floor, or
         // already-attempted this index) -> quarantine, never mask.
-        return { outcome: "quarantined", reason: `step ${result.at} failed: ${result.error}`, at: result.at };
+        return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error}`, at: result.at };
       }
 
       // result.outcome === "completed" — Ruling 3: the interpreter's result
@@ -173,12 +173,12 @@ export class JourneyRunner {
    * before the healer is ever invoked.
    */
   private async tryHeal(
-    policy: RunPolicy,
+    req: JourneyRunRequest,
     recording: Recording,
     brokenFlatIndex: number,
     healedIndices: ReadonlySet<number>,
   ): Promise<{ healedRecording: Recording } | undefined> {
-    if (policy.selfHeal.mode === "fail-closed" || !this.selfHealer) return undefined;
+    if (req.policy.selfHeal.mode === "fail-closed" || !this.selfHealer) return undefined;
     if (healedIndices.has(brokenFlatIndex)) return undefined; // already tried once — no re-heal loop
 
     const flat = flattenRecording(recording);
@@ -189,10 +189,12 @@ export class JourneyRunner {
     const postcondition = postconditionOf(brokenEntry.step);
     if (!postcondition) return undefined;
 
+    const secrets = secretParamValues(req.journey, req.params);
     const healResult = await this.selfHealer.reLearnStep({
       actor: this.actor,
       brokenStep: brokenEntry.step,
       expectedPostcondition: postcondition,
+      ...(secrets.length === 0 ? {} : { secrets }),
     });
     if (healResult.outcome !== "healed") return undefined;
 
@@ -268,6 +270,8 @@ export class JourneyRunner {
 
     const page = this.actor.ability(BrowseTheWebToken).session.page;
     const currentUrl = page.url();
+    // #399: messages name the ORIGIN only — the full URL may carry a secret navigate parameter.
+    const shownOrigin = originOnly(currentUrl);
     const refs = req.journey.metadata.secretRefs ?? [];
     const matching = refs.filter((ref) => {
       try {
@@ -279,12 +283,12 @@ export class JourneyRunner {
     });
     if (matching.length === 0) {
       throw new SecretOriginMismatchError(
-        `vault-autofill: no declared secretRef is bound to the current origin (${currentUrl})`,
+        `vault-autofill: no declared secretRef is bound to the current origin (${shownOrigin})`,
       );
     }
     if (matching.length > 1) {
       throw new SecretAmbiguousBindingError(
-        `vault-autofill: ${matching.length} declared secretRefs are bound to the current origin (${currentUrl}) — ambiguous, refusing to guess which one to fill (disambiguating multiple same-origin secrets by field is out of scope for this slice)`,
+        `vault-autofill: ${matching.length} declared secretRefs are bound to the current origin (${shownOrigin}) — ambiguous, refusing to guess which one to fill (disambiguating multiple same-origin secrets by field is out of scope for this slice)`,
       );
     }
     const ref = matching[0];
@@ -306,5 +310,15 @@ export class JourneyRunner {
     // redacted (see @jevitate/screenplay's interactions.ts).
     await EnterSecret.theSecret(secret).into(target).performAs(this.actor);
     return undefined;
+  }
+}
+
+/** A URL's origin, or a fixed marker when it has none — never the path or query (#399). */
+function originOnly(url: string): string {
+  try {
+    const o = new URL(url).origin;
+    return o === "null" ? "an opaque origin" : o;
+  } catch {
+    return "an unparseable URL";
   }
 }

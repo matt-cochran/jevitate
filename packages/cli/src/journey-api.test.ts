@@ -135,7 +135,14 @@ describe("#124: promoteJourney", () => {
     const store = new FsJourneyStore(dir);
     await store.put({
       metadata: { id: "draft", name: "draft", promoted: false, params: [], createdAtIso: "2026-09-24T00:00:00Z" },
-      recording: { version: "1", site: "https://example.test", pages: [] },
+      // #401: strengthened so the promote gate does not refuse it (an effect assertion, not just visibility).
+      recording: {
+        version: "1",
+        site: "https://example.test",
+        pages: [
+          { url: "/", steps: [{ step: { kind: "assert", check: { kind: "textIncludes", target: { testId: "ok" }, text: "OK" } } }] },
+        ],
+      },
     } as any);
 
     const result = await promoteJourney(dir, "draft");
@@ -148,5 +155,63 @@ describe("#124: promoteJourney", () => {
   it("throws UnknownJourneyError for an unknown journey id", async () => {
     const dir = await mkdtemp(join(tmpdir(), "journey-api-"));
     await expect(promoteJourney(dir, "does-not-exist")).rejects.toBeInstanceOf(UnknownJourneyError);
+  });
+});
+
+describe("#399: an error escaping a run never carries a secret parameter", () => {
+  it("a crash whose message echoes the navigated URL comes back redacted (same error class)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "journey-api-399-"));
+    await new FsJourneyStore(dir).put({
+      metadata: { id: "invite", name: "invite", promoted: true, params: [], parameters: [{ name: "inviteToken", secret: true }], createdAtIso: "2026-10-07T00:00:00Z" },
+      recording: {
+        version: "1",
+        site: "https://example.test",
+        pages: [{ url: "/accept", steps: [{ step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } } }] }],
+      },
+    });
+    const secret = "tok it's/9";
+    class BrowserCrash extends Error {}
+    const crashing = (): BrowserPort => ({
+      async open(): Promise<BrowserSession> {
+        throw new BrowserCrash(`browser crashed at https://example.test/accept?token=${encodeURIComponent(secret)} (${secret})`);
+      },
+    });
+    const err = await runJourneyProgrammatically({ dir, id: "invite", params: { inviteToken: secret }, browserPortFactory: crashing }).catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(BrowserCrash);
+    expect(err.message).toContain("browser crashed");
+    expect(err.message).not.toContain(secret);
+    expect(err.message).not.toContain(encodeURIComponent(secret));
+    expect(String(err.stack)).not.toContain(secret);
+  });
+});
+
+describe("#399: a fixture output used as a secret param never comes back in the run's fixture record", () => {
+  it("the record's outputs and log are redacted with the run's secret params", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "journey-api-399fx-"));
+    await new FsJourneyStore(dir).put({
+      metadata: { id: "invite", name: "invite", promoted: true, params: ["inviteToken"], parameters: [{ name: "inviteToken", secret: true }], createdAtIso: "2026-10-07T00:00:00Z" },
+      recording: {
+        version: "1",
+        site: "https://example.test",
+        pages: [{ url: "/accept", steps: [{ step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } } }] }],
+      },
+    });
+    const token = "fx-tok-399";
+    const fx = {
+      setup: vi.fn(async () => {}),
+      restore: vi.fn(async () => {}),
+      bindings: () => ({ values: { inviteToken: token }, secretNames: new Set<string>() }),
+      record: () => ({ identity: "h", specHash: "s", outputs: { inviteToken: token }, secretOutputs: [], cycles: 1, log: [{ ok: true, url: `/api/invite -> ${token}` }] }),
+    };
+    const opens: OpenOptions[] = [];
+    const result = await runJourneyProgrammatically({
+      dir,
+      id: "invite",
+      params: { inviteToken: "${setup.inviteToken}" },
+      browserPortFactory: fakeBrowserPortFactory(opens),
+      fixtures: () => fx as any,
+    });
+    expect(result.fixtures).toBeDefined();
+    expect(JSON.stringify(result)).not.toContain(token);
   });
 });

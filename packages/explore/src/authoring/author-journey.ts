@@ -1,14 +1,15 @@
 import type { Actor } from "@jevitate/screenplay";
-import type { Assertion, AuthoringRecording, PostdocDecision, Recording } from "@jevitate/recording";
+import type { Assertion, AuthoringRecording, OutcomeCheck, PostdocDecision, Recording } from "@jevitate/recording";
 import { diffTakes, applyPostdoc, flattenBaseFillSteps } from "@jevitate/recording";
 import type { GenerationPort, JudgmentPort } from "@jevitate/ai-core";
 import { deriveParamSchema } from "@jevitate/journey";
-import type { Journey, JourneyMetadata, JourneyNetworkCheck, JourneyParameter } from "@jevitate/journey";
+import type { Journey, JourneyMetadata, JourneyParameter } from "@jevitate/journey";
 import { runGoalBasedMission, type GoalBasedResult } from "../missions/goal-based.js";
 import type { Bounds, StopReason } from "../bounds.js";
 import type { SafetyConfig } from "../safety.js";
 import type { RunOutcome } from "../conversation.js";
-import { describeCheck, type SuccessCheck, type SuccessCheckResult } from "../success-checks.js";
+import type { SuccessCheck, SuccessCheckResult } from "../success-checks.js";
+import { deriveStepExpectations } from "./step-expectations.js";
 import { autoDecidePostdoc } from "./auto-decide.js";
 import { clock, type MissionFailure } from "@jevitate/domain";
 
@@ -60,14 +61,13 @@ export type AuthorTakeRunner = (take: { readonly index: number; readonly goal: s
 
 export interface AuthorJourneyRequest {
   goal: string;
-  /** A page assertion the discovery must reach (and the Journey's last step asserts). */
+  /** A page assertion the discovery must reach (kept as the Journey's first end-state assertion). */
   successAssertion?: Assertion;
   /**
-   * #322: more independent checks, ALL of which must hold with `successAssertion` — the goal
-   * mission's own kinds. A `page` check becomes an `assert` step at the Journey's end, as
-   * `successAssertion` does; a `requestMade`/`responseStatus` check becomes one of the Journey's
-   * `networkChecks`, evaluated over its replay's own requests. `reloadThen` is refused (a Journey
-   * cannot re-check after a reload yet). At least one check is required, from either field.
+   * #322/#400: more independent checks, ALL of which must hold with `successAssertion` — the goal
+   * mission's own kinds (`page`, `reloadThen`, `requestMade`, `responseStatus`). Every one is kept,
+   * in order, as the Journey's `metadata.endState`, judged after its last step on each replay. At
+   * least one check is required, from either field.
    */
   successChecks?: readonly SuccessCheck[];
   allowlist: readonly string[];
@@ -159,10 +159,6 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     ...(req.successChecks ?? []),
   ];
   if (checks.length === 0) throw new Error("authorJourney: a success check is required (successAssertion or successChecks)");
-  const reload = checks.find((c) => c.kind === "reloadThen");
-  if (reload !== undefined) {
-    throw new Error(`authorJourney: ${describeCheck(reload)} can't be authored into a Journey yet — use a page check or a requestMade/responseStatus check`);
-  }
   const runTake: AuthorTakeRunner = req.runTake ?? inProcessTake(req);
 
   const discovery = await runTake({ index: 0, goal: req.goal, successChecks: checks });
@@ -211,22 +207,18 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
   });
   const materializedRecording = applyPostdoc(base, diff, decisions);
 
-  // #118: the authored Journey's LAST step is always an `assert` on the independent success
-  // condition that gated authoring — so a replay proves the outcome the goal was driving toward,
-  // not just that navigation reached the final page. Jev's own "done" judgment is never trusted
-  // (ticket #1); this bakes that same independent oracle into the artifact itself.
-  // #322: every page check is asserted, in order; network checks go to `networkChecks`.
-  const parameterizedRecording = checks.reduce(
-    (r, c) => (c.kind === "page" ? appendSuccessAssertion(r, c.assertion) : r),
-    materializedRecording,
-  );
-  const networkChecks: JourneyNetworkCheck[] = checks.flatMap((c): JourneyNetworkCheck[] =>
-    c.kind === "requestMade"
-      ? [{ kind: "requestMade", method: c.method, pathGlob: c.pathGlob }]
-      : c.kind === "responseStatus"
-        ? [{ kind: "responseStatus", method: c.method, pathGlob: c.pathGlob, status: { ...c.status } }]
-        : [],
-  );
+  // #118/#400: the authored Journey proves the outcome the goal was driving toward, not just that
+  // navigation reached the final page. Every success check that gated authoring (all of them held:
+  // the discovery succeeded) is kept, as given, as an END-STATE assertion — every kind a goal run
+  // takes, `reloadThen` included — and `journey run` judges them with the goal run's own evaluator.
+  // Jev's own "done" judgment is never trusted (ticket #1); this bakes the independent oracle into
+  // the artifact itself.
+  // #400: each step's `expect` comes from what it changed (its write's status, the text it added),
+  // never from its own target.
+  const parameterizedRecording = deriveStepExpectations(materializedRecording, {
+    ...(req.safety?.readRequests === undefined ? {} : { readRequests: req.safety.readRequests }),
+  });
+  const endState: OutcomeCheck[] = checks.map((c) => structuredClone(c));
 
   const metadata: JourneyMetadata = {
     id: req.journeyId,
@@ -235,7 +227,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     params: deriveParamSchema(parameterizedRecording).required,
     authoredBy: "jev-driven",
     createdAtIso: clock.nowIso(),
-    ...(networkChecks.length === 0 ? {} : { networkChecks }),
+    endState,
     ...(secretParams.length === 0 ? {} : { parameters: secretParams }),
   };
 
@@ -299,20 +291,4 @@ function secretFillSteps(recording: Recording): Set<string> {
     if ((step.kind === "fill" || step.kind === "select") && "redacted" in step.value && step.value.redacted) keys.add(`${ref.page}:${ref.step}`);
   }
   return keys;
-}
-
-/**
- * Appends an `{ kind: "assert", check }` step to the LAST page's step list — the authored
- * Journey's final step (#118). A no-op-safe fallback when the recording somehow has no pages
- * (never expected past a successful discovery mission, which always emits at least one page).
- */
-function appendSuccessAssertion(recording: Recording, check: Assertion): Recording {
-  if (recording.pages.length === 0) return recording;
-  const lastIndex = recording.pages.length - 1;
-  return {
-    ...recording,
-    pages: recording.pages.map((page, i) =>
-      i === lastIndex ? { ...page, steps: [...page.steps, { step: { kind: "assert", check } }] } : page,
-    ),
-  };
 }

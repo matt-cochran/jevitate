@@ -19,7 +19,7 @@ useSkippingTime({ per: "all" });
  * edits, and acting while the save is still pending.
  */
 
-const state = { puts: 0, lastName: "Lovelace", keySubmits: 0, signups: 0, nativeSignins: 0 };
+const state = { puts: 0, lastName: "Lovelace", keySubmits: 0, signups: 0, nativeSignins: 0, kitCreates: 0 };
 
 /**
  * #155 — the issue's minimal repro: a submit button that native validation blocks (`required`
@@ -68,6 +68,35 @@ const KEYS_AND_SIGNUP = (): string => `<!doctype html><html><body>
     });
     document.getElementById("keyform").addEventListener("submit", async () => {
       await fetch("/api/keys", { method: "POST" });
+    });
+  </script>
+</body></html>`;
+
+/**
+ * #394 — a create form in a modal: one required "Name" field (plus an optional one), its Create
+ * button disabled until Name is non-empty. A boundary probe that empties Name, followed by an
+ * episode that edits the OTHER field, must not leave the form unsubmittable for the whole run.
+ */
+const MODAL_REQUIRED = (): string => `<!doctype html><html><body>
+  <h1>Brand kits</h1>
+  <button id="opener" aria-haspopup="dialog" onclick="document.getElementById('d').showModal()">New brand kit</button>
+  <dialog id="d" aria-label="New brand kit">
+    <form id="kitform">
+      <label>Name <input required name="name" aria-label="Name" /></label>
+      <label>Description <input name="description" aria-label="Description" /></label>
+      <button type="submit" id="create" disabled>Create</button>
+    </form>
+  </dialog>
+  <div id="toast" role="status"></div>
+  <script>
+    const form = document.getElementById("kitform");
+    const btn = document.getElementById("create");
+    const name = form.querySelector("[name=name]");
+    form.addEventListener("input", () => { btn.disabled = name.value.trim() === ""; });
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      await fetch("/api/brand-kits", { method: "POST" });
+      document.getElementById("toast").textContent = "Created";
     });
   </script>
 </body></html>`;
@@ -156,6 +185,15 @@ beforeAll(async () => {
     }
     if (path === "/api/signin-native" && req.method === "POST") {
       state.nativeSignins += 1;
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      return;
+    }
+    if (path === "/app/modal-required") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(MODAL_REQUIRED());
+      return;
+    }
+    if (path === "/api/brand-kits" && req.method === "POST") {
+      state.kitCreates += 1;
       res.writeHead(200, { "content-type": "application/json" }).end("{}");
       return;
     }
@@ -515,6 +553,28 @@ describe("adversarial — a visually-hidden skip link is never chosen (#161, reg
       // The run still did real work: the ordinary, fully-visible buttons WERE exercised.
       expect(result.transcript.some((e) => e.target?.includes("Action One") === true && e.actOk)).toBe(true);
       expect(result.transcript.some((e) => e.target?.includes("Action Two") === true && e.actOk)).toBe(true);
+    },
+    180_000,
+  );
+});
+
+describe("adversarial — a required-field modal form is submitted with valid values (#394)", () => {
+  it(
+    "after a boundary probe empties the required field, the next submit episode fills it validly: the form reaches the server",
+    async () => {
+      state.kitCreates = 0;
+      // Two rounds of each, as in the issue's run (`boundary-submit` 2, `double-submit` 2).
+      const result = await huntProfile(["boundary-submit", "double-submit"], {
+        seedUrl: `${origin}/app/modal-required`,
+        bounds: { maxDecisions: 4, maxActions: 30 },
+      });
+
+      expect(result.outcome).not.toBe("crashed");
+      expect(result.coverage.forms.found).toBe(1);
+      // The real ground truth: a create request reached the server.
+      expect(state.kitCreates).toBeGreaterThanOrEqual(1);
+      expect(result.coverage.forms.submitted).toBeGreaterThanOrEqual(1);
+      expect(result.coverage.shortfalls.some((s) => s.startsWith("form submitted 0 times"))).toBe(false);
     },
     180_000,
   );

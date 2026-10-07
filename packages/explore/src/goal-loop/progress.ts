@@ -6,6 +6,7 @@
 
 import { createHash } from "node:crypto";
 import { scrollPositionAt } from "../act.js";
+import { redactRevealed } from "../revealed-secrets.js";
 import { readPageText } from "../conversation.js";
 import { sampleHeap } from "../crash-report.js";
 import { describeCycle } from "../loop-cycle.js";
@@ -28,6 +29,7 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   // Status text (#79): alerts / invalid fields are not controls, so the model would never see
   // them. What newly appeared after the last step goes into its history; what shows now goes
   // into its prompt.
+  const after = ctx.statusAfter;
   {
     const before = ctx.status;
     ctx.status = await readPageStatus(ctx.page);
@@ -36,6 +38,21 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
       ctx.history.push(`after ${ctx.statusAfter ?? "the last step"}: ${describeStatus(appeared)}`);
     }
     ctx.statusAfter = null;
+  }
+  // #390 — text is not a control: a chat bubble, a next question or a result line an action added
+  // leaves the signature unchanged. What newly appeared on the same page is told to the model, and
+  // an action whose effect it is made progress (when no action delta, #303, already judged it).
+  const text = await readPageText(ctx.page, ctx.secrets).catch(() => "");
+  const previous = ctx.pageText;
+  ctx.pageText = { url: snap.url, text };
+  const replyTold = ctx.replyTold;
+  ctx.replyTold = false;
+  const acted = ctx.lastActedOp !== null && !["wait", "scroll_down", "scroll_up"].includes(ctx.lastActedOp);
+  const added = acted && previous !== null && previous.url === snap.url ? appearedLines(previous.text, text) : [];
+  if (added.length > 0 && !replyTold && ctx.deltas === null) {
+    // Redacted whole, then clipped: a clip never leaves part of a secret unmatched.
+    const line = `after ${after ?? "the last step"}: new text appeared on the page: ${added.map((l) => `"${l}"`).join(" ")}`;
+    ctx.history.push(clipLine(await redactRevealed(ctx.page, line, ctx.secrets)));
   }
 
   // #172 — a scroll that MOVED the page is progress (the model is reading a long page), even
@@ -65,7 +82,7 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   // #2 — no-progress: the last executed op left the page unchanged N times.
   // #303: the last action's delta decides when there is one — only `no-change` counts toward the
   // streak, `inconclusive` holds it; without one the page signature decides, as before.
-  const verdictNow = ctx.deltaVerdict;
+  const verdictNow = ctx.deltaVerdict ?? (added.length > 0 ? "relevant-change" : null);
   ctx.deltaVerdict = null;
   // #323: past the bound, a moving scroll is no progress even when the signature changed (a
   // virtualized list renders other rows at each position) — it only revisits what it has seen.
@@ -159,7 +176,7 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   // #367 — a loop the signature cannot show: the run alternates between at most two actions and two
   // page states (A→B→A→B…, a disclosure toggled open and shut, scrolls flipping between the same two
   // positions) with no request sent — every step "changed" the page, none made progress.
-  const cycle = await noteCycle(ctx, snap);
+  const cycle = await noteCycle(ctx, snap, text);
   if (cycle !== null) {
     ctx.history.push(cycle);
     ctx.incomplete = cycle;
@@ -177,7 +194,7 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
  * on (signature, visible-text hash, scroll position) and whether it sent a write (background traffic
  * excluded) — and returns the no-progress reason once the run is going round a cycle, else null.
  */
-async function noteCycle(ctx: RunContext, snap: Perceived["snap"]): Promise<string | null> {
+async function noteCycle(ctx: RunContext, snap: Perceived["snap"], text: string): Promise<string | null> {
   const step = ctx.cycleAction;
   ctx.cycleAction = null;
   const mark = ctx.cycleMark;
@@ -186,11 +203,39 @@ async function noteCycle(ctx: RunContext, snap: Perceived["snap"]): Promise<stri
   const monitor = monitorFor(ctx.page);
   const background = backgroundEndpoints(monitor, mark, ctx.turnWrites);
   const wrote = writesStartedSince(monitor, mark, ctx.isWrite).some((k) => !background.has(k));
-  const text = await readPageText(ctx.page).catch(() => "");
   const viewport = ctx.page.viewportSize();
   const pt = { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
   const scroll = await ctx.page.evaluate(scrollPositionAt, pt).catch(() => null);
   const state = `${snap.signature}|${createHash("sha1").update(text).digest("hex").slice(0, 16)}|${scroll ?? "?"}`;
   const verdict = ctx.cycles.note({ ...step, state, progress: wrote });
   return verdict === null ? null : describeCycle(verdict);
+}
+
+/** #390: the most text of new lines told after one action. */
+const APPEARED_CHARS = 400;
+
+function clipLine(s: string): string {
+  return s.length <= APPEARED_CHARS ? s : `${s.slice(0, APPEARED_CHARS - 1)}…`;
+}
+
+/**
+ * #390: the lines of `after` that `before` did not have (as many times). A line that differs only in
+ * its digits (a clock, a counter, "2 of 6") is the same line changing, not new text.
+ */
+export function appearedLines(before: string, after: string): string[] {
+  const lines = (t: string): string[] =>
+    t
+      .split("\n")
+      .map((l) => l.replace(/\s+/g, " ").trim())
+      .filter((l) => l !== "");
+  const shape = (l: string): string => l.replace(/\d+/g, "#");
+  const had = new Map<string, number>();
+  for (const l of lines(before)) had.set(shape(l), (had.get(shape(l)) ?? 0) + 1);
+  const out: string[] = [];
+  for (const l of lines(after)) {
+    const n = had.get(shape(l)) ?? 0;
+    if (n > 0) had.set(shape(l), n - 1);
+    else out.push(l);
+  }
+  return out;
 }

@@ -5,8 +5,8 @@ import type { BrowserPort, OpenOptions } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 
 /**
- * #322: `explore-author-journey --success` takes every kind `explore --success` takes but
- * reloadThen — a requestMade-only job reaches the browser instead of exiting 64. The port is a
+ * #322/#400: `explore-author-journey --success` takes every kind `explore --success` takes,
+ * reloadThen included — a requestMade-only job reaches the browser instead of exiting 64. The port is a
  * capturing fake that aborts before any browser starts.
  */
 function capture(): { program: ReturnType<typeof buildProgram>; lines: string[]; opens: OpenOptions[] } {
@@ -52,8 +52,13 @@ describe("explore-author-journey --success (#322)", () => {
     expect(r.opens).toBe(1);
   });
 
-  it("refuses reloadThen (and a bad spec) before any browser", async () => {
-    expect(await run(["reloadThen:visible:text=Saved"])).toEqual({ code: "E_EXPLORE_ASSERTION", opens: 0 });
+  it("#400: accepts reloadThen (a Journey re-checks it after a reload)", async () => {
+    const r = await run(["reloadThen:visible:text=Saved"]);
+    expect(r.code).not.toBe("E_EXPLORE_ASSERTION");
+    expect(r.opens).toBe(1);
+  });
+
+  it("refuses a bad spec before any browser", async () => {
     expect(await run(["nonsense:x"])).toEqual({ code: "E_EXPLORE_ASSERTION", opens: 0 });
   });
 });

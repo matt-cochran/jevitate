@@ -79,8 +79,12 @@ mission and reading the result honestly.
   `--fixture`, `--success-when`, `--allow-vacuous-checks`, `--dialogs`, `--reply-wait-ms`,
   `--viewport`/`--device`/`--geolocation`, …). A bound secret field becomes a secret Journey param
   (`secret1`). A `not-reached` result carries `discovery` (stop reason, checks, `resultPath`,
-  `transcriptPath`, `recordingPaths`, `screenshotsDir`): read the transcript before retrying. A
-  `reloadThen:` check is refused (64) before any browser: author with its inner check.
+  `transcriptPath`, `recordingPaths`, `screenshotsDir`): read the transcript before retrying. Every
+  `--success` check (any kind, `reloadThen:` included) becomes the Journey's end state
+  (`metadata.endState`), and each step's `expect` comes from what it changed (a write step gets
+  `expectRequests: responseStatus …=2xx`), never from its own target. Pass the outcome as checks
+  (`responseStatus:` for the write, `reloadThen:textIncludes:` for persistence) and add
+  `--action-deltas` so steps get page expectations too.
 
 ## MCP
 

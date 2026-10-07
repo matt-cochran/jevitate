@@ -1,5 +1,74 @@
 # jevitate
 
+## 0.7.0
+
+### Minor Changes
+
+- dca7fd8: `jevitate journey demo` Markdown guides end with one line about Journeeze (human comprehension
+  feedback for journeys, coming soon). Off with `JEVITATE_PROMOTIONS=0` or `"promotions": false` in
+  `~/.jevitate/config.json`. Never in stdout, JSON, subtitles, SARIF, JUnit or `check` output.
+- d115d4c: `jevitate journey lint <id>` reports the assertions that cannot prove a Journey's outcome (writes
+  without an asserted effect, visibility-only claims, nothing after the last write, …), as human
+  lines, a `--json` envelope, or a `--sarif` log CI can gate on (exit 1 when any error).
+  
+  `journey promote` now runs that lint first: a weak Journey is refused until the reviewer accepts it
+  with `--accept-weak "<reason>"`, which is recorded on the Journey as `metadata.acceptedWeak`.
+  Warnings never block promotion.
+- 5c8b401: `explore-author-journey` keeps the outcome evidence in the Journey (#400). Every `--success` check, of any kind (`textIncludes`, `valueEquals`, `count`, `attr`, `flashed`, `requestMade`, `responseStatus`, and now `reloadThen`), is saved as the Journey's end state (`metadata.endState`), and `journey run` / `source run` judge it after the last step with the goal run's own evaluator (one reload for the `reloadThen` checks). A step's `expect` now comes from what it changed: a write it sent becomes `expectRequests: responseStatus:<METHOD> <path>=2xx`, judged over the requests sent from that step on; a fill asserts its value; with `--action-deltas`, a step that changed the page asserts the text or element it added. Authoring never writes "the clicked target is visible" again. Older Journeys load and run unchanged.
+- 8b7200c: `jevitate journey verify <id> --mutate` proves each of a Journey's assertions can fail. It replays
+  the Journey once as recorded (it must pass), then once per mutation — each write step skipped
+  (`skip:<n>`), its write requests aborted (`block-write:<n>`), and each fill whose value an assertion
+  checks typed empty (`stale-value:<n>`) — and reports every assertion as `sensitive` (its paired
+  mutation broke it, at that assertion), `insensitive` (vacuous: it still passed), `cascade`,
+  `not-applied` or `unpaired`, with the Journey's content hash. Exit `0` when every paired assertion
+  is sensitive, `1` when any is insensitive, `2` when the proof is inconclusive. Mutations only skip
+  a step, type an empty value or abort the app's own writes; they never send or answer a request.
+  
+  A Journey can pin pairings in `metadata.mutationPairs` (`{ check: "end-state:0", mustFailWhen:
+  "skip:publish" }`, anchors by name), validated when it loads.
+- 9395c2c: A Journey's `navigate` URL can take declared parameters (#399), for single-use links such as invitation accept, magic-link sign-in or password reset: `"url": "/accept?token=${inviteToken}"` with `parameters: [{ "name": "inviteToken", "secret": true }]`, run with `journey run --param inviteToken=…` or MCP `run_journey` `params`. A placeholder must name a declared parameter (otherwise the Journey is refused when read) and must come after a literal origin. Its value is percent-encoded as one URL component, and the resolved URL must keep the template's origin. A secret value is redacted from the run's output and errors (including Playwright's navigation error), screenshots, action deltas, annotate/demo evidence, self-heal prompts and `source run`. Steps show it as `<param inviteToken>`.
+
+### Patch Changes
+
+- 9b97ae5: Adversarial runs judge a declared invariant on a Save only once that save has been answered (#388). A misuse step now waits (up to 5 s) for its requests before its invariants are checked, so a rejected save is no longer reported as violating `saidSaved -> stored` because the previous save's "Saved" was still on the page. And the Save that an act-while-pending sequence leaves in flight is now judged once the sequence settles, against the state from before the sequence and with the inputs as that Save sent them, so a page that says "Saved" over an HTTP 500 is reported as an invariant violation whose repro verify-fix and `regression capture` can replay.
+- e6a7d1d: Adversarial runs no longer send misuse values to an origin outside `--allow` (#403). A write request (a fetch/XHR or a native form post) that a misuse step fires to another origin is now aborted in the browser, listed in the result's `blockedWrites` with that origin and how to allow it (`--allow` the origin, or `--allow-write "<origin>/<path glob>"`), and never reported as a defect of the app; reads and subresources from other origins load as before. `docs/safety.md` now states exactly what `--allow` guarantees (the acting origin, checked before launch and after each settle; find-out goal writes; adversarial misuse writes) and what it does not block (subresources and third-party reads).
+- 21b7f45: Adversarial runs no longer judge a declared invariant on a save that is still in flight (#406). A misuse step waits up to 5 s for the writes it started to end; if one is still pending then, that step's `require`/`always` invariants are `inconclusive` (counted as unknown, never a violation and never a pass), and the transcript and the invariant report name the writes it waited on, e.g. `PUT /api/profile`. Invariants with `settle.withinMs` keep their own re-check window.
+- a8ff531: Journeys authored with `--action-deltas` now say what each step is expected to change (#400): a step with a recorded delta gets its `expectedResult` filled by code from that delta, so the reviewer sees what each step is supposed to prove. An `expectedResult` already present is never overwritten, and steps without a delta are unchanged.
+- fb6bfc4: Adversarial and other missions on a page with an open dialog now act on the dialog's own controls (#397). Controls below the fold that a fixed backdrop would cover once scrolled into view are left out of the inventory, so a `role=dialog` without `aria-modal` no longer ends a run with 0 actions and every step "obscured by" the backdrop.
+- deb1821: `jevitate load run` now judges each iteration exactly as `journey run` does: a Journey's end-state checks (`metadata.endState`, then legacy `networkChecks`) and each step's `expectRequests` are evaluated, so an iteration whose checks fail is counted as quarantined, not ok (#400). A Journey without checks behaves as before.
+- 434476b: Adversarial runs now submit a modal form whose submit stays disabled until its required fields are filled (#394). Before a submit probe (double-submit, boundary-submit, edit-cancel-save, act-while-pending), the other empty text fields get valid values, so the probe reaches the server instead of ending `insufficient-coverage`.
+- edaea57: `journey run`, `check` and a stale `--from-journey` prefix now name the failed step 1-based, the same way the rest of the output counts steps (#398). Before, "step 2 failed" meant the third step.
+- fd22779: Adversarial runs no longer report `failed-request` for a request the page itself cancelled with no response (#405). A superseded type-ahead or search read — including a read RPC sent as POST — and a document navigation replaced by another navigation are benign client-side aborts. An aborted write, and every genuine network failure (DNS, connection, SSL, timeout), still produces the signal.
+- f46b8b6: The repeat guard no longer treats a write that answered 5xx as rejected (#404). A 5xx, or a write that failed without any response, is outcome-unknown — the server may have committed it — so the control is not clicked again unless the page offers a retry or shows an error. Only a 4xx is treated as a rejected input that may be retried.
+- 1274f85: Goal runs no longer refuse "I've changed my nameservers" after "Review instructions" was clicked beside it (#391). When another control in the same part of the page (its section, form, dialog or card) has been used since a button's write, that button may be clicked once more even if its own part of the page looks unchanged, because client state may now make it send another request (`RetryShareDomain` instead of `RefreshShareDomain`). The next click is judged by the request it actually sends: the same click again with nothing used in between is still refused, as is a re-click after using a control elsewhere on the page (a menu), a paid or destructive control, and a write whose outcome is unknown.
+- 434476b: A goal run's rejected report keeps its real reason (#395). When the first answer was rejected and the retry found nothing, the run used to say "no answer was found on the pages seen" even though the answer was on the page. It now names the claim that couldn't be grounded and why, so the model can correct it instead of sending the same report again.
+- 9515c8f: A stale `explore --from-journey` prefix now reports what the page showed when the replay stopped — its URL, title and a short redacted text excerpt — so a reader can tell "the app said it was unavailable" from "jevitate clicked too early" (#398).
+- fb6bfc4: Goal runs now notice when an action's only effect is new text on the page, such as a chat reply or the next question in a wizard (#390). The model is told what text appeared (redacted like other page evidence), and the step counts as progress instead of "the page did not change". Text that only changes its digits, like a counter, is ignored.
+- e44f287: An icon-only control named by its `title`, `aria-labelledby` or a nested image's `alt` now shows that name in the control list, so `--deny` and `--paid` patterns match it (#396). A control that still has no accessible name is never clicked when the run declares `--deny` or `--paid` patterns, since those patterns can't be checked against it.
+- e44f287: Usability runs no longer report "an error interrupted the task" for reads the browser cancelled (`net::ERR_ABORTED`) because the run's own click navigated away, or for a gRPC-web/Connect request that answered and was then aborted (#393). Requests that answered 4xx/5xx, or failed without a navigation, are still reported.
+- Updated dependencies [9b97ae5]
+- Updated dependencies [e6a7d1d]
+- Updated dependencies [21b7f45]
+- Updated dependencies [a8ff531]
+- Updated dependencies [fb6bfc4]
+- Updated dependencies [dca7fd8]
+- Updated dependencies [d115d4c]
+- Updated dependencies [5c8b401]
+- Updated dependencies [8b7200c]
+- Updated dependencies [deb1821]
+- Updated dependencies [434476b]
+- Updated dependencies [9395c2c]
+- Updated dependencies [edaea57]
+- Updated dependencies [fd22779]
+- Updated dependencies [f46b8b6]
+- Updated dependencies [1274f85]
+- Updated dependencies [434476b]
+- Updated dependencies [9515c8f]
+- Updated dependencies [fb6bfc4]
+- Updated dependencies [e44f287]
+- Updated dependencies [e44f287]
+  - @jevitate/cli@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes

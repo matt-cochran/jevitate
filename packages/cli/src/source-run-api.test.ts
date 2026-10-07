@@ -219,6 +219,40 @@ describe("#26 runSourceJourney (run-gate wired)", () => {
   });
 });
 
+describe("#399 runSourceJourney: a secret navigate param never comes back", () => {
+  const SECRET = "inv-tok it's/9";
+  function inviteJourney(): SharedJourneyFile {
+    const j = sharedJourney("accept");
+    return {
+      ...j,
+      metadata: { ...j.metadata, parameters: [{ name: "inviteToken", secret: true }] },
+      recording: {
+        ...j.recording,
+        pages: [{ url: "/accept", steps: [{ step: { kind: "navigate", url: `${ORIGIN}/accept?token=\${inviteToken}`, expect: { kind: "urlIncludes", text: "/accept" } } }] }],
+      },
+    };
+  }
+
+  test("the run's result and an escaping error are redacted", async () => {
+    const s = await makeStores();
+    const { git } = makeFakeGit((d) => seedRemote(d, [inviteJourney()]));
+    const leaky: RunResolvedJourney = async (_file, params) =>
+      ({ outcome: "quarantined", reason: `failed at ${ORIGIN}/accept?token=${encodeURIComponent(params.inviteToken!)}`, output: { ...params } }) as unknown as JourneyRunResult;
+    const deps = { sourcesDir: s.sourcesDir, lockPath: s.lockPath, trust: s.trust, ack: s.ack, git, runJourney: leaky };
+    await addSource(deps, { name: "shop", gitUrl: "https://git.test/shop.git", acceptTou: true, ackedBy: "matthew" });
+
+    const result = await runSourceJourney(deps, { sourceName: "shop", journeyId: "accept", params: { inviteToken: SECRET } });
+    expect(JSON.stringify(result)).not.toContain("inv-tok");
+
+    const crashing: RunResolvedJourney = async (_file, params) => {
+      throw new Error(`crashed at ${ORIGIN}/accept?token=${encodeURIComponent(params.inviteToken!)}`);
+    };
+    const err = await runSourceJourney({ ...deps, runJourney: crashing }, { sourceName: "shop", journeyId: "accept", params: { inviteToken: SECRET } }).catch((e: unknown) => e as Error);
+    expect(err.message).toContain("crashed at");
+    expect(err.message).not.toContain("inv-tok");
+  });
+});
+
 describe("#118 realResolvedJourneyRunner: metadata.requiresAuth fails fast with no storageState", () => {
   test("refuses BEFORE any browser launch when the file declares requiresAuth and no storageState is given", async () => {
     const file: SharedJourneyFile = { ...sharedJourney("checkout"), metadata: { ...sharedJourney("checkout").metadata, requiresAuth: true } };

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -36,6 +36,64 @@ function makeJourney(overrides: Partial<Journey["metadata"]> = {}): Journey {
                 url: "/login",
                 expect: { kind: "visible", target: { label: "Username" } },
               },
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/** #401: a weak Journey — its only step's expect restates the step's own target, so it proves nothing. */
+function weakJourney(overrides: Partial<Journey["metadata"]> = {}): Journey {
+  return {
+    metadata: {
+      id: "weak",
+      name: "Weak",
+      promoted: false,
+      params: [],
+      createdAtIso: "2026-09-19T00:00:00Z",
+      ...overrides,
+    },
+    recording: {
+      version: "1.0.0",
+      site: "https://example.test",
+      pages: [
+        {
+          url: "/editor",
+          steps: [
+            {
+              step: { kind: "click", target: { testId: "publish" }, expect: { kind: "visible", target: { testId: "publish" } } },
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/** #401: a strengthened Journey — a step-request check on its write plus a reloadThen end state. */
+function strongJourney(overrides: Partial<Journey["metadata"]> = {}): Journey {
+  return {
+    metadata: {
+      id: "strong",
+      name: "Strong",
+      promoted: false,
+      params: [],
+      createdAtIso: "2026-09-19T00:00:00Z",
+      endState: [{ kind: "reloadThen", assertion: { kind: "textIncludes", target: { testId: "live" }, text: "published" } }],
+      ...overrides,
+    },
+    recording: {
+      version: "1.0.0",
+      site: "https://example.test",
+      pages: [
+        {
+          url: "/editor",
+          steps: [
+            {
+              step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status" }, text: "Published" } },
+              expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/publish", status: { class: 2 } }],
             },
           ],
         },
@@ -163,7 +221,7 @@ test("journey run --self-heal hybrid wires a SelfHealer into the JourneyRunner (
 });
 
 test("#124: journey promote <id> promotes an unpromoted journey (human-approval gate) and persists it", async () => {
-  const journeysDir = await seedJourneysDir([makeJourney({ id: "draft", promoted: false })]);
+  const journeysDir = await seedJourneysDir([strongJourney({ id: "draft" })]);
   const { program, lines } = newProgram();
 
   await program.parseAsync(["journey", "promote", "draft", "--dir", journeysDir, "--json"], { from: "user" });
@@ -207,4 +265,128 @@ test("journey run with no --self-heal is unchanged: default fail-closed, no AI s
   } finally {
     process.exitCode = savedExitCode;
   }
+});
+
+// #401 — `journey lint` and the promote gate.
+
+test("#401: journey lint reports an own-target-visible error for a weak Journey", async () => {
+  const dir = await seedJourneysDir([weakJourney()]);
+  const { program, lines } = newProgram();
+
+  await program.parseAsync(["journey", "lint", "weak", "--dir", dir, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.data.findings).toContainEqual(expect.objectContaining({ rule: "own-target-visible", level: "error" }));
+});
+
+test("#401: journey lint exits 1 when a Journey has an error finding", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const dir = await seedJourneysDir([weakJourney()]);
+    const { program } = newProgram();
+
+    await program.parseAsync(["journey", "lint", "weak", "--dir", dir, "--json"], { from: "user" });
+
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("#401: journey lint reports no errors for a strengthened Journey", async () => {
+  const dir = await seedJourneysDir([strongJourney()]);
+  const { program, lines } = newProgram();
+
+  await program.parseAsync(["journey", "lint", "strong", "--dir", dir, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.data.errors).toBe(0);
+});
+
+test("#401: journey lint exits 0 when a Journey has no error findings", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const dir = await seedJourneysDir([strongJourney()]);
+    const { program } = newProgram();
+
+    await program.parseAsync(["journey", "lint", "strong", "--dir", dir, "--json"], { from: "user" });
+
+    expect(process.exitCode).toBe(0);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("#401: journey lint on an unknown id fails with E_UNKNOWN_JOURNEY", async () => {
+  const dir = await seedJourneysDir([]);
+  const { program, lines } = newProgram();
+
+  await program.parseAsync(["journey", "lint", "does-not-exist", "--dir", dir, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
+});
+
+test("#401: journey promote of a weak Journey without --accept-weak fails with E_JOURNEY_WEAK", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const dir = await seedJourneysDir([weakJourney({ id: "weak" })]);
+    const { program, lines } = newProgram();
+
+    await program.parseAsync(["journey", "promote", "weak", "--dir", dir, "--json"], { from: "user" });
+    const parsed = JSON.parse(lines.join(""));
+
+    expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_JOURNEY_WEAK" } });
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("#401: journey promote of a weak Journey without --accept-weak leaves it unpromoted", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const dir = await seedJourneysDir([weakJourney({ id: "weak" })]);
+    const { program } = newProgram();
+    await program.parseAsync(["journey", "promote", "weak", "--dir", dir, "--json"], { from: "user" });
+
+    const { program: program2, lines: lines2 } = newProgram();
+    await program2.parseAsync(["journey", "list", "--dir", dir, "--json"], { from: "user" });
+    const listed = JSON.parse(lines2.join(""));
+
+    expect(listed.data).toContainEqual(expect.objectContaining({ id: "weak", promoted: false }));
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("#401: journey promote --accept-weak promotes a weak Journey", async () => {
+  const dir = await seedJourneysDir([weakJourney({ id: "weak" })]);
+  const { program, lines } = newProgram();
+
+  await program.parseAsync(["journey", "promote", "weak", "--accept-weak", "demo only", "--dir", dir, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed).toMatchObject({ v: 1, ok: true, data: { id: "weak", promoted: true } });
+});
+
+test("#401: journey promote --accept-weak records the acceptance reason in the Journey's metadata", async () => {
+  const dir = await seedJourneysDir([weakJourney({ id: "weak" })]);
+  const { program, lines } = newProgram();
+
+  await program.parseAsync(["journey", "promote", "weak", "--accept-weak", "demo only", "--dir", dir, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.data.acceptedWeak).toEqual({ reason: "demo only", rules: ["own-target-visible", "visibility-only"] });
+});
+
+test("#401: journey lint --sarif writes one result per finding", async () => {
+  const dir = await seedJourneysDir([weakJourney({ id: "weak" })]);
+  const sarifPath = join(await mkdtemp(join(tmpdir(), "jevitate-lint-")), "lint.sarif");
+  const { program, lines } = newProgram();
+
+  await program.parseAsync(["journey", "lint", "weak", "--sarif", sarifPath, "--dir", dir, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  const sarif = JSON.parse(await readFile(sarifPath, "utf8"));
+
+  expect(sarif.runs[0].results).toHaveLength(parsed.data.findings.length);
 });

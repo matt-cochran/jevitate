@@ -614,6 +614,24 @@ export class PageMonitor {
     return [...this.#inflight.values()];
   }
 
+  /**
+   * #406: waits until every write (not GET/HEAD, not a stream, not `--settle-ignore`d) started at or
+   * after `sinceMs` has ENDED — a long-poll demotion is not an end — or `deadlineMs` (this monitor's
+   * clock) passes. Returns the writes still in flight then (empty: all ended).
+   */
+  async writesEnded(sinceMs: number, deadlineMs: number): Promise<InflightRequest[]> {
+    const open = (): InflightRequest[] =>
+      [...this.#inflight.entries()]
+        .filter(([r, info]) => !STREAM_TYPES.has(info.resourceType) && this.#background.get(r) !== "ignored" && !isRead(info) && info.startedAt >= sinceMs)
+        .map(([, info]) => info);
+    for (;;) {
+      const left = open();
+      const remaining = deadlineMs - this.#now();
+      if (left.length === 0 || remaining <= 0 || this.#page.isClosed()) return left;
+      await this.#sleepOrActivity(remaining);
+    }
+  }
+
   /** In-flight requests currently treated as background, and why. */
   background(): Array<InflightRequest & { why: "stream" | "ignored" | "long-poll" }> {
     const out: Array<InflightRequest & { why: "stream" | "ignored" | "long-poll" }> = [];

@@ -1,9 +1,9 @@
 import type { Assertion, Recording } from "@jevitate/recording";
-import { checkAssertion, installFlashRecorder, readAssertionEvidence, readAssertionText } from "@jevitate/interpreter";
+import { checkAssertion, installFlashRecorder } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import type { Page } from "playwright";
 import type { MissionFailure } from "@jevitate/domain";
-import { reloadPage } from "../act.js";
+import { DEFAULT_ORACLE_SETTLE_MS, evaluateOutcomeChecks } from "../outcome-checks.js";
 import { monitorFor, type CapturedRequest, type RequestCapture } from "../page-monitor.js";
 import {
   describeCheck,
@@ -11,7 +11,6 @@ import {
   type SuccessCheck,
   type SuccessCheckResult,
 } from "../success-checks.js";
-import { redactText } from "../redact.js";
 import { explore, type ExploreConfig, type ExploreRun, type RunOutcome, type TranscriptEntry } from "../explore.js";
 import { NOT_REPLAYED, hangFinding, reproduceHang, withheldReason, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
@@ -242,16 +241,6 @@ function whyNot(run: ExploreRun, results: readonly SuccessCheckResult[]): string
   const ended = run.outcome.status === "incomplete" ? run.outcome.reason : `the run stopped (${run.stop})`;
   const failed = results.filter((r) => !r.passed).map((r) => `${r.check} ${r.detail}`);
   return failed.length === 0 ? ended : `${ended}; success check failed: ${failed.join("; ")}`;
-}
-
-const DEFAULT_ORACLE_SETTLE_MS = 10_000;
-
-/** Bound on the text quoted into a failed check's detail (#113): enough to see the mismatch, never a page dump. */
-const READ_TEXT_MAX_CHARS = 200;
-
-function quoteRead(s: string): string {
-  const flat = s.replace(/\s+/g, " ").trim();
-  return `"${flat.length > READ_TEXT_MAX_CHARS ? `${flat.slice(0, READ_TEXT_MAX_CHARS)}…` : flat}"`;
 }
 
 /** #202: the named message for a check that was satisfied before the run did anything. */
@@ -1003,21 +992,6 @@ function hangResult(run: ExploreRun, h: NonNullable<ExploreRun["hang"]>, reprodu
  * requests from BEFORE the oracle's own reload, and (#202) only those sent after the run's first
  * action — only what the run did counts. Results keep the order the checks were given in.
  */
-/**
- * #335: an exact `text=` target that matched no element while some element CONTAINS that text —
- * the usual reason a visible text "did not hold" (`text=` compares an element's whole text). Says
- * so, with the substring form to use. Empty for any other target or failure.
- */
-async function exactTextHint(page: Page, assertion: Assertion): Promise<string> {
-  const target = "target" in assertion ? assertion.target : undefined;
-  if (target === undefined || target.text === undefined || target.textMatch === "contains" || target.testId !== undefined || (target.role !== undefined && target.name !== undefined) || target.label !== undefined) return "";
-  const exact = await page.getByText(target.text, { exact: true }).count().catch(() => -1);
-  if (exact !== 0) return "";
-  const containing = await page.getByText(target.text).count().catch(() => 0);
-  if (containing === 0) return "";
-  return ` (no element's whole text is exactly ${JSON.stringify(target.text)} — text= matches an element's whole text — but ${containing} element(s) contain it: use textContains=${target.text})`;
-}
-
 async function evaluateChecks(
   cfg: GoalBasedMissionConfig,
   checks: readonly SuccessCheck[],
@@ -1026,60 +1000,13 @@ async function evaluateChecks(
   scope: NetworkScope,
   onVacuous?: (spec: string) => void,
 ): Promise<SuccessCheckResult[]> {
-  const timeoutMs = cfg.oracleTimeoutMs ?? 3000;
-  const ceilingMs = cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS;
-  const results = new Map<number, SuccessCheckResult>();
-  const needsSettle = checks.some((c) => c.kind !== "page");
-  if (needsSettle) await monitorFor(page).waitSettled({ ceilingMs });
-  const requests = capture?.sent() ?? [];
-
-  const assertOn = async (actor: Actor, assertion: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
-    const passed = await checkAssertion(actor, assertion, { timeoutMs });
-    // A visual-state check (#148) always says what it observed — the ratio, the computed values, the
-    // flash timing — pass or fail (bounded, redacted: it is page-derived).
-    const evidence = await readAssertionEvidence(actor, assertion).catch(() => null);
-    if (evidence !== null) {
-      const seen = redactText(evidence, cfg.secrets ?? []).slice(0, READ_TEXT_MAX_CHARS);
-      return { check: describeCheck(check), passed, detail: `${passed ? "held" : "did not hold"} ${when} (${seen})` };
-    }
-    if (passed) return { check: describeCheck(check), passed, detail: `held ${when}` };
-    // #113/#213 — a `textIncludes` or `valueEquals` mismatch (including a failing
-    // `reloadThen:valueEquals`) is otherwise invisible ("did not hold" alone doesn't say whether the
-    // text/value is wrong or just differently cased). What was actually read, bounded and redacted
-    // (page text or a form value is untrusted, and may carry a secret) — never a full-page dump.
-    const read = await readAssertionText(actor, assertion);
-    const detail =
-      read === null
-        ? `did not hold ${when}${await exactTextHint(page, assertion)}`
-        : `did not hold ${when} (read: ${quoteRead(redactText(read, cfg.secrets ?? []))})`;
-    return { check: describeCheck(check), passed, detail };
-  };
-
-  for (const [i, c] of checks.entries()) {
-    if (c.kind === "page") results.set(i, await assertOn(cfg.actor, c.assertion, "on the final page", c));
-  }
-  const reloads = [...checks.entries()].filter(([, c]) => c.kind === "reloadThen");
-  if (reloads.length > 0) {
-    // Persistence: what the page shows after a reload came from the server, not local UI state.
-    const reloaded = await reloadPage(page);
-    if (reloaded.ok) {
-      await page.waitForLoadState("domcontentloaded", { timeout: ceilingMs }).catch(() => undefined);
-      await monitorFor(page).waitSettled({ ceilingMs });
-    }
-    for (const [i, c] of reloads) {
-      if (c.kind !== "reloadThen") continue;
-      results.set(
-        i,
-        reloaded.ok
-          ? await assertOn(cfg.actor, c.assertion, "after a reload", c)
-          : { check: describeCheck(c), passed: false, detail: `the page could not be reloaded: ${reloaded.reason ?? "unknown"}` },
-      );
-    }
-  }
-  for (const [i, c] of checks.entries()) {
-    if (c.kind === "requestMade" || c.kind === "responseStatus") {
-      results.set(i, judgeNetworkCheck(c, requests, capture?.truncated ?? false, scope, onVacuous));
-    }
-  }
-  return checks.map((c, i) => results.get(i) ?? { check: describeCheck(c), passed: false, detail: "not evaluated" });
+  return evaluateOutcomeChecks(checks, {
+    actor: cfg.actor,
+    page,
+    capture,
+    ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
+    timeoutMs: cfg.oracleTimeoutMs ?? 3000,
+    settleMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS,
+    judgeNetwork: (c, requests, truncated) => judgeNetworkCheck(c, requests, truncated, scope, onVacuous),
+  });
 }

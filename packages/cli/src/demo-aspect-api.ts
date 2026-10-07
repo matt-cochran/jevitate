@@ -485,6 +485,12 @@ export interface ApproveDemoResult {
   /** What approving wrote into the Journey. */
   readonly changes: AnnotationChange[];
   readonly promoted: boolean;
+  /**
+   * #401: the assertion-strength errors the approval waived. A demo Journey shows a flow rather than
+   * proving an outcome, so approving the demo is the reviewer's `--accept-weak`; the waiver is recorded
+   * on the Journey (`metadata.acceptedWeak`) and listed here.
+   */
+  readonly acceptedWeak?: readonly string[];
   readonly final?: { readonly video?: string; readonly subtitles?: string; readonly guide?: string };
 }
 
@@ -506,6 +512,9 @@ export async function loadDemoForApproval(journeysDir: string, id: string): Prom
  * annotations; only when it replays does it apply the annotations, promote the Journey and remove
  * the demo record. A stale replay promotes nothing (outcome `stale`).
  */
+/** #401: the reason recorded when a demo approval waives the assertion-strength lint. */
+const DEMO_APPROVAL_WAIVER = "approved as a demo (jevitate demo approve)";
+
 export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemoResult> {
   assertDemoEnvironment(opts.environment);
   const { journey, annotations } = await loadDemoForApproval(opts.journeysDir, opts.id);
@@ -525,7 +534,8 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
     };
   }
   const applied = await approveJourneyAnnotations(opts.journeysDir, opts.id);
-  await promoteJourney(opts.journeysDir, opts.id);
+  const promotedJourney = await promoteJourney(opts.journeysDir, opts.id, { acceptWeak: DEMO_APPROVAL_WAIVER });
+  const waived = promotedJourney.metadata.acceptedWeak?.rules;
   await rm(demoDraftPath(opts.journeysDir, opts.id), { force: true });
   return {
     id: opts.id,
@@ -533,6 +543,7 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
     environment,
     steps,
     changes: applied.changes,
+    ...(waived === undefined ? {} : { acceptedWeak: waived }),
     promoted: true,
     final: outputsOf(demo),
   };

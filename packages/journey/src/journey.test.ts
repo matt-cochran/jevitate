@@ -46,6 +46,17 @@ describe("JourneySchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts metadata.acceptedWeak (reason + rules) and still rejects a malformed one (#401)", () => {
+    const accepted = JourneySchema.safeParse({
+      metadata: {
+        id: "x", name: "x", promoted: true, params: [], createdAtIso: "2026-09-20T00:00:00Z",
+        acceptedWeak: { reason: "demo only", rules: ["own-target-visible"] },
+      },
+      recording,
+    });
+    expect(accepted.success).toBe(true);
+  });
+
   it("rejects an unknown authoredBy value", () => {
     const result = JourneySchema.safeParse({
       metadata: { id: "x", name: "x", promoted: false, params: [], authoredBy: "made-up", createdAtIso: "2026-09-20T00:00:00Z" },
