@@ -177,13 +177,15 @@ function sleep(ms: number): Promise<void> {
  * `RecordingInterpreter` to report "assertion X failed at step Y".
  */
 export class PostconditionFailed extends Error {
-  constructor(a: Assertion, context?: string) {
-    super(`${context ? `${context}: ` : ""}postcondition failed: ${describeAssertion(a)}`);
+  /** `detail` (#409): how a waited expectation ended (timed out, or a hang naming its progress signal). */
+  constructor(a: Assertion, context?: string, detail?: string) {
+    super(`${context ? `${context}: ` : ""}postcondition failed: ${describeAssertion(a)}${detail === undefined ? "" : ` — ${detail}`}`);
     this.name = "PostconditionFailed";
   }
 }
 
-function describeAssertion(a: Assertion): string {
+/** An assertion's shape in one line (kind, target, expected value) — for a failure message. */
+export function describeAssertion(a: Assertion): string {
   switch (a.kind) {
     case "visible":
       return `kind=visible target=${JSON.stringify(a.target)}`;

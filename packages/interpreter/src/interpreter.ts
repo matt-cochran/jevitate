@@ -3,6 +3,7 @@ import { RecordingSchema } from "@jevitate/recording";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { installFlashRecorder } from "./flash-recorder.js";
 import type { InterpretResult } from "./interpret-result.js";
+import type { StepWait } from "./outcome-wait.js";
 import { runStep } from "./run-step.js";
 import { ReplayTargetError, type ResolveTargetOptions } from "./resolve-target.js";
 import type { RecordingSink } from "./sink.js";
@@ -204,6 +205,10 @@ function validateRecording(rec: Recording): void {
 function checkForEachChildKinds(step: Step, pageIndex: number, stepIndexInPage: number): void {
   if (step.kind !== "forEach") return;
   for (const childStep of step.steps) {
+    // #409: an outcome wait is a top-level step's; a row-scoped child never waits.
+    if ("waitFor" in childStep && childStep.waitFor !== undefined) {
+      throw new Error(`forEach at page ${pageIndex} step ${stepIndexInPage} has a child step with waitFor (an outcome wait belongs on a top-level step)`);
+    }
     if (!SUPPORTED_FOREACH_CHILD_KINDS.has(childStep.kind)) {
       throw new Error(
         `forEach at page ${pageIndex} step ${stepIndexInPage} has an unsupported child kind: ${childStep.kind}`,
@@ -272,6 +277,10 @@ async function runFlat(
   if (flat.slice(startIndex, lastIndex + 1).some((r) => stepAssertions(r.step).some((a) => a.kind === "flashed"))) {
     await installFlashRecorder(actor.ability(BrowseTheWebToken).session.page);
   }
+  // #409: each waited step's outcome wait, reported on the result (only when a step waited).
+  const waits: StepWait[] = [];
+  const stepOpts = { ...targetOpts, onWait: (w: StepWait) => void waits.push(w) };
+  const withWaits = <R extends InterpretResult>(r: R): R => (waits.length === 0 ? r : { ...r, waits });
   const runStartedAt = clock.monotonicMs();
   let lastSunkStepEndedAt = runStartedAt;
   for (let i = startIndex; i <= lastIndex; i++) {
@@ -286,13 +295,15 @@ async function runFlat(
     }
     const stepStartedAt = clock.monotonicMs();
     try {
-      outcome = await runStep(actor, flat[i], vars, i, targetOpts);
+      outcome = await runStep(actor, flat[i], vars, i, stepOpts);
     } catch (err) {
       await observe(observer?.afterStep && (() => observer.afterStep!({ actor, index: i, recorded, outcome: "failed" })));
       const message = err instanceof Error ? err.message : String(err);
-      return err instanceof ReplayTargetError
-        ? { outcome: "failed", at: i, error: message, reason: err.kind }
-        : { outcome: "failed", at: i, error: message };
+      return withWaits(
+        err instanceof ReplayTargetError
+          ? { outcome: "failed", at: i, error: message, reason: err.kind }
+          : { outcome: "failed", at: i, error: message },
+      );
     }
     const stepEndedAt = clock.monotonicMs();
     await observe(
@@ -300,7 +311,7 @@ async function runFlat(
         (() => observer.afterStep!({ actor, index: i, recorded, outcome: outcome.kind === "awaiting_human" ? "awaiting_human" : "done" })),
     );
     if (outcome.kind === "awaiting_human") {
-      return { outcome: "awaiting_human", at: i, prompt: outcome.prompt, resume: outcome.resume };
+      return withWaits({ outcome: "awaiting_human", at: i, prompt: outcome.prompt, resume: outcome.resume });
     }
     if (sink) {
       const timing: StepTiming = {
@@ -312,7 +323,7 @@ async function runFlat(
       lastSunkStepEndedAt = stepEndedAt;
     }
   }
-  return { outcome: "completed", vars: Object.fromEntries(vars) };
+  return withWaits({ outcome: "completed", vars: Object.fromEntries(vars) });
 }
 
 /** Every assertion a step carries (its postcondition / check / resume). */

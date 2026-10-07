@@ -243,3 +243,21 @@ describe("JourneyRunner self-heal (Ticket #7)", () => {
     expect(healer.reLearnStep).toHaveBeenCalledOnce(); // never re-heals the same index in a loop
   });
 });
+
+// === #409: per-step outcome waits reach the run result ===
+
+describe("JourneyRunner — #409 step waits", () => {
+  const wait = (step: number, waitedMs: number, ending: "held" | "timeout" | "hang" = "held") => ({ step, waitedMs, maxMs: 240_000, ending, polls: 9 });
+
+  it("carries the interpreter's waits on an ok result; none → no `waits` key", async () => {
+    const r = new JourneyRunner(fakeActor, fakeInterpreter({ outcome: "completed", vars: {}, waits: [wait(3, 125_000)] }));
+    expect(await r.run({ journey: journeyNoVars, params: {}, policy: safeRunPolicy() })).toEqual({ outcome: "ok", output: {}, waits: [wait(3, 125_000)] });
+    const plain = new JourneyRunner(fakeActor, fakeInterpreter({ outcome: "completed", vars: {} }));
+    expect(await plain.run({ journey: journeyNoVars, params: {}, policy: safeRunPolicy() })).toEqual({ outcome: "ok", output: {} });
+  });
+
+  it("carries a failed wait on a quarantined result", async () => {
+    const r = new JourneyRunner(fakeActor, fakeInterpreter({ outcome: "failed", at: 2, error: "assert: postcondition failed: … — hang: …", waits: [wait(3, 30_000, "hang")] }));
+    expect(await r.run({ journey: journeyNoVars, params: {}, policy: safeRunPolicy() })).toMatchObject({ outcome: "quarantined", at: 2, waits: [wait(3, 30_000, "hang")] });
+  });
+});

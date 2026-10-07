@@ -14,7 +14,8 @@ export { intersectionRatio, intersectionArea, boxesOverlap, sizeViolation, type 
 export { parseColor, parseNumber, styleChannel, compareStyle, type Rgba, type Comparison } from "./css-values.js";
 export { installFlashRecorder, readFlashes, type FlashQuery, type FlashResult } from "./flash-recorder.js";
 export { applyTextEdit, describeTextEdit } from "./rich-text.js";
-export { runStep } from "./run-step.js";
+export { runStep, type StepWaitHooks } from "./run-step.js";
+export { waitForOutcome, type StepWait } from "./outcome-wait.js";
 export type { StepOutcome } from "./outcome.js";
 export { RecordingInterpreter, type StepObserver } from "./interpreter.js";
 export type { InterpretResult } from "./interpret-result.js";

@@ -99,6 +99,15 @@ inconclusive rather than wrong. Failed steps are counted 1-based everywhere.
   pairing (`{ "check": "end-state:0", "mustFailWhen": "skip:publish" }`). MCP: `verify_journey`.
   Replays share the app's server-side state, so reset it between replays with `--fixtures` or
   `--before` when a blocked save could find the base replay's data.
+- **A step can wait for a long-running job (#409).** A step's `expect` (or an `assert` step's
+  `check`) may declare `waitFor: { maxMs, until: "held", progress, stallMs, reload, pollMs }`: replay
+  polls the expectation until it holds or `maxMs` (at most 30 min) passes, reloading the page between
+  polls with `reload: true`. While it waits, a declared `progress` signal must hold or change at
+  least once per `stallMs` (default 30 s), otherwise the step fails early as a hang naming the
+  signal instead of waiting out the budget. The run result lists each waited step's actual wait
+  under `waits`, so a slow job shows up as a number. Under `journey verify --mutate`, the waited
+  claim on a skipped or write-blocked step waits at most its hang threshold. Steps without
+  `waitFor` behave exactly as before.
 
 ### Fixed
 
