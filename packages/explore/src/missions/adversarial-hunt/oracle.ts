@@ -110,7 +110,7 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
    */
   ctx.adjudicate = async (
     action: InvariantAction | null = null,
-    opts: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null } = {},
+    opts: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null; readonly inFlight?: readonly string[] } = {},
   ): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
     // #300: after an identity switch no invariant is judged — they were declared for the original
     // identity — and what the monitor observed for this action is dropped. Hard signals still count.
@@ -121,11 +121,13 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
     // An unsettled sequence's pending submit is judged as its own action now that the sequence
     // settled, against the before-snapshot armed at the sequence's start (never mid-flight).
     const earlier = opts.earlierSubmit ?? null;
+    // #406: writes the step started that never ended within its settle ceiling — its invariants are inconclusive.
+    const inFlight = opts.inFlight !== undefined && opts.inFlight.length > 0 ? { inFlight: opts.inFlight } : {};
     const earlierResult =
       ctx.declared === null || skip || earlier === null || !ctx.armed
         ? null
-        : await ctx.declared.after(ctx.sessions.actor, earlier.action, { earlier: true, inputsAsOf: earlier.inputs });
-    const declaredResult = ctx.declared === null || skip ? null : await ctx.declared.after(ctx.sessions.actor, ctx.armed ? action : null);
+        : await ctx.declared.after(ctx.sessions.actor, earlier.action, { earlier: true, inputsAsOf: earlier.inputs, ...inFlight });
+    const declaredResult = ctx.declared === null || skip ? null : await ctx.declared.after(ctx.sessions.actor, ctx.armed ? action : null, inFlight);
     ctx.armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
     await clock.sleep(10);
@@ -170,7 +172,10 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
       findings.push({ ...ctx.declaredFinding(v), origin: { step: earlier?.step ?? 0, recordingStepIndex: earlier?.recordingStepIndex ?? 0 } });
     }
     for (const v of declaredResult?.violations ?? []) findings.push(ctx.declaredFinding(v));
-    if (findings.length === 0 && stepAdvisories.length === 0) return null;
+    const inconclusive = [...(earlierResult?.inconclusive ?? []), ...(declaredResult?.inconclusive ?? [])].map((i) => i.reason);
+    if (findings.length === 0 && stepAdvisories.length === 0) {
+      return inconclusive.length === 0 ? null : { reason: inconclusive.join("; "), findings, advisories: stepAdvisories };
+    }
     const reasons = [
       ...hardSignals.map((s) => s.detail),
       invariantResult.ok ? undefined : invariantResult.reason,
@@ -180,7 +185,7 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
       .filter((r): r is string => Boolean(r))
       .join("; ");
     const prefix = findings.length > 0 ? "defect" : "advisory";
-    return { reason: `${prefix}: ${reasons}`, findings, advisories: stepAdvisories };
+    return { reason: [`${prefix}: ${reasons}`, ...inconclusive].join("; "), findings, advisories: stepAdvisories };
   };
 
   /**

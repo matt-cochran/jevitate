@@ -149,7 +149,7 @@ export interface HuntContext {
    * `action`; with no action only its `never`s apply). Returns the transcript reason and the step's
    * findings, or null when nothing broke.
    */
-  readonly adjudicate: (action?: InvariantAction | null, opts?: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null; }) => Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[]; } | null>;
+  readonly adjudicate: (action?: InvariantAction | null, opts?: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null; readonly inFlight?: readonly string[]; }) => Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[]; } | null>;
   /**
    * Signals that land AFTER a step was adjudicated — while the next page loads and settles (a 500
    * fired by the page the action opened) — belong to that step: drained and folded into it, so a

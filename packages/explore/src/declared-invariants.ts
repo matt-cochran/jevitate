@@ -162,6 +162,8 @@ export class InvariantMonitor {
   /** The latest list per `[*]` `network` observable (#147). */
   readonly #networkLists = new Map<string, { value: ObservedValue[]; evidence: string }>();
   readonly #tally = new Map<string, { checked: number; held: number; violated: number; unknown: number }>();
+  /** #406: why an invariant was last left inconclusive (its step's writes were still in flight). */
+  readonly #inconclusive = new Map<string, string>();
   /** Every auth token this monitor has read (#135): scrubbed from evidence/values the instant it's read. */
   readonly #authSecrets: string[] = [];
   /** #147: bound captures (first value wins) and the JSON paths of `network` captures. */
@@ -222,7 +224,8 @@ export class InvariantMonitor {
   report(): InvariantReport[] {
     return this.#invariants.map((c) => {
       const tally = this.#tally.get(c.decl.id) ?? { checked: 0, held: 0, violated: 0, unknown: 0 };
-      if (c.gate === null) return { id: c.decl.id, ...tally };
+      const inconclusive = this.#inconclusive.get(c.decl.id);
+      if (c.gate === null) return { id: c.decl.id, ...tally, ...(inconclusive === undefined ? {} : { inconclusive }) };
       const decided = tally.held + tally.violated > 0;
       const why = decided
         ? undefined
@@ -457,6 +460,8 @@ export class InvariantMonitor {
     const violations: InvariantViolation[] = [];
     const unknown: string[] = [];
     const held: string[] = [];
+    const inconclusive: Array<{ id: string; reason: string }> = [];
+    const inFlight = opts.inFlight ?? [];
     const pageUrl = safeUrl(page);
     this.#lastPage = page;
     // #195: the responses a `never.response` drains now happened during this action (or the page load).
@@ -471,6 +476,16 @@ export class InvariantMonitor {
       const tally = this.#tally.get(c.decl.id) ?? { checked: 0, held: 0, violated: 0, unknown: 0 };
       this.#tally.set(c.decl.id, tally);
       tally.checked += 1;
+      // #406: the action's writes have not ended — its outcome is not on the page yet. Neither a
+      // pass nor a violation: inconclusive, naming what it waited on.
+      if (inFlight.length > 0 && c.decl.never === undefined && c.decl.settle === undefined) {
+        const reason = `${c.decl.id} inconclusive${action?.step === undefined ? "" : ` at step ${action.step}`}: writes still in flight when the step's settle ceiling passed: ${inFlight.join(", ")}`;
+        tally.unknown += 1;
+        unknown.push(c.decl.id);
+        inconclusive.push({ id: c.decl.id, reason });
+        this.#inconclusive.set(c.decl.id, reason);
+        continue;
+      }
       const verdict = await this.#evaluate(c, page, actor, action, before, after, pageUrl);
       // #151: settle only ever polls on a decided violation (below), so "unknown" never went
       // through the loop — the before-snapshot next action rearms from is still fresh for it.
@@ -488,10 +503,11 @@ export class InvariantMonitor {
     }
     // A settle window may have run for a while: then the page moved on, so snapshot it afresh.
     if (opts.rearm === true) this.#before = polled ? await this.#snapshot(page, beforeNames) : after;
-    if (earlier) return { violations, unknown, held };
+    const undecided = inconclusive.length === 0 ? {} : { inconclusive };
+    if (earlier) return { violations, unknown, held, ...undecided };
     // #147: bind what this action produced, then run every cross-actor check whose capture is now bound.
     const cross = await this.#crossActor(actor, action, opts);
-    return { violations: [...violations, ...cross.violations], unknown: [...unknown, ...cross.unknown], held: [...held, ...cross.held] };
+    return { violations: [...violations, ...cross.violations], unknown: [...unknown, ...cross.unknown], held: [...held, ...cross.held], ...undecided };
   }
 
   /**

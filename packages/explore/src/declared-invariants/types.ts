@@ -89,6 +89,11 @@ export interface InvariantReport {
   readonly observer?: string;
   /** #147: why a cross-actor invariant was never decided (never ran, session lost, unreadable). */
   readonly undecided?: string;
+  /**
+   * #406: why it was inconclusive at some step — the writes that step started were still in flight
+   * when its settle ceiling passed (the latest such step; each is also counted in `unknown`).
+   */
+  readonly inconclusive?: string;
 }
 
 /**
@@ -154,6 +159,13 @@ export interface AfterOptions {
    * place of the settled read, so a field edited after the submit is judged as it was submitted.
    */
   readonly inputsAsOf?: HeldInputs;
+  /**
+   * #406: writes the action started that had not ENDED when its settle ceiling passed (`PUT /path`).
+   * Its `require`/`always` invariants are then inconclusive — counted `unknown`, never judged on a page
+   * still waiting for its save (a `settle` invariant keeps its own re-check window; a `never` is
+   * judged as always).
+   */
+  readonly inFlight?: readonly string[];
 }
 
 /** `dom` observables that read an input's `value`, by name (`InvariantMonitor.inputValues`). */
@@ -165,4 +177,6 @@ export interface AfterResult {
   readonly unknown: string[];
   /** Invariants that applied and held. */
   readonly held: string[];
+  /** #406: invariants that applied but were not judged (writes still in flight), and why. */
+  readonly inconclusive?: ReadonlyArray<{ readonly id: string; readonly reason: string }>;
 }

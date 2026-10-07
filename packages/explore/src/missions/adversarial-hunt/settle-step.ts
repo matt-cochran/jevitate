@@ -6,15 +6,30 @@
  */
 
 import { redactUrl } from "@jevitate/ai-core";
+import { clock } from "@jevitate/domain";
 import type { ActResult } from "../../act.js";
 import { normalizeRoute } from "../../adversarial/defect-fingerprint.js";
 import { detectForms, planMisuseEpisode, type MisuseStep } from "../../adversarial/form-misuse.js";
 import { identityChange, readIdentity } from "../../adversarial/identity.js";
 import { controlIdentity } from "../../coverage/fingerprint.js";
-import { monitorFor } from "../../page-monitor.js";
+import { monitorFor, type InflightRequest } from "../../page-monitor.js";
 import type { HuntState } from "./context.js";
 import type { EpisodeState, Turn } from "./episode.js";
 import { FORM_STRATEGY, joinReasons } from "./helpers.js";
+
+/** How long a settled misuse step waits for its requests (and its writes) before it is judged (ms). */
+export const STEP_SETTLE_CEILING_MS = 5_000;
+
+/** A write still in flight, as a verdict names it: method and redacted path (never the query). */
+function describeWrite(r: InflightRequest): string {
+  let path = r.url;
+  try {
+    path = new URL(redactUrl(r.url)).pathname;
+  } catch {
+    /* keep the URL as given */
+  }
+  return `${r.method.toUpperCase()} ${path}`;
+}
 
 /** What a fired step hands to its settling: where and when it acted, its result, and its transcript entry. */
 export interface FiredStep {
@@ -34,7 +49,15 @@ export async function settleMisuseStep(ctx: HuntState, ep: EpisodeState, turn: T
   // back first. Read mid-flight, a save the server rejects still shows the previous save's "Saved",
   // and a declared invariant reports a violation no replay reproduces. A page that never settles
   // is left to the hang check that follows the verdict.
-  await monitorFor(ctx.sessions.page).waitSettled({ ceilingMs: 5_000 }).catch(() => undefined);
+  const monitor = monitorFor(ctx.sessions.page);
+  const settleStart = clock.now();
+  await monitor.waitSettled({ ceilingMs: STEP_SETTLE_CEILING_MS }).catch(() => undefined);
+  // #406: settling can end before a slow save does (the ceiling, or its demotion to a long-poll).
+  // Every write this step — or the unsettled sequence it closes — started must have ENDED before its
+  // declared invariants are judged; one still in flight at the ceiling makes them inconclusive.
+  const inFlight = (
+    await monitor.writesEnded(ctx.chainStart ?? firedAt, settleStart + STEP_SETTLE_CEILING_MS).catch(() => [])
+  ).map(describeWrite);
   // #303 (opt-in): what this settled action changed — on its transcript step, and kept as
   // evidence for a defect first seen at this step.
   if (ctx.deltaArmed !== null) {
@@ -105,7 +128,7 @@ export async function settleMisuseStep(ctx: HuntState, ep: EpisodeState, turn: T
   // submit (that one is judged as this step): it is the action that said "Saved" or not.
   const earlierSubmit = s.submitsForm === undefined ? ep.earlierSubmit : null;
   ep.earlierSubmit = null;
-  const verdict = await ctx.adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step }, { earlierSubmit });
+  const verdict = await ctx.adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step }, { earlierSubmit, inFlight });
   const soft = verdict === null ? await ctx.softJudgment(ep.stepSnap) : {};
   const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
   ctx.transcript.record({
