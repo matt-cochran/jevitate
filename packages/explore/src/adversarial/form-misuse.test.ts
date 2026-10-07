@@ -228,6 +228,46 @@ describe("planMisuseEpisode — disclosure controls open forms behind a modal tr
   });
 });
 
+describe("planMisuseEpisode — a form whose submit is disabled until valid (#394)", () => {
+  const MODAL = (nameValue?: string): Control[] => [
+    control({ name: "Name", role: "textbox", tag: "input", inputType: "text", form: "form#kit", ...(nameValue === undefined ? {} : { value: nameValue }) }),
+    control({ name: "Description", role: "textbox", tag: "input", inputType: "text", form: "form#kit" }),
+    control({ name: "Create", role: "button", tag: "button", form: "form#kit", submits: true, enabled: nameValue !== undefined }),
+  ];
+
+  it("fills the other EMPTY fields with valid values before the submit, so the edit under test can be submitted", () => {
+    const controls = MODAL();
+    const exercised = new Set([controlKey(controls[0] as Control)]);
+    const ep = planMisuseEpisode(ctx(controls, { exercised }));
+    expect(ep?.steps.map((s) => [s.op, s.control?.name ?? null, s.fillText ?? null])).toEqual([
+      ["type", "Name", "test-value"],
+      ["type", "Description", "test-value"],
+      ["click", "Create", null],
+      ["click", "Create", null],
+    ]);
+  });
+
+  it("boundary-submit keeps its probe value on its own field and fills only the others", () => {
+    const ep = planMisuseEpisode(ctx(MODAL(), { strategy: "boundary-submit" }));
+    expect(ep?.steps.map((s) => [s.op, s.control?.name ?? null, s.fillText ?? null])).toEqual([
+      ["type", "Description", "test-value"],
+      ["type", "Name", ""],
+      ["click", "Create", null],
+    ]);
+  });
+
+  it("never overwrites a field that already has a value, and adds nothing while the submit is enabled", () => {
+    const controls = MODAL("Acme");
+    const exercised = new Set([controlKey(controls[0] as Control)]);
+    const ep = planMisuseEpisode(ctx(controls, { exercised }));
+    expect(ep?.steps.map((s) => [s.op, s.control?.name ?? null])).toEqual([
+      ["type", "Description"],
+      ["click", "Create"],
+      ["click", "Create"],
+    ]);
+  });
+});
+
 describe("planMisuseEpisode — a checkbox is set once, never toggled back off (#76)", () => {
   const checkbox = (checked: boolean): Control =>
     control({ name: "I agree to the terms", role: "checkbox", tag: "input", inputType: "checkbox", form: "form#profile", checked });
