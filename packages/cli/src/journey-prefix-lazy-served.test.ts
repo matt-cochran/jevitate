@@ -43,6 +43,9 @@ const CHAT_PANEL = `export function mount(root) {
 
 let server: Server;
 let origin: string;
+/** A second origin (a CDN) that serves the same lazy chunk: the prefix must not block it either. */
+let cdn: Server;
+let cdnOrigin: string;
 let dir: string;
 let journeysDir: string;
 
@@ -50,6 +53,7 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
     if (path === "/") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(HOME);
+    if (path === "/cdn") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(HOME.replace('"/chat-panel.js"', JSON.stringify(`${cdnOrigin}/chat-panel.js`)));
     if (path === "/chat-panel.js") {
       // The lazily loaded chunk arrives late (a dynamic import over a slow network).
       return void setTimeout(() => res.writeHead(200, { "content-type": "text/javascript" }).end(CHAT_PANEL), 400);
@@ -58,27 +62,37 @@ beforeAll(async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  cdn = createServer((req, res) => {
+    if ((req.url ?? "").startsWith("/chat-panel.js")) {
+      return void setTimeout(() => res.writeHead(200, { "content-type": "text/javascript", "access-control-allow-origin": "*" }).end(CHAT_PANEL), 400);
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise<void>((resolve) => cdn.listen(0, "127.0.0.1", resolve));
+  cdnOrigin = `http://127.0.0.1:${(cdn.address() as AddressInfo).port}`;
   dir = await mkdtemp(join(tmpdir(), "jevitate-lazy-prefix-"));
   journeysDir = join(dir, "journeys");
-  await new FsJourneyStore(journeysDir).put(chatJourney());
+  await new FsJourneyStore(journeysDir).put(chatJourney("chat", "/"));
+  await new FsJourneyStore(journeysDir).put(chatJourney("chat-cdn", "/cdn"));
 });
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => cdn.close(() => resolve()));
   await rm(dir, { recursive: true, force: true });
 });
 
-function chatJourney(): Journey {
+function chatJourney(id: string, path: string): Journey {
   return {
-    metadata: { id: "chat", name: "Send a chat message", promoted: true, params: [], createdAtIso: "2026-10-01T00:00:00.000Z" },
+    metadata: { id, name: "Send a chat message", promoted: true, params: [], createdAtIso: "2026-10-01T00:00:00.000Z" },
     recording: {
       version: "1",
       site: origin,
       pages: [
         {
-          url: "/",
+          url: path,
           steps: [
-            { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { role: "heading", name: "Home" } } } },
+            { step: { kind: "navigate", url: path, expect: { kind: "visible", target: { role: "heading", name: "Home" } } } },
             { step: { kind: "click", target: { testId: "chat-launcher-link" }, expect: { kind: "urlIncludes", text: "#chat" } } },
             { step: { kind: "fill", target: { testId: "chat-input" }, value: { redacted: false, value: "hello" }, expect: { kind: "visible", target: { testId: "chat-input" } } } },
             { step: { kind: "click", target: { testId: "chat-send" }, expect: { kind: "visible", target: { testId: "chat-message" } } } },
@@ -127,8 +141,8 @@ async function cli(args: string[]): Promise<CliRun> {
 }
 
 describe("#398 a lazily mounted panel replays the same as a prefix as in journey run (served)", () => {
-  it("journey run replays the Journey green", async () => {
-    const r = await cli(["journey", "run", "chat", "--json"]);
+  it.each([["chat"], ["chat-cdn"]])("journey run replays %s green", async (id) => {
+    const r = await cli(["journey", "run", id, "--json"]);
     expect(r.envelope?.ok, r.out + r.err).toBe(true);
     expect(r.envelope?.data).toMatchObject({ outcome: "ok" });
   }, 120_000);
@@ -140,13 +154,15 @@ describe("#398 a lazily mounted panel replays the same as a prefix as in journey
     ["3", ["--strategy", "coverage"]],
     ["3", ["--strategy", "goal", "--goal", "send a chat message"]],
     ["3", ["--strategy", "usability", "--goal", "send a chat message", "--app-class", "saas"]],
-  ])("explore --from-journey --at-step %s %j replays the prefix (never journey-stale)", async (atStep, strategy) => {
+  ].flatMap(([at, strategy]) => [["chat", at, strategy], ["chat-cdn", at, strategy]]) as Array<[string, string, string[]]>)(
+    "explore --from-journey %s --at-step %s %j replays the prefix (never journey-stale)", async (id, atStep, strategy) => {
+    // --allow names only the app's origin: the CDN-served chunk is still fetched during the prefix.
     const r = await cli([
-      "explore", "--from-journey", "chat", "--at-step", atStep, "--journeys-dir", journeysDir,
-      ...strategy, "--fake-ai", "--max-actions", "1", "--out", join(dir, `at-${atStep}-${strategy[1]}`), "--json",
+      "explore", "--from-journey", id, "--at-step", atStep, "--allow", origin, "--journeys-dir", journeysDir,
+      ...strategy, "--fake-ai", "--max-actions", "1", "--out", join(dir, `${id}-at-${atStep}-${strategy[1]}`), "--json",
     ]);
     expect(r.envelope?.ok, r.out + r.err).toBe(true);
     expect((r.envelope?.data?.failure as { kind?: string } | undefined)?.kind, JSON.stringify(r.envelope?.data?.failure)).not.toBe("journey-stale");
-    expect(r.envelope?.data?.branch).toMatchObject({ journeyId: "chat", step: Number(atStep) });
+    expect(r.envelope?.data?.branch).toMatchObject({ journeyId: id, step: Number(atStep) });
   }, 180_000);
 });
