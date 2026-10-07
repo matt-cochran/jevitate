@@ -24,6 +24,7 @@ import { applyHttp5xxGoalOutcome, describeHttp5xx, http5xxGoalReason } from "./h
 import { goalExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
+import { redactSecretValues } from "./journey-api.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogEvidence, type ServerLogRuntimeResult, type ServerLogsSummary, type TranscriptEntryWithLogs } from "./log-correlation.js";
@@ -408,6 +409,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // The state the mission starts from — replays restore THIS fixture and rebind its recorded outputs.
   const fx = opts.fixtures;
   const missionFixture = fx === undefined ? undefined : { record: fx.record(), persisted: fx.persisted() };
+  // #399: what is persisted of the fixture never holds a run secret — e.g. a fixture output the
+  // Journey prefix took as a secret param (`--param inviteToken=${setup.inviteToken}`). The raw
+  // record stays in memory only, for the replays that rebind it.
+  const atRest = <T,>(v: T): T => redactSecretValues(v, secrets ?? []);
 
   // #149: refused BEFORE any browser opens (an unknown --device, or --viewport + --device together).
   const resolvedEmulation = resolveEmulation(opts.emulation);
@@ -548,7 +553,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     await fx?.restore();
     const recording: Recording = {
       ...mission.recording,
-      ...(missionFixture === undefined ? {} : { fixture: recordingFixture(missionFixture.record) }),
+      ...(missionFixture === undefined ? {} : { fixture: atRest(recordingFixture(missionFixture.record)) }),
       ...(resolvedEmulation === undefined ? {} : { emulation: recordingEmulation(resolvedEmulation) }),
       ...extensionsStamp(opts.browser), // #256
     };
@@ -626,7 +631,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       exitCode: goalExitCode(goalOutcome),
       resultPath,
       target: {
-        seedUrl: start.url,
+        seedUrl: start.persistUrl,
         allowlist: [...opts.allowlist],
         ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}),
         ...(opts.actors === undefined ? {} : { actors: persistedActors(opts.actors) }),
@@ -645,14 +650,14 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(fx === undefined || missionFixture === undefined
         ? {}
         : {
-            fixtures: {
+            fixtures: atRest({
               ...missionFixture.record,
               cycles: fx.record().cycles,
               log: fx.record().log,
               ...(missionFixture.persisted.spec === undefined ? {} : { spec: missionFixture.persisted.spec }),
               ...(missionFixture.persisted.hooks === undefined ? {} : { hooks: missionFixture.persisted.hooks }),
               ...(missionFixture.persisted.identities === undefined ? {} : { identities: missionFixture.persisted.identities }),
-            },
+            }),
           }),
       // #209: a goal-specific miss (`success-check-failed`, `vacuous-check`) is typed too — after an
       // engine failure or a starved host, which explain the run before the check does.

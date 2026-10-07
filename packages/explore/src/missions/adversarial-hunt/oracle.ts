@@ -23,7 +23,10 @@ import { RunRecorder } from "../../record.js";
 import type { TranscriptEntry } from "../../transcript.js";
 import type { AdversarialMissionParams } from "../adversarial.js";
 import type { HuntState } from "./context.js";
-import { stepAdvisory, type StepAdvisory, type StepFinding } from "./helpers.js";
+import { stepAdvisory, type EarlierSubmit, type StepAdvisory, type StepFinding } from "./helpers.js";
+
+/** #403: how a browser reports a fetch/XHR that was aborted before it left (Chromium, Firefox, WebKit). */
+const BLOCKED_FETCH_ERROR = /Failed to fetch|NetworkError when attempting to fetch|Load failed|ERR_BLOCKED_BY_CLIENT/i;
 
 /** Installs the oracle's closures (and its fired-action log) on `ctx`. */
 export function installOracle(ctx: HuntState, params: AdversarialMissionParams): void {
@@ -110,7 +113,7 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
    */
   ctx.adjudicate = async (
     action: InvariantAction | null = null,
-    opts: { readonly identitySwitched?: boolean } = {},
+    opts: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null; readonly inFlight?: readonly string[]; readonly blocked?: readonly string[] } = {},
   ): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
     // #300: after an identity switch no invariant is judged — they were declared for the original
     // identity — and what the monitor observed for this action is dropped. Hard signals still count.
@@ -118,11 +121,30 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
     if (skip) ctx.declared?.discardPending();
     const invariantResult: { ok: boolean; reason?: string } =
       !skip && params.userInvariant ? await params.userInvariant(ctx.sessions.page) : { ok: true };
-    const declaredResult = ctx.declared === null || skip ? null : await ctx.declared.after(ctx.sessions.actor, ctx.armed ? action : null);
+    // An unsettled sequence's pending submit is judged as its own action now that the sequence
+    // settled, against the before-snapshot armed at the sequence's start (never mid-flight).
+    const earlier = opts.earlierSubmit ?? null;
+    // #406: writes the step started that never ended within its settle ceiling — its invariants are inconclusive.
+    const inFlight = {
+      ...(opts.inFlight !== undefined && opts.inFlight.length > 0 ? { inFlight: opts.inFlight } : {}),
+      // #403: a write jevitate blocked never reached the app — what it set off is not the app's outcome.
+      ...(opts.blocked !== undefined && opts.blocked.length > 0 ? { blocked: opts.blocked } : {}),
+    };
+    const earlierResult =
+      ctx.declared === null || skip || earlier === null || !ctx.armed
+        ? null
+        : await ctx.declared.after(ctx.sessions.actor, earlier.action, { earlier: true, inputsAsOf: earlier.inputs, ...inFlight });
+    const declaredResult = ctx.declared === null || skip ? null : await ctx.declared.after(ctx.sessions.actor, ctx.armed ? action : null, inFlight);
     ctx.armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
     await clock.sleep(10);
-    const hardSignals = ctx.collector.drain();
+    const drained = ctx.collector.drain();
+    // #403: the page's own error for a fetch jevitate's guard aborted ("Failed to fetch") is the run's
+    // refusal surfacing, never the app's defect — dropped on a step that had a write blocked.
+    const hardSignals =
+      opts.blocked !== undefined && opts.blocked.length > 0
+        ? drained.filter((s) => !((s.kind === "page-error" || s.kind === "console-error") && BLOCKED_FETCH_ERROR.test(s.detail)))
+        : drained;
     hardSignals.push(...(await ctx.overflowSignals()));
     const url = redactUrl(ctx.sessions.page.url());
     const route = normalizeRoute(url);
@@ -159,17 +181,24 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
         invariantReason: reason,
       });
     }
+    for (const v of earlierResult?.violations ?? []) {
+      findings.push({ ...ctx.declaredFinding(v), origin: { step: earlier?.step ?? 0, recordingStepIndex: earlier?.recordingStepIndex ?? 0 } });
+    }
     for (const v of declaredResult?.violations ?? []) findings.push(ctx.declaredFinding(v));
-    if (findings.length === 0 && stepAdvisories.length === 0) return null;
+    const inconclusive = [...(earlierResult?.inconclusive ?? []), ...(declaredResult?.inconclusive ?? [])].map((i) => i.reason);
+    if (findings.length === 0 && stepAdvisories.length === 0) {
+      return inconclusive.length === 0 ? null : { reason: inconclusive.join("; "), findings, advisories: stepAdvisories };
+    }
     const reasons = [
       ...hardSignals.map((s) => s.detail),
       invariantResult.ok ? undefined : invariantResult.reason,
+      ...(earlierResult?.violations ?? []).map((v) => `${v.reason} (the submit at step ${earlier?.step ?? 0}, judged once its sequence settled)`),
       ...(declaredResult?.violations ?? []).map((v) => v.reason),
     ]
       .filter((r): r is string => Boolean(r))
       .join("; ");
     const prefix = findings.length > 0 ? "defect" : "advisory";
-    return { reason: `${prefix}: ${reasons}`, findings, advisories: stepAdvisories };
+    return { reason: [`${prefix}: ${reasons}`, ...inconclusive].join("; "), findings, advisories: stepAdvisories };
   };
 
   /**
@@ -258,7 +287,7 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
     for (const f of findings) {
       // #250: an HTTP 5xx belongs to the action whose request it answered, not to the step that
       // drained it (a submit left pending while the next step ran blamed that next step).
-      const origin = ctx.requestOrigin(f);
+      const origin = f.origin ?? ctx.requestOrigin(f);
       const step = origin === undefined ? drainedAt : Math.min(drainedAt, origin.step);
       const known = [...ctx.defects.values()].find((d) => d.fingerprint === f.fingerprint || d.related.has(f.fingerprint));
       if (known !== undefined) {
@@ -271,8 +300,9 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
       const summary =
         f.kind === "invariant" ? (f.invariantReason ?? f.title) : f.kind === "markup-injection" ? f.title : f.signals.map((s) => s.detail).join("; ");
       const triage = await tryTriage(params.generation, { failureSummary: summary, url: f.url });
+      const { origin: _origin, ...finding } = f;
       ctx.defects.set(f.fingerprint, {
-        ...f,
+        ...finding,
         related: new Set(f.related),
         epoch: ctx.segments.indexOf(ctx.recorder),
         firstSeenStep: step,

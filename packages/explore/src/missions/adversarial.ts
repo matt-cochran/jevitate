@@ -44,6 +44,7 @@ import {
   type CoverageThresholds,
 } from "../adversarial/run-coverage.js";
 import type { SafetyConfig } from "../safety.js";
+import type { BlockedWrite } from "../read-only.js";
 import { type SideEffect } from "../side-effects.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
@@ -273,6 +274,12 @@ export interface AdversarialOutcome {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects?: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /**
+   * #403: writes a misuse step fired to an origin outside `--allow`, aborted before they left the
+   * browser — jevitate's refusal, never a defect of the app. Each names the origin + path and how to
+   * allow it (`--allow` the origin, or `--allow-write "<origin>/<glob>"`).
+   */
+  readonly blockedWrites?: BlockedWrite[];
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
   /** #300: every action that switched the signed-in identity (present when one did). */
@@ -476,6 +483,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     ctx.crashHost = await ctx.probeHost();
     return ctx.finish("crashed", "crashed", failure);
   } finally {
+    await ctx.offAllowlist.disarm();
     await ctx.sessions.closeOwned();
   }
 }

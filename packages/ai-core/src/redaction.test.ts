@@ -68,3 +68,37 @@ describe("registered secrets are matched in their encodeURIComponent form too", 
     expect(redactContext(`see ${encoded}`, [secret])).toBe(`see ${REDACTION_MASK}`);
   });
 });
+
+describe("#399: registered secrets are matched in their strict (RFC 3986) percent-encoded form too", () => {
+  // A navigate `${param}` value is substituted strictly encoded (`!'()*` too), the form a browser keeps.
+  const secret = "it's(1)*!";
+  const strict = "it%27s%281%29%2A%21";
+
+  it("redactText scrubs the strictly encoded form", () => {
+    expect(redactText(`/accept?token=${strict}`, [secret])).toBe(`/accept?token=${REDACTION_MASK}`);
+  });
+
+  it("assertNoSecretInPayload throws on a strictly encoded survivor", () => {
+    expect(() => assertNoSecretInPayload({ url: `/accept?token=${strict}` }, [secret])).toThrow(SecretLeakError);
+  });
+});
+
+describe("#399: lowercase-%xx and +-for-space forms are matched too", () => {
+  const secret = "a b/c'd";
+
+  it("redactText scrubs the lowercase-hex and the form-urlencoded (+ for space) forms", () => {
+    expect(redactText("q=a%20b%2fc%27d", [secret])).toBe(`q=${REDACTION_MASK}`);
+    expect(redactText("q=a+b%2Fc%27d", [secret])).toBe(`q=${REDACTION_MASK}`);
+    expect(redactText("q=a+b%2fc%27d", [secret])).toBe(`q=${REDACTION_MASK}`);
+  });
+
+  it("assertNoSecretInPayload throws on them", () => {
+    expect(() => assertNoSecretInPayload({ url: "/x?q=a+b%2Fc%27d" }, [secret])).toThrow(SecretLeakError);
+    expect(() => assertNoSecretInPayload({ url: "/x?q=a%20b%2fc'd" }, [secret])).toThrow(SecretLeakError);
+  });
+
+  it("a lone surrogate never makes the guard throw a URIError (its raw form is still matched)", () => {
+    const odd = "x\uD800y";
+    expect(redactText(`v=${odd}`, [odd])).toBe(`v=${REDACTION_MASK}`);
+  });
+});

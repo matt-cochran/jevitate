@@ -150,6 +150,10 @@ export function formatMissionHuman(result: unknown): string {
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
   if (isRecord(result.failure)) {
     lines.push(`${tag("REASON")}${str(result.failure.kind) ?? "failure"}: ${str(result.failure.message) ?? ""}`);
+    // #398: a stale journey prefix shows what the page showed, so "unavailable" reads differently from "clicked too early".
+    if (isRecord(result.failure.page) && typeof result.failure.page.text === "string") {
+      lines.push(`${tag("PAGE")}the page showed: "${result.failure.page.text}" (${str(result.failure.page.url) ?? ""})`);
+    }
   } else if (str(result.reason) !== undefined) {
     lines.push(`${tag("REASON")}${str(result.reason)}`);
   }

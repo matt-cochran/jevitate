@@ -123,12 +123,13 @@ function fakeMonitor(): { monitor: PageMonitor; finish: (r: CapturedRequest) => 
 }
 
 const PAGE = { controlNames: ["Run the simulation →"], alerts: [] as string[] };
-const post = (status: number | null, failed = false): CapturedRequest => ({
+const post = (status: number | null, failed = false, rpcStatus?: CapturedRequest["rpcStatus"]): CapturedRequest => ({
   method: "POST",
   url: "http://x/api/simulations",
   path: "/api/simulations",
   status,
   failed,
+  ...(rpcStatus === undefined ? {} : { rpcStatus }),
 });
 
 describe("SideEffectGuard (#92)", () => {
@@ -164,7 +165,7 @@ describe("SideEffectGuard (#92)", () => {
     const { monitor, finish } = fakeMonitor();
     const g = new SideEffectGuard(monitor);
     g.beginClick("k", "Run", "/a", 0);
-    finish(post(500));
+    finish(post(422));
     g.settle();
     expect(g.check("k", "/a", PAGE)).toEqual({ refuse: false });
 
@@ -174,6 +175,42 @@ describe("SideEffectGuard (#92)", () => {
     expect(g.check("k2", "/a", PAGE).refuse).toBe(true);
     expect(g.check("k2", "/a", { controlNames: ["Try again"], alerts: [] })).toEqual({ refuse: false });
     expect(g.check("k2", "/a", { controlNames: [], alerts: ["Something went wrong"] })).toEqual({ refuse: false });
+  });
+
+  it("refuses a repeat after a 5xx write when the page offers no retry and shows no error (#404)", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("k", "Run", "/a", 0);
+    finish(post(500));
+    g.settle();
+    expect(g.check("k", "/a", PAGE).refuse).toBe(true);
+  });
+
+  it("allows a repeat after a 5xx write when the page offers a retry (#404)", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("k", "Run", "/a", 0);
+    finish(post(500));
+    g.settle();
+    expect(g.check("k", "/a", { controlNames: ["Try again"], alerts: [] })).toEqual({ refuse: false });
+  });
+
+  it("refuses a repeat after a write failed without a response (#404)", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("k", "Run", "/a", 0);
+    finish(post(null, true));
+    g.settle();
+    expect(g.check("k", "/a", PAGE).refuse).toBe(true);
+  });
+
+  it("refuses a repeat after an HTTP 200 whose gRPC RPC failed internally (#404)", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("k", "Run", "/a", 0);
+    finish(post(200, false, { protocol: "grpc-web", code: 13, name: "internal" }));
+    g.settle();
+    expect(g.check("k", "/a", PAGE).refuse).toBe(true);
   });
 
   it("an input change clears the guard (a repeat now sends something new)", () => {
@@ -486,5 +523,42 @@ describe("SideEffectGuard — the screen moved on (#380)", () => {
     expect(g.check("changed", "/domain", page(S2)).refuse).toBe(true);
     expect(screenState(CONTROLS, "Last checked 12 s ago")).toBe(screenState(CONTROLS, "Last checked  9 s ago"));
     expect(screenState(CONTROLS, "a")).not.toBe(screenState([{ role: "button", name: "Check status", enabled: true }], "a"));
+  });
+
+  it("#391: a control used beside it (same region) allows ONE re-click, judged by what it sends", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    const CARD = "html:0>body:1>main:1>section:1";
+    g.beginClick("changed", "I've changed my nameservers", "/domain", 0, S0, CARD);
+    finish(rpc("RefreshShareDomain"));
+    g.settle(S1);
+    // A control elsewhere (a header menu): no change — a true repeat.
+    g.beginClick("help", "Help", "/domain", 5, "h", "html:0>body:1>header:0");
+    g.settle("h2");
+    expect(g.check("changed", "/domain", page(S1)).refuse).toBe(true);
+    // "Review instructions" in the same card: the card looks the same, but the click is allowed…
+    g.beginClick("review", "Review instructions", "/domain", 10, S1, CARD);
+    g.settle(S1);
+    expect(g.check("changed", "/domain", page(S1))).toEqual({ refuse: false });
+    // …never for a paid / destructive control (no state), nor on another route.
+    expect(g.check("changed", "/domain", page()).refuse).toBe(true);
+    g.beginClick("changed", "I've changed my nameservers", "/domain", 20, S1, CARD);
+    finish(rpc("RetryShareDomain"));
+    g.settle(S1);
+    // …once: nothing used since, the same click again is a true repeat of the write it just sent.
+    const again = g.check("changed", "/domain", page(S1));
+    expect(again).toMatchObject({ refuse: true, inflight: false });
+    expect(again.refuse && again.reason).toContain("POST /share.v1.ShareService/RetryShareDomain");
+  });
+
+  it("#391: a write with no known outcome is never re-allowed by a control used beside it", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("changed", "I've changed my nameservers", "/domain", 0, S0, "card");
+    finish(rpc("RefreshShareDomain", null));
+    g.settle(S1);
+    g.beginClick("review", "Review instructions", "/domain", 10, S1, "card");
+    g.settle(S1);
+    expect(g.check("changed", "/domain", page(S1)).refuse).toBe(true);
   });
 });

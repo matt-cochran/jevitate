@@ -35,7 +35,7 @@ import type { Step } from "@jevitate/recording";
  */
 export function makeExploreSelfHealer(judgment: JudgmentPort, generation: GenerationPort): SelfHealer {
   return {
-    async reLearnStep({ actor, brokenStep, expectedPostcondition, allowedOrigins }) {
+    async reLearnStep({ actor, brokenStep, expectedPostcondition, allowedOrigins, secrets }) {
       const allowlist = allowedOrigins ?? [];
       const result = await runGoalBasedMission({
         goal: describeBrokenStepGoal(brokenStep),
@@ -50,6 +50,8 @@ export function makeExploreSelfHealer(judgment: JudgmentPort, generation: Genera
         actor,
         judge: judgment,
         gen: generation,
+        // #399: the run's secret params (the live URL may carry one) are redacted from every prompt.
+        ...(secrets === undefined || secrets.length === 0 ? {} : { secrets }),
       });
       return result.outcome === "succeeded"
         ? { outcome: "healed", segment: result.recording }

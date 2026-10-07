@@ -130,6 +130,10 @@ export interface RunContext {
   cycleAction: { action: string; label: string } | null;
   /** #367: when the last progress check ran — a write started after it is the next step's. */
   cycleMark: number;
+  /** #390: the page's visible text (and its URL) at the last progress check — what an action added to it is told. */
+  pageText: { readonly url: string; readonly text: string } | null;
+  /** #390: the last action was a conversation turn whose reply was already told (its text is not told again). */
+  replyTold: boolean;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   lastChanceGiven: boolean;
   /** #172: this decision is the last-chance turn. */
@@ -467,6 +471,8 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.cycles = new LoopCycleDetector();
   ctx.cycleAction = null;
   ctx.cycleMark = clock.now();
+  ctx.pageText = null;
+  ctx.replyTold = false;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   ctx.lastChanceGiven = false;
   /** #172: this decision is the last-chance turn. */

@@ -325,6 +325,11 @@ export class SafetyPolicy {
     for (const d of this.#deny) {
       if (d.match(c)) return { risk: "denied", reason: `refused by the safety policy: "${name}" matches --deny ${JSON.stringify(d.pattern)}` };
     }
+    // #396: a nameless control can't be matched against a name pattern, so it is never clicked blind
+    // when the run declares any --deny/--paid pattern. A descriptor-keyed --deny above still wins.
+    if (name === "" && (this.#deny.length > 0 || this.#paid.length > 0)) {
+      return { risk: "denied", reason: "refused by the safety policy: a control with no accessible name can't be checked against --deny/--paid" };
+    }
     if (this.#allowDestructive) return null;
     const r = this.#risk(c);
     if (r === null) return null;

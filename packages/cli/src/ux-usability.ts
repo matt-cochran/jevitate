@@ -770,7 +770,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "usability" as const,
       target: {
-        seedUrl: start.url,
+        seedUrl: start.persistUrl,
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },

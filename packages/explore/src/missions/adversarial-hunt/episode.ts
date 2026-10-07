@@ -26,6 +26,7 @@ import {
   joinReasons,
   nativeValidationMessage,
   submitRequestSent,
+  type EarlierSubmit,
 } from "./helpers.js";
 import { clock } from "@jevitate/domain";
 
@@ -47,6 +48,8 @@ export interface EpisodeState {
   refreshed: boolean;
   /** Whether an earlier step of this episode acted without settling (the page may have moved on). */
   pendingEarlier: boolean;
+  /** The last submit this episode left pending (judged once the episode settles). */
+  earlierSubmit: EarlierSubmit | null;
 }
 
 /** Runs one planned episode (a queue: a disclosure that reveals a form is followed by its own episode, #193). */
@@ -62,6 +65,7 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
   ep.refreshed = false;
   /** Whether an earlier step of this episode acted without settling (the page may have moved on). */
   ep.pendingEarlier = false;
+  ep.earlierSubmit = null;
   while (ep.queue.length > 0) {
     const s = ep.queue.shift() as MisuseStep;
     if (ctx.actions + ctx.restartSpend >= ctx.bounds.maxActions) break;
@@ -101,8 +105,18 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
     if (ctx.chainStart === null) ctx.chainStart = firedAt;
     const firedStep = ctx.transcript.nextStep;
     ctx.safety.mark(ctx.transcript.nextStep, s.op, s.control);
+    // A step after a pending submit may type over what it sent: keep the inputs as the submit sent them.
+    const held = ep.earlierSubmit !== null && ctx.declared !== null ? await ctx.declared.inputValues(ctx.sessions.actor) : null;
+    // #403: from this act until the step settled, a write to an origin outside --allow is aborted.
+    ctx.offAllowlist.beginAction();
     const { result, value } = await ctx.execute(s, ep.stepSnap.controls);
     ctx.actions += 1;
+    if (held !== null && ep.earlierSubmit !== null && ctx.declared !== null) {
+      const now = await ctx.declared.inputValues(ctx.sessions.actor);
+      for (const [name, was] of held) {
+        if (!ep.earlierSubmit.inputs.has(name) && JSON.stringify(now.get(name)?.value) !== JSON.stringify(was.value)) ep.earlierSubmit.inputs.set(name, was);
+      }
+    }
     if (ctx.deltaArmed !== null) {
       if (result.ok) ctx.deltaArmed.acted({ label: `${s.op} ${s.control?.name ?? ""}`.trim(), recordIndex: 0, step: ctx.transcript.nextStep, ...(value === undefined ? {} : { value }) });
       else {
@@ -119,6 +133,15 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
     if (result.ok) {
       ctx.recordAction(s, value, at, result.submittedVia);
       ctx.markFired(firedAt, firedStep);
+    }
+    // Its Recording step was just written: that is the step a replay re-runs to judge it.
+    if (!s.settle && result.ok && s.submitsForm !== undefined && ctx.declared !== null) {
+      ep.earlierSubmit = {
+        action: { op: s.op, control: s.control?.name ?? null, url: actedOn, step: firedStep },
+        step: firedStep,
+        recordingStepIndex: Math.max(0, ctx.recorder.stepCount - 1),
+        inputs: new Map(),
+      };
     }
     if (result.ok) ctx.cov.acted(ep.stepSnap.url, s.control);
     // #155 — a submit click counts as submitted only when it actually sent a request (a write

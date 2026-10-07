@@ -162,6 +162,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "journey find": { exempt: "a search: no match is an empty result" },
   "journey run": { base: ["nope"], cases: [["nope"], ["nope", "--storage-state", missing]] },
   "journey promote": { cases: [["nope"]] },
+  "journey lint": { cases: [["nope"], ["../x"]] },
+  "journey verify": { cases: [["nope", "--mutate"], ["nope"], ["nope", "--mutate", "--storage-state", missing]] },
   // #293: an unknown Journey (or an id that tries to leave the store) is refused.
   "journey anchors": { cases: [["nope"], ["../x"]] },
   // #293: a missing/unreadable spec, and a campaign with no model gateway.

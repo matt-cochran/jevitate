@@ -32,9 +32,6 @@ const AUTHOR_GOAL_RUN_FLAGS = [
   "allowSecretCmd", "secretCmdAttempts",
 ] as const satisfies readonly (keyof typeof GOAL_RUN_OPTIONS)[];
 
-/** `reloadThen:<check>` → the inner `<check>` (what the Journey CAN assert). */
-const innerOfReloadThen = (spec: string): string => spec.replace(/^\s*reloadThen:/, "");
-
 /** #369: one take's diagnostics as human lines (the paths a person opens next). */
 function takeLines(label: string, d: AuthorTakeDiagnostics): string[] {
   const lines = [`  ${label}: ${d.outcome}${d.stop === undefined ? "" : ` (stop: ${d.stop})`}${d.actions === undefined ? "" : ` · ${d.actions} action(s), ${d.decisions ?? 0} decision(s)`}`];
@@ -80,8 +77,8 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
     .option("--goal <text>", "natural-language goal")
     .option(
       "--success <spec>",
-      "independent success check (repeatable; all must hold), any explore --success kind but reloadThen, e.g. urlIncludes:/confirmed or " +
-        "'requestMade:POST /api/save': a page check becomes the Journey's last assert step, a requestMade/responseStatus check is re-checked over every replay's requests",
+      "independent success check (repeatable; all must hold), any explore --success kind, e.g. urlIncludes:/confirmed, " +
+        "'reloadThen:textIncludes:css=main|Saved' or 'responseStatus:POST /api/save=2xx': every check is kept as the Journey's end state and re-checked after every replay's last step",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -116,7 +113,8 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         "writing its own result, transcript and Recording (under --out). A take that does not reach the goal",
         "is reported with its stop reason, its checks' verdicts and those paths. A field code types itself",
         "(--secret-field/--totp) becomes a secret Journey parameter (secret1, …), passed with --param at replay.",
-        "A reloadThen: check is refused before any browser opens: author with its inner check instead.",
+        "Every --success check is kept as the Journey's end state (metadata.endState); each step's expect comes from what it",
+        "changed (a write's responseStatus, text it added — richer with --action-deltas), never from its own target.",
       ].join("\n"),
     )
     .action(async function (this: Command) {
@@ -146,21 +144,10 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         emitJson(program, fail("E_AUTHOR_ARGS", "--url, --goal, --success, --id and --name are all required"));
         return;
       }
-      // #322: every kind `explore --success` takes — page and network checks — but reloadThen.
+      // #322/#400: every kind `explore --success` takes — page, reloadThen and network checks.
       const successChecks: SuccessCheck[] = [];
       try {
-        for (const spec of o.success) {
-          const check = parseSuccessSpec(spec);
-          if (check.kind === "reloadThen") {
-            // #369: refused here, before any gateway or browser — a Journey has no reload step to re-check after.
-            throw new Error(
-              `--success ${JSON.stringify(spec)}: a reloadThen check can't be authored into a Journey (a Journey has no reload step); nothing was run. ` +
-                `Author with its inner check (--success ${JSON.stringify(innerOfReloadThen(spec))}) and prove persistence with \`jevitate explore --success ${JSON.stringify(spec)}\`, ` +
-                "or use a requestMade/responseStatus check",
-            );
-          }
-          successChecks.push(check);
-        }
+        for (const spec of o.success) successChecks.push(parseSuccessSpec(spec));
       } catch (err) {
         emitJson(program, fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;

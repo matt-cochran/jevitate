@@ -230,7 +230,9 @@ export class PlaywrightBrowserPort implements BrowserPort {
   }
 
   async open(opts: OpenOptions): Promise<BrowserSession> {
-    // TODO(M3): enforce allowedOrigins via route interception; currently unenforced.
+    // TODO(M3): allowedOrigins is not enforced here (no route interception): subresource requests to
+    // any origin load. The acting origin is checked by the missions after each settle, and writes are
+    // blocked by their own guards (read-only find-out goals, adversarial misuse #403) — docs/safety.md.
     // Refused BEFORE any browser opens: an unregistered --device name, or --viewport + --device together.
     const emulation = resolveEmulation({ viewport: opts.viewport, device: opts.device });
     // #205: admitted by the resource governor (machine-wide browser cap, throttling) before anything
@@ -397,7 +399,7 @@ async function confirmExtensionsLoaded(context: BrowserContext, extensions: read
       } catch (err) {
         // Cross-check: extensions the browser DID start (service workers / background pages) under
         // other ids mean the pre-launch id computation drifted from Chromium's, not a refused load.
-        const running = (await runningExtensionIds(context)).filter((id) => !extensions.some((x) => x.id === id));
+        const running = (await runningExtensionIds(context, timeoutMs)).filter((id) => !extensions.some((x) => x.id === id));
         throw new ExtensionLoadError(
           running.length > 0
             ? `the browser loaded an extension under id ${running.join(", ")}, not the id ${e.id} computed for ${e.name}@${e.version} from ${e.dir}: ` +
@@ -417,17 +419,31 @@ async function confirmExtensionsLoaded(context: BrowserContext, extensions: read
  * Ids of the extensions running in `context` (from their service workers' and background pages'
  * origins). Error path only: when none has registered yet, waits up to 2s for a service worker.
  */
-async function runningExtensionIds(context: BrowserContext): Promise<string[]> {
-  if (context.serviceWorkers().length === 0 && context.backgroundPages().length === 0) {
-    await context.waitForEvent("serviceworker", { timeout: 2_000 }).catch(() => undefined);
+async function runningExtensionIds(context: BrowserContext, timeoutMs: number): Promise<string[]> {
+  const ids = (): string[] => {
+    const out = new Set<string>();
+    for (const w of [...context.serviceWorkers(), ...context.backgroundPages()]) {
+      const m = EXTENSION_WORKER_URL.exec(w.url());
+      if (m !== null) out.add(m[1]!);
+    }
+    return [...out];
+  };
+  // #410: an extension's worker can start seconds after launch on a slow machine. Wait for one
+  // (the site's own service worker doesn't count), bounded by the load probe's timeout, so the
+  // diagnosis — refused load vs a drifted id — never depends on runner speed.
+  if (ids().length === 0) {
+    await context
+      .waitForEvent("serviceworker", { predicate: (w) => EXTENSION_WORKER_URL.test(w.url()), timeout: Math.min(timeoutMs, EXTENSION_WORKER_WAIT_MS) })
+      .catch(() => undefined);
   }
-  const ids = new Set<string>();
-  for (const w of [...context.serviceWorkers(), ...context.backgroundPages()]) {
-    const m = /^chrome-extension:\/\/([a-p]{32})\//.exec(w.url());
-    if (m !== null) ids.add(m[1]!);
-  }
-  return [...ids];
+  return ids();
 }
+
+/** The longest the drift cross-check waits for an extension's worker (only on the failure path). */
+const EXTENSION_WORKER_WAIT_MS = 10_000;
+
+/** A `chrome-extension://<id>/` worker or background page URL; group 1 is the id. */
+const EXTENSION_WORKER_URL = /^chrome-extension:\/\/([a-p]{32})\//;
 
 /** #245: the page's video file path when its context records one, else undefined (never throws). */
 async function videoPathOf(page: Page): Promise<string | undefined> {

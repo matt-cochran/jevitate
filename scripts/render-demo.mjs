@@ -151,22 +151,23 @@ function durationOf(file) {
 
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-/** A plain title frame (PNG) rendered by Chromium. */
-async function card(browser, file, { kicker, title, lines = [], foot }) {
+/** A plain title frame (PNG) rendered by Chromium. `numbered` lists the lines 1, 2, 3 instead of ticks. */
+async function card(browser, file, { kicker, title, lines = [], foot, numbered = false }) {
   const page = await browser.newPage({ viewport: { width: W, height: H } });
   await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>
     html,body{margin:0;height:100%;background:#0f172a;color:#e2e8f0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
     main{height:100%;box-sizing:border-box;padding:48px 56px;display:flex;flex-direction:column;justify-content:center;gap:14px}
     .k{font:600 15px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd}
-    h1{margin:0;font-size:34px;line-height:1.2;font-weight:700;color:#f8fafc}
-    ul{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
-    li{font-size:20px;line-height:1.3}
+    h1{margin:0;font-size:36px;line-height:1.2;font-weight:700;color:#f8fafc}
+    ul{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px;counter-reset:n}
+    li{font-size:21px;line-height:1.35}
     li::before{content:"✓";color:#4ade80;font-weight:700;margin-right:12px}
-    .f{margin-top:10px;font-size:15px;color:#94a3b8}
+    ul.n li::before{counter-increment:n;content:counter(n);display:inline-block;width:1.6em;color:#93c5fd}
+    .f{margin-top:10px;font-size:16px;line-height:1.4;color:#94a3b8}
   </style></head><body><main>
     ${kicker === undefined ? "" : `<div class="k">${esc(kicker)}</div>`}
     <h1>${esc(title)}</h1>
-    ${lines.length === 0 ? "" : `<ul>${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`}
+    ${lines.length === 0 ? "" : `<ul${numbered ? ' class="n"' : ""}>${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`}
     ${foot === undefined ? "" : `<div class="f">${esc(foot)}</div>`}
   </main></body></html>`);
   await page.screenshot({ path: file });
@@ -244,7 +245,7 @@ async function record() {
   const runs = join(work, "runs");
   const explore = jev(
     "explore --strategy adversarial --evidence-video (~2 min)",
-    ["explore", "--strategy", "adversarial", "--url", `${origin}/demo/profile`, "--invariants", invariants, "--viewport", REC, "--fake-ai", "--evidence-video", "--out", runs, "--json"],
+    ["explore", "--strategy", "adversarial", "--url", `${origin}/demo/profile`, "--invariants", invariants, "--viewport", REC, "--fake-ai", "--max-actions", "200", "--evidence-video", "--out", runs, "--json"],
     1,
   );
   const run = jsonData("explore", explore.out);
@@ -306,13 +307,32 @@ try {
   await card(browser, join(seg, "intro.png"), {
     kicker: "Jevitate in action · a real run",
     title: "A profile form says “Saved”. Is it?",
-    lines: [],
-    foot: "Journey: “Change your display name to Zoë 😀” · the example app in this repo · no API keys",
+    lines: ["What the user sees", "What Jevitate finds", "The fix, proven"],
+    numbered: true,
+    foot: "The example app in this repo · no API keys · every clip is Jevitate's own output",
   });
-  await card(browser, join(seg, "mid.png"), {
-    kicker: "explore --strategy adversarial --evidence-video",
+  await card(browser, join(seg, "ch1.png"), {
+    kicker: "1 / 3 · What the user sees",
+    title: "A user changes their display name and clicks Save.",
+    foot: "jevitate journey demo replays the flow with a caption on each step.",
+  });
+  await card(browser, join(seg, "ch2.png"), {
+    kicker: "2 / 3 · What Jevitate finds",
+    title: "Jevitate tries to break the form and checks what the server actually did.",
+    foot: "explore --strategy adversarial: double submits, odd values, reloads. Its evidence clip replays the repro and marks the step that failed.",
+  });
+  await card(browser, join(seg, "found.png"), {
+    kicker: "The bug",
     title: "The page said “Saved”. The server returned HTTP 500 and kept the old name.",
-    foot: `Jevitate misused the form and caught it. Its evidence clip replays the repro and marks the step that sent the failing request:`,
+    lines: [
+      `verify-fix: still reproduces on ${m.replays[0]}/${m.replays[1]} fresh replays`,
+      "regression “saved-means-stored” captured and checked in",
+    ],
+  });
+  await card(browser, join(seg, "ch3.png"), {
+    kicker: "3 / 3 · The fix, proven",
+    title: "With the fix in, the same Save is replayed. Now it passes.",
+    foot: "verify-fix --record-video records the after clip and ends on the verdict.",
   });
   await card(browser, join(seg, "end.png"), {
     kicker: "Decided by code, not by a model",
@@ -329,27 +349,35 @@ try {
   await browser.close();
 }
 
-// Every segment is normalised to 800x450, 25 fps; the concat filter joins them.
+// Every segment is normalised to 800x500, 25 fps; the concat filter joins them.
 const NORM = `scale=${W}:${H}:flags=lanczos,fps=25,format=yuv420p,setsar=1`;
 const segments = [];
 const still = (png, seconds) => segments.push({ input: ["-loop", "1", "-t", String(seconds), "-i", png], vf: NORM });
-const clip = (src, from, to, speed = 1) =>
-  segments.push({ input: ["-ss", from.toFixed(2), "-to", to.toFixed(2), "-i", src], vf: `setpts=(PTS-STARTPTS)/${speed},${NORM}` });
+// `hold` freezes the clip's last frame for that many seconds, so its closing caption can be read.
+const clip = (src, from, to, { speed = 1, hold = 0 } = {}) =>
+  segments.push({
+    input: ["-ss", from.toFixed(2), "-to", to.toFixed(2), "-i", src],
+    vf: `setpts=(PTS-STARTPTS)/${speed}${hold > 0 ? `,tpad=stop_mode=clone:stop_duration=${hold}` : ""},${NORM}`,
+  });
 
-still(join(seg, "intro.png"), 1.6);
-// The Journey demo from its first frame (the goal title card), captioned steps at 2.5x ("Saved" and
-// the Done card at the end).
+// Paced to be read: each chapter is introduced by a card, clips play at real speed, and each clip
+// holds its last frame.
+still(join(seg, "intro.png"), 4.5);
+still(join(seg, "ch1.png"), 3.5);
+// The Journey demo from its first frame (the goal title card): captioned steps, "Saved", the Done card.
 const jd = durationOf(m.journeyVideo);
-clip(m.journeyVideo, 0, jd - 0.1, 2.5);
-still(join(seg, "mid.png"), 2.4);
+clip(m.journeyVideo, 0, jd - 0.1, { hold: 1.5 });
+still(join(seg, "ch2.png"), 5);
 // The HTTP 500's evidence clip: its last steps (the Save click captioned, then marked "✗ … server
 // returned 500 (PUT /demo/api/profile)" with the red defect card).
 const evd = durationOf(m.evidenceVideo);
-clip(m.evidenceVideo, Math.max(0, evd - 4.75), evd - 0.15);
+clip(m.evidenceVideo, Math.max(0, evd - 5), evd - 0.15, { speed: 0.8, hold: 3 });
+still(join(seg, "found.png"), 5);
+still(join(seg, "ch3.png"), 4);
 // verify-fix --record-video on the 500 with the fix on: the same Save, ending on the verdict card.
 const afd = durationOf(m.afterClip);
-clip(m.afterClip, Math.max(0, afd - 2.55), afd - 0.15);
-still(join(seg, "end.png"), 3.2);
+clip(m.afterClip, Math.max(0, afd - 5), afd - 0.15, { hold: 2.5 });
+still(join(seg, "end.png"), 6);
 
 const master = join(seg, "master.mp4");
 const graph =

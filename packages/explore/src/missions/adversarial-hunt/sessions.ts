@@ -121,6 +121,7 @@ export function installSessions(ctx: HuntState, params: AdversarialMissionParams
   > => {
     await monitorFor(ctx.sessions.page).instrument();
     ctx.safety.attach(monitorFor(ctx.sessions.page));
+    await ctx.offAllowlist.arm(ctx.sessions.page);
     ctx.recorder = new RunRecorder(ctx.site, undefined, ctx.secrets);
     ctx.segments.push(ctx.recorder);
     if (params.restartAtStart !== undefined) {

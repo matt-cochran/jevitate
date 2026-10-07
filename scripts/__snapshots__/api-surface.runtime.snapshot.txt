@@ -172,7 +172,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (398 exports)
+# @jevitate/explore (400 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -196,6 +196,7 @@
   DEFAULT_COVERAGE_THRESHOLDS: object
   DEFAULT_HANG_REPLAYS: const (number)
   DEFAULT_LONG_POLL_MS: const (number)
+  DEFAULT_ORACLE_SETTLE_MS: const (number)
   DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: const (number)
   DEFAULT_SECRET_COMMAND_ATTEMPTS: const (number)
   DEFAULT_STALL_MS: const (number)
@@ -395,6 +396,7 @@
   endpointOf: function
   errorPageReason: function
   evaluateNetworkCheck: function
+  evaluateOutcomeChecks: function
   exactLiterals: function
   expandBraces: function
   expectedChange: function
@@ -619,7 +621,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (32 exports)
+# @jevitate/interpreter (33 exports)
   BufferingSink: class
   DEFAULT_IN_VIEWPORT_MIN: const (number)
   PostconditionFailed: class
@@ -652,8 +654,9 @@
   styleChannel: function
   stylesOf: function
   textIncludesCI: function
+  waitForOutcome: function
 
-# @jevitate/journey (32 exports)
+# @jevitate/journey (47 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
@@ -669,16 +672,31 @@
   SECRET_PARAM_NAME_RE: object
   SWEEP_MODES: array
   applyAnnotationDraft: function
+  assertionSiteKey: function
+  classifyMutation: function
   deriveParamSchema: function
   describeStep: function
   flatJourneySteps: function
   formatAnnotationChanges: function
   intentCoverage: function
+  isNoClaimExpect: function
+  isOwnTargetVisible: function
   isSweepMode: function
+  journeyAssertions: function
   journeyBranchPoint: function
+  journeyEndState: function
   journeyPrefix: function
+  journeyRunParams: function
   journeyStepCount: function
+  journeyWriteSteps: function
+  judgeAssertions: function
+  lintJourney: function
   listJourneyAnchors: function
+  mutationPairIssues: function
+  mutationProofVerdict: function
+  mutationReplay: function
+  mutationWait: function
+  planJourneyMutations: function
   prefixLandingPath: function
   resolveJourneyStep: function
   secretParamNames: function
@@ -859,7 +877,7 @@
   rungLocator: function
   validateCandidates: function
 
-# @jevitate/recording (73 exports)
+# @jevitate/recording (86 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -877,10 +895,15 @@
   JSON_PATH_EACH: object
   MAX_BUDGETS: const (number)
   MAX_INVARIANTS: const (number)
+  MAX_NAVIGATE_PARAM_LENGTH: const (number)
   MAX_OBSERVABLES: const (number)
   MAX_SETTLE_WITHIN_MS: const (number)
   MIN_SETTLE_POLL_MS: const (number)
+  NavigateUrlParamError: class
+  NetworkCheckSchema: object
   OBSERVABLE_NAME_RE: object
+  OutcomeCheckSchema: object
+  OutcomeWaitSchema: object
   PostdocDecisionSchema: object
   PostdocDecisionsSchema: object
   READ_RPC_VERB: object
@@ -888,8 +911,11 @@
   STYLE_CHANNELS: array
   STYLE_PROPERTIES: array
   SecretMaterializationError: class
+  StatusSpecSchema: object
   TargetDescriptorSchema: object
   UNKNOWN: const (symbol)
+  WAIT_FOR_MAX_MS: const (number)
+  WAIT_FOR_STALL_MS: const (number)
   WRITE_METHODS: object
   alignTraces: function
   applyDiff: function
@@ -897,9 +923,11 @@
   boundVariables: function
   captureRefs: function
   classifyColumns: function
+  describeNavigateUrl: function
   diffColumns: function
   diffRecordings: function
   diffTakes: function
+  encodeUrlParamValue: function
   evaluateInvariantExpression: function
   expressionObservables: function
   fitInteractionPolicy: function
@@ -915,6 +943,8 @@
   matchesPattern: function
   matchesResponseStatus: function
   mergeInvariantSpecs: function
+  navigateTemplateProblem: function
+  navigateUrlParams: function
   parseInvariantExpression: function
   parseJsonPath: function
   patternRegex: function
@@ -923,6 +953,7 @@
   readJsonPath: function
   readJsonPathList: function
   resolveHttpUrl: function
+  resolveNavigateUrl: function
   rpcMethodOf: function
   spliceRecording: function
   stepSignature: function

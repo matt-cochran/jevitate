@@ -277,7 +277,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (605 exports)
+# @jevitate/explore (609 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -398,6 +398,7 @@
   DEFAULT_COVERAGE_THRESHOLDS: variable
   DEFAULT_HANG_REPLAYS: variable
   DEFAULT_LONG_POLL_MS: variable
+  DEFAULT_ORACLE_SETTLE_MS: variable
   DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: variable
   DEFAULT_SECRET_COMMAND_ATTEMPTS: variable
   DEFAULT_STALL_MS: variable
@@ -467,6 +468,7 @@
   EpisodeContext: interface
   errorPageReason: function
   evaluateNetworkCheck: function
+  evaluateOutcomeChecks: function
   exactLiterals: function
   expandBraces: function
   expectedChange: function
@@ -539,6 +541,7 @@
   hasApiCredentials: function
   headingHint: function
   HeapLog: class
+  HeldInputs: type-alias
   hideDemoOverlayForCapture: function
   HOST_SAMPLE_INTERVAL_MS: variable
   HostHealthOptions: interface
@@ -650,6 +653,7 @@
   Op: type-alias
   OPS: variable
   OPS_NEEDING_TARGET: variable
+  OutcomeCheckContext: interface
   outOfScopeHangNote: function
   OverflowElement: interface
   OverflowFinding: interface
@@ -967,7 +971,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (47 exports)
+# @jevitate/interpreter (50 exports)
   anchorLocator: other
   applyTextEdit: other
   attrOf: other
@@ -1009,14 +1013,17 @@
   sizeViolation: other
   StepObserver: other
   StepOutcome: other
+  StepWait: other
+  StepWaitHooks: other
   styleChannel: other
   stylesOf: other
   textIncludesCI: other
   ToRecordingOptions: other
   VisualAssertion: other
   VisualVerdict: other
+  waitForOutcome: other
 
-# @jevitate/journey (53 exports)
+# @jevitate/journey (84 exports)
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1027,9 +1034,13 @@
   AnnotationDraftStep: type-alias
   AnnotationDraftStepSchema: variable
   applyAnnotationDraft: function
+  AssertionProof: interface
+  assertionSiteKey: function
+  AssertionVerdict: type-alias
   CAMPAIGN_LIMITS: variable
   CampaignSpec: type-alias
   CampaignSpecSchema: variable
+  classifyMutation: function
   deriveParamSchema: function
   describeStep: function
   FlatJourneyStep: interface
@@ -1038,27 +1049,54 @@
   FsJourneyStore: class
   intentCoverage: function
   IntentCoverage: interface
+  isNoClaimExpect: function
+  isOwnTargetVisible: function
   isSweepMode: function
   Journey: interface
   JourneyAnchor: interface
   JourneyAnchorListing: interface
+  journeyAssertions: function
+  JourneyAssertionSite: type-alias
   journeyBranchPoint: function
   JourneyBranchPoint: interface
+  journeyEndState: function
+  JourneyLintFinding: interface
+  JourneyLintOptions: interface
+  JourneyLintRule: type-alias
   JourneyMetadata: interface
+  JourneyMutation: interface
+  JourneyMutationPair: interface
   JourneyNetworkCheck: type-alias
   JourneyParameter: interface
   JourneyPrecondition: interface
   journeyPrefix: function
   JourneyRegistry: class
+  journeyRunParams: function
   JourneySchema: variable
   JourneyStatusSpec: type-alias
   journeyStepCount: function
   JourneyStepError: class
   JourneyStore: interface
   JourneySuccessCriterion: interface
+  JourneyWriteStep: interface
+  journeyWriteSteps: function
+  judgeAssertions: function
+  lintJourney: function
   listJourneyAnchors: function
+  MutationFailedSite: type-alias
+  MutationKind: type-alias
+  MutationPair: interface
+  mutationPairIssues: function
+  MutationPlan: interface
+  mutationProofVerdict: function
+  MutationProofVerdict: type-alias
+  mutationReplay: function
+  MutationRunResult: interface
+  MutationVerdict: type-alias
+  mutationWait: function
   ParamSchema: interface
   ParamValidationError: class
+  planJourneyMutations: function
   prefixLandingPath: function
   resolveJourneyStep: function
   SECRET_PARAM_NAME_RE: variable
@@ -1344,7 +1382,7 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (135 exports)
+# @jevitate/recording (152 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1374,12 +1412,14 @@
   CONFIDENT_VARIABLE_THRESHOLD: variable
   DeclaredInvariant: interface
   DeniedAsSpec: interface
+  describeNavigateUrl: function
   diffColumns: function
   diffRecordings: function
   DiffResult: interface
   diffTakes: function
   DomObservable: interface
   DomRead: type-alias
+  encodeUrlParamValue: function
   evaluateInvariantExpression: function
   EvalValue: type-alias
   ExpressionEnv: interface
@@ -1412,16 +1452,26 @@
   matchesResponseStatus: function
   MAX_BUDGETS: variable
   MAX_INVARIANTS: variable
+  MAX_NAVIGATE_PARAM_LENGTH: variable
   MAX_OBSERVABLES: variable
   MAX_SETTLE_WITHIN_MS: variable
   mergeInvariantSpecs: function
   MIN_SETTLE_POLL_MS: variable
+  navigateTemplateProblem: function
+  NavigateUrlParamError: class
+  navigateUrlParams: function
+  NetworkCheck: type-alias
+  NetworkCheckSchema: variable
   NetworkObservable: interface
   NeverResponse: interface
   OBSERVABLE_NAME_RE: variable
   ObservableSpec: type-alias
   ObservedList: type-alias
   ObservedValue: type-alias
+  OutcomeCheck: type-alias
+  OutcomeCheckSchema: variable
+  OutcomeWait: interface
+  OutcomeWaitSchema: variable
   PageSegment: interface
   PageTimingRecord: interface
   parseInvariantExpression: function
@@ -1448,11 +1498,14 @@
   ReferenceDiffResult: interface
   RequestShape: interface
   resolveHttpUrl: function
+  resolveNavigateUrl: function
   rpcMethodOf: function
   SecretMaterializationError: class
   SpliceAt: interface
   SpliceMode: type-alias
   spliceRecording: function
+  StatusSpec: type-alias
+  StatusSpecSchema: variable
   Step: type-alias
   StepRef: interface
   stepSignature: function
@@ -1475,6 +1528,8 @@
   ValidateInvariantOptions: interface
   validateInvariantSpec: function
   ValueOrVar: type-alias
+  WAIT_FOR_MAX_MS: variable
+  WAIT_FOR_STALL_MS: variable
   walkExpression: function
   WRITE_METHODS: variable
   writeClassifier: function

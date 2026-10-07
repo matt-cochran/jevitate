@@ -1,4 +1,5 @@
 import { z, ZodType } from "zod";
+import { navigateTemplateProblem } from "./navigate-params.js";
 
 // === Interfaces - TypeScript types matching the brief exactly ===
 
@@ -171,13 +172,42 @@ export function textEditProblem(e: {
   return null;
 }
 
+/** #409: the longest a step's outcome wait may last (30 min). */
+export const WAIT_FOR_MAX_MS = 1_800_000;
+/**
+ * #409: the default hang threshold of an outcome wait — how long a declared `progress` signal may be
+ * absent and unchanged before the wait fails early as a hang. Also the cap a mutation proof (#402)
+ * puts on the waited assertion of the step it mutates.
+ */
+export const WAIT_FOR_STALL_MS = 30_000;
+
+/**
+ * #409: a per-step OUTCOME wait for a long-running app job, declared next to the step's `expect`
+ * (an `assert` step's `check`). Replay polls the expectation until it holds (`until: "held"`, the
+ * only mode) or `maxMs` passes, reloading the page between polls when `reload` is set (a job that
+ * finishes server-side on a page that does not live-update). While it waits, a declared `progress`
+ * assertion must hold, or its target's text change, at least once per `stallMs` (default
+ * `WAIT_FOR_STALL_MS`); otherwise the step fails early as a hang naming the progress signal.
+ * Without `waitFor` a step's expectation is checked exactly as before.
+ */
+export interface OutcomeWait {
+  maxMs: number;
+  until?: "held";
+  progress?: Assertion;
+  reload?: boolean;
+  /** Time between polls (default 250 ms; 2 s with `reload`). */
+  pollMs?: number;
+  /** The hang threshold (default `WAIT_FOR_STALL_MS`); only meaningful with `progress`. */
+  stallMs?: number;
+}
+
 export type Step =
-  | { kind: "navigate"; label?: string; url: string; expect: Assertion }
-  | { kind: "click"; label?: string; target: TargetDescriptor; expect: Assertion }
-  | { kind: "fill"; label?: string; target: TargetDescriptor; value: ValueOrVar; expect: Assertion }
+  | { kind: "navigate"; label?: string; url: string; expect: Assertion; waitFor?: OutcomeWait }
+  | { kind: "click"; label?: string; target: TargetDescriptor; expect: Assertion; waitFor?: OutcomeWait }
+  | { kind: "fill"; label?: string; target: TargetDescriptor; value: ValueOrVar; expect: Assertion; waitFor?: OutcomeWait }
   | { kind: "waitFor"; label?: string; target: TargetDescriptor; state: "visible" | "hidden" | "attached" }
-  | { kind: "extract"; label?: string; target: TargetDescriptor; as: string; attr?: string; expect: Assertion }
-  | { kind: "select"; label?: string; target: TargetDescriptor; value: ValueOrVar; expect: Assertion }
+  | { kind: "extract"; label?: string; target: TargetDescriptor; as: string; attr?: string; expect: Assertion; waitFor?: OutcomeWait }
+  | { kind: "select"; label?: string; target: TargetDescriptor; value: ValueOrVar; expect: Assertion; waitFor?: OutcomeWait }
   /**
    * Attach a local file to an `<input type=file>`. `file` is the fixture's
    * path as a `ValueOrVar` (same discipline as `fill.value`): a plain path
@@ -185,8 +215,8 @@ export type Step =
    * a `{ redacted:true }` path (it contained a registered secret) cannot be
    * replayed and fails closed.
    */
-  | { kind: "upload"; label?: string; target: TargetDescriptor; file: ValueOrVar; expect: Assertion }
-  | { kind: "press"; label?: string; key: string; expect: Assertion }
+  | { kind: "upload"; label?: string; target: TargetDescriptor; file: ValueOrVar; expect: Assertion; waitFor?: OutcomeWait }
+  | { kind: "press"; label?: string; key: string; expect: Assertion; waitFor?: OutcomeWait }
   /**
    * A rich-text edit INSIDE a `contenteditable` (#148): place the caret/selection at `anchor` (an
    * exact quote, offsets, or start/end — a quote no longer present fails closed, never degrades to
@@ -202,9 +232,10 @@ export type Step =
       value?: ValueOrVar;
       format?: TextFormat;
       expect: Assertion;
+      waitFor?: OutcomeWait;
     }
   | { kind: "forEach"; label?: string; items: TargetDescriptor; as: string; steps: Step[] }
-  | { kind: "assert"; label?: string; check: Assertion }
+  | { kind: "assert"; label?: string; check: Assertion; waitFor?: OutcomeWait }
   | { kind: "handback"; label?: string; prompt: string; resume: Assertion; timeoutMs?: number };
 
 /**
@@ -268,7 +299,34 @@ export interface RecordedStep {
    * bounded. Replay / verify-fix can compare it; `journey annotate` can read expected results from it.
    */
   delta?: ActionDeltaRecord;
+  /**
+   * #400 (optional, additive): network checks on what THIS step's action sent — the goal mission's
+   * `requestMade`/`responseStatus` success checks, judged over the requests the replay sent from
+   * the moment this step began (to the end of the replay, after the network settled). A write step
+   * is authored with `responseStatus:<METHOD> <path>=2xx` from the request its discovery recorded.
+   * Evaluated by `journey run`/`source run` alongside the Journey's end state; never by the
+   * interpreter itself (a step's `expect` stays its page postcondition).
+   */
+  expectRequests?: NetworkCheck[];
 }
+
+/** #400: an expected HTTP status — a class (`2xx`) or an exact code (`201`). */
+export type StatusSpec = { class: 1 | 2 | 3 | 4 | 5 } | { code: number };
+
+/** #400: a network check (the `requestMade` / `responseStatus` success-check kinds). */
+export type NetworkCheck =
+  | { kind: "requestMade"; method: string; pathGlob: string }
+  | { kind: "responseStatus"; method: string; pathGlob: string; status: StatusSpec };
+
+/**
+ * #400: an outcome check — the goal mission's success-check kinds, as a Journey keeps them:
+ * `page` (an `Assertion` on the page as it is), `reloadThen` (reload, then the assertion: proves the
+ * state persisted), and the network checks. A Journey's `metadata.endState` is a list of these.
+ */
+export type OutcomeCheck =
+  | { kind: "page"; assertion: Assertion }
+  | { kind: "reloadThen"; assertion: Assertion }
+  | NetworkCheck;
 
 /** #303: one step's action delta as a Recording keeps it (see `RecordedStep.delta`). */
 export interface ActionDeltaRecord {
@@ -524,7 +582,26 @@ const NavigateUrlSchema = z
   .string()
   .refine((url) => SAFE_NAVIGATE_URL.test(url), {
     message: "navigate.url must be a relative path starting with '/' or an absolute http(s):// URL",
+  })
+  // #399: no tab or newline — URL parsing strips them, so `/\t/host` would become protocol-relative.
+  .refine((url) => !/[\t\n\r]/.test(url), { message: "navigate.url must not contain a tab or newline" })
+  // #399: `${param}` placeholders are well-formed and come after a literal origin.
+  .superRefine((url, ctx) => {
+    const problem = navigateTemplateProblem(url);
+    if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
   });
+
+/** #409: a step's outcome wait (bounded: at most `WAIT_FOR_MAX_MS`). */
+export const OutcomeWaitSchema: ZodType<OutcomeWait> = z
+  .object({
+    maxMs: z.number().int().min(1).max(WAIT_FOR_MAX_MS),
+    until: z.literal("held").optional(),
+    progress: AssertionSchema.optional(),
+    reload: z.boolean().optional(),
+    pollMs: z.number().int().min(100).max(60_000).optional(),
+    stallMs: z.number().int().min(1_000).max(WAIT_FOR_MAX_MS).optional(),
+  })
+  .strict();
 
 // Forward declaration for recursive Step schema
 const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
@@ -534,6 +611,7 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       label: z.string().optional(),
       url: NavigateUrlSchema,
       expect: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
     })
     .strict(),
   z
@@ -542,6 +620,7 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       label: z.string().optional(),
       target: TargetDescriptorSchema,
       expect: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
     })
     .strict(),
   z
@@ -551,6 +630,7 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       target: TargetDescriptorSchema,
       value: ValueOrVarSchema,
       expect: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
     })
     .strict(),
   z
@@ -569,6 +649,7 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       as: z.string(),
       attr: z.string().optional(),
       expect: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
     })
     .strict(),
   z
@@ -578,6 +659,7 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       target: TargetDescriptorSchema,
       value: ValueOrVarSchema,
       expect: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
     })
     .strict(),
   z
@@ -587,6 +669,7 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       target: TargetDescriptorSchema,
       file: ValueOrVarSchema,
       expect: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
     })
     .strict(),
   z
@@ -595,6 +678,7 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       label: z.string().optional(),
       key: z.string(),
       expect: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
     })
     .strict(),
   z
@@ -607,6 +691,7 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       value: ValueOrVarSchema.optional(),
       format: z.enum(["bold", "italic", "underline"]).optional(),
       expect: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
     })
     .strict()
     .superRefine((s, ctx) => {
@@ -627,6 +712,7 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       kind: z.literal("assert"),
       label: z.string().optional(),
       check: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
     })
     .strict(),
   z
@@ -689,6 +775,29 @@ const ActionDeltaRecordSchema = z
   })
   .strict();
 
+export const StatusSpecSchema: ZodType<StatusSpec> = z.union([
+  z.object({ class: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]) }).strict(),
+  z.object({ code: z.number().int().min(100).max(599) }).strict(),
+]);
+
+const METHOD = z.string().min(1).max(20);
+const PATH_GLOB = z.string().min(1).max(2000);
+const RequestMadeSchema = z.object({ kind: z.literal("requestMade"), method: METHOD, pathGlob: PATH_GLOB }).strict();
+const ResponseStatusSchema = z
+  .object({ kind: z.literal("responseStatus"), method: METHOD, pathGlob: PATH_GLOB, status: StatusSpecSchema })
+  .strict();
+
+/** #400: a `requestMade` / `responseStatus` check. */
+export const NetworkCheckSchema: ZodType<NetworkCheck> = z.discriminatedUnion("kind", [RequestMadeSchema, ResponseStatusSchema]);
+
+/** #400: any outcome check (page, reloadThen, requestMade, responseStatus). */
+export const OutcomeCheckSchema: ZodType<OutcomeCheck> = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("page"), assertion: AssertionSchema }).strict(),
+  z.object({ kind: z.literal("reloadThen"), assertion: AssertionSchema }).strict(),
+  RequestMadeSchema,
+  ResponseStatusSchema,
+]);
+
 const RecordedStepSchema = z
   .object({
     step: StepSchema,
@@ -700,6 +809,7 @@ const RecordedStepSchema = z
     objective: z.string().max(2000).optional(),
     expectedResult: z.string().max(2000).optional(),
     delta: ActionDeltaRecordSchema.optional(),
+    expectRequests: z.array(NetworkCheckSchema).max(20).optional(),
   })
   .strict();
 

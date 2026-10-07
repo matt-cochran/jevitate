@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import type { ObservedValue } from "@jevitate/recording";
+import type { EvalValue, ObservedValue } from "@jevitate/recording";
 
 /**
  * A value as it appears in a finding: the observed scalar, that it could not be read, or — for a
@@ -89,6 +89,11 @@ export interface InvariantReport {
   readonly observer?: string;
   /** #147: why a cross-actor invariant was never decided (never ran, session lost, unreadable). */
   readonly undecided?: string;
+  /**
+   * #406: why it was inconclusive at some step — the writes that step started were still in flight
+   * when its settle ceiling passed (the latest such step; each is also counted in `unknown`).
+   */
+  readonly inconclusive?: string;
 }
 
 /**
@@ -142,7 +147,34 @@ export interface AfterOptions {
    * once per step — the goal mission). Keeps probes to one read per action.
    */
   readonly rearm?: boolean;
+  /**
+   * Judges an EARLIER action of a sequence that did not wait for it to settle (a submit left
+   * pending while the next step ran), once the sequence settled: only its `require`/`always`
+   * invariants (no `never`, no cross-actor), the armed before-snapshot is kept for the sequence's
+   * own final action, and the action is not counted again.
+   */
+  readonly earlier?: boolean;
+  /**
+   * Input values as they were before the run's own later steps changed them (`inputValues`): used in
+   * place of the settled read, so a field edited after the submit is judged as it was submitted.
+   */
+  readonly inputsAsOf?: HeldInputs;
+  /**
+   * #406: writes the action started that had not ENDED when its settle ceiling passed (`PUT /path`).
+   * Its `require`/`always` invariants are then inconclusive — counted `unknown`, never judged on a page
+   * still waiting for its save (a `settle` invariant keeps its own re-check window; a `never` is
+   * judged as always).
+   */
+  readonly inFlight?: readonly string[];
+  /**
+   * #403: writes the action fired that jevitate blocked (an origin outside `--allow`). The app never
+   * saw them, so its `require`/`always` invariants are inconclusive in the same way.
+   */
+  readonly blocked?: readonly string[];
 }
+
+/** `dom` observables that read an input's `value`, by name (`InvariantMonitor.inputValues`). */
+export type HeldInputs = ReadonlyMap<string, { readonly value: EvalValue; readonly evidence?: string }>;
 
 export interface AfterResult {
   readonly violations: InvariantViolation[];
@@ -150,4 +182,6 @@ export interface AfterResult {
   readonly unknown: string[];
   /** Invariants that applied and held. */
   readonly held: string[];
+  /** #406: invariants that applied but were not judged (writes still in flight), and why. */
+  readonly inconclusive?: ReadonlyArray<{ readonly id: string; readonly reason: string }>;
 }

@@ -12,7 +12,7 @@ import { monitorFor } from "../page-monitor.js";
 import { awaitWrites } from "../side-effects.js";
 import { backgroundEndpoints, writesStartedSince } from "../stuck-actions.js";
 import type { RunContext } from "./context.js";
-import { TOGGLE_ROLES, actionIdentityOf, buttonLike, keyOf, noReply, quote, readRegionState, safePath } from "./helpers.js";
+import { TOGGLE_ROLES, actionIdentityOf, buttonLike, keyOf, noReply, quote, readRegion, readRegionState, safePath } from "./helpers.js";
 import type { Flow } from "./step.js";
 import { type ActStep } from "./step.js";
 
@@ -55,9 +55,12 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
     return "continue";
   }
   const baseline = turn ? await readPageText(ctx.page, ctx.secrets) : "";
-  const before = await readState();
+  // #391: where the control sits is read for every click (a control used beside an earlier write's
+  // control may change what that one sends); its state only for a control that is not paid / destructive.
+  const region = await readRegion(ctx.page, control, ctx.secrets);
+  const before = stateless ? undefined : region?.state;
   ctx.clickedRegion = readState;
-  ctx.sideEffects.beginClick(identity, control.name || control.summary, safePath(snap.url), ctx.now(), before);
+  ctx.sideEffects.beginClick(identity, control.name || control.summary, safePath(snap.url), ctx.now(), before, region?.where);
   const r = await act(cfg.actor, { op: "click", control });
   let reply: ReplyResult | undefined;
   let message: string | undefined;
@@ -99,6 +102,8 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
         ceilingMs: ctx.replyCeilingMs,
         quietMs: ctx.replyQuietMs,
       });
+      // #390: the reply is told below — the progress check does not tell its text again.
+      ctx.replyTold = reply.received;
       if (reply.received) {
         ctx.conversation.latestReply = reply.text;
         ctx.replies.add(snap.url, reply.text);

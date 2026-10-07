@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
-import type { Assertion, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
+import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
+import { describeNavigateUrl, encodeUrlParamValue, navigateUrlParams, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
@@ -19,6 +20,7 @@ async function strictTarget(actor: Actor, d: TargetDescriptor, opts: ResolveTarg
 import { checkAssertion, pollUntil, textIncludesCI, PostconditionFailed } from "./assertion.js";
 import { descriptorToTarget } from "./descriptor.js";
 import type { StepOutcome } from "./outcome.js";
+import { waitForOutcome, type StepWait } from "./outcome-wait.js";
 
 /**
  * NOTE (deferred to a future milestone, documentation-only): every step
@@ -59,6 +61,55 @@ export function resolveValue(value: ValueOrVar, vars: Map<string, string>): stri
 }
 
 /**
+ * #399: a navigation error with every value substituted into `template` (raw, `encodeURIComponent`
+ * and strictly encoded) replaced by `<param name>` — Playwright echoes the URL it was given. A new
+ * `Error` (same name, no `cause`), so the original message cannot ride along.
+ */
+function withoutNavigateValues(err: unknown, template: string, vars: Map<string, string>): Error {
+  const scrub = (text: string): string => {
+    let out = text;
+    for (const name of navigateUrlParams(template)) {
+      const v = vars.get(name);
+      if (v === undefined || v === "") continue;
+      for (const form of new Set([encodeUrlParamValue(v), encodeURIComponent(v), v])) out = out.split(form).join(`<param ${name}>`);
+    }
+    return out;
+  };
+  const original = err instanceof Error ? err : new Error(String(err));
+  const scrubbed = new Error(scrub(original.message));
+  scrubbed.name = original.name;
+  scrubbed.stack = original.stack === undefined ? undefined : scrub(original.stack);
+  return scrubbed;
+}
+
+/** #409: where a waited step reports its outcome wait (`RecordingInterpreter` collects them). */
+export interface StepWaitHooks {
+  readonly onWait?: (wait: StepWait) => void;
+}
+
+/**
+ * A step's postcondition: without `waitFor`, exactly the bounded `checkAssertion` it always was; with
+ * it (#409), the outcome wait (`waitForOutcome`) — reported through `hooks.onWait` whatever its
+ * ending, and a `PostconditionFailed` naming how it ended when the expectation never held.
+ */
+async function postcondition(
+  actor: Actor,
+  a: Assertion,
+  wait: OutcomeWait | undefined,
+  context: string,
+  index: number,
+  hooks: StepWaitHooks,
+): Promise<void> {
+  if (wait === undefined) {
+    if (!(await checkAssertion(actor, a))) throw new PostconditionFailed(a, context);
+    return;
+  }
+  const waited = await waitForOutcome(actor, a, wait, index + 1);
+  hooks.onWait?.(waited);
+  if (waited.ending !== "held") throw new PostconditionFailed(a, context, waited.detail);
+}
+
+/**
  * Performs one recorded step's action (if any) and enforces its
  * postcondition, throwing `PostconditionFailed` when the postcondition does
  * not hold. This is the fail-closed guardrail at the heart of RxD replay:
@@ -90,30 +141,31 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   switch (step.kind) {
     case "navigate": {
-      await Navigate.to(step.url).performAs(actor);
-      if (!(await checkAssertion(actor, step.expect))) {
-        throw new PostconditionFailed(step.expect, `navigate to ${step.url}`);
+      // #399: `${param}` placeholders resolve from the vars (strictly encoded, origin kept); a
+      // navigation error never echoes a substituted value, and the postcondition names the template.
+      const url = resolveNavigateUrl(step.url, vars);
+      try {
+        await Navigate.to(url).performAs(actor);
+      } catch (err) {
+        throw url === step.url ? err : withoutNavigateValues(err, step.url, vars);
       }
+      await postcondition(actor, step.expect, step.waitFor, `navigate to ${describeNavigateUrl(step.url)}`, index, targetOpts);
       return { kind: "done" };
     }
     case "click": {
       await Click.on(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
-      if (!(await checkAssertion(actor, step.expect))) {
-        throw new PostconditionFailed(step.expect, "click");
-      }
+      await postcondition(actor, step.expect, step.waitFor, "click", index, targetOpts);
       return { kind: "done" };
     }
     case "fill": {
       const text = resolveValue(step.value, vars);
       await Enter.theText(text).into(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
-      if (!(await checkAssertion(actor, step.expect))) {
-        throw new PostconditionFailed(step.expect, "fill");
-      }
+      await postcondition(actor, step.expect, step.waitFor, "fill", index, targetOpts);
       return { kind: "done" };
     }
     case "waitFor": {
@@ -122,9 +174,7 @@ export async function runStep(
       return { kind: "done" };
     }
     case "assert": {
-      if (!(await checkAssertion(actor, step.check))) {
-        throw new PostconditionFailed(step.check, "assert");
-      }
+      await postcondition(actor, step.check, step.waitFor, "assert", index, targetOpts);
       return { kind: "done" };
     }
     case "extract": {
@@ -135,18 +185,14 @@ export async function runStep(
         throw new Error(`extract: attribute "${step.attr}" not found on target`);
       }
       vars.set(step.as, value);
-      if (!(await checkAssertion(actor, step.expect))) {
-        throw new PostconditionFailed(step.expect, "extract");
-      }
+      await postcondition(actor, step.expect, step.waitFor, "extract", index, targetOpts);
       return { kind: "done" };
     }
     case "select": {
       const value = resolveValue(step.value, vars);
       const page = actor.ability(BrowseTheWebToken).session.page;
       await (await resolveTarget(page, step.target, targetOpts)).selectOption(value);
-      if (!(await checkAssertion(actor, step.expect))) {
-        throw new PostconditionFailed(step.expect, "select");
-      }
+      await postcondition(actor, step.expect, step.waitFor, "select", index, targetOpts);
       return { kind: "done" };
     }
     case "upload": {
@@ -161,17 +207,13 @@ export async function runStep(
       }
       const page = actor.ability(BrowseTheWebToken).session.page;
       await (await resolveTarget(page, step.target, targetOpts)).setInputFiles(file);
-      if (!(await checkAssertion(actor, step.expect))) {
-        throw new PostconditionFailed(step.expect, "upload");
-      }
+      await postcondition(actor, step.expect, step.waitFor, "upload", index, targetOpts);
       return { kind: "done" };
     }
     case "press": {
       const page = actor.ability(BrowseTheWebToken).session.page;
       await page.keyboard.press(step.key);
-      if (!(await checkAssertion(actor, step.expect))) {
-        throw new PostconditionFailed(step.expect, "press");
-      }
+      await postcondition(actor, step.expect, step.waitFor, "press", index, targetOpts);
       return { kind: "done" };
     }
     case "editText": {
@@ -185,9 +227,7 @@ export async function runStep(
         ...(value === undefined ? {} : { value }),
         ...(step.format === undefined ? {} : { format: step.format }),
       });
-      if (!(await checkAssertion(actor, step.expect))) {
-        throw new PostconditionFailed(step.expect, "editText");
-      }
+      await postcondition(actor, step.expect, step.waitFor, "editText", index, targetOpts);
       return { kind: "done" };
     }
     case "forEach": {

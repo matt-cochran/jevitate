@@ -83,3 +83,18 @@ describe("two-level MCP journey tools", () => {
     ).rejects.toThrow(/unknown/);
   });
 });
+
+describe("#399: a navigate placeholder declared only in parameters is listed as a param", () => {
+  it("find_capabilities and the named tools list it (never only metadata.params)", async () => {
+    const reg = new JourneyRegistry(new FsJourneyStore(mkdtempSync(join(tmpdir(), "mcp-399-"))));
+    await reg.put({
+      metadata: { id: "accept-invite", name: "accept invite", promoted: true, params: [], parameters: [{ name: "inviteToken", secret: true }], createdAtIso: "2026-10-07T00:00:00Z" },
+      recording: { version: "1", site: "https://example.test", pages: [{ url: "/accept", steps: [{ step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } } }] }] },
+    });
+    expect((await findCapabilities(reg, "accept"))[0]?.params).toEqual(["inviteToken"]);
+    const { listNamedJourneyTools } = await import("./index.js");
+    const tool = (await listNamedJourneyTools(reg)).find((t) => t.name === "accept-invite");
+    expect(tool?.inputSchema.required).toEqual(["inviteToken"]);
+    expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(["inviteToken"]);
+  });
+});

@@ -354,6 +354,10 @@ Jevitate is pre-1.0 and under active development. Known limitations worth knowin
 - [Demo](./docs/demo.md) · [How it works](./docs/how-it-works.md) · [Safety](./docs/safety.md)
 - [Changelog](./CHANGELOG.md) · [Releasing](./RELEASING.md)
 - Website: [jevitate.com](https://jevitate.com)
+- Related: [Journeeze](https://journeeze.dev) (coming soon): Jevitate proves what the browser can
+  prove; Journeeze adds what only people can tell you: what they like, dislike and don't
+  understand, anchored to the same journeys and clustered into GitHub issues.
+  [Early access](mailto:contact@journeeze.dev?subject=Journeeze%20early%20access)
 
 ## Contributing
 

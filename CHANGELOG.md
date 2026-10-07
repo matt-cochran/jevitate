@@ -5,7 +5,157 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [0.6.0] – unreleased
+## [Unreleased]
+
+## [0.7.0] – 2026-10-07
+
+0.7.0 makes a Journey prove its outcome. Authored Journeys keep the goal's success checks as their
+end state and record what each step is supposed to change. A new `journey lint` command and a
+`journey promote` gate flag assertions that can't prove anything, `journey verify --mutate` proves
+each assertion fails when its outcome is absent, and `journey run` and `load run` judge those checks
+the same way. A `navigate` URL can take declared parameters, including secrets,
+so single-use links such as invitations or magic-link sign-ins are supported. The repeat guard no
+longer re-fires a write that answered 5xx, and goal runs notice when an action's only effect is new
+text. Adversarial runs stay inside their safety boundary: a misuse write to another origin is
+blocked and never blamed on the app, a modal form is filled before a submit probe, a page's own
+cancelled reads are no longer filed as defects, and a save still in flight makes its invariants
+inconclusive rather than wrong. Failed steps are counted 1-based everywhere.
+
+### Behaviour changes
+
+- **The repeat guard treats a 5xx write as unknown (#404).** A write that answered 5xx, or failed
+  without any response, may have been committed by the server, so its control is not clicked again
+  unless the page offers a retry or shows an error. Only a 4xx is treated as a rejected input that
+  may be retried.
+- **Adversarial misuse writes to another origin are blocked (#403).** A fetch/XHR or native form
+  post that a misuse step fires outside `--allow` is aborted in the browser and listed in the
+  result's `blockedWrites` with that origin and how to allow it; it is never reported as a defect of
+  the app, while reads and subresources from other origins load as before. `docs/safety.md` now
+  states exactly what `--allow` guarantees and what it does not block. If the app refreshes a sign-in
+  token on another origin (an identity provider) during an adversarial run, add that origin to
+  `--allow`.
+- **`journey promote` refuses a weak Journey (#401).** Promotion now runs `journey lint` first and
+  refuses a Journey whose assertions cannot prove its outcome until the reviewer accepts it with
+  `--accept-weak "<reason>"`, which is recorded as `metadata.acceptedWeak`. Warnings never block
+  promotion. Approving a demo (`demo approve`) is the reviewer's approval, so it records the waiver
+  instead of refusing.
+- **A nameless control is never clicked under `--deny` or `--paid` (#396).** An icon-only control
+  named by its `title`, `aria-labelledby` or a nested image's `alt` now shows that name in the
+  control list, so the patterns match it; a control that still has no accessible name is not clicked
+  when those patterns are declared, since they can't be checked against it.
+- **Failed steps are named 1-based (#398).** `journey run`, `check` and a stale `--from-journey`
+  prefix now count steps the same way the rest of the output does; before, "step 2 failed" meant the
+  third step.
+- **`load run` judges each iteration like `journey run` (#400).** A Journey's end-state checks
+  (`metadata.endState`, then legacy `networkChecks`) and each step's `expectRequests` are evaluated,
+  so an iteration whose checks fail is counted as quarantined, not ok. A Journey without checks
+  behaves as before.
+- **Adversarial invariants on a slow save are inconclusive (#406).** A misuse step waits up to 5 s
+  for the writes it started to end; if one is still pending then, that step's `require`/`always`
+  invariants are `inconclusive` — counted as unknown, never a violation and never a pass — and the
+  report names the writes it waited on, such as `PUT /api/profile`. Invariants with
+  `settle.withinMs` keep their own re-check window.
+
+
+
+### Added
+
+- **`journey lint` reports weak assertions (#401).** The command reports the assertions that cannot
+  prove a Journey's outcome (writes without an asserted effect, visibility-only claims, nothing
+  after the last write, …) as human lines, a `--json` envelope or a `--sarif` log CI can gate on,
+  exiting 1 when any error is found. MCP exposes it as the `lint_journey` tool (`promote_journey` applies the gate; only the CLI can
+  `--accept-weak`).
+- **Authoring keeps the outcome evidence (#400).** Every `--success` check of any kind —
+  `textIncludes`, `valueEquals`, `count`, `attr`, `flashed`, `requestMade`, `responseStatus` and now
+  `reloadThen` — is saved as the Journey's end state (`metadata.endState`), and `journey run` /
+  `source run` judge it after the last step with the goal run's own evaluator (one reload for
+  `reloadThen`). A step's `expect` now comes from what it changed: a write becomes
+  `expectRequests: responseStatus:<METHOD> <path>=2xx`, a fill asserts its value, and with
+  `--action-deltas` a changed page asserts the text or element it added. Older Journeys load and run
+  unchanged.
+- **`--action-deltas` fills each step's `expectedResult` (#400).** A step with a recorded delta gets
+  its `expectedResult` filled by code from that delta, so the reviewer sees what each step is
+  supposed to prove; an existing `expectedResult` is never overwritten and steps without a delta are
+  unchanged.
+- **A `navigate` URL can take declared parameters (#399).** A Journey may use a single-use link
+  such as an invitation accept, magic-link sign-in or password reset:
+  `"url": "/accept?token=${inviteToken}"` with
+  `parameters: [{ "name": "inviteToken", "secret": true }]`, run with
+  `journey run --param inviteToken=…` or MCP `run_journey` `params`. A placeholder must name a
+  declared parameter and must come after a literal origin; its value is percent-encoded as one URL
+  component, the resolved URL must keep the template's origin, and a secret value is redacted from
+  output, errors, screenshots and evidence. Steps show it as `<param inviteToken>`.
+- **`journey demo` guides end with a Journeeze line.** Every generated Markdown guide ends with one
+  line about Journeeze (human comprehension feedback for journeys, coming soon). It is off with
+  `JEVITATE_PROMOTIONS=0` or `"promotions": false` in `~/.jevitate/config.json`, and never appears
+  in stdout, JSON, subtitles, SARIF, JUnit or `check` output.
+- **`journey verify --mutate` proves each assertion can fail (#402).** It replays the Journey once
+  as recorded (it must pass), then once per mutation: each write step skipped, its write requests
+  aborted, and each fill whose value an assertion checks typed empty. Every assertion is reported
+  `sensitive` (its paired mutation broke it), `insensitive` (vacuous: it still passed), `cascade`,
+  `not-applied` or `unpaired`; exit `0` when every paired assertion is sensitive, `1` when any is
+  insensitive, `2` when nothing could be proven. Mutations only skip a step, type an empty value or
+  abort the app's own writes; they never send or answer a request. `metadata.mutationPairs` pins a
+  pairing (`{ "check": "end-state:0", "mustFailWhen": "skip:publish" }`). MCP: `verify_journey`.
+  Replays share the app's server-side state, so reset it between replays with `--fixtures` or
+  `--before` when a blocked save could find the base replay's data.
+- **A step can wait for a long-running job (#409).** A step's `expect` (or an `assert` step's
+  `check`) may declare `waitFor: { maxMs, until: "held", progress, stallMs, reload, pollMs }`: replay
+  polls the expectation until it holds or `maxMs` (at most 30 min) passes, reloading the page between
+  polls with `reload: true`. While it waits, a declared `progress` signal must hold or change at
+  least once per `stallMs` (default 30 s), otherwise the step fails early as a hang naming the
+  signal instead of waiting out the budget. The run result lists each waited step's actual wait
+  under `waits`, so a slow job shows up as a number. Under `journey verify --mutate`, the waited
+  claim on a skipped or write-blocked step waits at most its hang threshold. Steps without
+  `waitFor` behave exactly as before.
+
+### Fixed
+
+- **An extension whose id drifted is diagnosed as such on a slow machine (#410).** When an unpacked
+  extension's computed id doesn't match the one Chromium used, the error names the real id instead
+  of saying the browser didn't load the extension. The cross-check now waits (up to 10 s) for the
+  extension's own service worker rather than 2 s for any worker.
+
+- **Adversarial invariants are judged after the save is answered (#388).** A misuse step waits (up
+  to 5 s) for its requests before its declared invariants are checked, so a rejected save is no
+  longer reported as a violation because the previous save's "Saved" was still showing. A Save left
+  in flight by an act-while-pending sequence is judged once the sequence settles, against the state
+  from before it and with the inputs that Save sent, so a page that says "Saved" over an HTTP 500 is
+  reported as an invariant violation that verify-fix and `regression capture` can replay.
+- **A modal form is submitted with valid values (#394).** Before a submit probe (double-submit,
+  boundary-submit, edit-cancel-save, act-while-pending), the other empty text fields get valid
+  values, so an adversarial probe reaches the server instead of ending `insufficient-coverage`.
+- **A page's own cancelled read is not a defect (#405).** A superseded type-ahead or search read —
+  including a read RPC sent as POST — and a document navigation replaced by another are benign
+  client-side aborts and no longer produce `failed-request`. An aborted write, and every genuine
+  network failure (DNS, connection, SSL, timeout), still produces the signal.
+- **A usability run ignores reads its own navigation cancelled (#393).** Reads cancelled
+  (`net::ERR_ABORTED`) because the run's own click navigated away, or a gRPC-web/Connect request
+  that answered and was then aborted, no longer produce "an error interrupted the task". Requests
+  that answered 4xx/5xx, or failed without a navigation, are still reported.
+- **A rejected goal report keeps its real reason (#395).** When the first answer was rejected and
+  the retry found nothing, the run used to say "no answer was found on the pages seen" even though
+  the answer was on the page; it now names the claim that couldn't be grounded and why, so the
+  model can correct it instead of sending the same report again.
+- **Goal runs notice when an action's only effect is new text (#390).** The model is told what text
+  appeared (redacted like other page evidence), and the step counts as progress instead of "the page
+  did not change". Text that only changes its digits, like a counter, is ignored.
+- **A same-labelled button that sends a different request is no longer refused (#391).** When another control in the same part of
+  the page (its section, form, dialog or card) has been used since a button's write, that button may
+  be clicked once more even if its own part looks unchanged, because client state may now make it
+  send another request. The next click is judged by the request it actually sends; a re-click with
+  nothing used in between is still refused, as are paid or destructive controls and writes whose
+  outcome is unknown.
+- **Missions on a page with an open dialog act on the dialog's controls (#397).** Controls below the
+  fold that a fixed backdrop would cover once scrolled into view are left out of the inventory, so a
+  `role=dialog` without `aria-modal` no longer ends a run with 0 actions and every step "obscured
+  by" the backdrop.
+- **A stale `--from-journey` prefix shows what the page showed (#398).** The `journey-stale`
+  failure carries the page's URL, title and a short visible-text excerpt (redacted), so "the chat
+  said it is unavailable" reads differently from "the click came too early". A lazily mounted panel
+  replays green as a prefix, as it does under `journey run`.
+
+## [0.6.0] – 2026-10-05
 
 0.6.0 fixes what a release-gate sweep of goal runs on 0.5.0 found. Runs stop on a click or scroll
 loop instead of spending the whole decision budget, and say which action actually blocked them.

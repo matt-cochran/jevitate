@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "@jevitate/example-site";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
+import type { OutcomeCheck } from "@jevitate/recording";
 import { runJourneyLoadTest } from "./load-api.js";
 
 /**
@@ -84,6 +85,56 @@ describe("load run — real-browser smoke test", () => {
       expect(report.provenance).toBe("measured");
       expect(report.totalRuns).toBe(2);
       expect(report.okRuns + report.quarantinedRuns + report.errorRuns).toBe(2);
+    },
+    30_000,
+  );
+
+  it(
+    "#400: judges a Journey's end-state checks, so a replay whose check fails is not an ok run",
+    async () => {
+      const endState: OutcomeCheck[] = [
+        { kind: "responseStatus", method: "POST", pathGlob: "/never-sent", status: { class: 2 } },
+      ];
+      await new JourneyRegistry(new FsJourneyStore(journeysDir)).put({
+        metadata: {
+          id: "home-end-state",
+          name: "home end state",
+          promoted: true,
+          params: [],
+          createdAtIso: "2026-09-20T00:00:00Z",
+          endState,
+        },
+        recording: {
+          version: "1",
+          site: baseUrl,
+          pages: [
+            {
+              url: `${baseUrl}/login`,
+              steps: [
+                {
+                  step: {
+                    kind: "navigate",
+                    url: "/login",
+                    expect: { kind: "urlIncludes", text: "/login" },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      } as any);
+
+      const report = await runJourneyLoadTest({
+        dir: journeysDir,
+        id: "home-end-state",
+        params: {},
+        concurrency: 2,
+        iterationsPerActor: 1,
+        seed: 1,
+        authorizedOrigins: [baseUrl],
+      });
+
+      expect(report.quarantinedRuns).toBe(2);
     },
     30_000,
   );

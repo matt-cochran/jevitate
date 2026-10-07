@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, deriveParamSchema, secretParamValues, validateParams } from "@jevitate/journey";
 import type { SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
@@ -9,6 +9,7 @@ import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner } from "@jevitate/runtime";
 import { runLoadTest, type CapacityReport, type LoadActorRunner } from "@jevitate/load";
 import { JourneyRequiresAuthError } from "./journey-api.js";
+import { JourneyOutcomeChecks } from "./journey-network-checks.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
 
 /** Distinct from `@jevitate/journey`'s ParamValidationError-style "unknown id" cases elsewhere, so CLI callers can branch without string-matching. */
@@ -116,7 +117,12 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
         new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
-      const runner = new JourneyRunner(actor, new RecordingInterpreter());
+      // #400: a load iteration means the same as a `journey run` — the Journey's end state and
+      // each step's `expectRequests` are judged, so a replay whose checks fail is not an ok run.
+      const outcomeChecks = new JourneyOutcomeChecks(session.page, journey, { secrets: secretParamValues(journey, opts.params) });
+      const observer = outcomeChecks.observer();
+      const interpreter = observer === undefined ? new RecordingInterpreter() : new RecordingInterpreter({ observer });
+      const runner = new JourneyRunner(actor, interpreter);
 
       // `runLoadTest` calls `run()` exactly `iterationsPerActor` times for
       // this actor — success or failure, never more, never fewer (see
@@ -132,7 +138,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       return {
         run: async () => {
           try {
-            return await runner.run({ journey, params: opts.params, policy });
+            return await outcomeChecks.run(actor, () => runner.run({ journey, params: opts.params, policy }));
           } finally {
             remainingIterations--;
             if (remainingIterations <= 0) {

@@ -90,6 +90,19 @@ describe("the shared safety policy (#116)", () => {
     expect(new SafetyPolicy({ deny: ["Publish"] }).refuses(btn("Publish now"))).toMatchObject({ risk: "denied" });
   });
 
+  it("#396: a nameless control is refused when a --deny pattern is declared, even with allowDestructive", () => {
+    const p = new SafetyPolicy({ deny: ["/^Archive/i"], allowDestructive: true });
+    expect(p.refuses(btn(""))).toMatchObject({ risk: "denied" });
+  });
+
+  it("#396: a nameless control is not refused when no --deny/--paid pattern is declared", () => {
+    expect(new SafetyPolicy({ allowDestructive: true }).refuses(btn(""))).toBeNull();
+  });
+
+  it("#396: a --deny pattern refuses a control by its title-derived name", () => {
+    expect(new SafetyPolicy({ deny: ["/^Auto-improve/i"] }).refuses(btn("Auto-improve"))).toMatchObject({ risk: "denied" });
+  });
+
   it("on a goal run, allows the risky control the goal itself asks for", () => {
     expect(goalAsksFor("Pressure-test the bet by simulating how customers respond", "simulation")).toBe(true);
     expect(goalAsksFor("Delete the draft note", "Delete")).toBe(true);
