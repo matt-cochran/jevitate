@@ -11,6 +11,9 @@ import { monitorFor } from "../page-monitor.js";
 import { perceive } from "../perceive.js";
 import { verifyFix, type VerifySession } from "../verify-fix.js";
 import { ScriptedJudge, useSkippingTime, withSession } from "../testkit.js";
+import { replayAndDetectHang } from "../hang-repro.js";
+import type { HangSignal } from "../hang.js";
+import type { Recording } from "@jevitate/recording";
 import { HostHealthSampler } from "../host-health.js";
 
 /**
@@ -451,7 +454,10 @@ describe("#193 — a page reached only by an out-of-scope departure is never han
 });
 
 describe("#87 — a global hang element is ONE finding across every route it appears on", () => {
-  useSkippingTime({ pageClock: false }); // #304: a busy page keeps the browser's own clock
+  // #304: the layout's indicator is static (no busy loop), so the page's clock follows the skips. Kept
+  // on the browser's own clock (#414), a settle's quiet window — measured in PAGE time — fell behind
+  // the render ceiling skipped in NODE time: the replay read never-settled, not the stuck indicator.
+  useSkippingTime();
   it(
     "a persistent busy indicator shared by the layout, met on 3 routes, is 1 hang finding listing all 3 routes, reproduced once",
     async () => {
@@ -486,6 +492,50 @@ describe("#87 — a global hang element is ONE finding across every route it app
       expect(result.outcome).toBe("exhausted");
     },
     180_000,
+  );
+});
+
+describe("#414 — a busy-indicator replay under skipped time keeps the page clock in step", () => {
+  // As fast as skipping gets (a skip after 1ms idle): with the page on its own clock this read
+  // never-settled on every attempt; with the page clock following the skips it reproduces every time.
+  useSkippingTime({ idleMs: 1 });
+  it(
+    "the layout's stuck progressbar, replayed hub → Route A, reproduces on every attempt",
+    async () => {
+      const recording: Recording = {
+        version: "1.0.0",
+        site: "test",
+        pages: [
+          {
+            url: `${origin}/lay-hub`,
+            steps: [
+              { step: { kind: "navigate", url: `${origin}/lay-hub`, expect: { kind: "urlIncludes", text: "/lay-hub" } } },
+              { step: { kind: "click", target: { role: "link", name: "Route A" }, expect: { kind: "urlIncludes", text: "/lay-a" } } },
+            ],
+          },
+        ],
+      };
+      const hang: HangSignal = {
+        kind: "ui-no-progress",
+        detail: "a busy indicator ([data-testid=global-progress]) never went away within 4000ms",
+        route: "/lay-a",
+        url: `${origin}/lay-a`,
+        pending: [],
+        lastState: { signature: "irrelevant", controls: [] },
+        element: "[data-testid=global-progress]",
+      };
+      for (let i = 0; i < 3; i++) {
+        const attempt = await replayAndDetectHang({
+          recording,
+          recordingStepIndex: 1,
+          hang,
+          openSession: freshSession,
+          perceive: { renderWaitMs: FAST.renderWaitMs },
+        });
+        expect(attempt, attempt.detail).toMatchObject({ ran: true, reproduced: true, rule: "busy-indicator" });
+      }
+    },
+    120_000,
   );
 });
 
