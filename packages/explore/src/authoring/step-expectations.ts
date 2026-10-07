@@ -3,6 +3,7 @@ import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
 import { isOwnTargetVisible } from "@jevitate/journey";
 import { REDACTION_MASK } from "@jevitate/ai-core";
 import { normalizeRoute } from "../adversarial/defect-fingerprint.js";
+import { expectedResultFromDelta } from "../replay-deltas.js";
 
 /**
  * #400 — a step's `expect` comes from what the step CHANGED, never from its own target. Reads what
@@ -20,6 +21,9 @@ import { normalizeRoute } from "../adversarial/defect-fingerprint.js";
  * A click/type/select step left with nothing to claim gets the explicit "no claim" `count … min 0`
  * (always true; the lint #401 reads it as "no assertion here") — never `visible` of its own target,
  * which holds before and after the action and so proves nothing.
+ *
+ * #400: when the step has a delta, its blank `expectedResult` (RecordedStep, #246) is filled from
+ * `expectedResultFromDelta` so the reviewer sees, in words, what the step is supposed to prove.
  */
 export function deriveStepExpectations(recording: Recording, opts: { readonly readRequests?: readonly string[] } = {}): Recording {
   const isWrite = writeClassifier(opts.readRequests === undefined ? {} : { readRequests: opts.readRequests });
@@ -32,11 +36,22 @@ export function deriveStepExpectations(recording: Recording, opts: { readonly re
 function deriveOne(recorded: RecordedStep, isWrite: WriteClassifier): RecordedStep {
   const writes = writeChecks(recorded, isWrite);
   const step = withDerivedExpect(recorded);
+  const expectedResult = derivedExpectedResult(recorded);
   return {
     ...recorded,
     step,
+    ...(expectedResult === undefined ? {} : { expectedResult }),
     ...(writes.length === 0 ? {} : { expectRequests: mergeChecks(recorded.expectRequests ?? [], writes) }),
   };
+}
+
+/** #400: the prose `expectedResult` code drafts from a step's delta, when it has none yet. */
+function derivedExpectedResult(recorded: RecordedStep): string | undefined {
+  if (recorded.delta === undefined) return undefined;
+  const existing = recorded.expectedResult;
+  if (existing !== undefined && existing.trim() !== "") return undefined;
+  const draft = expectedResultFromDelta(recorded.delta);
+  return draft === null || draft.trim() === "" ? undefined : draft;
 }
 
 // ── Requests ────────────────────────────────────────────────────────────────────────────────────
