@@ -102,6 +102,8 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
         ceilingMs: ctx.replyCeilingMs,
         quietMs: ctx.replyQuietMs,
       });
+      // #390: the reply is told below — the progress check does not tell its text again.
+      ctx.replyTold = reply.received;
       if (reply.received) {
         ctx.conversation.latestReply = reply.text;
         ctx.replies.add(snap.url, reply.text);

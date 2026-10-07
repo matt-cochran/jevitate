@@ -12,6 +12,7 @@ import {
 } from "@jevitate/ai-core";
 import { descriptorToLocator } from "@jevitate/recorder";
 import { buildJudgmentState } from "./redact.js";
+import { pageFacts } from "./revealed-secrets.js";
 import { monitorFor } from "./page-monitor.js";
 import { backgroundEndpoints, endpointKey } from "./stuck-actions.js";
 import type { Control } from "./snapshot.js";
@@ -167,42 +168,6 @@ export interface AriaCapture {
   readonly partial: readonly string[];
   readonly at: number;
   readonly ms: number;
-}
-
-/** BROWSER CODE — values the page shows in secret fields (learned, in memory only) + page facts. */
-function pageFacts(selectors: readonly string[]): { learned: string[]; title: string; canvas: boolean } {
-  const learned: string[] = [];
-  const take = (v: string | null | undefined): void => {
-    const t = (v ?? "").trim();
-    if (t !== "" && t.length <= 2_000) learned.push(t);
-  };
-  for (const el of Array.from(document.querySelectorAll('input[type="password"]'))) take((el as HTMLInputElement).value);
-  for (const sel of selectors) {
-    let found: Element[] = [];
-    try {
-      found = Array.from(document.querySelectorAll(sel));
-    } catch {
-      continue;
-    }
-    for (const el of found) {
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-        take(el.value);
-        continue;
-      }
-      // A marked element's text: the whole text when it is one word, else its credential-like
-      // words (12+ chars, no space) — never a label word, which would then be masked everywhere.
-      const text = (el.textContent ?? "").trim();
-      if (text !== "" && !/\s/.test(text) && text.length >= 6) take(text);
-      else for (const w of text.split(/\s+/)) if (w.length >= 12) take(w);
-    }
-  }
-  const vw = window.innerWidth * window.innerHeight;
-  let canvas = false;
-  for (const c of Array.from(document.querySelectorAll("canvas"))) {
-    const r = c.getBoundingClientRect();
-    if (vw > 0 && r.width * r.height >= vw * 0.5) canvas = true;
-  }
-  return { learned, title: document.title, canvas };
 }
 
 /** BROWSER CODE — why the target itself cannot be seen by an accessibility snapshot, or null. */
