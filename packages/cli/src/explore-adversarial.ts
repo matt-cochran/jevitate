@@ -373,7 +373,7 @@ export async function runAdversarialCliMission(
       // What `verify-fix` needs to replay a defect later: where, which origins, which session file
       // (the storageState PATH only — its cookies never enter an artifact).
       target: {
-        seedUrl: start.url,
+        seedUrl: start.persistUrl,
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },

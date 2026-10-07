@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Journey, JourneyMetadata } from "./journey.js";
 import { JourneySchema } from "./journey.js";
+import { journeyRunParams } from "./param-schema.js";
 
 /**
  * Structural shape `JourneyRegistry` needs from its backing store.
@@ -108,7 +109,9 @@ export class FsJourneyStore {
         try {
           const raw = await readFile(join(dir, entry), "utf8");
           const parsed = JourneySchema.parse(JSON.parse(raw));
-          results.push(withNamespace(parsed, ns, entry.slice(0, -".json".length)).metadata);
+          // #399: a listing names every param the Journey takes (a navigate placeholder too).
+          const listed = withNamespace(parsed, ns, entry.slice(0, -".json".length));
+          results.push({ ...listed.metadata, params: journeyRunParams(listed) });
         } catch {
           // Defensive skip: list() is a lifecycle operation, not a hard read
           // path — one corrupt/unparseable file shouldn't break listing

@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import type { PageSegment, Recording, RecordedStep } from "@jevitate/recording";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import { RecordingInterpreter } from "./interpreter.js";
+import { RecordingInterpreter, type StepObserver } from "./interpreter.js";
 
 // === fakes, mirroring run-step.test.ts's pattern ===
 
@@ -228,6 +228,92 @@ test("run: a non-PostconditionFailed error on page 2 (extract with no matching a
     at: 2,
     error: expect.stringContaining('attribute "data-id" not found'),
   });
+});
+
+// === run: skipStep (#402) ===
+
+test("run: skipStep leaves one step's action out while the others still run (#402)", async () => {
+  const actions: string[] = [];
+  const locator = fakeLocator({
+    click: vi.fn(async () => {
+      actions.push("click");
+    }),
+    isVisible: vi.fn(async () => {
+      actions.push("visible");
+      return true;
+    }),
+  });
+  const page = fakePage(locator);
+  page.goto = vi.fn(async () => {
+    actions.push("navigate");
+  });
+  const actor = actorWithPage(page);
+  const rec = recording([
+    [
+      { step: { kind: "navigate", url: "/inbox", expect: { kind: "visible", target: { testId: "loaded" } } } },
+      { step: { kind: "click", target: { testId: "delete" }, expect: { kind: "visible", target: { testId: "confirm" } } } },
+      { step: { kind: "assert", check: { kind: "visible", target: { testId: "done" } } } },
+    ],
+  ]);
+
+  const interp = new RecordingInterpreter({ skipStep: (index) => index === 1 });
+  await interp.run(actor as any, rec);
+
+  expect(actions).toEqual(["navigate", "visible", "visible"]);
+});
+
+test("run: a failure after a skipped step keeps the un-renumbered flat index (#402)", async () => {
+  // Step 1 would fail its own postcondition (isVisible false); skipping it lets the later step 2 fail
+  // instead, proving indices were not shifted.
+  const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
+  const actor = actorWithPage(fakePage(locator));
+  const rec = recording([
+    [
+      { step: { kind: "navigate", url: "/inbox", expect: { kind: "urlIncludes", text: "/inbox" } } },
+      { step: { kind: "click", target: { testId: "delete" }, expect: { kind: "visible", target: { testId: "confirm" } } } },
+      {
+        step: {
+          kind: "fill",
+          target: { label: "Body" },
+          value: { var: "missing" },
+          expect: { kind: "visible", target: { label: "Body" } },
+        },
+      },
+    ],
+  ]);
+
+  const interp = new RecordingInterpreter({ skipStep: (index) => index === 1 });
+  const result = await interp.run(actor as any, rec);
+
+  expect(result).toEqual({ outcome: "failed", at: 2, error: expect.stringContaining("unknown variable") });
+});
+
+test("run: the observer still sees before/after for a skipped step (#402)", async () => {
+  // The skipped step's own postcondition would fail if it ran (isVisible false), so a `done` after it
+  // is only possible because skipStep bypassed it.
+  const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
+  const actor = actorWithPage(fakePage(locator));
+  const rec = recording([
+    [
+      { step: { kind: "navigate", url: "/inbox", expect: { kind: "urlIncludes", text: "/inbox" } } },
+      { step: { kind: "click", target: { testId: "delete" }, expect: { kind: "visible", target: { testId: "confirm" } } } },
+      { step: { kind: "assert", check: { kind: "urlIncludes", text: "/inbox" } } },
+    ],
+  ]);
+  const seen: string[] = [];
+  const observer: StepObserver = {
+    beforeStep: async ({ index }) => {
+      seen.push(`before:${index}`);
+    },
+    afterStep: async ({ index, outcome }) => {
+      seen.push(`after:${index}:${outcome}`);
+    },
+  };
+
+  const interp = new RecordingInterpreter({ observer, skipStep: (index) => index === 1 });
+  await interp.run(actor as any, rec);
+
+  expect(seen.filter((s) => s.includes(":1"))).toEqual(["before:1", "after:1:done"]);
 });
 
 // === runToCheckpoint ===

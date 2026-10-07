@@ -1,6 +1,6 @@
 {
   "name": "@jevitate/cli",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Autonomous browser testing that turns discovered bugs into deterministic regression tests: explore a web app in a real browser, confirm findings with evidence, and replay them as regressions in CI.",
   "type": "module",
   "license": "MIT",

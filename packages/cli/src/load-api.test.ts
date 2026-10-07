@@ -202,4 +202,22 @@ describe("runJourneyLoadTest", () => {
     ).rejects.toBeInstanceOf(JourneyRequiresAuthError);
     expect(sessions).toHaveLength(0);
   });
+
+  it("#400: a Journey with no outcome checks still runs every iteration as ok (check wiring is additive)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "load-api-"));
+    await seedJourney(dir);
+
+    const report = await runJourneyLoadTest({
+      dir,
+      id: "checkout",
+      params: {},
+      concurrency: 2,
+      iterationsPerActor: 1,
+      seed: 1,
+      authorizedOrigins: ["https://example.com"],
+      browserPortFactory: fakeBrowserPortFactory([]),
+    });
+
+    expect(report.okRuns).toBe(2);
+  });
 });

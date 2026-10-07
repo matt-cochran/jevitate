@@ -1,3 +1,5 @@
+import { redactCredentialShapes, redactText, redactUrl } from "@jevitate/ai-core";
+import { clock } from "@jevitate/domain";
 import {
   FsJourneyStore,
   JourneyRegistry,
@@ -38,6 +40,42 @@ import { withSiteGate } from "./site-gate-cli.js";
  * Journey that needs a session the run was not given.
  */
 
+/** #398: how long reading a page's stale evidence may take before it is skipped (the page may be hung). */
+const PAGE_EVIDENCE_TIMEOUT_MS = 2_000;
+/** #398: visible text kept in the stale evidence (redacted first, then cut, so a cut never splits a secret). */
+const PAGE_EVIDENCE_TEXT_MAX = 600;
+
+/** A promise's value, or `undefined` when `ms` (on the clock) passes first — never throws, never uses a global timer. */
+async function bounded<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof clock.setTimeout> | undefined;
+  try {
+    return await Promise.race([p, new Promise<undefined>((r) => (timer = clock.setTimeout(() => r(undefined), Math.max(1, ms))))]);
+  } catch {
+    return undefined;
+  } finally {
+    if (timer !== undefined) clock.clearTimeout(timer);
+  }
+}
+
+/**
+ * #398: what the page showed when the prefix went stale — URL, title and a short visible-text
+ * excerpt, all redacted. Best effort by contract: any failure (a closed page, a navigation, a hung
+ * evaluate) yields no evidence, so it can never mask the stale error with a different one.
+ */
+async function stalePageEvidence(page: BrowserSession["page"], secrets: readonly string[]): Promise<{ url: string; title: string; text: string } | undefined> {
+  try {
+    const url = page.url();
+    const title = await bounded(page.title(), PAGE_EVIDENCE_TIMEOUT_MS);
+    const raw = await bounded(page.evaluate(() => document.body?.innerText ?? ""), PAGE_EVIDENCE_TIMEOUT_MS);
+    if (title === undefined || raw === undefined) return undefined;
+    // Persisted in the result: the run's secrets AND any credential-shaped string the page shows (#298).
+    const text = redactCredentialShapes(redactText(raw.replace(/\s+/g, " ").trim(), secrets)).slice(0, PAGE_EVIDENCE_TEXT_MAX);
+    return { url: redactText(redactUrl(url), secrets), title: redactText(title, secrets), text };
+  } catch {
+    return undefined;
+  }
+}
+
 /** The strategies a mission can branch off a Journey with (`--feature` and multi-runs are refused). */
 export { ANCHORED_STRATEGIES, type AnchoredStrategy } from "@jevitate/journey";
 
@@ -61,6 +99,8 @@ export class JourneyPrefixStaleError extends Error {
     readonly branch: JourneyBranchPoint,
     /** The 1-based Journey step that failed, when the replay names it. */
     readonly failedStep?: number,
+    /** #398: what the page showed when the prefix went stale (redacted); absent when it could not be read. */
+    readonly page?: { readonly url: string; readonly title: string; readonly text: string },
   ) {
     super(message);
     this.name = "JourneyPrefixStaleError";
@@ -168,11 +208,12 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
   const allowedOrigins = opts.environment === undefined ? [new URL(site).origin] : [...opts.environment.allowedOrigins];
   const where = `step ${branch.step}${branch.anchor === undefined ? "" : ` (anchor ${branch.anchor})`}`;
   const secretNames = secretParamNames(full, used).filter((n) => n in used);
+  const secretValues = secretParamValues(full, used);
   return {
     branch,
     startUrl,
     allowedOrigins,
-    secrets: secretParamValues(full, used),
+    secrets: secretValues,
     steps: resolved.step,
     replayInfo: {
       journeysDir: resolvePath(opts.dir),
@@ -202,12 +243,13 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
         // the Journey did not reach its anchor — typed, never a restart from a URL.
         if (err instanceof SiteGateRefusedError) throw err;
         const message = err instanceof Error ? (err.message.split("\n")[0] ?? err.message) : String(err);
-        throw new JourneyPrefixStaleError(`journey '${opts.id}' did not replay to ${where}: ${message}`, branch);
+        throw new JourneyPrefixStaleError(`journey '${opts.id}' did not replay to ${where}: ${message}`, branch, undefined, await stalePageEvidence(session.page, secretValues));
       }
       if (run.outcome !== "ok") {
         const failed = run.outcome === "quarantined" && run.at !== undefined ? run.at + 1 : undefined;
+        // #398: the runner's reason names the failed step 1-based, like `--at-step` and `failedStep`.
         const reason = run.outcome === "quarantined" ? run.reason : "the replay healed a step (a self-healed prefix is never a branch point)";
-        throw new JourneyPrefixStaleError(`journey '${opts.id}' is stale: it no longer reaches ${where} — ${reason}`, branch, failed);
+        throw new JourneyPrefixStaleError(`journey '${opts.id}' is stale: it no longer reaches ${where} — ${reason}`, branch, failed, await stalePageEvidence(session.page, secretValues));
       }
       return session.page.url();
     },
@@ -216,7 +258,13 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
 
 /** What an anchored run starts from: the live URL after the prefix, its branch point, and how it resets. */
 export interface AnchoredStart {
+  /** The live URL to start from — for navigation and the mission engine (which redacts it) only. */
   readonly url: string;
+  /**
+   * #399: `url` as it may be shown or persisted (`target.seedUrl`): credential-named query values and
+   * the prefix's secret params (e.g. a token its navigate URL carried) redacted. Never navigated to.
+   */
+  readonly persistUrl: string;
   readonly branch?: RecordedBranch;
   /**
    * #293: what a reset inside the mission uses instead of re-navigating to the anchor URL — the
@@ -254,11 +302,11 @@ export async function startFromJourney(
   allowlist: readonly string[],
   browser?: BrowserRunOptions,
 ): Promise<AnchoredStart> {
-  if (prefix === undefined) return { url };
+  if (prefix === undefined) return { url, persistUrl: url };
   const live = await prefix.replay(session, browser);
   assertAuthorizedExploreTarget(live, allowlist);
   const restart = { restartAtStart: prefixRestart(prefix, allowlist, browser), restartCost: prefix.steps };
-  return { url: live, branch: { ...prefix.branch, replay: prefix.replayInfo }, restart };
+  return { url: live, persistUrl: redactText(redactUrl(live), prefix.secrets), branch: { ...prefix.branch, replay: prefix.replayInfo }, restart };
 }
 
 /** The result fields an anchored run adds (#293, additive): its branch point (and how to replay it). */
@@ -272,7 +320,7 @@ export interface JourneyStaleResult {
   readonly outcome: "inconclusive";
   readonly missionOutcome: "inconclusive";
   readonly reason: string;
-  readonly failure: { readonly kind: "journey-stale"; readonly message: string };
+  readonly failure: { readonly kind: "journey-stale"; readonly message: string; readonly page?: { readonly url: string; readonly title: string; readonly text: string } };
   readonly branch: JourneyBranchPoint;
   /** The 1-based Journey step whose replay failed, when known. */
   readonly failedStep?: number;
@@ -285,7 +333,7 @@ export function journeyStaleResult(err: JourneyPrefixStaleError, strategy: strin
     outcome: "inconclusive",
     missionOutcome: "inconclusive",
     reason: err.message,
-    failure: { kind: "journey-stale", message: err.message },
+    failure: { kind: "journey-stale", message: err.message, ...(err.page === undefined ? {} : { page: err.page }) },
     branch: err.branch,
     ...(err.failedStep === undefined ? {} : { failedStep: err.failedStep }),
     exitCode: 2,

@@ -18,6 +18,7 @@ export async function loadSeed(ctx: HuntState, params: AdversarialMissionParams)
   // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
   await monitorFor(ctx.sessions.page).instrument();
   ctx.safety.attach(monitorFor(ctx.sessions.page));
+  await ctx.offAllowlist.arm(ctx.sessions.page);
   // #128: real network evidence for the FIRST navigation — a refused connection can still
   // surface as a bare navigation timeout.
   let firstNavNetError: string | null = null;

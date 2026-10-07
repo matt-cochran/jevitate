@@ -1,10 +1,10 @@
-import { deriveParamSchema, validateParams } from "@jevitate/journey";
+import { deriveParamSchema, secretParamValues, validateParams } from "@jevitate/journey";
 import type { SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
 import { sessionLaunchOptions } from "./browser-run-options.js";
-import { withNetworkChecks } from "./journey-network-checks.js";
+import { JourneyOutcomeChecks } from "./journey-network-checks.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult } from "@jevitate/runtime";
@@ -21,7 +21,7 @@ import {
   type SourceEntry,
 } from "@jevitate/sources";
 import type { SourceApiDeps } from "./source-api.js";
-import { JourneyRequiresAuthError } from "./journey-api.js";
+import { JourneyRequiresAuthError, redactErrorSecrets, redactSecretParams } from "./journey-api.js";
 
 /**
  * The runner seam for a source-resolved Journey. Takes the ALREADY-GATED
@@ -87,10 +87,12 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
   });
   try {
     const actor = CastActor.named("source-runner").whoCan(new BrowseTheWeb(session, allowedOrigins), ...gate.abilities);
-    const runner = new JourneyRunner(actor, new RecordingInterpreter());
+    // #322/#400: a trusted remote Journey's end state and step request checks hold for its replay too.
+    const outcomeChecks = new JourneyOutcomeChecks(session.page, file);
+    const observer = outcomeChecks.observer();
+    const runner = new JourneyRunner(actor, new RecordingInterpreter(observer === undefined ? {} : { observer }));
     try {
-      // #322: a trusted remote Journey's network checks hold for its replay too.
-      return await withNetworkChecks(session.page, file.metadata.networkChecks, () => runner.run({ journey: file, params, policy }));
+      return await outcomeChecks.run(actor, () => runner.run({ journey: file, params, policy }));
     } finally {
       await gate.done();
     }
@@ -183,5 +185,12 @@ export async function runSourceJourney(
   const file = await resolveForRun(gateDeps, `${req.sourceName}/${req.journeyId}`);
 
   const run = deps.runJourney ?? realResolvedJourneyRunner;
-  return run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate);
+  // #399: a secret parameter (e.g. a token in a navigate URL) never comes back — not in the
+  // result, not in an escaping error — exactly as `journey run` redacts it.
+  try {
+    const result = await run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate);
+    return redactSecretParams(result, file, req.params);
+  } catch (err) {
+    throw redactErrorSecrets(err, secretParamValues(file, req.params));
+  }
 }

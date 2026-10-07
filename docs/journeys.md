@@ -15,22 +15,129 @@ jevitate journey promote checkout        # a human approval gate: unpromoted Jou
 jevitate journey run checkout
 ```
 
-The authored Journey carries its `--success` check as its final assertion, so a replay fails when
-the flow stops reaching its goal. It is written unpromoted: promotion is always a deliberate human
+The authored Journey carries its `--success` checks as its end state, so a replay fails when the
+flow stops reaching its goal. It is written unpromoted: promotion is always a deliberate human
 act. `--takes <n>` corroborates the flow over several takes.
 
-`--success` is repeatable (every check must hold) and takes the kinds `explore --success` takes,
-except `reloadThen` (below). A state-changing job with no stable on-page text can use its request as the
-check, for example `--success 'requestMade:POST /api.v1.Settings/Save'` or
-`--success 'responseStatus:POST /api.v1.Settings/Save=2xx'`. A page check becomes the Journey's last
-`assert` step. A network check is kept in `metadata.networkChecks`, and `journey run` and
-`source run` evaluate it over the requests that replay itself sent, after its last step. A replay
-whose steps all pass but whose request never went out, or got the wrong status, fails with the
-check named.
+`--success` is repeatable (every check must hold) and takes every kind `explore --success` takes:
+page checks (`textIncludes`, `valueEquals`, `count`, `attr`, `flashed`, …), `reloadThen:<check>`
+(persistence), `requestMade` and `responseStatus`. Pass the job's outcome, not just the page it
+ends on: a state-changing job checks its write and what persisted, for example
+`--success 'responseStatus:POST /portal.v1.Sites/PublishSiteEdits=2xx'
+--success 'reloadThen:textIncludes:testId=live|published'`.
 
-A `reloadThen:` check is refused before any browser opens (exit 64, `E_EXPLORE_ASSERTION`): a
-Journey has no reload step to re-check after. Author with its inner check (`reloadThen:visible:…`
-becomes `visible:…`) and prove persistence with `jevitate explore --success 'reloadThen:…'`.
+### Outcome assertions in a Journey
+
+- **End state** (`metadata.endState`): every `--success` check, in the order given, kept in the
+  same shape the goal run judged it. `journey run` and `source run` judge them after the last step
+  with the goal run's own evaluator: page checks on the final page, then one reload for the
+  `reloadThen` checks, then network checks over the requests the replay itself sent. A replay
+  whose steps all pass but whose outcome is absent fails, naming each check that did not hold
+  (`success check not met after the last step: …`).
+- **A step's request expectation** (`expectRequests` on the recorded step): a write the step sent
+  during discovery (a non-read request answered 2xx/3xx) becomes
+  `responseStatus:<METHOD> <path>=2xx`, with id segments as `*`. It is judged over the requests
+  the replay sent from the moment that step began, so it pairs the check with the step that
+  causes it (`step request check not met: step 3 (click …): …`).
+- **A step's `expect`** comes from what the step changed: the navigation it caused
+  (`urlIncludes`), the value a fill typed (`valueEquals`, for a constant value), or, with
+  `--action-deltas`, the element or text a `relevant-change` step added. A step with nothing to
+  claim gets the explicit "no claim" `count … min 0`. Authoring never writes `visible` of the
+  step's own target: it holds before and after the click, so it proves nothing.
+
+```json
+{
+  "metadata": {
+    "id": "publish",
+    "endState": [
+      { "kind": "responseStatus", "method": "POST", "pathGlob": "/portal.v1.Sites/PublishSiteEdits", "status": { "class": 2 } },
+      { "kind": "reloadThen", "assertion": { "kind": "textIncludes", "target": { "testId": "live" }, "text": "published" } }
+    ]
+  },
+  "recording": { "pages": [{ "url": "/editor", "steps": [
+    { "step": { "kind": "click", "target": { "testId": "publish" },
+                "expect": { "kind": "visible", "target": { "text": "Your site is live", "textMatch": "contains" } } },
+      "expectRequests": [
+        { "kind": "responseStatus", "method": "POST", "pathGlob": "/portal.v1.Sites/PublishSiteEdits", "status": { "class": 2 } }
+      ] }
+  ] }] }
+}
+```
+
+Both fields are optional. A Journey authored before them (a trailing `assert` step, and network
+checks in `metadata.networkChecks`) loads and runs exactly as before: its `networkChecks` are
+judged with the end state.
+
+### Waiting for a long-running job (`waitFor`)
+
+A step's `expect` is checked with a short bounded retry (about 5 s), which is too short for a job
+that takes minutes (generating previews, preparing exports). Declare an outcome wait next to the
+`expect` (or an `assert` step's `check`) instead of raising a global timeout:
+
+```json
+{ "step": { "kind": "click", "target": { "role": "button", "name": "Generate" },
+            "expect": { "kind": "count", "target": { "testId": "variation-preview" }, "min": 3 },
+            "waitFor": { "maxMs": 240000, "until": "held",
+                         "progress": { "kind": "visible", "target": { "css": "[role=status]" } } } } }
+```
+
+| Field | Meaning |
+|---|---|
+| `maxMs` | required: the longest the expectation may take to hold (integer, at most 1 800 000 = 30 min) |
+| `until` | `"held"` (the only mode, and the default): poll until the expectation holds |
+| `progress` | optional: an assertion that shows the job is still working (a status line, a progress bar) |
+| `stallMs` | optional: the hang threshold for `progress` (default 30 000, at least 1 000) |
+| `reload` | optional: reload the page between polls, for a job that finishes server-side on a page that does not live-update (each poll after a reload waits up to 5 s for the page to render) |
+| `pollMs` | optional: time between polls (default 250 ms; 2 s with `reload`; 100–60 000) |
+
+Replay polls the expectation until it holds or `maxMs` passes. With `progress`, the progress
+signal must hold, or its target's text change ("Step 2 of 9" → "Step 3 of 9"), at least once per
+`stallMs`; when it has not for that long, the step fails early as a hang that names the signal,
+not after the whole budget (the same rule as the explore runs' stuck-status and job-wait checks).
+A job that never shows its progress signal at all fails at the hang threshold too. A status that
+stays on screen forever is still "working": the step fails at `maxMs`. A target needs a usable
+selector (`testId`, `role` with `name`, `label`, `text` or `css`): use `{ "css": "[role=status]" }`
+for a bare role.
+
+The run result reports each waited step under `waits`: `step` (1-based), `waitedMs` (the actual
+wait), `maxMs`, `ending` (`held`, `timeout` or `hang`), `polls` and, with `reload`, `reloads`. A
+job that gets slower shows up as a number, not as a flaky pass or fail. A failed wait is a
+postcondition failure: `step 2 failed: click: postcondition failed: kind=count … — waited 240.0s
+(waitFor maxMs 240000); it never held`, or `… — hang: the progress signal (kind=visible …) was
+absent and unchanged for 30.0s …`. Without `waitFor`, a step is checked exactly as before. A
+`waitFor` belongs on a top-level step: a `forEach` child step with one is refused before the replay
+starts. The lint (`journey lint`) judges the `expect` itself; a waited `expect` that claims nothing
+is flagged like any other.
+
+Under `journey verify --mutate`, a waited claim on the mutated step (`skip:<n>`, `block-write:<n>`)
+waits at most its hang threshold plus 5 s (`stallMs`, default 30 s) instead of `maxMs`: the job was never
+started (or its writes were aborted), so the claim must fail, and the proof does not wait out the
+budget to show it. Waits on other steps, and under `stale-value`, keep their `maxMs`.
+
+### Assertion strength
+
+A green replay only proves something when its assertions can fail for the wrong reason. `journey
+lint` reports the assertions that cannot, and `journey promote` runs the same lint first: a Journey
+with any error-level finding is refused unless the reviewer accepts it with `--accept-weak
+"<reason>"`. Gate CI on the lint (exit 1 when any error) with:
+
+```bash
+jevitate journey lint checkout                  # one line per finding, then a summary
+jevitate journey lint checkout --json           # { id, findings, errors, warnings }
+jevitate journey lint checkout --sarif lint.sarif
+```
+
+| Rule | Level | Flags |
+|---|---|---|
+| `own-target-visible` | error | A step's `expect` only restates that the step's own target is visible — true before and after the step, so it proves nothing |
+| `write-without-effect` | error | A state-changing step (a write) has no assertion on its effect |
+| `visibility-only` | error | Every assertion is a bare `visible` (or the step's own target), so the Journey cannot fail for the wrong reason |
+| `nothing-after-last-write` | error | No effect assertion follows the last state-changing step |
+| `no-persistence-check` | warning | A write has no `reloadThen` end-state check, so persistence is unverified |
+| `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion |
+
+Warnings never block promotion. `--accept-weak "<reason>"` records the reason and the waived error
+rules in the Journey's `metadata.acceptedWeak`.
 
 Each take (the discovery and every corroborating one) is a full `explore --strategy goal` run, so
 the author command takes the same run-shaping flags: `--secret`, `--secret-field` (including
@@ -48,6 +155,62 @@ says why and where to look: `reason` (`discovery mission <outcome>: <the goal ru
 `discovery` (its `stop`, `runOutcome`, each check's verdict, `resultPath`, `transcriptPath`,
 `recordingPaths`, `screenshotsDir`), and `takes` (requested / run / succeeded). The human summary
 prints the same.
+
+### Proving assertions can fail
+
+The lint reads a Journey; `journey verify --mutate` runs it. An assertion is evidence only if it
+**fails** when the outcome is absent, so the proof replays the Journey once as recorded (it must
+pass), then once per mutation, and checks that each mutation breaks the assertion paired with it:
+
+```bash
+jevitate journey verify checkout --mutate                 # one line per assertion, then a summary
+jevitate journey verify checkout --mutate --json          # the full report
+jevitate journey verify checkout --mutate --env staging --param sku=A1 --fixtures reset.json
+```
+
+| Mutation | What the replay does | Derived for |
+|---|---|---|
+| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits at most its hang threshold plus 5 s) | each write step (the lint's rule) |
+| `block-write:<n>` | aborts the write requests step n sends, from its start until the network settled after it | each write step |
+| `stale-value:<n>` | types `""` into fill step n | each fill whose value a `valueEquals`/`textIncludes` checks |
+
+A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`; the
+**last** write step's mutations are also paired with every end-state check; a `stale-value` is also
+paired with every assertion that checks the typed value. An explicit no-claim `expect` (`count … min
+0`) claims nothing and is never paired. Each assertion gets one verdict:
+
+| Verdict | Meaning |
+|---|---|
+| `sensitive` | a paired mutation made the replay fail AT this assertion, with nothing failing before the mutated step (`provedBy` names it) |
+| `insensitive` | the replay still passed under a paired mutation: the assertion is vacuous |
+| `cascade` | the replay failed somewhere else first; never counted as proof |
+| `not-applied` | `block-write` blocked nothing the step recorded (its own write was not aborted) |
+| `error` | the mutated replay could not run (or the base replay failed) |
+| `unpaired` | no mutation is paired with it |
+
+Exit codes: `0` every paired assertion is sensitive · `1` any is insensitive · `2` inconclusive (the
+unmutated replay failed, every mutation errored, nothing was paired, or only cascades and
+not-applied are left) · `64` usage (`journey verify` without `--mutate`, an unknown id, bad params).
+The JSON report carries `journeyId`, `journeyHash` (the Journey's content hash: the proof is bound
+to exactly that content), `base.outcome`, each mutation's `outcome`, `failedSites` and
+`blockedWrites`, each assertion's `site`, `check`, `verdict` and `provedBy`, and `summary` counts.
+
+Pin a pairing the derivation would not make with `metadata.mutationPairs` — the assertion `check`
+(`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail when `mustFailWhen`
+(`skip:<n|anchor>`, `block-write:<n|anchor>`, `stale-value:<n|anchor>`; [anchors](#explore-from-a-journey-step-anchors-and-campaigns) by name)
+is applied. A pair naming a site, step or anchor the Journey does not have is refused when the
+Journey loads.
+
+```json
+"mutationPairs": [{ "check": "end-state:0", "mustFailWhen": "skip:publish" }]
+```
+
+Safe by construction: a mutation only leaves a step's action out, types an empty value, or
+**aborts** the app's own write requests (the same first-party rule as a read-only find-out run;
+a write navigation is aborted too, never answered). It never sends, fabricates or answers a
+request. Every replay starts fresh, with the same fixtures and hooks as `journey run`; when the
+app keeps state between sessions, reset it with `--fixtures`/`--before`, or the replay after a
+blocked save can still find the base replay's saved data.
 
 ## Record a flow by demonstration
 
@@ -79,6 +242,9 @@ jevitate journey annotate checkout --real                   # draft each step's 
 jevitate load run checkout --authorized-origin http://localhost:3000 --concurrency 5 --iterations 10 --seed 1
 ```
 
+- `journey lint checkout` (or `promote`'s own gate) reports assertions that cannot prove the
+  outcome before a Journey is promoted; `journey verify checkout --mutate` proves each one can fail
+  by replaying the Journey with each write skipped or blocked ([details](#proving-assertions-can-fail)).
 - `--self-heal fail-closed` (the default) stops and quarantines on a broken step. `hybrid` and
   `full` re-learn only the broken step and need `--real` (or `--fake-ai`). Write and irreversible
   steps are never auto-healed in any mode.
@@ -123,6 +289,7 @@ key is refused when the file is read.
 | `successCriteria` | no | `[{ "description", "check"? }]`: the end state that shows it worked; `check` is any [assertion](./success-checks.md) that checks it in code |
 | `parameters` | no | `[{ "name", "description"?, "secret"? }]`: its inputs. `secret: true` marks a value (a password, a token) that is redacted wherever it is shown. A declared parameter never carries a value |
 | `anchors` | no | `[{ "name", "step", "description"?, "probes"? }]`: named states worth exploring from — the state after `step` top-level steps (1-based). `name` is letters, digits, `.`, `_`, `-` and never all digits; `probes` are suggested adversarial attacks there. See [Explore from a Journey step](#explore-from-a-journey-step-anchors-and-campaigns) |
+| `mutationPairs` | no | `[{ "check", "mustFailWhen" }]`: declared negative-proof pairs for `journey verify --mutate` — the assertion at `check` (`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail under `mustFailWhen` (`skip:`/`block-write:`/`stale-value:` + a step number or anchor). An unknown site, step or anchor is refused at load. See [Proving assertions can fail](#proving-assertions-can-fail) |
 
 `recording` holds `version`, `site` (the origin it runs on), optional `intent`, and `pages[]`, each
 with `url` and `steps[]`. Every step is `{ "step": {…}, … }`: the action (`navigate`, `click`,
@@ -144,6 +311,41 @@ A secret parameter's value is redacted in the `journey run` output, in `journey 
 evidence, drafts and output, and in anything sent to a model. A parameter whose name looks like a
 credential (`password`, `token`, `apiKey`, `otp`, …) is treated as secret even when the Journey
 does not declare it.
+
+### Parameters in a `navigate` URL
+
+A `navigate` step's `url` may hold `${name}` placeholders, for single-use links whose secret lives
+in the URL (an invitation, a magic-link sign-in, a password reset, an email verification):
+
+```json
+"metadata": { "params": [], "parameters": [{ "name": "inviteToken", "secret": true }], … },
+"recording": { …, "pages": [{ "url": "/accept", "steps": [
+  { "step": { "kind": "navigate", "url": "/accept?token=${inviteToken}",
+              "expect": { "kind": "visible", "target": { "role": "heading", "name": "Welcome" } } } }
+] }] }
+```
+
+```bash
+jevitate journey run accept-invite --param inviteToken="$TOKEN"
+```
+
+MCP `run_journey` takes it the same way (`"params": { "inviteToken": "…" }`). A value can also come
+from a fixture output (`--param inviteToken='${setup.inviteToken}'`, see [fixtures](./fixtures.md)).
+
+- Each placeholder must name a declared parameter (`params` or `parameters`). Otherwise the Journey
+  is refused when it is read. A placeholder is a required run parameter, and `journey find`, MCP
+  `find_capabilities` and the named Journey tools list it even when only `parameters` declares it.
+- A placeholder comes after the origin: the scheme, host, port and the path's leading `/` are
+  literal (`https://${host}/…`, `${base}/…` and `//${host}` are refused). The value is
+  percent-encoded as one URL component (everything except `A-Z a-z 0-9 - . _ ~`), so `/`, `\`,
+  `@`, `?`, `#` and `%` in a value are never URL syntax. The resolved URL must keep the template's
+  origin, and the run's origin allowlist still applies.
+- A secret parameter's value is redacted in every form it can take in a URL (raw,
+  `encodeURIComponent` and strictly encoded). This covers the run's JSON output and errors,
+  Playwright's own navigation error (which echoes the URL), screenshots and their index, action
+  deltas, `journey annotate`/`journey demo` evidence, a self-heal's model prompts, and `source run`.
+  `describeStep`, step captions and failure messages show the template as
+  `navigate to /accept?token=<param inviteToken>`.
 
 ## Explore from a Journey step: anchors and campaigns
 

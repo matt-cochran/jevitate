@@ -1,5 +1,6 @@
 import type { ReplayTargetFailure } from "./resolve-target.js";
 import type { Assertion } from "@jevitate/recording";
+import type { StepWait } from "./outcome-wait.js";
 
 /**
  * The result of running a whole (or partial, for `runToCheckpoint`)
@@ -22,7 +23,7 @@ import type { Assertion } from "@jevitate/recording";
  *   still propagate as rejected promises instead, since there is no step
  *   index to report.
  */
-export type InterpretResult =
+export type InterpretResult = (
   | { outcome: "completed"; vars: Record<string, string> }
   | { outcome: "awaiting_human"; at: number; prompt: string; resume: Assertion }
   | {
@@ -35,4 +36,11 @@ export type InterpretResult =
        * every other failure (a postcondition, an automation error).
        */
       reason?: ReplayTargetFailure;
-    };
+    }
+) & {
+  /**
+   * #409: the outcome wait of every step that declared `waitFor` and ran its postcondition, in run
+   * order (a failed waited step included). Absent when no step waited.
+   */
+  waits?: StepWait[];
+};

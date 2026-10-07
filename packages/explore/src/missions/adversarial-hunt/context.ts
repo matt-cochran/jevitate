@@ -26,6 +26,8 @@ import type { HangSignal } from "../../hang.js";
 import { hostProbe, type HostPressure, type HostProbe } from "../../host-pressure.js";
 import { CrashWatch } from "../../mission-failure.js";
 import { MissionSafety } from "../../mission-safety.js";
+import { ReadOnlyGuard, type BlockedWrite } from "../../read-only.js";
+import { writeClassifier } from "@jevitate/recording";
 import { MissionSessions } from "../../mission-session.js";
 import { RunRecorder } from "../../record.js";
 import type { HangConfig, SettleConfig, TimingConfig } from "../../settle-config.js";
@@ -40,7 +42,7 @@ import type {
   ScopeDeparture,
 } from "../adversarial.js";
 import { installFinish } from "./finish.js";
-import type { MutableAdvisory, MutableDefect, StepAdvisory, StepFinding } from "./helpers.js";
+import type { EarlierSubmit, MutableAdvisory, MutableDefect, StepAdvisory, StepFinding } from "./helpers.js";
 import { DEFAULT_TIME_BUDGET_MS } from "./helpers.js";
 import { installOracle } from "./oracle.js";
 import { installSessions } from "./sessions.js";
@@ -71,6 +73,12 @@ export interface HuntContext {
   armed: boolean;
   readonly heap: HeapLog;
   readonly safety: MissionSafety;
+  /**
+   * #403: aborts a write a misuse step fires to an origin outside `--allow` (the window opens at the
+   * step's act and closes once it settled); `blockedWrites` keeps every one for the result.
+   */
+  readonly offAllowlist: ReadOnlyGuard;
+  readonly blockedWrites: BlockedWrite[];
   readonly probeHost: HostProbe;
   crashHost: HostPressure | undefined;
   readonly secrets: readonly string[];
@@ -149,7 +157,7 @@ export interface HuntContext {
    * `action`; with no action only its `never`s apply). Returns the transcript reason and the step's
    * findings, or null when nothing broke.
    */
-  readonly adjudicate: (action?: InvariantAction | null, opts?: { readonly identitySwitched?: boolean; }) => Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[]; } | null>;
+  readonly adjudicate: (action?: InvariantAction | null, opts?: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null; readonly inFlight?: readonly string[]; readonly blocked?: readonly string[]; }) => Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[]; } | null>;
   /**
    * Signals that land AFTER a step was adjudicated — while the next page loads and settles (a 500
    * fired by the page the action opened) — belong to that step: drained and folded into it, so a
@@ -318,6 +326,12 @@ export function createHuntContext(params: AdversarialMissionParams): HuntContext
   /** The shared safety policy and the writes the run fires (#116). */
   // Its clock is the page monitor's (wall time), never the `now` seam: writes are attributed by it.
   ctx.safety = new MissionSafety(params.safety);
+  ctx.offAllowlist = new ReadOnlyGuard(writeClassifier(params.safety?.readRequests === undefined ? {} : { readRequests: params.safety.readRequests }), {
+    mode: "off-allowlist",
+    allowlist: params.allowlist,
+    ...(params.safety?.allowWriteRequests === undefined ? {} : { allowWrites: params.safety.allowWriteRequests }),
+  });
+  ctx.blockedWrites = [];
   ctx.probeHost = params.hostProbe ?? hostProbe();
   ctx.crashHost = undefined;
   ctx.secrets = params.secrets ?? [];

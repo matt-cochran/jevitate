@@ -38,18 +38,50 @@ const ABORT_AFTER_RESPONSE_PAGE = `<!doctype html><html><body>
   </script>
 </body></html>`;
 
+// #405: the page's own AbortController cancelling a request that never received a response. A
+// superseded type-ahead/search READ is benign; an aborted WRITE still gates (it may have reached the
+// server). The server holds both routes open and never responds.
+const PAGE_INITIATED_ABORT = `<!doctype html><html><body>
+  <button id="read" type="button">Read</button>
+  <button id="write" type="button">Write</button>
+  <script>
+    window.__ctrl = null;
+    window.__settled = false;
+    function start(url, opts) {
+      const c = new AbortController();
+      window.__ctrl = c;
+      window.__settled = false;
+      fetch(url, Object.assign({ signal: c.signal }, opts))
+        .catch(() => undefined)
+        .finally(() => { window.__settled = true; });
+    }
+    document.getElementById("read").addEventListener("click", () => start("/api/search?q=a"));
+    document.getElementById("write").addEventListener("click", () => start("/api/items", { method: "POST", body: "x" }));
+  </script>
+</body></html>`;
+
 let abortServer: Server;
 let abortOrigin: string;
 
 beforeAll(async () => {
   abortServer = createServer((req, res) => {
-    if ((req.url ?? "").split("?")[0] === "/data.json") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write(JSON.stringify({ ok: true }));
-      res.on("close", () => undefined); // never end() — held open until the client aborts it
-      return;
+    switch ((req.url ?? "").split("?")[0]) {
+      case "/data.json":
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write(JSON.stringify({ ok: true }));
+        res.on("close", () => undefined); // never end() — held open until the client aborts it
+        return;
+      case "/api/search":
+      case "/api/items":
+        // #405: hold the request open and never respond, so the client's abort races a still-pending
+        // request for which NO response was received.
+        return;
+      case "/aborts":
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(PAGE_INITIATED_ABORT);
+        return;
+      default:
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(ABORT_AFTER_RESPONSE_PAGE);
     }
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(ABORT_AFTER_RESPONSE_PAGE);
   });
   await new Promise<void>((resolve) => abortServer.listen(0, "127.0.0.1", resolve));
   const addr = abortServer.address();
@@ -140,6 +172,40 @@ describe("PageSignalCollector", () => {
       await p.waitForTimeout(200);
       const signals = collector.drain();
       expect(signals.some((s) => s.kind === "failed-request" && !s.detail.includes("ERR_ABORTED"))).toBe(true);
+    } finally {
+      await p.close();
+    }
+  });
+
+  test("#405: an aborted type-ahead READ with no response is not a failed-request signal", async () => {
+    const p = await browser.newPage();
+    try {
+      const collector = new PageSignalCollector(p);
+      await p.goto(`${abortOrigin}/aborts`);
+      const issued = p.waitForRequest(/\/api\/search/);
+      await p.click("#read");
+      await issued;
+      await p.evaluate(() => (window as unknown as { __ctrl: AbortController | null }).__ctrl!.abort());
+      await p.waitForFunction(() => (window as unknown as { __settled?: boolean }).__settled === true);
+      await p.waitForTimeout(200);
+      expect(collector.drain().some((s) => s.kind === "failed-request")).toBe(false);
+    } finally {
+      await p.close();
+    }
+  });
+
+  test("#405: an aborted WRITE with no response still produces a failed-request signal", async () => {
+    const p = await browser.newPage();
+    try {
+      const collector = new PageSignalCollector(p);
+      await p.goto(`${abortOrigin}/aborts`);
+      const issued = p.waitForRequest(/\/api\/items/);
+      await p.click("#write");
+      await issued;
+      await p.evaluate(() => (window as unknown as { __ctrl: AbortController | null }).__ctrl!.abort());
+      await p.waitForFunction(() => (window as unknown as { __settled?: boolean }).__settled === true);
+      await p.waitForTimeout(200);
+      expect(collector.drain().some((s) => s.kind === "failed-request")).toBe(true);
     } finally {
       await p.close();
     }

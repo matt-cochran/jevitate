@@ -1,8 +1,8 @@
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, EnterSecret } from "@jevitate/screenplay";
 import type { RunPolicy } from "@jevitate/domain";
-import { deriveParamSchema, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
-import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult } from "@jevitate/interpreter";
+import { deriveParamSchema, secretParamValues, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
+import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult, type StepWait } from "@jevitate/interpreter";
 import type { Recording } from "@jevitate/recording";
 import {
   SecretOriginMismatchError,
@@ -20,10 +20,17 @@ import { isWriteStep, postconditionOf, healRecording, flattenRecording, type Sel
  * JourneyRunner's success outcome, not a passthrough of anything the
  * interpreter returns.
  */
-export type JourneyRunResult =
+export type JourneyRunResult = (
   | { outcome: "ok"; output: unknown }
   | { outcome: "healed"; output: unknown; healedRecording: Recording; healedAt: number }
-  | { outcome: "quarantined"; reason: string; at?: number };
+  | { outcome: "quarantined"; reason: string; at?: number }
+) & {
+  /**
+   * #409: the actual outcome wait of each step that declared `waitFor` (in run order; a resumed or
+   * healed run's waits included) — a slow job is a performance signal. Absent when no step waited.
+   */
+  waits?: StepWait[];
+};
 
 export interface HandbackHandler {
   present(prompt: string): Promise<void>;
@@ -83,6 +90,17 @@ export class JourneyRunner {
    * here.
    */
   async run(req: JourneyRunRequest): Promise<JourneyRunResult> {
+    // #409: every interpreter pass's step waits, reported on whatever result the run ends with.
+    const waits: StepWait[] = [];
+    const collect = (r: InterpretResult): InterpretResult => {
+      waits.push(...(r.waits ?? []));
+      return r;
+    };
+    const out = await this.#run(req, collect);
+    return waits.length === 0 ? out : { ...out, waits };
+  }
+
+  async #run(req: JourneyRunRequest, collect: (r: InterpretResult) => InterpretResult): Promise<JourneyRunResult> {
     assertCompletePolicy(req?.policy); // #1 — fires before ANY interpreter call
     validateParams(deriveParamSchema(req.journey.recording), req.params); // #5 — before any step
 
@@ -95,7 +113,7 @@ export class JourneyRunner {
     // It starts as the Journey's own recording; a clean (never-healed) run
     // never mutates it.
     let recording: Recording = req.journey.recording;
-    let result = await this.interpreter.run(this.actor, recording, req.params);
+    let result = collect(await this.interpreter.run(this.actor, recording, req.params));
     let healedAt: number | undefined;
     // RULING (invariant #4 / loop-safety, see report): each step index is
     // healed AT MOST once. If a healed splice, once resumed, itself fails
@@ -108,7 +126,7 @@ export class JourneyRunner {
         if (req.policy.secret.secretMode === "vault-autofill") {
           const refusal = await this.fillViaVaultAutofill(req, result);
           if (refusal) return refusal; // quarantined — bail out, never assume success
-          result = await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params);
+          result = collect(await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params));
           continue;
         }
 
@@ -131,24 +149,24 @@ export class JourneyRunner {
             at: result.at,
           };
         }
-        result = await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params);
+        result = collect(await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params));
         continue; // a resumed run may hit another handback.
       }
 
       if (result.outcome === "failed") {
-        const healed = await this.tryHeal(req.policy, recording, result.at, healedIndices);
+        const healed = await this.tryHeal(req, recording, result.at, healedIndices);
         if (healed) {
           healedAt = result.at;
           healedIndices.add(result.at);
           recording = healed.healedRecording;
           // Resume AT the broken index — the healed recording carries the
           // re-learned replacement step at that same flat position.
-          result = await this.interpreter.resumeFrom(this.actor, recording, result.at, req.params);
+          result = collect(await this.interpreter.resumeFrom(this.actor, recording, result.at, req.params));
           continue;
         }
         // Invariant #4: no heal (refused, none wired, write floor, or
         // already-attempted this index) -> quarantine, never mask.
-        return { outcome: "quarantined", reason: `step ${result.at} failed: ${result.error}`, at: result.at };
+        return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error}`, at: result.at };
       }
 
       // result.outcome === "completed" — Ruling 3: the interpreter's result
@@ -173,12 +191,12 @@ export class JourneyRunner {
    * before the healer is ever invoked.
    */
   private async tryHeal(
-    policy: RunPolicy,
+    req: JourneyRunRequest,
     recording: Recording,
     brokenFlatIndex: number,
     healedIndices: ReadonlySet<number>,
   ): Promise<{ healedRecording: Recording } | undefined> {
-    if (policy.selfHeal.mode === "fail-closed" || !this.selfHealer) return undefined;
+    if (req.policy.selfHeal.mode === "fail-closed" || !this.selfHealer) return undefined;
     if (healedIndices.has(brokenFlatIndex)) return undefined; // already tried once — no re-heal loop
 
     const flat = flattenRecording(recording);
@@ -189,10 +207,12 @@ export class JourneyRunner {
     const postcondition = postconditionOf(brokenEntry.step);
     if (!postcondition) return undefined;
 
+    const secrets = secretParamValues(req.journey, req.params);
     const healResult = await this.selfHealer.reLearnStep({
       actor: this.actor,
       brokenStep: brokenEntry.step,
       expectedPostcondition: postcondition,
+      ...(secrets.length === 0 ? {} : { secrets }),
     });
     if (healResult.outcome !== "healed") return undefined;
 
@@ -268,6 +288,8 @@ export class JourneyRunner {
 
     const page = this.actor.ability(BrowseTheWebToken).session.page;
     const currentUrl = page.url();
+    // #399: messages name the ORIGIN only — the full URL may carry a secret navigate parameter.
+    const shownOrigin = originOnly(currentUrl);
     const refs = req.journey.metadata.secretRefs ?? [];
     const matching = refs.filter((ref) => {
       try {
@@ -279,12 +301,12 @@ export class JourneyRunner {
     });
     if (matching.length === 0) {
       throw new SecretOriginMismatchError(
-        `vault-autofill: no declared secretRef is bound to the current origin (${currentUrl})`,
+        `vault-autofill: no declared secretRef is bound to the current origin (${shownOrigin})`,
       );
     }
     if (matching.length > 1) {
       throw new SecretAmbiguousBindingError(
-        `vault-autofill: ${matching.length} declared secretRefs are bound to the current origin (${currentUrl}) — ambiguous, refusing to guess which one to fill (disambiguating multiple same-origin secrets by field is out of scope for this slice)`,
+        `vault-autofill: ${matching.length} declared secretRefs are bound to the current origin (${shownOrigin}) — ambiguous, refusing to guess which one to fill (disambiguating multiple same-origin secrets by field is out of scope for this slice)`,
       );
     }
     const ref = matching[0];
@@ -306,5 +328,15 @@ export class JourneyRunner {
     // redacted (see @jevitate/screenplay's interactions.ts).
     await EnterSecret.theSecret(secret).into(target).performAs(this.actor);
     return undefined;
+  }
+}
+
+/** A URL's origin, or a fixed marker when it has none — never the path or query (#399). */
+function originOnly(url: string): string {
+  try {
+    const o = new URL(url).origin;
+    return o === "null" ? "an opaque origin" : o;
+  } catch {
+    return "an unparseable URL";
   }
 }

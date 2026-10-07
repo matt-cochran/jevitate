@@ -1,4 +1,5 @@
 import { formatScreenshotsLine, parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
+import { PromotionsConfigError } from "./promotions.js";
 import { existsSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
@@ -164,6 +165,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
       } catch (err) {
         if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) emitJson(program, fail(err.code, err.message));
         else if (err instanceof DemoArgsError || err instanceof DemoOutputError) emitJson(program, fail(err.code, err.message));
+        else if (err instanceof PromotionsConfigError) emitJson(program, fail(err.code, err.message));
         else if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", err.message));
         else if (err instanceof JourneyRequiresAuthError) emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", err.message));
         else if (err instanceof ParamValidationError) emitJson(program, fail("E_INVALID_PARAMS", err.message));

@@ -92,6 +92,51 @@ describe("detectFriction (#132)", () => {
     };
     expect(detectFriction(capture, { status: "completed" })).toEqual([]);
   });
+
+  // #393: a request the run's own navigation aborted (net::ERR_ABORTED) is not an error.
+  it("a request the run's own navigation aborted is not an error", () => {
+    const capture: RunSignalCapture = {
+      steps: [step(1, "click", { url: "http://app.test/next" })],
+      requests: [
+        { id: 0, method: "POST", endpoint: "POST /api/read", url: "http://app.test/api/read", resourceType: "fetch", startedAt: 0, endedAt: 100, status: null, failed: true, aborted: true, step: 1 },
+        { id: 1, method: "GET", endpoint: "GET /next", url: "http://app.test/next", resourceType: "document", startedAt: 0, endedAt: 100, status: 200, step: 1 },
+      ],
+      screens: [screen(0, 1)],
+      endedAt: 2_000,
+    };
+    expect(detectFriction(capture).filter((p) => p.kind === "error")).toEqual([]);
+  });
+
+  // #73: the connect-web/gRPC-web abort-after-read — a received response, then requestfailed.
+  it("a request that failed after receiving a <400 response is not an error", () => {
+    const capture: RunSignalCapture = {
+      steps: [step(1, "click")],
+      requests: [{ id: 0, method: "POST", endpoint: "POST /api/read", url: "http://app.test/api/read", resourceType: "fetch", startedAt: 0, endedAt: 100, status: 200, failed: true, step: 1 }],
+      screens: [screen(0, 1)],
+      endedAt: 2_000,
+    };
+    expect(detectFriction(capture).filter((p) => p.kind === "error")).toEqual([]);
+  });
+
+  it("a request that answered 500 is still an error", () => {
+    const capture: RunSignalCapture = {
+      steps: [step(1, "click")],
+      requests: [{ id: 0, method: "POST", endpoint: "POST /api/pay", url: "http://app.test/api/pay", resourceType: "fetch", startedAt: 0, endedAt: 100, status: 500, step: 1 }],
+      screens: [screen(0, 1)],
+      endedAt: 2_000,
+    };
+    expect(detectFriction(capture).filter((p) => p.kind === "error")).toHaveLength(1);
+  });
+
+  it("an aborted request at a step that did not navigate is still an error", () => {
+    const capture: RunSignalCapture = {
+      steps: [step(1, "click")],
+      requests: [{ id: 0, method: "POST", endpoint: "POST /api/read", url: "http://app.test/api/read", resourceType: "fetch", startedAt: 0, endedAt: 100, status: null, failed: true, aborted: true, step: 1 }],
+      screens: [screen(0, 1)],
+      endedAt: 2_000,
+    };
+    expect(detectFriction(capture).filter((p) => p.kind === "error")).toHaveLength(1);
+  });
 });
 
 describe("groundFindings (#132)", () => {

@@ -132,6 +132,8 @@ export async function handleMessage(ctx: RunContext, step: ActStep, op: Decision
       quietMs: ctx.replyQuietMs,
     });
     const reply: ReplyResult = { ...listened, waitedMs: listened.waitedMs + checkedMs };
+    // #390: the reply is told below — the progress check does not tell its text again.
+    ctx.replyTold = reply.received;
     if (reply.received) {
       ctx.conversation.latestReply = reply.text;
       ctx.replies.add(snap.url, reply.text);

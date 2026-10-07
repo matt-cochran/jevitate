@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, journeyStepCount, listJourneyAnchors } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, journeyStepCount, listJourneyAnchors, type JourneyLintFinding } from "@jevitate/journey";
 import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
-import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { runJourneyProgrammatically, promoteJourney, lintJourneyById, WeakJourneyError, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 import { ExtensionMismatchError } from "./browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { withSiteGate } from "./site-gate-cli.js";
@@ -15,7 +16,9 @@ import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
 import { journeyIntentCoverage } from "./journey-annotate-api.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
-import { withEngine } from "./engine.js";
+import { withEngine, currentEngineInfo } from "./engine.js";
+import { renderJourneyLintSarif } from "./journey-lint-sarif.js";
+import { verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "./journey-verify.js";
 import { publishJourneyToSource, realGhPort, NotPromotedError, NoDeclaredOriginsError } from "./source-api.js";
 import { UnknownSourceError, EmbeddedSecretError, UndeclaredOriginError } from "@jevitate/sources";
 import { type EmulationSpec } from "@jevitate/playwright";
@@ -43,7 +46,13 @@ import {
   buildExploreGateways,
 } from "./cli-shared.js";
 
-/** Registers `jevitate journey`: `list|find|run|promote|anchors|annotate|demo|publish`. */
+/** #401: one human line per lint finding — level, step (when it has one), rule, message. */
+function lintFindingLine(finding: JourneyLintFinding): string {
+  const message = finding.message.replace(/^step \d+: /, "");
+  return `${finding.level}  ${finding.step === undefined ? "" : `step ${finding.step}  `}${finding.rule}  ${message}`;
+}
+
+/** Registers `jevitate journey`: `list|find|run|promote|lint|verify|anchors|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
@@ -311,11 +320,12 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .command("promote <id>")
     .description("promote a local Journey (human-approval gate) so it becomes discoverable/runnable")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--accept-weak <reason>", "#401: promote a Journey whose assertions cannot prove its outcome, recording the reason")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      const { dir, json, acceptWeak } = this.opts<{ dir?: string; json?: boolean; acceptWeak?: string }>();
       try {
-        const journeyResult = await promoteJourney(resolveJourneysDir(deps, dir), id);
+        const journeyResult = await promoteJourney(resolveJourneysDir(deps, dir), id, acceptWeak === undefined ? {} : { acceptWeak });
         const envelope = ok(journeyResult.metadata);
         if (json) {
           emitJson(program, envelope);
@@ -326,8 +336,151 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       } catch (err) {
         if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof WeakJourneyError) {
+          // #401: the findings printed before the refusal (human mode); the reason the gate is here.
+          if (!json) {
+            const out = program.configureOutput().writeOut;
+            for (const finding of err.findings) out?.(`${lintFindingLine(finding)}\n`);
+          }
+          emitJson(program, fail("E_JOURNEY_WEAK", String(err.message)));
+          process.exitCode = 1;
         } else {
           emitJson(program, fail("E_JOURNEY_PROMOTE", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  // #401 — the assertion-strength lint: which assertions cannot prove the Journey's outcome. CI can
+  // gate on it (`--json`/`--sarif`, exit 1 when any error); `promote` runs the same lint first.
+  journey
+    .command("lint <id>")
+    .description("report a Journey's weak assertions (writes without an asserted effect, visibility-only claims, nothing after the last write, …)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--sarif <file>", "also write a SARIF 2.1.0 log here")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, json, sarif } = this.opts<{ dir?: string; json?: boolean; sarif?: string }>();
+      try {
+        const result = await lintJourneyById(resolveJourneysDir(deps, dir), id);
+        if (sarif !== undefined) {
+          const log = renderJourneyLintSarif({ id: result.id, findings: result.findings, version: currentEngineInfo().version });
+          await writeFile(sarif, `${JSON.stringify(log, null, 2)}\n`);
+        }
+        if (json) {
+          emitJson(program, ok({ id: result.id, findings: result.findings, errors: result.errors, warnings: result.warnings }));
+        } else {
+          const out = program.configureOutput().writeOut;
+          for (const finding of result.findings) out?.(`${lintFindingLine(finding)}\n`);
+          out?.(`${result.errors} error(s), ${result.warnings} warning(s) — journey '${result.id}'\n`);
+        }
+        process.exitCode = result.errors > 0 ? 1 : 0;
+      } catch (err) {
+        if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else {
+          emitJson(program, fail("E_JOURNEY_LINT_ARGS", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  // #402 — the negative proof: replay the Journey once as recorded, then once per mutation (skip a
+  // write step, abort its writes, type an empty value into a checked fill); each assertion must fail
+  // under its paired mutation. `verify` is reserved for proofs: today only `--mutate` exists.
+  withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(journey.command("verify <id>"))))
+    .description("prove each assertion of a Journey can fail: --mutate replays it with each write step skipped or blocked, and each checked fill emptied")
+    .option("--mutate", "run the mutation proof (required)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--storage-state <file>", "Playwright storageState JSON to start each replay authenticated (as journey run)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { mutate, dir, param, storageState: storageStateFlag, json, env: envName, baseUrl } = this.opts<
+        { mutate?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags
+      >();
+      if (mutate !== true) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify needs --mutate (the mutation proof is the only verification it runs today)"));
+        return;
+      }
+      let environment: ResolvedJourneyEnvironment | undefined;
+      try {
+        environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+      } catch (err) {
+        if (!isEnvironmentError(err)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      const ownFixtureFlags = this.opts<FixtureFlags>();
+      const fixtureFlags: FixtureFlags = {
+        ...ownFixtureFlags,
+        ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
+        ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
+      };
+      const storageState = storageStateFlag ?? environment?.storageState;
+      if (storageState !== undefined && !existsSync(storageState)) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
+      try {
+        const report = await withSiteGate(resolveDbPath(deps), (siteGate) =>
+          verifyJourneyMutations({
+            ...(siteGate === undefined ? {} : { siteGate }),
+            dir: resolveJourneysDir(deps, dir),
+            id,
+            params: param,
+            browserPortFactory: deps.explore?.browserPortFactory,
+            ...(browser === undefined ? {} : { browser }),
+            ...(storageState !== undefined ? { storageState } : {}),
+            ...(environment === undefined ? {} : { environment }),
+            // Fixtures run around EVERY replay, so each mutation starts from the same state as the base.
+            fixtures: (site) => {
+              const fx = buildMissionFixtures(fixtureFlags, {
+                allowlist: environment === undefined ? [site] : environment.allowedOrigins,
+                baseUrl: site,
+                ...(storageState !== undefined ? { storageState } : {}),
+                ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
+              });
+              checkSetupRefs({ "--param": Object.values(param) }, fx);
+              return fx;
+            },
+          }),
+        );
+        const code = verifyExitCode(report.verdict);
+        if (json) {
+          emitJson(program, ok(withEngine(report)));
+        } else {
+          const out = program.configureOutput().writeOut;
+          for (const a of report.assertions) out?.(`${verifyAssertionLine(a)}\n`);
+          const s = report.summary;
+          out?.(
+            `${report.verdict} — journey '${report.journeyId}': ${s.sensitive} sensitive, ${s.insensitive} insensitive, ${s.cascade} cascade, ${s.notApplied} not applied, ${s.error} error, ${s.unpaired} unpaired` +
+              `${report.reason === undefined ? "" : ` (${report.reason})`}\n`,
+          );
+        }
+        process.exitCode = code;
+      } catch (err) {
+        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof JourneyRequiresAuthError) {
+          emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
+        } else if (err instanceof ExtensionMismatchError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof FixtureSpecError || err instanceof UnboundSetupRefError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof ParamValidationError) {
+          emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
+        } else if (err instanceof FixtureSetupError) {
+          emitJson(program, fail("E_JOURNEY_VERIFY", `fixture setup failed — nothing verified: ${err.message}`));
+        } else {
+          emitJson(program, fail("E_JOURNEY_VERIFY", String(err instanceof Error ? err.message : err)));
         }
       }
     });

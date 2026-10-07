@@ -115,6 +115,32 @@ PR title and description become the commit message. Write them for the changelog
 - **User-facing changes get a changeset** (`pnpm changeset`, bumping `@jevitate/cli` and
   `jevitate`) and a line in [CHANGELOG.md](./CHANGELOG.md).
 
+### Judging a page that is still changing
+
+Most false findings come from judging a page too early, or from reading a transient network event
+as a defect. The network is not reliable, latency is not zero, and the page is not done when the
+click returns. Code that turns page or network evidence into a verdict (an oracle, a settle or
+wait, a change detector, a guard) follows these rules. Check them in review.
+
+1. **Judge after the writes end.** A declared invariant on a step is judged only after the writes
+   that step started have ended. If a ceiling is hit first, the verdict is `inconclusive` and names
+   the writes still in flight (#388, #406).
+2. **Explain an abort before you count it.** A `net::ERR_ABORTED` with no response is a defect
+   signal only when no navigation, frame teardown or page-initiated cancel explains it. A request
+   that received a response and was then aborted keeps its status (#73, #393, #405).
+3. **Every wait has a named ceiling.** A finding produced at a ceiling names that ceiling and its
+   in-flight evidence. A ceiling is never silent.
+4. **Oracles take the allowlist.** Every `PageSignalCollector` and `Http5xxOracle` takes the run's
+   allowlist as a required parameter, so an off-origin host is never judged as the app.
+5. **`fixed` needs replays that ran.** A `verify-fix` replay that never ran is not evidence. Today
+   one clean run plus one that never ran is `fixed` (#74, pinned by
+   `verify-fix-intermittent.test.ts`). Don't widen that, and change it only on purpose.
+6. **An unknown write outcome keeps the guard.** A write answered 5xx or with no response may have
+   committed. It doesn't lift the repeat guard unless the page offers a retry or shows an error.
+   A 4xx (rejected input) may be retried (#404).
+7. **Record what the settle decided.** Every settle ceiling hit and long-poll demotion is recorded
+   in the step's settle result or transcript, so a reader can see why a step was judged when it was.
+
 ## Pull requests
 
 Keep PRs focused and include tests. Before you open one, make sure `pnpm -r build`, the tests

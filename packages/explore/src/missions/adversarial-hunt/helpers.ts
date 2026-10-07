@@ -12,7 +12,7 @@ import { advisoryTitle, signalFingerprint } from "../../adversarial/defect-finge
 import type { DefectSignal } from "../../adversarial/defect-oracle.js";
 import { FORM_MISUSE_STRATEGIES } from "../../adversarial/form-misuse.js";
 import type { MisuseStrategy } from "../../adversarial/misuse.js";
-import type { InvariantViolation } from "../../declared-invariants.js";
+import type { HeldInputs, InvariantAction, InvariantViolation } from "../../declared-invariants.js";
 import type { Triage } from "../../mission-failure.js";
 import type { PageMonitor } from "../../page-monitor.js";
 import { WRITE_METHODS } from "../../side-effects.js";
@@ -48,6 +48,20 @@ export interface StepFinding {
   readonly invariantReason?: string;
   readonly invariant?: InvariantViolation;
   readonly markupInjection?: MarkupInjection;
+  /** The action the finding belongs to, when it is not the step that drained it (an earlier, unsettled submit). */
+  readonly origin?: { readonly step: number; readonly recordingStepIndex: number };
+}
+
+/**
+ * A submit an unsettled misuse sequence left pending (act-while-pending, double-submit): judged by
+ * the declared invariants once the sequence settles, as its own action, with the inputs as it sent them.
+ */
+export interface EarlierSubmit {
+  readonly action: InvariantAction;
+  readonly step: number;
+  readonly recordingStepIndex: number;
+  /** Input values a later step of the sequence changed, as they were before it did. */
+  readonly inputs: Map<string, HeldInputs extends ReadonlyMap<string, infer V> ? V : never>;
 }
 
 export interface MutableDefect extends Omit<StepFinding, "related"> {

@@ -395,7 +395,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       hangs: result.hangs,
       recording: null,
       target: {
-        seedUrl: start.url,
+        seedUrl: start.persistUrl,
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },

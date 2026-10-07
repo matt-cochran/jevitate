@@ -3,6 +3,7 @@ import { RecordingSchema } from "@jevitate/recording";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { installFlashRecorder } from "./flash-recorder.js";
 import type { InterpretResult } from "./interpret-result.js";
+import type { StepWait } from "./outcome-wait.js";
 import { runStep } from "./run-step.js";
 import { ReplayTargetError, type ResolveTargetOptions } from "./resolve-target.js";
 import type { RecordingSink } from "./sink.js";
@@ -61,12 +62,29 @@ export class RecordingInterpreter {
    * `targetTimeoutMs`: how long a recorded target may take to appear before the step fails as
    * `replay-target-not-found` / `ambiguous` (default 15s).
    */
-  constructor(private readonly options: { readonly targetTimeoutMs?: number; readonly observer?: StepObserver } = {}) {}
+  constructor(
+    private readonly options: {
+      readonly targetTimeoutMs?: number;
+      readonly observer?: StepObserver;
+      /**
+       * #402: a mutation proof replays a Journey with one step's action left out. `skipStep`
+       * decides, by flat step index, whether this replay SKIPS that step's action and postcondition.
+       * Indices are never renumbered (`at`, anchors and `expectRequests` keep pointing at the same
+       * steps); a skipped step still gets observer `beforeStep`/`afterStep` (outcome `done`) and is
+       * never sunk. Absent by default, so behavior is unchanged.
+       */
+      readonly skipStep?: (index: number, recorded: RecordedStep) => boolean;
+    } = {},
+  ) {}
 
-  #targetOpts(): ResolveTargetOptions & { observer?: StepObserver } {
+  #targetOpts(): ResolveTargetOptions & {
+    observer?: StepObserver;
+    skipStep?: (index: number, recorded: RecordedStep) => boolean;
+  } {
     return {
       ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
       ...(this.options.observer === undefined ? {} : { observer: this.options.observer }),
+      ...(this.options.skipStep === undefined ? {} : { skipStep: this.options.skipStep }),
     };
   }
 
@@ -187,6 +205,10 @@ function validateRecording(rec: Recording): void {
 function checkForEachChildKinds(step: Step, pageIndex: number, stepIndexInPage: number): void {
   if (step.kind !== "forEach") return;
   for (const childStep of step.steps) {
+    // #409: an outcome wait is a top-level step's; a row-scoped child never waits.
+    if ("waitFor" in childStep && childStep.waitFor !== undefined) {
+      throw new Error(`forEach at page ${pageIndex} step ${stepIndexInPage} has a child step with waitFor (an outcome wait belongs on a top-level step)`);
+    }
     if (!SUPPORTED_FOREACH_CHILD_KINDS.has(childStep.kind)) {
       throw new Error(
         `forEach at page ${pageIndex} step ${stepIndexInPage} has an unsupported child kind: ${childStep.kind}`,
@@ -243,30 +265,45 @@ async function runFlat(
   flat: RecordedStep[],
   vars: Map<string, string>,
   lastIndex: number,
-  runOpts: ResolveTargetOptions & { observer?: StepObserver },
+  runOpts: ResolveTargetOptions & {
+    observer?: StepObserver;
+    skipStep?: (index: number, recorded: RecordedStep) => boolean;
+  },
   sink?: RecordingSink,
   startIndex = 0,
 ): Promise<InterpretResult> {
-  const { observer, ...targetOpts } = runOpts;
+  const { observer, skipStep, ...targetOpts } = runOpts;
   // A transient-state check (#148) needs the flash recorder BEFORE the action that triggers it.
   if (flat.slice(startIndex, lastIndex + 1).some((r) => stepAssertions(r.step).some((a) => a.kind === "flashed"))) {
     await installFlashRecorder(actor.ability(BrowseTheWebToken).session.page);
   }
+  // #409: each waited step's outcome wait, reported on the result (only when a step waited).
+  const waits: StepWait[] = [];
+  const stepOpts = { ...targetOpts, onWait: (w: StepWait) => void waits.push(w) };
+  const withWaits = <R extends InterpretResult>(r: R): R => (waits.length === 0 ? r : { ...r, waits });
   const runStartedAt = clock.monotonicMs();
   let lastSunkStepEndedAt = runStartedAt;
   for (let i = startIndex; i <= lastIndex; i++) {
     let outcome;
     const recorded = flat[i] as RecordedStep;
     await observe(observer?.beforeStep && (() => observer.beforeStep!({ actor, index: i, recorded })));
+    // #402: a skipped step never runs its action or expect, and records nothing to the sink; the
+    // index is not renumbered, so later steps keep their flat positions.
+    if (skipStep?.(i, recorded) === true) {
+      await observe(observer?.afterStep && (() => observer.afterStep!({ actor, index: i, recorded, outcome: "done" })));
+      continue;
+    }
     const stepStartedAt = clock.monotonicMs();
     try {
-      outcome = await runStep(actor, flat[i], vars, i, targetOpts);
+      outcome = await runStep(actor, flat[i], vars, i, stepOpts);
     } catch (err) {
       await observe(observer?.afterStep && (() => observer.afterStep!({ actor, index: i, recorded, outcome: "failed" })));
       const message = err instanceof Error ? err.message : String(err);
-      return err instanceof ReplayTargetError
-        ? { outcome: "failed", at: i, error: message, reason: err.kind }
-        : { outcome: "failed", at: i, error: message };
+      return withWaits(
+        err instanceof ReplayTargetError
+          ? { outcome: "failed", at: i, error: message, reason: err.kind }
+          : { outcome: "failed", at: i, error: message },
+      );
     }
     const stepEndedAt = clock.monotonicMs();
     await observe(
@@ -274,7 +311,7 @@ async function runFlat(
         (() => observer.afterStep!({ actor, index: i, recorded, outcome: outcome.kind === "awaiting_human" ? "awaiting_human" : "done" })),
     );
     if (outcome.kind === "awaiting_human") {
-      return { outcome: "awaiting_human", at: i, prompt: outcome.prompt, resume: outcome.resume };
+      return withWaits({ outcome: "awaiting_human", at: i, prompt: outcome.prompt, resume: outcome.resume });
     }
     if (sink) {
       const timing: StepTiming = {
@@ -286,7 +323,7 @@ async function runFlat(
       lastSunkStepEndedAt = stepEndedAt;
     }
   }
-  return { outcome: "completed", vars: Object.fromEntries(vars) };
+  return withWaits({ outcome: "completed", vars: Object.fromEntries(vars) });
 }
 
 /** Every assertion a step carries (its postcondition / check / resume). */

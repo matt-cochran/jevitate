@@ -1,4 +1,4 @@
-import type { Assertion, TargetDescriptor } from "@jevitate/recording";
+import type { Assertion, OutcomeCheck, StatusSpec as RecordingStatusSpec, TargetDescriptor } from "@jevitate/recording";
 import { matchGlob } from "./feature/capability-scope.js";
 import type { CapturedRequest } from "./page-monitor.js";
 import { classifyRequest } from "./timing.js";
@@ -24,14 +24,14 @@ import { describeStatusWithRpc, effectiveStatus } from "./rpc-status.js";
  * the request's path (query ignored). A method of `*` matches any method.
  */
 
-/** An expected HTTP status: a class (`2xx`) or an exact code (`201`). */
-export type StatusSpec = { readonly class: 1 | 2 | 3 | 4 | 5 } | { readonly code: number };
+/** An expected HTTP status: a class (`2xx`) or an exact code (`201`) — the Journey schema's own (#400). */
+export type StatusSpec = RecordingStatusSpec;
 
-export type SuccessCheck =
-  | { readonly kind: "page"; readonly assertion: Assertion }
-  | { readonly kind: "reloadThen"; readonly assertion: Assertion }
-  | { readonly kind: "requestMade"; readonly method: string; readonly pathGlob: string }
-  | { readonly kind: "responseStatus"; readonly method: string; readonly pathGlob: string; readonly status: StatusSpec };
+/**
+ * One success check. The SAME type a Journey keeps its end state in (`OutcomeCheck`, #400), so an
+ * authored check is persisted as-is and a replay judges it with this module's evaluator.
+ */
+export type SuccessCheck = OutcomeCheck;
 
 /** The verdict of one check, with what it saw. */
 export interface SuccessCheckResult {

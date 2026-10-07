@@ -1,5 +1,6 @@
 import type { Page, Request } from "playwright";
 import { redactUrl } from "@jevitate/ai-core";
+import { writeClassifier } from "@jevitate/recording";
 import { http5xxSignalOf, requestHeadersOf, rpc5xxSignalOf, type Http5xxSignal } from "../http-5xx.js";
 import { FirstPartyOrigins } from "../third-party.js";
 import { clock, isExternalSchemeUrl } from "@jevitate/domain";
@@ -90,17 +91,30 @@ export function isNon5xxResourceConsoleError(text: string): boolean {
 
 /**
  * Chromium's net error for a request the CLIENT cancelled — never a network-level failure. It fires
- * for two entirely benign cases (#73):
+ * for three entirely benign cases (#73, #405):
  *
  *  - a connect-web/gRPC-web (or plain `fetch`) client that reads the response body and then aborts
  *    its own request/stream — the request already SUCCEEDED server-side (a response was received);
  *  - a request abandoned because the page navigated away or unmounted the component that issued it
- *    (React Query/connect cancel on unmount, a full navigation tearing down the old document).
+ *    (React Query/connect cancel on unmount, a full navigation tearing down the old document);
+ *  - #405: no response yet and the frame is still attached — the page's OWN AbortController cancelled
+ *    a superseded READ (a type-ahead/search fetch or a read RPC) or a navigation request superseded
+ *    by another navigation. The app changed its mind, not a failing server. An aborted WRITE is NOT
+ *    benign — it may already have reached the server — so it still gates.
  *
- * Neither is evidence the system under test is broken. A genuine network failure — DNS, connection,
- * SSL, a timeout — reports a DIFFERENT `errorText` and is unaffected.
+ * A genuine network failure — DNS, connection, SSL, a timeout — reports a DIFFERENT `errorText` and
+ * is unaffected.
  */
 const ERR_ABORTED = "net::ERR_ABORTED";
+/** #403: Chromium's net error (`…BLOCKED_BY_CLIENT.Inspector` from a route abort) for a request jevitate's guards stopped. */
+const ERR_BLOCKED_BY_CLIENT = "net::ERR_BLOCKED_BY_CLIENT";
+
+/**
+ * #405: the read/write classifier the aborted-request rule uses. The collector is not given the
+ * run's read-RPC patterns, so this uses `writeClassifier` defaults: a cancelled GET, or a cancelled
+ * POST that is RPC-read-shaped, is the page's own superseded read and never a defect.
+ */
+const isWriteRequest = writeClassifier();
 
 /**
  * A console-error CORRELATED with a captured network response (#88, extending #29's 5xx scope) is
@@ -187,6 +201,8 @@ export class PageSignalCollector {
       // §9: the HTTP signal is 5xx-only). Real console errors, page errors and
       // 5xx are untouched and still gate.
       if (isNon5xxResourceConsoleError(text)) return;
+      // #403: the browser's note on a request jevitate's guard aborted — the run's refusal, not the app's.
+      if (text.includes(ERR_BLOCKED_BY_CLIENT)) return;
       const redactedText = redactUrl(text);
       // Correlated against the REDACTED text (both sides of the match go through the same
       // redaction, so a query-string secret never breaks an otherwise-matching URL).
@@ -233,12 +249,19 @@ export class PageSignalCollector {
       // test — decided on the ORIGINAL url's scheme (redaction would hide it).
       if (isExternalSchemeUrl(request.url())) return;
       const errorText = request.failure()?.errorText ?? "request failed";
+      // #403: a write jevitate's own guard aborted (`route.abort("blockedbyclient")`) — the run's
+      // refusal, recorded as blocked by the guard, never a failure of the app.
+      if (errorText.startsWith(ERR_BLOCKED_BY_CLIENT)) return;
       if (errorText === ERR_ABORTED) {
         // A response was already received: the client aborted after reading it (connect-web/gRPC-web).
         if (responseSeen.has(request)) return;
         // No response yet, but the request's own frame is gone: a navigation or component unmount
         // cancelled it — the page did this to itself, not a network failure.
         if (request.frame().isDetached()) return;
+        // #405: no response and the frame is still attached — the app's own AbortController cancelled
+        // a superseded READ (type-ahead/search fetch or read RPC) or a navigation request. The page
+        // changed its mind; only an aborted WRITE (outcome-unknown to the server) still gates.
+        if (request.isNavigationRequest() || !isWriteRequest({ method: request.method(), path: requestPathOf(request.url()) })) return;
       }
       this.buffer.push({
         kind: "failed-request",
@@ -263,6 +286,15 @@ export class PageSignalCollector {
     const out = this.buffer;
     this.buffer = [];
     return out;
+  }
+}
+
+/** A request URL's pathname (#405), or the raw URL when it cannot be parsed. */
+function requestPathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
   }
 }
 
