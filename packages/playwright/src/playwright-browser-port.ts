@@ -230,7 +230,9 @@ export class PlaywrightBrowserPort implements BrowserPort {
   }
 
   async open(opts: OpenOptions): Promise<BrowserSession> {
-    // TODO(M3): enforce allowedOrigins via route interception; currently unenforced.
+    // TODO(M3): allowedOrigins is not enforced here (no route interception): subresource requests to
+    // any origin load. The acting origin is checked by the missions after each settle, and writes are
+    // blocked by their own guards (read-only find-out goals, adversarial misuse #403) — docs/safety.md.
     // Refused BEFORE any browser opens: an unregistered --device name, or --viewport + --device together.
     const emulation = resolveEmulation({ viewport: opts.viewport, device: opts.device });
     // #205: admitted by the resource governor (machine-wide browser cap, throttling) before anything

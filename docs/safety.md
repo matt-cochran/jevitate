@@ -1,14 +1,32 @@
 # Safety model
 
 Jevitate drives a real browser against a real app, sometimes under a model's direction. These are
-the guardrails that hold whatever a model proposes. Each is enforced in code and covered by tests
-that assert the refusal. [SECURITY.md](../SECURITY.md) lists the invariants whose regression is a
+the guardrails that hold whatever a model proposes. Each is enforced in code, to the extent each
+bullet states (and no further), and covered by tests that assert the refusal. [SECURITY.md](../SECURITY.md) lists the invariants whose regression is a
 security bug, and how to report one.
 
 **Only what you authorize.**
 
-- Every run is restricted to an allowlist of origins: the `--url`'s own origin, or exactly the
-  `--allow` origins you pass. It is checked before a browser opens and again during the run.
+- Every run acts on an allowlist of origins: the `--url`'s own origin, or exactly the `--allow`
+  origins you pass. What that guarantees, exactly:
+  - **The acting origin.** The start URL is checked before a browser opens, and the page the run
+    is on is checked again after each action settles (an adversarial run returns to its start
+    page). An action that navigates off the allowlist is stopped there, but that page has already
+    loaded and run by then: the check is after the fact, not a network block.
+  - **First-party writes in find-out goals.** A find-out goal's write requests are blocked at the
+    network (below).
+  - **Adversarial misuse writes (#403).** During an adversarial run, a write request (anything but
+    a read — `POST`, `PUT`, `PATCH`, `DELETE`, a native form post) that a misuse step fires to an
+    origin outside `--allow` is aborted in the browser before it is sent, whoever that origin is.
+    It is listed in the result's `blockedWrites` with its origin and path and how to allow it (add
+    the origin to `--allow` if it is the app's, or pass `--allow-write "<origin>/<path glob>"`),
+    and it is never reported as a defect of the app. A step whose write was blocked does not have
+    its declared invariants judged (inconclusive).
+
+  What `--allow` does **not** block: subresource requests to other origins (scripts, styles,
+  images, fonts, frames, fetch/XHR reads, WebSockets, workers) — third-party CDNs and APIs are
+  normal and load as usual — and, outside the two cases above, third-party writes (listed in
+  `sideEffects`, below).
 - MCP missions can only target a *promoted* mission target, a human act
   (`jevitate mission target promote`).
 - `load run` refuses to start without `--authorized-origin`.
@@ -132,7 +150,8 @@ security bug, and how to report one.
   its users' browsers. The run only inspects the DOM for an element carrying the canary attribute,
   after submit and after loading the page again with a plain GET (a form is never re-sent). A hit
   means the input was rendered unescaped (`markup-injection`, stored or reflected). The canary
-  never attempts exploitation. Its values go only to the `--allow` origins, through the same gated
+  never attempts exploitation. A write that would carry it (or any misuse value) to an origin
+  outside `--allow` is blocked before it is sent (#403, above); it goes through the same gated
   actions, paid/destructive guards and budgets as every other value. Canaries the app accepts stay
   in its data like any other boundary value, so reset state between runs (below). See
   [exploration](./exploration.md#adversarial-scope-form-misuse-and-coverage).

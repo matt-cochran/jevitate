@@ -106,6 +106,8 @@ export function isNon5xxResourceConsoleError(text: string): boolean {
  * is unaffected.
  */
 const ERR_ABORTED = "net::ERR_ABORTED";
+/** #403: Chromium's net error (`…BLOCKED_BY_CLIENT.Inspector` from a route abort) for a request jevitate's guards stopped. */
+const ERR_BLOCKED_BY_CLIENT = "net::ERR_BLOCKED_BY_CLIENT";
 
 /**
  * #405: the read/write classifier the aborted-request rule uses. The collector is not given the
@@ -199,6 +201,8 @@ export class PageSignalCollector {
       // §9: the HTTP signal is 5xx-only). Real console errors, page errors and
       // 5xx are untouched and still gate.
       if (isNon5xxResourceConsoleError(text)) return;
+      // #403: the browser's note on a request jevitate's guard aborted — the run's refusal, not the app's.
+      if (text.includes(ERR_BLOCKED_BY_CLIENT)) return;
       const redactedText = redactUrl(text);
       // Correlated against the REDACTED text (both sides of the match go through the same
       // redaction, so a query-string secret never breaks an otherwise-matching URL).
@@ -245,6 +249,9 @@ export class PageSignalCollector {
       // test — decided on the ORIGINAL url's scheme (redaction would hide it).
       if (isExternalSchemeUrl(request.url())) return;
       const errorText = request.failure()?.errorText ?? "request failed";
+      // #403: a write jevitate's own guard aborted (`route.abort("blockedbyclient")`) — the run's
+      // refusal, recorded as blocked by the guard, never a failure of the app.
+      if (errorText.startsWith(ERR_BLOCKED_BY_CLIENT)) return;
       if (errorText === ERR_ABORTED) {
         // A response was already received: the client aborted after reading it (connect-web/gRPC-web).
         if (responseSeen.has(request)) return;

@@ -27,6 +27,9 @@ export async function planTurn(ctx: HuntState, params: AdversarialMissionParams)
   // is stale: the next action gets a fresh one, so no effect is attributed to the wrong action.
   ctx.armed = false;
   ctx.chainStart = null;
+  // #403: an episode that ended before its last step settled leaves the misuse window open: closed here.
+  ctx.offAllowlist.settled();
+  ctx.blockedWrites.push(...ctx.offAllowlist.drain());
 
   // A perception's timing is reported once — on the first step decided on it.
   let stepSnap = ctx.snap;
