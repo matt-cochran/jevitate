@@ -102,6 +102,11 @@ inconclusive rather than wrong. Failed steps are counted 1-based everywhere.
 
 ### Fixed
 
+- **An extension whose id drifted is diagnosed as such on a slow machine (#410).** When an unpacked
+  extension's computed id doesn't match the one Chromium used, the error names the real id instead
+  of saying the browser didn't load the extension. The cross-check now waits (up to 10 s) for the
+  extension's own service worker rather than 2 s for any worker.
+
 - **Adversarial invariants are judged after the save is answered (#388).** A misuse step waits (up
   to 5 s) for its requests before its declared invariants are checked, so a rejected save is no
   longer reported as a violation because the previous save's "Saved" was still showing. A Save left
