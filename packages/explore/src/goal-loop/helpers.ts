@@ -173,9 +173,10 @@ export const actionIdentityOf = (c: Control): ActionIdentity => ({
  * BROWSER CODE — #380: the clicked control's own region — its nearest dialog / form / region / group /
  * tabpanel / section / article / list item / table row / card-like container, else the nearest
  * landmark (`main`), never the whole document — as its visible text and the controls it offers
- * (role, name, enabled; never a value). Null when the control sits in none.
+ * (role, name, enabled; never a value), and where it sits (#391: its element path, tag + sibling
+ * index up to the document — which region it is, never what it shows). Null when the control sits in none.
  */
-function regionOf(el: Element): { text: string; controls: Array<{ role: string; name: string; enabled: boolean }> } | null {
+function regionOf(el: Element): { text: string; controls: Array<{ role: string; name: string; enabled: boolean }>; where: string } | null {
   const REGION =
     'dialog,[role=dialog],[role=alertdialog],form,[role=form],[role=region],[role=group],[role=tabpanel],section,article,li,tr,[role=row],[role=listitem],[class*="card" i],[data-card]';
   const LANDMARK = "main,[role=main]";
@@ -189,21 +190,35 @@ function regionOf(el: Element): { text: string; controls: Array<{ role: string; 
       const name = (c.getAttribute("aria-label") ?? (h.type === "submit" || h.type === "button" ? h.value : "") ?? "") || ((c as HTMLElement).innerText ?? c.textContent ?? "");
       return { role: c.getAttribute("role") ?? c.tagName.toLowerCase(), name: name.replace(/\s+/g, " ").trim(), enabled: !h.disabled && c.getAttribute("aria-disabled") !== "true" };
     });
-  return { text: (region as HTMLElement).innerText ?? region.textContent ?? "", controls };
+  const steps: string[] = [];
+  for (let n: Element | null = region; n !== null; n = n.parentElement) {
+    steps.push(`${n.tagName.toLowerCase()}:${n.parentElement === null ? 0 : [...n.parentElement.children].indexOf(n)}`);
+  }
+  return { text: (region as HTMLElement).innerText ?? region.textContent ?? "", controls, where: steps.reverse().join(">") };
 }
 
 /**
  * #380: the state the repeat guard compares (`screenState`) — the clicked control's REGION (see
- * `regionOf`), never the whole page, so a menu or a toast elsewhere is no change. Its text is
+ * `regionOf`), never the whole page, so a menu or a toast elsewhere is no change — and (#391) which
+ * region that is (`where`), so a control used beside an earlier write's control is known. Its text is
  * redacted of every registered secret and only the digest is kept. Undefined when the control is
  * gone or sits in no region (the guard then never re-allows on state).
  */
-export async function readRegionState(page: Page, control: Pick<Control, "descriptor">, secrets: readonly string[]): Promise<string | undefined> {
+export async function readRegion(
+  page: Page,
+  control: Pick<Control, "descriptor">,
+  secrets: readonly string[],
+): Promise<{ readonly state: string; readonly where: string } | undefined> {
   const region = await descriptorToLocator(page, control.descriptor)
     .first()
     .evaluate(regionOf, undefined, { timeout: 1_000 })
     .catch(() => null);
-  return region === null ? undefined : screenState(region.controls, redactPageText(region.text, secrets));
+  return region === null ? undefined : { state: screenState(region.controls, redactPageText(region.text, secrets)), where: region.where };
+}
+
+/** #380: the clicked control's region state alone (`readRegion`). */
+export async function readRegionState(page: Page, control: Pick<Control, "descriptor">, secrets: readonly string[]): Promise<string | undefined> {
+  return (await readRegion(page, control, secrets))?.state;
 }
 
 /** History text for a reply wait that ended without a reply — and why it stopped waiting (#93). */

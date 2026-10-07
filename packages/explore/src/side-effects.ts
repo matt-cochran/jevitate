@@ -60,6 +60,13 @@ import { clock } from "@jevitate/domain";
  * so "Add to cart → open a menu → Add to cart" is still refused, as is the same control on an
  * unchanged region (or one back where it was). The caller passes no state for a paid / destructive
  * control, so this never lifts the guard on one; a write with no response never lifts it either.
+ *
+ * A control used beside it (#391): client state another control in the SAME region sets may change
+ * what the control sends although its region looks the same ("Review instructions" opens the
+ * instructions elsewhere, and "I've changed my nameservers" then sends `RetryShareDomain`). So once
+ * another control in its region (`where`: the region's element path) has been clicked since, one more
+ * click is allowed (same state / outcome conditions as above) and recorded by what IT sends: the same
+ * click again with nothing used in between is a true repeat. A control used in another region is no change.
  */
 
 /**
@@ -151,6 +158,8 @@ interface Fired {
   /** #380: its region's state when it was clicked, and when its window closed (when known). */
   readonly before?: string;
   readonly after?: string;
+  /** #391: which region it sits in (`regionOf`'s element path), when known. */
+  readonly where?: string;
 }
 
 interface Open {
@@ -162,6 +171,7 @@ interface Open {
   readonly capture: RequestCapture;
   readonly values: string;
   readonly before?: string;
+  readonly where?: string;
 }
 
 /** Whether the most recently closed click sent any request (#130a). */
@@ -199,6 +209,11 @@ export class SideEffectGuard {
   /** Bumped by an input change whose resulting value is unknown (an upload, a radio…). */
   #generation = 0;
   #open: Open | null = null;
+  /**
+   * #391: the recorded actions (record keys) beside which another control in the same region has
+   * been clicked since — client state that decides what they send may have changed.
+   */
+  readonly #besideUsed = new Set<string>();
   /** Whether the most recently CLOSED click sent any request at all (#130a). */
   #lastClick: LastClick | null = null;
 
@@ -250,15 +265,37 @@ export class SideEffectGuard {
    * A click on `id` (a bare string = an element with no known context) is about to be dispatched:
    * watch what it sends. `label` only names it in reasons and drives the sign-in / back rules.
    * `state` (#380) is its region's state as it is clicked (`screenState`), when the caller read it.
+   * `where` (#391) is which region that is (an element path), when the caller read it.
    */
-  beginClick(id: string | ActionIdentity, label: string, route: string, at: number, state?: string): void {
+  beginClick(id: string | ActionIdentity, label: string, route: string, at: number, state?: string, where?: string): void {
     const identity = identityOf(id);
     this.#closeOpen();
+    const key = recordKey(route, identity);
     // A back / start-over control abandons the flow on this route: its earlier submits may be redone.
     if (BACK_NAME.test(label)) {
-      for (const [k, f] of this.#fired) if (f.route === route) this.#fired.delete(k);
+      for (const [k, f] of this.#fired) {
+        if (f.route !== route) continue;
+        this.#fired.delete(k);
+        this.#besideUsed.delete(k);
+      }
     }
-    this.#open = { key: recordKey(route, identity), element: identity.element, label, route, at, capture: this.#monitor.startCapture(), values: this.#valuesKey(), ...(state === undefined ? {} : { before: state }) };
+    // #391: this click is the one re-allowed click; what it sends is judged afresh when it closes.
+    this.#besideUsed.delete(key);
+    // #391: another control used in the region of an earlier write's control (on this route).
+    if (where !== undefined) {
+      for (const [k, f] of this.#fired) if (f.route === route && f.where === where && f.element !== identity.element) this.#besideUsed.add(k);
+    }
+    this.#open = {
+      key,
+      element: identity.element,
+      label,
+      route,
+      at,
+      capture: this.#monitor.startCapture(),
+      values: this.#valuesKey(),
+      ...(state === undefined ? {} : { before: state }),
+      ...(where === undefined ? {} : { where }),
+    };
   }
 
   /**
@@ -313,6 +350,7 @@ export class SideEffectGuard {
       values: o.values,
       ...(o.before === undefined ? {} : { before: o.before }),
       ...(after === undefined ? {} : { after }),
+      ...(o.where === undefined ? {} : { where: o.where }),
     });
   }
 
@@ -377,7 +415,8 @@ export class SideEffectGuard {
       };
     }
     // The same action: same route, same element, same context (#356 — never the label alone).
-    const f = this.#fired.get(recordKey(route, identity));
+    const key = recordKey(route, identity);
+    const f = this.#fired.get(key);
     if (f === undefined) return { refuse: false };
     // Repeating a sign-in creates nothing (a retry after "Back to sign in", a 2FA restart).
     if (SIGN_IN_NAME.test(f.label)) return { refuse: false };
@@ -393,6 +432,11 @@ export class SideEffectGuard {
     // the one it produced) and its writes all finished: the same control may now send another request.
     const known = page.state !== undefined && f.before !== undefined && f.after !== undefined;
     if (known && page.state !== f.before && page.state !== f.after && f.writes.every((w) => w.status !== null)) return { refuse: false };
+    // #391: another control in its region was used since ("Review instructions" beside "I've changed
+    // my nameservers"): what it sends may differ although its region looks the same, so one click is
+    // allowed and judged by the request it sends. Never a paid / destructive control (no state), never
+    // a write with no known outcome; a control used elsewhere on the page (a menu) is no change.
+    if (page.state !== undefined && this.#besideUsed.has(key) && f.writes.every((w) => w.status !== null)) return { refuse: false };
     const unchanged = known ? " (its part of the page has not moved on since)" : "";
     const retyped = this.#values.size > 0 ? " (the inputs hold the same values as when it was sent — nothing new would be submitted)" : "";
     return {

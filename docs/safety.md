@@ -117,6 +117,10 @@ security bug, and how to report one.
   clicked and how it looked after the click. A menu or a toast elsewhere on the page is no change, so
   "Add to cart", then opening a menu, then "Add to cart" again is still refused. This never applies
   to a paid or destructive control, or to a write whose outcome is unknown.
+  The same holds once another control in that part of the page has been used since the click
+  ("Review instructions" beside "I've changed my nameservers"), even when that part looks the same:
+  one more click is allowed, and is then judged by the request it actually sends. A control used
+  elsewhere on the page (a menu) does not count.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
 - **Inert markup canaries (#301).** The adversarial boundary values include an HTML-injection canary
