@@ -25,6 +25,9 @@ import type { AdversarialMissionParams } from "../adversarial.js";
 import type { HuntState } from "./context.js";
 import { stepAdvisory, type EarlierSubmit, type StepAdvisory, type StepFinding } from "./helpers.js";
 
+/** #403: how a browser reports a fetch/XHR that was aborted before it left (Chromium, Firefox, WebKit). */
+const BLOCKED_FETCH_ERROR = /Failed to fetch|NetworkError when attempting to fetch|Load failed|ERR_BLOCKED_BY_CLIENT/i;
+
 /** Installs the oracle's closures (and its fired-action log) on `ctx`. */
 export function installOracle(ctx: HuntState, params: AdversarialMissionParams): void {
   /** The run's verdict: every finding kind folded by severity (a confirmed hang dominates). */
@@ -110,7 +113,7 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
    */
   ctx.adjudicate = async (
     action: InvariantAction | null = null,
-    opts: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null; readonly inFlight?: readonly string[] } = {},
+    opts: { readonly identitySwitched?: boolean; readonly earlierSubmit?: EarlierSubmit | null; readonly inFlight?: readonly string[]; readonly blocked?: readonly string[] } = {},
   ): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
     // #300: after an identity switch no invariant is judged — they were declared for the original
     // identity — and what the monitor observed for this action is dropped. Hard signals still count.
@@ -122,7 +125,11 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
     // settled, against the before-snapshot armed at the sequence's start (never mid-flight).
     const earlier = opts.earlierSubmit ?? null;
     // #406: writes the step started that never ended within its settle ceiling — its invariants are inconclusive.
-    const inFlight = opts.inFlight !== undefined && opts.inFlight.length > 0 ? { inFlight: opts.inFlight } : {};
+    const inFlight = {
+      ...(opts.inFlight !== undefined && opts.inFlight.length > 0 ? { inFlight: opts.inFlight } : {}),
+      // #403: a write jevitate blocked never reached the app — what it set off is not the app's outcome.
+      ...(opts.blocked !== undefined && opts.blocked.length > 0 ? { blocked: opts.blocked } : {}),
+    };
     const earlierResult =
       ctx.declared === null || skip || earlier === null || !ctx.armed
         ? null
@@ -131,7 +138,13 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
     ctx.armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
     await clock.sleep(10);
-    const hardSignals = ctx.collector.drain();
+    const drained = ctx.collector.drain();
+    // #403: the page's own error for a fetch jevitate's guard aborted ("Failed to fetch") is the run's
+    // refusal surfacing, never the app's defect — dropped on a step that had a write blocked.
+    const hardSignals =
+      opts.blocked !== undefined && opts.blocked.length > 0
+        ? drained.filter((s) => !((s.kind === "page-error" || s.kind === "console-error") && BLOCKED_FETCH_ERROR.test(s.detail)))
+        : drained;
     hardSignals.push(...(await ctx.overflowSignals()));
     const url = redactUrl(ctx.sessions.page.url());
     const route = normalizeRoute(url);

@@ -166,6 +166,11 @@ export interface AfterOptions {
    * judged as always).
    */
   readonly inFlight?: readonly string[];
+  /**
+   * #403: writes the action fired that jevitate blocked (an origin outside `--allow`). The app never
+   * saw them, so its `require`/`always` invariants are inconclusive in the same way.
+   */
+  readonly blocked?: readonly string[];
 }
 
 /** `dom` observables that read an input's `value`, by name (`InvariantMonitor.inputValues`). */

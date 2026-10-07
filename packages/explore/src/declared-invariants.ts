@@ -462,6 +462,11 @@ export class InvariantMonitor {
     const held: string[] = [];
     const inconclusive: Array<{ id: string; reason: string }> = [];
     const inFlight = opts.inFlight ?? [];
+    const blocked = opts.blocked ?? [];
+    const notJudged = [
+      ...(inFlight.length === 0 ? [] : [`writes still in flight when the step's settle ceiling passed: ${inFlight.join(", ")}`]),
+      ...(blocked.length === 0 ? [] : [`its writes were blocked (not an --allow origin): ${blocked.join(", ")}`]),
+    ].join("; ");
     const pageUrl = safeUrl(page);
     this.#lastPage = page;
     // #195: the responses a `never.response` drains now happened during this action (or the page load).
@@ -478,8 +483,8 @@ export class InvariantMonitor {
       tally.checked += 1;
       // #406: the action's writes have not ended — its outcome is not on the page yet. Neither a
       // pass nor a violation: inconclusive, naming what it waited on.
-      if (inFlight.length > 0 && c.decl.never === undefined && c.decl.settle === undefined) {
-        const reason = `${c.decl.id} inconclusive${action?.step === undefined ? "" : ` at step ${action.step}`}: writes still in flight when the step's settle ceiling passed: ${inFlight.join(", ")}`;
+      if (notJudged !== "" && c.decl.never === undefined && c.decl.settle === undefined) {
+        const reason = `${c.decl.id} inconclusive${action?.step === undefined ? "" : ` at step ${action.step}`}: ${notJudged}`;
         tally.unknown += 1;
         unknown.push(c.decl.id);
         inconclusive.push({ id: c.decl.id, reason });

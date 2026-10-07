@@ -13,6 +13,7 @@ import { detectForms, planMisuseEpisode, type MisuseStep } from "../../adversari
 import { identityChange, readIdentity } from "../../adversarial/identity.js";
 import { controlIdentity } from "../../coverage/fingerprint.js";
 import { monitorFor, type InflightRequest } from "../../page-monitor.js";
+import { redactText } from "../../redact.js";
 import type { HuntState } from "./context.js";
 import type { EpisodeState, Turn } from "./episode.js";
 import { FORM_STRATEGY, joinReasons } from "./helpers.js";
@@ -58,6 +59,15 @@ export async function settleMisuseStep(ctx: HuntState, ep: EpisodeState, turn: T
   const inFlight = (
     await monitor.writesEnded(ctx.chainStart ?? firedAt, settleStart + STEP_SETTLE_CEILING_MS).catch(() => [])
   ).map(describeWrite);
+  // #403: the step's window closes; the writes it fired off the --allow origins were blocked.
+  ctx.offAllowlist.settled();
+  const blockedNow = ctx.offAllowlist.drain();
+  ctx.blockedWrites.push(...blockedNow);
+  const blocked = [...new Set(blockedNow.map((b) => `${b.method} ${b.path}`))];
+  const blockedNote =
+    blocked.length === 0
+      ? undefined
+      : `blocked write(s) ${redactText(blocked.join(", "), ctx.secrets)}: not an --allow origin, never sent (${redactText([...new Set(blockedNow.flatMap((b) => (b.hint === undefined ? [] : [b.hint])))].join("; "), ctx.secrets)})`;
   // #303 (opt-in): what this settled action changed — on its transcript step, and kept as
   // evidence for a defect first seen at this step.
   if (ctx.deltaArmed !== null) {
@@ -128,9 +138,9 @@ export async function settleMisuseStep(ctx: HuntState, ep: EpisodeState, turn: T
   // submit (that one is judged as this step): it is the action that said "Saved" or not.
   const earlierSubmit = s.submitsForm === undefined ? ep.earlierSubmit : null;
   ep.earlierSubmit = null;
-  const verdict = await ctx.adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step }, { earlierSubmit, inFlight });
+  const verdict = await ctx.adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step }, { earlierSubmit, inFlight, blocked });
   const soft = verdict === null ? await ctx.softJudgment(ep.stepSnap) : {};
-  const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
+  const full = joinReasons([reason, blockedNote, verdict === null ? soft.note : verdict.reason]);
   ctx.transcript.record({
     ...entry,
     ...(full === undefined ? {} : { reason: full }),
