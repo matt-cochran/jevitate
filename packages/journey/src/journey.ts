@@ -11,6 +11,7 @@ import {
   type Recording,
   type StatusSpec,
 } from "@jevitate/recording";
+import { mutationPairIssues } from "./mutation-proof.js";
 
 export interface SecretRef { manager: string; key: string; origin: string; field: string }
 export interface JourneyMetadata {
@@ -75,6 +76,19 @@ export interface JourneyMetadata {
    * exactly as before.
    */
   acceptedWeak?: { reason: string; rules: string[] };
+  /**
+   * #402 — declared negative-proof pairs for `journey verify --mutate`: the assertion at `check`
+   * (`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must FAIL when the Journey is replayed
+   * with `mustFailWhen` (`skip:<n|anchor>`, `block-write:<n|anchor>`, `stale-value:<n|anchor>`).
+   * Validated at load: an unknown site, step or anchor is refused. Additive.
+   */
+  mutationPairs?: JourneyMutationPair[];
+}
+
+/** #402: one declared pair — see `JourneyMetadata.mutationPairs`. */
+export interface JourneyMutationPair {
+  check: string;
+  mustFailWhen: string;
 }
 
 /** #322: an expected HTTP status — a class (`2xx`) or an exact code (`201`). */
@@ -205,6 +219,10 @@ export const JourneySchema: ZodType<Journey> = z.object({
       .object({ reason: z.string().min(1), rules: z.array(z.string()) })
       .strict()
       .optional(),
+    mutationPairs: z
+      .array(z.object({ check: z.string().min(1).max(100), mustFailWhen: z.string().min(1).max(200) }).strict())
+      .max(100)
+      .optional(),
   }).strict(),
   recording: RecordingSchema,
 }).superRefine((j, ctx) => {
@@ -219,6 +237,10 @@ export const JourneySchema: ZodType<Journey> = z.object({
       });
     }
   });
+  // #402: a declared mutation pair must name an assertion and a step (or anchor) the Journey has.
+  for (const issue of mutationPairIssues(j)) {
+    ctx.addIssue({ code: "custom", path: ["metadata", "mutationPairs", issue.index, issue.field], message: issue.message });
+  }
   // #399: a `${name}` in a navigate URL must name a declared parameter (`params` or `parameters`).
   const declared = new Set([...j.metadata.params, ...(j.metadata.parameters ?? []).map((p) => p.name)]);
   j.recording.pages.forEach((page, pi) =>

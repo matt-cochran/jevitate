@@ -98,6 +98,28 @@ function endStateCovers(requests: readonly WriteRequest[], endEffects: readonly 
   });
 }
 
+/** #402: a write step — 1-based, counted the way `--at-step` counts — with its recorded write request lines. */
+export interface JourneyWriteStep {
+  readonly step: number;
+  /** The write requests its recorded delta names (`POST /api/items → 201`); empty when it is a write by other evidence. */
+  readonly requests: readonly string[];
+}
+
+/**
+ * #402: the Journey's write steps, by the SAME rule the lint's `write-without-effect` uses (a recorded
+ * write request, a write `expectRequests`, or a state-changing step whose delta changed the page).
+ * The mutation proof (`journey verify --mutate`) skips or blocks exactly these.
+ */
+export function journeyWriteSteps(journey: Journey, opts: JourneyLintOptions = {}): JourneyWriteStep[] {
+  const classify = writeClassifier({ readRequests: opts.readRequests });
+  const out: JourneyWriteStep[] = [];
+  flattenSteps(journey).forEach((recorded, i) => {
+    const requests = writeRequestsOf(recorded, classify);
+    if (isWriteStep(recorded, classify, requests)) out.push({ step: i + 1, requests: requests.map((r) => r.line) });
+  });
+  return out;
+}
+
 /** #401: the pure assertion-strength lint for a Journey — no I/O, no clock, no globals. */
 export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): JourneyLintFinding[] {
   const classify = writeClassifier({ readRequests: opts.readRequests });
