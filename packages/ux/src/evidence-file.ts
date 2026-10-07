@@ -123,6 +123,7 @@ const RequestSchema = z.object({
   endedAt: z.number().nullable(),
   status: z.number().nullable(),
   failed: z.boolean().optional(),
+  aborted: z.boolean().optional(),
   step: z.number(),
   payloadKey: z.string().optional(),
 });

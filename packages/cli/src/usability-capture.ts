@@ -165,6 +165,7 @@ interface LiveRequest {
   endedAt: number | null;
   status: number | null;
   failed?: boolean;
+  aborted?: true;
   step: number;
   contentType?: string;
   payloadKey?: string;
@@ -262,6 +263,16 @@ export class UsabilityCapture {
     this.#live.delete(r);
     rec.endedAt = this.#now();
     rec.failed = true;
+    if (r.failure()?.errorText === "net::ERR_ABORTED") rec.aborted = true; // #393
+    // #73/#393: a request aborted after receiving a response still has a real status.
+    this.#statusReads.push(
+      r.response().then(
+        (res) => {
+          rec.status = res?.status() ?? null;
+        },
+        () => undefined,
+      ),
+    );
   };
 
   /** TranscriptLog listener: counts the steps recorded so far (a snapshot belongs to the next one). */
