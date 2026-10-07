@@ -112,3 +112,27 @@ describe("describeNavigateUrl", () => {
     expect(describeNavigateUrl("/accept?token=${inviteToken}")).toBe("/accept?token=<param inviteToken>");
   });
 });
+
+describe("#399 hardening", () => {
+  it("RecordingSchema refuses a navigate URL holding a tab or newline (WHATWG strips them)", () => {
+    for (const url of ["/\t/evil.example/${x}", "/a\n/b", "/a\rb"]) {
+      const rec = { version: "1", site: "http://127.0.0.1:1", pages: [{ url: "/", steps: [{ step: { kind: "navigate", url, expect: { kind: "urlIncludes", text: "/" } } }] }] };
+      expect(RecordingSchema.safeParse(rec).success, JSON.stringify(url)).toBe(false);
+    }
+  });
+
+  it("a value over 4096 characters is a typed refusal that never echoes it", () => {
+    const long = "k".repeat(4097);
+    expect(() => resolveNavigateUrl("/a?t=${t}", vars({ t: long }))).toThrow(NavigateUrlParamError);
+    try {
+      resolveNavigateUrl("/a?t=${t}", vars({ t: long }));
+    } catch (err) {
+      expect((err as Error).message).not.toContain("kkkk");
+    }
+    expect(resolveNavigateUrl("/a?t=${t}", vars({ t: "k".repeat(4096) }))).toHaveLength(4096 + 5);
+  });
+
+  it("a lone surrogate is a typed NavigateUrlParamError, not a URIError", () => {
+    expect(() => resolveNavigateUrl("/a?t=${t}", vars({ t: "x\uD800" }))).toThrow(NavigateUrlParamError);
+  });
+});

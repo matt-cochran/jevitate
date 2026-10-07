@@ -526,6 +526,8 @@ const NavigateUrlSchema = z
   .refine((url) => SAFE_NAVIGATE_URL.test(url), {
     message: "navigate.url must be a relative path starting with '/' or an absolute http(s):// URL",
   })
+  // #399: no tab or newline — URL parsing strips them, so `/\t/host` would become protocol-relative.
+  .refine((url) => !/[\t\n\r]/.test(url), { message: "navigate.url must not contain a tab or newline" })
   // #399: `${param}` placeholders are well-formed and come after a literal origin.
   .superRefine((url, ctx) => {
     const problem = navigateTemplateProblem(url);

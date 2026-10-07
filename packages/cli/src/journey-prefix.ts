@@ -1,3 +1,4 @@
+import { redactText, redactUrl } from "@jevitate/ai-core";
 import {
   FsJourneyStore,
   JourneyRegistry,
@@ -216,7 +217,13 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
 
 /** What an anchored run starts from: the live URL after the prefix, its branch point, and how it resets. */
 export interface AnchoredStart {
+  /** The live URL to start from — for navigation and the mission engine (which redacts it) only. */
   readonly url: string;
+  /**
+   * #399: `url` as it may be shown or persisted (`target.seedUrl`): credential-named query values and
+   * the prefix's secret params (e.g. a token its navigate URL carried) redacted. Never navigated to.
+   */
+  readonly persistUrl: string;
   readonly branch?: RecordedBranch;
   /**
    * #293: what a reset inside the mission uses instead of re-navigating to the anchor URL — the
@@ -254,11 +261,11 @@ export async function startFromJourney(
   allowlist: readonly string[],
   browser?: BrowserRunOptions,
 ): Promise<AnchoredStart> {
-  if (prefix === undefined) return { url };
+  if (prefix === undefined) return { url, persistUrl: url };
   const live = await prefix.replay(session, browser);
   assertAuthorizedExploreTarget(live, allowlist);
   const restart = { restartAtStart: prefixRestart(prefix, allowlist, browser), restartCost: prefix.steps };
-  return { url: live, branch: { ...prefix.branch, replay: prefix.replayInfo }, restart };
+  return { url: live, persistUrl: redactText(redactUrl(live), prefix.secrets), branch: { ...prefix.branch, replay: prefix.replayInfo }, restart };
 }
 
 /** The result fields an anchored run adds (#293, additive): its branch point (and how to replay it). */

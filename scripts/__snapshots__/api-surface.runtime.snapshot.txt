@@ -653,7 +653,7 @@
   stylesOf: function
   textIncludesCI: function
 
-# @jevitate/journey (32 exports)
+# @jevitate/journey (33 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
@@ -677,6 +677,7 @@
   isSweepMode: function
   journeyBranchPoint: function
   journeyPrefix: function
+  journeyRunParams: function
   journeyStepCount: function
   listJourneyAnchors: function
   prefixLandingPath: function
@@ -859,7 +860,7 @@
   rungLocator: function
   validateCandidates: function
 
-# @jevitate/recording (79 exports)
+# @jevitate/recording (80 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -877,6 +878,7 @@
   JSON_PATH_EACH: object
   MAX_BUDGETS: const (number)
   MAX_INVARIANTS: const (number)
+  MAX_NAVIGATE_PARAM_LENGTH: const (number)
   MAX_OBSERVABLES: const (number)
   MAX_SETTLE_WITHIN_MS: const (number)
   MIN_SETTLE_POLL_MS: const (number)

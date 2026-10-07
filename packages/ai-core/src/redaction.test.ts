@@ -82,3 +82,23 @@ describe("#399: registered secrets are matched in their strict (RFC 3986) percen
     expect(() => assertNoSecretInPayload({ url: `/accept?token=${strict}` }, [secret])).toThrow(SecretLeakError);
   });
 });
+
+describe("#399: lowercase-%xx and +-for-space forms are matched too", () => {
+  const secret = "a b/c'd";
+
+  it("redactText scrubs the lowercase-hex and the form-urlencoded (+ for space) forms", () => {
+    expect(redactText("q=a%20b%2fc%27d", [secret])).toBe(`q=${REDACTION_MASK}`);
+    expect(redactText("q=a+b%2Fc%27d", [secret])).toBe(`q=${REDACTION_MASK}`);
+    expect(redactText("q=a+b%2fc%27d", [secret])).toBe(`q=${REDACTION_MASK}`);
+  });
+
+  it("assertNoSecretInPayload throws on them", () => {
+    expect(() => assertNoSecretInPayload({ url: "/x?q=a+b%2Fc%27d" }, [secret])).toThrow(SecretLeakError);
+    expect(() => assertNoSecretInPayload({ url: "/x?q=a%20b%2fc'd" }, [secret])).toThrow(SecretLeakError);
+  });
+
+  it("a lone surrogate never makes the guard throw a URIError (its raw form is still matched)", () => {
+    const odd = "x\uD800y";
+    expect(redactText(`v=${odd}`, [odd])).toBe(`v=${REDACTION_MASK}`);
+  });
+});

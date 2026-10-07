@@ -20,6 +20,9 @@ const SAFE_NAVIGATE_URL = /^(\/|https?:\/\/)/;
 const LITERAL_ORIGIN_PREFIX = /^https?:\/\/[^/?#\\$@]+[/?#]/i;
 
 /** Thrown when a resolved navigate URL would leave its template's origin. Never carries a value. */
+/** The longest value a placeholder takes (a token, an id) — longer is refused, never truncated. */
+export const MAX_NAVIGATE_PARAM_LENGTH = 4096;
+
 export class NavigateUrlParamError extends Error {
   constructor(message: string) {
     super(message);
@@ -98,7 +101,14 @@ export function resolveNavigateUrl(url: string, vars: ReadonlyMap<string, string
   const resolved = url.replace(PLACEHOLDER, (_m, name: string) => {
     const v = vars.get(name);
     if (v === undefined) throw new Error(`unknown variable: ${name}`);
-    return encodeUrlParamValue(v);
+    if (v.length > MAX_NAVIGATE_PARAM_LENGTH) {
+      throw new NavigateUrlParamError(`navigate to ${describeNavigateUrl(url)}: the value of ${name} is longer than ${MAX_NAVIGATE_PARAM_LENGTH} characters — refused`);
+    }
+    try {
+      return encodeUrlParamValue(v);
+    } catch {
+      throw new NavigateUrlParamError(`navigate to ${describeNavigateUrl(url)}: the value of ${name} is not valid text (a lone surrogate) — refused`);
+    }
   });
   const expected = originOf(url.replace(PLACEHOLDER, "x"));
   const relativeEscapes = resolved.startsWith("//") || resolved.startsWith("/\\");

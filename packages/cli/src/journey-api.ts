@@ -298,7 +298,8 @@ export async function runJourneyProgrammatically(
       const videos = await finalizeVideos(videoDir, closeSession);
       if (fx === undefined) return { ...result, ...videos, ...shotFields, ...deltaFields };
       await fx.restore();
-      return { ...result, ...videos, ...shotFields, ...deltaFields, fixtures: fx.record() };
+      // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
+      return { ...result, ...videos, ...shotFields, ...deltaFields, fixtures: redactSecretParams(fx.record(), journey, params) };
     } finally {
       await closeSession();
     }

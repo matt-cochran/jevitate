@@ -80,14 +80,23 @@ export function assertNoSecretInPayload(
 
 /**
  * The forms a registered secret is matched in: its raw value and — when they
- * differ — its `encodeURIComponent` form and its strict RFC 3986 form (`!'()*`
- * encoded too: how a Journey's navigate `${param}` substitutes it, #399) — how
- * a secret appears once it has ridden into a URL. Shared by `redactText` and
+ * differ — its `encodeURIComponent` form, its strict RFC 3986 form (`!'()*`
+ * encoded too: how a Journey's navigate `${param}` substitutes it, #399), its
+ * form-urlencoded form (`+` for space) and the lowercase-hex spelling of each —
+ * how a secret appears once it has ridden into a URL. Shared by `redactText` and
  * `assertNoSecretInPayload` so the scrub and its proof always agree on what
  * counts as the secret.
  */
 export function secretForms(secret: string): readonly string[] {
-  const encoded = encodeURIComponent(secret);
+  let encoded: string;
+  try {
+    encoded = encodeURIComponent(secret);
+  } catch {
+    return [secret]; // a lone surrogate has no URL-encoded form; its raw form is still matched
+  }
   const strict = encoded.replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-  return [...new Set([secret, encoded, strict])];
+  // application/x-www-form-urlencoded (`+` for space), as a form or URLSearchParams re-serializes it.
+  const form = new URLSearchParams([["", secret]]).toString().slice(1);
+  const lower = (v: string): string => v.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
+  return [...new Set([secret, encoded, strict, form, lower(encoded), lower(strict), lower(form)])];
 }

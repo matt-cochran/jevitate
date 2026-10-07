@@ -626,7 +626,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       exitCode: goalExitCode(goalOutcome),
       resultPath,
       target: {
-        seedUrl: start.url,
+        seedUrl: start.persistUrl,
         allowlist: [...opts.allowlist],
         ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}),
         ...(opts.actors === undefined ? {} : { actors: persistedActors(opts.actors) }),

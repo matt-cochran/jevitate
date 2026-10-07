@@ -151,7 +151,7 @@ A `navigate` step's `url` may hold `${name}` placeholders, for single-use links 
 in the URL (an invitation, a magic-link sign-in, a password reset, an email verification):
 
 ```json
-"metadata": { "params": ["inviteToken"], "parameters": [{ "name": "inviteToken", "secret": true }], … },
+"metadata": { "params": [], "parameters": [{ "name": "inviteToken", "secret": true }], … },
 "recording": { …, "pages": [{ "url": "/accept", "steps": [
   { "step": { "kind": "navigate", "url": "/accept?token=${inviteToken}",
               "expect": { "kind": "visible", "target": { "role": "heading", "name": "Welcome" } } } }
@@ -166,8 +166,8 @@ MCP `run_journey` takes it the same way (`"params": { "inviteToken": "…" }`). 
 from a fixture output (`--param inviteToken='${setup.inviteToken}'`, see [fixtures](./fixtures.md)).
 
 - Each placeholder must name a declared parameter (`params` or `parameters`). Otherwise the Journey
-  is refused when it is read. A placeholder is a required run parameter. List it in `params` too, so
-  `journey find` and MCP `find_capabilities` show it.
+  is refused when it is read. A placeholder is a required run parameter, and `journey find`, MCP
+  `find_capabilities` and the named Journey tools list it even when only `parameters` declares it.
 - A placeholder comes after the origin: the scheme, host, port and the path's leading `/` are
   literal (`https://${host}/…`, `${base}/…` and `//${host}` are refused). The value is
   percent-encoded as one URL component (everything except `A-Z a-z 0-9 - . _ ~`), so `/`, `\`,

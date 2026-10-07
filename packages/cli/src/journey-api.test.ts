@@ -177,3 +177,34 @@ describe("#399: an error escaping a run never carries a secret parameter", () =>
     expect(String(err.stack)).not.toContain(secret);
   });
 });
+
+describe("#399: a fixture output used as a secret param never comes back in the run's fixture record", () => {
+  it("the record's outputs and log are redacted with the run's secret params", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "journey-api-399fx-"));
+    await new FsJourneyStore(dir).put({
+      metadata: { id: "invite", name: "invite", promoted: true, params: ["inviteToken"], parameters: [{ name: "inviteToken", secret: true }], createdAtIso: "2026-10-07T00:00:00Z" },
+      recording: {
+        version: "1",
+        site: "https://example.test",
+        pages: [{ url: "/accept", steps: [{ step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } } }] }],
+      },
+    });
+    const token = "fx-tok-399";
+    const fx = {
+      setup: vi.fn(async () => {}),
+      restore: vi.fn(async () => {}),
+      bindings: () => ({ values: { inviteToken: token }, secretNames: new Set<string>() }),
+      record: () => ({ identity: "h", specHash: "s", outputs: { inviteToken: token }, secretOutputs: [], cycles: 1, log: [{ ok: true, url: `/api/invite -> ${token}` }] }),
+    };
+    const opens: OpenOptions[] = [];
+    const result = await runJourneyProgrammatically({
+      dir,
+      id: "invite",
+      params: { inviteToken: "${setup.inviteToken}" },
+      browserPortFactory: fakeBrowserPortFactory(opens),
+      fixtures: () => fx as any,
+    });
+    expect(result.fixtures).toBeDefined();
+    expect(JSON.stringify(result)).not.toContain(token);
+  });
+});

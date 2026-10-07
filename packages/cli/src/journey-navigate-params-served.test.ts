@@ -197,6 +197,25 @@ describe("#399 navigate ${param} — served", () => {
     expect(paths.length).toBeGreaterThan(0); // every navigation stayed on the Journey's own origin
   }, 120_000);
 
+  it("explore --from-journey from a secret-param prefix: the token is in no mission result, transcript or stdout", async () => {
+    const out = join(root, "anchored");
+    seen.length = 0;
+    const r = await cli([
+      "explore", "--from-journey", "accept-invite", "--at-step", "1", "--param", `inviteToken=${SECRET}`, "--journeys-dir", join(root, "journeys"),
+      "--strategy", "adversarial", "--fake-ai", "--max-actions", "2", "--out", out, "--json",
+    ]);
+    expect(seen).toContain(SECRET); // the prefix really navigated with the token
+    expectNoToken("explore stdout", r.out);
+    expectNoToken("explore stderr", r.err);
+    const env = JSON.parse(r.out) as { ok: boolean; data?: { resultPath?: string; transcriptPath?: string; target?: { seedUrl?: string } } };
+    expect(env.ok, r.out + r.err).toBe(true);
+    expect(env.data?.target?.seedUrl).toMatch(/\/accept\?token=/);
+    const files = await filesUnder(out);
+    expect(files.some((f) => f.path.endsWith(".result.json"))).toBe(true);
+    for (const f of files) expectNoToken(f.path, f.text);
+    for (const p of [env.data?.resultPath, env.data?.transcriptPath]) if (p !== undefined) expectNoToken(p, await readFile(p, "utf8"));
+  }, 180_000);
+
   it("MCP run_journey takes the same param (parity) — no token in its result or artifacts", async () => {
     const media = join(root, "media-mcp");
     seen.length = 0;
