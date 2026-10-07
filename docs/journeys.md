@@ -110,7 +110,7 @@ starts. The lint (`journey lint`) judges the `expect` itself; a waited `expect` 
 is flagged like any other.
 
 Under `journey verify --mutate`, a waited claim on the mutated step (`skip:<n>`, `block-write:<n>`)
-waits at most its hang threshold (`stallMs`, default 30 s) instead of `maxMs`: the job was never
+waits at most its hang threshold plus 5 s (`stallMs`, default 30 s) instead of `maxMs`: the job was never
 started (or its writes were aborted), so the claim must fail, and the proof does not wait out the
 budget to show it. Waits on other steps, and under `stale-value`, keep their `maxMs`.
 
@@ -170,7 +170,7 @@ jevitate journey verify checkout --mutate --env staging --param sku=A1 --fixture
 
 | Mutation | What the replay does | Derived for |
 |---|---|---|
-| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits at most its hang threshold) | each write step (the lint's rule) |
+| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits at most its hang threshold plus 5 s) | each write step (the lint's rule) |
 | `block-write:<n>` | aborts the write requests step n sends, from its start until the network settled after it | each write step |
 | `stale-value:<n>` | types `""` into fill step n | each fill whose value a `valueEquals`/`textIncludes` checks |
 

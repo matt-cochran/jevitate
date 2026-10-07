@@ -177,19 +177,19 @@ describe("#409 mutationReplay — a waited claim on the mutated step waits at mo
     ]);
   }
 
-  it("skip:<n> keeps the waitFor on the assert it becomes, maxMs capped at WAIT_FOR_STALL_MS (30 s)", () => {
+  it("skip:<n> keeps the waitFor on the assert it becomes, maxMs capped just past WAIT_FOR_STALL_MS (30 s + 5 s), so the hang is named", () => {
     const journey = jobJourney({ maxMs: 240_000, until: "held", progress });
     const step = mutationReplay(journey, { kind: "skip", step: 2, id: "skip:2" }).journey.recording.pages[0]!.steps[1]!.step;
-    expect(step).toEqual({ kind: "assert", check: previews, waitFor: { maxMs: 30_000, until: "held", progress } });
+    expect(step).toEqual({ kind: "assert", check: previews, waitFor: { maxMs: 35_000, until: "held", progress } });
     expect(JourneySchema.safeParse(mutationReplay(journey, { kind: "skip", step: 2, id: "skip:2" }).journey).success).toBe(true);
   });
 
-  it("the cap is the step's own stallMs, and never raises a shorter maxMs", () => {
+  it("the cap is the step's own stallMs plus a margin, and never raises a shorter maxMs", () => {
     const cap = (waitFor: Record<string, unknown>) => {
       const s = mutationReplay(jobJourney(waitFor), { kind: "skip", step: 2, id: "skip:2" }).journey.recording.pages[0]!.steps[1]!.step;
       return s.kind === "assert" ? s.waitFor?.maxMs : undefined;
     };
-    expect(cap({ maxMs: 240_000, stallMs: 10_000 })).toBe(10_000);
+    expect(cap({ maxMs: 240_000, stallMs: 10_000 })).toBe(15_000);
     expect(cap({ maxMs: 5_000 })).toBe(5_000);
   });
 
@@ -198,7 +198,7 @@ describe("#409 mutationReplay — a waited claim on the mutated step waits at mo
     const r = mutationReplay(journey, { kind: "block-write", step: 2, id: "block-write:2" });
     expect(r).toMatchObject({ blockIndex: 1, blockRequests: ["POST /api/generate → 202"] });
     const step = r.journey.recording.pages[0]!.steps[1]!.step;
-    expect(step.kind === "click" && step.waitFor).toEqual({ maxMs: 30_000, reload: true });
+    expect(step.kind === "click" && step.waitFor).toEqual({ maxMs: 35_000, reload: true });
     expect(journey.recording.pages[0]!.steps[1]!.step).toMatchObject({ waitFor: { maxMs: 240_000 } }); // the input is never mutated
   });
 

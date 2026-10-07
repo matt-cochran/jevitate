@@ -223,8 +223,13 @@ export function planJourneyMutations(
  * hangs on its progress signal), at that step, as a postcondition: the sensitive verdict.
  */
 export function mutationWait(wait: OutcomeWait): OutcomeWait {
-  return { ...wait, maxMs: Math.min(wait.maxMs, wait.stallMs ?? WAIT_FOR_STALL_MS) };
+  // The cap sits a margin PAST the stall threshold: capped exactly at it, the final poll could reach
+  // maxMs a few ms before the stall measured stallMs, and a hang would read as a plain timeout.
+  return { ...wait, maxMs: Math.min(wait.maxMs, (wait.stallMs ?? WAIT_FOR_STALL_MS) + MUTATION_WAIT_MARGIN_MS) };
 }
+
+/** #409: how far past the stall threshold a mutated step's wait may run, so its hang is named as one. */
+const MUTATION_WAIT_MARGIN_MS = 5_000;
 
 /**
  * #402: how to replay one mutation. `journey` is what the replay runs (a copy when the mutation
