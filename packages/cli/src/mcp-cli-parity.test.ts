@@ -49,6 +49,9 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "source trust": "trusting a third-party Journey (bound to its content hash) is a person's decision, like approve_action: MCP can add, pull and run a source, never vouch for it",
   "logs triage":
     "#313: sends a run's recorded log text (redacted) to the judgment model with --real — an operator opt-in for their own logs, like --log-source itself (operator-declared, never an MCP argument)",
+  // TEMPORARY (#402): the manager adds the MCP tool for `journey verify --mutate` (an ALLOWED_TOOLS
+  // boundary change); remove this entry when it lands.
+  "journey verify": "#402: MCP tool pending — added with the ALLOWED_TOOLS boundary review, not in this change",
   doctor:
     "#205: host maintenance for the operator (it signals processes on this machine and clears machine-wide browser slots); the same orphan sweep already runs automatically before every browser-driving MCP tool, and each result reports governance in hostHealth.resources",
 };

@@ -196,6 +196,8 @@ export class ReadOnlyGuard {
   #armed = false;
   /** A model-chosen action's window is open (from its act until the page settled after it). */
   #inAction = false;
+  /** #402: how a held main-frame write navigation is stopped (default: answered `204` in the browser). */
+  readonly #navigationWrites: "no-content" | "abort";
   readonly #handler = (route: Route, request: Request): Promise<void> => this.#route(route, request);
 
   constructor(
@@ -206,9 +208,15 @@ export class ReadOnlyGuard {
       readonly firstParty?: FirstPartyOrigins;
       /** Default `read-only` (#158); `no-destructive` holds back only destructive writes (#270). */
       readonly mode?: ReadOnlyMode;
+      /**
+       * #402: `abort` aborts a held main-frame write navigation too, instead of answering it `204` —
+       * a mutation proof never answers a write with anything that could read as a success.
+       */
+      readonly navigationWrites?: "no-content" | "abort";
     } = {},
   ) {
     this.#isWrite = isWrite;
+    this.#navigationWrites = opts.navigationWrites ?? "no-content";
     this.#mode = opts.mode ?? "read-only";
     this.#origins = opts.allowlist ?? [];
     this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
@@ -315,7 +323,7 @@ export class ReadOnlyGuard {
     // #253: a native form POST is a main-frame NAVIGATION — aborting it would leave the page on the
     // browser's error page. A `204 No Content` answer (from the browser, never the server) keeps the
     // page where it was, per the HTML navigation rules; any other write is aborted.
-    if (this.#mainFrameNavigation(request)) {
+    if (this.#navigationWrites === "no-content" && this.#mainFrameNavigation(request)) {
       await route.fulfill({ status: 204, body: "" }).catch(() => undefined);
       return;
     }

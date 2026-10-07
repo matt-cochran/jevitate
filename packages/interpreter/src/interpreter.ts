@@ -61,12 +61,29 @@ export class RecordingInterpreter {
    * `targetTimeoutMs`: how long a recorded target may take to appear before the step fails as
    * `replay-target-not-found` / `ambiguous` (default 15s).
    */
-  constructor(private readonly options: { readonly targetTimeoutMs?: number; readonly observer?: StepObserver } = {}) {}
+  constructor(
+    private readonly options: {
+      readonly targetTimeoutMs?: number;
+      readonly observer?: StepObserver;
+      /**
+       * #402: a mutation proof replays a Journey with one step's action left out. `skipStep`
+       * decides, by flat step index, whether this replay SKIPS that step's action and postcondition.
+       * Indices are never renumbered (`at`, anchors and `expectRequests` keep pointing at the same
+       * steps); a skipped step still gets observer `beforeStep`/`afterStep` (outcome `done`) and is
+       * never sunk. Absent by default, so behavior is unchanged.
+       */
+      readonly skipStep?: (index: number, recorded: RecordedStep) => boolean;
+    } = {},
+  ) {}
 
-  #targetOpts(): ResolveTargetOptions & { observer?: StepObserver } {
+  #targetOpts(): ResolveTargetOptions & {
+    observer?: StepObserver;
+    skipStep?: (index: number, recorded: RecordedStep) => boolean;
+  } {
     return {
       ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
       ...(this.options.observer === undefined ? {} : { observer: this.options.observer }),
+      ...(this.options.skipStep === undefined ? {} : { skipStep: this.options.skipStep }),
     };
   }
 
@@ -243,11 +260,14 @@ async function runFlat(
   flat: RecordedStep[],
   vars: Map<string, string>,
   lastIndex: number,
-  runOpts: ResolveTargetOptions & { observer?: StepObserver },
+  runOpts: ResolveTargetOptions & {
+    observer?: StepObserver;
+    skipStep?: (index: number, recorded: RecordedStep) => boolean;
+  },
   sink?: RecordingSink,
   startIndex = 0,
 ): Promise<InterpretResult> {
-  const { observer, ...targetOpts } = runOpts;
+  const { observer, skipStep, ...targetOpts } = runOpts;
   // A transient-state check (#148) needs the flash recorder BEFORE the action that triggers it.
   if (flat.slice(startIndex, lastIndex + 1).some((r) => stepAssertions(r.step).some((a) => a.kind === "flashed"))) {
     await installFlashRecorder(actor.ability(BrowseTheWebToken).session.page);
@@ -258,6 +278,12 @@ async function runFlat(
     let outcome;
     const recorded = flat[i] as RecordedStep;
     await observe(observer?.beforeStep && (() => observer.beforeStep!({ actor, index: i, recorded })));
+    // #402: a skipped step never runs its action or expect, and records nothing to the sink; the
+    // index is not renumbered, so later steps keep their flat positions.
+    if (skipStep?.(i, recorded) === true) {
+      await observe(observer?.afterStep && (() => observer.afterStep!({ actor, index: i, recorded, outcome: "done" })));
+      continue;
+    }
     const stepStartedAt = clock.monotonicMs();
     try {
       outcome = await runStep(actor, flat[i], vars, i, targetOpts);

@@ -8,7 +8,8 @@ import type { Journey } from "./journey.js";
  *  - `step` — a top-level step's page postcondition (`expect`), an `assert` step's `check`, or a
  *    `handback`'s `resume`; `step` is 1-based, counted the way `--at-step <n>` and anchors count;
  *  - `step-request` — a step's `expectRequests` network check (judged over the requests the replay
- *    sent from that step on): the step it is paired with is `step`;
+ *    sent from that step on): the step it is paired with is `step`, its position in that step's
+ *    `expectRequests` is `checkIndex` (#402);
  *  - `end-state` — `metadata.endState` in order, then an older Journey's `metadata.networkChecks`
  *    (`source` says which), judged after the last step.
  *
@@ -21,7 +22,7 @@ export type JourneyAssertionSite =
       readonly field: "expect" | "check" | "resume";
       readonly check: Extract<OutcomeCheck, { kind: "page" }>;
     }
-  | { readonly where: "step-request"; readonly step: number; readonly check: NetworkCheck }
+  | { readonly where: "step-request"; readonly step: number; readonly checkIndex: number; readonly check: NetworkCheck }
   | { readonly where: "end-state"; readonly index: number; readonly source: "endState" | "networkChecks"; readonly check: OutcomeCheck };
 
 export function journeyAssertions(journey: Journey): JourneyAssertionSite[] {
@@ -33,7 +34,7 @@ export function journeyAssertions(journey: Journey): JourneyAssertionSite[] {
       const s = recorded.step;
       const own = ownAssertion(s);
       if (own !== null) out.push({ where: "step", step: n, field: own.field, check: { kind: "page", assertion: own.assertion } });
-      for (const check of recorded.expectRequests ?? []) out.push({ where: "step-request", step: n, check });
+      (recorded.expectRequests ?? []).forEach((check, checkIndex) => out.push({ where: "step-request", step: n, checkIndex, check }));
     }
   }
   const end = journey.metadata.endState ?? [];

@@ -110,6 +110,62 @@ says why and where to look: `reason` (`discovery mission <outcome>: <the goal ru
 `recordingPaths`, `screenshotsDir`), and `takes` (requested / run / succeeded). The human summary
 prints the same.
 
+### Proving assertions can fail
+
+The lint reads a Journey; `journey verify --mutate` runs it. An assertion is evidence only if it
+**fails** when the outcome is absent, so the proof replays the Journey once as recorded (it must
+pass), then once per mutation, and checks that each mutation breaks the assertion paired with it:
+
+```bash
+jevitate journey verify checkout --mutate                 # one line per assertion, then a summary
+jevitate journey verify checkout --mutate --json          # the full report
+jevitate journey verify checkout --mutate --env staging --param sku=A1 --fixtures reset.json
+```
+
+| Mutation | What the replay does | Derived for |
+|---|---|---|
+| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood | each write step (the lint's rule) |
+| `block-write:<n>` | aborts the write requests step n sends, from its start until the network settled after it | each write step |
+| `stale-value:<n>` | types `""` into fill step n | each fill whose value a `valueEquals`/`textIncludes` checks |
+
+A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`; the
+**last** write step's mutations are also paired with every end-state check; a `stale-value` is also
+paired with every assertion that checks the typed value. An explicit no-claim `expect` (`count … min
+0`) claims nothing and is never paired. Each assertion gets one verdict:
+
+| Verdict | Meaning |
+|---|---|
+| `sensitive` | a paired mutation made the replay fail AT this assertion, with nothing failing before the mutated step (`provedBy` names it) |
+| `insensitive` | the replay still passed under a paired mutation: the assertion is vacuous |
+| `cascade` | the replay failed somewhere else first; never counted as proof |
+| `not-applied` | `block-write` blocked nothing the step recorded (its own write was not aborted) |
+| `error` | the mutated replay could not run (or the base replay failed) |
+| `unpaired` | no mutation is paired with it |
+
+Exit codes: `0` every paired assertion is sensitive · `1` any is insensitive · `2` inconclusive (the
+unmutated replay failed, every mutation errored, nothing was paired, or only cascades and
+not-applied are left) · `64` usage (`journey verify` without `--mutate`, an unknown id, bad params).
+The JSON report carries `journeyId`, `journeyHash` (the Journey's content hash: the proof is bound
+to exactly that content), `base.outcome`, each mutation's `outcome`, `failedSites` and
+`blockedWrites`, each assertion's `site`, `check`, `verdict` and `provedBy`, and `summary` counts.
+
+Pin a pairing the derivation would not make with `metadata.mutationPairs` — the assertion `check`
+(`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail when `mustFailWhen`
+(`skip:<n|anchor>`, `block-write:<n|anchor>`, `stale-value:<n|anchor>`; [anchors](#explore-from-a-journey-step-anchors-and-campaigns) by name)
+is applied. A pair naming a site, step or anchor the Journey does not have is refused when the
+Journey loads.
+
+```json
+"mutationPairs": [{ "check": "end-state:0", "mustFailWhen": "skip:publish" }]
+```
+
+Safe by construction: a mutation only leaves a step's action out, types an empty value, or
+**aborts** the app's own write requests (the same first-party rule as a read-only find-out run;
+a write navigation is aborted too, never answered). It never sends, fabricates or answers a
+request. Every replay starts fresh, with the same fixtures and hooks as `journey run`; when the
+app keeps state between sessions, reset it with `--fixtures`/`--before`, or the replay after a
+blocked save can still find the base replay's saved data.
+
 ## Record a flow by demonstration
 
 ```bash
@@ -141,7 +197,8 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
 ```
 
 - `journey lint checkout` (or `promote`'s own gate) reports assertions that cannot prove the
-  outcome before a Journey is promoted.
+  outcome before a Journey is promoted; `journey verify checkout --mutate` proves each one can fail
+  by replaying the Journey with each write skipped or blocked ([details](#proving-assertions-can-fail)).
 - `--self-heal fail-closed` (the default) stops and quarantines on a broken step. `hybrid` and
   `full` re-learn only the broken step and need `--real` (or `--fake-ai`). Write and irreversible
   steps are never auto-healed in any mode.
@@ -186,6 +243,7 @@ key is refused when the file is read.
 | `successCriteria` | no | `[{ "description", "check"? }]`: the end state that shows it worked; `check` is any [assertion](./success-checks.md) that checks it in code |
 | `parameters` | no | `[{ "name", "description"?, "secret"? }]`: its inputs. `secret: true` marks a value (a password, a token) that is redacted wherever it is shown. A declared parameter never carries a value |
 | `anchors` | no | `[{ "name", "step", "description"?, "probes"? }]`: named states worth exploring from — the state after `step` top-level steps (1-based). `name` is letters, digits, `.`, `_`, `-` and never all digits; `probes` are suggested adversarial attacks there. See [Explore from a Journey step](#explore-from-a-journey-step-anchors-and-campaigns) |
+| `mutationPairs` | no | `[{ "check", "mustFailWhen" }]`: declared negative-proof pairs for `journey verify --mutate` — the assertion at `check` (`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail under `mustFailWhen` (`skip:`/`block-write:`/`stale-value:` + a step number or anchor). An unknown site, step or anchor is refused at load. See [Proving assertions can fail](#proving-assertions-can-fail) |
 
 `recording` holds `version`, `site` (the origin it runs on), optional `intent`, and `pages[]`, each
 with `url` and `steps[]`. Every step is `{ "step": {…}, … }`: the action (`navigate`, `click`,

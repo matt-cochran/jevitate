@@ -5,11 +5,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
+import type { Page } from "playwright";
 import { ProfileManager } from "@jevitate/daemon";
 import { FsJourneyStore, JourneySchema, type Journey, type JourneyNetworkCheck } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { BrowseTheWeb, CastActor, type Actor } from "@jevitate/screenplay";
 import { buildProgram } from "./program.js";
-import { useSkippingTime } from "../../explore/src/testkit.js";
+import { JourneyOutcomeChecks } from "./journey-network-checks.js";
+import { useSkippingTime, withSession } from "../../explore/src/testkit.js";
 
 // #304: Node and page time skip idle waits; assertions unchanged.
 useSkippingTime({ per: "all" });
@@ -118,4 +121,65 @@ describe("journey run evaluates the Journey's network checks over its replay (#3
     (bad.metadata as unknown as { networkChecks: unknown[] }).networkChecks = [{ kind: "requestMade", method: "POST" }];
     expect(JourneySchema.safeParse(bad).success).toBe(false);
   });
+});
+
+describe("JourneyOutcomeChecks.lastFailures reports the failed assertion sites (#402, served)", () => {
+  function withPage<T>(body: (page: Page, actor: Actor) => Promise<T>): Promise<T> {
+    return withSession(
+      "netchecks-lastfailures",
+      async (session) => {
+        const actor = CastActor.named("test").whoCan(new BrowseTheWeb(session, [origin]));
+        return body(session.page, actor);
+      },
+      origin,
+    );
+  }
+
+  /** The existing fixture with a step-request expectation on its second (1-based) step. */
+  function journeyWithStepRequests(id: string, requests: JourneyNetworkCheck[]): Journey {
+    const j = journey(id, []);
+    const steps = j.recording.pages[0].steps;
+    steps[1] = { ...steps[1], expectRequests: requests };
+    return j;
+  }
+
+  it("an unmet step-request check is reported as a step-request failure with its 1-based step and checkIndex", async () => {
+    await withPage(async (page, actor) => {
+      const checks = new JourneyOutcomeChecks(
+        page,
+        journeyWithStepRequests("last-failures-step", [{ kind: "requestMade", method: "POST", pathGlob: "/api/publish" }]),
+      );
+      await checks.run(actor, async () => {
+        await page.goto(origin);
+        return { outcome: "ok", output: null };
+      });
+
+      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String) }]);
+    });
+  }, 120_000);
+
+  it("an unmet end-state check is reported as an end-state failure with its index", async () => {
+    await withPage(async (page, actor) => {
+      const checks = new JourneyOutcomeChecks(page, journey("last-failures-end", [{ kind: "requestMade", method: "POST", pathGlob: "/api/publish" }]));
+      await checks.run(actor, async () => {
+        await page.goto(origin);
+        return { outcome: "ok", output: null };
+      });
+
+      expect(checks.lastFailures).toEqual([{ where: "end-state", index: 0, detail: expect.any(String) }]);
+    });
+  }, 120_000);
+
+  it("all checks met leaves lastFailures empty", async () => {
+    await withPage(async (page, actor) => {
+      const checks = new JourneyOutcomeChecks(page, journeyWithStepRequests("last-failures-met", [{ kind: "requestMade", method: "POST", pathGlob: "/api/save" }]));
+      await checks.run(actor, async () => {
+        await page.goto(origin);
+        await page.evaluate(() => fetch("/api/save", { method: "POST" }));
+        return { outcome: "ok", output: null };
+      });
+
+      expect(checks.lastFailures).toEqual([]);
+    });
+  }, 120_000);
 });

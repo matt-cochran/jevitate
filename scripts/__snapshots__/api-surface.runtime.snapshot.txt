@@ -655,7 +655,7 @@
   stylesOf: function
   textIncludesCI: function
 
-# @jevitate/journey (38 exports)
+# @jevitate/journey (46 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
@@ -671,6 +671,8 @@
   SECRET_PARAM_NAME_RE: object
   SWEEP_MODES: array
   applyAnnotationDraft: function
+  assertionSiteKey: function
+  classifyMutation: function
   deriveParamSchema: function
   describeStep: function
   flatJourneySteps: function
@@ -685,8 +687,14 @@
   journeyPrefix: function
   journeyRunParams: function
   journeyStepCount: function
+  journeyWriteSteps: function
+  judgeAssertions: function
   lintJourney: function
   listJourneyAnchors: function
+  mutationPairIssues: function
+  mutationProofVerdict: function
+  mutationReplay: function
+  planJourneyMutations: function
   prefixLandingPath: function
   resolveJourneyStep: function
   secretParamNames: function

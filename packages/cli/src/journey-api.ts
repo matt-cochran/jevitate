@@ -8,7 +8,9 @@ import { artifactStamp } from "./mission-journal.js";
 import { logsDirFor } from "./project-dir.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
-import { ReplayDeltas, replayDeltaSummary, type ReplayDeltaSummary } from "@jevitate/explore";
+import { ReadOnlyGuard, ReplayDeltas, monitorFor, replayDeltaSummary, type BlockedWrite, type ReplayDeltaSummary } from "@jevitate/explore";
+import { writeClassifier } from "@jevitate/recording";
+import type { Page } from "playwright";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { SecretPixelMask, maskingPort } from "./demo-capture.js";
 import { RunScreenshots, composeObservers, screenshotObserver, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
@@ -16,7 +18,7 @@ import { JourneyRunner, type JourneyRunResult, type SelfHealer, type SiteGateDep
 import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
-import { JourneyOutcomeChecks } from "./journey-network-checks.js";
+import { JourneyOutcomeChecks, type OutcomeCheckFailure } from "./journey-network-checks.js";
 
 /**
  * Distinct from `@jevitate/journey`'s `ParamValidationError` so CLI/API callers
@@ -137,6 +139,37 @@ export interface RunJourneyProgrammaticallyOptions {
 }
 
 /**
+ * #402: how a mutation-proof replay (`journey verify --mutate`) differs from `journey run` — a
+ * separate argument, never a surface option: no other caller passes it.
+ */
+export interface MutationReplayOptions {
+  /**
+   * #402 `journey verify --mutate`: replay a MUTATED copy of the Journey. Applied after params are
+   * validated against the stored Journey (a mutation may stop a step reading a param), and never to
+   * an anchored prefix. Indices must be kept: a mutation changes a step, never removes one.
+   */
+  mutateJourney?: (journey: Journey) => Journey;
+  /** #402: leave this flat step (0-based) out of the replay — `RecordingInterpreter`'s `skipStep`. */
+  skipStep?: (index: number) => boolean;
+  /**
+   * #402: ABORT the write requests (the #110 classifier, first-party only — `ReadOnlyGuard`) that
+   * start while this flat step (0-based) runs, until the network settles after it. Never answered,
+   * never sent; what was blocked comes back as `blockedWrites`.
+   */
+  blockWritesAtStep?: number;
+  /** #402: also return the outcome checks' structured failures (`outcomeFailures`). */
+  structuredFailures?: boolean;
+}
+
+/** #402: what a mutation-proof replay returns beyond `journey run`'s result. */
+export interface MutationReplayFields {
+  /** The step-request / end-state checks that failed (`structuredFailures`). */
+  outcomeFailures?: OutcomeCheckFailure[];
+  /** The writes aborted in `blockWritesAtStep`'s window. */
+  blockedWrites?: BlockedWrite[];
+}
+
+/**
  * #246: a secret parameter's value (declared `secret: true`, or a credential-like name) never comes
  * back in a run's output — the interpreter's vars start as the params, so the value is masked there.
  */
@@ -247,7 +280,8 @@ export async function promoteJourney(dir: string, id: string, opts: { acceptWeak
  */
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary } & Partial<ScreenshotsResult>> {
+  mutation: MutationReplayOptions = {},
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary } & Partial<ScreenshotsResult> & MutationReplayFields> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -275,6 +309,8 @@ export async function runJourneyProgrammatically(
   // the cost (or risk) of opening a browser.
   const inputParams = journey === full ? opts.params : prefixParams(full, journey, opts.params);
   validateParams(deriveParamSchema(journey.recording), inputParams);
+  // #402: the mutated copy replays (and is judged); the stored Journey still names, redacts and gates.
+  const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
 
   const policy = opts.policy ?? safeRunPolicy();
 
@@ -341,37 +377,45 @@ export async function runJourneyProgrammatically(
       const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
       // #322/#400: a full replay (never an anchored prefix) must also satisfy the Journey's end state
       // and each step's request expectations.
-      const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? journey : undefined, { secrets });
+      const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, { secrets });
+      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins);
       const observer = composeObservers(
         outcomeChecks.observer(),
+        blocker?.observer,
         replayDeltas?.observer(),
         opts.observer,
         shots === undefined ? undefined : screenshotObserver(shots, (a) => a.ability(BrowseTheWebToken).session.page, whatOf),
       );
+      const skipStep = mutation.skipStep;
       const interpreter =
         opts.interpreter ??
-        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined
+        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && skipStep === undefined
           ? new RecordingInterpreter()
-          : new RecordingInterpreter({ observer }));
+          : new RecordingInterpreter({ observer, ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }) }));
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer);
       let result: JourneyRunResult;
       try {
         result = redactSecretParams(
-          await outcomeChecks.run(actor, () => runner.run({ journey, params, policy })),
+          await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params, policy })),
           journey,
           params,
         );
       } finally {
         await gate.done();
+        await blocker?.guard.disarm();
       }
+      const mutationFields: MutationReplayFields = {
+        ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretParams([...outcomeChecks.lastFailures], journey, params) } : {}),
+        ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
+      };
       const shotFields = shots === undefined ? {} : await shots.finish();
       const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretParams(replayDeltaSummary(replayDeltas), journey, params) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
-      if (fx === undefined) return { ...result, ...videos, ...shotFields, ...deltaFields };
+      if (fx === undefined) return { ...result, ...videos, ...shotFields, ...deltaFields, ...mutationFields };
       await fx.restore();
       // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
-      return { ...result, ...videos, ...shotFields, ...deltaFields, fixtures: redactSecretParams(fx.record(), journey, params) };
+      return { ...result, ...videos, ...shotFields, ...deltaFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
     } finally {
       await closeSession();
     }
@@ -382,6 +426,37 @@ export async function runJourneyProgrammatically(
   } finally {
     await fx?.restore();
   }
+}
+
+/** How long one blocked step's window stays open for the writes its action triggers (network settle). */
+const BLOCK_WINDOW_SETTLE_MS = 5_000;
+
+/**
+ * #402 block-write: a `ReadOnlyGuard` armed on the page whose action window is ONLY the given step —
+ * opened as it begins, closed once the network settled after it. Every held write is aborted (a
+ * write navigation too: never answered with a status that could read as a success).
+ */
+async function stepWriteBlocker(page: Page, index: number, allowedOrigins: readonly string[]): Promise<{ guard: ReadOnlyGuard; observer: StepObserver }> {
+  const guard = new ReadOnlyGuard(writeClassifier({}), { allowlist: [...allowedOrigins], navigationWrites: "abort" });
+  await guard.arm(page);
+  const monitor = monitorFor(page);
+  await monitor.instrument();
+  return {
+    guard,
+    observer: {
+      beforeStep: async ({ index: i }) => {
+        if (i === index) guard.beginAction();
+      },
+      afterStep: async ({ index: i }) => {
+        if (i !== index) return;
+        try {
+          await monitor.waitSettled({ ceilingMs: BLOCK_WINDOW_SETTLE_MS });
+        } finally {
+          guard.settled();
+        }
+      },
+    },
+  };
 }
 
 /** `err` with every secret (and its URL-encoded forms) masked in its message and stack — same object, same class. */
