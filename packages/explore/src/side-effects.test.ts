@@ -123,12 +123,13 @@ function fakeMonitor(): { monitor: PageMonitor; finish: (r: CapturedRequest) => 
 }
 
 const PAGE = { controlNames: ["Run the simulation →"], alerts: [] as string[] };
-const post = (status: number | null, failed = false): CapturedRequest => ({
+const post = (status: number | null, failed = false, rpcStatus?: CapturedRequest["rpcStatus"]): CapturedRequest => ({
   method: "POST",
   url: "http://x/api/simulations",
   path: "/api/simulations",
   status,
   failed,
+  ...(rpcStatus === undefined ? {} : { rpcStatus }),
 });
 
 describe("SideEffectGuard (#92)", () => {
@@ -164,7 +165,7 @@ describe("SideEffectGuard (#92)", () => {
     const { monitor, finish } = fakeMonitor();
     const g = new SideEffectGuard(monitor);
     g.beginClick("k", "Run", "/a", 0);
-    finish(post(500));
+    finish(post(422));
     g.settle();
     expect(g.check("k", "/a", PAGE)).toEqual({ refuse: false });
 
@@ -174,6 +175,42 @@ describe("SideEffectGuard (#92)", () => {
     expect(g.check("k2", "/a", PAGE).refuse).toBe(true);
     expect(g.check("k2", "/a", { controlNames: ["Try again"], alerts: [] })).toEqual({ refuse: false });
     expect(g.check("k2", "/a", { controlNames: [], alerts: ["Something went wrong"] })).toEqual({ refuse: false });
+  });
+
+  it("refuses a repeat after a 5xx write when the page offers no retry and shows no error (#404)", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("k", "Run", "/a", 0);
+    finish(post(500));
+    g.settle();
+    expect(g.check("k", "/a", PAGE).refuse).toBe(true);
+  });
+
+  it("allows a repeat after a 5xx write when the page offers a retry (#404)", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("k", "Run", "/a", 0);
+    finish(post(500));
+    g.settle();
+    expect(g.check("k", "/a", { controlNames: ["Try again"], alerts: [] })).toEqual({ refuse: false });
+  });
+
+  it("refuses a repeat after a write failed without a response (#404)", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("k", "Run", "/a", 0);
+    finish(post(null, true));
+    g.settle();
+    expect(g.check("k", "/a", PAGE).refuse).toBe(true);
+  });
+
+  it("refuses a repeat after an HTTP 200 whose gRPC RPC failed internally (#404)", () => {
+    const { monitor, finish } = fakeMonitor();
+    const g = new SideEffectGuard(monitor);
+    g.beginClick("k", "Run", "/a", 0);
+    finish(post(200, false, { protocol: "grpc-web", code: 13, name: "internal" }));
+    g.settle();
+    expect(g.check("k", "/a", PAGE).refuse).toBe(true);
   });
 
   it("an input change clears the guard (a repeat now sends something new)", () => {

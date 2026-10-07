@@ -20,7 +20,9 @@ import { clock } from "@jevitate/domain";
  *  - it went through (a response below 400, or an outcome unknown because the page navigated away
  *    from it — the server may well have run it),
  * unless the page shows the action can be retried (a visible "Retry"/"Try again" control, or an
- * error alert) or every write it fired was rejected (4xx/5xx, or failed without a response).
+ * error alert) or every write it fired was rejected (4xx). A 5xx, or a write that failed with no
+ * response, is outcome-unknown — the server may have committed it — so it lifts the guard only when
+ * the page offers a retry or shows an error (#404).
  * A write is classified by `writeClassifier` (#110): a gRPC-web/Connect read (`POST /pkg.Svc/GetX`)
  * is a read, never a guarded side effect.
  * Changing an input makes a new request, so it lifts the guard — but only when the submitted VALUES
@@ -142,7 +144,7 @@ export interface FiredWrite {
   readonly path: string;
   /** The response status; null when still in flight or it ended without a response. */
   readonly status: number | null;
-  /** Rejected by the server (>= 400) or failed without a response. */
+  /** Refused with a 4xx: retrying is fair. A 5xx or no response is outcome-unknown (#404). */
   readonly rejected: boolean;
 }
 
@@ -334,8 +336,11 @@ export class SideEffectGuard {
     const done: FiredWrite[] = requests
       .filter((r: CapturedRequest) => this.#write(r) && this.#ours(r))
       .map((r) => {
-        const status = effectiveStatus(r); // #378: a 200 whose gRPC-web/Connect RPC failed is rejected
-        return { method: r.method.toUpperCase(), path: this.#name(r.url), status, rejected: (status !== null && status >= 400) || (status === null && r.failed) };
+        const status = effectiveStatus(r); // #378: a 200 carrying a failed RPC has that RPC's HTTP equivalent
+        // #404: only a 4xx effective status is rejected; a 5xx or a write with no response is
+        // outcome-unknown (the server may have committed it), so it does not lift the guard alone.
+        const rejected = status !== null && status >= 400 && status < 500;
+        return { method: r.method.toUpperCase(), path: this.#name(r.url), status, rejected };
       });
     const inflight = unfinished.filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r));
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
@@ -421,7 +426,9 @@ export class SideEffectGuard {
     // Repeating a sign-in creates nothing (a retry after "Back to sign in", a 2FA restart).
     if (SIGN_IN_NAME.test(f.label)) return { refuse: false };
     const what = f.writes.map(describeWrite).join(", ");
-    // Every write it fired was rejected: the side effect did not land, so trying again is fair.
+    // Every write it fired was rejected with a 4xx: the input was refused, so trying again is fair.
+    // A 5xx or a write with no response is outcome-unknown (#404): it may have committed, so only a
+    // retry control or an error alert lifts the guard for it.
     if (f.writes.every((w) => w.rejected)) return { refuse: false };
     const retryOffered =
       page.controlNames.some((n) => RETRY_NAME.test(n)) || page.alerts.some((a) => FAILURE_ALERT.test(a));
