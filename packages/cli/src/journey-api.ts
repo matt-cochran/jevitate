@@ -16,7 +16,7 @@ import { JourneyRunner, type JourneyRunResult, type SelfHealer, type SiteGateDep
 import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
-import { withNetworkChecks } from "./journey-network-checks.js";
+import { JourneyOutcomeChecks } from "./journey-network-checks.js";
 
 /**
  * Distinct from `@jevitate/journey`'s `ParamValidationError` so CLI/API callers
@@ -273,19 +273,25 @@ export async function runJourneyProgrammatically(
         ...gate.abilities,
       );
       const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
+      // #322/#400: a full replay (never an anchored prefix) must also satisfy the Journey's end state
+      // and each step's request expectations.
+      const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? journey : undefined, { secrets });
       const observer = composeObservers(
+        outcomeChecks.observer(),
         replayDeltas?.observer(),
         opts.observer,
         shots === undefined ? undefined : screenshotObserver(shots, (a) => a.ability(BrowseTheWebToken).session.page, whatOf),
       );
-      const interpreter = opts.interpreter ?? (opts.observer === undefined && shots === undefined && replayDeltas === undefined ? new RecordingInterpreter() : new RecordingInterpreter({ observer }));
+      const interpreter =
+        opts.interpreter ??
+        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined
+          ? new RecordingInterpreter()
+          : new RecordingInterpreter({ observer }));
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer);
       let result: JourneyRunResult;
       try {
-        // #322: a full replay (never an anchored prefix) must also satisfy the Journey's network checks.
-        const networkChecks = journey === full ? journey.metadata.networkChecks : undefined;
         result = redactSecretParams(
-          await withNetworkChecks(session.page, networkChecks, () => runner.run({ journey, params, policy })),
+          await outcomeChecks.run(actor, () => runner.run({ journey, params, policy })),
           journey,
           params,
         );

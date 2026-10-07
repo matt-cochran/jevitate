@@ -15,22 +15,58 @@ jevitate journey promote checkout        # a human approval gate: unpromoted Jou
 jevitate journey run checkout
 ```
 
-The authored Journey carries its `--success` check as its final assertion, so a replay fails when
-the flow stops reaching its goal. It is written unpromoted: promotion is always a deliberate human
+The authored Journey carries its `--success` checks as its end state, so a replay fails when the
+flow stops reaching its goal. It is written unpromoted: promotion is always a deliberate human
 act. `--takes <n>` corroborates the flow over several takes.
 
-`--success` is repeatable (every check must hold) and takes the kinds `explore --success` takes,
-except `reloadThen` (below). A state-changing job with no stable on-page text can use its request as the
-check, for example `--success 'requestMade:POST /api.v1.Settings/Save'` or
-`--success 'responseStatus:POST /api.v1.Settings/Save=2xx'`. A page check becomes the Journey's last
-`assert` step. A network check is kept in `metadata.networkChecks`, and `journey run` and
-`source run` evaluate it over the requests that replay itself sent, after its last step. A replay
-whose steps all pass but whose request never went out, or got the wrong status, fails with the
-check named.
+`--success` is repeatable (every check must hold) and takes every kind `explore --success` takes:
+page checks (`textIncludes`, `valueEquals`, `count`, `attr`, `flashed`, …), `reloadThen:<check>`
+(persistence), `requestMade` and `responseStatus`. Pass the job's outcome, not just the page it
+ends on: a state-changing job checks its write and what persisted, for example
+`--success 'responseStatus:POST /portal.v1.Sites/PublishSiteEdits=2xx'
+--success 'reloadThen:textIncludes:testId=live|published'`.
 
-A `reloadThen:` check is refused before any browser opens (exit 64, `E_EXPLORE_ASSERTION`): a
-Journey has no reload step to re-check after. Author with its inner check (`reloadThen:visible:…`
-becomes `visible:…`) and prove persistence with `jevitate explore --success 'reloadThen:…'`.
+### Outcome assertions in a Journey
+
+- **End state** (`metadata.endState`): every `--success` check, in the order given, kept in the
+  same shape the goal run judged it. `journey run` and `source run` judge them after the last step
+  with the goal run's own evaluator: page checks on the final page, then one reload for the
+  `reloadThen` checks, then network checks over the requests the replay itself sent. A replay
+  whose steps all pass but whose outcome is absent fails, naming each check that did not hold
+  (`success check not met after the last step: …`).
+- **A step's request expectation** (`expectRequests` on the recorded step): a write the step sent
+  during discovery (a non-read request answered 2xx/3xx) becomes
+  `responseStatus:<METHOD> <path>=2xx`, with id segments as `*`. It is judged over the requests
+  the replay sent from the moment that step began, so it pairs the check with the step that
+  causes it (`step request check not met: step 3 (click …): …`).
+- **A step's `expect`** comes from what the step changed: the navigation it caused
+  (`urlIncludes`), the value a fill typed (`valueEquals`, for a constant value), or, with
+  `--action-deltas`, the element or text a `relevant-change` step added. A step with nothing to
+  claim gets the explicit "no claim" `count … min 0`. Authoring never writes `visible` of the
+  step's own target: it holds before and after the click, so it proves nothing.
+
+```json
+{
+  "metadata": {
+    "id": "publish",
+    "endState": [
+      { "kind": "responseStatus", "method": "POST", "pathGlob": "/portal.v1.Sites/PublishSiteEdits", "status": { "class": 2 } },
+      { "kind": "reloadThen", "assertion": { "kind": "textIncludes", "target": { "testId": "live" }, "text": "published" } }
+    ]
+  },
+  "recording": { "pages": [{ "url": "/editor", "steps": [
+    { "step": { "kind": "click", "target": { "testId": "publish" },
+                "expect": { "kind": "visible", "target": { "text": "Your site is live", "textMatch": "contains" } } },
+      "expectRequests": [
+        { "kind": "responseStatus", "method": "POST", "pathGlob": "/portal.v1.Sites/PublishSiteEdits", "status": { "class": 2 } }
+      ] }
+  ] }] }
+}
+```
+
+Both fields are optional. A Journey authored before them (a trailing `assert` step, and network
+checks in `metadata.networkChecks`) loads and runs exactly as before: its `networkChecks` are
+judged with the end state.
 
 Each take (the discovery and every corroborating one) is a full `explore --strategy goal` run, so
 the author command takes the same run-shaping flags: `--secret`, `--secret-field` (including

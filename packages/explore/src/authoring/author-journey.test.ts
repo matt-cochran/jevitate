@@ -1,7 +1,9 @@
 import { expect, test, vi } from "vitest";
 import type { Recording } from "@jevitate/recording";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
+import { JourneySchema, isOwnTargetVisible } from "@jevitate/journey";
 import { authorJourney } from "./author-journey.js";
+import type { SuccessCheck } from "../success-checks.js";
 
 // `recordingWith` is referenced inside the hoisted `vi.mock` factory, so it must itself be hoisted
 // (a plain top-level const would not be initialized when the hoisted mock factory runs).
@@ -64,7 +66,7 @@ test("single-take authoring (takes: 1) produces a fully-materialized, replayable
   }
 });
 
-test("#118: the authored Journey's final step asserts the independent success condition", async () => {
+test("#118/#400: the authored Journey's end state asserts the independent success condition", async () => {
   const result = await authorJourney({
     goal: "search for widgets",
     successAssertion: { kind: "visible", target: { testId: "results" } },
@@ -80,10 +82,11 @@ test("#118: the authored Journey's final step asserts the independent success co
 
   expect(result.outcome).toBe("authored");
   if (result.outcome !== "authored") throw new Error("unreachable");
-  const pages = result.journey.recording.pages;
-  const lastPage = pages[pages.length - 1];
-  const lastStep = lastPage.steps[lastPage.steps.length - 1].step;
-  expect(lastStep).toEqual({ kind: "assert", check: { kind: "visible", target: { testId: "results" } } });
+  expect(result.journey.metadata.endState).toEqual([{ kind: "page", assertion: { kind: "visible", target: { testId: "results" } } }]);
+  // #400: the check lives in the end state, not as a trailing assert step too.
+  const steps = result.journey.recording.pages.flatMap((p) => p.steps.map((s) => s.step.kind));
+  expect(steps).not.toContain("assert");
+  expect(JourneySchema.safeParse(result.journey).success).toBe(true);
 });
 
 test("returns not-reached when the discovery mission does not succeed", async () => {
@@ -150,13 +153,21 @@ test("multi-take authoring (takes: 2) promotes a value that differs across takes
   if (fillStep.kind === "fill") expect(fillStep.value).toEqual({ var: expect.any(String) });
 });
 
-test("#322: network success checks author a Journey — kept as networkChecks, page checks asserted in order", async () => {
+test("#400: every --success check, of every kind, becomes an end-state assertion, in order", async () => {
+  const successChecks: SuccessCheck[] = [
+    { kind: "page", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "Published" } },
+    { kind: "page", assertion: { kind: "valueEquals", target: { label: "Title" }, value: "Hi" } },
+    { kind: "page", assertion: { kind: "count", target: { css: "li" }, min: 2 } },
+    { kind: "page", assertion: { kind: "attr", target: { testId: "site" }, name: "data-state", value: "live" } },
+    { kind: "page", assertion: { kind: "flashed", target: { testId: "status" }, className: "toast" } },
+    { kind: "reloadThen", assertion: { kind: "textIncludes", target: { css: "main" }, text: "Hello" } },
+    { kind: "requestMade", method: "POST", pathGlob: "/api.v1.Settings/Save" },
+    { kind: "responseStatus", method: "POST", pathGlob: "/api.v1.Settings/Save", status: { class: 2 } },
+  ];
   const result = await authorJourney({
     goal: "save the settings",
-    successChecks: [
-      { kind: "requestMade", method: "POST", pathGlob: "/api.v1.Settings/Save" },
-      { kind: "responseStatus", method: "POST", pathGlob: "/api.v1.Settings/Save", status: { class: 2 } },
-    ],
+    successAssertion: { kind: "visible", target: { testId: "results" } },
+    successChecks,
     allowlist: ["https://example.test"],
     startUrl: "https://example.test/search",
     actor: {} as never,
@@ -166,35 +177,13 @@ test("#322: network success checks author a Journey — kept as networkChecks, p
     journeyId: "save-settings",
     journeyName: "Save settings",
   });
-  expect(result.outcome).toBe("authored");
   if (result.outcome !== "authored") throw new Error("unreachable");
-  expect(result.journey.metadata.networkChecks).toEqual([
-    { kind: "requestMade", method: "POST", pathGlob: "/api.v1.Settings/Save" },
-    { kind: "responseStatus", method: "POST", pathGlob: "/api.v1.Settings/Save", status: { class: 2 } },
-  ]);
-  // No page check: no assert step is appended.
-  const steps = result.journey.recording.pages.flatMap((p) => p.steps.map((s) => s.step.kind));
-  expect(steps).not.toContain("assert");
-
-  const both = await authorJourney({
-    goal: "search for widgets",
-    successAssertion: { kind: "visible", target: { testId: "results" } },
-    successChecks: [{ kind: "page", assertion: { kind: "urlIncludes", text: "/search" } }, { kind: "requestMade", method: "GET", pathGlob: "/api/search" }],
-    allowlist: ["https://example.test"],
-    startUrl: "https://example.test/search",
-    actor: {} as never,
-    judgment: fakeJudgment,
-    generation: fakeGeneration,
-    journeyId: "search",
-    journeyName: "Search",
-  });
-  if (both.outcome !== "authored") throw new Error("unreachable");
-  const asserts = both.journey.recording.pages.flatMap((p) => p.steps.map((s) => s.step)).filter((s) => s.kind === "assert");
-  expect(asserts.map((s) => (s.kind === "assert" ? s.check.kind : null))).toEqual(["visible", "urlIncludes"]);
-  expect(both.journey.metadata.networkChecks).toEqual([{ kind: "requestMade", method: "GET", pathGlob: "/api/search" }]);
+  expect(result.journey.metadata.endState).toEqual([{ kind: "page", assertion: { kind: "visible", target: { testId: "results" } } }, ...successChecks]);
+  expect(result.journey.metadata.networkChecks).toBeUndefined();
+  expect(JourneySchema.safeParse(result.journey).success).toBe(true);
 });
 
-test("#322: reloadThen is refused, and a success check is required", async () => {
+test("#322: a success check is required", async () => {
   const base = {
     goal: "save",
     allowlist: ["https://example.test"],
@@ -205,10 +194,47 @@ test("#322: reloadThen is refused, and a success check is required", async () =>
     journeyId: "j",
     journeyName: "J",
   };
-  await expect(authorJourney({ ...base, successChecks: [{ kind: "reloadThen", assertion: { kind: "visible", target: { testId: "x" } } }] })).rejects.toThrow(
-    /reloadThen:visible:testId=x can't be authored into a Journey yet/,
-  );
   await expect(authorJourney(base)).rejects.toThrow(/a success check is required/);
+});
+
+test("#400: each step's expect is derived from what it changed — the write's status, the added text — never its own target", async () => {
+  const target = { testId: "publish" };
+  const discovered: Recording = {
+    version: "1.0",
+    site: "https://example.test",
+    pages: [
+      {
+        url: "/editor",
+        steps: [
+          { step: { kind: "navigate", url: "/editor", expect: { kind: "urlIncludes", text: "/editor" } } },
+          { step: { kind: "click", target: { testId: "preview" }, expect: { kind: "visible", target: { testId: "preview" } } }, delta: { verdict: "relevant-change", why: "x", changes: ["+ text: Preview updated"], requests: ["POST /portal.v1.OwnerSiteEditService/PreviewSiteEdits → 200"], overheadMs: 1 } },
+          { step: { kind: "click", target, expect: { kind: "visible", target } }, delta: { verdict: "inconclusive", why: "a request was sent but nothing visible changed", changes: [], requests: ["POST /portal.v1.OwnerSiteEditService/PublishSiteEdits → 200"], overheadMs: 1 } },
+        ],
+      },
+    ],
+  };
+  const result = await authorJourney({
+    goal: "publish the edit",
+    successChecks: [{ kind: "reloadThen", assertion: { kind: "textIncludes", target: { css: "main" }, text: "Hello" } }],
+    allowlist: ["https://example.test"],
+    startUrl: "https://example.test/editor",
+    runTake: async () => take("succeeded", discovered),
+    journeyId: "publish",
+    journeyName: "Publish",
+  });
+  if (result.outcome !== "authored") throw new Error("unreachable");
+  const steps = result.journey.recording.pages[0].steps;
+  expect(steps[1]).toMatchObject({
+    step: { expect: { kind: "visible", target: { text: "Preview updated", textMatch: "contains" } } },
+    expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/portal.v1.OwnerSiteEditService/PreviewSiteEdits", status: { class: 2 } }],
+  });
+  expect(steps[2]).toMatchObject({
+    step: { expect: { kind: "count", target, min: 0 } },
+    expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/portal.v1.OwnerSiteEditService/PublishSiteEdits", status: { class: 2 } }],
+  });
+  for (const s of steps) expect(isOwnTargetVisible(s.step)).toBe(false);
+  expect(result.journey.metadata.endState).toEqual([{ kind: "reloadThen", assertion: { kind: "textIncludes", target: { css: "main" }, text: "Hello" } }]);
+  expect(JourneySchema.safeParse(result.journey).success).toBe(true);
 });
 
 const take = (outcome: string, recording: Recording, diagnostics: Record<string, unknown> = {}) => ({

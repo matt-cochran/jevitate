@@ -172,7 +172,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (398 exports)
+# @jevitate/explore (400 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -196,6 +196,7 @@
   DEFAULT_COVERAGE_THRESHOLDS: object
   DEFAULT_HANG_REPLAYS: const (number)
   DEFAULT_LONG_POLL_MS: const (number)
+  DEFAULT_ORACLE_SETTLE_MS: const (number)
   DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: const (number)
   DEFAULT_SECRET_COMMAND_ATTEMPTS: const (number)
   DEFAULT_STALL_MS: const (number)
@@ -395,6 +396,7 @@
   endpointOf: function
   errorPageReason: function
   evaluateNetworkCheck: function
+  evaluateOutcomeChecks: function
   exactLiterals: function
   expandBraces: function
   expectedChange: function
@@ -653,7 +655,7 @@
   stylesOf: function
   textIncludesCI: function
 
-# @jevitate/journey (32 exports)
+# @jevitate/journey (36 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
@@ -674,8 +676,12 @@
   flatJourneySteps: function
   formatAnnotationChanges: function
   intentCoverage: function
+  isNoClaimExpect: function
+  isOwnTargetVisible: function
   isSweepMode: function
+  journeyAssertions: function
   journeyBranchPoint: function
+  journeyEndState: function
   journeyPrefix: function
   journeyStepCount: function
   listJourneyAnchors: function
@@ -859,7 +865,7 @@
   rungLocator: function
   validateCandidates: function
 
-# @jevitate/recording (73 exports)
+# @jevitate/recording (76 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -880,7 +886,9 @@
   MAX_OBSERVABLES: const (number)
   MAX_SETTLE_WITHIN_MS: const (number)
   MIN_SETTLE_POLL_MS: const (number)
+  NetworkCheckSchema: object
   OBSERVABLE_NAME_RE: object
+  OutcomeCheckSchema: object
   PostdocDecisionSchema: object
   PostdocDecisionsSchema: object
   READ_RPC_VERB: object
@@ -888,6 +896,7 @@
   STYLE_CHANNELS: array
   STYLE_PROPERTIES: array
   SecretMaterializationError: class
+  StatusSpecSchema: object
   TargetDescriptorSchema: object
   UNKNOWN: const (symbol)
   WRITE_METHODS: object
