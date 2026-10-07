@@ -562,7 +562,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--secret-field <binding>` | goal/usability strategy: '<label\|testId\|type\|id\|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}. A value delivered during the run (an emailed code): '<descriptor>=cmd:<command>' runs the command when the field is typed and types its stdout (needs --allow-secret-cmd) | `[]` |  |  |  |
 | `--settle-ignore <pattern>` | a request URL pattern the target marks as background (never pending work; repeatable, * wildcard) | `[]` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist |  |  |  |  |
-| `--success <spec>` | independent success check (repeatable; all must hold), any explore --success kind but reloadThen, e.g. urlIncludes:/confirmed or 'requestMade:POST /api/save': a page check becomes the Journey's last assert step, a requestMade/responseStatus check is re-checked over every replay's requests | `[]` |  |  |  |
+| `--success <spec>` | independent success check (repeatable; all must hold), any explore --success kind, e.g. urlIncludes:/confirmed, 'reloadThen:textIncludes:css=main\|Saved' or 'responseStatus:POST /api/save=2xx': every check is kept as the Journey's end state and re-checked after every replay's last step | `[]` |  |  |  |
 | `--success-when <when>` | when the --success page checks must hold: final (default; on the final page) \| held (on the final page, or all together at any settled step — a one-time secret, a toast) \| each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final |  |  |  |  |
 | `--takes <n>` | corroborating takes incl. discovery (default 1) | `1` |  |  |  |
 | `--totp <binding>` | goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk | `[]` |  |  |  |
@@ -936,6 +936,28 @@ jevitate journey find [options] <query>
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
+### journey lint
+
+```
+jevitate journey lint [options] <id>
+```
+
+report a Journey's weak assertions (writes without an asserted effect, visibility-only claims, nothing after the last write, …)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--sarif <file>` | also write a SARIF 2.1.0 log here |  |  |  |  |
+
 ### journey list
 
 ```
@@ -967,6 +989,7 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-weak <reason>` | #401: promote a Journey whose assertions cannot prove its outcome, recording the reason |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 

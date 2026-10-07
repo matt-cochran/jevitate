@@ -67,7 +67,8 @@ tool from the CLI), except the few listed below with the reason:
 | `run_journey` | run a promoted Journey: `params`, `storageState`, `env`/`baseUrl`, `headed`/`slowMo`, `recordVideo` → `videoPaths`, `screenshots` → `screenshotPaths`, `viewport`/`device`, `fixtures`, `selfHeal` (+ `real`/`fakeAi`) | `journey run` |
 | `annotate_journey` | draft each step's objective/expected result into a reviewable draft; `approve: true` applies the reviewed draft (refused if the Journey changed) | `journey annotate` (`--approve`) |
 | `demo_journey` | replay a Journey as a narrated demo: `video` (.webm + .vtt) and/or `guide` (.md + screenshots) | `journey demo` |
-| `promote_journey`, `publish_journey` | promote a local Journey; publish one to a registered source | `journey promote`, `journey publish` |
+| `promote_journey`, `publish_journey` | promote a local Journey (refused when its assertions can't prove its outcome; only the CLI's `--accept-weak` waives that); publish one to a registered source | `journey promote`, `journey publish` |
+| `lint_journey` | the assertions that can't prove a Journey's outcome | `journey lint` |
 | `create_demo`, `approve_demo` | demo one aspect on a named, non-production environment as a DRAFT; approve it (renders the final demo, promotes the Journey) | `demo "<aspect>"` / `demo create`, `demo approve` |
 | `author_journey` | explore toward a goal and author an unpromoted Journey from the verified path | `explore-author-journey` |
 | `queue_exploration`, `run_queued_missions`, `get_mission_result` | queue a bounded mission against a promoted target (`goal-based`/`coverage`/`exploratory`/`adversarial`/`feature`; `recordVideo`, `screenshots`, `evidenceVideo`, `persona`), drain the queue once, read its typed result | `mission queue`, `mission run`, `mission result` |
