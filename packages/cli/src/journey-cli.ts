@@ -378,7 +378,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
         } else {
-          emitJson(program, fail("E_JOURNEY_LINT", String(err instanceof Error ? err.message : err)));
+          emitJson(program, fail("E_JOURNEY_LINT_ARGS", String(err instanceof Error ? err.message : err)));
         }
       }
     });
