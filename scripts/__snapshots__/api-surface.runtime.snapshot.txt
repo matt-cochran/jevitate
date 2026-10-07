@@ -655,7 +655,7 @@
   stylesOf: function
   textIncludesCI: function
 
-# @jevitate/journey (37 exports)
+# @jevitate/journey (38 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
@@ -685,6 +685,7 @@
   journeyPrefix: function
   journeyRunParams: function
   journeyStepCount: function
+  lintJourney: function
   listJourneyAnchors: function
   prefixLandingPath: function
   resolveJourneyStep: function
