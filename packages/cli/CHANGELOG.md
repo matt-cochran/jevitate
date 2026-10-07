@@ -27,6 +27,13 @@
   A Journey can pin pairings in `metadata.mutationPairs` (`{ check: "end-state:0", mustFailWhen:
   "skip:publish" }`, anchors by name), validated when it loads.
 - 9395c2c: A Journey's `navigate` URL can take declared parameters (#399), for single-use links such as invitation accept, magic-link sign-in or password reset: `"url": "/accept?token=${inviteToken}"` with `parameters: [{ "name": "inviteToken", "secret": true }]`, run with `journey run --param inviteToken=…` or MCP `run_journey` `params`. A placeholder must name a declared parameter (otherwise the Journey is refused when read) and must come after a literal origin. Its value is percent-encoded as one URL component, and the resolved URL must keep the template's origin. A secret value is redacted from the run's output and errors (including Playwright's navigation error), screenshots, action deltas, annotate/demo evidence, self-heal prompts and `source run`. Steps show it as `<param inviteToken>`.
+- efac084: A Journey step can wait for a long-running job (#409). A step's `expect` (or an `assert` step's
+  `check`) may declare `waitFor: { maxMs, until: "held", progress, stallMs, reload, pollMs }`: replay
+  polls the expectation until it holds or `maxMs` (at most 30 min) passes, reloading between polls
+  with `reload: true`. A declared `progress` signal that neither holds nor changes for `stallMs`
+  (default 30 s) fails the step early as a hang naming it. The run result lists each waited step's
+  actual wait under `waits`; under `journey verify --mutate` the waited claim on a skipped or
+  write-blocked step waits at most its hang threshold. Steps without `waitFor` are unchanged.
 
 ### Patch Changes
 
