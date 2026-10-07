@@ -36,3 +36,16 @@ test("maps a non-succeeded mission to {outcome: 'not-healed'}", async () => {
   });
   expect(result.outcome).toBe("not-healed");
 });
+
+test("#399: the run's secrets reach the re-learn mission (it redacts them from every model prompt)", async () => {
+  const { runGoalBasedMission } = await import("@jevitate/explore");
+  const healer = makeExploreSelfHealer(judgment, generation);
+  const expectedPostcondition: Assertion = { kind: "visible", target: { testId: "next" } };
+  await healer.reLearnStep({
+    actor: {} as any,
+    brokenStep: { kind: "click", target: { testId: "old-button" }, expect: expectedPostcondition },
+    expectedPostcondition,
+    secrets: ["tok-399"],
+  });
+  expect(runGoalBasedMission).toHaveBeenLastCalledWith(expect.objectContaining({ secrets: ["tok-399"] }));
+});

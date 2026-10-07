@@ -1,6 +1,7 @@
 import { z, type ZodType } from "zod";
 import {
   AssertionSchema,
+  navigateUrlParams,
   NetworkCheckSchema,
   OutcomeCheckSchema,
   RecordingSchema,
@@ -208,4 +209,19 @@ export const JourneySchema: ZodType<Journey> = z.object({
       });
     }
   });
+  // #399: a `${name}` in a navigate URL must name a declared parameter (`params` or `parameters`).
+  const declared = new Set([...j.metadata.params, ...(j.metadata.parameters ?? []).map((p) => p.name)]);
+  j.recording.pages.forEach((page, pi) =>
+    page.steps.forEach((rs, si) => {
+      if (rs.step.kind !== "navigate") return;
+      for (const name of navigateUrlParams(rs.step.url)) {
+        if (declared.has(name)) continue;
+        ctx.addIssue({
+          code: "custom",
+          path: ["recording", "pages", pi, "steps", si, "step", "url"],
+          message: `navigate placeholder \${${name}} is not a declared parameter — add it to metadata.parameters (secret: true for a token)`,
+        });
+      }
+    }),
+  );
 });

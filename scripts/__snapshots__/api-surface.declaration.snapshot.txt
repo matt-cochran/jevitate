@@ -1020,7 +1020,7 @@
   VisualAssertion: other
   VisualVerdict: other
 
-# @jevitate/journey (58 exports)
+# @jevitate/journey (59 exports)
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1059,6 +1059,7 @@
   JourneyPrecondition: interface
   journeyPrefix: function
   JourneyRegistry: class
+  journeyRunParams: function
   JourneySchema: variable
   JourneyStatusSpec: type-alias
   journeyStepCount: function
@@ -1353,7 +1354,7 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (141 exports)
+# @jevitate/recording (148 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1383,12 +1384,14 @@
   CONFIDENT_VARIABLE_THRESHOLD: variable
   DeclaredInvariant: interface
   DeniedAsSpec: interface
+  describeNavigateUrl: function
   diffColumns: function
   diffRecordings: function
   DiffResult: interface
   diffTakes: function
   DomObservable: interface
   DomRead: type-alias
+  encodeUrlParamValue: function
   evaluateInvariantExpression: function
   EvalValue: type-alias
   ExpressionEnv: interface
@@ -1421,10 +1424,14 @@
   matchesResponseStatus: function
   MAX_BUDGETS: variable
   MAX_INVARIANTS: variable
+  MAX_NAVIGATE_PARAM_LENGTH: variable
   MAX_OBSERVABLES: variable
   MAX_SETTLE_WITHIN_MS: variable
   mergeInvariantSpecs: function
   MIN_SETTLE_POLL_MS: variable
+  navigateTemplateProblem: function
+  NavigateUrlParamError: class
+  navigateUrlParams: function
   NetworkCheck: type-alias
   NetworkCheckSchema: variable
   NetworkObservable: interface
@@ -1461,6 +1468,7 @@
   ReferenceDiffResult: interface
   RequestShape: interface
   resolveHttpUrl: function
+  resolveNavigateUrl: function
   rpcMethodOf: function
   SecretMaterializationError: class
   SpliceAt: interface
