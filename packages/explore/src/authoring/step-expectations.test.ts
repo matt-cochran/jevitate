@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActionDeltaRecord, RecordedStep, Recording, Step, ValueOrVar } from "@jevitate/recording";
 import { deriveStepExpectations } from "./step-expectations.js";
+import { expectedResultFromDelta } from "../replay-deltas.js";
 
 const publish = { testId: "publish" };
 const click = (target = publish): Step => ({ kind: "click", target, expect: { kind: "visible", target } });
@@ -100,6 +101,24 @@ describe("#400 deriveStepExpectations: a step's expect comes from what it change
       expect: { kind: "valueEquals", target: { label: "Title" }, value: "Hello" },
     });
     expect(only(deriveStepExpectations(rec({ step: fill({ var: "title" }) }))).step).toMatchObject({ expect: { kind: "count", target: { label: "Title" }, min: 0 } });
+  });
+
+  it("fills a step's expectedResult from the delta it recorded", () => {
+    const d = delta({ verdict: "relevant-change", changes: ["+ status: Site published"] });
+    const out = only(deriveStepExpectations(rec({ step: click(), delta: d })));
+    expect(out.expectedResult).toBe(expectedResultFromDelta(d));
+  });
+
+  it("keeps an expectedResult the step already has", () => {
+    const out = only(
+      deriveStepExpectations(rec({ step: click(), delta: delta({ verdict: "relevant-change", changes: ["+ status: Site published"] }), expectedResult: "Shows the receipt" })),
+    );
+    expect(out.expectedResult).toBe("Shows the receipt");
+  });
+
+  it("leaves a step without a delta without an expectedResult", () => {
+    const out = only(deriveStepExpectations(rec({ step: click() })));
+    expect(out.expectedResult).toBeUndefined();
   });
 
   it("keeps a navigation postcondition and any expect that is not the step's own target", () => {
