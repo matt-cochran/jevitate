@@ -277,7 +277,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (606 exports)
+# @jevitate/explore (609 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -398,6 +398,7 @@
   DEFAULT_COVERAGE_THRESHOLDS: variable
   DEFAULT_HANG_REPLAYS: variable
   DEFAULT_LONG_POLL_MS: variable
+  DEFAULT_ORACLE_SETTLE_MS: variable
   DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: variable
   DEFAULT_SECRET_COMMAND_ATTEMPTS: variable
   DEFAULT_STALL_MS: variable
@@ -467,6 +468,7 @@
   EpisodeContext: interface
   errorPageReason: function
   evaluateNetworkCheck: function
+  evaluateOutcomeChecks: function
   exactLiterals: function
   expandBraces: function
   expectedChange: function
@@ -651,6 +653,7 @@
   Op: type-alias
   OPS: variable
   OPS_NEEDING_TARGET: variable
+  OutcomeCheckContext: interface
   outOfScopeHangNote: function
   OverflowElement: interface
   OverflowFinding: interface
@@ -1017,7 +1020,7 @@
   VisualAssertion: other
   VisualVerdict: other
 
-# @jevitate/journey (53 exports)
+# @jevitate/journey (58 exports)
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1039,12 +1042,17 @@
   FsJourneyStore: class
   intentCoverage: function
   IntentCoverage: interface
+  isNoClaimExpect: function
+  isOwnTargetVisible: function
   isSweepMode: function
   Journey: interface
   JourneyAnchor: interface
   JourneyAnchorListing: interface
+  journeyAssertions: function
+  JourneyAssertionSite: type-alias
   journeyBranchPoint: function
   JourneyBranchPoint: interface
+  journeyEndState: function
   JourneyMetadata: interface
   JourneyNetworkCheck: type-alias
   JourneyParameter: interface
@@ -1345,7 +1353,7 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (135 exports)
+# @jevitate/recording (141 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1417,12 +1425,16 @@
   MAX_SETTLE_WITHIN_MS: variable
   mergeInvariantSpecs: function
   MIN_SETTLE_POLL_MS: variable
+  NetworkCheck: type-alias
+  NetworkCheckSchema: variable
   NetworkObservable: interface
   NeverResponse: interface
   OBSERVABLE_NAME_RE: variable
   ObservableSpec: type-alias
   ObservedList: type-alias
   ObservedValue: type-alias
+  OutcomeCheck: type-alias
+  OutcomeCheckSchema: variable
   PageSegment: interface
   PageTimingRecord: interface
   parseInvariantExpression: function
@@ -1454,6 +1466,8 @@
   SpliceAt: interface
   SpliceMode: type-alias
   spliceRecording: function
+  StatusSpec: type-alias
+  StatusSpecSchema: variable
   Step: type-alias
   StepRef: interface
   stepSignature: function

@@ -11,7 +11,7 @@ import { describeCheck, evaluateNetworkCheck, type SuccessCheck, type SuccessChe
 export const DEFAULT_ORACLE_SETTLE_MS = 10_000;
 
 /** Bound on the text quoted into a failed check's detail (#113): enough to see the mismatch, never a page dump. */
-export const READ_TEXT_MAX_CHARS = 200;
+const READ_TEXT_MAX_CHARS = 200;
 
 function quoteRead(s: string): string {
   const flat = s.replace(/\s+/g, " ").trim();

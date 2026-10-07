@@ -243,13 +243,16 @@ describe("explore-author-journey runs explore's goal run (#369)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("refuses a reloadThen check before any run, naming the inner check to author instead", async () => {
-    const r = await cli([...BASE.slice(0, 5), "--success", "reloadThen:valueEquals:[data-testid=last-name]|Litmus", ...BASE.slice(7), "--json"]);
-    const env = JSON.parse(r.out) as { ok: boolean; error: { code: string; message: string } };
-    expect(env).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ASSERTION" } });
-    expect(env.error.message).toContain("a reloadThen check can't be authored into a Journey");
-    expect(env.error.message).toContain("nothing was run");
-    expect(env.error.message).toContain('--success "valueEquals:[data-testid=last-name]|Litmus"');
-    expect(calls).toHaveLength(0);
+  it("#400: a reloadThen check is authored into the Journey's end state, with the other checks, in order", async () => {
+    const r = await cli([...BASE, "--success", "reloadThen:valueEquals:[data-testid=last-name]|Litmus", "--journeys-dir", journeysDir, "--json"]);
+    const env = JSON.parse(r.out) as { ok: boolean; data: { journey?: { metadata: { endState?: unknown[] } } } };
+    expect(env.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    const { FsJourneyStore } = await import("@jevitate/journey");
+    const saved = await new FsJourneyStore(journeysDir).get("signin");
+    expect(saved?.metadata.endState).toEqual([
+      { kind: "page", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "Welcome" } },
+      { kind: "reloadThen", assertion: { kind: "valueEquals", target: { testId: "last-name" }, value: "Litmus" } },
+    ]);
   });
 });
