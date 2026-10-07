@@ -10,7 +10,7 @@ command's codes only as a reminder; this is the reference.
 | Exit | Class | Meaning |
 |---|---|---|
 | `0` | ok | clean, succeeded, check passed, fixed, or the command did what it was asked |
-| `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), a success check that did not hold, an invalid invariant file (`invariants validate`; an unreadable one is `64`) |
+| `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), an assertion still passing under its mutation (`journey verify --mutate`), a success check that did not hold, an invalid invariant file (`invariants validate`; an unreadable one is `64`) |
 | `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error, or `ledger verify` matched no entries (nothing was verified). It proves nothing. |
 | `3` | hang | the app hung, and the hang reproduced on replay |
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |

@@ -18,6 +18,7 @@ import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFla
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
 import { withEngine, currentEngineInfo } from "./engine.js";
 import { renderJourneyLintSarif } from "./journey-lint-sarif.js";
+import { verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "./journey-verify.js";
 import { publishJourneyToSource, realGhPort, NotPromotedError, NoDeclaredOriginsError } from "./source-api.js";
 import { UnknownSourceError, EmbeddedSecretError, UndeclaredOriginError } from "@jevitate/sources";
 import { type EmulationSpec } from "@jevitate/playwright";
@@ -51,7 +52,7 @@ function lintFindingLine(finding: JourneyLintFinding): string {
   return `${finding.level}  ${finding.step === undefined ? "" : `step ${finding.step}  `}${finding.rule}  ${message}`;
 }
 
-/** Registers `jevitate journey`: `list|find|run|promote|lint|anchors|annotate|demo|publish`. */
+/** Registers `jevitate journey`: `list|find|run|promote|lint|verify|anchors|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
@@ -378,6 +379,108 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
         } else {
           emitJson(program, fail("E_JOURNEY_LINT", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  // #402 — the negative proof: replay the Journey once as recorded, then once per mutation (skip a
+  // write step, abort its writes, type an empty value into a checked fill); each assertion must fail
+  // under its paired mutation. `verify` is reserved for proofs: today only `--mutate` exists.
+  withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(journey.command("verify <id>"))))
+    .description("prove each assertion of a Journey can fail: --mutate replays it with each write step skipped or blocked, and each checked fill emptied")
+    .option("--mutate", "run the mutation proof (required)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--storage-state <file>", "Playwright storageState JSON to start each replay authenticated (as journey run)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { mutate, dir, param, storageState: storageStateFlag, json, env: envName, baseUrl } = this.opts<
+        { mutate?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags
+      >();
+      if (mutate !== true) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify needs --mutate (the mutation proof is the only verification it runs today)"));
+        return;
+      }
+      let environment: ResolvedJourneyEnvironment | undefined;
+      try {
+        environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+      } catch (err) {
+        if (!isEnvironmentError(err)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      const ownFixtureFlags = this.opts<FixtureFlags>();
+      const fixtureFlags: FixtureFlags = {
+        ...ownFixtureFlags,
+        ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
+        ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
+      };
+      const storageState = storageStateFlag ?? environment?.storageState;
+      if (storageState !== undefined && !existsSync(storageState)) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
+      try {
+        const report = await withSiteGate(resolveDbPath(deps), (siteGate) =>
+          verifyJourneyMutations({
+            ...(siteGate === undefined ? {} : { siteGate }),
+            dir: resolveJourneysDir(deps, dir),
+            id,
+            params: param,
+            browserPortFactory: deps.explore?.browserPortFactory,
+            ...(browser === undefined ? {} : { browser }),
+            ...(storageState !== undefined ? { storageState } : {}),
+            ...(environment === undefined ? {} : { environment }),
+            // Fixtures run around EVERY replay, so each mutation starts from the same state as the base.
+            fixtures: (site) => {
+              const fx = buildMissionFixtures(fixtureFlags, {
+                allowlist: environment === undefined ? [site] : environment.allowedOrigins,
+                baseUrl: site,
+                ...(storageState !== undefined ? { storageState } : {}),
+                ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
+              });
+              checkSetupRefs({ "--param": Object.values(param) }, fx);
+              return fx;
+            },
+          }),
+        );
+        const code = verifyExitCode(report.verdict);
+        if (json) {
+          emitJson(program, ok(withEngine(report)));
+        } else {
+          const out = program.configureOutput().writeOut;
+          for (const a of report.assertions) out?.(`${verifyAssertionLine(a)}\n`);
+          const s = report.summary;
+          out?.(
+            `${report.verdict} — journey '${report.journeyId}': ${s.sensitive} sensitive, ${s.insensitive} insensitive, ${s.cascade} cascade, ${s.notApplied} not applied, ${s.error} error, ${s.unpaired} unpaired` +
+              `${report.reason === undefined ? "" : ` (${report.reason})`}\n`,
+          );
+        }
+        process.exitCode = code;
+      } catch (err) {
+        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof JourneyRequiresAuthError) {
+          emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
+        } else if (err instanceof ExtensionMismatchError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof FixtureSpecError || err instanceof UnboundSetupRefError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof ParamValidationError) {
+          emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
+        } else if (err instanceof FixtureSetupError) {
+          emitJson(program, fail("E_JOURNEY_VERIFY", `fixture setup failed — nothing verified: ${err.message}`));
+        } else {
+          emitJson(program, fail("E_JOURNEY_VERIFY", String(err instanceof Error ? err.message : err)));
         }
       }
     });
