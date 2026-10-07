@@ -812,7 +812,8 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
       if (raw.unreachable && raw.inputType !== "file") continue;
       // Occlusion — the ONE shared predicate (./occlusion.ts), also used by act()'s gate: a control
       // a user cannot click (covered by an overlay, or by an ancestor at its own centre) is not
-      // offered. Off-screen controls stay eligible (scroll ops reach them).
+      // offered. Off-screen controls stay eligible (scroll ops reach them) unless a fixed layer (a
+      // dialog's backdrop) would still cover them once scrolled into view (#397).
       if (raw.inputType !== "file" && (await handle.evaluate(occluderOf)) !== null) continue;
       // The value leaves the page only for a control the shared predicate says
       // is NOT a secret (type=password, or a password/one-time-code

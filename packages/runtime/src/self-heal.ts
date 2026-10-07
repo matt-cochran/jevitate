@@ -116,5 +116,10 @@ export interface SelfHealer {
     brokenStep: Step;
     expectedPostcondition: Assertion;
     allowedOrigins?: readonly string[];
+    /**
+     * #399: the run's secret parameter values (e.g. a token a navigate URL carried — the live page
+     * URL may still hold it). The healer redacts them from everything it sends a model.
+     */
+    secrets?: readonly string[];
   }): Promise<{ outcome: "healed"; segment: Recording } | { outcome: "not-healed"; reason: string }>;
 }

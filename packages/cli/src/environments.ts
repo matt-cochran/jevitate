@@ -361,7 +361,12 @@ export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnviro
   const move = (raw: string, where: string, mustBeAllowed: boolean): string => {
     const u = absoluteUrl(raw);
     if (u === null) return raw;
-    if (recordedOrigin !== undefined && u.origin === recordedOrigin) return `${env.baseUrl}${u.pathname}${u.search}${u.hash}`;
+    if (recordedOrigin !== undefined && u.origin === recordedOrigin) {
+      // #399: a `${param}` placeholder (always after a literal origin) keeps its raw text — URL
+      // parsing would percent-encode its braces in a path.
+      if (raw.includes("${")) return `${env.baseUrl}${raw.replace(/^https?:\/\/[^/?#]*/i, "")}`;
+      return `${env.baseUrl}${u.pathname}${u.search}${u.hash}`;
+    }
     if (mustBeAllowed && !env.allowedOrigins.includes(u.origin)) refusals.push(`${where} is on ${u.origin}`);
     return raw;
   };

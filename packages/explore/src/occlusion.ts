@@ -10,8 +10,9 @@
  * ancestor, not the control — the same hit-target rule Playwright's click applies. A descendant on
  * top (the label `<span>` inside a `<button>`) is the control's own content and never covers it.
  *
- * Off-screen or unrendered controls are not "covered" (they cannot be probed with
- * `elementFromPoint`; scrolling reaches them), so this returns null for them.
+ * Unrendered controls are not "covered". An off-screen control cannot be probed where it is
+ * (scrolling reaches it), so it is probed where scrolling it into view would bring it, and is covered
+ * there only by a FIXED layer (#397: a dialog's backdrop stays over the page however it scrolls).
  *
  * A VISUALLY-HIDDEN input (the sr-only idiom: clipped to ≤1px, `clip`/`clip-path` to nothing, or
  * pulled far off-screen) is never what a user clicks — its visible `<label>` (or `aria-labelledby`
@@ -95,7 +96,39 @@ export function occluderOf(node: Node): string | null {
   }
   const rect = boxOf(el);
   if (rect === null) return null;
-  return probe(rect, (top) => holds(el, top));
+  /**
+   * #397: an OFF-SCREEN control is judged where scrolling it into view (centred, as act() does)
+   * would bring it. Only a FIXED layer is trusted there — it stays put while the page scrolls under
+   * it (a dialog's backdrop, a fixed dialog panel) — and only one that does not contain the control
+   * (a fixed app shell whose inner scroller holds it is the control's own layer, not a cover).
+   * Anything else at that point scrolls away with the page and proves nothing.
+   */
+  const fixedCoverAfterScroll = (r: DOMRect): string | null => {
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    if (cx >= 0 && cy >= 0 && cx < window.innerWidth && cy < window.innerHeight) return null;
+    if (r.left <= -1_000 || r.top <= -1_000) return null;
+    const doc = document.scrollingElement ?? document.documentElement;
+    const land = (centre: number, scrolled: number, view: number, extent: number): number => {
+      const target = Math.min(Math.max(scrolled + centre - view / 2, 0), Math.max(0, extent - view));
+      return centre - (target - scrolled);
+    };
+    const x = cx >= 0 && cx < window.innerWidth ? cx : land(cx, doc.scrollLeft, window.innerWidth, doc.scrollWidth);
+    const y = cy >= 0 && cy < window.innerHeight ? cy : land(cy, doc.scrollTop, window.innerHeight, doc.scrollHeight);
+    if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return null;
+    const top = hitAt(x, y);
+    if (top === null || holds(el, top)) return null;
+    let layer: Element | null = null;
+    for (let n: Node | null = top; n !== null; n = n instanceof ShadowRoot ? n.host : n.parentNode) {
+      if (n instanceof Element && window.getComputedStyle(n).position === "fixed") {
+        layer = n;
+        break;
+      }
+    }
+    if (layer === null || holds(layer, el)) return null;
+    return describe(top);
+  };
+  return probe(rect, (top) => holds(el, top)) ?? fixedCoverAfterScroll(rect);
 }
 
 /**

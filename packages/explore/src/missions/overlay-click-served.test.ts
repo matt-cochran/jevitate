@@ -46,8 +46,12 @@ const MODAL = `<div id="ov" role="dialog" aria-modal="true" aria-label="What wou
   style="position:fixed;inset:0;background:rgba(0,0,0,.4)">
   <div style="background:#fff;margin:40px;padding:20px;height:80vh"><p style="height:70vh">Pick what to look into next.</p>
   <a href="#" id="close">Close</a></div></div>`;
-/** A dialog drawn as an overlay but not marked modal: only the click failures can tell. */
-const UNMARKED = MODAL.replace(' aria-modal="true"', "");
+/**
+ * A dialog drawn as an overlay but not marked modal, and not FIXED: it scrolls with the page, so
+ * where a below-the-fold control lands after scrolling cannot be told from the snapshot (#397 trusts
+ * only a fixed layer there) — only the click failures can tell.
+ */
+const UNMARKED = MODAL.replace(' aria-modal="true"', "").replace("position:fixed;inset:0", "position:absolute;top:0;left:0;width:100%;height:6000px");
 /** The same overlay with no way out. */
 const NO_EXIT = UNMARKED.replace('<a href="#" id="close">Close</a>', "");
 

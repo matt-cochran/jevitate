@@ -208,6 +208,41 @@ evidence, drafts and output, and in anything sent to a model. A parameter whose 
 credential (`password`, `token`, `apiKey`, `otp`, …) is treated as secret even when the Journey
 does not declare it.
 
+### Parameters in a `navigate` URL
+
+A `navigate` step's `url` may hold `${name}` placeholders, for single-use links whose secret lives
+in the URL (an invitation, a magic-link sign-in, a password reset, an email verification):
+
+```json
+"metadata": { "params": [], "parameters": [{ "name": "inviteToken", "secret": true }], … },
+"recording": { …, "pages": [{ "url": "/accept", "steps": [
+  { "step": { "kind": "navigate", "url": "/accept?token=${inviteToken}",
+              "expect": { "kind": "visible", "target": { "role": "heading", "name": "Welcome" } } } }
+] }] }
+```
+
+```bash
+jevitate journey run accept-invite --param inviteToken="$TOKEN"
+```
+
+MCP `run_journey` takes it the same way (`"params": { "inviteToken": "…" }`). A value can also come
+from a fixture output (`--param inviteToken='${setup.inviteToken}'`, see [fixtures](./fixtures.md)).
+
+- Each placeholder must name a declared parameter (`params` or `parameters`). Otherwise the Journey
+  is refused when it is read. A placeholder is a required run parameter, and `journey find`, MCP
+  `find_capabilities` and the named Journey tools list it even when only `parameters` declares it.
+- A placeholder comes after the origin: the scheme, host, port and the path's leading `/` are
+  literal (`https://${host}/…`, `${base}/…` and `//${host}` are refused). The value is
+  percent-encoded as one URL component (everything except `A-Z a-z 0-9 - . _ ~`), so `/`, `\`,
+  `@`, `?`, `#` and `%` in a value are never URL syntax. The resolved URL must keep the template's
+  origin, and the run's origin allowlist still applies.
+- A secret parameter's value is redacted in every form it can take in a URL (raw,
+  `encodeURIComponent` and strictly encoded). This covers the run's JSON output and errors,
+  Playwright's own navigation error (which echoes the URL), screenshots and their index, action
+  deltas, `journey annotate`/`journey demo` evidence, a self-heal's model prompts, and `source run`.
+  `describeStep`, step captions and failure messages show the template as
+  `navigate to /accept?token=<param inviteToken>`.
+
 ## Explore from a Journey step: anchors and campaigns
 
 The real defects sit deep in a flow: a verification step mid-booking, the close step of a sale, a
