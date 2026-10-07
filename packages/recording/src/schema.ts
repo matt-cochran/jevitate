@@ -1,4 +1,5 @@
 import { z, ZodType } from "zod";
+import { navigateTemplateProblem } from "./navigate-params.js";
 
 // === Interfaces - TypeScript types matching the brief exactly ===
 
@@ -524,6 +525,11 @@ const NavigateUrlSchema = z
   .string()
   .refine((url) => SAFE_NAVIGATE_URL.test(url), {
     message: "navigate.url must be a relative path starting with '/' or an absolute http(s):// URL",
+  })
+  // #399: `${param}` placeholders are well-formed and come after a literal origin.
+  .superRefine((url, ctx) => {
+    const problem = navigateTemplateProblem(url);
+    if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
   });
 
 // Forward declaration for recursive Step schema

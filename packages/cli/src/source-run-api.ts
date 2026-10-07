@@ -1,4 +1,4 @@
-import { deriveParamSchema, validateParams } from "@jevitate/journey";
+import { deriveParamSchema, secretParamValues, validateParams } from "@jevitate/journey";
 import type { SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
@@ -21,7 +21,7 @@ import {
   type SourceEntry,
 } from "@jevitate/sources";
 import type { SourceApiDeps } from "./source-api.js";
-import { JourneyRequiresAuthError } from "./journey-api.js";
+import { JourneyRequiresAuthError, redactErrorSecrets, redactSecretParams } from "./journey-api.js";
 
 /**
  * The runner seam for a source-resolved Journey. Takes the ALREADY-GATED
@@ -183,5 +183,12 @@ export async function runSourceJourney(
   const file = await resolveForRun(gateDeps, `${req.sourceName}/${req.journeyId}`);
 
   const run = deps.runJourney ?? realResolvedJourneyRunner;
-  return run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate);
+  // #399: a secret parameter (e.g. a token in a navigate URL) never comes back — not in the
+  // result, not in an escaping error — exactly as `journey run` redacts it.
+  try {
+    const result = await run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate);
+    return redactSecretParams(result, file, req.params);
+  } catch (err) {
+    throw redactErrorSecrets(err, secretParamValues(file, req.params));
+  }
 }

@@ -150,3 +150,30 @@ describe("#124: promoteJourney", () => {
     await expect(promoteJourney(dir, "does-not-exist")).rejects.toBeInstanceOf(UnknownJourneyError);
   });
 });
+
+describe("#399: an error escaping a run never carries a secret parameter", () => {
+  it("a crash whose message echoes the navigated URL comes back redacted (same error class)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "journey-api-399-"));
+    await new FsJourneyStore(dir).put({
+      metadata: { id: "invite", name: "invite", promoted: true, params: [], parameters: [{ name: "inviteToken", secret: true }], createdAtIso: "2026-10-07T00:00:00Z" },
+      recording: {
+        version: "1",
+        site: "https://example.test",
+        pages: [{ url: "/accept", steps: [{ step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } } }] }],
+      },
+    });
+    const secret = "tok it's/9";
+    class BrowserCrash extends Error {}
+    const crashing = (): BrowserPort => ({
+      async open(): Promise<BrowserSession> {
+        throw new BrowserCrash(`browser crashed at https://example.test/accept?token=${encodeURIComponent(secret)} (${secret})`);
+      },
+    });
+    const err = await runJourneyProgrammatically({ dir, id: "invite", params: { inviteToken: secret }, browserPortFactory: crashing }).catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(BrowserCrash);
+    expect(err.message).toContain("browser crashed");
+    expect(err.message).not.toContain(secret);
+    expect(err.message).not.toContain(encodeURIComponent(secret));
+    expect(String(err.stack)).not.toContain(secret);
+  });
+});

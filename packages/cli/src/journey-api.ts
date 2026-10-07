@@ -122,7 +122,7 @@ export interface RunJourneyProgrammaticallyOptions {
  * #246: a secret parameter's value (declared `secret: true`, or a credential-like name) never comes
  * back in a run's output — the interpreter's vars start as the params, so the value is masked there.
  */
-function redactSecretParams<T>(result: T, journey: Journey, params: Record<string, string>): T {
+export function redactSecretParams<T>(result: T, journey: Journey, params: Record<string, string>): T {
   const secrets = secretParamValues(journey, params);
   if (secrets.length === 0) return result;
   const scrub = (v: unknown): unknown =>
@@ -302,7 +302,19 @@ export async function runJourneyProgrammatically(
     } finally {
       await closeSession();
     }
+  } catch (err) {
+    // #399: an error escaping the run (a crash, a closed page) may echo a navigated URL that
+    // carried a secret parameter — its message and stack are redacted, its class kept.
+    throw redactErrorSecrets(err, secretParamValues(journey, { ...inputParams, ...params }));
   } finally {
     await fx?.restore();
   }
+}
+
+/** `err` with every secret (and its URL-encoded forms) masked in its message and stack — same object, same class. */
+export function redactErrorSecrets(err: unknown, secrets: readonly string[]): unknown {
+  if (!(err instanceof Error) || secrets.length === 0) return err;
+  err.message = redactText(err.message, secrets);
+  if (err.stack !== undefined) err.stack = redactText(err.stack, secrets);
+  return err;
 }

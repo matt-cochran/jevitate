@@ -154,6 +154,20 @@ describe("JourneyRunner self-heal (Ticket #7)", () => {
     expect(healer.reLearnStep).toHaveBeenCalledOnce();
   });
 
+  it("#399: the healer is handed the run's secret parameter values (a token in a navigate URL) to redact", async () => {
+    const recording = journeyWithBrokenReadOnlyStep();
+    const healer = fakeHealer({ outcome: "not-healed", reason: "x" });
+    const runner = new JourneyRunner(fakeActor, fakeInterpreterThatFails(), undefined, undefined, healer);
+    const metadata = { ...baseMetadata, params: [], parameters: [{ name: "inviteToken", secret: true }] };
+    const withParam = { ...recording, pages: [{ ...recording.pages[0]!, steps: [{ step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } } }, ...recording.pages[0]!.steps.slice(1)] }, ...recording.pages.slice(1)] };
+    await runner.run({
+      journey: { metadata, recording: withParam } as any,
+      params: { inviteToken: "tok-399" },
+      policy: { selfHeal: { mode: "hybrid" }, direction: { direction: "deterministic" }, secret: { secretMode: "fail-closed" } },
+    });
+    expect(healer.reLearnStep).toHaveBeenCalledWith(expect.objectContaining({ secrets: ["tok-399"] }));
+  });
+
   it("hybrid + WRITE broken step (fill) -> healer is NEVER called, quarantines (invariant #8)", async () => {
     const recording = journeyWithBrokenWriteStep();
     const healer = fakeHealer({ outcome: "healed", segment: healedSegment });

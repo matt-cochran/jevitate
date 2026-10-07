@@ -859,7 +859,7 @@
   rungLocator: function
   validateCandidates: function
 
-# @jevitate/recording (73 exports)
+# @jevitate/recording (79 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -880,6 +880,7 @@
   MAX_OBSERVABLES: const (number)
   MAX_SETTLE_WITHIN_MS: const (number)
   MIN_SETTLE_POLL_MS: const (number)
+  NavigateUrlParamError: class
   OBSERVABLE_NAME_RE: object
   PostdocDecisionSchema: object
   PostdocDecisionsSchema: object
@@ -897,9 +898,11 @@
   boundVariables: function
   captureRefs: function
   classifyColumns: function
+  describeNavigateUrl: function
   diffColumns: function
   diffRecordings: function
   diffTakes: function
+  encodeUrlParamValue: function
   evaluateInvariantExpression: function
   expressionObservables: function
   fitInteractionPolicy: function
@@ -915,6 +918,8 @@
   matchesPattern: function
   matchesResponseStatus: function
   mergeInvariantSpecs: function
+  navigateTemplateProblem: function
+  navigateUrlParams: function
   parseInvariantExpression: function
   parseJsonPath: function
   patternRegex: function
@@ -923,6 +928,7 @@
   readJsonPath: function
   readJsonPathList: function
   resolveHttpUrl: function
+  resolveNavigateUrl: function
   rpcMethodOf: function
   spliceRecording: function
   stepSignature: function

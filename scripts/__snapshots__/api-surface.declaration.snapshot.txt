@@ -1345,7 +1345,7 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (135 exports)
+# @jevitate/recording (141 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1375,12 +1375,14 @@
   CONFIDENT_VARIABLE_THRESHOLD: variable
   DeclaredInvariant: interface
   DeniedAsSpec: interface
+  describeNavigateUrl: function
   diffColumns: function
   diffRecordings: function
   DiffResult: interface
   diffTakes: function
   DomObservable: interface
   DomRead: type-alias
+  encodeUrlParamValue: function
   evaluateInvariantExpression: function
   EvalValue: type-alias
   ExpressionEnv: interface
@@ -1417,6 +1419,9 @@
   MAX_SETTLE_WITHIN_MS: variable
   mergeInvariantSpecs: function
   MIN_SETTLE_POLL_MS: variable
+  navigateTemplateProblem: function
+  NavigateUrlParamError: class
+  navigateUrlParams: function
   NetworkObservable: interface
   NeverResponse: interface
   OBSERVABLE_NAME_RE: variable
@@ -1449,6 +1454,7 @@
   ReferenceDiffResult: interface
   RequestShape: interface
   resolveHttpUrl: function
+  resolveNavigateUrl: function
   rpcMethodOf: function
   SecretMaterializationError: class
   SpliceAt: interface

@@ -1,10 +1,18 @@
-import { boundVariables, type Recording } from "@jevitate/recording";
+import { boundVariables, navigateUrlParams, type Recording } from "@jevitate/recording";
 
 export interface ParamSchema { required: string[] }
 export class ParamValidationError extends Error {}
 
+/** The params a Recording takes: its bound variables, then (#399) any `${name}` in a navigate URL. */
 export function deriveParamSchema(rec: Recording): ParamSchema {
-  return { required: boundVariables(rec) };
+  const required = boundVariables(rec);
+  for (const page of rec.pages) {
+    for (const { step } of page.steps) {
+      if (step.kind !== "navigate") continue;
+      for (const name of navigateUrlParams(step.url)) if (!required.includes(name)) required.push(name);
+    }
+  }
+  return { required };
 }
 
 export function validateParams(schema: ParamSchema, params: Record<string, string>): void {
