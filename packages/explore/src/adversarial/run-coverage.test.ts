@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Control, Snapshot } from "../snapshot.js";
-import { CoverageTracker, DEFAULT_COVERAGE_THRESHOLDS, resolveCoverageThresholds } from "./run-coverage.js";
+import { CoverageTracker, DEFAULT_COVERAGE_THRESHOLDS, resolveCoverageThresholds, safetyRefusalsFromTranscript } from "./run-coverage.js";
 
 let n = 0;
 function control(name: string, role: string, tag: string, extra: Partial<Control> = {}): Control {
@@ -121,6 +121,13 @@ describe("CoverageTracker", () => {
       "double-submit": { applied: 2, foundNothing: 0 },
       "visit-route": { applied: 0, foundNothing: 1 },
     });
+  });
+
+  it("#396: a nameless-control safety refusal is parsed as denied", () => {
+    const reason = "refused by the safety policy: a control with no accessible name can't be checked against --deny/--paid";
+    expect(safetyRefusalsFromTranscript([{ strategy: "safety-policy", actOk: false, reason }])).toEqual([
+      { name: "a control with no accessible name", risk: "denied" },
+    ]);
   });
 
   it("thresholds default to 25% and a required submit, and reject an out-of-range ratio", () => {

@@ -131,5 +131,29 @@ describe("snapshot — perceive: indexed controls + durable descriptors + freshn
     },
     120_000,
   );
+
+  it(
+    "#396: an icon-only button's accessible name comes from its title",
+    async () => {
+      await withSession("explore-snapshot-title-", async (session) => {
+        await session.page.setContent('<button title="Auto-improve" data-testid="auto-improve-button"><svg width="16" height="16"></svg></button>');
+        const snap = await snapshot(session.page);
+        expect(snap.controls).toContainEqual(expect.objectContaining({ role: "button", name: "Auto-improve" }));
+      });
+    },
+    120_000,
+  );
+
+  it(
+    "#396: a button's accessible name comes from the text of its aria-labelledby ids",
+    async () => {
+      await withSession("explore-snapshot-labelledby-", async (session) => {
+        await session.page.setContent('<button aria-labelledby="panel-label"><svg width="16" height="16"></svg></button><span id="panel-label">Close panel</span>');
+        const snap = await snapshot(session.page);
+        expect(snap.controls).toContainEqual(expect.objectContaining({ role: "button", name: "Close panel" }));
+      });
+    },
+    120_000,
+  );
 });
 
