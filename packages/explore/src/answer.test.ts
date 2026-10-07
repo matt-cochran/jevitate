@@ -560,3 +560,15 @@ describe("#395 — a hint retry that finds nothing never hides why the first ans
     expect(v.accept).toBe(true);
   });
 });
+
+describe("#395 — the heading hint is not for the content a goal supplies or types", () => {
+  it("gives no hint when the goal's 'this text' is imported content, not the page's one entity", () => {
+    const page = { url: "http://app.test/billing", heading: "Billing", text: "Billing\nPurchasing opens soon." };
+    expect(headingHint(page, "Import this text and analyze it, then report what the app told you")).toBeNull();
+  });
+
+  it("still hints the page's one entity for an entity noun", () => {
+    const page = { url: "http://app.test/roadmap", heading: "Roadmap", text: "Roadmap\nQ3 goals" };
+    expect(headingHint(page, "Find out the name of the current project")).toContain("Roadmap");
+  });
+});

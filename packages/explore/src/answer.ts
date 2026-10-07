@@ -700,6 +700,11 @@ const LIST_GOAL =
   /\b(?:first|second|third|fourth|fifth|last|next|previous|top|bottom|\d+(?:st|nd|rd|th)|each|every|all|any|list(?:ed|s)?|how many|which (?:one|of)|among)\b/i;
 /** #229: a goal about the ONE thing a page shows: "this item", "the current page", "this record". */
 const SINGLE_GOAL = /\b(?:this|the current|the open(?:ed)?|the shown|the displayed)\s+([a-z][a-z-]*)\b/i;
+/**
+ * #395: "this text" / "this snippet" name content the goal supplies or types, not an entity a page shows.
+ * Nouns that can also be a page's one entity ("this note", "this message", "this comment") stay out.
+ */
+const INPUT_CONTENT_NOUNS = new Set(["text", "value", "content", "input", "string", "prompt", "snippet", "paragraph", "sentence", "word", "words"]);
 
 /** "item" → ["items"], "entry" → ["entries"], "box" → ["boxes"]: the plural forms a list heading uses. */
 function plurals(noun: string): string[] {
@@ -722,6 +727,8 @@ export function headingHint(page: ObservedPage | undefined, goal: string): strin
   if (errorPageReason(page) !== null) return null;
   const single = SINGLE_GOAL.exec(goal);
   if (single === null || LIST_GOAL.test(goal)) return null;
+  // #395: "import this text" supplies content; the page heading is not that content's title.
+  if (INPUT_CONTENT_NOUNS.has(single[1]!.toLowerCase())) return null;
   const listOf = plurals(single[1]!);
   const namesList = (h: string | undefined): boolean => h !== undefined && (fold(h).match(/[a-z][a-z'-]*/g) ?? []).some((w) => listOf.includes(w));
   if (namesList(page.heading) || (page.heading === undefined && namesList(page.title))) return null;
