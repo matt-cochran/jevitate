@@ -4,7 +4,7 @@ import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
 import { sessionLaunchOptions } from "./browser-run-options.js";
-import { withNetworkChecks } from "./journey-network-checks.js";
+import { JourneyOutcomeChecks } from "./journey-network-checks.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult } from "@jevitate/runtime";
@@ -87,10 +87,12 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
   });
   try {
     const actor = CastActor.named("source-runner").whoCan(new BrowseTheWeb(session, allowedOrigins), ...gate.abilities);
-    const runner = new JourneyRunner(actor, new RecordingInterpreter());
+    // #322/#400: a trusted remote Journey's end state and step request checks hold for its replay too.
+    const outcomeChecks = new JourneyOutcomeChecks(session.page, file);
+    const observer = outcomeChecks.observer();
+    const runner = new JourneyRunner(actor, new RecordingInterpreter(observer === undefined ? {} : { observer }));
     try {
-      // #322: a trusted remote Journey's network checks hold for its replay too.
-      return await withNetworkChecks(session.page, file.metadata.networkChecks, () => runner.run({ journey: file, params, policy }));
+      return await outcomeChecks.run(actor, () => runner.run({ journey: file, params, policy }));
     } finally {
       await gate.done();
     }
