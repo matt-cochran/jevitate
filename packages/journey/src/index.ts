@@ -5,3 +5,4 @@ export * from "./registry.js";
 export * from "./intent.js";
 export * from "./anchors.js";
 export * from "./campaign-spec.js";
+export * from "./assertions.js";
