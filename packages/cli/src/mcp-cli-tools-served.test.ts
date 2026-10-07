@@ -133,8 +133,9 @@ async function seedJourney(dir: string, id: string, promoted = false): Promise<v
           url: "/",
           steps: [
             { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { role: "heading", name: "Profile" } } } },
-            { step: { kind: "fill", target: { label: "Display name" }, value: { redacted: false, value: "Ada" }, expect: { kind: "visible", target: { label: "Display name" } } } },
-            { step: { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "visible", target: { testId: "status" } } } },
+            { step: { kind: "fill", target: { label: "Display name" }, value: { redacted: false, value: "Ada" }, expect: { kind: "valueEquals", target: { label: "Display name" }, value: "Ada" } } },
+            // #401: the outcome is asserted (a promotable Journey), not just that the status line exists.
+            { step: { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "textIncludes", target: { testId: "status" }, text: "Saved Ada" } } },
           ],
         },
       ],

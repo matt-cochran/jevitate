@@ -107,6 +107,7 @@ export const OMIT = {
   branchParams:
     "#293: a branch-point finding replays through its Journey prefix with the params its result recorded (non-secret ones); a secret param is re-supplied by the operator on the CLI, never sent as an MCP argument",
   tou: "accepting a third-party source's Terms of Use is a person's decision (like approve_action): MCP can add, pull and run a source, never accept for them",
+  acceptWeak: "#401: promoting a Journey whose assertions cannot prove its outcome is a reviewer's waiver (recorded on the Journey): a person's decision on the CLI, never a request's",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
@@ -148,7 +149,13 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "promote_journey",
     description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
-    command: { path: "journey promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "journey promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, ...JSON_FLAG } },
+  },
+  {
+    name: "lint_journey",
+    description:
+      "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding.",
+    command: { path: "journey lint", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "journey_anchors",
