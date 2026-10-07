@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
+import { FakeGenerationGateway, FakeJudgmentGateway, type GenerationPort } from "@jevitate/ai-core";
 import {
   ANSWER_FITS_QUESTION,
   NO_ANSWER_REASON,
@@ -521,5 +521,42 @@ describe("#239 — the run's own typed, unsaved values are not grounds", () => {
     for (const g of ["Find out how to add a teammate", "Report the saved decision", "Which records are listed?", "Log in and report your plan"]) {
       expect(goalAsksToWrite(g), g).toBe(false);
     }
+  });
+});
+
+describe("#395 — a hint retry that finds nothing never hides why the first answer was rejected", () => {
+  const billing = {
+    url: "http://app.test/billing",
+    heading: "Billing",
+    text: "Billing\nPurchasing opens soon — You can use your included credits now. Buying credits and plans isn't open yet.\nPlans",
+  };
+  // "this text" reads as a goal about one item, so a rejected answer gets the heading-hint retry.
+  const goal = "Import this text and analyze it. If you do not have enough credits, try to get more credits, then report what the app told you.";
+  const banner = "Purchasing opens soon — You can use your included credits now. Buying credits and plans isn't open yet.";
+  const answered = new FakeGenerationGateway({ "goal.answer": { answer: banner, claims: [{ claim: "The app says purchasing opens soon", quote: banner }] } });
+  const nothing = new FakeGenerationGateway({ "goal.answer": { answer: null, claims: [] } });
+  // The first ask answers from the page; the hinted retry (about the page's heading) finds nothing.
+  const gen: GenerationPort = {
+    generate: (kind, input) => ((input as { hint?: string }).hint === undefined ? answered : nothing).generate(kind, input),
+  };
+  const veto = new FakeJudgmentGateway({ [ANSWER_FITS_QUESTION]: { kind: "noul", value: false, probability: 0.1 } });
+
+  it("the rejection names the claim and why — never 'no answer was found' while an answer WAS found", async () => {
+    const vetoes = new VetoedAnswers();
+    const input = { goal, url: billing.url, pages: [billing], history: [], judge: veto, vetoes };
+    const first = await reportAnswer(gen, input);
+    expect(first.accept).toBe(false);
+    expect(!first.accept && first.reason).not.toBe(NO_ANSWER_REASON);
+    expect(!first.accept && first.reason).toMatch(/Jev vetoed it/);
+    expect(first.answer?.text).toBe(banner);
+    // Re-reported: the standing veto is the reason, again never "no answer".
+    const again = await reportAnswer(gen, input);
+    expect(!again.accept && again.reason).not.toBe(NO_ANSWER_REASON);
+    expect(!again.accept && again.reason).toMatch(/already vetoed/);
+  });
+
+  it("an answer code grounds and Jev does not veto is accepted on the current page", async () => {
+    const v = await reportAnswer(gen, { goal, url: billing.url, pages: [billing], history: [] });
+    expect(v.accept).toBe(true);
   });
 });
