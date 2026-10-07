@@ -910,7 +910,13 @@ export async function reportAnswer(
   const retry = await gen.generate("goal.answer", { ...ask, hint: redactContext(hint, secrets) });
   const retried = await vetoed(groundAnswer(scrub(retry.output), input.pages, grounding), input.judge, vet, vetoes);
   // The retry repeated the answer just vetoed: the veto itself (with Jev's p) is the verdict to report.
-  return !retried.accept && retried.reason === ALREADY_VETOED_REASON && verdict.notAnswer === true ? verdict : absence(retried);
+  if (!retried.accept && retried.reason === ALREADY_VETOED_REASON && verdict.notAnswer === true) return verdict;
+  const final = absence(retried);
+  // #395: a retry that found NO answer never replaces a first answer's rejection — that one names the
+  // claim and why it was rejected (a veto, a label-only quote), so the model can correct it; "no
+  // answer was found" would be false (one was) and the same report would be re-sent unchanged.
+  const noneOnRetry = !final.accept && final.answer === null && final.reason === NO_ANSWER_REASON;
+  return noneOnRetry && verdict.answer !== null ? verdict : final;
 }
 
 /** #234: what the reason of a re-report of an answer code already rejected in this run adds. */

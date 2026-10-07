@@ -382,6 +382,22 @@ function ensureCheckboxes(form: FormModel, settle: boolean): MisuseStep[] {
     .map((c) => ({ op: "click" as const, control: c, settle, note: `check "${c.name}" so the form can be submitted` }));
 }
 
+/**
+ * #394: when the form's submit is DISABLED in the planning snapshot (the page enables it only once
+ * the form is valid — a required "Name" left empty, maybe by an earlier `empty` boundary probe),
+ * every OTHER empty text field gets a valid value first, so the episode's own edit is the only
+ * thing under test and its submit can actually fire. Without this, an episode that edits a
+ * different field than the empty required one could never submit, round after round. Only empty
+ * fields are filled (a value already there is never overwritten); a password field's value is
+ * never read, so it is always (re)filled — redacted, like every password step.
+ */
+function fillEmptyFields(form: FormModel, except: Control): MisuseStep[] {
+  if (form.submit.enabled) return [];
+  return form.fields
+    .filter((f) => controlKey(f) !== controlKey(except) && affordedOp(f) === "type" && (f.value ?? "") === "")
+    .map((f) => edit(f, "normal", `fill "${f.name}" with a valid value so the form can be submitted`));
+}
+
 function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ctx: EpisodeContext): MisuseEpisode | null {
   const inScope = ctx.inScope ?? (() => true);
   // A form whose submit the run blacklisted (not actionable, or still disabled every time it was
@@ -398,6 +414,7 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
       return {
         steps: [
           ...ensureCheckboxes(form, false),
+          ...fillEmptyFields(form, field),
           edit(field, "normal", "edit a field"),
           submit(form, "submit", false),
           submit(form, "submit again before the first submit settled", true),
@@ -408,6 +425,7 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
       return {
         steps: [
           ...ensureCheckboxes(form, false),
+          ...fillEmptyFields(form, field),
           edit(field, value, `enter a ${value} value`, false, canaryFor(value, ctx)),
           submit(form, `submit the ${value} value`, true),
         ],
@@ -418,6 +436,7 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
       return {
         steps: [
           ...ensureCheckboxes(form, false),
+          ...fillEmptyFields(form, field),
           edit(field, "normal", "edit a field"),
           { op: "click", control: form.cancel, settle: true, note: "cancel the edit" },
           submit(form, "save after cancelling", true),
@@ -442,7 +461,13 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
                 : edit(next, "normal", "edit another field while the submit is pending", true);
             })();
       return {
-        steps: [...ensureCheckboxes(form, false), edit(field, "normal", "edit a field"), submit(form, "submit", false), other],
+        steps: [
+          ...ensureCheckboxes(form, false),
+          ...fillEmptyFields(form, field),
+          edit(field, "normal", "edit a field"),
+          submit(form, "submit", false),
+          other,
+        ],
       };
     }
   }
