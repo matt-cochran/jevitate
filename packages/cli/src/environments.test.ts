@@ -227,6 +227,16 @@ describe("rebasing a Journey onto an environment", () => {
   });
 });
 
+describe("rebasing a navigate URL with ${param} placeholders (#399)", () => {
+  const staging = { name: "staging", baseUrl: "https://staging.example.test", allowedOrigins: ["https://staging.example.test"], source: "t" };
+
+  it("keeps each placeholder verbatim on the new origin (never percent-encoded by URL parsing)", () => {
+    const rec = recording([{ url: "/teams", steps: [{ step: { kind: "navigate", url: `${RECORDED}/teams/\${team}/accept?token=\${inviteToken}`, expect: { kind: "urlIncludes", text: "/accept" } } }] }]);
+    const step = rebaseRecording(rec, staging).pages[1]!.steps[0]!.step;
+    expect(step).toMatchObject({ kind: "navigate", url: "https://staging.example.test/teams/${team}/accept?token=${inviteToken}" });
+  });
+});
+
 describe("journey run --env / --base-url (CLI)", () => {
   function harness(opts: { environmentsFile?: string } = {}) {
     const opens: OpenOptions[] = [];

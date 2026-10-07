@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import type { Assertion, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
+import { describeNavigateUrl, encodeUrlParamValue, navigateUrlParams, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
@@ -59,6 +60,28 @@ export function resolveValue(value: ValueOrVar, vars: Map<string, string>): stri
 }
 
 /**
+ * #399: a navigation error with every value substituted into `template` (raw, `encodeURIComponent`
+ * and strictly encoded) replaced by `<param name>` — Playwright echoes the URL it was given. A new
+ * `Error` (same name, no `cause`), so the original message cannot ride along.
+ */
+function withoutNavigateValues(err: unknown, template: string, vars: Map<string, string>): Error {
+  const scrub = (text: string): string => {
+    let out = text;
+    for (const name of navigateUrlParams(template)) {
+      const v = vars.get(name);
+      if (v === undefined || v === "") continue;
+      for (const form of new Set([encodeUrlParamValue(v), encodeURIComponent(v), v])) out = out.split(form).join(`<param ${name}>`);
+    }
+    return out;
+  };
+  const original = err instanceof Error ? err : new Error(String(err));
+  const scrubbed = new Error(scrub(original.message));
+  scrubbed.name = original.name;
+  scrubbed.stack = original.stack === undefined ? undefined : scrub(original.stack);
+  return scrubbed;
+}
+
+/**
  * Performs one recorded step's action (if any) and enforces its
  * postcondition, throwing `PostconditionFailed` when the postcondition does
  * not hold. This is the fail-closed guardrail at the heart of RxD replay:
@@ -95,9 +118,16 @@ export async function runStep(
   const step = rec.step;
   switch (step.kind) {
     case "navigate": {
-      await Navigate.to(step.url).performAs(actor);
+      // #399: `${param}` placeholders resolve from the vars (strictly encoded, origin kept); a
+      // navigation error never echoes a substituted value, and the postcondition names the template.
+      const url = resolveNavigateUrl(step.url, vars);
+      try {
+        await Navigate.to(url).performAs(actor);
+      } catch (err) {
+        throw url === step.url ? err : withoutNavigateValues(err, step.url, vars);
+      }
       if (!(await checkAssertion(actor, step.expect))) {
-        throw new PostconditionFailed(step.expect, `navigate to ${step.url}`);
+        throw new PostconditionFailed(step.expect, `navigate to ${describeNavigateUrl(step.url)}`);
       }
       return { kind: "done" };
     }

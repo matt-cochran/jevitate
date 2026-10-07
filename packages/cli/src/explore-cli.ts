@@ -554,6 +554,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // refused, exit 64) before anything else — the start URL every later check uses is where the
       // Journey's prefix lands.
       let journeyPrefix: JourneyPrefix | undefined;
+      /** #399: how the prefix was resolved — re-resolved once `${setup.x}` in a --param is bound (goal + --fixtures). */
+      let prefixRequest: Parameters<typeof resolveJourneyPrefix>[0] | undefined;
       const anchoredFlags = [o.fromJourney, o.atStep, o.journeysDir, o.env, o.baseUrl].some((v) => v !== undefined);
       if (anchoredFlags || Object.keys(o.param).length > 0) {
         const refuse = (message: string): void => emitExplore(fail("E_EXPLORE_ARGS", message));
@@ -580,6 +582,10 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         // strategy runs the same way — as a one-stop campaign, whose runner restores around the run.
         const restoredSingle =
           !isSweepMode(o.atStep) && strategy !== "goal" && (o.fixtures !== undefined || o.before !== undefined || o.after !== undefined);
+        if ((isSweepMode(o.atStep) || restoredSingle) && Object.values(o.param).some((v) => v.includes("${setup."))) {
+          refuse("a --param holding ${setup.x} is bound from --fixtures only by a single --strategy goal run; pass the value itself here");
+          return;
+        }
         if (isSweepMode(o.atStep) || restoredSingle) {
           if (o.real !== true && o.fakeAi !== true) {
             emitExplore(fail("E_AI_SETUP_REQUIRED", "a sweep's missions are model-driven: pass --real or --fake-ai"));
@@ -643,7 +649,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           );
           // The environment's own session applies when --storage-state names none (as `journey run`).
           if (o.storageState === undefined && environment?.storageState !== undefined) o.storageState = environment.storageState;
-          journeyPrefix = await resolveJourneyPrefix({
+          prefixRequest = {
             dir: resolveJourneysDir(deps, o.journeysDir),
             id: o.fromJourney,
             atStep: o.atStep,
@@ -652,7 +658,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
             dbPath: resolveDbPath(deps),
             environmentFlags: { ...(o.env === undefined ? {} : { env: o.env }), ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }) },
-          });
+          };
+          journeyPrefix = await resolveJourneyPrefix(prefixRequest);
         } catch (err) {
           if (isEnvironmentError(err) || err instanceof JourneyPrefixArgsError) emitExplore(fail(err.code, err.message));
           else if (err instanceof UnknownJourneyError) emitExplore(fail("E_UNKNOWN_JOURNEY", err.message));
@@ -1368,7 +1375,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ...(target?.fixtures === undefined ? {} : { targetFixtures: target.fixtures }),
           ...(target?.personas === undefined ? {} : { personas: target.personas }),
         });
-        checkSetupRefs({ "--url": o.url, "--goal": o.goal, "--success": o.success, ...invariantSetupTexts(invariants) }, fx);
+        checkSetupRefs({ "--url": o.url, "--goal": o.goal, "--success": o.success, ...invariantSetupTexts(invariants), ...(journeyPrefix === undefined ? {} : { "--param": Object.values(o.param) }) }, fx);
       } catch (err) {
         if (!(err instanceof FixtureSpecError || err instanceof UnboundSetupRefError)) throw err;
         emitExplore(fail(err.code, err.message));
@@ -1406,6 +1413,13 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           successChecks = o.success.map((spec) => parseSuccessSpec(substituteSetupRefs(spec, b, { where: "--success" })));
           // #187: ${setup.x} in the invariants (probe paths, deniedAs.open, capture routes), origin-fixed.
           if (invariants !== undefined) runInvariants = { ...withInvariants, invariants: substituteSpecSetupRefs(invariants, b, url) };
+          // #399: `--param name=${setup.x}` for the Journey prefix is bound to the fixture's output, and the
+          // prefix re-resolved so its secret params (and so every redaction) hold the bound value.
+          if (journeyPrefix !== undefined && prefixRequest !== undefined && Object.values(o.param).some((v) => v.includes("${setup."))) {
+            const params = Object.fromEntries(Object.entries(o.param).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
+            journeyPrefix = await resolveJourneyPrefix({ ...prefixRequest, params });
+            o.secret = [...new Set([...o.secret, ...journeyPrefix.secrets])];
+          }
         } catch (err) {
           if (!(err instanceof FixtureSetupError || err instanceof UnboundSetupRefError)) {
             await fx.restore();
@@ -1451,7 +1465,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ...runInvariants,
           ...triagedServerLog(serverLog, judge, o.real === true),
           ...(fx === undefined ? {} : { fixtures: fx }),
-          ...withPrefix,
+          ...(journeyPrefix === undefined ? {} : { journeyPrefix }), // #399: re-resolved when a --param was bound
         });
         // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
         emitExplore(ok(await withEvidence(result)), result.exitCode);

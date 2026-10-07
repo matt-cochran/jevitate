@@ -122,8 +122,12 @@ export interface RunJourneyProgrammaticallyOptions {
  * #246: a secret parameter's value (declared `secret: true`, or a credential-like name) never comes
  * back in a run's output — the interpreter's vars start as the params, so the value is masked there.
  */
-function redactSecretParams<T>(result: T, journey: Journey, params: Record<string, string>): T {
-  const secrets = secretParamValues(journey, params);
+export function redactSecretParams<T>(result: T, journey: Journey, params: Record<string, string>): T {
+  return redactSecretValues(result, secretParamValues(journey, params));
+}
+
+/** Every string in `result` (deeply) with each secret, in each of its URL forms, masked. */
+export function redactSecretValues<T>(result: T, secrets: readonly string[]): T {
   if (secrets.length === 0) return result;
   const scrub = (v: unknown): unknown =>
     typeof v === "string"
@@ -304,11 +308,24 @@ export async function runJourneyProgrammatically(
       const videos = await finalizeVideos(videoDir, closeSession);
       if (fx === undefined) return { ...result, ...videos, ...shotFields, ...deltaFields };
       await fx.restore();
-      return { ...result, ...videos, ...shotFields, ...deltaFields, fixtures: fx.record() };
+      // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
+      return { ...result, ...videos, ...shotFields, ...deltaFields, fixtures: redactSecretParams(fx.record(), journey, params) };
     } finally {
       await closeSession();
     }
+  } catch (err) {
+    // #399: an error escaping the run (a crash, a closed page) may echo a navigated URL that
+    // carried a secret parameter — its message and stack are redacted, its class kept.
+    throw redactErrorSecrets(err, secretParamValues(journey, { ...inputParams, ...params }));
   } finally {
     await fx?.restore();
   }
+}
+
+/** `err` with every secret (and its URL-encoded forms) masked in its message and stack — same object, same class. */
+export function redactErrorSecrets(err: unknown, secrets: readonly string[]): unknown {
+  if (!(err instanceof Error) || secrets.length === 0) return err;
+  err.message = redactText(err.message, secrets);
+  if (err.stack !== undefined) err.stack = redactText(err.stack, secrets);
+  return err;
 }

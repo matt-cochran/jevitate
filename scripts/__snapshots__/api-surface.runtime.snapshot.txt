@@ -655,7 +655,7 @@
   stylesOf: function
   textIncludesCI: function
 
-# @jevitate/journey (36 exports)
+# @jevitate/journey (37 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
@@ -683,6 +683,7 @@
   journeyBranchPoint: function
   journeyEndState: function
   journeyPrefix: function
+  journeyRunParams: function
   journeyStepCount: function
   listJourneyAnchors: function
   prefixLandingPath: function
@@ -865,7 +866,7 @@
   rungLocator: function
   validateCandidates: function
 
-# @jevitate/recording (76 exports)
+# @jevitate/recording (83 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -883,9 +884,11 @@
   JSON_PATH_EACH: object
   MAX_BUDGETS: const (number)
   MAX_INVARIANTS: const (number)
+  MAX_NAVIGATE_PARAM_LENGTH: const (number)
   MAX_OBSERVABLES: const (number)
   MAX_SETTLE_WITHIN_MS: const (number)
   MIN_SETTLE_POLL_MS: const (number)
+  NavigateUrlParamError: class
   NetworkCheckSchema: object
   OBSERVABLE_NAME_RE: object
   OutcomeCheckSchema: object
@@ -906,9 +909,11 @@
   boundVariables: function
   captureRefs: function
   classifyColumns: function
+  describeNavigateUrl: function
   diffColumns: function
   diffRecordings: function
   diffTakes: function
+  encodeUrlParamValue: function
   evaluateInvariantExpression: function
   expressionObservables: function
   fitInteractionPolicy: function
@@ -924,6 +929,8 @@
   matchesPattern: function
   matchesResponseStatus: function
   mergeInvariantSpecs: function
+  navigateTemplateProblem: function
+  navigateUrlParams: function
   parseInvariantExpression: function
   parseJsonPath: function
   patternRegex: function
@@ -932,6 +939,7 @@
   readJsonPath: function
   readJsonPathList: function
   resolveHttpUrl: function
+  resolveNavigateUrl: function
   rpcMethodOf: function
   spliceRecording: function
   stepSignature: function
