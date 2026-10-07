@@ -13,6 +13,8 @@ export const ALLOWED_TOOLS = [
   "ux_review", "validate_invariants", "get_ai_status",
   // #293 — journey-anchored exploration: a Journey's anchors, and a campaign of anchored missions.
   "journey_anchors", "run_campaign",
+  // #401 — the assertion-strength lint promote_journey applies.
+  "lint_journey",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [
