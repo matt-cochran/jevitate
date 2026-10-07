@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
@@ -50,6 +50,8 @@ beforeAll(async () => {
       return token === SECRET ? html(200, PAGE("Invitation accepted", `<a href="/team">Team</a>`)) : html(403, PAGE("Invalid invitation"));
     }
     if (u.pathname === "/team") return html(200, PAGE("Team"));
+    if (u.pathname === "/api/invite") return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ token: SECRET }));
+    if (u.pathname === "/api/reset") return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
     if (u.pathname === "/drop") return void req.socket.destroy();
     html(404, PAGE("Not found"));
   });
@@ -210,6 +212,31 @@ describe("#399 navigate ${param} — served", () => {
     const env = JSON.parse(r.out) as { ok: boolean; data?: { resultPath?: string; transcriptPath?: string; target?: { seedUrl?: string } } };
     expect(env.ok, r.out + r.err).toBe(true);
     expect(env.data?.target?.seedUrl).toMatch(/\/accept\?token=/);
+    const files = await filesUnder(out);
+    expect(files.some((f) => f.path.endsWith(".result.json"))).toBe(true);
+    for (const f of files) expectNoToken(f.path, f.text);
+    for (const p of [env.data?.resultPath, env.data?.transcriptPath]) if (p !== undefined) expectNoToken(p, await readFile(p, "utf8"));
+  }, 180_000);
+
+  it("explore --from-journey --fixtures with a fixture output as the secret param: bound, and nowhere at rest", async () => {
+    const out = join(root, "anchored-fx");
+    const spec = join(root, "invite-fixture.json");
+    await writeFile(spec, JSON.stringify({
+      setup: [{ name: "invite", method: "POST", url: "/api/invite", outputs: { inviteToken: "$.token" } }],
+      restore: [{ name: "reset", method: "POST", url: "/api/reset" }],
+    }));
+    seen.length = 0;
+    const r = await cli([
+      "explore", "--from-journey", "accept-invite", "--at-step", "1", "--param", "inviteToken=${setup.inviteToken}", "--fixtures", spec,
+      "--journeys-dir", join(root, "journeys"), "--strategy", "goal", "--goal", "open the team page", "--success", "urlIncludes:/team",
+      "--fake-ai", "--max-actions", "2", "--out", out, "--json",
+    ]);
+    expect(seen, r.out + r.err).toContain(SECRET); // the prefix navigated with the fixture's token
+    expectNoToken("explore stdout", r.out);
+    expectNoToken("explore stderr", r.err);
+    const env = JSON.parse(r.out) as { ok: boolean; data?: { resultPath?: string; transcriptPath?: string; fixtures?: unknown } };
+    expect(env.ok, r.out + r.err).toBe(true);
+    expect(env.data?.fixtures).toBeDefined();
     const files = await filesUnder(out);
     expect(files.some((f) => f.path.endsWith(".result.json"))).toBe(true);
     for (const f of files) expectNoToken(f.path, f.text);

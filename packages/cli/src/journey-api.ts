@@ -123,7 +123,11 @@ export interface RunJourneyProgrammaticallyOptions {
  * back in a run's output — the interpreter's vars start as the params, so the value is masked there.
  */
 export function redactSecretParams<T>(result: T, journey: Journey, params: Record<string, string>): T {
-  const secrets = secretParamValues(journey, params);
+  return redactSecretValues(result, secretParamValues(journey, params));
+}
+
+/** Every string in `result` (deeply) with each secret, in each of its URL forms, masked. */
+export function redactSecretValues<T>(result: T, secrets: readonly string[]): T {
   if (secrets.length === 0) return result;
   const scrub = (v: unknown): unknown =>
     typeof v === "string"
