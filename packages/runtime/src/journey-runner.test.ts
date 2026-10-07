@@ -69,7 +69,8 @@ describe("JourneyRunner invariants", () => {
     const r = new JourneyRunner(fakeActor, interp);
     const res = await r.run({ journey: journeyNoVars, params: {}, policy: safeRunPolicy() });
     expect(res).toMatchObject({ outcome: "quarantined", at: 2 });
-    expect((res as any).reason).toMatch(/failed/);
+    // #398: `at` stays the 0-based flat index; the reason names the step 1-based, as a person counts it.
+    expect((res as any).reason).toBe("step 3 failed: boom");
   });
 });
 

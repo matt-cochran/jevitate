@@ -148,7 +148,7 @@ export class JourneyRunner {
         }
         // Invariant #4: no heal (refused, none wired, write floor, or
         // already-attempted this index) -> quarantine, never mask.
-        return { outcome: "quarantined", reason: `step ${result.at} failed: ${result.error}`, at: result.at };
+        return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error}`, at: result.at };
       }
 
       // result.outcome === "completed" — Ruling 3: the interpreter's result
