@@ -621,7 +621,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (32 exports)
+# @jevitate/interpreter (33 exports)
   BufferingSink: class
   DEFAULT_IN_VIEWPORT_MIN: const (number)
   PostconditionFailed: class
@@ -654,8 +654,9 @@
   styleChannel: function
   stylesOf: function
   textIncludesCI: function
+  waitForOutcome: function
 
-# @jevitate/journey (46 exports)
+# @jevitate/journey (47 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
@@ -694,6 +695,7 @@
   mutationPairIssues: function
   mutationProofVerdict: function
   mutationReplay: function
+  mutationWait: function
   planJourneyMutations: function
   prefixLandingPath: function
   resolveJourneyStep: function
@@ -875,7 +877,7 @@
   rungLocator: function
   validateCandidates: function
 
-# @jevitate/recording (83 exports)
+# @jevitate/recording (86 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -901,6 +903,7 @@
   NetworkCheckSchema: object
   OBSERVABLE_NAME_RE: object
   OutcomeCheckSchema: object
+  OutcomeWaitSchema: object
   PostdocDecisionSchema: object
   PostdocDecisionsSchema: object
   READ_RPC_VERB: object
@@ -911,6 +914,8 @@
   StatusSpecSchema: object
   TargetDescriptorSchema: object
   UNKNOWN: const (symbol)
+  WAIT_FOR_MAX_MS: const (number)
+  WAIT_FOR_STALL_MS: const (number)
   WRITE_METHODS: object
   alignTraces: function
   applyDiff: function

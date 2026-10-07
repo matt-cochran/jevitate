@@ -68,6 +68,52 @@ Both fields are optional. A Journey authored before them (a trailing `assert` st
 checks in `metadata.networkChecks`) loads and runs exactly as before: its `networkChecks` are
 judged with the end state.
 
+### Waiting for a long-running job (`waitFor`)
+
+A step's `expect` is checked with a short bounded retry (about 5 s), which is too short for a job
+that takes minutes (generating previews, preparing exports). Declare an outcome wait next to the
+`expect` (or an `assert` step's `check`) instead of raising a global timeout:
+
+```json
+{ "step": { "kind": "click", "target": { "role": "button", "name": "Generate" },
+            "expect": { "kind": "count", "target": { "testId": "variation-preview" }, "min": 3 },
+            "waitFor": { "maxMs": 240000, "until": "held",
+                         "progress": { "kind": "visible", "target": { "css": "[role=status]" } } } } }
+```
+
+| Field | Meaning |
+|---|---|
+| `maxMs` | required: the longest the expectation may take to hold (integer, at most 1 800 000 = 30 min) |
+| `until` | `"held"` (the only mode, and the default): poll until the expectation holds |
+| `progress` | optional: an assertion that shows the job is still working (a status line, a progress bar) |
+| `stallMs` | optional: the hang threshold for `progress` (default 30 000, at least 1 000) |
+| `reload` | optional: reload the page between polls, for a job that finishes server-side on a page that does not live-update (each poll after a reload waits up to 5 s for the page to render) |
+| `pollMs` | optional: time between polls (default 250 ms; 2 s with `reload`; 100–60 000) |
+
+Replay polls the expectation until it holds or `maxMs` passes. With `progress`, the progress
+signal must hold, or its target's text change ("Step 2 of 9" → "Step 3 of 9"), at least once per
+`stallMs`; when it has not for that long, the step fails early as a hang that names the signal,
+not after the whole budget (the same rule as the explore runs' stuck-status and job-wait checks).
+A job that never shows its progress signal at all fails at the hang threshold too. A status that
+stays on screen forever is still "working": the step fails at `maxMs`. A target needs a usable
+selector (`testId`, `role` with `name`, `label`, `text` or `css`): use `{ "css": "[role=status]" }`
+for a bare role.
+
+The run result reports each waited step under `waits`: `step` (1-based), `waitedMs` (the actual
+wait), `maxMs`, `ending` (`held`, `timeout` or `hang`), `polls` and, with `reload`, `reloads`. A
+job that gets slower shows up as a number, not as a flaky pass or fail. A failed wait is a
+postcondition failure: `step 2 failed: click: postcondition failed: kind=count … — waited 240.0s
+(waitFor maxMs 240000); it never held`, or `… — hang: the progress signal (kind=visible …) was
+absent and unchanged for 30.0s …`. Without `waitFor`, a step is checked exactly as before. A
+`waitFor` belongs on a top-level step: a `forEach` child step with one is refused before the replay
+starts. The lint (`journey lint`) judges the `expect` itself; a waited `expect` that claims nothing
+is flagged like any other.
+
+Under `journey verify --mutate`, a waited claim on the mutated step (`skip:<n>`, `block-write:<n>`)
+waits at most its hang threshold (`stallMs`, default 30 s) instead of `maxMs`: the job was never
+started (or its writes were aborted), so the claim must fail, and the proof does not wait out the
+budget to show it. Waits on other steps, and under `stale-value`, keep their `maxMs`.
+
 ### Assertion strength
 
 A green replay only proves something when its assertions can fail for the wrong reason. `journey
@@ -124,7 +170,7 @@ jevitate journey verify checkout --mutate --env staging --param sku=A1 --fixture
 
 | Mutation | What the replay does | Derived for |
 |---|---|---|
-| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood | each write step (the lint's rule) |
+| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits at most its hang threshold) | each write step (the lint's rule) |
 | `block-write:<n>` | aborts the write requests step n sends, from its start until the network settled after it | each write step |
 | `stale-value:<n>` | types `""` into fill step n | each fill whose value a `valueEquals`/`textIncludes` checks |
 

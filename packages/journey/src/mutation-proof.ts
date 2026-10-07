@@ -1,4 +1,5 @@
-import type { Assertion, RecordedStep, Step } from "@jevitate/recording";
+import type { Assertion, OutcomeWait, RecordedStep, Step } from "@jevitate/recording";
+import { WAIT_FOR_STALL_MS } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { journeyWriteSteps, type JourneyLintOptions } from "./lint.js";
@@ -216,6 +217,16 @@ export function planJourneyMutations(
 }
 
 /**
+ * #409: a waited claim on the mutated step itself waits at most the hang threshold (its `stallMs`,
+ * default `WAIT_FOR_STALL_MS`) — the job was skipped or its writes blocked, so the outcome must be
+ * absent; waiting out a long `maxMs` would only make the proof slow. It still FAILS (times out, or
+ * hangs on its progress signal), at that step, as a postcondition: the sensitive verdict.
+ */
+export function mutationWait(wait: OutcomeWait): OutcomeWait {
+  return { ...wait, maxMs: Math.min(wait.maxMs, wait.stallMs ?? WAIT_FOR_STALL_MS) };
+}
+
+/**
  * #402: how to replay one mutation. `journey` is what the replay runs (a copy when the mutation
  * changes a step; the input is never modified, and no step is ever removed, so indices hold);
  * `skipIndex` (0-based) is a step the interpreter leaves out; `blockIndex` (0-based) is the step
@@ -229,7 +240,13 @@ export function mutationReplay(
   const index = m.step - 1;
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
-    return { journey, blockIndex: index, blockRequests: [...requests] };
+    const step = flat(journey)[index]?.step;
+    // #409: the blocked job never runs, so its waited claim waits at most the hang threshold.
+    if (step === undefined || !("waitFor" in step) || step.waitFor === undefined) return { journey, blockIndex: index, blockRequests: [...requests] };
+    const copy = structuredClone(journey);
+    const target = flat(copy)[index]!;
+    target.step = { ...step, waitFor: mutationWait(step.waitFor) } as Step;
+    return { journey: copy, blockIndex: index, blockRequests: [...requests] };
   }
   const step = flat(journey)[index]?.step;
   if (step === undefined) throw new Error(`journey '${journey.metadata.id}' has no step ${m.step}`);
@@ -237,8 +254,14 @@ export function mutationReplay(
   const copy = structuredClone(journey);
   const target = flat(copy)[index]!;
   if (m.kind === "skip" && "expect" in step) {
-    // The action is left out; its own claim is still checked where it stood.
-    target.step = { kind: "assert", ...(step.label === undefined ? {} : { label: step.label }), check: step.expect };
+    // The action is left out; its own claim is still checked where it stood — a waited claim (#409)
+    // still waits, but at most the hang threshold: the job it waits on was never started.
+    target.step = {
+      kind: "assert",
+      ...(step.label === undefined ? {} : { label: step.label }),
+      check: step.expect,
+      ...(step.waitFor === undefined ? {} : { waitFor: mutationWait(step.waitFor) }),
+    };
   } else if (m.kind === "stale-value" && target.step.kind === "fill") {
     target.step = { ...target.step, value: { redacted: false, value: "" } };
   }

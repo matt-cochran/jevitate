@@ -971,7 +971,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (47 exports)
+# @jevitate/interpreter (50 exports)
   anchorLocator: other
   applyTextEdit: other
   attrOf: other
@@ -1013,14 +1013,17 @@
   sizeViolation: other
   StepObserver: other
   StepOutcome: other
+  StepWait: other
+  StepWaitHooks: other
   styleChannel: other
   stylesOf: other
   textIncludesCI: other
   ToRecordingOptions: other
   VisualAssertion: other
   VisualVerdict: other
+  waitForOutcome: other
 
-# @jevitate/journey (83 exports)
+# @jevitate/journey (84 exports)
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1090,6 +1093,7 @@
   mutationReplay: function
   MutationRunResult: interface
   MutationVerdict: type-alias
+  mutationWait: function
   ParamSchema: interface
   ParamValidationError: class
   planJourneyMutations: function
@@ -1378,7 +1382,7 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (148 exports)
+# @jevitate/recording (152 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1466,6 +1470,8 @@
   ObservedValue: type-alias
   OutcomeCheck: type-alias
   OutcomeCheckSchema: variable
+  OutcomeWait: interface
+  OutcomeWaitSchema: variable
   PageSegment: interface
   PageTimingRecord: interface
   parseInvariantExpression: function
@@ -1522,6 +1528,8 @@
   ValidateInvariantOptions: interface
   validateInvariantSpec: function
   ValueOrVar: type-alias
+  WAIT_FOR_MAX_MS: variable
+  WAIT_FOR_STALL_MS: variable
   walkExpression: function
   WRITE_METHODS: variable
   writeClassifier: function

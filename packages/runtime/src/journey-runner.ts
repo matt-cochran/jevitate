@@ -2,7 +2,7 @@ import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, EnterSecret } from "@jevitate/screenplay";
 import type { RunPolicy } from "@jevitate/domain";
 import { deriveParamSchema, secretParamValues, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
-import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult } from "@jevitate/interpreter";
+import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult, type StepWait } from "@jevitate/interpreter";
 import type { Recording } from "@jevitate/recording";
 import {
   SecretOriginMismatchError,
@@ -20,10 +20,17 @@ import { isWriteStep, postconditionOf, healRecording, flattenRecording, type Sel
  * JourneyRunner's success outcome, not a passthrough of anything the
  * interpreter returns.
  */
-export type JourneyRunResult =
+export type JourneyRunResult = (
   | { outcome: "ok"; output: unknown }
   | { outcome: "healed"; output: unknown; healedRecording: Recording; healedAt: number }
-  | { outcome: "quarantined"; reason: string; at?: number };
+  | { outcome: "quarantined"; reason: string; at?: number }
+) & {
+  /**
+   * #409: the actual outcome wait of each step that declared `waitFor` (in run order; a resumed or
+   * healed run's waits included) — a slow job is a performance signal. Absent when no step waited.
+   */
+  waits?: StepWait[];
+};
 
 export interface HandbackHandler {
   present(prompt: string): Promise<void>;
@@ -83,6 +90,17 @@ export class JourneyRunner {
    * here.
    */
   async run(req: JourneyRunRequest): Promise<JourneyRunResult> {
+    // #409: every interpreter pass's step waits, reported on whatever result the run ends with.
+    const waits: StepWait[] = [];
+    const collect = (r: InterpretResult): InterpretResult => {
+      waits.push(...(r.waits ?? []));
+      return r;
+    };
+    const out = await this.#run(req, collect);
+    return waits.length === 0 ? out : { ...out, waits };
+  }
+
+  async #run(req: JourneyRunRequest, collect: (r: InterpretResult) => InterpretResult): Promise<JourneyRunResult> {
     assertCompletePolicy(req?.policy); // #1 — fires before ANY interpreter call
     validateParams(deriveParamSchema(req.journey.recording), req.params); // #5 — before any step
 
@@ -95,7 +113,7 @@ export class JourneyRunner {
     // It starts as the Journey's own recording; a clean (never-healed) run
     // never mutates it.
     let recording: Recording = req.journey.recording;
-    let result = await this.interpreter.run(this.actor, recording, req.params);
+    let result = collect(await this.interpreter.run(this.actor, recording, req.params));
     let healedAt: number | undefined;
     // RULING (invariant #4 / loop-safety, see report): each step index is
     // healed AT MOST once. If a healed splice, once resumed, itself fails
@@ -108,7 +126,7 @@ export class JourneyRunner {
         if (req.policy.secret.secretMode === "vault-autofill") {
           const refusal = await this.fillViaVaultAutofill(req, result);
           if (refusal) return refusal; // quarantined — bail out, never assume success
-          result = await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params);
+          result = collect(await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params));
           continue;
         }
 
@@ -131,7 +149,7 @@ export class JourneyRunner {
             at: result.at,
           };
         }
-        result = await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params);
+        result = collect(await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params));
         continue; // a resumed run may hit another handback.
       }
 
@@ -143,7 +161,7 @@ export class JourneyRunner {
           recording = healed.healedRecording;
           // Resume AT the broken index — the healed recording carries the
           // re-learned replacement step at that same flat position.
-          result = await this.interpreter.resumeFrom(this.actor, recording, result.at, req.params);
+          result = collect(await this.interpreter.resumeFrom(this.actor, recording, result.at, req.params));
           continue;
         }
         // Invariant #4: no heal (refused, none wired, write floor, or

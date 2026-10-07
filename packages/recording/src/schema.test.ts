@@ -528,3 +528,39 @@ describe("RecordingSchema — upload step", () => {
     ).toThrow();
   });
 });
+
+describe("RecordingSchema — #409 per-step outcome wait (waitFor)", () => {
+  const rec = (step: Record<string, unknown>) => ({ version: "1", site: "https://example.test", pages: [{ url: "/", steps: [{ step }] }] });
+  const previews = { kind: "count", target: { testId: "variation-preview" }, min: 3 };
+  const click = { kind: "click", target: { role: "button", name: "Generate" }, expect: previews };
+
+  it("loads the issue's example next to a click's expect, and on an assert step", () => {
+    const waitFor = { maxMs: 240_000, until: "held", progress: { kind: "visible", target: { role: "status" } } };
+    const parsed = RecordingSchema.parse(rec({ ...click, waitFor }));
+    expect(parsed.pages[0]!.steps[0]!.step).toEqual({ ...click, waitFor });
+    expect(() => RecordingSchema.parse(rec({ kind: "assert", check: previews, waitFor: { maxMs: 60_000, reload: true, pollMs: 5_000, stallMs: 20_000 } }))).not.toThrow();
+  });
+
+  it("an old Journey (no waitFor) loads unchanged", () => {
+    expect(RecordingSchema.parse(rec(click)).pages[0]!.steps[0]!.step).toEqual(click);
+  });
+
+  it.each([
+    ["no maxMs", {}],
+    ["maxMs over 30 min", { maxMs: 1_800_001 }],
+    ["maxMs zero", { maxMs: 0 }],
+    ["a fractional maxMs", { maxMs: 1.5 }],
+    ["an unknown until", { maxMs: 1_000, until: "gone" }],
+    ["an unknown key", { maxMs: 1_000, retries: 3 }],
+    ["a progress that is not an assertion", { maxMs: 1_000, progress: { kind: "spinner" } }],
+    ["a poll faster than 100 ms", { maxMs: 1_000, pollMs: 10 }],
+    ["a stall threshold under 1 s", { maxMs: 60_000, stallMs: 500 }],
+  ])("refuses a waitFor with %s", (_why, waitFor) => {
+    expect(() => RecordingSchema.parse(rec({ ...click, waitFor }))).toThrow();
+  });
+
+  it("refuses a waitFor on a step without an expectation (handback, waitFor, forEach)", () => {
+    expect(() => RecordingSchema.parse(rec({ kind: "waitFor", target: { testId: "x" }, state: "visible", waitFor: { maxMs: 1_000 } }))).toThrow();
+    expect(() => RecordingSchema.parse(rec({ kind: "handback", prompt: "p", resume: previews, waitFor: { maxMs: 1_000 } }))).toThrow();
+  });
+});
