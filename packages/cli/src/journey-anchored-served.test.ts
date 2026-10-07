@@ -92,6 +92,18 @@ const PANEL_APP = `<!doctype html><html><head><title>Panel</title></head><body><
     document.getElementById("b").onclick = () => leaf("Showing B");
   </script></main></body></html>`;
 
+/** #398: a page whose only content is a "gone" message — the prefix's next step targets a testId it never renders. */
+const CHAT_APP = `<!doctype html><html><head><title>Chat</title></head><body><main><h1>Chat</h1><p>Chat is unavailable right now</p></main></body></html>`;
+
+/** #398: a page whose visible text echoes a secret field's value — the stale evidence must never leak it. */
+const ECHO_APP = `<!doctype html><html><head><title>Sign in</title></head><body><main>
+  <h1>Sign in</h1>
+  <label>Password <input id="pw" aria-label="Password"></label>
+  <p id="echo"></p>
+  <script>
+    document.getElementById("pw").addEventListener("input", (e) => { document.getElementById("echo").textContent = "You typed " + e.target.value; });
+  </script></main></body></html>`;
+
 let server: Server;
 let origin: string;
 let dir: string;
@@ -108,6 +120,8 @@ beforeAll(async () => {
     if (path === "/wizard") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(WIZARD);
     if (path === "/editor") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(SWEEP_APP);
     if (path === "/panel") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(PANEL_APP);
+    if (path === "/chat") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(CHAT_APP);
+    if (path === "/echo") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(ECHO_APP);
     if (path === "/api/seed" || path === "/api/reset") return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
     res.writeHead(404).end();
   });
@@ -122,6 +136,8 @@ beforeAll(async () => {
   await store.put(orderWithNote("order-noted"));
   await store.put(editorJourney("Passphrase"));
   await store.put(panelJourney());
+  await store.put(staleChatJourney());
+  await store.put(echoJourney());
   // A Journey whose prefix types a secret (a credential-like param name): never into an unredacted strategy.
   await store.put({
     ...order("signin", "Next"),
@@ -206,6 +222,47 @@ function panelJourney(): Journey {
   };
 }
 
+/** #398: a Journey whose second step targets a testId the /chat page never renders. */
+function staleChatJourney(): Journey {
+  return {
+    metadata: { id: "chat", name: "Ask the assistant", promoted: true, params: [], createdAtIso: "2026-10-01T00:00:00.000Z" },
+    recording: {
+      version: "1",
+      site: origin,
+      pages: [
+        {
+          url: "/chat",
+          steps: [
+            { step: { kind: "navigate", url: "/chat", expect: { kind: "visible", target: { role: "heading", name: "Chat" } } } },
+            { step: { kind: "click", target: { testId: "composer" }, expect: { kind: "visible", target: { testId: "composer" } } } },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/** #398: a Journey whose prefix types a secret into /echo (which shows it), then targets a missing testId. */
+function echoJourney(): Journey {
+  return {
+    metadata: { id: "echo", name: "Sign in", promoted: true, params: ["password"], createdAtIso: "2026-10-01T00:00:00.000Z" },
+    recording: {
+      version: "1",
+      site: origin,
+      pages: [
+        {
+          url: "/echo",
+          steps: [
+            { step: { kind: "navigate", url: "/echo", expect: { kind: "visible", target: { role: "heading", name: "Sign in" } } } },
+            { step: { kind: "fill", target: { label: "Password" }, value: { var: "password" }, expect: { kind: "visible", target: { label: "Password" } } }, variableName: "password" },
+            { step: { kind: "click", target: { testId: "submit" }, expect: { kind: "visible", target: { testId: "done" } } } },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 interface CliRun {
   readonly out: string;
   readonly err: string;
@@ -282,6 +339,26 @@ describe("journey-anchored exploration (#293, served)", () => {
     expect(String((data.failure as { message: string }).message)).toMatch(/— step 3 failed: replay-target-not-found/);
     expect(served.filter((s) => s === "GET /wizard")).toHaveLength(1); // the replay's own load; no restart from the URL
     expect(existsSync(out) ? readdirSync(out).filter((f) => f.endsWith(".result.json")) : []).toEqual([]);
+  }, 120_000);
+
+  it("#398: a stale prefix's failure carries the page's visible text — the page, not the chat reply, said it was unavailable", async () => {
+    served.length = 0;
+    const r = await cli([
+      "explore", "--from-journey", "chat", "--at-step", "2", "--journeys-dir", journeysDir,
+      "--strategy", "exploratory", "--fake-ai", "--max-actions", "2", "--out", join(dir, "stale-chat"), "--json",
+    ]);
+    const data = r.envelope!.data!;
+    expect((data.failure as { page: { text: string } }).page.text).toContain("Chat is unavailable right now");
+  }, 120_000);
+
+  it("#398: the stale prefix's page evidence never contains a secret param value", async () => {
+    served.length = 0;
+    const r = await cli([
+      "explore", "--from-journey", "echo", "--at-step", "3", "--param", "password=hunter2", "--journeys-dir", journeysDir,
+      "--strategy", "adversarial", "--fake-ai", "--max-actions", "2", "--out", join(dir, "stale-echo"), "--json",
+    ]);
+    const data = r.envelope!.data!;
+    expect((data.failure as { page: { text: string } }).page.text).not.toContain("hunter2");
   }, 120_000);
 
   it("journey anchors lists the named states and their probes; an unknown Journey is refused", async () => {
