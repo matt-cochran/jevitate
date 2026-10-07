@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, secretParamValues, validateParams, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyLintFinding } from "@jevitate/journey";
 import { redactText } from "@jevitate/ai-core";
 import { safeRunPolicy, type RunPolicy, clock } from "@jevitate/domain";
 import { join } from "node:path";
@@ -31,6 +31,24 @@ export class UnknownJourneyError extends Error {}
  * actual problem instead of a confusing `replay-target-not-found` deep into the steps.
  */
 export class JourneyRequiresAuthError extends Error {}
+
+/**
+ * #401: the Journey's assertions cannot prove its outcome (the `lintJourney` errors). `promote`
+ * refuses unless the reviewer accepts it with a non-empty `--accept-weak <reason>`.
+ */
+export class WeakJourneyError extends Error {
+  constructor(message: string, readonly findings: readonly JourneyLintFinding[] = []) {
+    super(message);
+  }
+}
+
+/** #401: the assertion-strength lint's verdict for one Journey (`journey lint`). */
+export interface JourneyLintResult {
+  id: string;
+  findings: JourneyLintFinding[];
+  errors: number;
+  warnings: number;
+}
 
 export interface RunJourneyProgrammaticallyOptions {
   /** Directory a `FsJourneyStore` reads Journey JSON files from. */
@@ -150,20 +168,64 @@ export function prefixParams(full: Journey, prefix: Journey, params: Record<stri
 }
 
 /**
+ * #401: the assertion-strength lint (#401) for one Journey by id — an unknown id is refused,
+ * exactly as `journey run`/`promote` refuse one (`UnknownJourneyError`). Pure read; no browser.
+ */
+export async function lintJourneyById(
+  dir: string,
+  id: string,
+  opts: { readRequests?: readonly string[] } = {},
+): Promise<JourneyLintResult> {
+  const registry = new JourneyRegistry(new FsJourneyStore(dir));
+  const journey = await registry.get(id);
+  if (!journey) {
+    throw new UnknownJourneyError(`unknown journey '${id}'`);
+  }
+  const findings = lintJourney(journey, opts.readRequests === undefined ? {} : { readRequests: opts.readRequests });
+  return {
+    id,
+    findings,
+    errors: findings.filter((f) => f.level === "error").length,
+    warnings: findings.filter((f) => f.level === "warning").length,
+  };
+}
+
+/**
  * Promotes a local Journey (#124, mirrors `promoteMissionTarget` in
  * `mission-api.ts`) so it becomes discoverable via `journey find`/MCP
  * `find_capabilities` and runnable via `run_journey` — a human-approval gate,
  * same as `mission target promote`. An unknown id is refused with
  * `UnknownJourneyError` (never silently created). Returns the persisted,
  * now-promoted Journey.
+ *
+ * #401: lints first — a Journey whose assertions cannot prove its outcome is refused
+ * (`WeakJourneyError`) unless the reviewer accepts it with a non-empty `--accept-weak <reason>`,
+ * which is recorded on the Journey (`metadata.acceptedWeak`). Warnings never block.
  */
-export async function promoteJourney(dir: string, id: string): Promise<Journey> {
+export async function promoteJourney(dir: string, id: string, opts: { acceptWeak?: string } = {}): Promise<Journey> {
   const store = new FsJourneyStore(dir);
   const registry = new JourneyRegistry(store);
 
   const existing = await registry.get(id);
   if (!existing) {
     throw new UnknownJourneyError(`unknown journey '${id}'`);
+  }
+  const errors = lintJourney(existing).filter((f) => f.level === "error");
+  const reason = opts.acceptWeak?.trim() ?? "";
+  if (errors.length > 0 && reason === "") {
+    throw new WeakJourneyError(
+      [
+        `journey '${id}' has ${errors.length} assertion-strength error(s):`,
+        ...errors.map((f) => f.message),
+        "strengthen the Journey or pass --accept-weak <reason>",
+      ].join("\n"),
+      errors,
+    );
+  }
+  if (errors.length > 0) {
+    const acceptedWeak = { reason, rules: [...new Set(errors.map((f) => f.rule))] };
+    await store.put({ ...existing, metadata: { ...existing.metadata, promoted: true, acceptedWeak } });
+    return (await registry.get(id)) ?? { ...existing, metadata: { ...existing.metadata, promoted: true, acceptedWeak } };
   }
   await registry.promote(id);
   const promoted = await registry.get(id);

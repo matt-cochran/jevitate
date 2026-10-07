@@ -68,6 +68,12 @@ export interface JourneyMetadata {
    * Journeys (an old Journey's `networkChecks` still run; see `journeyEndState`). Additive.
    */
   endState?: OutcomeCheck[];
+  /**
+   * #401 — a weak Journey a reviewer explicitly accepted at `journey promote`: the reason they gave
+   * and the assertion-strength rules they waived. Additive: a Journey without it validates and runs
+   * exactly as before.
+   */
+  acceptedWeak?: { reason: string; rules: string[] };
 }
 
 /** #322: an expected HTTP status — a class (`2xx`) or an exact code (`201`). */
@@ -194,6 +200,10 @@ export const JourneySchema: ZodType<Journey> = z.object({
       .optional(),
     networkChecks: z.array(JourneyNetworkCheckSchema).max(20).optional(),
     endState: z.array(OutcomeCheckSchema).max(50).optional(),
+    acceptedWeak: z
+      .object({ reason: z.string().min(1), rules: z.array(z.string()) })
+      .strict()
+      .optional(),
   }).strict(),
   recording: RecordingSchema,
 }).superRefine((j, ctx) => {

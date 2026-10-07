@@ -68,6 +68,31 @@ Both fields are optional. A Journey authored before them (a trailing `assert` st
 checks in `metadata.networkChecks`) loads and runs exactly as before: its `networkChecks` are
 judged with the end state.
 
+### Assertion strength
+
+A green replay only proves something when its assertions can fail for the wrong reason. `journey
+lint` reports the assertions that cannot, and `journey promote` runs the same lint first: a Journey
+with any error-level finding is refused unless the reviewer accepts it with `--accept-weak
+"<reason>"`. Gate CI on the lint (exit 1 when any error) with:
+
+```bash
+jevitate journey lint checkout                  # one line per finding, then a summary
+jevitate journey lint checkout --json           # { id, findings, errors, warnings }
+jevitate journey lint checkout --sarif lint.sarif
+```
+
+| Rule | Level | Flags |
+|---|---|---|
+| `own-target-visible` | error | A step's `expect` only restates that the step's own target is visible — true before and after the step, so it proves nothing |
+| `write-without-effect` | error | A state-changing step (a write) has no assertion on its effect |
+| `visibility-only` | error | Every assertion is a bare `visible` (or the step's own target), so the Journey cannot fail for the wrong reason |
+| `nothing-after-last-write` | error | No effect assertion follows the last state-changing step |
+| `no-persistence-check` | warning | A write has no `reloadThen` end-state check, so persistence is unverified |
+| `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion |
+
+Warnings never block promotion. `--accept-weak "<reason>"` records the reason and the waived error
+rules in the Journey's `metadata.acceptedWeak`.
+
 Each take (the discovery and every corroborating one) is a full `explore --strategy goal` run, so
 the author command takes the same run-shaping flags: `--secret`, `--secret-field` (including
 `cmd:` sources with `--allow-secret-cmd` and `--secret-cmd-attempts`), `--totp`, `--type-fixture`,
@@ -115,6 +140,8 @@ jevitate journey annotate checkout --real                   # draft each step's 
 jevitate load run checkout --authorized-origin http://localhost:3000 --concurrency 5 --iterations 10 --seed 1
 ```
 
+- `journey lint checkout` (or `promote`'s own gate) reports assertions that cannot prove the
+  outcome before a Journey is promoted.
 - `--self-heal fail-closed` (the default) stops and quarantines on a broken step. `hybrid` and
   `full` re-learn only the broken step and need `--real` (or `--fake-ai`). Write and irreversible
   steps are never auto-healed in any mode.

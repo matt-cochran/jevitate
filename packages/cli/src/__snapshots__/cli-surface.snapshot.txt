@@ -352,7 +352,7 @@
     - flags=--secret-field <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal/usability strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}. A value delivered during the run (an emailed code): '<descriptor>=cmd:<command>' runs the command when the field is typed and types its stdout (needs --allow-secret-cmd)
     - flags=--settle-ignore <pattern> required=true mandatory=false negate=false variadic=false default=[] description=a request URL pattern the target marks as background (never pending work; repeatable, * wildcard)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist
-    - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=[] description=independent success check (repeatable; all must hold), any explore --success kind but reloadThen, e.g. urlIncludes:/confirmed or 'requestMade:POST /api/save': a page check becomes the Journey's last assert step, a requestMade/responseStatus check is re-checked over every replay's requests
+    - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=[] description=independent success check (repeatable; all must hold), any explore --success kind, e.g. urlIncludes:/confirmed, 'reloadThen:textIncludes:css=main|Saved' or 'responseStatus:POST /api/save=2xx': every check is kept as the Journey's end state and re-checked after every replay's last step
     - flags=--success-when <when> required=true mandatory=false negate=false variadic=false default=null description=when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast) | each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final
     - flags=--takes <n> required=true mandatory=false negate=false variadic=false default=1 description=corroborating takes incl. discovery (default 1)
     - flags=--totp <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk
@@ -551,6 +551,15 @@
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
+# journey lint
+  description: report a Journey's weak assertions (writes without an asserted effect, visibility-only claims, nothing after the last write, …)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--sarif <file> required=true mandatory=false negate=false variadic=false default=null description=also write a SARIF 2.1.0 log here
+
 # journey list
   description: 
   options:
@@ -562,6 +571,7 @@
   arguments:
     - name=id required=true variadic=false default=null
   options:
+    - flags=--accept-weak <reason> required=true mandatory=false negate=false variadic=false default=null description=#401: promote a Journey whose assertions cannot prove its outcome, recording the reason
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 

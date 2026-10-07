@@ -135,7 +135,14 @@ describe("#124: promoteJourney", () => {
     const store = new FsJourneyStore(dir);
     await store.put({
       metadata: { id: "draft", name: "draft", promoted: false, params: [], createdAtIso: "2026-09-24T00:00:00Z" },
-      recording: { version: "1", site: "https://example.test", pages: [] },
+      // #401: strengthened so the promote gate does not refuse it (an effect assertion, not just visibility).
+      recording: {
+        version: "1",
+        site: "https://example.test",
+        pages: [
+          { url: "/", steps: [{ step: { kind: "assert", check: { kind: "textIncludes", target: { testId: "ok" }, text: "OK" } } }] },
+        ],
+      },
     } as any);
 
     const result = await promoteJourney(dir, "draft");
