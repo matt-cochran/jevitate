@@ -200,6 +200,25 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     },
   },
   {
+    name: "verify_journey",
+    description:
+      "`jevitate journey verify <id> --mutate` (#402): prove each assertion can fail. Replays the Journey once (it must pass), then once per mutation — a write step skipped, its write request aborted, a typed value left empty — and reports each assertion as sensitive (failed for the right reason), insensitive (still passed: vacuous), cascade, not-applied or unpaired. Mutations only skip steps or abort the app's own writes; nothing is fabricated. Exit 1 when any paired assertion is insensitive, 2 when nothing could be proven. Set mutate: true.",
+    command: {
+      path: "journey verify",
+      params: {
+        id: pos(),
+        ...EXTENSION,
+        mutate: b("--mutate"),
+        params: { kind: "params", flag: "--param" },
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        ...ENVIRONMENT,
+      },
+      omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
     name: "publish_journey",
     description: "`jevitate journey publish <id> --to <source>`: publish a promoted Journey into a registered source on a new publish/<id> branch (a PR when gh is available). Secret references only; declared origins must cover its steps.",
     command: {
