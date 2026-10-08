@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { FindingSchema, JourneyCatalogLinksSchema } from "./catalog-schema.js";
+import { AcceptedFindingsSchema } from "./journey.js";
 
 /**
  * #432 — the JSON shape of a Journey's review sheet (`jevitate journey review <id> --json`, MCP
@@ -134,9 +136,19 @@ export const JourneyReviewSchema = z
       .strict(),
     changeSinceApproval: ReviewChangeSchema,
     approval: z
-      .object({ contentHash: z.string(), at: z.string(), acceptedWeak: z.object({ reason: z.string(), rules: z.array(z.string()) }).strict().optional() })
+      .object({
+        contentHash: z.string(),
+        at: z.string(),
+        acceptedWeak: z.object({ reason: z.string(), rules: z.array(z.string()) }).strict().optional(),
+        waivers: z.array(z.object({ kind: z.literal("unvetted"), reason: z.string(), items: z.array(z.string()) }).strict()).optional(),
+        acceptedFindings: AcceptedFindingsSchema.optional(),
+      })
       .strict()
       .optional(),
+    /** #433: the Journey's catalog links (job, persona) and their approval state — set when the catalog was loaded. */
+    catalog: JourneyCatalogLinksSchema.optional(),
+    /** #433: the pre-approval findings (`preApprovalFindings`) — set when the catalog was loaded. */
+    findings: z.array(FindingSchema).optional(),
     /** `journeyReviewHash`: what `journey promote --reviewed-hash` binds an approval to. */
     contentHash: z.string().regex(/^[0-9a-f]{64}$/),
   })

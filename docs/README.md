@@ -23,6 +23,8 @@ full flag list, or see the generated [CLI reference](./cli.md).
 - [Fixtures](./fixtures.md): known state before every run and every replay.
 - [Browser extensions](./extensions.md): load an unpacked extension (`--extension`) and drive its
   side panel, popup or options page.
+- [The catalog](./catalog.md): personas and job stories a person signed off, linked to Journeys;
+  promotion order, staleness ("needs re-review"), pre-approval findings and `catalog status`.
 - [Repeats, personas and actors](./multi-run.md): vote across runs, diff roles, check cross-tenant
   isolation; mint persona sessions with `jevitate login` and catch expired ones before a run starts.
 - [Sweeps](./sweeps.md): many targets × personas from one targets file, with concurrency,

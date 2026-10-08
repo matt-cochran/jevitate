@@ -109,6 +109,9 @@ export const OMIT = {
   tou: "accepting a third-party source's Terms of Use is a person's decision (like approve_action): MCP can add, pull and run a source, never accept for them",
   acceptWeak: "#401: promoting a Journey whose assertions cannot prove its outcome is a reviewer's waiver (recorded on the Journey): a person's decision on the CLI, never a request's",
   reviewSheet: "#432: a review sheet FILE is what a person read on their screen; over MCP the same binding is the reviewedHash argument (the sheet's content hash from review_journey)",
+  acceptFindings:
+    "#433: approving despite pre-approval findings that need an acknowledgment (conflicts, broken links, …) is the approver's own judgment, recorded with the approval: a person's decision on the CLI (like --accept-weak), never a request's",
+  catalogRendering: "#433: review_persona / review_job / catalog_status return the schema-checked JSON; the Markdown/text renderings and writing them to a file are for people at the CLI",
   reviewRendering: "#432: review_journey returns the schema-checked JSON sheet; the Markdown/text renderings and writing them to a file are for people at the CLI",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
@@ -158,9 +161,29 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
     command: {
       path: "journey promote",
-      params: { id: pos(), reviewedHash: s("--reviewed-hash") },
-      omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, "--review-sheet": OMIT.reviewSheet, ...JSON_FLAG },
+      params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted") },
+      omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, "--review-sheet": OMIT.reviewSheet, "--accept-findings": OMIT.acceptFindings, ...JSON_FLAG },
     },
+  },
+  {
+    name: "review_persona",
+    description:
+      "`jevitate persona review <id> --json` (#433): read-only. A catalog persona's review sheet — description, account role, session presence (never a credential), the jobs it serves, the Journeys linked to it, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "Approving a persona is a person's act on the CLI (`jevitate persona approve`): there is no MCP tool for it.",
+    command: { path: "persona review", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "review_job",
+    description:
+      "`jevitate job review <id> --json` (#433): read-only. A catalog job's review sheet — its job story (\"When …, I want to …, so I can ….\"), its personas and which of them have a promoted Journey for it, the gaps, its Journeys, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "Approving a job is a person's act on the CLI (`jevitate job approve`): there is no MCP tool for it.",
+    command: { path: "job review", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "catalog_status",
+    description:
+      "`jevitate catalog status --json` (#433): read-only. The catalog's coverage — the jobs × personas matrix (which pairs have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links, and stale approvals (edited personas/jobs and the Journeys linked to them: needs re-review).",
+    command: { path: "catalog status", params: {}, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "review_journey",
@@ -282,8 +305,19 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1).",
     command: {
       path: "demo approve",
-      params: { ...EXTENSION, id: pos(), out: path("--out"), pace: n("--pace"), storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, ...EMULATION, ...DEMO_SHOW },
-      omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      params: {
+        ...EXTENSION,
+        id: pos(),
+        out: path("--out"),
+        pace: n("--pace"),
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        ...EMULATION,
+        ...DEMO_SHOW,
+        acceptUnvetted: s("--accept-unvetted"),
+      },
+      omitted: { "--dir": OMIT.storeDir, "--accept-findings": OMIT.acceptFindings, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {

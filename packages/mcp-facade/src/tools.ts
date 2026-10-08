@@ -19,11 +19,16 @@ export const ALLOWED_TOOLS = [
   "run_sweep",
   // #432 — the read-only review sheet a person reads before promote_journey (bound by its content hash).
   "review_journey",
+  // #433 — the read-only catalog sheets (personas, jobs) and coverage. Approving a persona or a job
+  // is a person's act on the CLI: approve_persona / approve_job are FORBIDDEN below.
+  "review_persona", "review_job", "catalog_status",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [
   "browser_click", "browser_fill", "page_evaluate", "run_selector",
   "navigate_url", "get_dom", "get_cookies",
+  // #433: catalog sign-off is human-only (`jevitate persona|job approve` on the CLI).
+  "approve_persona", "approve_job",
 ] as const;
 
 export function listToolNames(): string[] {

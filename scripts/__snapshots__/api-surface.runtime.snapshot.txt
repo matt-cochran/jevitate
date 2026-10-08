@@ -701,20 +701,31 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (54 exports)
+# @jevitate/journey (66 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
+  AcceptedFindingsSchema: object
   AnnotationDraftMismatchError: class
   AnnotationDraftSchema: object
   AnnotationDraftStepSchema: object
   CAMPAIGN_LIMITS: object
+  CATALOG_ID_RE: object
   CampaignSpecSchema: object
+  CatalogApprovalSchema: object
+  CatalogStatusSchema: object
+  CatalogStatusValueSchema: object
+  FindingSchema: object
   FsJourneyStore: class
+  JOB_PRIORITIES: array
+  JobReviewSchema: object
+  JobSchema: object
+  JourneyCatalogLinksSchema: object
   JourneyRegistry: class
   JourneyReviewSchema: object
   JourneySchema: object
   JourneyStepError: class
   ParamValidationError: class
+  PersonaReviewSchema: object
   ReviewChangeSchema: object
   ReviewLintFindingSchema: object
   ReviewRiskyControlSchema: object
@@ -750,6 +761,7 @@
   mutationWait: function
   planJourneyMutations: function
   prefixLandingPath: function
+  renderJobStory: function
   resolveJourneyStep: function
   secretParamNames: function
   secretParamValues: function

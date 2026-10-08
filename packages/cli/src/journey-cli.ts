@@ -13,6 +13,9 @@ import { runJourneyProgrammatically, promoteJourney, lintJourneyById, WeakJourne
 import { ReviewSheetError, renderReviewMarkdown, renderReviewText, reviewSheetHash } from "./journey-review.js";
 import { reviewJourneyById } from "./journey-review-api.js";
 import { ReviewSidecarError } from "./journey-review-store.js";
+import { UnvettedLinksError, resolveCatalogDir } from "./catalog-api.js";
+import { CatalogInputError } from "./catalog.js";
+import { ApprovalFindingsError } from "./pre-approval.js";
 import { TargetConfigError } from "./target-config.js";
 import { ExtensionMismatchError } from "./browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
@@ -338,14 +341,18 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--accept-weak <reason>", "#401: promote a Journey whose assertions cannot prove its outcome, recording the reason")
     .option("--reviewed-hash <hash>", "#432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since")
     .option("--review-sheet <file>", "#432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash")
+    .option("--accept-unvetted <reason>", "#433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers")
+    .option("--accept-findings <reason>", "#433: promote although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet } = this.opts<{
+      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings } = this.opts<{
         dir?: string;
         json?: boolean;
         acceptWeak?: string;
         reviewedHash?: string;
         reviewSheet?: string;
+        acceptUnvetted?: string;
+        acceptFindings?: string;
       }>();
       try {
         const journeysDir = resolveJourneysDir(deps, dir);
@@ -372,13 +379,16 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         }
         if (!json) {
           // Human mode: the sheet is shown before promoting, and the approval binds to what was shown.
-          const { review } = await reviewJourneyById(journeysDir, id, targetsOpts(deps));
+          const { review } = await reviewJourneyById(journeysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir) });
           program.configureOutput().writeOut?.(`${renderReviewText(review)}\n`);
           reviewedHash ??= review.contentHash;
         }
         const journeyResult = await promoteJourney(journeysDir, id, {
           ...(acceptWeak === undefined ? {} : { acceptWeak }),
           ...(reviewedHash === undefined ? {} : { reviewedHash }),
+          ...(acceptUnvetted === undefined ? {} : { acceptUnvetted }),
+          ...(acceptFindings === undefined ? {} : { acceptFindings }),
+          catalogDir: resolveCatalogDir(deps.catalogDir),
         });
         const envelope = ok(journeyResult.metadata);
         if (json) {
@@ -400,6 +410,12 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           }
           emitJson(program, fail("E_JOURNEY_WEAK", String(err.message)));
           process.exitCode = 1;
+        } else if (err instanceof UnvettedLinksError || err instanceof ApprovalFindingsError) {
+          // #433: a gate on the catalog — exit 1 (a gating finding), like E_JOURNEY_WEAK.
+          emitJson(program, fail(err.code, err.message));
+          process.exitCode = 1;
+        } else if (err instanceof CatalogInputError) {
+          emitJson(program, fail(err.code, err.message));
         } else {
           emitJson(program, fail("E_JOURNEY_PROMOTE", String(err instanceof Error ? err.message : err)));
         }
@@ -422,7 +438,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         return;
       }
       try {
-        const { review } = await reviewJourneyById(resolveJourneysDir(deps, dir), id, targetsOpts(deps));
+        const { review } = await reviewJourneyById(resolveJourneysDir(deps, dir), id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir) });
         const rendered = json ? `${JSON.stringify(review, null, 2)}\n` : markdown ? renderReviewMarkdown(review) : renderReviewText(review);
         if (outFile !== undefined) await writeFile(outFile, rendered, { mode: 0o600 });
         if (json) {
@@ -436,7 +452,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       } catch (err) {
         if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
-        } else if (err instanceof ReviewSidecarError) {
+        } else if (err instanceof ReviewSidecarError || err instanceof CatalogInputError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof TargetConfigError) {
           emitJson(program, fail("E_TARGET_CONFIG", err.message));

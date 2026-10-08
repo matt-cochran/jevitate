@@ -32,7 +32,14 @@ jobs. Anchor everything on the jobs users actually do. Load `jevitate-explore`,
 ## 2. Build the job catalog first
 
 List every user job from the app's routes, API surface and product docs: persona, job, and the
-signal that proves it worked. Write one goal spec per job (template below): the outcome only,
+signal that proves it worked. Write each job as a job story in `.jevitate/jobs.json` (template
+below): "When [trigger], I want to [motivation], so I can [outcome]." (`trigger`, `motivation`,
+`outcome`, all required), the `personas` it serves (ids from `.jevitate/personas.json`, with a
+`description` and `role` each) and a `priority`. Ask the human to review and approve each one
+(`jevitate job review <id>`, `jevitate persona review <id>`, then `job|persona approve`: human
+only, CLI only, never do it yourself). Link each Journey you draft with `metadata.job` and
+`metadata.persona`, so `journey promote` checks that its job and persona were vetted (see
+docs/catalog.md). Add the planning fields to each job: the outcome only,
 never the click path; independent `--success` checks (page or network state); preconditions;
 whether it mutates state; and a run order (jobs that create data run before jobs that use it).
 A job you can't write a checkable `--success` for is too vague. Split it or narrow it.
@@ -148,18 +155,26 @@ broken check, never green.
 
 ## 10. The gate
 
-Release only when: every job in the catalog has a promoted Journey that passes; every finding is
+Read `jevitate catalog status --json` (MCP `catalog_status`) first: every approved job must have
+a promoted Journey for each persona it serves (no `gaps`), nothing in `stale` (needs re-review),
+and no `danglingLinks`. Release only when: every job in the catalog has a promoted Journey that passes; every finding is
 `fixed` by verify-fix (with a ledger entry or regression); the final round ran on the release
 build; and no `inconclusive` run was counted as a pass. Anything short of that, report it as open.
 
 ## Templates
 
-Job spec (one per job, `.jevitate/campaign/jobs.json`) — the catalog you plan from:
+Job spec (one per job, `.jevitate/jobs.json`; the old `.jevitate/campaign/jobs.json` is still
+read when `jobs.json` does not exist). This is the catalog you plan from. The story parts are
+required, and the rest is planning:
 
 ```json
 [{
   "id": "invite-teammate",
-  "persona": "admin",
+  "trigger": "a new colleague joins my team",
+  "motivation": "invite them by email",
+  "outcome": "work on our projects together from their first day",
+  "personas": ["admin"],
+  "priority": "high",
   "storageState": "~/.jevitate/sessions/admin.json",
   "goal": "invite a new teammate by email and see them listed as pending",
   "success": ["textIncludes:role=table|Pending", "responseStatus:POST /api/invites=2xx"],

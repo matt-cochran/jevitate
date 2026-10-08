@@ -78,6 +78,7 @@ you do, show them what they are approving:
 - approving a demo, which promotes its Journey: `jevitate demo approve <id>` / `approve_demo`
 - promoting a mission target: `jevitate mission target promote <id>`
 - trusting a third-party Journey or accepting a source's Terms of Use (CLI only)
+- approving a catalog persona or job, waiving an unvetted link, acknowledging findings: `jevitate persona approve <id>`, `jevitate job approve <id>`, `journey promote --accept-unvetted`, `--accept-findings` (approve and acknowledge are CLI only; MCP reads `review_persona` / `review_job` / `catalog_status`)
 - approving or cancelling an inbox item: only in `jevitate ui`. The MCP tools `approve_action` and `cancel_command` always refuse.
 
 ## 5. Exit codes (every command)

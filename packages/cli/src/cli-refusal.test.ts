@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command, CommanderError } from "commander";
@@ -23,6 +23,7 @@ let validScript: string;
 let badProduct: string;
 let suiteOffAllowlist: string;
 let suiteUnknownFingerprint: string;
+let badCatalog: string;
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "jev-cli-refusal-"));
@@ -39,6 +40,10 @@ beforeAll(() => {
   // #198: a product facts file with a negative price and an unknown key.
   badProduct = join(dir, "product.json");
   writeFileSync(badProduct, JSON.stringify({ version: 1, plans: [{ name: "Pro", prices: [{ amount: -1, interval: "month" }] }], extra: true }));
+  // #433: a catalog whose jobs.json holds a job without its story's trigger.
+  badCatalog = join(dir, "bad-catalog");
+  mkdirSync(badCatalog, { recursive: true });
+  writeFileSync(join(badCatalog, "jobs.json"), JSON.stringify([{ id: "j", motivation: "m", outcome: "o" }]));
   validScript = join(dir, "script.json");
   writeFileSync(validScript, JSON.stringify([{ kind: "click", label: "open menu" }]));
   // A mission whose start URL (the target's own) is off the target's `allow` list, and a verifyFix
@@ -78,6 +83,7 @@ function deps(): CliDeps {
     profiles: new ProfileManager(join(dir, "profiles")),
     dbPath: join(dir, "site.sqlite"),
     journeysDir: join(dir, "journeys"),
+    catalogDir: join(dir, "catalog"),
     missionTargetsDir: join(dir, "targets"),
     inboxDir: join(dir, "inbox"),
     explore: { judge: new FakeJudgmentGateway({}), gen: new FakeGenerationGateway(), browserPortFactory: () => refusingPort },
@@ -165,6 +171,12 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "journey promote": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"]] },
   "journey lint": { cases: [["nope"], ["../x"]] },
   "journey review": { cases: [["nope"], ["../x"]] },
+  // #433: an unknown persona/job, a malformed --reviewed-hash, an invalid catalog file.
+  "persona review": { cases: [["nope"], ["nope", "--dir", badCatalog]] },
+  "persona approve": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"], ["nope", "--accept-findings", " "]] },
+  "job review": { cases: [["nope"], ["j", "--dir", badCatalog]] },
+  "job approve": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"], ["j", "--dir", badCatalog]] },
+  "catalog status": { cases: [["--dir", badCatalog]] },
   "journey verify": { cases: [["nope", "--mutate"], ["nope"], ["nope", "--mutate", "--storage-state", missing]] },
   // #293: an unknown Journey (or an id that tries to leave the store) is refused.
   "journey anchors": { cases: [["nope"], ["../x"]] },

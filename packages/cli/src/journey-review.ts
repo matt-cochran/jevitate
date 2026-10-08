@@ -18,7 +18,10 @@ import {
   type JourneyReviewStep,
   type JourneyReviewVerify,
   type JourneyReviewWriteRequest,
+  type JourneyCatalogLinks,
+  type Finding,
 } from "@jevitate/journey";
+import { renderFindings } from "./catalog-review.js";
 import { SafetyPolicy, describeCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
 
@@ -64,6 +67,8 @@ export interface JourneyReviewContext {
   readonly approvedSnapshot?: Journey | null;
   /** The last recorded mutation-proof verdict, or null when there is none. */
   readonly lastVerify?: JourneyVerifyRecord | null;
+  /** #433: the Journey's catalog links and its pre-approval findings (the CLI loads the catalog). */
+  readonly catalog?: { readonly links: JourneyCatalogLinks; readonly findings: readonly Finding[] };
 }
 
 function targetOf(step: Step): TargetDescriptor | undefined {
@@ -386,8 +391,11 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
             contentHash: m.approval.contentHash,
             at: m.approval.at,
             ...(m.approval.acceptedWeak === undefined ? {} : { acceptedWeak: { reason: m.approval.acceptedWeak.reason, rules: [...m.approval.acceptedWeak.rules] } }),
+            ...(m.approval.waivers === undefined ? {} : { waivers: m.approval.waivers.map((w) => ({ kind: w.kind, reason: w.reason, items: [...w.items] })) }),
+            ...(m.approval.acceptedFindings === undefined ? {} : { acceptedFindings: { reason: m.approval.acceptedFindings.reason, findings: [...m.approval.acceptedFindings.findings] } }),
           },
         }),
+    ...(ctx.catalog === undefined ? {} : { catalog: ctx.catalog.links, findings: [...ctx.catalog.findings] }),
     contentHash: hash,
   };
 }
@@ -521,6 +529,32 @@ function renderSheet(r: JourneyReview, style: Style): string {
     }
   }
   section(h2("Change since last approval"), "", ...change);
+
+  // #433: the catalog links (job, persona), then the pre-approval findings — before the approval line.
+  if (r.catalog !== undefined) {
+    const k = r.catalog;
+    const status = (st: string): string => (st === "stale" ? "STALE — needs re-review" : st === "unknown" ? "UNKNOWN — not declared in the catalog" : st);
+    section(
+      h2("Catalog"),
+      "",
+      ...(k.linked
+        ? [
+            li(k.job === undefined ? `Job: ${em("none")}` : `Job: ${code(k.job.id)} (${status(k.job.status)})${k.job.story === undefined ? "" : ` — ${k.job.story}`}`),
+            li(k.persona === undefined ? `Persona: ${em("none")}` : `Persona: ${code(k.persona.id)} (${status(k.persona.status)})`),
+            ...(k.unvetted.length === 0 ? [] : [li(`Unvetted: ${k.unvetted.join(", ")} — promote needs them approved, or --accept-unvetted "<reason>"`)]),
+            ...(k.needsReReview.length === 0 ? [] : [li(`NEEDS RE-REVIEW: ${k.needsReReview.join("; ")}`)]),
+          ]
+        : [li(em("not linked to a job/persona"))]),
+    );
+  }
+  if (r.findings !== undefined) section(...renderFindings(r.findings, style));
+  if (r.approval?.waivers !== undefined || r.approval?.acceptedFindings !== undefined) {
+    section(
+      h3("Recorded with the last approval"),
+      ...(r.approval.waivers ?? []).map((w) => li(`waived (${w.kind}): "${w.reason}" — ${w.items.join(", ")}`)),
+      ...(r.approval.acceptedFindings === undefined ? [] : [li(`acknowledged findings: "${r.approval.acceptedFindings.reason}" — ${r.approval.acceptedFindings.findings.join(", ")}`)]),
+    );
+  }
 
   section(
     h2("Content hash"),

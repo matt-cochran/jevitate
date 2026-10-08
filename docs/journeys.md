@@ -249,6 +249,17 @@ it showed. Every promotion — `journey promote` and `demo approve` alike — re
 --mutate` records its last verdict at `.jevitate/journeys/.verify/<id>.json` (bound to the same
 hash). The [assertion-strength gate](#assertion-strength) still applies: `--accept-weak` is recorded in the approval too.
 
+**Catalog links (#433).** A Journey can link the job it does and the persona doing it
+(`metadata.job`, `metadata.persona`: ids from `.jevitate/jobs.json` and `.jevitate/personas.json`,
+see [the catalog](./catalog.md)). The sheet then has a **Catalog** section: the linked job (its
+story) and persona with their approval state, and **needs re-review** when the Journey or a linked
+item changed since its approval. `journey promote` (and `demo approve`) refuses a Journey whose
+linked job or persona is not approved (`E_JOURNEY_UNVETTED`, exit 1) unless you pass
+`--accept-unvetted "<reason>"`, which is recorded in `metadata.approval.waivers`. An unlinked
+Journey promotes as before. Every sheet also lists the **pre-approval findings**. When one needs
+an acknowledgment, promotion is refused (`E_APPROVAL_FINDINGS`, exit 1) unless you pass
+`--accept-findings "<reason>"`, which is recorded in `metadata.approval.acceptedFindings`.
+
 ## Record a flow by demonstration
 
 ```bash
