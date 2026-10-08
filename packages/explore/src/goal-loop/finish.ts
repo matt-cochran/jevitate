@@ -5,6 +5,7 @@
  */
 
 import { answerNotFoundReason } from "../answer.js";
+import { buildPartialReport } from "../partial-report.js";
 import type { RunOutcome } from "../conversation.js";
 import { buildCrashReport } from "../crash-report.js";
 import type { ExploreRun } from "../explore.js";
@@ -17,6 +18,20 @@ import { incompleteReason, quote, safeUrl, withCause } from "./helpers.js";
 
 export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
   const { cfg } = ctx;
+  // #424: a grounded answer the minimum effort deferred is the run's answer when the run then ended
+  // on its own (budget spent, no progress, gave up) without a later one — it was grounded when reported.
+  if (
+    ctx.answer === undefined &&
+    ctx.deferredAnswer !== undefined &&
+    ctx.failure === undefined &&
+    (ctx.stop === "exhausted" || ctx.stop === "no-progress" || ctx.stop === "blocked")
+  ) {
+    ctx.history.push(`the run ended (${ctx.stop}) after its grounded report was deferred for the minimum exploration effort: that report is the answer`);
+    ctx.answer = ctx.deferredAnswer;
+    ctx.outcome = { status: "completed", verifiedBy: "grounded-answer" };
+    ctx.incomplete = null;
+    ctx.stop = "done";
+  }
   // #230: a no-progress stop on an app that stopped answering is `target-unresponsive` — before the
   // host is blamed for it (#203).
   if (ctx.stop === "no-progress") {
@@ -82,7 +97,21 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     const banner = finalOutcome.status === "completed" ? `jevitate · done — ${ctx.stop}` : `jevitate · ${ctx.stop} — ${finalOutcome.reason}`;
     await ctx.overlay.finish(banner, finalOutcome.status === "completed", ctx.page);
   }
+  // #424: an answer-verdict run (no success check, or a goal that asks for a report) that ended
+  // without a grounded answer (not completed) still says what it saw and tried — observed evidence only.
+  const partialReport =
+    finalOutcome.status !== "completed" && (cfg.successCheck === undefined || cfg.requireAnswer === true)
+      ? buildPartialReport({
+          goal: cfg.goal,
+          pages: ctx.observed.pages(),
+          transcript: ctx.transcript.entries(),
+          claims: ctx.reportClaims,
+          note: finalOutcome.status === "incomplete" ? finalOutcome.reason : `the run ended (${ctx.stop}) without a grounded answer`,
+        })
+      : undefined;
   return {
+    depth: ctx.depth.report(ctx.tracker.actions, ctx.tracker.decisions, ctx.minEffort),
+    ...(partialReport === undefined || partialReport.states.length === 0 ? {} : { partialReport }),
     sideEffects: fired.sideEffects,
     ...(fired.truncated > 0 ? { sideEffectsTruncated: fired.truncated } : {}),
     ...(ctx.deltas === null ? {} : { actionDeltas: { ...ctx.deltas.stats(), ...(ctx.notPersisted.length === 0 ? {} : { notPersisted: ctx.notPersisted }) } }),

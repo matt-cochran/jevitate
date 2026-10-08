@@ -99,6 +99,9 @@ export function newStep(ctx: RunContext, input: StepInput) {
         label: target === null ? op.replace("_", " ") : `${op} ${quote(target.name || target.summary, 60)}`,
       };
     }
+    // #424: the run's depth — what was tried on this page, and the form submissions that went through.
+    if (target !== null && TARGET_OPS.has(op)) ctx.depth.noteTried(snap.url, target.name || target.summary);
+    if (actOk && target !== null && (op === "send" || (op === "click" && target.submits === true))) ctx.depth.noteSubmitted();
     if (op === "type" || op === "send") ctx.auth.noteTyped(target, snap.url, actOk, target !== null && ctx.isBound(target));
     // #225: typed credentials make the pending submit a sign-in, never a save.
     if ((op === "type" || op === "send") && actOk && target !== null && (ctx.isBound(target) || isCredentialField(target))) ctx.save.noteCredential();
