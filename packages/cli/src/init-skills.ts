@@ -1,5 +1,5 @@
 import { existsSync as realExistsSync } from "node:fs";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rm, rmdir } from "node:fs/promises";
 import { homedir as realHomedir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -39,6 +39,7 @@ export interface InstallTargetPaths {
   cursorRulesDir: string;
   genericAgentsFile: string;
   genericSkillsDir: string;
+  claudeMdFile: string;
 }
 
 export function resolveInstallTargetPaths(deps: DetectionDeps = {}): InstallTargetPaths {
@@ -50,12 +51,19 @@ export function resolveInstallTargetPaths(deps: DetectionDeps = {}): InstallTarg
     cursorRulesDir: join(cwd(), ".cursor", "rules"),
     genericAgentsFile: join(cwd(), "AGENTS.md"),
     genericSkillsDir: join(cwd(), ".agent", "skills"),
+    claudeMdFile: join(cwd(), "CLAUDE.md"),
   };
 }
 
 // ---- whole-file install planning (shared idempotency/conflict decision) ----
 
-export type InstallAction = "create" | "update" | "unchanged" | "skip-user-modified" | "force-update";
+export type InstallAction =
+  | "create"
+  | "update"
+  | "unchanged"
+  | "skip-user-modified"
+  | "force-update"
+  | "refuse-malformed";
 
 function sha256(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex");
@@ -96,6 +104,108 @@ export async function applyFileInstall(targetPath: string, content: string, acti
 
 export const SKILLS_BLOCK_BEGIN = "<!-- BEGIN JEVITATE SKILLS v1 -->";
 export const SKILLS_BLOCK_END = "<!-- END JEVITATE SKILLS v1 -->";
+/** Matches a BEGIN marker of ANY version, plus any trailing attributes (#431). */
+export const SKILLS_BLOCK_BEGIN_RE = /<!-- BEGIN JEVITATE SKILLS v\d+[^>]*-->/;
+/** Matches an END marker of ANY version (#431). */
+export const SKILLS_BLOCK_END_RE = /<!-- END JEVITATE SKILLS v\d+ -->/;
+
+/** Raised when a file's marker pair is malformed (missing, duplicated, or misordered). */
+export class SkillsBlockMarkerError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(reason);
+    this.name = "SkillsBlockMarkerError";
+    this.reason = reason;
+  }
+}
+
+export type SkillsBlockLocation =
+  | { kind: "none" }
+  | { kind: "block"; start: number; end: number }
+  | { kind: "malformed"; reason: string };
+
+/** Byte offsets of a well-formed marker pair (BEGIN start → END end). */
+interface BlockSpan {
+  beginStart: number;
+  beginEnd: number;
+  endStart: number;
+  endEnd: number;
+}
+
+function findAllMarkers(re: RegExp, content: string): RegExpMatchArray[] {
+  const flags = re.flags.includes("g") ? re.flags : `${re.flags}g`;
+  return [...content.matchAll(new RegExp(re.source, flags))];
+}
+
+function locateBlock(
+  content: string,
+): { kind: "block"; span: BlockSpan } | { kind: "none" } | { kind: "malformed"; reason: string } {
+  const begins = findAllMarkers(SKILLS_BLOCK_BEGIN_RE, content);
+  const ends = findAllMarkers(SKILLS_BLOCK_END_RE, content);
+  if (begins.length === 0 && ends.length === 0) return { kind: "none" };
+  if (begins.length > 1) {
+    return {
+      kind: "malformed",
+      reason:
+        "found more than one BEGIN JEVITATE SKILLS marker — keep a single marked block (delete the extra BEGIN lines), then re-run",
+    };
+  }
+  if (ends.length > 1) {
+    return {
+      kind: "malformed",
+      reason:
+        "found more than one END JEVITATE SKILLS marker — keep a single marked block (delete the extra END lines), then re-run",
+    };
+  }
+  if (begins.length === 1 && ends.length === 0) {
+    return {
+      kind: "malformed",
+      reason:
+        "the BEGIN JEVITATE SKILLS marker has no matching END marker — restore the END line or delete the partial block, then re-run",
+    };
+  }
+  if (begins.length === 0) {
+    return {
+      kind: "malformed",
+      reason:
+        "the END JEVITATE SKILLS marker has no matching BEGIN marker — restore the BEGIN line or delete the stray END, then re-run",
+    };
+  }
+  const begin = begins[0];
+  const end = ends[0];
+  const beginIndex = begin.index ?? 0;
+  const endIndex = end.index ?? 0;
+  if (endIndex < beginIndex) {
+    return {
+      kind: "malformed",
+      reason:
+        "the END JEVITATE SKILLS marker appears before the BEGIN marker — reorder the markers or delete the block, then re-run",
+    };
+  }
+  return {
+    kind: "block",
+    span: {
+      beginStart: beginIndex,
+      beginEnd: beginIndex + begin[0].length,
+      endStart: endIndex,
+      endEnd: endIndex + end[0].length,
+    },
+  };
+}
+
+/**
+ * Locates the Jevitate skills block in `content`, version-agnostically (#431).
+ * `none` when no marker is present; `malformed` (with a fix-it reason) when the
+ * markers are missing, duplicated, or misordered; otherwise `block` with the
+ * BEGIN-line-start..END-marker-end span.
+ */
+export function findSkillsBlock(content: string): SkillsBlockLocation {
+  const found = locateBlock(content);
+  if (found.kind === "block") {
+    return { kind: "block", start: found.span.beginStart, end: found.span.endEnd };
+  }
+  return found;
+}
 
 type BlockSkill = Pick<ResolvedSkill, "id" | "name" | "description" | "body">;
 
@@ -103,6 +213,8 @@ export interface RenderBlockOptions {
   mode: "inline" | "reference";
   /** Required for reference mode: where the Claude-Code copies live. */
   claudeSkillsDir?: string;
+  /** When set, the BEGIN marker carries a `jevitate@<version>` stamp (#431). */
+  jevitateVersion?: string;
 }
 
 /**
@@ -112,7 +224,10 @@ export interface RenderBlockOptions {
  * installed Claude-Code path instead.
  */
 export function renderSkillsBlock(skills: BlockSkill[], opts: RenderBlockOptions): string {
-  const parts: string[] = [SKILLS_BLOCK_BEGIN, "", "# Jevitate skills", ""];
+  const begin = opts.jevitateVersion
+    ? `<!-- BEGIN JEVITATE SKILLS v1 jevitate@${opts.jevitateVersion} -->`
+    : SKILLS_BLOCK_BEGIN;
+  const parts: string[] = [begin, "", "# Jevitate skills", ""];
   for (const s of skills) {
     parts.push(`## ${s.name}`, "", s.description, "");
     if (opts.mode === "reference" && opts.claudeSkillsDir) {
@@ -126,59 +241,79 @@ export function renderSkillsBlock(skills: BlockSkill[], opts: RenderBlockOptions
 }
 
 /**
- * Splices `newBlock` (marker-wrapped) into `existing`. If markers are present,
- * only the marked region is replaced; everything before the opening marker and
+ * Splices `newBlock` (marker-wrapped) into `existing`. Any existing block (of
+ * ANY version) is replaced in place; everything before the opening marker and
  * after the closing marker is preserved byte-for-byte. Otherwise the block is
- * appended after a blank-line separator. Idempotent on repeat with the same block.
+ * appended after a blank-line separator. Idempotent on repeat with the same
+ * block. Throws `SkillsBlockMarkerError` when the target's markers are
+ * malformed (#431).
  */
 export function mergeBlock(existing: string, newBlock: string): string {
-  const start = existing.indexOf(SKILLS_BLOCK_BEGIN);
-  const endMarker = existing.indexOf(SKILLS_BLOCK_END, start === -1 ? 0 : start);
-  if (start !== -1 && endMarker !== -1) {
-    const before = existing.slice(0, start);
-    const after = existing.slice(endMarker + SKILLS_BLOCK_END.length);
-    return before + newBlock + after;
+  const found = locateBlock(existing);
+  if (found.kind === "malformed") throw new SkillsBlockMarkerError(found.reason);
+  if (found.kind === "block") {
+    return existing.slice(0, found.span.beginStart) + newBlock + existing.slice(found.span.endEnd);
   }
   if (existing === "") return newBlock;
   const sep = existing.endsWith("\n\n") ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
   return existing + sep + newBlock;
 }
 
-/** sha256 of just the block's inner text (between the markers), or undefined
- *  when no block is present — so user edits OUTSIDE the block never register as
- *  a modification and edits INSIDE it do. */
+/** sha256 of just the block's inner text (between the marker lines) — so the
+ *  `jevitate@<version>` stamp in the BEGIN line never counts as a user
+ *  modification, while edits INSIDE the block do. `undefined` when no block is
+ *  present; throws `SkillsBlockMarkerError` when the markers are malformed. */
 export function extractBlockHash(content: string): string | undefined {
-  const start = content.indexOf(SKILLS_BLOCK_BEGIN);
-  if (start === -1) return undefined;
-  const endMarker = content.indexOf(SKILLS_BLOCK_END, start);
-  if (endMarker === -1) return undefined;
-  const inner = content.slice(start + SKILLS_BLOCK_BEGIN.length, endMarker);
-  return sha256(inner);
+  const found = locateBlock(content);
+  if (found.kind === "none") return undefined;
+  if (found.kind === "malformed") throw new SkillsBlockMarkerError(found.reason);
+  return sha256(content.slice(found.span.beginEnd, found.span.endStart));
 }
 
-async function planBlockInstall(
+interface BlockPlan {
+  action: InstallAction;
+  reason?: string;
+}
+
+async function planBlockInstallDetailed(
+  targetPath: string,
+  newBlock: string,
+  lastInstalledHash: string | undefined,
+  opts: { force?: boolean } = {},
+): Promise<BlockPlan> {
+  let current: string;
+  try {
+    current = await readFile(targetPath, "utf8");
+  } catch {
+    return { action: "create" };
+  }
+  const found = locateBlock(current);
+  if (found.kind === "malformed") return { action: "refuse-malformed", reason: found.reason };
+  if (found.kind === "none") return { action: "create" }; // file exists but has no block yet — append one
+  const currentBlockHash = sha256(current.slice(found.span.beginEnd, found.span.endStart));
+  const userModified = lastInstalledHash === undefined || currentBlockHash !== lastInstalledHash;
+  if (userModified && !opts.force) return { action: "skip-user-modified" };
+  if (userModified && opts.force) return { action: "force-update" };
+  const existingBlock = current.slice(found.span.beginStart, found.span.endEnd);
+  return { action: existingBlock === newBlock ? "unchanged" : "update" };
+}
+
+/**
+ * Decides what to do with one marked-block target. Never writes and never
+ * throws: a malformed marker pair is reported as `refuse-malformed` so the
+ * skill installer leaves that file untouched and proceeds with the others (#431).
+ */
+export async function planBlockInstall(
   targetPath: string,
   newBlock: string,
   lastInstalledHash: string | undefined,
   opts: { force?: boolean } = {},
 ): Promise<InstallAction> {
-  let current: string;
-  try {
-    current = await readFile(targetPath, "utf8");
-  } catch {
-    return "create";
-  }
-  const currentBlockHash = extractBlockHash(current);
-  if (currentBlockHash === undefined) return "create"; // file exists but has no block yet — append one
-  const userModified = lastInstalledHash === undefined || currentBlockHash !== lastInstalledHash;
-  if (userModified && !opts.force) return "skip-user-modified";
-  if (userModified && opts.force) return "force-update";
-  const newInnerHash = extractBlockHash(newBlock);
-  return currentBlockHash === newInnerHash ? "unchanged" : "update";
+  return (await planBlockInstallDetailed(targetPath, newBlock, lastInstalledHash, opts)).action;
 }
 
 async function applyBlockInstall(targetPath: string, newBlock: string, action: InstallAction): Promise<void> {
-  if (action === "unchanged" || action === "skip-user-modified") return;
+  if (action === "unchanged" || action === "skip-user-modified" || action === "refuse-malformed") return;
   let existing = "";
   try {
     existing = await readFile(targetPath, "utf8");
@@ -208,6 +343,8 @@ export interface InstallReport {
   skillId: string;
   path: string;
   action: InstallAction;
+  /** Populated for `refuse-malformed`: the human fix-it reason (#431). */
+  reason?: string;
 }
 
 type StateMap = Record<string, string>;
@@ -250,7 +387,7 @@ export async function installSkills(
   skills: ResolvedSkill[],
   paths: InstallTargetPaths,
   statePath: string,
-  opts: { force?: boolean; dryRun?: boolean } = {},
+  opts: { force?: boolean; dryRun?: boolean; jevitateVersion?: string; claudeMd?: boolean } = {},
 ): Promise<InstallReport[]> {
   const { state, raw: originalStateRaw } = await loadState(statePath);
   const runtimeSet = new Set(runtimes);
@@ -287,9 +424,17 @@ export async function installSkills(
     }
   }
 
-  const block = renderSkillsBlock(skills, { mode: blockMode, claudeSkillsDir: paths.claudeSkillsDir });
+  const block = renderSkillsBlock(skills, {
+    mode: blockMode,
+    claudeSkillsDir: paths.claudeSkillsDir,
+    jevitateVersion: opts.jevitateVersion,
+  });
   if (runtimeSet.has("codex")) blockUnits.push({ target: "codex", path: paths.codexAgentsFile, block });
   if (runtimeSet.has("generic")) blockUnits.push({ target: "generic", path: paths.genericAgentsFile, block });
+  // #431: opt-in CLAUDE.md block, only when Claude Code is actually a target.
+  if (opts.claudeMd && runtimeSet.has("claude-code")) {
+    blockUnits.push({ target: "claude-code", path: paths.claudeMdFile, block });
+  }
 
   const report: InstallReport[] = [];
 
@@ -303,20 +448,202 @@ export async function installSkills(
   }
 
   for (const unit of blockUnits) {
-    const action = await planBlockInstall(unit.path, unit.block, state[unit.path], { force: opts.force });
+    const plan = await planBlockInstallDetailed(unit.path, unit.block, state[unit.path], { force: opts.force });
     if (!opts.dryRun) {
-      await applyBlockInstall(unit.path, unit.block, action);
-      if (action !== "skip-user-modified") {
+      await applyBlockInstall(unit.path, unit.block, plan.action);
+      if (plan.action !== "skip-user-modified" && plan.action !== "refuse-malformed") {
         const written = await readFile(unit.path, "utf8").catch(() => "");
         const hash = extractBlockHash(written);
         if (hash !== undefined) state[unit.path] = hash;
       }
     }
-    report.push({ target: unit.target, skillId: "*", path: unit.path, action });
+    report.push({
+      target: unit.target,
+      skillId: "*",
+      path: unit.path,
+      action: plan.action,
+      ...(plan.reason !== undefined ? { reason: plan.reason } : {}),
+    });
   }
 
   // Only touch the state file when it actually changed, so a clean re-run
   // (everything "unchanged") performs zero writes.
+  if (!opts.dryRun) {
+    const nextStateRaw = JSON.stringify(state, null, 2);
+    if (nextStateRaw !== originalStateRaw) {
+      await mkdir(dirname(statePath), { recursive: true });
+      await writeFile(statePath, nextStateRaw, "utf8");
+    }
+  }
+
+  return report;
+}
+
+// ---- uninstall (inverse of installSkills, same units + state) ----
+
+export interface UninstallReport {
+  target: RuntimeId;
+  skillId: string;
+  path: string;
+  action: "remove" | "absent" | "skip-user-modified" | "force-remove" | "refuse-malformed";
+  /** Populated for `refuse-malformed`: the human fix-it reason (#431). */
+  reason?: string;
+}
+
+/** One whole-file unit to remove (mirrors installSkills' FileUnit). */
+interface FileRemovalUnit {
+  target: RuntimeId;
+  skillId: string;
+  path: string;
+  /** The directory installSkills created for the target, removable when empty. */
+  rootDir: string;
+}
+
+/** One marked-block unit to remove (mirrors installSkills' BlockUnit). */
+interface BlockRemovalUnit {
+  target: RuntimeId;
+  path: string;
+}
+
+/** Removes a well-formed block plus ONE adjacent blank-line separator that
+ *  mergeBlock appended, leaving every other byte in place (#431). */
+function removeSkillsBlock(content: string): string {
+  const found = locateBlock(content);
+  if (found.kind !== "block") return content;
+  let before = content.slice(0, found.span.beginStart);
+  const after = content.slice(found.span.endEnd);
+  if (before.endsWith("\n\n")) before = before.slice(0, -1);
+  return before + after;
+}
+
+/**
+ * Removes everything `installSkills` wrote, with the same never-clobber safety:
+ * a whole file or block whose current hash differs from the recorded state is
+ * reported `skip-user-modified` (or `force-remove` with `force`) rather than
+ * deleted. Malformed markers are reported `refuse-malformed` and left alone.
+ * `dryRun` reports the plan and writes nothing. Corresponding state entries are
+ * dropped for removed/absent targets.
+ */
+export async function uninstallSkills(
+  runtimes: RuntimeId[],
+  skills: ResolvedSkill[],
+  paths: InstallTargetPaths,
+  statePath: string,
+  opts: { force?: boolean; dryRun?: boolean; claudeMd?: boolean } = {},
+): Promise<UninstallReport[]> {
+  const { state, raw: originalStateRaw } = await loadState(statePath);
+  const runtimeSet = new Set(runtimes);
+
+  const fileUnits: FileRemovalUnit[] = [];
+  const blockUnits: BlockRemovalUnit[] = [];
+
+  for (const skill of skills) {
+    if (runtimeSet.has("claude-code")) {
+      fileUnits.push({
+        target: "claude-code",
+        skillId: skill.id,
+        path: join(paths.claudeSkillsDir, skill.id, "SKILL.md"),
+        rootDir: paths.claudeSkillsDir,
+      });
+    }
+    if (runtimeSet.has("cursor")) {
+      fileUnits.push({
+        target: "cursor",
+        skillId: skill.id,
+        path: join(paths.cursorRulesDir, `jevitate-${skill.id}.mdc`),
+        rootDir: paths.cursorRulesDir,
+      });
+    }
+    if (runtimeSet.has("generic")) {
+      fileUnits.push({
+        target: "generic",
+        skillId: skill.id,
+        path: join(paths.genericSkillsDir, skill.id, "SKILL.md"),
+        rootDir: paths.genericSkillsDir,
+      });
+    }
+  }
+
+  if (runtimeSet.has("codex")) blockUnits.push({ target: "codex", path: paths.codexAgentsFile });
+  if (runtimeSet.has("generic")) blockUnits.push({ target: "generic", path: paths.genericAgentsFile });
+  if (opts.claudeMd && runtimeSet.has("claude-code")) {
+    blockUnits.push({ target: "claude-code", path: paths.claudeMdFile });
+  }
+
+  const report: UninstallReport[] = [];
+
+  for (const unit of fileUnits) {
+    let current: string | undefined;
+    try {
+      current = await readFile(unit.path, "utf8");
+    } catch {
+      current = undefined;
+    }
+    let action: UninstallReport["action"];
+    if (current === undefined) {
+      action = "absent";
+    } else {
+      const recorded = state[unit.path];
+      const userModified = recorded === undefined || sha256(current) !== recorded;
+      action = userModified ? (opts.force ? "force-remove" : "skip-user-modified") : "remove";
+    }
+    if (!opts.dryRun) {
+      if (action === "remove" || action === "force-remove") {
+        await rm(unit.path, { force: true });
+        await rmdir(dirname(unit.path)).catch(() => {}); // drop the now-empty <skill> dir
+        if (dirname(unit.path) !== unit.rootDir) await rmdir(unit.rootDir).catch(() => {});
+        delete state[unit.path];
+      } else if (action === "absent") {
+        delete state[unit.path];
+      }
+    }
+    report.push({ target: unit.target, skillId: unit.skillId, path: unit.path, action });
+  }
+
+  for (const unit of blockUnits) {
+    let current: string | undefined;
+    try {
+      current = await readFile(unit.path, "utf8");
+    } catch {
+      current = undefined;
+    }
+    let action: UninstallReport["action"];
+    let reason: string | undefined;
+    if (current === undefined) {
+      action = "absent";
+    } else {
+      const found = locateBlock(current);
+      if (found.kind === "none") {
+        action = "absent";
+      } else if (found.kind === "malformed") {
+        action = "refuse-malformed";
+        reason = found.reason;
+      } else {
+        const innerHash = sha256(current.slice(found.span.beginEnd, found.span.endStart));
+        const recorded = state[unit.path];
+        const userModified = recorded === undefined || innerHash !== recorded;
+        action = userModified ? (opts.force ? "force-remove" : "skip-user-modified") : "remove";
+      }
+    }
+    if (!opts.dryRun && current !== undefined) {
+      if (action === "remove" || action === "force-remove") {
+        const updated = removeSkillsBlock(current);
+        if (updated.trim() === "") await rm(unit.path, { force: true });
+        else await writeFile(unit.path, updated, "utf8");
+        delete state[unit.path];
+      } else if (action === "absent") {
+        delete state[unit.path];
+      }
+    }
+    report.push({
+      target: unit.target,
+      skillId: "*",
+      path: unit.path,
+      action,
+      ...(reason !== undefined ? { reason } : {}),
+    });
+  }
+
   if (!opts.dryRun) {
     const nextStateRaw = JSON.stringify(state, null, 2);
     if (nextStateRaw !== originalStateRaw) {

@@ -14,8 +14,14 @@ import {
   mergeBlock,
   extractBlockHash,
   installSkills,
+  findSkillsBlock,
+  planBlockInstall,
+  uninstallSkills,
+  SkillsBlockMarkerError,
   SKILLS_BLOCK_BEGIN,
   SKILLS_BLOCK_END,
+  SKILLS_BLOCK_BEGIN_RE,
+  SKILLS_BLOCK_END_RE,
 } from "./init-skills.js";
 
 const sha256 = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
@@ -250,4 +256,224 @@ test("dry-run reports planned actions but performs no writes and no state file",
   expect(report.every((r) => r.action === "create")).toBe(true);
   expect(existsSync(join(paths.claudeSkillsDir, "jevitate-x", "SKILL.md"))).toBe(false);
   expect(existsSync(statePath)).toBe(false);
+});
+
+// ---- Part 3b: version-agnostic markers + findSkillsBlock (#431) ----
+
+test("renderSkillsBlock stamps the BEGIN marker with jevitate@<version> when asked", () => {
+  const block = renderSkillsBlock(fakeSkills(), { mode: "inline", jevitateVersion: "1.2.3" });
+  expect(block.startsWith("<!-- BEGIN JEVITATE SKILLS v1 jevitate@1.2.3 -->")).toBe(true);
+});
+
+test("renderSkillsBlock omits the version stamp when jevitateVersion is absent", () => {
+  const block = renderSkillsBlock(fakeSkills(), { mode: "inline" });
+  expect(block.startsWith(SKILLS_BLOCK_BEGIN)).toBe(true);
+});
+
+test("SKILLS_BLOCK_BEGIN_RE matches any version plus trailing attributes", () => {
+  expect(SKILLS_BLOCK_BEGIN_RE.test("<!-- BEGIN JEVITATE SKILLS v3 jevitate@0.9.0 extra -->")).toBe(true);
+});
+
+test("SKILLS_BLOCK_END_RE matches any version", () => {
+  expect(SKILLS_BLOCK_END_RE.test("<!-- END JEVITATE SKILLS v7 -->")).toBe(true);
+});
+
+test("findSkillsBlock returns none when no markers are present", () => {
+  expect(findSkillsBlock("nothing to see here")).toEqual({ kind: "none" });
+});
+
+test("findSkillsBlock spans from the BEGIN line start through the END marker end", () => {
+  const block = renderSkillsBlock(fakeSkills(), { mode: "inline" });
+  const content = `PREFIX${block}SUFFIX`;
+  expect(findSkillsBlock(content)).toEqual({ kind: "block", start: 6, end: 6 + block.length });
+});
+
+test("findSkillsBlock reports a malformed BEGIN without END", () => {
+  expect(findSkillsBlock("<!-- BEGIN JEVITATE SKILLS v1 -->")).toMatchObject({ kind: "malformed" });
+});
+
+test("findSkillsBlock reports a malformed END without BEGIN", () => {
+  expect(findSkillsBlock("<!-- END JEVITATE SKILLS v1 -->")).toMatchObject({ kind: "malformed" });
+});
+
+test("findSkillsBlock reports two blocks as malformed", () => {
+  const block = renderSkillsBlock(fakeSkills(), { mode: "inline" });
+  expect(findSkillsBlock(`${block}\n${block}`)).toMatchObject({ kind: "malformed" });
+});
+
+test("findSkillsBlock reports an END before its BEGIN as malformed", () => {
+  expect(findSkillsBlock(`${SKILLS_BLOCK_END}\n${SKILLS_BLOCK_BEGIN}`)).toMatchObject({ kind: "malformed" });
+});
+
+test("findSkillsBlock's malformed reason names the problem and the fix", () => {
+  const found = findSkillsBlock("<!-- BEGIN JEVITATE SKILLS v1 -->");
+  expect(found.kind === "malformed" ? found.reason : "").toMatch(/no matching END marker.*re-run/);
+});
+
+test("mergeBlock replaces an unstamped v1 block with a stamped block in place", () => {
+  const oldBlock = renderSkillsBlock(fakeSkills(), { mode: "inline" });
+  const newBlock = renderSkillsBlock(fakeSkills(), { mode: "inline", jevitateVersion: "1.2.3" });
+  const existing = `PRE\n\n${oldBlock}\n\nPOST\n`;
+  expect(mergeBlock(existing, newBlock)).toBe(`PRE\n\n${newBlock}\n\nPOST\n`);
+});
+
+test("mergeBlock replaces a v2 block in place", () => {
+  const block = renderSkillsBlock(fakeSkills(), { mode: "inline" });
+  const v2 = block.replace("JEVITATE SKILLS v1", "JEVITATE SKILLS v2");
+  const newBlock = renderSkillsBlock(fakeSkills(), { mode: "inline", jevitateVersion: "9.9.9" });
+  const existing = `TOP\n\n${v2}\n\nBOTTOM\n`;
+  expect(mergeBlock(existing, newBlock)).toBe(`TOP\n\n${newBlock}\n\nBOTTOM\n`);
+});
+
+test("mergeBlock never duplicates markers when replacing an existing block", () => {
+  const oldBlock = renderSkillsBlock(fakeSkills(), { mode: "inline" });
+  const newBlock = renderSkillsBlock(fakeSkills(), { mode: "inline", jevitateVersion: "4.0.0" });
+  const merged = mergeBlock(`TOP\n\n${oldBlock}\n\nBOTTOM\n`, newBlock);
+  expect(merged.match(/<!-- BEGIN JEVITATE SKILLS/g)?.length).toBe(1);
+});
+
+test("mergeBlock throws SkillsBlockMarkerError on malformed content", () => {
+  expect(() => mergeBlock("<!-- BEGIN JEVITATE SKILLS v1 -->", "block")).toThrow(SkillsBlockMarkerError);
+});
+
+test("extractBlockHash ignores the BEGIN-line version stamp", () => {
+  const plain = renderSkillsBlock(fakeSkills(), { mode: "inline" });
+  const stamped = renderSkillsBlock(fakeSkills(), { mode: "inline", jevitateVersion: "5.0.0" });
+  expect(extractBlockHash(stamped)).toBe(extractBlockHash(plain));
+});
+
+test("extractBlockHash throws SkillsBlockMarkerError on malformed content", () => {
+  expect(() => extractBlockHash("<!-- END JEVITATE SKILLS v1 -->")).toThrow(SkillsBlockMarkerError);
+});
+
+// ---- Part 4b: marked-block planning + CLAUDE.md (#431) ----
+
+test("planBlockInstall reports refuse-malformed (never throws) for a BEGIN without END", async () => {
+  const p = tmpFile("<!-- BEGIN JEVITATE SKILLS v1 -->\n");
+  const block = renderSkillsBlock(fakeSkills(), { mode: "inline" });
+  expect(await planBlockInstall(p, block, undefined)).toBe("refuse-malformed");
+});
+
+test("installSkills reports refuse-malformed for a BEGIN without END", async () => {
+  const { cwd, statePath, paths } = envDirs();
+  writeFileSync(join(cwd, "AGENTS.md"), "<!-- BEGIN JEVITATE SKILLS v1 -->\n", "utf8");
+  const report = await installSkills(["generic"], fixtureSkills(), paths, statePath, {});
+  const entry = report.find((r) => r.target === "generic" && r.skillId === "*");
+  expect(entry!.action).toBe("refuse-malformed");
+});
+
+test("installSkills leaves a malformed AGENTS.md byte-identical", async () => {
+  const { cwd, statePath, paths } = envDirs();
+  const malformed = "<!-- BEGIN JEVITATE SKILLS v1 -->\nmy notes\n";
+  writeFileSync(join(cwd, "AGENTS.md"), malformed, "utf8");
+  await installSkills(["generic"], fixtureSkills(), paths, statePath, {});
+  expect(readFileSync(join(cwd, "AGENTS.md"), "utf8")).toBe(malformed);
+});
+
+test("installSkills reports refuse-malformed for an END without BEGIN", async () => {
+  const { cwd, statePath, paths } = envDirs();
+  writeFileSync(join(cwd, "AGENTS.md"), "<!-- END JEVITATE SKILLS v1 -->\n", "utf8");
+  const report = await installSkills(["generic"], fixtureSkills(), paths, statePath, {});
+  const entry = report.find((r) => r.target === "generic" && r.skillId === "*");
+  expect(entry!.action).toBe("refuse-malformed");
+});
+
+test("installSkills reports refuse-malformed for two blocks", async () => {
+  const { cwd, statePath, paths } = envDirs();
+  const block = renderSkillsBlock(fixtureSkills(), { mode: "inline" });
+  writeFileSync(join(cwd, "AGENTS.md"), `${block}\n${block}`, "utf8");
+  const report = await installSkills(["generic"], fixtureSkills(), paths, statePath, {});
+  const entry = report.find((r) => r.target === "generic" && r.skillId === "*");
+  expect(entry!.action).toBe("refuse-malformed");
+});
+
+test("installSkills upgrades in place when only the version stamp changed (update, not skip)", async () => {
+  const { statePath, paths } = envDirs();
+  const skills = fixtureSkills();
+  await installSkills(["generic"], skills, paths, statePath, { jevitateVersion: "1.0.0" });
+  const report = await installSkills(["generic"], skills, paths, statePath, { jevitateVersion: "2.0.0" });
+  const entry = report.find((r) => r.target === "generic" && r.skillId === "*");
+  expect(entry!.action).toBe("update");
+});
+
+test("installSkills with claudeMd false never creates CLAUDE.md", async () => {
+  const { statePath, paths } = envDirs();
+  await installSkills(["claude-code", "generic"], fixtureSkills(), paths, statePath, {});
+  expect(existsSync(paths.claudeMdFile)).toBe(false);
+});
+
+test("installSkills with claudeMd true places a marked block in CLAUDE.md", async () => {
+  const { statePath, paths } = envDirs();
+  await installSkills(["claude-code", "generic"], fixtureSkills(), paths, statePath, { claudeMd: true });
+  expect(readFileSync(paths.claudeMdFile, "utf8")).toContain(SKILLS_BLOCK_BEGIN);
+});
+
+test("resolveInstallTargetPaths adds the project CLAUDE.md path", () => {
+  const p = resolveInstallTargetPaths({ homedir: () => "/home/u", cwd: () => "/proj" });
+  expect(p.claudeMdFile).toBe(join("/proj", "CLAUDE.md"));
+});
+
+// ---- Part 5: uninstallSkills (#431) ----
+
+test("uninstallSkills after install restores AGENTS.md to the user's original text", async () => {
+  const { cwd, statePath, paths } = envDirs();
+  const agents = join(cwd, "AGENTS.md");
+  const original = "# My AGENTS\n\nMy own notes.\n";
+  writeFileSync(agents, original, "utf8");
+  await installSkills(["generic"], fixtureSkills(), paths, statePath, {});
+  await uninstallSkills(["generic"], fixtureSkills(), paths, statePath, {});
+  expect(readFileSync(agents, "utf8")).toBe(original);
+});
+
+test("uninstallSkills removes installed Claude skill files", async () => {
+  const { statePath, paths } = envDirs();
+  const skills = fixtureSkills();
+  await installSkills(["claude-code"], skills, paths, statePath, {});
+  await uninstallSkills(["claude-code"], skills, paths, statePath, {});
+  expect(existsSync(join(paths.claudeSkillsDir, skills[0].id, "SKILL.md"))).toBe(false);
+});
+
+test("uninstallSkills skips a user-modified skill file", async () => {
+  const { statePath, paths } = envDirs();
+  const skills = fixtureSkills();
+  await installSkills(["claude-code"], skills, paths, statePath, {});
+  const edited = join(paths.claudeSkillsDir, skills[0].id, "SKILL.md");
+  writeFileSync(edited, "USER EDIT", "utf8");
+  const report = await uninstallSkills(["claude-code"], skills, paths, statePath, {});
+  const entry = report.find((r) => r.target === "claude-code" && r.skillId === skills[0].id);
+  expect(entry!.action).toBe("skip-user-modified");
+});
+
+test("uninstallSkills --force removes a user-modified skill file", async () => {
+  const { statePath, paths } = envDirs();
+  const skills = fixtureSkills();
+  await installSkills(["claude-code"], skills, paths, statePath, {});
+  const edited = join(paths.claudeSkillsDir, skills[0].id, "SKILL.md");
+  writeFileSync(edited, "USER EDIT", "utf8");
+  await uninstallSkills(["claude-code"], skills, paths, statePath, { force: true });
+  expect(existsSync(edited)).toBe(false);
+});
+
+test("uninstallSkills dryRun leaves installed files in place", async () => {
+  const { statePath, paths } = envDirs();
+  const skills = fixtureSkills();
+  await installSkills(["claude-code"], skills, paths, statePath, {});
+  await uninstallSkills(["claude-code"], skills, paths, statePath, { dryRun: true });
+  expect(existsSync(join(paths.claudeSkillsDir, skills[0].id, "SKILL.md"))).toBe(true);
+});
+
+test("uninstallSkills reports refuse-malformed for a malformed AGENTS.md", async () => {
+  const { cwd, statePath, paths } = envDirs();
+  writeFileSync(join(cwd, "AGENTS.md"), "<!-- END JEVITATE SKILLS v1 -->\n", "utf8");
+  const report = await uninstallSkills(["generic"], fixtureSkills(), paths, statePath, {});
+  const entry = report.find((r) => r.target === "generic" && r.skillId === "*");
+  expect(entry!.action).toBe("refuse-malformed");
+});
+
+test("uninstallSkills with claudeMd removes the CLAUDE.md block and the file", async () => {
+  const { statePath, paths } = envDirs();
+  const skills = fixtureSkills();
+  await installSkills(["claude-code", "generic"], skills, paths, statePath, { claudeMd: true });
+  await uninstallSkills(["claude-code", "generic"], skills, paths, statePath, { claudeMd: true });
+  expect(existsSync(paths.claudeMdFile)).toBe(false);
 });

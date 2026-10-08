@@ -772,6 +772,7 @@ set up jevitate: collect API keys, install skills/MCP wiring, create the repo's 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--claude-md` | #431: also keep a marked jevitate block in the project's CLAUDE.md pointing at the installed skills (Claude Code only) |  |  |  |  |
 | `--dry-run` | report planned skill-install/mcp-register actions without writing |  |  |  |  |
 | `--force` | overwrite a user-modified installed skill file/block or MCP config entry |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -782,6 +783,7 @@ set up jevitate: collect API keys, install skills/MCP wiring, create the repo's 
 | `--skip-project` | skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs) |  |  |  |  |
 | `--skip-skills` | skip skill installation |  |  |  |  |
 | `--targets <ids>` | comma-separated runtime ids to force-install to, overriding detection |  |  |  |  |
+| `--uninstall` | #431: remove the skill files and marked AGENTS.md/CLAUDE.md blocks jevitate installed (user-modified ones are skipped unless --force); keys, MCP registration and .jevitate/ are left alone |  |  |  |  |
 
 ## invariants
 
