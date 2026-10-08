@@ -1,5 +1,6 @@
 import {
   CatalogStatusSchema,
+  GTWR_SET_CHARACTERISTICS,
   JobReviewSchema,
   PersonaReviewSchema,
   type CatalogStatusReport,
@@ -15,7 +16,7 @@ import { jevLayerOf, type JevSetup } from "./jev-advisor.js";
 export interface SheetOptions {
   /** #434: include the Readiness section (`--readiness`; every approval sets it). */
   readonly readiness?: boolean;
-  /** #434: the advisory Jev layer (`--real`), or why it is skipped. */
+  /** #434/#435: the advisory Jev layer (`--real`), or why it is skipped. */
   readonly jev?: JevSetup;
 }
 
@@ -158,14 +159,30 @@ function findingLine(f: Finding, code: (s: string) => string): string {
   return `${f.requiresAcknowledgment ? "⚠ NEEDS ACKNOWLEDGMENT " : ""}${f.severity} ${code(`${f.analyzer}/${f.code}`)}: ${f.message}${f.probability === undefined ? "" : ` (p=${f.probability.toFixed(2)})`}${f.characteristic === undefined ? "" : ` [GtWR: ${f.characteristic}]`}${f.fix === undefined ? "" : ` — fix: ${f.fix}`}`;
 }
 
-/** The analyzers whose findings get their own section of the sheet (#434 readiness). */
+/** #435: catalog-analysis findings, one sub-section per INCOSE GtWR set characteristic (non-empty ones, in the guide's order). */
+export function renderAnalysisGroups(findings: readonly Finding[], style: Style): string[] {
+  const { md, li, code } = helpers(style);
+  const h3 = (s: string): string => (md ? `### ${s}` : `${s}:`);
+  const out: string[] = [];
+  for (const characteristic of GTWR_SET_CHARACTERISTICS) {
+    const mine = findings.filter((f) => f.characteristic === characteristic);
+    if (mine.length > 0) out.push(h3(`GtWR: ${characteristic}`), "", ...mine.map((f) => li(findingLine(f, code))), "");
+  }
+  const other = findings.filter((f) => !(GTWR_SET_CHARACTERISTICS as readonly string[]).includes(f.characteristic ?? ""));
+  if (other.length > 0) out.push(h3("Other"), "", ...other.map((f) => li(findingLine(f, code))), "");
+  return out;
+}
+
+/** The analyzers whose findings get their own section of the sheet (#434 readiness, #435 catalog analysis). */
 const READINESS_ANALYZER = "readiness";
 const READINESS_JEV_ANALYZER = "readiness-jev";
+const CATALOG_ANALYSIS_ANALYZER = "catalog-analysis";
 
 /**
  * #433: the pre-approval findings every review sheet shows before an approval. #434: the readiness
  * findings form their own Readiness section, its two layers apart (deterministic checks; the
- * advisory Jev review). The acknowledgment line counts every section.
+ * advisory Jev review). #435: the catalog analysis forms its own section, grouped by GtWR set
+ * characteristic. The acknowledgment line counts every section.
  */
 export function renderFindings(findings: readonly Finding[], style: Style): string[] {
   const { h2, li, em, code, md } = helpers(style);
@@ -174,7 +191,8 @@ export function renderFindings(findings: readonly Finding[], style: Style): stri
   const of = (id: string) => findings.filter((f) => f.analyzer === id);
   const readiness = of(READINESS_ANALYZER);
   const jev = of(READINESS_JEV_ANALYZER);
-  const rest = findings.filter((f) => f.analyzer !== READINESS_ANALYZER && f.analyzer !== READINESS_JEV_ANALYZER);
+  const analysis = of(CATALOG_ANALYSIS_ANALYZER);
+  const rest = findings.filter((f) => f.analyzer !== READINESS_ANALYZER && f.analyzer !== READINESS_JEV_ANALYZER && f.analyzer !== CATALOG_ANALYSIS_ANALYZER);
   const lines = (fs: readonly Finding[]) => (fs.length === 0 ? [li(em("none"))] : fs.map((f) => li(findingLine(f, code))));
   return [
     ...(readiness.length + jev.length === 0
@@ -191,6 +209,7 @@ export function renderFindings(findings: readonly Finding[], style: Style): stri
           ...lines(jev),
           "",
         ]),
+    ...(analysis.length === 0 ? [] : [h2("Catalog analysis (against the rest of the catalog)"), "", ...renderAnalysisGroups(analysis, style)]),
     h2("Pre-approval findings"),
     "",
     ...lines(rest),

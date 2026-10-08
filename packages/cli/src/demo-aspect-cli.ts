@@ -271,7 +271,7 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
     )
     .option("--accept-unvetted <reason>", "#433: approve although the Journey's linked job/persona is not approved, recording the reason in approval.waivers")
     .option("--accept-findings <reason>", "#433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings")
-    .option("--real", REAL_JEV_FLAG_HELP)
+    .option("--real", `${REAL_JEV_FLAG_HELP}; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings`)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .action(async function (this: Command, id: string) {
       const o = this.opts<ReplayFlags & { acceptUnvetted?: string; acceptFindings?: string; real?: boolean; jevProvider?: string }>();

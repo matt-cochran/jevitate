@@ -157,7 +157,9 @@ broken check, never green.
 
 Read `jevitate catalog status --json` (MCP `catalog_status`) first: every approved job must have
 a promoted Journey for each persona it serves (no `gaps`), nothing in `stale` (needs re-review),
-and no `danglingLinks`. Release only when: every job in the catalog has a promoted Journey that passes; every finding is
+and no `danglingLinks`. Then read `jevitate catalog analyze --real --json` (MCP `analyze_catalog`):
+the release gate decides in code on its typed result, e.g. no pair classified `conflicting` at
+probability ≥ its `threshold` (Jev only advises). Release only when: every job in the catalog has a promoted Journey that passes; every finding is
 `fixed` by verify-fix (with a ledger entry or regression); the final round ran on the release
 build; and no `inconclusive` run was counted as a pass. Anything short of that, report it as open.
 

@@ -42,3 +42,7 @@ test("#433: facade exposes the read-only catalog tools and no catalog approve to
   }
   expect([...names].filter((n) => /approve/.test(n)).sort()).toEqual(["approve_action", "approve_demo"]);
 });
+
+test("#435: facade exposes the read-only analyze_catalog tool", () => {
+  expect(new Set(listToolNames()).has("analyze_catalog")).toBe(true);
+});

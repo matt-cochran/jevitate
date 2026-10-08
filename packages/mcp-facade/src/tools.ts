@@ -22,6 +22,8 @@ export const ALLOWED_TOOLS = [
   // #433 — the read-only catalog sheets (personas, jobs) and coverage. Approving a persona or a job
   // is a person's act on the CLI: approve_persona / approve_job are FORBIDDEN below.
   "review_persona", "review_job", "catalog_status",
+  // #435 — the read-only, advisory catalog analysis (conflicts, duplicates, gaps; GtWR set characteristics).
+  "analyze_catalog",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [

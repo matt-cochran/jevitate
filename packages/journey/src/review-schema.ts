@@ -149,7 +149,7 @@ export const JourneyReviewSchema = z
     catalog: JourneyCatalogLinksSchema.optional(),
     /** #433: the pre-approval findings (`preApprovalFindings`) — set when the catalog was loaded. */
     findings: z.array(FindingSchema).optional(),
-    /** #434: the advisory Jev layer of the findings (the readiness questions). */
+    /** #434/#435: the advisory Jev layer of the findings (readiness questions, pair classifications). */
     jev: JevLayerSchema.optional(),
     /** `journeyReviewHash`: what `journey promote --reviewed-hash` binds an approval to. */
     contentHash: z.string().regex(/^[0-9a-f]{64}$/),

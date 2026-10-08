@@ -109,7 +109,7 @@ export const FindingSchema = z
 export type Finding = z.infer<typeof FindingSchema>;
 
 /**
- * #434: what one call's model usage cost (the shape of ai-core's `UsageCounts`, so the CLI's
+ * #434/#435: what one call's model usage cost (the shape of ai-core's `UsageCounts`, so the CLI's
  * usage line and `jevitate report` read it like any run's usage).
  */
 export const JudgmentUsageSchema = z
@@ -129,7 +129,7 @@ export const JudgmentUsageSchema = z
   .strict();
 
 /**
- * #434: whether the advisory Jev layer ran for a sheet — `skipped` with the
+ * #434/#435: whether the advisory Jev layer ran for a sheet or an analysis — `skipped` with the
  * reason (`pass --real`, `no judgment key`), or `ran` with how many questions went to the model
  * (`asked`) and how many answers came from the content-hash cache (`cached`), and what it cost.
  */
@@ -159,7 +159,7 @@ export const PersonaReviewSchema = z
     jobs: z.array(z.object({ id: z.string(), story: z.string(), status: CatalogStatusValueSchema }).strict()),
     journeys: z.array(JourneyRefSchema),
     findings: z.array(FindingSchema),
-    /** #434: the advisory Jev layer of the findings (the readiness questions). */
+    /** #434/#435: the advisory Jev layer of the findings (readiness questions, pair classifications). */
     jev: JevLayerSchema.optional(),
     approval: CatalogApprovalSchema.optional(),
     contentHash: z.string().regex(/^[0-9a-f]{64}$/),
@@ -193,7 +193,7 @@ export const JobReviewSchema = z
     gaps: z.array(z.string()),
     journeys: z.array(JourneyRefSchema.extend({ persona: z.string().optional() }).strict()),
     findings: z.array(FindingSchema),
-    /** #434: the advisory Jev layer of the findings (the readiness questions). */
+    /** #434/#435: the advisory Jev layer of the findings (readiness questions, pair classifications). */
     jev: JevLayerSchema.optional(),
     approval: CatalogApprovalSchema.optional(),
     contentHash: z.string().regex(/^[0-9a-f]{64}$/),
@@ -246,3 +246,60 @@ export const CatalogStatusSchema = z
   .strict();
 export type CatalogStatusReport = z.infer<typeof CatalogStatusSchema>;
 
+// ── #435: catalog analysis ────────────────────────────────────────────────────────────────────
+
+/**
+ * #435: the INCOSE Guide to Writing Requirements' characteristics of a SET of requirements, which
+ * the catalog analysis groups its findings by (the individual characteristics are #434's).
+ */
+export const GTWR_SET_CHARACTERISTICS = ["complete", "consistent", "feasible", "comprehensible", "able to be validated", "correct"] as const;
+export type GtwrSetCharacteristic = (typeof GTWR_SET_CHARACTERISTICS)[number];
+
+/** #435: how Jev classifies a candidate pair (a typed Choice; code, not the model, decides what it gates). */
+export const PAIR_RELATIONS = ["compatible", "duplicate", "overlapping", "conflicting", "dependent"] as const;
+export type PairRelation = (typeof PAIR_RELATIONS)[number];
+
+/** #435: two catalog items paired deterministically (`job:<id>`, `persona:<id>`, `journey:<id>`), and why. */
+export const CandidatePairSchema = z
+  .object({
+    a: z.string(),
+    b: z.string(),
+    kind: z.enum(["job", "persona", "journey"]),
+    /** Why code paired them (shared persona, overlapping terms, opposing writes, …). */
+    reasons: z.array(z.string()).min(1),
+    /** Jev's classification, when the pair was judged. */
+    classification: z
+      .object({
+        relation: z.enum(PAIR_RELATIONS),
+        probability: z.number().min(0).max(1),
+        /** One line grounded in the two items' own text (built by code, never model prose). */
+        reason: z.string(),
+        /** The answer came from the content-hash cache (nothing was asked). */
+        cached: z.boolean(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type CandidatePair = z.infer<typeof CandidatePairSchema>;
+
+/** #435: `jevitate catalog analyze --json` (MCP `analyze_catalog`), and the per-approval analysis. */
+export const CatalogAnalysisSchema = z
+  .object({
+    /** `catalog`: the whole catalog; else the item being approved or reviewed (only its pairs). */
+    scope: z.object({ kind: z.enum(["catalog", "persona", "job", "journey"]), id: z.string().optional() }).strict(),
+    /** A hash over every item's content hash: the catalog this report is about. */
+    catalogHash: z.string().regex(/^[0-9a-f]{64}$/),
+    /** A `conflicting` / `duplicate` classification at or above it needs an acknowledgment to approve. */
+    threshold: z.number().min(0).max(1),
+    /** The most pairs judged in one analysis. */
+    pairCap: z.number().int().min(1),
+    pairs: z.array(CandidatePairSchema),
+    /** Candidate pairs over the cap: listed, never silently dropped, not judged. */
+    overflow: z.array(CandidatePairSchema),
+    /** Findings grouped by GtWR set characteristic (only non-empty groups, in GTWR_SET_CHARACTERISTICS order). */
+    groups: z.array(z.object({ characteristic: z.enum(GTWR_SET_CHARACTERISTICS), findings: z.array(FindingSchema) }).strict()),
+    jev: JevLayerSchema,
+  })
+  .strict();
+export type CatalogAnalysis = z.infer<typeof CatalogAnalysisSchema>;

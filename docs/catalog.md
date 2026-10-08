@@ -231,3 +231,72 @@ jevitate catalog status --json   # the schema-checked report (MCP: catalog_statu
 
 The test-campaign skill's release gate reads it. The command always exits 0: it is a report, and
 whoever reads it decides what it gates.
+
+## Catalog analysis
+
+Individual reviews can't see problems *between* items: two jobs that contradict each other,
+duplicates, Journeys whose writes undo each other, a persona with no jobs, a catalog that has drifted
+from the app. The INCOSE *Guide to Writing Requirements* calls these the characteristics of a
+requirement **set**: complete, consistent, feasible, comprehensible, able to be validated, correct.
+The catalog analysis groups its findings by them.
+
+```bash
+jevitate catalog analyze                  # deterministic layer (pairs, gaps, advice)
+jevitate catalog analyze --real --json    # + Jev classifications (MCP: analyze_catalog {real: true})
+jevitate catalog analyze --markdown --max-pairs 100
+```
+
+**Candidate pairs** are chosen by code, so the cost stays bounded and never grows to O(n²) model
+calls. Each pair records why it was paired:
+
+- jobs that serve the same persona, or share trigger/outcome terms;
+- Journeys whose expected writes (from the [review sheet](./journeys.md#review-and-promotion-sign-off))
+  hit the same resource, flagged when the writes oppose each other (`POST` vs `DELETE`,
+  `enable` vs `disable`), and Journeys that do the same job as the same persona;
+- personas with the same account role, or largely the same jobs.
+
+**Jev classification (advisory, with `--real`).** Each judged pair gets one typed Choice with a
+probability: `compatible`, `duplicate` (the same job), `overlapping` (one contains the other),
+`conflicting` (the outcomes can't both hold, or the flows leave contradictory states) or
+`dependent` (one must come first). The one-line reason is written by code from the two items' own
+text and the pairing evidence, never model prose. `duplicate`, `overlapping` and `conflicting`
+violate *consistent*, and `dependent` asks for an order to be stated (*comprehensible*).
+
+**Completeness** (*complete*): personas with no approved job, approved jobs with no promoted
+Journey, and (Jev, as a suggestion only, never auto-created) a persona whose jobs may not cover
+what that user obviously needs.
+
+**Update advice:** items edited since their approval and dangling links (*correct*), and promoted
+Journeys whose last recorded result, the `journey verify --mutate` record, is `insensitive`
+(*able to be validated*) or `inconclusive` (*feasible*). Journey run results are not persisted, so
+the mutation proof is the last result the analysis can read. The advice is written as
+"consider updating X because Y" and is never applied.
+
+The report never changes a catalog file, a Journey or an approval. It always exits 0.
+
+### Before every approval
+
+The main use is incremental. Before `persona approve`, `job approve`, `journey promote` and
+`demo approve` (and in every review sheet, and MCP `review_*`), the same analysis runs for the item
+being approved:
+
+- only the candidate pairs that involve it are judged, at most **8 per approval**. The rest are
+  listed as an overflow finding, never silently dropped, and `catalog analyze` judges them;
+- completeness: whether it fills a gap or leaves its persona/job without coverage;
+- advice about the item and its linked Journeys.
+
+The findings appear in the sheet's **Catalog analysis** section, next to Readiness, before the
+confirmation.
+
+**Acknowledgment threshold.** Code decides on the typed result: a `conflicting` or `duplicate`
+classification with probability **≥ 0.7** on a pair involving the item being approved
+**requires an acknowledgment**. The approval is refused (`E_APPROVAL_FINDINGS`, exit 1) unless
+the approver gives `--accept-findings "<reason>"`, which is recorded as
+`approval.acceptedFindings` (e.g. `catalog-analysis/conflicting:job:share-team`). Below the
+threshold, and every other relation, the finding is informational. A review sheet and
+`catalog analyze` show the same classification but never refuse. Without `--real` or without a
+key nothing is classified, so nothing gates on it: the pairs are listed unclassified and the
+section says the Jev classification was skipped.
+
+Answers are cached by the pairs' content (see [the cache](#readiness-review)), so re-approving an
+unchanged item asks nothing new.

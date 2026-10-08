@@ -1089,7 +1089,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (130 exports)
+# @jevitate/journey (138 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   ANCHOR_NAME_RE: variable
@@ -1108,7 +1108,11 @@
   CAMPAIGN_LIMITS: variable
   CampaignSpec: type-alias
   CampaignSpecSchema: variable
+  CandidatePair: type-alias
+  CandidatePairSchema: variable
   CATALOG_ID_RE: variable
+  CatalogAnalysis: type-alias
+  CatalogAnalysisSchema: variable
   CatalogApproval: type-alias
   CatalogApprovalSchema: variable
   CatalogItemStatus: type-alias
@@ -1128,8 +1132,10 @@
   formatAnnotationChanges: function
   FsJourneyStore: class
   GTWR_RULES: variable
+  GTWR_SET_CHARACTERISTICS: variable
   GtwrCharacteristic: type-alias
   GtwrRule: interface
+  GtwrSetCharacteristic: type-alias
   intentCoverage: function
   IntentCoverage: interface
   isNoClaimExpect: function
@@ -1196,6 +1202,8 @@
   MutationRunResult: interface
   MutationVerdict: type-alias
   mutationWait: function
+  PAIR_RELATIONS: variable
+  PairRelation: type-alias
   ParamSchema: interface
   ParamValidationError: class
   PersonaReview: type-alias
