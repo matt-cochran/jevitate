@@ -458,6 +458,7 @@
 # init
   description: set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
   options:
+    - flags=--claude-md required=false mandatory=false negate=false variadic=false default=null description=#431: also keep a marked jevitate block in the project's CLAUDE.md pointing at the installed skills (Claude Code only)
     - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=report planned skill-install/mcp-register actions without writing
     - flags=--force required=false mandatory=false negate=false variadic=false default=null description=overwrite a user-modified installed skill file/block or MCP config entry
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
@@ -468,6 +469,7 @@
     - flags=--skip-project required=false mandatory=false negate=false variadic=false default=null description=skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs)
     - flags=--skip-skills required=false mandatory=false negate=false variadic=false default=null description=skip skill installation
     - flags=--targets <ids> required=true mandatory=false negate=false variadic=false default=null description=comma-separated runtime ids to force-install to, overriding detection
+    - flags=--uninstall required=false mandatory=false negate=false variadic=false default=null description=#431: remove the skill files and marked AGENTS.md/CLAUDE.md blocks jevitate installed (user-modified ones are skipped unless --force); keys, MCP registration and .jevitate/ are left alone
 
 # invariants
   description: declared-invariant files (`explore --invariants`)

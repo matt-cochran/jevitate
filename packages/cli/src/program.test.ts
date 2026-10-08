@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { mkdtemp, writeFile, readFile } from "node:fs/promises";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -666,11 +666,19 @@ test("load run accumulates repeated --authorized-origin flags", async () => {
  * (so no prompt fires) and skill-install detection pinned to fresh temp
  * home/cwd dirs plus a temp state path (so nothing touches the real machine).
  */
-function newInitProgram(opts: { keysPresent?: boolean; existsSync?: (p: string) => boolean; isInteractive?: () => boolean } = {}) {
+function newInitProgram(
+  opts: {
+    keysPresent?: boolean;
+    existsSync?: (p: string) => boolean;
+    isInteractive?: () => boolean;
+    /** A second program over the SAME home/cwd/state (e.g. install, then `init --uninstall`). */
+    reuse?: { home: string; cwd: string; statePath: string };
+  } = {},
+) {
   const profiles = new ProfileManager("/unused-in-init-tests");
-  const home = mkdtempSync(join(tmpdir(), "init-home-"));
-  const cwd = mkdtempSync(join(tmpdir(), "init-cwd-"));
-  const statePath = join(mkdtempSync(join(tmpdir(), "init-state-")), "skills-install-state.json");
+  const home = opts.reuse?.home ?? mkdtempSync(join(tmpdir(), "init-home-"));
+  const cwd = opts.reuse?.cwd ?? mkdtempSync(join(tmpdir(), "init-cwd-"));
+  const statePath = opts.reuse?.statePath ?? join(mkdtempSync(join(tmpdir(), "init-state-")), "skills-install-state.json");
   const env = opts.keysPresent === false ? {} : { OPENROUTER_API_KEY: "x", TYPESAFE_API_KEY: "y" };
   const lines: string[] = [];
   const program = buildProgram({
@@ -819,6 +827,29 @@ test("init --dry-run --skip-keys human summary says 'would', never 'initialized'
   expect(out).not.toMatch(/\d+ created\)/);
   expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
   expect(existsSync(statePath)).toBe(false);
+});
+
+// #431: the marked AGENTS.md block comes back out with --uninstall, leaving the user's own text.
+test("init --uninstall removes the AGENTS.md block init added, keeping the user's text", async () => {
+  const { program, cwd, home, statePath } = newInitProgram();
+  writeFileSync(join(cwd, "AGENTS.md"), "# My project rules\n");
+  await program.parseAsync(["init", "--targets", "generic", "--skip-keys", "--skip-mcp", "--skip-project", "--json"], { from: "user" });
+  const again = newInitProgram({ reuse: { home, cwd, statePath } });
+  await again.program.parseAsync(["init", "--uninstall", "--targets", "generic", "--json"], { from: "user" });
+  expect(readFileSync(join(cwd, "AGENTS.md"), "utf8")).toBe("# My project rules\n");
+});
+
+test("init names an AGENTS.md whose JEVITATE SKILLS markers are broken instead of appending", async () => {
+  const { program, lines, cwd } = newInitProgram();
+  writeFileSync(join(cwd, "AGENTS.md"), "# Mine\n\n<!-- BEGIN JEVITATE SKILLS v1 -->\nhalf a block\n");
+  await program.parseAsync(["init", "--targets", "generic", "--skip-keys", "--skip-mcp", "--skip-project"], { from: "user" });
+  expect(lines.join("")).toMatch(/refused .*AGENTS\.md: the BEGIN JEVITATE SKILLS marker has no matching END marker/);
+});
+
+test("init --claude-md writes a version-stamped block into the project's CLAUDE.md", async () => {
+  const { program, cwd } = newInitProgram();
+  await program.parseAsync(["init", "--targets", "claude-code", "--claude-md", "--skip-keys", "--skip-mcp", "--skip-project", "--json"], { from: "user" });
+  expect(readFileSync(join(cwd, "CLAUDE.md"), "utf8")).toMatch(/<!-- BEGIN JEVITATE SKILLS v1 jevitate@\d+\.\d+\.\d+[^>]*-->/);
 });
 
 test("init --targets claude-code,codex --skip-keys --json ALSO registers the MCP server", async () => {

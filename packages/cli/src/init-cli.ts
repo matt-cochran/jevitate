@@ -7,7 +7,8 @@ import { KeyCheckError, credentialInputs, enteredKeyCheck, realSecureIO } from "
 import { keySources, realVerifyFetch, shadowWarnings, verifyFeatureKeys } from "./key-report.js";
 import { collectAllMissingKeys, type KeyCollectionReport } from "./init-keys.js";
 import { formatInitKeysHuman } from "./cli-output.js";
-import { detectRuntimes, resolveInstallTargetPaths, installSkills, type RuntimeId } from "./init-skills.js";
+import { detectRuntimes, resolveInstallTargetPaths, installSkills, uninstallSkills, type InstallReport, type RuntimeId, type UninstallReport } from "./init-skills.js";
+import { currentEngineInfo } from "./engine.js";
 import { registerMcp, resolveMcpTargetPaths, type McpInstallReport } from "./init-mcp.js";
 import { initNextSteps, environmentHint } from "./init-next-steps.js";
 import { loadManifest } from "@jevitate/skills";
@@ -29,8 +30,15 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
     .option("--force", "overwrite a user-modified installed skill file/block or MCP config entry")
     .option("--dry-run", "report planned skill-install/mcp-register actions without writing")
     .option("--skip-project", "skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs)")
+    .option("--claude-md", "#431: also keep a marked jevitate block in the project's CLAUDE.md pointing at the installed skills (Claude Code only)")
+    .option(
+      "--uninstall",
+      "#431: remove the skill files and marked AGENTS.md/CLAUDE.md blocks jevitate installed (user-modified ones are skipped unless --force); keys, MCP registration and .jevitate/ are left alone",
+    )
     .action(async function (this: Command) {
-      const { json, skipKeys, skipSkills, skipMcp, skipProject, targets, force, dryRun, replaceKeys, verify } = this.opts<{
+      const { json, skipKeys, skipSkills, skipMcp, skipProject, targets, force, dryRun, replaceKeys, verify, claudeMd, uninstall } = this.opts<{
+        claudeMd?: boolean;
+        uninstall?: boolean;
         replaceKeys?: boolean;
         verify: boolean;
         skipProject?: boolean;
@@ -43,6 +51,29 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
         dryRun?: boolean;
       }>();
       try {
+        // #431: --uninstall only removes what the skill installer wrote, with the same never-clobber
+        // rules; it never touches keys, MCP configs or the repo's .jevitate/.
+        if (uninstall === true) {
+          const runtimes = targets
+            ? (targets.split(",").map((t) => t.trim()).filter((t) => t.length > 0) as RuntimeId[])
+            : detectRuntimes(deps.init?.detection);
+          const paths = resolveInstallTargetPaths(deps.init?.detection);
+          const statePath = deps.init?.statePath ?? resolveDataDir(["skills-install-state.json"]);
+          const removed = await uninstallSkills(runtimes, loadManifest(), paths, statePath, {
+            ...(force === true ? { force: true } : {}),
+            ...(dryRun === true ? { dryRun: true } : {}),
+            ...(claudeMd === true ? { claudeMd: true } : {}),
+          });
+          if (json) {
+            emitJson(program, ok({ uninstalled: removed }));
+          } else {
+            const out = program.configureOutput().writeOut;
+            out?.(dryRun === true ? "jevitate: dry run — nothing was removed\n" : "jevitate skills uninstalled\n");
+            for (const line of skillReportLines(removed)) out?.(`${line}\n`);
+            process.exitCode = 0;
+          }
+          return;
+        }
         const data: Record<string, unknown> = { initialized: true };
         // The repo's own .jevitate/ (0.2.0 layout): Journeys, regressions and baselines live with the
         // app's code; logs stay local. Secrets and machine state stay in ~/.jevitate.
@@ -97,7 +128,12 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
           const paths = resolveInstallTargetPaths(deps.init?.detection);
           const statePath = deps.init?.statePath ?? resolveDataDir(["skills-install-state.json"]);
           const skills = loadManifest();
-          data.skills = await installSkills(runtimes, skills, paths, statePath, { force, dryRun });
+          data.skills = await installSkills(runtimes, skills, paths, statePath, {
+            force,
+            dryRun,
+            jevitateVersion: currentEngineInfo().version,
+            ...(claudeMd === true ? { claudeMd: true } : {}),
+          });
         }
         if (!skipMcp) {
           // Register the `jevitate mcp` server for each detected/selected
@@ -147,7 +183,10 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
           // configured — set X or run `jevitate ai setup <feature>`" — never a raw `collected:
           // []` that reads as "missing" when every key was already set.
           if (data.keys) out?.(`${formatInitKeysHuman(data.keys as KeyCollectionReport)}\n`);
-          if (data.skills) out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs ${dryRun === true ? "would be processed" : "processed"}\n`);
+          if (data.skills) {
+            out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs ${dryRun === true ? "would be processed" : "processed"}\n`);
+            for (const line of skillReportLines(data.skills as InstallReport[])) out?.(`${line}\n`);
+          }
           if (data.mcp) out?.(`mcp: ${(data.mcp as unknown[]).length} harness config(s) ${dryRun === true ? "would be processed" : "processed"}\n`);
           const project = data.project as ProjectInitReport | undefined;
           if (project !== undefined) {
@@ -166,4 +205,19 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
         emitCommandResult(program, fail(code, String(err instanceof Error ? err.message : err)), { json: json === true, command: "init" });
       }
     });
+}
+
+/**
+ * #431: the skill-install/uninstall actions a person must see — a file left alone because they
+ * edited it, or refused because its markers are broken (with the fix) — and, for uninstall, what
+ * was removed. `create`/`update`/`unchanged` stay in the count line above (and in --json).
+ */
+export function skillReportLines(reports: readonly (InstallReport | UninstallReport)[]): string[] {
+  const lines: string[] = [];
+  for (const r of reports) {
+    if (r.action === "skip-user-modified") lines.push(`  skipped ${r.path}: you edited it (re-run with --force to replace it)`);
+    else if (r.action === "refuse-malformed") lines.push(`  refused ${r.path}: ${r.reason ?? "its JEVITATE SKILLS markers are malformed"}`);
+    else if (r.action === "remove" || r.action === "force-remove") lines.push(`  removed ${r.path}`);
+  }
+  return lines;
 }
