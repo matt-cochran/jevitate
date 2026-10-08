@@ -391,6 +391,10 @@ export interface RunSummary {
   readonly missionOutcome?: string;
   /** #217: a goal run's own ending, beside the canonical `missionOutcome`. */
   readonly goalOutcome?: string;
+  /** #423: why the goal was not achieved. */
+  readonly goalReason?: string;
+  /** #423: the run's defect verdict, by kind — orthogonal to `goalOutcome`. */
+  readonly defectOutcome?: { readonly status: string; readonly byKind: Readonly<Record<string, number>> };
   readonly targetBuild?: string;
   readonly engineCommit?: string;
   readonly findings: number;
@@ -424,6 +428,8 @@ export function summarizeRun(r: RunRecord): RunSummary {
     ...(r.startedAt === undefined ? {} : { startedAt: r.startedAt }),
     ...(r.missionOutcome === undefined ? {} : { missionOutcome: r.missionOutcome }),
     ...(r.goalOutcome === undefined ? {} : { goalOutcome: r.goalOutcome }),
+    ...(r.goalReason === undefined ? {} : { goalReason: r.goalReason }),
+    ...(r.defectOutcome === undefined ? {} : { defectOutcome: r.defectOutcome }),
     ...(r.targetBuild === undefined ? {} : { targetBuild: r.targetBuild }),
     ...(r.engine?.commit === undefined ? {} : { engineCommit: r.engine.commit }),
   };

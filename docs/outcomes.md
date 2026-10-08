@@ -80,11 +80,56 @@ whose success check did not hold is `missionOutcome: "defects-found"`, `goalOutc
 | `failed` | `defects-found` | 1 | the model said `done` (or kept proposing it until code stopped accepting proposals), but an independent success check did not hold — `failure.kind: "success-check-failed"`, the check named in `failure.message` |
 | `exhausted` | `defects-found` | 1 | the action/decision budget ran out before the checks held |
 | `blocked` | `defects-found` | 1 | the loop stopped without the goal met and without claiming it: the model gave up (e.g. no matching control), or no progress was possible |
-| `defects-found` | `defects-found` | 1 | a defect was found: an HTTP 5xx from the app, a violated declared invariant, or a `--log-defect` match. It overrides the endings above, even when the success checks held: the checks' own verdict stays in `assertionPassed` and `checks`, and `reason` names the defect (`PUT /api/profile → 500`). A broken run or a hang keeps its own outcome, and the defect is still listed in `defects`. |
+| `defects-found` | `defects-found` | 1 | only when a violated declared invariant overrode an `inconclusive` budget or vacuous-check stop (#423: a defect no longer replaces `succeeded`/`failed`/`exhausted`/`blocked` — see the table below) |
 | `inconclusive` | `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) — or every failing success check was **vacuous** (#202: satisfied before the run's first action), so the run proved nothing either way: `failure.kind: "vacuous-check"`, naming the check |
 | `crashed` | `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
 | `hang` | `hang` | 3 | the app under test hung, and it reproduced on replay |
 | `intermittent` | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
+
+#### Goal outcome × defect outcome (#423)
+
+A goal run carries two orthogonal verdicts: `goalOutcome` (did the agent reach the goal?) and
+`defectOutcome` (did the app break? `{status: "none" | "defects", byKind}`, counting the gating
+entries of `defects[]` per kind — an HTTP 5xx, a violated invariant, a `--log-defect` match; see
+[results](./results.md)). A defect never replaces `goalOutcome`: a goal reached on an app that
+answered 500 is `goalOutcome: "succeeded"`, `defectOutcome.status: "defects"`. `missionOutcome` —
+and so the exit code — is derived from both by ONE table (`goalMissionOutcome`,
+`packages/domain/src/mission-outcome.ts`; the result schema and MCP `get_mission_result` check it):
+
+| `goalOutcome` | `defectOutcome: none` | `defectOutcome: defects` |
+|---|---|---|
+| `succeeded` | `clean` (0) | `defects-found` (1) |
+| `failed` / `exhausted` / `blocked` | `defects-found` (1) | `defects-found` (1) |
+| `defects-found` | `defects-found` (1) | `defects-found` (1) |
+| `hang` | `hang` (3) | `hang` (3) |
+| `intermittent` | `intermittent` (4) | `intermittent` (4) |
+| `inconclusive` / `crashed` | that outcome (2) | that outcome (2) |
+
+Every exit code is the same as in 0.7.0. In particular a goal that was not achieved with no defect
+still exits 1 (the long-standing "the check failed" code): read `defectOutcome.status: "none"` and
+`goalReason` to tell "untested because the agent could not do it" from "tested and found bugs". A
+hang or a broken run dominates its defects, which are still listed and counted.
+
+`goalReason` (on every goal result whose `goalOutcome` is not `succeeded`) says why the goal was not
+achieved, decided by code from the run's state, never parsed from `reason`:
+
+| `goalReason` | Meaning |
+|---|---|
+| `success-check-failed` | `failed`: the model said done, but an independent success check did not hold |
+| `not-found` | a find-out goal's report found no answer on the pages it searched |
+| `ungrounded` | the model's answer was rejected as not grounded on the observed pages until the run gave up |
+| `blocked-by-policy` | the model gave up after the safety policy refused a control it chose |
+| `gave-up` | the model reported the goal cannot be advanced from the page (no more specific cause known) |
+| `no-progress` | the run stopped because its actions left the page unchanged |
+| `budget` | `exhausted` (the action/decision budget), or a spend budget (`stop: "budget"`) |
+| `hang` | `hang` / `intermittent` |
+| `vacuous-check` | every failing check was satisfied before the first action |
+| `broken-run` | the run itself broke or proved nothing: a crash, an unreachable or unresponsive app, a starved host, an unreadable `--log-defect` oracle, a kill |
+| `defects` | `goalOutcome: "defects-found"` with no more specific cause |
+
+The human summary prints both: `GOAL blocked (not-found, stop: blocked)` and `DEFECTS server-log 2`
+(or `none`). `jevitate report` shows them per run, and `check`'s `--fake-ai` rule (a goal-only miss is
+inconclusive under the fake judge) no longer hides a defect the run found.
 
 **Goal / explore loop — `stop: StopReason`**, why the loop itself stopped acting (folds into
 the `goalOutcome` above; not separately exit-coded):

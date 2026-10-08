@@ -123,7 +123,8 @@ export function formatMissionHuman(result: unknown): string {
   // own defects/hangs arrays are typically empty for these (the goal's own check failed, not a
   // discovered defect) — a "DEFECTS-FOUND … 0 defect(s)" headline self-contradicts. Lead with the
   // goal's own verdict and why instead; missionOutcome/goalOutcome stay canonical in --json (#217).
-  const selfContradicting = goal === "failed" || goal === "exhausted" || goal === "blocked";
+  // #423: only when the run found no gating defect — with defects, the canonical headline counts them.
+  const selfContradicting = (goal === "failed" || goal === "exhausted" || goal === "blocked") && gating.length === 0;
   if (selfContradicting) {
     const detail = goalFailureDetail(result);
     lines.push(`${goal.toUpperCase()}: ${strategy}${target === undefined ? "" : ` ${target}`}${detail === undefined ? "" : ` (${detail})`}`);
@@ -135,8 +136,15 @@ export function formatMissionHuman(result: unknown): string {
   const own = str(result.outcome);
   if (goal !== undefined) {
     const stop = str(result.stop);
-    lines.push(`${tag("GOAL")}${goal}${stop === undefined ? "" : ` (stop: ${stop})`}`);
+    // #423: the goal's structured miss reason beside its ending.
+    const why = [str(result.goalReason), stop === undefined ? undefined : `stop: ${stop}`].filter((s): s is string => s !== undefined);
+    lines.push(`${tag("GOAL")}${goal}${why.length === 0 ? "" : ` (${why.join(", ")})`}`);
   } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
+  // #421/#423: the defect verdict by kind, orthogonal to the goal's (none when the run found none).
+  if (isRecord(result.defectOutcome) && isRecord(result.defectOutcome.byKind)) {
+    const kinds = Object.entries(result.defectOutcome.byKind).flatMap(([k, n]) => (typeof n === "number" && n > 0 ? [`${k} ${n}`] : []));
+    lines.push(`${tag("DEFECTS")}${kinds.length === 0 ? "none" : kinds.join(" · ")}`);
+  }
   const scope = scopeLine(result.scope);
   if (scope !== undefined) lines.push(`${tag("SCOPE")}${scope}`);
   // #293: where a journey-anchored run branched off its Journey.
@@ -311,7 +319,7 @@ export function formatMultiRunHuman(result: unknown): string {
   // typically empty for these (every run's OWN check failed, not a discovered defect); a
   // "DEFECTS-FOUND … 0 agreed finding(s)" headline self-contradicts. Lead with the goal's own
   // verdict instead; missionOutcome/goalOutcome stay canonical in --json.
-  const selfContradicting = goal === "failed" || goal === "exhausted" || goal === "blocked";
+  const selfContradicting = (goal === "failed" || goal === "exhausted" || goal === "blocked") && findings.length === 0;
   const lines = [selfContradicting ? `${goal.toUpperCase()}: ${base}` : `${outcome.toUpperCase()}: ${base} · ${findings.length} agreed finding(s) · ${flaky.length} flaky`];
   if (goal !== undefined) lines.push(`${tag("GOAL")}${goal}`);
   // #220: why the multi-run is inconclusive (interrupted, runs pending, or a run broke).

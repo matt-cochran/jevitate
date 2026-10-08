@@ -1,5 +1,15 @@
 import { z } from "zod";
-import { DEFECT_OUTCOME_STATUSES, GOAL_OUTCOMES, MISSION_OUTCOMES, defectOutcomeOf, foldGoalOutcome, type DefectOutcome } from "./mission-outcome.js";
+import {
+  DEFECT_OUTCOME_STATUSES,
+  GOAL_OUTCOMES,
+  GOAL_REASONS,
+  MISSION_OUTCOMES,
+  defectOutcomeOf,
+  foldGoalOutcome,
+  goalMissionOutcome,
+  type DefectOutcome,
+  type GoalReason,
+} from "./mission-outcome.js";
 
 /**
  * The ONE result schema every explore strategy's result follows (#195 part 5) — what `jevitate
@@ -16,6 +26,9 @@ import { DEFECT_OUTCOME_STATUSES, GOAL_OUTCOMES, MISSION_OUTCOMES, defectOutcome
  *  - `goalOutcome` — a goal run's own ending (`succeeded`/`failed`/`exhausted`/`blocked`, or a shared
  *    outcome it ended with directly), present on every goal result and on no other; it folds onto
  *    `missionOutcome` by the domain's single mapping (`GOAL_OUTCOME_FOLD`). Additive (schemaVersion 1).
+ *    #423: a goal result's `missionOutcome` is derived from `goalOutcome` AND `defectOutcome` by ONE
+ *    table (`goalMissionOutcome` in `mission-outcome.ts`); `goalOutcome` is the goal's own ending — a
+ *    defect no longer replaces it — and `goalReason` names why a goal was not achieved.
  *  - `defects` — EVERY defect the run found, whatever oracle found it: hard-signal defects,
  *    declared-invariant defects and `server-log` defects alike, each with its `fingerprint` and
  *    `kind`. A defect a strategy reports but never gates on (a usability run's `server-log`
@@ -247,6 +260,8 @@ export const MissionResultSchema = z
     missionOutcome: z.enum(RESULT_MISSION_OUTCOMES),
     /** #217 — additive: a goal run's own ending (present on every goal result, on no other). */
     goalOutcome: z.enum(RESULT_GOAL_OUTCOMES).optional(),
+    /** #423 — additive: why the goal was not achieved (goal results whose goalOutcome is not `succeeded`). */
+    goalReason: z.enum(GOAL_REASONS).optional(),
     exitCode: z.number().int().nonnegative(),
     defects: z.array(ResultDefectSchema),
     /** #421/#423 — additive: optional so results written before 0.8.0 still parse. */
@@ -283,10 +298,21 @@ export const MissionResultSchema = z
     message: "defectOutcome.byKind must count the result's gating defects per kind",
     path: ["defectOutcome"],
   })
-  .refine((r) => r.goalOutcome === undefined || foldGoalOutcome(r.goalOutcome) === r.missionOutcome, {
-    message: "missionOutcome must be the canonical fold of goalOutcome (GOAL_OUTCOME_FOLD)",
-    path: ["missionOutcome"],
-  });
+  .refine((r) => r.goalReason === undefined || (r.goalOutcome !== undefined && r.goalOutcome !== "succeeded"), {
+    message: "goalReason is only on a goal result whose goal was not achieved",
+    path: ["goalReason"],
+  })
+  .refine(
+    (r) =>
+      r.goalOutcome === undefined ||
+      (r.defectOutcome === undefined
+        ? foldGoalOutcome(r.goalOutcome) === r.missionOutcome // a result written before #423
+        : goalMissionOutcome(r.goalOutcome, r.defectOutcome.status) === r.missionOutcome),
+    {
+      message: "missionOutcome must be derived from goalOutcome and defectOutcome (goalMissionOutcome; GOAL_OUTCOME_FOLD before #423)",
+      path: ["missionOutcome"],
+    },
+  );
 export type MissionResult = z.infer<typeof MissionResultSchema>;
 
 /** A persisted `<stem>.result.json`: the verdict beside the result it summarizes. */
@@ -311,6 +337,8 @@ export interface MissionResultCore {
   readonly missionOutcome: ResultMissionOutcome;
   /** #217: a goal run's own ending (goal results only). */
   readonly goalOutcome?: ResultGoalOutcome;
+  /** #423: why the goal was not achieved (goal results whose goal was not `succeeded`). */
+  readonly goalReason?: GoalReason;
   readonly exitCode: number;
   readonly defects: ReadonlyArray<{ readonly fingerprint: string; readonly kind: string; readonly advisory?: true }>;
   /** #421/#423: `defectOutcomeOf(defects)` — every result written now carries it. */

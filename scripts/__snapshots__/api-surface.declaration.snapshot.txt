@@ -163,7 +163,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (119 exports)
+# @jevitate/domain (124 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
@@ -203,8 +203,13 @@
   GOAL_ONLY_OUTCOMES: variable
   GOAL_OUTCOME_FOLD: variable
   GOAL_OUTCOMES: variable
+  GOAL_REASONS: variable
+  goalMissionOutcome: function
   GoalOnlyOutcome: type-alias
   GoalOutcome: type-alias
+  GoalReason: type-alias
+  GoalReasonInput: interface
+  goalReasonOf: function
   hasOwnFrame: function
   HeapGrowthRule: interface
   HeapSample: interface
@@ -284,7 +289,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (609 exports)
+# @jevitate/explore (610 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -628,6 +633,7 @@
   MESSAGE_FIELD: variable
   messageClass: function
   messageRisk: function
+  MissCause: type-alias
   MissionRouteScope: interface
   MissionSafety: class
   MissionSessions: class

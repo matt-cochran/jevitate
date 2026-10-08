@@ -199,8 +199,11 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
 export function goalRunTake(r: RunExplorationResult, g: Pick<GoalRunShaping, "screenshots"> = {}): AuthorTake {
   const reason = r.reason ?? r.failure?.message;
   const recordingPath = r.recordingPaths[0];
+  // #423: a goal reached on a run that hit a defect (a 5xx, a server-log error, a violated invariant)
+  // is not a take to author from — as before the goal/defect split, it reads `defects-found` here.
+  const outcome = r.goalOutcome === "succeeded" && r.defectOutcome.status === "defects" ? "defects-found" : r.goalOutcome;
   const diagnostics: AuthorTakeDiagnostics = {
-    outcome: r.goalOutcome,
+    outcome,
     ...(reason === undefined ? {} : { reason }),
     stop: r.stop,
     runOutcome: r.runOutcome,
@@ -214,5 +217,5 @@ export function goalRunTake(r: RunExplorationResult, g: Pick<GoalRunShaping, "sc
     recordingPaths: r.recordingPaths,
     ...(g.screenshots === undefined || recordingPath === undefined ? {} : { screenshotsDir: screenshotsDirFor(g.screenshots, recordingPath) }),
   };
-  return { outcome: r.goalOutcome, recording: r.recording, diagnostics };
+  return { outcome, recording: r.recording, diagnostics };
 }

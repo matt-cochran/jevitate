@@ -120,6 +120,10 @@ export interface RunRecord {
   readonly missionOutcome?: string;
   /** #217: a goal run's own ending (succeeded/failed/exhausted/blocked/…). */
   readonly goalOutcome?: string;
+  /** #423: why the goal was not achieved (`result.goalReason`: not-found, ungrounded, budget, …). */
+  readonly goalReason?: string;
+  /** #421/#423: the run's defect verdict (`result.defectOutcome`): `none`/`defects` and the count per kind. */
+  readonly defectOutcome?: { readonly status: string; readonly byKind: Readonly<Record<string, number>> };
   readonly exitCode?: number;
   readonly observations: readonly FindingObservation[];
   /** The run's persisted model `usage` object (#163), as written — summed by `jevitate report`. */
@@ -153,6 +157,14 @@ function classifiedCauses(v: unknown): ClassifiedLogCause[] {
       const count = num(c.count);
       return ruleId === undefined || source === undefined || message === undefined || count === undefined ? [] : [{ ruleId, source, message, count }];
     });
+}
+
+/** #423: a result's `defectOutcome`, read structurally (a malformed one is skipped, never guessed at). */
+function defectOutcomeOfResult(v: unknown): RunRecord["defectOutcome"] {
+  if (!isRecord(v) || (v.status !== "none" && v.status !== "defects") || !isRecord(v.byKind)) return undefined;
+  const byKind: Record<string, number> = {};
+  for (const [k, n] of Object.entries(v.byKind)) if (num(n) !== undefined) byKind[k] = n as number;
+  return { status: v.status, byKind };
 }
 
 /** #422: a batch's environment causes, once each (rule + source + message) — summed, with how many runs hit it. */
@@ -451,7 +463,7 @@ function goalCheckObservations(result: Json, ctx: Ctx): FindingObservation[] {
       observation(
         { category: "goal-check", signal: `goal-check:not-reached`, ...(route === undefined ? {} : { route }), ...(goalName === undefined ? {} : { control: `goal ${goalName}` }) },
         {
-          title: `Goal not reached (${outcome})${goalName === undefined ? "" : ` (${goalName})`}${str(result.reason) === undefined ? "" : `: ${str(result.reason)}`}`,
+          title: `Goal not reached (${outcome}${str(result.goalReason) === undefined ? "" : `: ${str(result.goalReason)}`})${goalName === undefined ? "" : ` (${goalName})`}${str(result.reason) === undefined ? "" : `: ${str(result.reason)}`}`,
           occurrences: 1,
           evidence: [{ ...(ctx.transcript === undefined ? {} : { transcript: ctx.transcript }) }],
         },
@@ -698,6 +710,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   const scope = missionScope(mode, result);
   const branch = branchOf(result.branch);
   const environmentFaults = classifiedCauses(isRecord(result.environmentFaults) ? result.environmentFaults.causes : undefined);
+  const defectOutcome = defectOutcomeOfResult(result.defectOutcome);
   const expectedValidation = classifiedCauses(result.expectedValidation);
   return {
     runId,
@@ -705,6 +718,8 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
     path,
     observations,
     ...runOutcomes(str(raw.missionOutcome), result.goalOutcome),
+    ...(str(result.goalReason) === undefined ? {} : { goalReason: str(result.goalReason) }),
+    ...(defectOutcome === undefined ? {} : { defectOutcome }),
     ...(num(raw.exitCode) === undefined ? {} : { exitCode: num(raw.exitCode) }),
     ...(origin === undefined ? {} : { target: origin }),
     ...(str(suite?.target) === undefined ? {} : { targetName: str(suite?.target) }),

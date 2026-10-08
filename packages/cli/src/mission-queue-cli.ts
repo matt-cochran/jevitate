@@ -32,6 +32,12 @@ export function missionResultExitCode(body: Record<string, unknown>): number {
   return typeof body.exitCode === "number" ? body.exitCode : EXIT_CODES.inconclusive;
 }
 
+/** `server-log 2 · http-5xx 1`, or `none` (#423). */
+function kindCounts(byKind: Record<string, unknown>): string {
+  const parts = Object.entries(byKind).flatMap(([k, n]) => (typeof n === "number" && n > 0 ? [`${k} ${n}`] : []));
+  return parts.length === 0 ? "none" : parts.join(" · ");
+}
+
 export function formatMissionResultHuman(data: unknown): string {
   if (!isRecord(data)) return "";
   const id = String(data.missionId ?? data.id);
@@ -40,9 +46,12 @@ export function formatMissionResultHuman(data: unknown): string {
   }
   if (data.status === "failed") return `FAILED  ${id}: ${String(data.error)} — the mission could not run\n`;
   const lines = [`${String(data.status).toUpperCase()}  ${id}${data.resultId === undefined ? "" : ` → ${String(data.resultId)}`}  (exit ${String(data.exitCode)})`];
-  if (data.goalOutcome !== undefined) lines.push(`  goal: ${String(data.goalOutcome)}`);
+  if (data.goalOutcome !== undefined) lines.push(`  goal: ${String(data.goalOutcome)}${typeof data.goalReason === "string" ? ` (${data.goalReason})` : ""}`);
   const result = isRecord(data.result) ? data.result : undefined;
-  if (result !== undefined && Array.isArray(result.defects)) lines.push(`  defects: ${result.defects.length}`);
+  // #423: the defect verdict by kind (structured), else (an older result) the defects' count.
+  const byKind = isRecord(data.defectOutcome) && isRecord(data.defectOutcome.byKind) ? data.defectOutcome.byKind : undefined;
+  if (byKind !== undefined) lines.push(`  defects: ${kindCounts(byKind)}`);
+  else if (result !== undefined && Array.isArray(result.defects)) lines.push(`  defects: ${result.defects.length}`);
   if (data.coverage !== undefined) lines.push(`  coverage: ${JSON.stringify(data.coverage)}`);
   lines.push(`next: jevitate mission result ${id} --json for the full typed result`);
   return `${lines.join("\n")}\n`;

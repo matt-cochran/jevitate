@@ -591,6 +591,10 @@ Outcomes, stop reasons and exit codes:
   --strategy goal also carries its own ending as "goalOutcome" (= its "outcome"), folded onto missionOutcome:
     succeeded → clean 0 · failed / exhausted / blocked → defects-found 1
     (defects-found, inconclusive, crashed, hang, intermittent are themselves)
+    a defect never replaces goalOutcome: every result also carries defectOutcome {status none|defects, byKind},
+    and a succeeded goal with defects is missionOutcome defects-found 1 (goalOutcome stays succeeded);
+    a goal not achieved also carries goalReason (not-found, ungrounded, blocked-by-policy, gave-up,
+    no-progress, budget, hang, vacuous-check, success-check-failed, broken-run)
   --strategy goal's "stop" (why the loop itself stopped; not separately exit-coded):
     done | blocked | exhausted | no-progress | hang | inconclusive | crashed | budget
     (a "done" code rejected ends stop done, goalOutcome failed — never blocked)

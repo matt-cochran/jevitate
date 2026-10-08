@@ -142,7 +142,10 @@ running, or that could not run, exits 2, because it proves nothing yet.
 the CLI, its result lands in `.jevitate/logs/<date>/`, and its queue record moves
 `queued → running → done | failed`. `get_mission_result {id: missionId}` reports `queued`/`running`
 (`pending: true`), the finished result, or `failed` (an error: it could not run, e.g. its target was
-unpromoted meanwhile); `verify_fix` takes the missionId too once it is done.
+unpromoted meanwhile); `verify_fix` takes the missionId too once it is done. A finished result's
+status carries the two orthogonal verdicts beside `status`/`exitCode` (#423): a goal run's
+`goalOutcome` and `goalReason` (why it was not achieved: `not-found`, `ungrounded`, `budget`, …), and
+every run's `defectOutcome` (`{status: "none" | "defects", byKind}`) — read these, never `reason`.
 
 ```bash
 jevitate mission target add spa --name "App" --authorized-origin http://127.0.0.1:5193 \

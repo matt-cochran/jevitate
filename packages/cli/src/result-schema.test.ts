@@ -256,12 +256,42 @@ describe("#217 — a goal result's missionOutcome is canonical; its own ending i
         const core = assertConforms(r, "goal");
         expect(MISSION_OUTCOMES).toContain(core.missionOutcome);
         expect([core.missionOutcome, core.goalOutcome, r.outcome, r.stop]).toEqual([missionOutcome, goalOutcome, goalOutcome, stop]);
+        // #423: no defect on this backend — the miss is the goal's alone, with its structured reason.
+        expect(r.defectOutcome).toEqual({ status: "none", byKind: {} });
+        expect(r.goalReason).toBe({ succeeded: undefined, failed: "success-check-failed", blocked: "gave-up", exhausted: "budget" }[goalOutcome]);
         const file = JSON.parse(readFileSync(r.resultPath, "utf8")) as { missionOutcome: string; result: { goalOutcome: string } };
         expect([file.missionOutcome, file.result.goalOutcome]).toEqual([missionOutcome, goalOutcome]);
       },
       180_000,
     );
   }
+});
+
+describe("#423 — goalOutcome and defectOutcome are orthogonal; missionOutcome is derived from both", () => {
+  it(
+    "a goal not reached on a backend that logged an error: goalOutcome blocked (gave-up), defectOutcome defects, defects-found (exit 1)",
+    async () => {
+      const r = await runExploration({
+        url: url(),
+        goal: "save the settings",
+        allowlist: [origin],
+        judge: sequence("click:0", "blocked"),
+        gen: new FakeGenerationGateway({}),
+        successChecks: [parseSuccessSpec("textIncludes:[data-testid=status]|never")],
+        bounds: { maxActions: 2, maxDecisions: 3 },
+        outDir: await out("goal-blocked-defects"),
+        serverLog: serverLog(),
+      });
+      const core = assertConforms(r, "goal");
+      expect([core.goalOutcome, core.goalReason, core.missionOutcome, core.exitCode]).toEqual(["blocked", "gave-up", "defects-found", 1]);
+      expect(r.defectOutcome).toEqual({ status: "defects", byKind: { "server-log": 1 } });
+      // `reason` stays prose: the goal's own account first, then what the defect oracle found.
+      expect(r.reason).toMatch(/cannot be advanced.*; 1 server-log defect found \(--log-defect\)$/);
+      const file = JSON.parse(readFileSync(r.resultPath, "utf8")) as { result: { goalOutcome: string; goalReason: string; defectOutcome: unknown } };
+      expect([file.result.goalOutcome, file.result.goalReason, file.result.defectOutcome]).toEqual(["blocked", "gave-up", { status: "defects", byKind: { "server-log": 1 } }]);
+    },
+    180_000,
+  );
 });
 
 describe("one result schema across strategies (#195 part 5)", () => {

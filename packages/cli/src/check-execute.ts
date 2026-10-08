@@ -247,10 +247,15 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       // cannot prove a goal was reached OR missed, so the goal's own judgment-driven ending
       // (`succeeded`/`failed`/`exhausted`/`blocked`: `GOAL_ONLY_OUTCOMES`) is honestly inconclusive
       // under it, never a gating FAILED. A genuine hard signal the run hit along the way (an
-      // invariant violation, a 5xx, a hang, a crash — `goalOutcome` holding a shared
-      // `MissionOutcome` directly, not a goal-only one) never depended on the judge and still
-      // gates. `succeeded` needs no override: it is the clean case.
-      if (ctx.opts.aiMode === "fake" && (GOAL_ONLY_OUTCOMES as readonly string[]).includes(r.goalOutcome) && r.goalOutcome !== "succeeded") {
+      // invariant violation, a 5xx, a server-log defect — #423: `defectOutcome.status: "defects"`; a
+      // hang or a crash — `goalOutcome` holding a shared `MissionOutcome`) never depended on the
+      // judge and still gates. `succeeded` needs no override: it is the clean (or defects) case.
+      if (
+        ctx.opts.aiMode === "fake" &&
+        (GOAL_ONLY_OUTCOMES as readonly string[]).includes(r.goalOutcome) &&
+        r.goalOutcome !== "succeeded" &&
+        r.defectOutcome.status === "none"
+      ) {
         return {
           status: "error",
           resultPath: r.resultPath,

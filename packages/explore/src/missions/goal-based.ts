@@ -211,6 +211,12 @@ export interface GoalBasedResult {
   readonly failure?: MissionFailure;
   /** Declared-invariant violations (#86), deduped by fingerprint, each with its repro step. */
   readonly invariantDefects?: InvariantDefect[];
+  /**
+   * #423: the goal's own ending a violated invariant overrode with `defects-found` (`succeeded`,
+   * `exhausted`, `blocked`, `failed`, or an `inconclusive` budget/vacuous stop) — so a caller can
+   * keep "did the goal get reached" apart from "did the app break a rule". Absent otherwise.
+   */
+  readonly goalEnding?: GoalBasedOutcome;
   /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
   readonly invariants?: InvariantReport[];
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
@@ -469,6 +475,7 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
       return {
         ...(hard ? rest : withBudget),
         outcome: hard ? "defects-found" : withBudget.outcome,
+        ...(hard ? { goalEnding: withBudget.outcome } : {}),
         reason: withBudget.reason === undefined ? why : `${why}; ${withBudget.reason}`,
         invariantDefects,
         invariants,

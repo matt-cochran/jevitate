@@ -105,7 +105,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (69 exports)
+# @jevitate/domain (72 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEFECT_OUTCOME_STATUSES: array
@@ -116,6 +116,7 @@
   GOAL_ONLY_OUTCOMES: array
   GOAL_OUTCOMES: array
   GOAL_OUTCOME_FOLD: object
+  GOAL_REASONS: array
   HostHealthSummarySchema: object
   LogClassCauseSchema: object
   MAX_SAFE_NAME_LENGTH: const (number)
@@ -153,6 +154,8 @@
   foldGoalOutcome: function
   gatingDefects: function
   gaussian: function
+  goalMissionOutcome: function
+  goalReasonOf: function
   hasOwnFrame: function
   installClock: function
   isBrokenRun: function

@@ -268,6 +268,18 @@ function goalOutcomeOf(file: object): unknown {
   return result !== null && typeof result === "object" && "goalOutcome" in result ? (result as { goalOutcome: unknown }).goalOutcome : undefined;
 }
 
+/** #423: a persisted result's `defectOutcome.status` (`none`/`defects`), when present. */
+function defectStatusOf(file: object): unknown {
+  const outcome = resultField(file, "defectOutcome");
+  return outcome !== null && typeof outcome === "object" && "status" in outcome ? (outcome as { status: unknown }).status : undefined;
+}
+
+/** One field of a persisted result's `result` object, else undefined. */
+function resultField(file: object, key: string): unknown {
+  const result = (file as { result?: unknown }).result;
+  return result !== null && typeof result === "object" && key in result ? (result as Record<string, unknown>)[key] : undefined;
+}
+
 /** A model-backed option was asked for without usable gateways/keys (typed `setup_required`). */
 class SetupRequired extends Error {}
 
@@ -484,14 +496,21 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     // #217: `missionOutcome` is canonical; a goal run's own ending rides beside it as `goalOutcome`.
     const parsedOutcome =
       parsed !== null && typeof parsed === "object" && "missionOutcome" in parsed
-        ? parseResultOutcome((parsed as { missionOutcome: unknown }).missionOutcome, goalOutcomeOf(parsed))
+        ? parseResultOutcome((parsed as { missionOutcome: unknown }).missionOutcome, goalOutcomeOf(parsed), defectStatusOf(parsed))
         : null;
     if (parsedOutcome === null) {
       return errorResult({ error: "corrupt_result", ...ids });
     }
+    // #423: the two orthogonal verdicts beside the status — did the goal get reached (goalOutcome +
+    // goalReason) and did the app break (defectOutcome, counted by kind) — read from the structured
+    // result, never from its `reason` prose.
+    const goalReason = resultField(parsed as object, "goalReason");
+    const defectOutcome = resultField(parsed as object, "defectOutcome");
     const status = {
       ...missionStatus(parsedOutcome.outcome),
       ...(parsedOutcome.goalOutcome === undefined ? {} : { goalOutcome: parsedOutcome.goalOutcome }),
+      ...(typeof goalReason === "string" ? { goalReason } : {}),
+      ...(defectOutcome !== null && typeof defectOutcome === "object" ? { defectOutcome } : {}),
     };
     const result = (parsed as { result?: unknown }).result ?? null;
     // An adversarial run's coverage is surfaced next to the status: an `inconclusive` run says what

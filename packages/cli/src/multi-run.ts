@@ -300,6 +300,10 @@ export interface RunSummary {
   readonly missionOutcome: MissionOutcome;
   /** #226: a goal run's own ending (#217), beside `missionOutcome`. */
   readonly goalOutcome?: GoalOutcome;
+  /** #423: why the run's goal was not achieved (its result's `goalReason`). */
+  readonly goalReason?: string;
+  /** #423: the run's defect verdict by kind (its result's `defectOutcome`) — orthogonal to the goal's. */
+  readonly defectOutcome?: { readonly status: string; readonly byKind: Readonly<Record<string, number>> };
   readonly exitCode: number;
   readonly findings: readonly RunFinding[];
   readonly requests: Readonly<Record<string, readonly number[]>>;
@@ -726,6 +730,11 @@ function runFailureKindOf(data: Record<string, unknown>): string | undefined {
   return (isRecord(data.crash) ? kindOf(data.crash.failure) : undefined) ?? kindOf(data.failure);
 }
 
+/** A `byKind` record's numeric entries only. */
+function numericCounts(v: Record<string, unknown>): Record<string, number> {
+  return Object.fromEntries(Object.entries(v).filter((e): e is [string, number] => typeof e[1] === "number"));
+}
+
 /** Summarizes one run's envelope (the only IO: its transcript file when the result omits it). */
 export function summarizeRun(strategy: string, index: number, envelope: RunEnvelope, envelopePath?: string): RunSummary {
   const base = { index, ...(envelopePath === undefined ? {} : { envelopePath }) };
@@ -763,6 +772,10 @@ export function summarizeRun(strategy: string, index: number, envelope: RunEnvel
     outcome: goalOutcome ?? missionOutcome,
     missionOutcome,
     ...(goalOutcome === undefined ? {} : { goalOutcome }),
+    ...(typeof data.goalReason === "string" ? { goalReason: data.goalReason } : {}),
+    ...(isRecord(data.defectOutcome) && (data.defectOutcome.status === "none" || data.defectOutcome.status === "defects") && isRecord(data.defectOutcome.byKind)
+      ? { defectOutcome: { status: data.defectOutcome.status, byKind: numericCounts(data.defectOutcome.byKind) } }
+      : {}),
     exitCode: typeof data.exitCode === "number" ? data.exitCode : MISSION_EXIT_CODES[missionOutcome],
     findings: extractRunFindings(data),
     requests: extractRequests(data),
