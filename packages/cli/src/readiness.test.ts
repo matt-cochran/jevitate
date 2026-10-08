@@ -104,6 +104,8 @@ function deps(): CliDeps {
     journeysDir,
     catalogDir,
     explore: { targetsConfigPath: join(root, "no-targets.json"), env, localConfig: {}, usage, ...(judge === undefined ? {} : { judge }) },
+    // #437: a fixed, marker-free environment — on a CI runner the real one would record channel `ci`.
+    approval: { env: {}, stdinIsTTY: () => false, stdoutIsTTY: () => false, user: () => "tester" },
   };
 }
 
