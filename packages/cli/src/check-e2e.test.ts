@@ -223,7 +223,7 @@ describe("jevitate check — served suite (#137)", () => {
       const guarded = transcripts[1] ?? [];
       expect(open.some((s) => s.op === "click" && s.target === 'button "Import"' && s.actOk)).toBe(true);
       expect(guarded.some((s) => s.op === "click" && s.target === 'button "Import"')).toBe(false);
-      expect(guarded.find((s) => s.target === 'button "Import"')?.reason).toBe('refused by the safety policy: "Import" matches --deny "/^Import$/"');
+      expect(guarded.find((s) => s.target === 'button "Import"')?.reason).toBe('refused by the safety policy: "Import" matches --deny "/^Import$/" [rule deny:/^Import$/]');
     },
     240_000,
   );

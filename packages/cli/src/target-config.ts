@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 import type { DialogPolicy, HangConfig, SafetyConfig, SettleConfig, TimingConfig } from "@jevitate/explore";
+import { validateAllowControlPatterns } from "@jevitate/explore";
 import { resolveDataDir } from "./data-dir.js";
 import { sessionFileInProjectRefusal } from "./project-dir.js";
 
@@ -12,7 +13,7 @@ import { sessionFileInProjectRefusal } from "./project-dir.js";
  *     "settle": { "ignoreRequests": ["/api/notifications/poll*", "/hub/*"], "longPollMs": 5000 },
  *     "hangs": { "ignoreNoProgress": ["click Refresh*", "/dashboard"] },
  *     "timing": { "apiPrefixes": ["/api/", "/graphql"] },
- *     "safety": { "deny": ["/^Archive/"], "paid": ["/^Analyze/"], "allowDestructive": false, "readRequests": ["Estimate*", "/api/search*"] } } }
+ *     "safety": { "deny": ["/^Archive/"], "paid": ["/^Analyze/"], "allowControl": ["^Generate Your First Key$"], "allowDestructive": false, "readRequests": ["Estimate*", "/api/search*"] } } }
  * ```
  *
  * `settle.ignoreRequests` — requests the target marks as background (never in-flight work);
@@ -241,8 +242,19 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     if (f.dialogs !== undefined && f.dialogs !== "dismiss" && f.dialogs !== "accept") {
       throw new TargetConfigError(`${where}.safety.dialogs must be "dismiss" or "accept"`);
     }
+    let allowControl: string[] | undefined;
+    if (f.allowControl !== undefined) {
+      allowControl = strings(f.allowControl, `${where}.safety.allowControl`);
+      // #428: an unusable exemption is refused when the file is read, never silently dropped.
+      try {
+        validateAllowControlPatterns(allowControl, `${where}.safety.allowControl`);
+      } catch (e) {
+        throw new TargetConfigError(e instanceof Error ? e.message : String(e));
+      }
+    }
     out.safety = {
       ...(f.deny === undefined ? {} : { deny: strings(f.deny, `${where}.safety.deny`) }),
+      ...(allowControl === undefined ? {} : { allowControl }),
       ...(f.paid === undefined ? {} : { paid: strings(f.paid, `${where}.safety.paid`) }),
       ...(f.allowDestructive === undefined ? {} : { allowDestructive: f.allowDestructive as boolean }),
       ...(typeof f.allowWrites === "boolean" ? { allowWrites: f.allowWrites } : {}),
@@ -287,6 +299,8 @@ export interface TargetFlags {
   readonly deny?: readonly string[];
   /** `--paid` patterns (added to the file's `safety.paid`, #181). */
   readonly paid?: readonly string[];
+  /** `--allow-control` regexes (added to the file's `safety.allowControl`, #428). */
+  readonly allowControl?: readonly string[];
   /** `--allow-destructive` (true wins over the file). */
   readonly allowDestructive?: boolean;
   /** `--allow-writes` (true wins over the file, #158). */
@@ -314,6 +328,7 @@ export function resolveTargetConfig(
   const apiPrefixes = [...(base.timing?.apiPrefixes ?? []), ...(flags.apiPrefixes ?? [])];
   const deny = [...(base.safety?.deny ?? []), ...(flags.deny ?? [])];
   const paid = [...(base.safety?.paid ?? []), ...(flags.paid ?? [])];
+  const allowControl = [...(base.safety?.allowControl ?? []), ...(flags.allowControl ?? [])];
   const readRequests = [...(base.safety?.readRequests ?? []), ...(flags.readRpc ?? [])];
   const allowDestructive = flags.allowDestructive === true || base.safety?.allowDestructive === true;
   const allowWrites = flags.allowWrites === true || base.safety?.allowWrites === true;
@@ -323,6 +338,7 @@ export function resolveTargetConfig(
   const safety: SafetyConfig = {
     ...(deny.length === 0 ? {} : { deny }),
     ...(paid.length === 0 ? {} : { paid }),
+    ...(allowControl.length === 0 ? {} : { allowControl }),
     ...(readRequests.length === 0 ? {} : { readRequests }),
     ...(allowDestructive ? { allowDestructive } : {}),
     ...(allowWrites ? { allowWrites } : {}),

@@ -195,6 +195,7 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--allow-control <regex>` | exempt a control whose name matches from the soft 'may cost money' heuristic only (repeatable, #428) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's) |  |  |  |  |
 | `--allow-log-cmd` | a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running the spec's before/after operator hooks around every run (never model-chosen) | `false` |  |  |  |
@@ -410,6 +411,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--actor <name=storageState>` | multi-actor mission (#147, goal only; repeatable): the FIRST actor is the primary (the only one the model drives, from its own storageState); every other actor is an observer in its OWN fresh context that only runs the --invariants' cross-actor checks (capture + probe as:/deniedAs) — never clicks or types. Replaces --storage-state | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it | `[]` |  |  |  |
+| `--allow-control <regex>` | #428: exempt a control whose accessible name matches this regex (case-sensitive; /src/i for case-insensitive) from the soft built-in 'may cost money' name heuristic only — e.g. --allow-control "^Generate Your First Key$" (repeatable). It never lifts --deny, --paid, destructive, session-end, read-only or origin rules; every use is recorded in the result's safetyOverrides | `[]` |  |  |  |
 | `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for |  |  |  |  |
 | `--allow-log-cmd` | opt-in: a --log-source cmd:<command> may run as a subprocess (operator-declared only; refused otherwise) | `false` |  |  |  |
 | `--allow-secret-cmd` | opt-in: a --secret-field <descriptor>=cmd:<command> may run its command (in a shell, at type time, 60s timeout) and type its output (operator-declared only; refused otherwise) | `false` |  |  |  |
@@ -525,6 +527,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | --- | --- | --- | --- | --- | --- |
 | `--action-deltas` | opt-in (#303; every --strategy, not --feature): record what each action changed on the page — an accessibility snapshot before and after, announcements, the action's requests — redacted, with a code verdict per step (no-change \| relevant-change \| inconclusive) used by the goal loop's no-progress check and a persistence re-check after writes (goal), and as defect evidence (adversarial, coverage); adds `delta` to every transcript step (and Recording step, goal) and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one |  |  |  |  |
 | `--allow <origin>` | authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it | `[]` |  |  |  |
+| `--allow-control <regex>` | #428: exempt a control whose accessible name matches this regex (case-sensitive; /src/i for case-insensitive) from the soft built-in 'may cost money' name heuristic only — e.g. --allow-control "^Generate Your First Key$" (repeatable). It never lifts --deny, --paid, destructive, session-end, read-only or origin rules; every use is recorded in the result's safetyOverrides | `[]` |  |  |  |
 | `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for |  |  |  |  |
 | `--allow-secret-cmd` | opt-in: a --secret-field <descriptor>=cmd:<command> may run its command (in a shell, at type time, 60s timeout) and type its output (operator-declared only; refused otherwise) | `false` |  |  |  |
 | `--allow-vacuous-checks` | downgrade a vacuous --success check to a warning. By default a check satisfied before the run's first action — a page check that held on the seed page and never changed (an empty result container), a requestMade/responseStatus matched only by a page-load or polling request — FAILS: it cannot verify the goal |  |  |  |  |
@@ -1776,6 +1779,20 @@ print the policy for a site (an origin) and account
 | --- | --- | --- | --- | --- | --- |
 | `--account <account>` | account id | `primary` |  |  |  |
 | `--db <path>` | sqlite db path |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+
+#### site policy rules
+
+```
+jevitate site policy rules [options]
+```
+
+#428: list the control safety rules every run applies — built-in heuristics (ids, what they match, their regex), operator patterns and hard boundaries — and whether --allow-control can waive each (only the soft 'may cost money' heuristic). A refusal names the rule id it matched
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
 #### site policy set

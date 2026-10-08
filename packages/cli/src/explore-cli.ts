@@ -10,6 +10,7 @@ import {
   UnauthorizedExploreTargetError,
   resolveCoverageThresholds,
   TypeFixtureSpecError,
+  validateAllowControlPatterns,
   validateDenyPatterns,
   type CoverageThresholds,
   type DialogPolicy,
@@ -272,6 +273,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .addOption(GOAL_RUN_OPTIONS.jobWaitMs())
     .addOption(GOAL_RUN_OPTIONS.deny())
     .addOption(GOAL_RUN_OPTIONS.paid())
+    .addOption(GOAL_RUN_OPTIONS.allowControl())
     .addOption(GOAL_RUN_OPTIONS.allowDestructive())
     .addOption(GOAL_RUN_OPTIONS.dialogs())
     .option(
@@ -502,6 +504,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         jobWaitMs?: string;
         deny: string[];
         paid: string[];
+        allowControl?: string[];
         allowDestructive?: boolean;
         dialogs?: string;
         allowWrites?: boolean;
@@ -767,6 +770,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       try {
         validateDenyPatterns(o.deny);
         validateDenyPatterns(o.paid, "--paid");
+        validateAllowControlPatterns(o.allowControl ?? []);
       } catch (err) {
         emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;

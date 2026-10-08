@@ -9,7 +9,7 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
-import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
+import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, SafetyOverride, SideEffect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
@@ -198,6 +198,8 @@ export interface RunExplorationResult {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #428: every --allow-control exemption the run used. */
+  readonly safetyOverrides?: readonly SafetyOverride[];
   /** #303: the run's action deltas (verdict counts, per-action overhead) — only with `--action-deltas`. */
   readonly actionDeltas?: ActionDeltaStats;
   /**
@@ -644,6 +646,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(mission.budget === undefined ? {} : { budget: mission.budget }),
       sideEffects: mission.run.sideEffects,
       ...(mission.run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: mission.run.sideEffectsTruncated }),
+      ...(mission.run.safetyOverrides === undefined ? {} : { safetyOverrides: mission.run.safetyOverrides }),
       ...(mission.run.actionDeltas === undefined ? {} : { actionDeltas: mission.run.actionDeltas }),
       engine,
       ...(fx === undefined || missionFixture === undefined

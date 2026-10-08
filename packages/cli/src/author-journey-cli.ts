@@ -28,7 +28,7 @@ import { GOAL_RUN_OPTIONS, GoalRunFlagError, resolveGoalRunFlags, type GoalRunFl
  */
 const AUTHOR_GOAL_RUN_FLAGS = [
   "successWhen", "allowVacuousChecks", "actionDeltas", "secret", "secretField", "totp", "typeFixture", "fixture",
-  "saveStorageState", "replyWaitMs", "replyQuietMs", "replyCeilingMs", "replyMaxChars", "jobWaitMs", "deny", "paid",
+  "saveStorageState", "replyWaitMs", "replyQuietMs", "replyCeilingMs", "replyMaxChars", "jobWaitMs", "deny", "paid", "allowControl",
   "allowDestructive", "dialogs", "readRpc", "hangReplays", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
   "allowSecretCmd", "secretCmdAttempts",
 ] as const satisfies readonly (keyof typeof GOAL_RUN_OPTIONS)[];

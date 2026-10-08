@@ -59,10 +59,10 @@ export async function refuseAction(ctx: RunContext, step: Step, control: Control
   // #158 — a read-only (find-out) goal: code refuses a control that would start a write flow,
   // submit a form, send a message or upload. Refused before any interaction, recorded, told.
   if (ctx.readOnly !== null) {
-    const refusal = ctx.readOnly.refuses(decision.op, control);
+    const refusal = ctx.readOnly.refusal(decision.op, control);
     if (refusal !== null) {
-      ctx.history.push(refusal);
-      record(false, refusal, { origin: "engine" });
+      ctx.history.push(refusal.reason);
+      record(false, refusal.reason, { origin: "engine", safety: refusal.safety });
       ctx.lastActedOp = decision.op;
       return "continue";
     }
@@ -75,7 +75,7 @@ export async function refuseAction(ctx: RunContext, step: Step, control: Control
       ctx.refusedKeys.add(keyOf(control));
       ctx.lastRefusal = unsafe.reason;
       ctx.history.push(unsafe.reason);
-      record(false, unsafe.reason, { origin: "engine" });
+      record(false, unsafe.reason, { origin: "engine", safety: unsafe.refusal });
       ctx.lastActedOp = decision.op;
       return "continue";
     }

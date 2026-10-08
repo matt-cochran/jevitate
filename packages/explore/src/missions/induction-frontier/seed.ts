@@ -15,7 +15,7 @@ import { seedRedirectReason } from "../../seed-redirect.js";
 import { summarizeTimings } from "../../timing.js";
 import type { InductionRunResult } from "../induction.js";
 import type { FrontierState } from "./context.js";
-import { FRONTIER_OPS, enqueueFrom, refusalRisk, withSeed } from "./helpers.js";
+import { FRONTIER_OPS, enqueueFrom, withSeed } from "./helpers.js";
 
 /** Loads the seed and seeds the frontier; the run's result when it ends there, else null. */
 export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult | null> {
@@ -108,9 +108,9 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
 
   // A candidate the safety policy refuses is withheld at enqueue time (#186), its refusal recorded once.
   ctx.withheld = (control: Control, on: Snapshot): boolean =>
-    safety.withholds("click", control, (reason) => {
+    safety.withholds("click", control, (reason, refusal) => {
       // #213: kept (name + category) to explain a run that took no action.
-      ctx.refusedControls.set(control.name.replace(/\s+/g, " ").trim() || control.role, refusalRisk(reason));
+      ctx.refusedControls.set(control.name.replace(/\s+/g, " ").trim() || control.role, refusal.risk);
       ctx.transcript.record({
         op: null,
         control,
@@ -120,6 +120,7 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
         origin: "engine",
         actOk: false,
         reason,
+        safety: refusal,
         snapshot: on,
       });
     });

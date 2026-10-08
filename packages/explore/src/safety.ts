@@ -121,6 +121,13 @@ export interface SafetyConfig {
   readonly paid?: readonly string[];
   /** Lift the built-in session-end / destructive / paid categories (`--deny` still holds). */
   readonly allowDestructive?: boolean;
+  /**
+   * #428: controls exempt from the soft built-in "may cost money" heuristic (`--allow-control`,
+   * repeatable; `safety.allowControl` in targets.json): a case-sensitive regex over the accessible name
+   * (or `/source/flags`). Never lifts `--deny`, `--paid`, destructive, session-end, read-only or origin
+   * rules. Every use is recorded in the result's `safetyOverrides`.
+   */
+  readonly allowControl?: readonly string[];
   /** Extra read-request patterns for the write classifier (`--read-rpc`, #110). */
   readonly readRequests?: readonly string[];
   /**
@@ -283,35 +290,232 @@ export function validateDenyPatterns(patterns: readonly string[], flag = "--deny
   }
 }
 
+/**
+ * #428: the rule a refusal matched — a stable id, the pattern / heuristic words that matched, and the
+ * control's accessible name — so an operator can tell a `--paid` pattern from a built-in heuristic
+ * and decide whether to widen a guard, exempt one control, or report a false positive.
+ */
+export interface SafetyRefusal {
+  /**
+   * `builtin:session-end` | `builtin:destructive` | `builtin:may-cost-money` | `builtin:nameless-control`
+   * | `deny:<pattern>` | `paid:<pattern>` | `read-only:<kind>` (see {@link SAFETY_RULES}).
+   */
+  readonly ruleId: string;
+  /** What matched: the heuristic's matched words ("Generate"), or the operator pattern as given. */
+  readonly pattern: string;
+  /** The control's accessible name (whitespace-collapsed; "" when it has none). */
+  readonly control: string;
+  readonly risk: ControlRisk | "read-only";
+  /** True when `--allow-control <regex>` can exempt a control from this rule (soft name heuristics only). */
+  readonly waivable: boolean;
+}
+
 export interface SafetyVerdict {
   readonly risk: ControlRisk;
-  /** The transcript/history reason. */
+  /** The transcript/history reason (names the rule, #428). */
   readonly reason: string;
+  /** The rule that refused it (#428). */
+  readonly refusal: SafetyRefusal;
 }
+
+/** #428: one use of a `--allow-control` exemption — recorded in the run's result, never persisted. */
+export interface SafetyOverride {
+  /** The `--allow-control` regex as given. */
+  readonly regex: string;
+  /** The exempted control's accessible name. */
+  readonly control: string;
+  /** The soft rule it would otherwise have been refused by. */
+  readonly ruleId: string;
+  /** The words that rule matched. */
+  readonly pattern: string;
+  /** The transcript step whose click it permitted. */
+  readonly step: number;
+}
+
+/** #428: where a safety rule comes from. */
+export type SafetyRuleSource = "builtin" | "operator" | "read-only" | "boundary";
+
+/** #428: one safety rule as `jevitate site policy rules` lists it. */
+export interface SafetyRuleInfo {
+  /** The stable rule id (`deny:<pattern>` / `paid:<pattern>` / `read-only:<kind>` name a family). */
+  readonly id: string;
+  readonly source: SafetyRuleSource;
+  /** What it matches, in words. */
+  readonly matches: string;
+  /** The built-in heuristic's regex source, when it is one. */
+  readonly regex?: string;
+  /** Can `--allow-control <regex>` exempt one control from it? Only soft name heuristics can. */
+  readonly allowControl: boolean;
+  /** What else lifts it. */
+  readonly liftedBy: string;
+}
+
+/** #428: every rule that can refuse an action, and which ones `--allow-control` may waive. */
+export const SAFETY_RULES: readonly SafetyRuleInfo[] = [
+  {
+    id: "builtin:may-cost-money",
+    source: "builtin",
+    matches: "a short button/link label that may cost money or contact real people (Buy, Upgrade, Subscribe, Generate, Simulate, Send invite…)",
+    regex: PAID.source,
+    allowControl: true,
+    liftedBy: "--allow-destructive; a goal that asks for it; --allow-control <regex> for one named control",
+  },
+  {
+    id: "builtin:destructive",
+    source: "builtin",
+    matches: "a short label for an irreversible action (Delete, Remove, Revoke, Rotate, Regenerate, Close account, Reset authenticator…)",
+    regex: DESTRUCTIVE.source,
+    allowControl: false,
+    liftedBy: "--allow-destructive; a goal that asks for it",
+  },
+  {
+    id: "builtin:session-end",
+    source: "builtin",
+    matches: "a label that ends the session (Sign out, Log out) — the run would lose its authentication",
+    regex: SESSION_END.source,
+    allowControl: false,
+    liftedBy: "--allow-destructive; a goal that asks for it",
+  },
+  {
+    id: "builtin:nameless-control",
+    source: "builtin",
+    matches: "a control with no accessible name, when the run declares any --deny/--paid pattern (it can't be checked)",
+    allowControl: false,
+    liftedBy: "nothing (a descriptor-keyed --deny still applies)",
+  },
+  {
+    id: "deny:<pattern>",
+    source: "operator",
+    matches: "a control matching an operator --deny pattern (targets.json safety.deny)",
+    allowControl: false,
+    liftedBy: "nothing — remove the pattern",
+  },
+  {
+    id: "paid:<pattern>",
+    source: "operator",
+    matches: "a control matching an operator --paid pattern (targets.json safety.paid)",
+    allowControl: false,
+    liftedBy: "--allow-destructive; a goal that names its action word; or remove/narrow the pattern",
+  },
+  {
+    id: "read-only:<kind>",
+    source: "read-only",
+    matches: "a find-out goal (no success check) starting a write: a session-end/destructive/paid label, a write flow (save, create, submit…), send or upload",
+    allowControl: false,
+    liftedBy: "--allow-writes, or a goal that asks for a change",
+  },
+  {
+    id: "boundary:off-origin",
+    source: "boundary",
+    matches: "a page or action outside the run's authorized origins (--allow / the target URL)",
+    allowControl: false,
+    liftedBy: "nothing per control — authorize the origin",
+  },
+  {
+    id: "boundary:forbidden-tool",
+    source: "boundary",
+    matches: "an MCP tool outside the served allowlist (raw browser primitives, human-only approvals)",
+    allowControl: false,
+    liftedBy: "nothing",
+  },
+  {
+    id: "boundary:credentials",
+    source: "boundary",
+    matches: "credentials and secrets: never shown to the model, never persisted outside ~/.jevitate/credentials.json",
+    allowControl: false,
+    liftedBy: "nothing",
+  },
+];
+
+/** The built-in rule id of a heuristic category. */
+const BUILTIN_RULE: Record<Exclude<ControlRisk, "denied">, string> = {
+  "session-end": "builtin:session-end",
+  destructive: "builtin:destructive",
+  paid: "builtin:may-cost-money",
+};
+
+/** #428: is this rule one `--allow-control` may waive? Only the soft built-in name heuristic. */
+export function waivableRule(ruleId: string): boolean {
+  return SAFETY_RULES.some((r) => r.id === ruleId && r.allowControl);
+}
+
+/** A compiled `--allow-control` pattern. */
+interface AllowControl {
+  readonly regex: string;
+  readonly re: RegExp;
+}
+
+/**
+ * #428: compiles `--allow-control` patterns — a regex over the control's whitespace-collapsed
+ * accessible name, case-sensitive (`^Generate Your First Key$`), or `/source/flags`. Throws a message
+ * naming the bad pattern: an empty pattern, an invalid regex, or one that matches EVERY name (it
+ * matches the empty string, e.g. `.*`) — an exemption is for named controls, never a blanket waiver.
+ */
+export function compileAllowControl(patterns: readonly string[], flag = "--allow-control"): AllowControl[] {
+  return patterns.map((p) => {
+    if (typeof p !== "string" || p.trim() === "") throw new Error(`${flag} needs a non-empty regex`);
+    const slashed = /^\/(.*)\/([a-z]*)$/s.exec(p.trim());
+    let re: RegExp;
+    try {
+      re = slashed === null ? new RegExp(p) : new RegExp(slashed[1]!, slashed[2]!.replace(/[gy]/g, ""));
+    } catch (e) {
+      throw new Error(`${flag} ${JSON.stringify(p)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (re.test("")) throw new Error(`${flag} ${JSON.stringify(p)} matches every control name; anchor it to the control's name, e.g. "^Generate key$"`);
+    return { regex: p, re };
+  });
+}
+
+/** Throws a message naming the bad `--allow-control` pattern (CLI validation before any browser opens). */
+export function validateAllowControlPatterns(patterns: readonly string[], flag = "--allow-control"): void {
+  compileAllowControl(patterns, flag);
+}
+
+/** A regex that matches exactly this name (the `--allow-control` a refusal suggests). */
+function exactNameRegex(name: string): string {
+  return "^" + name.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&") + "$";
+}
+
+/** What the policy decided for one control: refused, waived by `--allow-control`, or neither. */
+type Evaluation =
+  | { readonly kind: "refused"; readonly verdict: SafetyVerdict }
+  | { readonly kind: "waived"; readonly waiver: Omit<SafetyOverride, "step"> }
+  | null;
 
 export class SafetyPolicy {
   readonly #deny: Array<{ readonly pattern: string; readonly match: DenyMatcher }>;
-  readonly #paid: DenyMatcher[];
+  readonly #paid: Array<{ readonly pattern: string; readonly match: DenyMatcher }>;
+  readonly #allowControl: readonly AllowControl[];
   readonly #allowDestructive: boolean;
   readonly #goal: string | null;
   readonly #dialogs: DialogPolicy;
+  readonly #overrides: SafetyOverride[] = [];
 
   constructor(cfg: SafetyConfig = {}, opts: { readonly goal?: string } = {}) {
     this.#deny = (cfg.deny ?? []).map((pattern) => ({ pattern, match: compileDeny(pattern) }));
-    this.#paid = (cfg.paid ?? []).map(compileDeny);
+    this.#paid = (cfg.paid ?? []).map((pattern) => ({ pattern, match: compileDeny(pattern) }));
+    // #428: an unusable --allow-control is refused here too (fail closed), never silently dropped.
+    this.#allowControl = compileAllowControl(cfg.allowControl ?? []);
     this.#allowDestructive = cfg.allowDestructive === true;
     this.#goal = opts.goal ?? null;
     this.#dialogs = cfg.dialogs ?? "dismiss";
   }
 
+  /** The operator `--paid` pattern this control matches, if any (#181). */
+  #operatorPaid(c: Pick<Control, "name" | "role" | "descriptor">): string | null {
+    const name = c.name.replace(/\s+/g, " ").trim();
+    if (name === "") return null;
+    return this.#paid.find((p) => p.match(c))?.pattern ?? null;
+  }
+
   /** The built-in category, else `paid` when an operator `--paid` pattern matches (#181). */
   #risk(
     c: Pick<Control, "name" | "role" | "descriptor">,
-  ): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string; readonly operator?: true } | null {
+  ): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string; readonly operator?: string } | null {
     const r = controlRisk(c.name, c.role);
     if (r !== null) return r;
-    const name = c.name.replace(/\s+/g, " ").trim();
-    return name !== "" && this.#paid.some((m) => m(c)) ? { risk: "paid", matched: name, operator: true } : null;
+    const pattern = this.#operatorPaid(c);
+    return pattern === null ? null : { risk: "paid", matched: c.name.replace(/\s+/g, " ").trim(), operator: pattern };
   }
 
   /** The risk category of a control's name (for marking the side effects a click fired). */
@@ -319,27 +523,95 @@ export class SafetyPolicy {
     return this.#risk({ ...c, descriptor: c.descriptor ?? {} })?.risk ?? null;
   }
 
-  /** Why this control may not be clicked, or null when it may. */
-  refuses(c: Pick<Control, "name" | "role" | "descriptor">): SafetyVerdict | null {
+  #evaluate(c: Pick<Control, "name" | "role" | "descriptor">): Evaluation {
     const name = c.name.replace(/\s+/g, " ").trim();
     for (const d of this.#deny) {
-      if (d.match(c)) return { risk: "denied", reason: `refused by the safety policy: "${name}" matches --deny ${JSON.stringify(d.pattern)}` };
+      if (d.match(c)) {
+        const ruleId = `deny:${d.pattern}`;
+        return {
+          kind: "refused",
+          verdict: {
+            risk: "denied",
+            reason: `refused by the safety policy: "${name}" matches --deny ${JSON.stringify(d.pattern)} [rule ${ruleId}]`,
+            refusal: { ruleId, pattern: d.pattern, control: name, risk: "denied", waivable: false },
+          },
+        };
+      }
     }
     // #396: a nameless control can't be matched against a name pattern, so it is never clicked blind
     // when the run declares any --deny/--paid pattern. A descriptor-keyed --deny above still wins.
     if (name === "" && (this.#deny.length > 0 || this.#paid.length > 0)) {
-      return { risk: "denied", reason: "refused by the safety policy: a control with no accessible name can't be checked against --deny/--paid" };
+      const ruleId = "builtin:nameless-control";
+      return {
+        kind: "refused",
+        verdict: {
+          risk: "denied",
+          reason: `refused by the safety policy: a control with no accessible name can't be checked against --deny/--paid [rule ${ruleId}]`,
+          refusal: { ruleId, pattern: "", control: "", risk: "denied", waivable: false },
+        },
+      };
     }
     if (this.#allowDestructive) return null;
     const r = this.#risk(c);
     if (r === null) return null;
     // #280: an operator `--paid` match is asked for by its action word, never its whole (estimate-bearing) name.
-    if (this.#goal !== null && (r.operator === true ? goalAsksForAction(this.#goal, r.matched) : goalAsksFor(this.#goal, r.matched))) return null;
+    if (this.#goal !== null && (r.operator !== undefined ? goalAsksForAction(this.#goal, r.matched) : goalAsksFor(this.#goal, r.matched))) return null;
+    let ruleId = r.operator === undefined ? BUILTIN_RULE[r.risk] : `paid:${r.operator}`;
+    let pattern = r.operator ?? r.matched;
+    // #428: --allow-control exempts a named control from the soft built-in heuristic ONLY. An operator
+    // --paid pattern the same control also matches still refuses it (the operator declared it paid).
+    if (waivableRule(ruleId)) {
+      const allow = this.#allowControl.find((a) => a.re.test(name));
+      if (allow !== undefined) {
+        const operator = this.#operatorPaid(c);
+        if (operator === null) return { kind: "waived", waiver: { regex: allow.regex, control: name, ruleId, pattern } };
+        ruleId = `paid:${operator}`;
+        pattern = operator;
+      }
+    }
+    const waivable = waivableRule(ruleId);
     const what = r.risk === "session-end" ? "ends the session" : r.risk === "destructive" ? "is destructive" : "may cost money or contact real people";
+    const rule = r.operator === undefined && !ruleId.startsWith("paid:") ? `[rule ${ruleId}, matched ${JSON.stringify(pattern)}]` : `[rule ${ruleId}]`;
+    const hint = waivable
+      ? `pass --allow-destructive to permit it, or --allow-control ${JSON.stringify(exactNameRegex(name))} to exempt this one control`
+      : "pass --allow-destructive to permit it";
     return {
-      risk: r.risk,
-      reason: `refused by the safety policy: "${name}" ${what} (${r.risk}); pass --allow-destructive to permit it`,
+      kind: "refused",
+      verdict: {
+        risk: r.risk,
+        reason: `refused by the safety policy: "${name}" ${what} (${r.risk}) ${rule}; ${hint}`,
+        refusal: { ruleId, pattern, control: name, risk: r.risk, waivable },
+      },
     };
+  }
+
+  /** Why this control may not be clicked, or null when it may. */
+  refuses(c: Pick<Control, "name" | "role" | "descriptor">): SafetyVerdict | null {
+    const e = this.#evaluate(c);
+    return e?.kind === "refused" ? e.verdict : null;
+  }
+
+  /**
+   * #428: the `--allow-control` exemption that lets this control be clicked (it would otherwise be
+   * refused by a soft heuristic), or null.
+   */
+  waiver(c: Pick<Control, "name" | "role" | "descriptor">): Omit<SafetyOverride, "step"> | null {
+    const e = this.#evaluate(c);
+    return e?.kind === "waived" ? e.waiver : null;
+  }
+
+  /**
+   * #428: a click on this control is about to be dispatched at `step`: an `--allow-control`
+   * exemption it relies on is recorded (every use, in order) for the result's `safetyOverrides`.
+   */
+  noteClick(step: number, c: Pick<Control, "name" | "role"> & { readonly descriptor?: Control["descriptor"] }): void {
+    const w = this.waiver({ ...c, descriptor: c.descriptor ?? {} });
+    if (w !== null) this.#overrides.push({ ...w, step });
+  }
+
+  /** #428: every `--allow-control` exemption used so far. */
+  overrides(): SafetyOverride[] {
+    return [...this.#overrides];
   }
 
   /**

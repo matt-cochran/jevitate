@@ -9,7 +9,7 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { InvariantSpec } from "@jevitate/recording";
-import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type SecretCommandRunner, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
+import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type SecretCommandRunner, type HangFinding, type VerifySession, type SideEffect, type SafetyOverride, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
 import { a11yChecks, analyzeClaims, buildReport, calibrationCaveat, claimsCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AnalysisOutcome, type AppContext, type GuardProbe, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
 import { captureFindingShots, planGuardProbes, runGuardProbes, skippedProbes, withProbePage } from "./ux-claim-probe.js";
 import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
@@ -238,6 +238,8 @@ export interface RunUsabilityMissionResult {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: readonly SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #428: every --allow-control exemption the run used. */
+  readonly safetyOverrides?: readonly SafetyOverride[];
   /** #303: the run's action deltas (verdict counts, per-action overhead) — only with `--action-deltas`. */
   readonly actionDeltas?: ActionDeltaStats;
   /**
@@ -791,6 +793,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       screenshots: capture.screenshots(),
       sideEffects: run.sideEffects,
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
+      ...(run.safetyOverrides === undefined ? {} : { safetyOverrides: run.safetyOverrides }),
       ...(run.actionDeltas === undefined ? {} : { actionDeltas: run.actionDeltas }),
       engine: currentEngineInfo(),
       ...((): { failure?: MissionFailure } => {

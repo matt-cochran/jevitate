@@ -183,7 +183,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (401 exports)
+# @jevitate/explore (405 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -302,6 +302,7 @@
   ReplayDeltas: class
   RequestCapture: class
   RunRecorder: class
+  SAFETY_RULES: array
   SELECT_OPTION_INSTRUCTIONS: const (string)
   SESSION_END: object
   SETTLE_QUIET_MS: const (number)
@@ -367,6 +368,7 @@
   clickTimeoutMs: function
   clippingSummary: function
   compareDeltas: function
+  compileAllowControl: function
   controlFields: function
   controlKey: function
   controlRisk: function
@@ -576,6 +578,7 @@
   unreadablePageTiming: function
   urlMatcher: function
   vacuousCheckMessage: function
+  validateAllowControlPatterns: function
   validateDenyPatterns: function
   valueFor: function
   valueStatedInGoal: function
@@ -584,6 +587,7 @@
   verifyReplayVerdict: function
   visibleBusyIndicator: function
   visibleBusyIndicatorContainer: function
+  waivableRule: function
   withheldReason: function
 
 # @jevitate/findings (20 exports)

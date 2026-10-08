@@ -27,6 +27,7 @@ function withMissionFlags(cmd: Command): Command {
   const repeatable: ReadonlyArray<readonly [string, string]> = [
     ["--deny <pattern>", "a control no mission may click (repeatable)"],
     ["--paid <pattern>", "an app control that costs money or credits (repeatable)"],
+    ["--allow-control <regex>", "exempt a control whose name matches from the soft 'may cost money' heuristic only (repeatable, #428)"],
     ["--invariants <file>", "app-declared invariants JSON (repeatable)"],
     ["--log-source <spec>", "backend log source: file:<path> | docker:<container> | cmd:<command> (needs --allow-log-cmd) (repeatable)"],
     ["--log-defect <level|/regex/>", "backend log lines matching this become a server-log defect (repeatable)"],

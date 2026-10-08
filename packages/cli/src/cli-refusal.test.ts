@@ -152,6 +152,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "profile create": { cases: TRAVERSAL().map((n) => [n]) },
   "profile status": { cases: TRAVERSAL().map((n) => [n]) },
   "site policy get": { exempt: "reports an unset policy as a status (exit 0), not a refusal" },
+  "site policy rules": { exempt: "#428: lists the static safety rules; it takes no input that could be refused" },
   "site policy set": { cases: [["x", "--file", missing, "--db", join(dir, "site.sqlite")]] },
   "site simulate": { base: ["x", "--script", validScript, "--db", join(dir, "site.sqlite")], cases: [["x", "--script", missing]] },
   "recording promote": { base: [validRecording, "--page", "0", "--step", "0", "--var", "v"], cases: [[missing, "--page", "0", "--step", "0", "--var", "v"]] },

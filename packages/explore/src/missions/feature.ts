@@ -39,7 +39,7 @@ import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
 import { seedRedirectReason } from "../seed-redirect.js";
 import { MissionSafety } from "../mission-safety.js";
-import type { SafetyConfig } from "../safety.js";
+import type { SafetyConfig, SafetyOverride } from "../safety.js";
 import type { SideEffect } from "../side-effects.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
@@ -137,6 +137,8 @@ export interface FeatureRunResult {
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
   sideEffects?: SideEffect[];
   sideEffectsTruncated?: number;
+  /** #428: every --allow-control exemption the run used (regex, control, the soft rule it waived, step). */
+  safetyOverrides?: SafetyOverride[];
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   budget?: BudgetTrajectory[];
 }
@@ -456,7 +458,7 @@ async function runFeatureFrontier(
 
     // A candidate the safety policy refuses is withheld at push time (#186), its refusal recorded once.
     const withheld = (control: Control, op: FrontierOp, on: Snapshot): boolean =>
-      safety.withholds(op, control, (reason) =>
+      safety.withholds(op, control, (reason, refusal) =>
         transcript.record({
           op: null,
           control,
@@ -466,6 +468,7 @@ async function runFeatureFrontier(
           origin: "engine",
           actOk: false,
           reason,
+          safety: refusal,
           snapshot: on,
         }),
       );
@@ -568,6 +571,7 @@ async function runFeatureFrontier(
             origin: "engine",
             actOk: false,
             reason: unsafe.reason,
+            safety: unsafe.refusal,
             snapshot: decidedOn,
           });
         }

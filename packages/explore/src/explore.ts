@@ -57,7 +57,7 @@ import { ChromeTracker } from "./feature/relevance.js";
 import { type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { describeFailure, isPageUnresponsive, isTargetUnresponsive } from "./mission-failure.js";
-import { type SafetyConfig } from "./safety.js";
+import { type SafetyConfig, type SafetyOverride } from "./safety.js";
 import { type TypeFixture } from "./type-fixtures.js";
 import { type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
@@ -421,6 +421,8 @@ export interface ExploreRun {
   readonly sideEffects: SideEffect[];
   /** Writes past the listed cap (`MAX_SIDE_EFFECTS`), counted — present only when some were. */
   readonly sideEffectsTruncated?: number;
+  /** #428: every --allow-control exemption the run used (regex, control, the soft rule it waived, step). */
+  readonly safetyOverrides?: SafetyOverride[];
   /** #303: the run's action deltas — verdict counts and the per-action overhead (absent when off). */
   readonly actionDeltas?: ActionDeltaStats;
 }

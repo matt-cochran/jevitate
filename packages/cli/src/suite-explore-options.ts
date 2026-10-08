@@ -87,6 +87,7 @@ export const SUITE_EXPLORE_OPTIONS = {
   // safety, settle, timing (the target config explore builds from its flags)
   deny: { shape: "strings", appliesTo: ALL_KINDS },
   paid: { shape: "strings", appliesTo: ALL_KINDS },
+  allowControl: { shape: "strings", appliesTo: ALL_KINDS },
   allowDestructive: { shape: "boolean", appliesTo: ALL_KINDS },
   dialogs: { shape: "string", appliesTo: ALL_KINDS, oneOf: ["dismiss", "accept"] },
   allowWrites: { shape: "boolean", appliesTo: ALL_KINDS },

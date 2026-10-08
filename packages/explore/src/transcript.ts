@@ -6,6 +6,7 @@ import type { PageTiming, RequestTiming } from "./timing.js";
 import type { RunAnswer } from "./answer.js";
 import type { ActionDelta } from "./action-delta.js";
 import type { NativeDialogEvent } from "./native-dialogs.js";
+import type { SafetyRefusal } from "./safety.js";
 
 /**
  * The transcript's copy of a perception's timing: redacted, and WITHOUT the per-request sample list
@@ -93,6 +94,11 @@ export interface TranscriptEntry {
    * can never fail against a fixed app, since nothing about the app changed.
    */
   readonly origin?: "engine";
+  /**
+   * #428 — set on a step the safety policy (or the read-only guard) refused: the rule that matched
+   * (`ruleId`), what it matched (`pattern`) and the control's accessible name (redacted). Additive.
+   */
+  readonly safety?: SafetyRefusal;
   readonly url: string;
   readonly signature: string;
   /** Interactive controls perceived on the page when this step was decided. */
@@ -174,6 +180,8 @@ export interface TranscriptStep {
   readonly reason?: string;
   /** See `TranscriptEntry.origin`. */
   readonly origin?: "engine";
+  /** See `TranscriptEntry.safety` (#428). */
+  readonly safety?: SafetyRefusal;
   /** The snapshot the step was decided on. */
   readonly snapshot: Snapshot;
   readonly judgments?: Readonly<Record<string, TranscriptJudgment>>;
@@ -231,6 +239,16 @@ export class TranscriptLog {
       actOk: step.actOk,
       ...(step.reason === undefined ? {} : { reason: redactText(step.reason, this.#secrets) }),
       ...(step.origin === undefined ? {} : { origin: step.origin }),
+      ...(step.safety === undefined
+        ? {}
+        : {
+            safety: {
+              ...step.safety,
+              ruleId: redactText(step.safety.ruleId, this.#secrets),
+              pattern: redactText(step.safety.pattern, this.#secrets),
+              control: redactText(step.safety.control, this.#secrets),
+            },
+          }),
       url: redactText(redactUrl(step.snapshot.url), this.#secrets),
       signature: step.snapshot.signature,
       controlCount: step.snapshot.controls.length,
