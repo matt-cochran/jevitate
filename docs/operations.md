@@ -246,7 +246,7 @@ walking up from the working directory.
 | | `run/browser-slots/`: the machine-wide browser slots ([resource governance](#shared-machines-resource-governance)) |
 
 `.jevitate/.gitignore` (written by `init`, which only ever adds the lines it lacks) keeps `logs/`
-and unapproved Journey annotation drafts (`journeys/.drafts/`) out of git, along with any secret or machine-local file that might be copied there: credentials,
+and unapproved Journey annotation drafts (`journeys/.drafts/`) and the Jev answer cache (`cache/`, answers keyed by content hash) out of git, along with any secret or machine-local file that might be copied there: credentials,
 config, targets, the policy database, profiles and storage states, the inbox and queue, trust
 decisions, source clones, `.env` files, HAR captures and traces.
 

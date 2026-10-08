@@ -12,6 +12,7 @@ import {
   type StatusSpec,
 } from "@jevitate/recording";
 import { mutationPairIssues } from "./mutation-proof.js";
+import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
 
 export interface SecretRef { manager: string; key: string; origin: string; field: string }
 export interface JourneyMetadata {
@@ -36,8 +37,18 @@ export interface JourneyMetadata {
    */
   /** What the Journey achieves, in one sentence. */
   goal?: string;
-  /** Who does it (a person, in words). */
+  /**
+   * Who does it. #433: when it equals a persona id in `.jevitate/personas.json` it LINKS the Journey
+   * to that catalog persona (whose approval `journey promote` then requires); otherwise it is the
+   * free-text description of a person it always was (a Journey with a `job` must name a catalog persona).
+   */
   persona?: string;
+  /**
+   * #433 — the job (a job story in `.jevitate/jobs.json`, by id) this Journey is how a persona does.
+   * `journey promote` requires the linked job and persona to be approved (or a recorded waiver,
+   * `--accept-unvetted`). Additive: an unlinked Journey promotes exactly as before.
+   */
+  job?: string;
   /** The account role it runs as — the environment's session it needs (e.g. `admin`, `buyer`). */
   role?: string;
   /** The seed data and login it needs, linked to fixtures and hooks. */
@@ -83,6 +94,49 @@ export interface JourneyMetadata {
    * Validated at load: an unknown site, step or anchor is refused. Additive.
    */
   mutationPairs?: JourneyMutationPair[];
+  /**
+   * #432 — the last human approval (`journey promote`, `demo approve`): the review hash of the
+   * Journey that was approved (`journeyReviewHash`: the content hash without the approval
+   * bookkeeping — `promoted`, `approval`, `acceptedWeak`), when, and the assertion-strength waiver
+   * given at that approval. Additive: a Journey without it validates and runs exactly as before.
+   */
+  approval?: JourneyApproval;
+}
+
+/** #432: one recorded approval — see `JourneyMetadata.approval`. */
+export interface JourneyApproval {
+  contentHash: string;
+  at: string;
+  /**
+   * #437: how the approval was made — channel (`tty` | `non-interactive` | `mcp` | `ci`), the agent
+   * marker NAMES detected, the OS user. Absent on approvals recorded before 0.8.0.
+   */
+  provenance?: ApprovalProvenance;
+  acceptedWeak?: { reason: string; rules: string[]; provenance?: ApprovalProvenance };
+  /**
+   * #433: what the approver waived — `unvetted`: promoted while its linked job/persona was not
+   * approved (`--accept-unvetted "<reason>"`), with the links as they stood (`job:<id> (draft)`).
+   */
+  waivers?: JourneyApprovalWaiver[];
+  /** #433: the pre-approval findings that needed an acknowledgment, and the reason (`--accept-findings`). */
+  acceptedFindings?: AcceptedFindings;
+}
+
+/** #433: one waiver recorded with an approval — see `JourneyApproval.waivers`. */
+export interface JourneyApprovalWaiver {
+  kind: "unvetted";
+  reason: string;
+  items: string[];
+  /** #437: how this waiver was confirmed (the approval's provenance). */
+  provenance?: ApprovalProvenance;
+}
+
+/** #433: pre-approval findings acknowledged at an approval (`--accept-findings "<reason>"`), by `<analyzer>/<code>`. */
+export interface AcceptedFindings {
+  reason: string;
+  findings: string[];
+  /** #437: how this acknowledgment was confirmed (the approval's provenance). */
+  provenance?: ApprovalProvenance;
 }
 
 /** #402: one declared pair — see `JourneyMetadata.mutationPairs`. */
@@ -187,6 +241,11 @@ const SecretRefSchema = z.object({
 // `checkout`, `j`, `gmail-archive-thread`.
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** #433: an `--accept-findings` acknowledgment, as a Journey's, a persona's or a job's approval records it. */
+export const AcceptedFindingsSchema = z
+  .object({ reason: z.string().min(1), findings: z.array(z.string()).max(200), provenance: ApprovalProvenanceSchema.optional() })
+  .strict();
+
 export const JourneySchema: ZodType<Journey> = z.object({
   metadata: z.object({
     id: z.string().regex(SAFE_ID_RE, "invalid id"),
@@ -201,6 +260,7 @@ export const JourneySchema: ZodType<Journey> = z.object({
     goal: TEXT.optional(),
     persona: z.string().max(500).optional(),
     role: z.string().max(200).optional(),
+    job: z.string().regex(SAFE_ID_RE, "job: a job id from .jevitate/jobs.json").max(64).optional(),
     preconditions: z.array(JourneyPreconditionSchema).max(50).optional(),
     successCriteria: z.array(JourneySuccessCriterionSchema).max(50).optional(),
     parameters: z
@@ -222,6 +282,20 @@ export const JourneySchema: ZodType<Journey> = z.object({
     mutationPairs: z
       .array(z.object({ check: z.string().min(1).max(100), mustFailWhen: z.string().min(1).max(200) }).strict())
       .max(100)
+      .optional(),
+    approval: z
+      .object({
+        contentHash: z.string().regex(/^[0-9a-f]{64}$/, "approval.contentHash: a sha256 hex digest"),
+        at: z.string().min(1),
+        provenance: ApprovalProvenanceSchema.optional(),
+        acceptedWeak: z.object({ reason: z.string().min(1), rules: z.array(z.string()), provenance: ApprovalProvenanceSchema.optional() }).strict().optional(),
+        waivers: z
+          .array(z.object({ kind: z.literal("unvetted"), reason: z.string().min(1), items: z.array(z.string()), provenance: ApprovalProvenanceSchema.optional() }).strict())
+          .max(20)
+          .optional(),
+        acceptedFindings: AcceptedFindingsSchema.optional(),
+      })
+      .strict()
       .optional(),
   }).strict(),
   recording: RecordingSchema,

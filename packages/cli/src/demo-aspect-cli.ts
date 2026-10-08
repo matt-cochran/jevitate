@@ -1,3 +1,10 @@
+import { UnvettedLinksError, resolveCatalogDir } from "./catalog-api.js";
+import { approvalRefusal, checkNonInteractiveReason, makeApprovalConfirm } from "./approval-provenance.js";
+import { CatalogInputError } from "./catalog.js";
+import { ApprovalFindingsError } from "./pre-approval.js";
+import { REAL_JEV_FLAG_HELP, jevSetupFor } from "./catalog-cli.js";
+import { reviewJourneyById } from "./journey-review-api.js";
+import { renderReviewText } from "./journey-review.js";
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
@@ -263,33 +270,84 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
       "the one human approval of a DRAFT demo: shows the Journey and its annotations, renders the final demo (no DRAFT marks) on the environment it was made on, " +
         "then applies the annotations and promotes the Journey; a replay that no longer works promotes nothing (exit 1)",
     )
+    .option("--accept-unvetted <reason>", "#433: approve although the Journey's linked job/persona is not approved, recording the reason in approval.waivers")
+    .option("--accept-findings <reason>", "#433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings")
+    .option("--real", `${REAL_JEV_FLAG_HELP}; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings`)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
+    .option(
+      "--non-interactive-approval <reason>",
+      "#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this",
+    )
     .action(async function (this: Command, id: string) {
-      const o = this.opts<ReplayFlags>();
+      const o = this.opts<ReplayFlags & { acceptUnvetted?: string; acceptFindings?: string; real?: boolean; jevProvider?: string; nonInteractiveApproval?: string }>();
       const out = program.configureOutput().writeOut;
       try {
+        checkNonInteractiveReason(o.nonInteractiveApproval);
         const journeysDir = resolveJourneysDir(deps, o.dir);
         const { record } = await loadDemoForApproval(journeysDir, id);
         const environment = resolveJourneyEnvironment({ env: record.env, ...(record.persona === undefined ? {} : { persona: record.persona }), ...environmentSeams(deps) });
         assertDemoEnvironment(environment); // re-checked: the environment may have been flagged production since
         const replay = replayOptionsFrom(this, deps, o, environment);
+        // #434/#435: readiness and the catalog analysis run before the approval; Jev only with --real.
+        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { ...(o.real === undefined ? {} : { real: o.real }), ...(o.jevProvider === undefined ? {} : { jevProvider: o.jevProvider }) });
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) =>
-          approveDemo({ ...replay, ...(siteGate === undefined ? {} : { siteGate }), journeysDir, id, outDir: outDirFor(o.out, id, "final") }),
+          approveDemo({
+            jev,
+            ...replay,
+            ...(siteGate === undefined ? {} : { siteGate }),
+            journeysDir,
+            id,
+            outDir: outDirFor(o.out, id, "final"),
+            catalogDir: resolveCatalogDir(deps.catalogDir),
+            ...(o.acceptUnvetted === undefined ? {} : { acceptUnvetted: o.acceptUnvetted }),
+            ...(o.acceptFindings === undefined ? {} : { acceptFindings: o.acceptFindings }),
+            // #437: a typed confirmation on a TTY (or the escape hatch, or the MCP channel), before the final render.
+            confirm: makeApprovalConfirm(deps.approval, o.nonInteractiveApproval === undefined ? {} : { nonInteractiveReason: o.nonInteractiveApproval }),
+          }),
         );
         process.exitCode = result.outcome === "approved" ? EXIT_CODES.ok : EXIT_CODES.defects;
         if (o.json) {
           emitJson(program, ok(withEngine(result)));
           return;
         }
-        out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${stepLines(result.steps)}`);
         if (result.outcome !== "approved") {
+          out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${stepLines(result.steps)}`);
           program.configureOutput().writeErr?.(`error: demo '${id}' is stale: ${result.reason ?? "unknown"}\n`);
           return;
         }
+        // #432: the same review sheet `journey review` shows, of the Journey as approved.
+        const { review } = await reviewJourneyById(journeysDir, id, {
+          ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath }),
+          catalogDir: resolveCatalogDir(deps.catalogDir),
+          readiness: true,
+          jev,
+        });
+        out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${renderReviewText(review)}\n`);
         out?.(formatAnnotationChanges(result.changes));
         out?.(`approved: journey '${id}' promoted\n`);
         if (result.final?.video !== undefined) out?.(`video: ${result.final.video}\nsubtitles: ${result.final.subtitles ?? ""}\n`);
         if (result.final?.guide !== undefined) out?.(`guide: ${result.final.guide}\n`);
       } catch (err) {
+        const refusal = approvalRefusal(err);
+        if (refusal !== null) {
+          // #437: not confirmed by a person (no TTY, or a mismatched confirmation) — nothing rendered or promoted.
+          emitJson(program, fail(refusal.code, refusal.message));
+          return;
+        }
+        if (err instanceof UnvettedLinksError || err instanceof ApprovalFindingsError) {
+          // #433: the catalog gate refused before anything rendered — exit 1, like `journey promote`.
+          emitJson(program, fail(err.code, err.message));
+          process.exitCode = EXIT_CODES.defects;
+          return;
+        }
+        if (err instanceof CatalogInputError) {
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
+        if (err instanceof GatewaySelectionError || err instanceof MissingCredentialError) {
+          emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+          return;
+        }
         const r = refusalOf(err);
         emitJson(program, r === null ? fail("E_DEMO", String(err instanceof Error ? err.message : err)) : fail(r.code, r.message));
       }

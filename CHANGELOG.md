@@ -56,6 +56,18 @@ an OpenRouter key, so one key covers generation and judgment.
 - **`jevitate init` skips the TypeSafe key prompt when an OpenRouter key is set (#429)**, because
   judgment can already run on it. Add one with `ai setup judgment --jev-provider typesafe`.
 
+- **Approvals need a person at a terminal and record how they were made (#437).** `journey promote`,
+  `demo approve`, `persona approve` and `job approve` (and each `--accept-*` waiver) now require an
+  interactive terminal and a typed confirmation — the item id or the first 8 characters of its content
+  hash; without one they are refused with `E_APPROVAL_NEEDS_HUMAN` (exit 64). Scripted setups can pass
+  `--non-interactive-approval "<reason>"`, which is recorded as a non-interactive approval. Every
+  approval stores its provenance (terminal, non-interactive, CI or MCP channel, the names of any agent
+  markers such as `CLAUDECODE`, and the OS user), shown in review sheets, `catalog status` and
+  `journey list`; MCP `promote_journey`/`approve_demo` are always recorded as agent approvals. To
+  enforce human sign-off, run `jevitate check --require-approvals` (or `catalog status
+  --require-approvals`) in CI and add `jevitate init --codeowners <@team>` with branch protection;
+  docs/catalog.md says exactly what each layer guarantees.
+
 ### Added
 
 - **`jevitate sweep --targets <file.tsv|file.json>` (#425):** many explore missions (per feature or
@@ -97,6 +109,55 @@ an OpenRouter key, so one key covers generation and judgment.
   switched. `ai status` shows the route, key and model; usage and cost are recorded on both routes.
 - **Hang evidence names the indicator's container (#419):** a `ui-no-progress` hang records the stuck
   indicator's nearest landmark (dialog, header, form, …) as `elementContainer`.
+
+- **Managed instruction blocks survive upgrades (#431).** `jevitate init` finds its `AGENTS.md` block by
+  any `BEGIN/END JEVITATE SKILLS vN` marker pair and replaces it in place, so a future marker version
+  never appends a second block; the BEGIN line names the jevitate version that wrote it. A file whose
+  markers are broken (a BEGIN without its END, two blocks) is refused with how to fix it, never
+  appended to. `init --uninstall` removes the skill files and marked blocks `init` installed (edited
+  ones are skipped unless `--force`), and `--claude-md` opts into a pointer block in the project's
+  `CLAUDE.md`. `init` now names every file it skipped or refused.
+
+- **`jevitate journey review <id>` (#432)** (and the read-only MCP tool `review_journey`) produces one
+  review sheet for promotion sign-off, as text, Markdown or JSON: the goal and success criteria, each
+  step in plain words, side effects (expected write requests, controls that match safety rules, origins
+  touched), inputs by name only, the proof (end-state checks, lint, the last `journey verify --mutate`
+  verdict), what changed since the last approval, and the Journey's content hash. `journey promote`
+  shows the sheet first and accepts `--reviewed-hash` / `--review-sheet` (MCP `reviewedHash`), refusing
+  with `E_JOURNEY_REVIEW_STALE` when the Journey changed after review. Every promotion, `demo approve`
+  included, records `metadata.approval` and keeps the approved version for the next review's diff.
+
+- **Catalog sign-off for personas and jobs (#433).** Personas and jobs become human-approved catalog
+  entries linked to Journeys. A job is a job story — "When [trigger], I want to [motivation], so I can
+  [outcome]." — in `.jevitate/jobs.json` (`.jevitate/campaign/jobs.json` is still read); a persona gains a
+  description, role and approval in `.jevitate/personas.json`. `jevitate persona|job review` and
+  `approve` record an approval bound to the item's content hash, and editing an approved item marks it
+  and its linked Journeys as needing re-review. `journey promote` and `demo approve` require the
+  linked job and persona to be approved, or a recorded `--accept-unvetted` waiver; every approval shows
+  pre-approval findings, and those that need it must be acknowledged with `--accept-findings`.
+  `jevitate catalog status` shows jobs × personas coverage, unlinked Journeys and stale approvals. MCP
+  gets the read-only `review_persona`, `review_job` and `catalog_status`; approving stays CLI-only.
+- **Requirements-quality checks on job stories and personas (#434).** Every job and persona review
+  lists findings from rules paraphrasing the INCOSE *Guide to Writing Requirements*: vague terms,
+  escape clauses, "and/or", open-ended lists, absolutes, negative outcomes, several outcomes in one
+  story, a user-story trigger ("As a …") and an outcome that names a feature, each with its rule id and
+  GtWR characteristic.
+
+- **Readiness review before sign-off (#434).** Review sheets for Journeys, jobs and personas show a
+  Readiness section (`--readiness`, MCP `readiness: true`), and every approval shows it automatically:
+  deterministic checks (links exist and are approved, intent is complete, lint passes, the mutation
+  proof is current, INCOSE GtWR findings), each pass/warn/fail with a fix. With `--real` and a judgment
+  key, Jev answers a few narrow questions — does the Journey achieve the job's outcome for this persona,
+  does its end-state check prove it, is the job story singular and verifiable — each with its
+  probability; a low answer reads "not ready because … (GtWR: …)". Jev only advises: its answers never
+  block an approval or change an exit code, and they are cached by content hash.
+- **Catalog analysis before every approval (#435).** `jevitate catalog analyze` (MCP `analyze_catalog`)
+  finds conflicts, duplicates, overlaps, coverage gaps and stale items across the catalog, grouped by
+  INCOSE GtWR set characteristic. Code picks the candidate pairs and says why; with `--real`, Jev
+  classifies each pair (compatible, duplicate, overlapping, conflicting, dependent) with a probability.
+  The same analysis runs before every persona, job, Journey or demo approval for that item's pairs (at
+  most 8); a conflicting or duplicate classification at probability 0.7 or higher needs
+  `--accept-findings "<reason>"`, recorded with the approval. It never changes catalog files.
 
 ### Fixed
 

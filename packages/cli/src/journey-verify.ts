@@ -25,7 +25,10 @@ import {
   type MutationRunResult,
 } from "@jevitate/journey";
 import { describeCheck, type BlockedWrite } from "@jevitate/explore";
+import { clock } from "@jevitate/domain";
 import { journeyContentHash } from "./journey-annotate-api.js";
+import { journeyReviewHash } from "./journey-review.js";
+import { writeVerifyRecord } from "./journey-review-store.js";
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
 
@@ -184,7 +187,17 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     },
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
-  return redactSecretParams(report, journey, opts.params);
+  const redacted = redactSecretParams(report, journey, opts.params);
+  // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
+  await writeVerifyRecord(opts.dir, {
+    journeyId: journey.metadata.id,
+    contentHash: journeyReviewHash(journey),
+    verdict: redacted.verdict,
+    ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
+    summary: { ...redacted.summary },
+    at: clock.nowIso(),
+  });
+  return redacted;
 }
 
 /** One human line per assertion — verdict, site, check, and the mutation that proved it. */

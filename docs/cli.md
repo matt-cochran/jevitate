@@ -15,6 +15,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`ai`](#ai): check or configure the model gateway credentials jevitate's AI features need
 - [`baseline`](#baseline): named baselines for `diff`, `report --baseline` and `check --baseline`
 - [`campaign`](#campaign): journey-anchored test campaigns (#293): many anchored missions, one deduped report
+- [`catalog`](#catalog): #433: the human-vetted catalog of personas, jobs and the Journeys linked to them
 - [`check`](#check): CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
 - [`demo`](#demo): demo one aspect of an app from a one-line request: explore → clean path → Journey → annotate → a DRAFT narrated demo; `demo approve <id>` promotes and renders the final one
 - [`diff`](#diff): classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline)
@@ -24,6 +25,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`inbox`](#inbox): the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
 - [`init`](#init): set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
 - [`invariants`](#invariants): declared-invariant files (`explore --invariants`)
+- [`job`](#job): #433: catalog jobs — job stories in .jevitate/jobs.json ("When …, I want to …, so I can ….") — review a job's sheet, approve it (bound to its content hash)
 - [`journey`](#journey): manage and run promoted Journeys (regression-test replays)
 - [`ledger`](#ledger): keep each finding's repro material by fingerprint, so verify-fix works long after the run's output is gone
 - [`load`](#load): run a promoted Journey as a load test
@@ -31,6 +33,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`logs`](#logs): run output under .jevitate/logs (dated; pruned by retention)
 - [`mcp`](#mcp): start an MCP stdio server exposing only the allowlisted Jevitate tools
 - [`mission`](#mission): manage exploration mission targets and drain the mission queue
+- [`persona`](#persona): #433: catalog personas (.jevitate/personas.json) — review a persona's sheet, approve it (a person's sign-off, bound to its content hash)
 - [`profile`](#profile): manage jevitate profiles (isolated credential/data sets)
 - [`record`](#record): record a demonstrated flow into a Recording (authoring plane)
 - [`recording`](#recording): inspect and edit recorded takes (promote, edit steps, diff, postdoc)
@@ -226,6 +229,50 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 
+## catalog
+
+```
+jevitate catalog [command]
+```
+
+#433: the human-vetted catalog of personas, jobs and the Journeys linked to them
+
+### catalog analyze
+
+```
+jevitate catalog analyze [options]
+```
+
+#435: problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic — candidate pairs (paired by code: shared persona/terms, opposing writes, same role) classified by Jev (with --real) as compatible/duplicate/overlapping/conflicting/dependent, completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Read-only and advisory: it never changes the catalog and never gates
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
+| `--markdown` | render the report as Markdown |  |  |  |  |
+| `--max-pairs <n>` | the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped |  |  |  |  |
+| `--real` | #435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only |  |  |  |  |
+
+### catalog status
+
+```
+jevitate catalog status [options]
+```
+
+the jobs × personas matrix (which have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links and stale approvals
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty) |  |  |  |  |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
+| `--require-approvals` | #437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels) |  |  |  |  |
+
 ## check
 
 ```
@@ -238,6 +285,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty) |  |  |  |  |
 | `--baseline <run|tag|last>` | only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`) |  |  |  |  |
 | `--baseline-dir <dir>` | results dir holding baseline runs (repeatable; default: this check's results, then ~/.jevitate) | `[]` |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -255,6 +303,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--out <dir>` | output dir: results/, junit.xml, jevitate.sarif, report.md, check.json | `jevitate-check` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys) | `false` |  |  |  |
+| `--require-approvals` | #437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed |  |  |  |  |
 | `--sarif <path>` | SARIF path (default <out>/jevitate.sarif) |  |  |  |  |
 | `--suite <file>` | the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget) |  |  | yes |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
@@ -286,6 +335,8 @@ the one human approval of a DRAFT demo: shows the Journey and its annotations, r
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-findings <reason>` | #433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings |  |  |  |  |
+| `--accept-unvetted <reason>` | #433: approve although the Journey's linked job/persona is not approved, recording the reason in approval.waivers |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
@@ -301,11 +352,14 @@ the one human approval of a DRAFT demo: shows the Journey and its annotations, r
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this |  |  |  |  |
 | `--out <dir>` | write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir) |  |  |  |  |
 | `--pace <ms>` | how long each step's caption shows before it acts (default 1500) |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
@@ -772,6 +826,8 @@ set up jevitate: collect API keys, install skills/MCP wiring, create the repo's 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--claude-md` | #431: also keep a marked jevitate block in the project's CLAUDE.md pointing at the installed skills (Claude Code only) |  |  |  |  |
+| `--codeowners <owners>` | #437: write/merge a marked CODEOWNERS block (.github/CODEOWNERS, or the repo's existing one) making .jevitate/journeys/, personas.json and jobs.json need these owners' review ("@org/team @user"); enable code-owner review in branch protection |  |  |  |  |
 | `--dry-run` | report planned skill-install/mcp-register actions without writing |  |  |  |  |
 | `--force` | overwrite a user-modified installed skill file/block or MCP config entry |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -782,6 +838,7 @@ set up jevitate: collect API keys, install skills/MCP wiring, create the repo's 
 | `--skip-project` | skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs) |  |  |  |  |
 | `--skip-skills` | skip skill installation |  |  |  |  |
 | `--targets <ids>` | comma-separated runtime ids to force-install to, overriding detection |  |  |  |  |
+| `--uninstall` | #431: remove the skill files and marked AGENTS.md/CLAUDE.md blocks jevitate installed (user-modified ones are skipped unless --force); keys, MCP registration and .jevitate/ are left alone |  |  |  |  |
 
 ## invariants
 
@@ -813,6 +870,66 @@ validate invariant files without a browser (the same pre-browser check `explore 
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--observer <name>` | a registered observer actor a probe `as:` / `deniedAs.actor` may name (repeatable; `explore --actor` minus the primary) | `[]` |  |  |  |
 | `--url <url>` | the run's start URL: relative probe/deniedAs paths resolve against it, and its origin is authorized |  |  |  |  |
+
+## job
+
+```
+jevitate job [command]
+```
+
+#433: catalog jobs — job stories in .jevitate/jobs.json ("When …, I want to …, so I can ….") — review a job's sheet, approve it (bound to its content hash)
+
+### job approve
+
+```
+jevitate job approve [options] <id>
+```
+
+approve a job (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in its jobs file. Editing it later makes it — and its Journeys — "needs re-review"
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
+| `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the job changed since |  |  |  |  |
+
+### job review
+
+```
+jevitate job review [options] <id>
+```
+
+a job's review sheet: its story, its personas and which have a promoted Journey for it, the gaps, its Journeys, its approval state, the pre-approval findings, its content hash
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
+| `--markdown` | render the sheet as Markdown |  |  |  |  |
+| `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 
 ## journey
 
@@ -997,7 +1114,7 @@ jevitate journey list [options]
 jevitate journey promote [options] <id>
 ```
 
-promote a local Journey (human-approval gate) so it becomes discoverable/runnable
+promote a local Journey (human-approval gate) so it becomes discoverable/runnable; shows its review sheet first and records the approval
 
 **Arguments**
 
@@ -1009,9 +1126,16 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-findings <reason>` | #433: promote although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings |  |  |  |  |
+| `--accept-unvetted <reason>` | #433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers |  |  |  |  |
 | `--accept-weak <reason>` | #401: promote a Journey whose assertions cannot prove its outcome, recording the reason |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
+| `--review-sheet <file>` | #432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash |  |  |  |  |
+| `--reviewed-hash <hash>` | #432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since |  |  |  |  |
 
 ### journey publish
 
@@ -1034,6 +1158,32 @@ jevitate journey publish [options] <id>
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--to <source>` | registered source name to publish into |  |  | yes |  |
+
+### journey review
+
+```
+jevitate journey review [options] <id>
+```
+
+a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
+| `--markdown` | render the sheet as Markdown |  |  |  |  |
+| `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 
 ### journey run
 
@@ -1528,6 +1678,66 @@ set a registered target's operator-declared auth for queued missions (#175); kee
 | `--save-storage-state [file]` | #175: write the rotated session back after each queued mission — to --storage-state (no value) or to <file>; for rotating refresh tokens |  |  |  |  |
 | `--secret-field <spec>` | #175: '<label\|testId\|type\|id\|name>=<value>=env:<VAR>' typed by queued goal missions (repeatable); the value is read from the environment at run time |  |  |  |  |
 | `--storage-state <file>` | #175: Playwright storageState JSON queued missions on this target start from (must exist; wins over targets.json) |  |  |  |  |
+
+## persona
+
+```
+jevitate persona [command]
+```
+
+#433: catalog personas (.jevitate/personas.json) — review a persona's sheet, approve it (a person's sign-off, bound to its content hash)
+
+### persona approve
+
+```
+jevitate persona approve [options] <id>
+```
+
+approve a persona (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in personas.json. Editing it later makes it — and its Journeys — "needs re-review"
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
+| `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the persona changed since |  |  |  |  |
+
+### persona review
+
+```
+jevitate persona review [options] <id>
+```
+
+a persona's review sheet: who it is, the jobs it serves, the Journeys linked to it, its approval state (stale = needs re-review), the pre-approval findings, its content hash
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
+| `--markdown` | render the sheet as Markdown |  |  |  |  |
+| `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 
 ## profile
 

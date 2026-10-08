@@ -51,6 +51,9 @@ const EXCLUDED: Readonly<Record<string, string>> = {
     "#313: sends a run's recorded log text (redacted) to the judgment model with --real — an operator opt-in for their own logs, like --log-source itself (operator-declared, never an MCP argument)",
   login:
     "#427: signs in by typing the values of operator environment variables the command line names (--user-env/--password-env) into a page: a request never chooses which of the operator's variables is read (the --secret-field rule). Over MCP a persona's session is refreshed only from the login parameters an operator's personas file declares (run_exploration personas + authCheck)",
+  "persona approve":
+    "#433: approving a catalog persona is a person's sign-off (bound to its content hash), like source trust: MCP reads the sheet (review_persona), never approves",
+  "job approve": "#433: approving a catalog job is a person's sign-off (bound to its content hash), like source trust: MCP reads the sheet (review_job), never approves",
   doctor:
     "#205: host maintenance for the operator (it signals processes on this machine and clears machine-wide browser slots); the same orphan sweep already runs automatically before every browser-driving MCP tool, and each result reports governance in hostHealth.resources",
 };

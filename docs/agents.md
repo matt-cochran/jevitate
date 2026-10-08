@@ -25,6 +25,27 @@ into every agent runtime it detects:
 `--targets claude-code,codex,cursor` forces targets, `--skip-skills` / `--skip-keys` / `--skip-mcp`
 skip a step, and a file you have edited is never overwritten without `--force`.
 
+**Managed blocks.** In a file you own (`AGENTS.md`, and `CLAUDE.md` with `--claude-md`), jevitate's
+instructions sit between two markers:
+
+```
+<!-- BEGIN JEVITATE SKILLS v1 jevitate@0.8.0 -->
+…
+<!-- END JEVITATE SKILLS v1 -->
+```
+
+Re-running `init` (for example after upgrading jevitate) replaces only the text between the markers,
+whatever version wrote it, and leaves everything outside them byte-for-byte; the BEGIN line names
+the jevitate version that wrote the block. An edit inside the block counts as yours: `init` skips
+that file and says so until you pass `--force`. If the markers are broken (a BEGIN without its END,
+two blocks), `init` refuses that file and prints how to fix it rather than appending a second block.
+
+- `--claude-md` also keeps a block in the project's `CLAUDE.md` pointing at the installed Claude Code
+  skills (opt-in; `CLAUDE.md` is never touched otherwise).
+- `--uninstall` removes what `init` installed: the skill files and the marked blocks (a file left
+  empty is deleted). Files and blocks you edited are skipped unless `--force`; `--dry-run` and
+  `--targets` work as for install. Keys, MCP registration and `.jevitate/` are left alone.
+
 The skills (each one's description tells the agent when to use it):
 
 | Skill | For |
@@ -67,8 +88,11 @@ tool from the CLI), except the few listed below with the reason:
 | `run_journey` | run a promoted Journey: `params`, `storageState`, `env`/`baseUrl`, `headed`/`slowMo`, `recordVideo` → `videoPaths`, `screenshots` → `screenshotPaths`, `viewport`/`device`, `fixtures`, `selfHeal` (+ `real`/`fakeAi`) | `journey run` |
 | `annotate_journey` | draft each step's objective/expected result into a reviewable draft; `approve: true` applies the reviewed draft (refused if the Journey changed) | `journey annotate` (`--approve`) |
 | `demo_journey` | replay a Journey as a narrated demo: `video` (.webm + .vtt) and/or `guide` (.md + screenshots) | `journey demo` |
-| `promote_journey`, `publish_journey` | promote a local Journey (refused when its assertions can't prove its outcome; only the CLI's `--accept-weak` waives that); publish one to a registered source | `journey promote`, `journey publish` |
+| `promote_journey`, `publish_journey` | promote a local Journey — recorded as an agent's approval (`provenance.channel: "mcp"`) (refused when its assertions can't prove its outcome; only the CLI's `--accept-weak` waives that; a Journey linked to an unapproved job/persona needs `acceptUnvetted`, recorded as a waiver; findings needing an acknowledgment only the CLI's `--accept-findings` accepts); publish one to a registered source | `journey promote`, `journey publish` |
 | `lint_journey` | the assertions that can't prove a Journey's outcome | `journey lint` |
+| `review_journey` | read-only: the review sheet for promotion sign-off (summary, steps, side effects, inputs by name, proof, change since last approval, content hash; `readiness: true` adds the Readiness section); pass its `contentHash` as `promote_journey`'s `reviewedHash` | `journey review --json` (`promote --reviewed-hash`) |
+| `review_persona`, `review_job`, `catalog_status` | read-only: a catalog persona's / job's review sheet (job story, personas, Journeys, gaps, approval state, pre-approval findings, content hash); the jobs × personas coverage, unlinked Journeys and stale approvals. `readiness: true` adds the #434 Readiness section (deterministic checks + INCOSE GtWR rules; with `real: true`, advisory Jev questions). Approving a persona or a job is human-only (CLI) | `persona review --json`, `job review --json`, `catalog status --json` |
+| `analyze_catalog` | read-only, advisory: conflicts, duplicates, overlaps, gaps and update advice between catalog items, grouped by INCOSE GtWR set characteristic; candidate pairs chosen by code, classified by Jev with `real: true`; never changes the catalog, never gates | `catalog analyze --json` |
 | `verify_journey` | prove each assertion can fail: replay with a write step skipped, its write aborted, or a typed value emptied | `journey verify --mutate` |
 | `create_demo`, `approve_demo` | demo one aspect on a named, non-production environment as a DRAFT; approve it (renders the final demo, promotes the Journey) | `demo "<aspect>"` / `demo create`, `demo approve` |
 | `author_journey` | explore toward a goal and author an unpromoted Journey from the verified path | `explore-author-journey` |
@@ -97,6 +121,19 @@ Not reachable over MCP, on purpose:
 | `ai setup` | interactive secret entry: a key never passes through a model |
 | `record` | a person clicks through the app while it records (`author_journey` is the agent's way) |
 | `source trust` (and `source add --accept-tou`) | trusting a third-party Journey, or accepting a source's Terms of Use, is a person's decision |
+| `persona approve`, `job approve` (and `--accept-findings` on `journey promote` / `demo approve`) | signing off a catalog persona or job, or accepting findings that need an acknowledgment, is a person's decision ([the catalog](./catalog.md)); MCP reads the sheets (`review_persona`, `review_job`) |
+| `--non-interactive-approval` (on every approval command) | the scripted-setup escape hatch is the operator's choice; an MCP approval needs none — it is always recorded as channel `mcp` |
+
+**Approvals are a person's (#437).** `promote_journey` and `approve_demo` still work, but every
+approval they make is recorded with `provenance.channel: "mcp"` — an agent's approval, never a
+person's — and `jevitate check --require-approvals` fails it unless the operator allows `mcp`. On
+the CLI, every approval (`journey promote`, `demo approve`, `persona approve`, `job approve`, and
+the `--accept-*` waivers) needs an interactive terminal and a typed confirmation; an agent's shell
+gets `E_APPROVAL_NEEDS_HUMAN` (exit 64). An agent hands the approval to a person — it names the
+command and the review sheet to read — and never passes `--non-interactive-approval` on its own:
+that flag is for scripted setups a person configured, and it is recorded as `non-interactive`
+with the agent markers it detects (e.g. `CLAUDECODE`). See
+[what "human approval" guarantees](./catalog.md#what-human-approval-guarantees).
 
 **How the CLI-mirroring tools work.** Each tool that mirrors a CLI command takes typed, closed
 arguments named after the command's flags (`--storage-state` → `storageState`, a family's command

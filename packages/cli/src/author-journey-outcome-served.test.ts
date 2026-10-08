@@ -125,7 +125,7 @@ describe("explore-author-journey keeps the outcome evidence — served (#400)", 
     expect(publish?.expectRequests).toEqual([{ kind: "responseStatus", method: "POST", pathGlob: RPC, status: { class: 2 } }]);
     for (const s of steps) expect(isOwnTargetVisible(s.step), JSON.stringify(s.step)).toBe(false);
 
-    await cli(journeysDir, ["journey", "promote", "publish", "--json"]);
+    await cli(journeysDir, ["journey", "promote", "publish", "--json", "--non-interactive-approval", "test"]);
     state = "draft";
     const ok = await cli(journeysDir, ["journey", "run", "publish", "--json"]);
     expect((JSON.parse(ok.out) as { data: { outcome: string } }).data.outcome, ok.out).toBe("ok");

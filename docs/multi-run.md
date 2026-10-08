@@ -159,6 +159,10 @@ commit it as the project's `.jevitate/personas.json`. With that file:
 
 The storage states themselves must live outside `.jevitate/`.
 
+The same file is the [catalog](./catalog.md)'s persona list: an entry may also carry a
+`description`, a `role` and its `approval` (`jevitate persona approve`). An entry with no session
+yet (no `storageState`, no `login`) is a catalog-only persona, which runs skip.
+
 **Where the check runs.** `explore` (single runs, `--repeat`, the persona matrix, `--actor`) and queued
 missions (`mission run`, MCP `queue_exploration`) run it. A queued mission whose session expired gets
 an `auth-expired` result from `get_mission_result`. `targets.json` personas have no login parameters,

@@ -1,4 +1,9 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyLintFinding } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding } from "@jevitate/journey";
+import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { journeyReviewHash } from "./journey-review.js";
+import { writeApprovedSnapshot } from "./journey-review-store.js";
+import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
+import type { JevSetup } from "./jev-advisor.js";
 import { redactText } from "@jevitate/ai-core";
 import { safeRunPolicy, type RunPolicy, clock } from "@jevitate/domain";
 import { join } from "node:path";
@@ -38,6 +43,11 @@ export class JourneyRequiresAuthError extends Error {}
  * #401: the Journey's assertions cannot prove its outcome (the `lintJourney` errors). `promote`
  * refuses unless the reviewer accepts it with a non-empty `--accept-weak <reason>`.
  */
+/** #432: `journey promote --reviewed-hash`: the Journey changed after the reviewer's sheet was produced. */
+export class StaleReviewError extends Error {
+  readonly code = "E_JOURNEY_REVIEW_STALE";
+}
+
 export class WeakJourneyError extends Error {
   constructor(message: string, readonly findings: readonly JourneyLintFinding[] = []) {
     super(message);
@@ -238,14 +248,50 @@ export async function lintJourneyById(
  * #401: lints first — a Journey whose assertions cannot prove its outcome is refused
  * (`WeakJourneyError`) unless the reviewer accepts it with a non-empty `--accept-weak <reason>`,
  * which is recorded on the Journey (`metadata.acceptedWeak`). Warnings never block.
+ *
+ * #432: records the approval (`metadata.approval`: the review hash, when, the waiver) and keeps a
+ * snapshot of the approved Journey (`.approved/<id>.json`). Given `reviewedHash` (what the reviewer's
+ * sheet showed), a Journey that changed since is refused (`StaleReviewError`) before anything else.
+ *
+ * #433: then the catalog gate (`journeyCatalogGate`): a Journey linking a job/persona that is not
+ * approved is refused (`UnvettedLinksError`) unless `acceptUnvetted` (recorded in
+ * `approval.waivers`), and the shared pre-approval findings are acknowledged (`acceptFindings`,
+ * recorded in `approval.acceptedFindings`) — the same pipeline `persona|job approve` and
+ * `demo approve` use. `catalogDir` (default: the project's `.jevitate/`) holds personas/jobs.
  */
-export async function promoteJourney(dir: string, id: string, opts: { acceptWeak?: string } = {}): Promise<Journey> {
+export interface PromoteJourneyOptions {
+  acceptWeak?: string;
+  reviewedHash?: string;
+  acceptUnvetted?: string;
+  acceptFindings?: string;
+  /** The catalog's directory; undefined: the project's `.jevitate/` (none outside a project). */
+  catalogDir?: string | null;
+  /** Which approval path asks (`demo approve` promotes through here too). */
+  action?: "journey promote" | "demo approve";
+  /** #434/#435: the advisory Jev layer of the pre-approval readiness and analysis (`--real`), or why it is skipped. */
+  jev?: JevSetup;
+  /**
+   * #437: confirms the approval (after every gate, before anything is written) and returns its
+   * provenance — the CLI's `makeApprovalConfirm` (a typed confirmation on a TTY, the escape hatch,
+   * or the MCP channel). Omitted: recorded as `non-interactive` (`programmaticProvenance`).
+   */
+  confirm?: ApprovalConfirm;
+}
+
+export async function promoteJourney(dir: string, id: string, opts: PromoteJourneyOptions = {}): Promise<Journey> {
   const store = new FsJourneyStore(dir);
   const registry = new JourneyRegistry(store);
 
   const existing = await registry.get(id);
   if (!existing) {
     throw new UnknownJourneyError(`unknown journey '${id}'`);
+  }
+  // #432: approval binds to what the reviewer read — refused when the Journey changed since.
+  const contentHash = journeyReviewHash(existing);
+  if (opts.reviewedHash !== undefined && opts.reviewedHash.trim().toLowerCase() !== contentHash) {
+    throw new StaleReviewError(
+      `journey '${id}' changed after its review sheet was produced (reviewed ${opts.reviewedHash.trim()}, now ${contentHash}) — review it again: jevitate journey review ${id}`,
+    );
   }
   const errors = lintJourney(existing).filter((f) => f.level === "error");
   const reason = opts.acceptWeak?.trim() ?? "";
@@ -259,14 +305,45 @@ export async function promoteJourney(dir: string, id: string, opts: { acceptWeak
       errors,
     );
   }
-  if (errors.length > 0) {
-    const acceptedWeak = { reason, rules: [...new Set(errors.map((f) => f.rule))] };
-    await store.put({ ...existing, metadata: { ...existing.metadata, promoted: true, acceptedWeak } });
-    return (await registry.get(id)) ?? { ...existing, metadata: { ...existing.metadata, promoted: true, acceptedWeak } };
-  }
-  await registry.promote(id);
-  const promoted = await registry.get(id);
-  return promoted ?? { ...existing, metadata: { ...existing.metadata, promoted: true } };
+  const acceptedWeak = errors.length > 0 ? { reason, rules: [...new Set(errors.map((f) => f.rule))] } : undefined;
+  const gate = await journeyCatalogGate(existing, {
+    catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir,
+    journeysDir: dir,
+    action: opts.action ?? "journey promote",
+    ...(opts.acceptUnvetted === undefined ? {} : { acceptUnvetted: opts.acceptUnvetted }),
+    ...(opts.acceptFindings === undefined ? {} : { acceptFindings: opts.acceptFindings }),
+    ...(opts.jev === undefined ? {} : { jev: opts.jev }),
+  });
+  // #437: the person confirms the approval and each waiver given with it (or it is refused) — then it is recorded with how it was made.
+  const provenance =
+    opts.confirm === undefined
+      ? programmaticProvenance()
+      : await opts.confirm({
+          kind: opts.action === "demo approve" ? "demo" : "journey",
+          id,
+          contentHash,
+          waivers: [
+            ...(acceptedWeak === undefined ? [] : [{ flag: "--accept-weak", reason: acceptedWeak.reason, detail: acceptedWeak.rules.join(", ") }]),
+            ...(gate.waivers ?? []).map((w) => ({ flag: "--accept-unvetted", reason: w.reason, detail: w.items.join(", ") })),
+            ...(gate.acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: gate.acceptedFindings.reason, detail: gate.acceptedFindings.findings.join(", ") }]),
+          ],
+        });
+  const approval: JourneyApproval = {
+    contentHash,
+    at: clock.nowIso(),
+    provenance,
+    ...(acceptedWeak === undefined ? {} : { acceptedWeak: { ...acceptedWeak, provenance } }),
+    ...(gate.waivers === undefined ? {} : { waivers: gate.waivers.map((w) => ({ ...w, provenance })) }),
+    ...(gate.acceptedFindings === undefined ? {} : { acceptedFindings: { ...gate.acceptedFindings, provenance } }),
+  };
+  const promoted: Journey = {
+    ...existing,
+    metadata: { ...existing.metadata, promoted: true, ...(acceptedWeak === undefined ? {} : { acceptedWeak }), approval },
+  };
+  await store.put(promoted);
+  // #432: the Journey as approved — the next review diffs against it ("change since last approval").
+  await writeApprovedSnapshot(dir, promoted);
+  return (await registry.get(id)) ?? promoted;
 }
 
 /**

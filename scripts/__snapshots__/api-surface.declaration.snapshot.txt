@@ -1089,7 +1089,9 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (84 exports)
+# @jevitate/journey (147 exports)
+  AcceptedFindings: interface
+  AcceptedFindingsSchema: variable
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1100,31 +1102,72 @@
   AnnotationDraftStep: type-alias
   AnnotationDraftStepSchema: variable
   applyAnnotationDraft: function
+  APPROVAL_CHANNELS: variable
+  ApprovalChannel: type-alias
+  ApprovalChannelSchema: variable
+  ApprovalProvenance: type-alias
+  ApprovalProvenanceSchema: variable
+  ApprovalsReport: type-alias
+  ApprovalsReportSchema: variable
+  ApprovalViolation: type-alias
+  ApprovalViolationSchema: variable
   AssertionProof: interface
   assertionSiteKey: function
   AssertionVerdict: type-alias
   CAMPAIGN_LIMITS: variable
   CampaignSpec: type-alias
   CampaignSpecSchema: variable
+  CandidatePair: type-alias
+  CandidatePairSchema: variable
+  CATALOG_ID_RE: variable
+  CatalogAnalysis: type-alias
+  CatalogAnalysisSchema: variable
+  CatalogApproval: type-alias
+  CatalogApprovalSchema: variable
+  CatalogItemStatus: type-alias
+  CatalogStatusReport: type-alias
+  CatalogStatusSchema: variable
+  CatalogStatusValueSchema: variable
+  checkJobStory: function
+  checkPersona: function
+  checkStatement: function
   classifyMutation: function
   deriveParamSchema: function
   describeStep: function
+  Finding: type-alias
+  FindingSchema: variable
   FlatJourneyStep: interface
   flatJourneySteps: function
   formatAnnotationChanges: function
   FsJourneyStore: class
+  GTWR_RULES: variable
+  GTWR_SET_CHARACTERISTICS: variable
+  GtwrCharacteristic: type-alias
+  GtwrRule: interface
+  GtwrSetCharacteristic: type-alias
   intentCoverage: function
   IntentCoverage: interface
   isNoClaimExpect: function
   isOwnTargetVisible: function
   isSweepMode: function
+  JevLayer: type-alias
+  JevLayerSchema: variable
+  Job: type-alias
+  JOB_PRIORITIES: variable
+  JobReview: type-alias
+  JobReviewSchema: variable
+  JobSchema: variable
   Journey: interface
   JourneyAnchor: interface
   JourneyAnchorListing: interface
+  JourneyApproval: interface
+  JourneyApprovalWaiver: interface
   journeyAssertions: function
   JourneyAssertionSite: type-alias
   journeyBranchPoint: function
   JourneyBranchPoint: interface
+  JourneyCatalogLinks: type-alias
+  JourneyCatalogLinksSchema: variable
   journeyEndState: function
   JourneyLintFinding: interface
   JourneyLintOptions: interface
@@ -1137,6 +1180,13 @@
   JourneyPrecondition: interface
   journeyPrefix: function
   JourneyRegistry: class
+  JourneyReview: type-alias
+  JourneyReviewChange: type-alias
+  JourneyReviewRiskyControl: type-alias
+  JourneyReviewSchema: variable
+  JourneyReviewStep: type-alias
+  JourneyReviewVerify: type-alias
+  JourneyReviewWriteRequest: type-alias
   journeyRunParams: function
   JourneySchema: variable
   JourneyStatusSpec: type-alias
@@ -1147,6 +1197,7 @@
   JourneyWriteStep: interface
   journeyWriteSteps: function
   judgeAssertions: function
+  JudgmentUsageSchema: variable
   lintJourney: function
   listJourneyAnchors: function
   MutationFailedSite: type-alias
@@ -1160,11 +1211,23 @@
   MutationRunResult: interface
   MutationVerdict: type-alias
   mutationWait: function
+  PAIR_RELATIONS: variable
+  PairRelation: type-alias
   ParamSchema: interface
   ParamValidationError: class
+  PersonaReview: type-alias
+  PersonaReviewSchema: variable
   planJourneyMutations: function
   prefixLandingPath: function
+  QualityFinding: interface
+  renderJobStory: function
   resolveJourneyStep: function
+  ReviewChangeSchema: variable
+  ReviewLintFindingSchema: variable
+  ReviewRiskyControlSchema: variable
+  ReviewStepSchema: variable
+  ReviewVerifySchema: variable
+  ReviewWriteRequestSchema: variable
   SECRET_PARAM_NAME_RE: variable
   secretParamNames: function
   secretParamValues: function

@@ -108,6 +108,13 @@ export const OMIT = {
     "#293: a branch-point finding replays through its Journey prefix with the params its result recorded (non-secret ones); a secret param is re-supplied by the operator on the CLI, never sent as an MCP argument",
   tou: "accepting a third-party source's Terms of Use is a person's decision (like approve_action): MCP can add, pull and run a source, never accept for them",
   acceptWeak: "#401: promoting a Journey whose assertions cannot prove its outcome is a reviewer's waiver (recorded on the Journey): a person's decision on the CLI, never a request's",
+  reviewSheet: "#432: a review sheet FILE is what a person read on their screen; over MCP the same binding is the reviewedHash argument (the sheet's content hash from review_journey)",
+  acceptFindings:
+    "#433: approving despite pre-approval findings that need an acknowledgment (conflicts, broken links, …) is the approver's own judgment, recorded with the approval: a person's decision on the CLI (like --accept-weak), never a request's",
+  catalogRendering: "#433/#435: review_persona / review_job / catalog_status / analyze_catalog return the schema-checked JSON; the Markdown/text renderings and writing them to a file are for people at the CLI",
+  reviewRendering: "#432: review_journey returns the schema-checked JSON sheet; the Markdown/text renderings and writing them to a file are for people at the CLI",
+  nonInteractiveApproval:
+    "#437: the scripted-setup escape hatch for a CLI approval is the operator's choice, never a request's: an MCP approval needs no hatch — it is always recorded with provenance channel `mcp` (an agent's approval), which `check --require-approvals` fails unless the operator allows `mcp`",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
@@ -141,6 +148,8 @@ const ENVIRONMENT = { env: s("--env"), baseUrl: s("--base-url") };
 const AI = { real: b("--real"), fakeAi: b("--fake-ai") };
 /** #429: commands that build the live Jev gateway also take the Jev provider (typesafe | openrouter). */
 const JEV_AI = { ...AI, jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) };
+/** #434/#435: the advisory Jev layer of a review sheet / approval / catalog analysis (judgment only, cached by content hash). */
+const JEV_ADVICE = { real: b("--real"), jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) };
 /** #243: `name=<storageState>` identities a fixture step authenticates as — each path confined as a session. */
 const FIXTURE_IDENTITY: CliParam = { kind: "named-sessions", flag: "--fixture-identity" };
 
@@ -153,8 +162,68 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   },
   {
     name: "promote_journey",
-    description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
-    command: { path: "journey promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, ...JSON_FLAG } },
+    description:
+      "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey). " +
+      "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`, with the agent markers detected) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is an allowed channel. " +
+      "A promotion that must count as human sign-off is a person's act at their own terminal: hand it to them (`jevitate journey promote <id>`, typed confirmation).",
+    command: {
+      path: "journey promote",
+      params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted"), ...JEV_ADVICE },
+      omitted: {
+        "--dir": OMIT.storeDir,
+        "--accept-weak": OMIT.acceptWeak,
+        "--review-sheet": OMIT.reviewSheet,
+        "--accept-findings": OMIT.acceptFindings,
+        "--non-interactive-approval": OMIT.nonInteractiveApproval,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
+    name: "review_persona",
+    description:
+      "`jevitate persona review <id> --json` (#433): read-only. A catalog persona's review sheet — description, account role, session presence (never a credential), the jobs it serves, the Journeys linked to it, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
+      "Approving a persona is a person's act on the CLI (`jevitate persona approve`): there is no MCP tool for it.",
+    command: { path: "persona review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "review_job",
+    description:
+      "`jevitate job review <id> --json` (#433): read-only. A catalog job's review sheet — its job story (\"When …, I want to …, so I can ….\"), its personas and which of them have a promoted Journey for it, the gaps, its Journeys, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
+      "Approving a job is a person's act on the CLI (`jevitate job approve`): there is no MCP tool for it.",
+    command: { path: "job review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "catalog_status",
+    description:
+      "`jevitate catalog status --json` (#433): read-only. The catalog's coverage — the jobs × personas matrix (which pairs have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links, and stale approvals (edited personas/jobs and the Journeys linked to them: needs re-review). " +
+      "#437: `approvals` lists every recorded approval and how it was made (provenance channel tty / non-interactive / mcp / ci). requireApprovals (+ allowChannels, default tty): exit 1 when an approval is missing, stale or made over a channel not allowed.",
+    command: {
+      path: "catalog status",
+      params: { requireApprovals: b("--require-approvals"), allowChannels: s("--allow-channels") },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "analyze_catalog",
+    description:
+      "`jevitate catalog analyze --json` (#435): read-only and advisory. Problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic (complete, consistent, feasible, comprehensible, able to be validated, correct): candidate pairs chosen by code (shared persona or trigger/outcome terms, opposing writes on one resource, same role), each with why it was paired and — with real: true — Jev's typed classification (compatible | duplicate | overlapping | conflicting | dependent, with a probability), " +
+      "completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Pairs over maxPairs are listed as overflow, never dropped. It never changes the catalog and never gates.",
+    command: { path: "catalog analyze", params: { ...JEV_ADVICE, maxPairs: n("--max-pairs") }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "review_journey",
+    description:
+      "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
+      "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed.",
+    command: {
+      path: "journey review",
+      params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE },
+      omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
+    },
   },
   {
     name: "lint_journey",
@@ -262,11 +331,24 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "approve_demo",
     description:
-      "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1).",
+      "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1). " +
+      "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is allowed; human sign-off is the person's `jevitate demo approve <id>` at their own terminal.",
     command: {
       path: "demo approve",
-      params: { ...EXTENSION, id: pos(), out: path("--out"), pace: n("--pace"), storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, ...EMULATION, ...DEMO_SHOW },
-      omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      params: {
+        ...EXTENSION,
+        id: pos(),
+        out: path("--out"),
+        pace: n("--pace"),
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        ...EMULATION,
+        ...DEMO_SHOW,
+        acceptUnvetted: s("--accept-unvetted"),
+        ...JEV_ADVICE,
+      },
+      omitted: { "--dir": OMIT.storeDir, "--accept-findings": OMIT.acceptFindings, "--non-interactive-approval": OMIT.nonInteractiveApproval, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -522,7 +604,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_check",
     description:
-      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding.",
+      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding. " +
+      "#437 requireApprovals (+ allowChannels, default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed.",
     command: {
       path: "check",
       params: { tags: TAGS, ...EXTENSION,
@@ -534,6 +617,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         baseline: s("--baseline"),
         changedRoutes: many("--changed-routes"),
         targetBuild: s("--target-build"),
+        requireApprovals: b("--require-approvals"),
+        allowChannels: s("--allow-channels"),
         ...JEV_AI,
       },
       omitted: { "--baseline-dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },

@@ -26,6 +26,8 @@ import { registerProfileCommands } from "./profile-cli.js";
 import { registerSiteCommands } from "./site-cli.js";
 import { registerRecordingCommands } from "./recording-cli.js";
 import { registerJourneyCommands } from "./journey-cli.js";
+import { registerCatalogCommands } from "./catalog-cli.js";
+import { registerBuiltinAnalyzers } from "./builtin-analyzers.js";
 import { registerSourceCommands } from "./source-cli.js";
 import { registerLoadCommands } from "./load-cli.js";
 import { registerExploreCommands } from "./explore-cli.js";
@@ -64,12 +66,15 @@ export function buildProgram(deps: CliDeps): Command {
   program.name("jevitate").description("Autonomous browser testing that turns discovered bugs into deterministic regression tests").version(versionString());
   // #218: the shared refusal path (cli-refusal.ts) needs to know which command is running.
   trackActionCommand(program);
+  // #434/#435: the readiness and catalog-analysis pre-approval analyzers (once per process).
+  registerBuiltinAnalyzers();
 
   registerInitCommands(program, deps);
   registerProfileCommands(program, deps);
   registerSiteCommands(program, deps);
   registerRecordingCommands(program, deps);
   registerJourneyCommands(program, deps);
+  registerCatalogCommands(program, deps); // #433: persona/job review|approve, catalog status
   registerSourceCommands(program, deps);
   registerLoadCommands(program, deps);
   registerExploreCommands(program, deps, buildProgram);
@@ -108,6 +113,7 @@ export function buildProgram(deps: CliDeps): Command {
       sitePolicyDbPath: resolveDbPath(deps),
       ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
       ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
+      ...(deps.catalogDir === undefined ? {} : { catalogDir: deps.catalogDir }),
       ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
       browserLaunch: (flags) => browserLaunchFromFlags(flags as BrowserLaunchFlags),
     },

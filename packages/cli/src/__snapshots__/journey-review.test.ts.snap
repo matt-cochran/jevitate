@@ -1,0 +1,100 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`#432 rendering > markdown snapshot of the fixture Journey 1`] = `
+"# Journey review: Buy the Pro plan (buy-pro)
+
+Content hash: \`f25252e405b8b2d1299faa0734b8058032fa8c8e127a1a9305f5ed43a8d36318\`
+Status: not promoted
+
+## Summary
+
+- Description: Signs in and buys the Pro plan
+- Goal: Buy the Pro plan
+- Success criteria:
+  - The order is confirmed (checked by \`textIncludes:role=status|Order confirmed\`)
+- Missing intent:
+  - ⚠ 5 of 7 step(s) have no objective — draft it with \`jevitate journey annotate buy-pro\`
+
+## Steps
+
+1. **navigate to /login**
+   - Objective: Open the sign-in page
+   - Checks: \`visible:label=Email\`
+2. **fill field "Email" with <param email>** — target: "Email"
+   - Objective: _none_
+   - Checks: \`visible:label=Email\`
+   - Params: \`email\`
+3. **fill field "Password" with <param password>** — target: "Password"
+   - Objective: _none_
+   - Checks: \`visible:role=button;name=Sign in\`
+   - Params: \`password\`
+4. **fill field "API token" with «redacted»** — target: "API token"
+   - Objective: _none_
+   - Checks: \`visible:role=button;name=Sign in\`
+5. **click button "Sign in"** — target: button "Sign in"
+   - Objective: _none_
+   - Checks: \`urlIncludes:/plans\`
+6. **click button "Activate Pro"** — target: button "Activate Pro"
+   - Objective: Pay for the plan
+   - Expected result: The order is confirmed
+   - Checks: \`textIncludes:role=status|Order confirmed\`
+7. **click button "Sign out"** — target: button "Sign out"
+   - Objective: _none_
+   - Checks: \`urlIncludes:/login\`
+
+## Side effects
+
+### Write requests
+- \`POST /api/orders\` — recorded at step 6
+- \`POST /api/orders\` — expected at step 6
+- \`POST /api/orders\` — end-state check
+
+### Controls matching safety rules
+- step 6: button "Activate Pro" — paid [\`paid:/^Activate/\`]
+- step 7: button "Sign out" — session-end [\`builtin:session-end\`]
+
+### Origins
+- \`https://shop.example.test\`
+- \`https://cdn.example.test\`
+
+## Inputs
+
+### Parameters
+- \`email\` — the buyer's login
+- \`password\` (secret)
+
+### Secret references
+- \`password\` from env on https://shop.example.test
+
+## Proof
+
+### End-state checks
+- \`responseStatus:POST /api/orders=2xx\`
+- \`reloadThen:textIncludes:testId=plan|Pro\`
+
+### Per-step assertions
+- step 1: \`visible:label=Email\` (weak: proves nothing about the step's effect)
+- step 2: \`visible:label=Email\` (weak: proves nothing about the step's effect)
+- step 3: \`visible:role=button;name=Sign in\` (weak: proves nothing about the step's effect)
+- step 4: \`visible:role=button;name=Sign in\` (weak: proves nothing about the step's effect)
+- step 5: \`urlIncludes:/plans\`
+- step 6: \`textIncludes:role=status|Order confirmed\`
+- step 6: \`responseStatus:POST /api/orders=2xx\`
+- step 7: \`urlIncludes:/login\`
+
+### Lint: 1 error(s), 0 warning(s)
+- error own-target-visible (step 2): step 2: expect asserts the step's own target is visible — that holds before and after the step, so it proves nothing
+
+Mutation proof: proven (2026-10-02T00:00:00.000Z): 3 sensitive, 0 insensitive, 0 cascade, 0 notApplied, 0 error, 1 unpaired
+
+## Change since last approval
+
+_first approval — nothing approved before_
+
+## Content hash
+
+Content hash: \`f25252e405b8b2d1299faa0734b8058032fa8c8e127a1a9305f5ed43a8d36318\`
+
+Approve exactly this version: \`jevitate journey promote buy-pro --reviewed-hash f25252e405b8b2d1299faa0734b8058032fa8c8e127a1a9305f5ed43a8d36318\`
+"
+`;

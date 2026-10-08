@@ -94,9 +94,31 @@
     - flags=--server-log-drain-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's)
     - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
 
+# catalog
+  description: #433: the human-vetted catalog of personas, jobs and the Journeys linked to them
+
+# catalog analyze
+  description: #435: problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic — candidate pairs (paired by code: shared persona/terms, opposing writes, same role) classified by Jev (with --real) as compatible/duplicate/overlapping/conflicting/dependent, completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Read-only and advisory: it never changes the catalog and never gates
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked report)
+    - flags=--markdown required=false mandatory=false negate=false variadic=false default=null description=render the report as Markdown
+    - flags=--max-pairs <n> required=true mandatory=false negate=false variadic=false default=null description=the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped
+    - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only
+
+# catalog status
+  description: the jobs × personas matrix (which have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links and stale approvals
+  options:
+    - flags=--allow-channels <list> required=true mandatory=false negate=false variadic=false default=null description=#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked report)
+    - flags=--require-approvals required=false mandatory=false negate=false variadic=false default=null description=#437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels)
+
 # check
   description: CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
   options:
+    - flags=--allow-channels <list> required=true mandatory=false negate=false variadic=false default=null description=#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty)
     - flags=--baseline <run|tag|last> required=true mandatory=false negate=false variadic=false default=null description=only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`)
     - flags=--baseline-dir <dir> required=true mandatory=false negate=false variadic=false default=[] description=results dir holding baseline runs (repeatable; default: this check's results, then ~/.jevitate)
     - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
@@ -114,6 +136,7 @@
     - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
     - flags=--out <dir> required=true mandatory=false negate=false variadic=false default="jevitate-check" description=output dir: results/, junit.xml, jevitate.sarif, report.md, check.json
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys)
+    - flags=--require-approvals required=false mandatory=false negate=false variadic=false default=null description=#437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed
     - flags=--sarif <path> required=true mandatory=false negate=false variadic=false default=null description=SARIF path (default <out>/jevitate.sarif)
     - flags=--suite <file> required=true mandatory=true negate=false variadic=false default=null description=the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget)
     - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
@@ -127,6 +150,8 @@
   arguments:
     - name=id required=true variadic=false default=null
   options:
+    - flags=--accept-findings <reason> required=true mandatory=false negate=false variadic=false default=null description=#433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings
+    - flags=--accept-unvetted <reason> required=true mandatory=false negate=false variadic=false default=null description=#433: approve although the Journey's linked job/persona is not approved, recording the reason in approval.waivers
     - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
     - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
     - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
@@ -142,11 +167,14 @@
     - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
     - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
+    - flags=--non-interactive-approval <reason> required=true mandatory=false negate=false variadic=false default=null description=#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this
     - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir)
     - flags=--pace <ms> required=true mandatory=false negate=false variadic=false default=null description=how long each step's caption shows before it acts (default 1500)
+    - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings
     - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
@@ -458,6 +486,8 @@
 # init
   description: set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
   options:
+    - flags=--claude-md required=false mandatory=false negate=false variadic=false default=null description=#431: also keep a marked jevitate block in the project's CLAUDE.md pointing at the installed skills (Claude Code only)
+    - flags=--codeowners <owners> required=true mandatory=false negate=false variadic=false default=null description=#437: write/merge a marked CODEOWNERS block (.github/CODEOWNERS, or the repo's existing one) making .jevitate/journeys/, personas.json and jobs.json need these owners' review ("@org/team @user"); enable code-owner review in branch protection
     - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=report planned skill-install/mcp-register actions without writing
     - flags=--force required=false mandatory=false negate=false variadic=false default=null description=overwrite a user-modified installed skill file/block or MCP config entry
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
@@ -468,6 +498,7 @@
     - flags=--skip-project required=false mandatory=false negate=false variadic=false default=null description=skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs)
     - flags=--skip-skills required=false mandatory=false negate=false variadic=false default=null description=skip skill installation
     - flags=--targets <ids> required=true mandatory=false negate=false variadic=false default=null description=comma-separated runtime ids to force-install to, overriding detection
+    - flags=--uninstall required=false mandatory=false negate=false variadic=false default=null description=#431: remove the skill files and marked AGENTS.md/CLAUDE.md blocks jevitate installed (user-modified ones are skipped unless --force); keys, MCP registration and .jevitate/ are left alone
 
 # invariants
   description: declared-invariant files (`explore --invariants`)
@@ -481,6 +512,35 @@
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--observer <name> required=true mandatory=false negate=false variadic=false default=[] description=a registered observer actor a probe `as:` / `deniedAs.actor` may name (repeatable; `explore --actor` minus the primary)
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=the run's start URL: relative probe/deniedAs paths resolve against it, and its origin is authorized
+
+# job
+  description: #433: catalog jobs — job stories in .jevitate/jobs.json ("When …, I want to …, so I can ….") — review a job's sheet, approve it (bound to its content hash)
+
+# job approve
+  description: approve a job (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in its jobs file. Editing it later makes it — and its Journeys — "needs re-review"
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--accept-findings <reason> required=true mandatory=false negate=false variadic=false default=null description=approve although pre-approval findings need an acknowledgment, recording the reason with the approval
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--non-interactive-approval <reason> required=true mandatory=false negate=false variadic=false default=null description=#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this
+    - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings
+    - flags=--reviewed-hash <hash> required=true mandatory=false negate=false variadic=false default=null description=the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the job changed since
+
+# job review
+  description: a job's review sheet: its story, its personas and which have a promoted Journey for it, the gaps, its Journeys, its approval state, the pre-approval findings, its content hash
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked sheet)
+    - flags=--markdown required=false mandatory=false negate=false variadic=false default=null description=render the sheet as Markdown
+    - flags=--out <file> required=true mandatory=false negate=false variadic=false default=null description=write the sheet (JSON with --json, Markdown with --markdown, else text) to this file
+    - flags=--readiness required=false mandatory=false negate=false variadic=false default=null description=#434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities
+    - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs
 
 # journey
   description: manage and run promoted Journeys (regression-test replays)
@@ -585,13 +645,20 @@
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey promote
-  description: promote a local Journey (human-approval gate) so it becomes discoverable/runnable
+  description: promote a local Journey (human-approval gate) so it becomes discoverable/runnable; shows its review sheet first and records the approval
   arguments:
     - name=id required=true variadic=false default=null
   options:
+    - flags=--accept-findings <reason> required=true mandatory=false negate=false variadic=false default=null description=#433: promote although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings
+    - flags=--accept-unvetted <reason> required=true mandatory=false negate=false variadic=false default=null description=#433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers
     - flags=--accept-weak <reason> required=true mandatory=false negate=false variadic=false default=null description=#401: promote a Journey whose assertions cannot prove its outcome, recording the reason
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--non-interactive-approval <reason> required=true mandatory=false negate=false variadic=false default=null description=#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person
+    - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings
+    - flags=--review-sheet <file> required=true mandatory=false negate=false variadic=false default=null description=#432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash
+    - flags=--reviewed-hash <hash> required=true mandatory=false negate=false variadic=false default=null description=#432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since
 
 # journey publish
   description: 
@@ -603,6 +670,19 @@
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--to <source> required=true mandatory=true negate=false variadic=false default=null description=registered source name to publish into
+
+# journey review
+  description: a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked sheet)
+    - flags=--markdown required=false mandatory=false negate=false variadic=false default=null description=render the sheet as Markdown
+    - flags=--out <file> required=true mandatory=false negate=false variadic=false default=null description=write the sheet (JSON with --json, Markdown with --markdown, else text) to this file
+    - flags=--readiness required=false mandatory=false negate=false variadic=false default=null description=#434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities
+    - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs
 
 # journey run
   description: 
@@ -885,6 +965,35 @@
     - flags=--save-storage-state [file] required=false mandatory=false negate=false variadic=false default=null description=#175: write the rotated session back after each queued mission — to --storage-state (no value) or to <file>; for rotating refresh tokens
     - flags=--secret-field <spec> required=true mandatory=false negate=false variadic=false default=null description=#175: '<label|testId|type|id|name>=<value>=env:<VAR>' typed by queued goal missions (repeatable); the value is read from the environment at run time
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=#175: Playwright storageState JSON queued missions on this target start from (must exist; wins over targets.json)
+
+# persona
+  description: #433: catalog personas (.jevitate/personas.json) — review a persona's sheet, approve it (a person's sign-off, bound to its content hash)
+
+# persona approve
+  description: approve a persona (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in personas.json. Editing it later makes it — and its Journeys — "needs re-review"
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--accept-findings <reason> required=true mandatory=false negate=false variadic=false default=null description=approve although pre-approval findings need an acknowledgment, recording the reason with the approval
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--non-interactive-approval <reason> required=true mandatory=false negate=false variadic=false default=null description=#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this
+    - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings
+    - flags=--reviewed-hash <hash> required=true mandatory=false negate=false variadic=false default=null description=the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the persona changed since
+
+# persona review
+  description: a persona's review sheet: who it is, the jobs it serves, the Journeys linked to it, its approval state (stale = needs re-review), the pre-approval findings, its content hash
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked sheet)
+    - flags=--markdown required=false mandatory=false negate=false variadic=false default=null description=render the sheet as Markdown
+    - flags=--out <file> required=true mandatory=false negate=false variadic=false default=null description=write the sheet (JSON with --json, Markdown with --markdown, else text) to this file
+    - flags=--readiness required=false mandatory=false negate=false variadic=false default=null description=#434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities
+    - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs
 
 # profile
   description: manage jevitate profiles (isolated credential/data sets)
