@@ -137,6 +137,83 @@ readiness review and the catalog-wide conflict/duplicate analysis) plug into the
 An analyzer that fails to run produces a finding that needs an acknowledgment. It does not wave
 the approval through.
 
+## Readiness review
+
+Every review sheet can show a **Readiness** section, and every approval shows it. It has two layers,
+printed apart so that advice never reads as a gate.
+
+```bash
+jevitate job review invite-teammate --readiness           # deterministic checks + INCOSE GtWR rules
+jevitate job review invite-teammate --readiness --real    # … plus the advisory Jev questions
+jevitate journey review invite --readiness --real --json  # MCP: review_journey {readiness: true, real: true}
+```
+
+**1. Deterministic checks.** Each check is `pass` (shown as `info`), `warn` or `fail`, with a
+fix-it line:
+
+| Subject | Check (`readiness/<code>`) |
+|---|---|
+| Journey | `readiness.links`: it links an existing job and persona |
+| Journey | `readiness.links-approved`: both are approved |
+| Journey | `readiness.intent`: a goal, success criteria, and each step's objective and expected result |
+| Journey | `readiness.lint`: `journey lint` passes |
+| Journey | `readiness.verify`: the `journey verify --mutate` result is known, current (for this content hash) and `proven` |
+| Job | `readiness.story`: the trigger, motivation and outcome are present; `readiness.personas`: its personas exist and are approved |
+| Persona | `readiness.description`: it says who the user is; `readiness.jobs`: a job serves it |
+
+The writing rules of the INCOSE *Guide to Writing Requirements* (GtWR) that can be checked
+mechanically run on every job story and persona (`packages/journey/src/gtwr-rules.ts`). Each
+finding is `readiness/gtwr:<rule>@<field>`, cites its rule id, and names the individual
+characteristic it protects:
+
+| Rule | GtWR characteristic |
+|---|---|
+| `gtwr:vague-term` (user-friendly, fast, easy, …), `gtwr:negative`, `gtwr:pronoun-reference`, `gtwr:too-long` | unambiguous |
+| `gtwr:escape-clause` (if possible, where practical, …), `gtwr:absolute` (always, never, all, …) | verifiable |
+| `gtwr:combinator` (and/or, as well as, …), `gtwr:multiple-outcomes` | singular |
+| `gtwr:open-ended` (etc., including but not limited to, …) | complete |
+| `gtwr:empty-field`, `gtwr:trigger-is-persona` (a trigger that names a persona, not a situation) | conforming |
+| `gtwr:outcome-is-feature` (an outcome that names a control, not a result) | necessary |
+
+The rule ids and characteristic names follow the GtWR edition current when they were written. Check
+them against the current edition when the guide changes. Readiness never adds a second gate: the
+existing gates still block (lint errors need `--accept-weak`, unapproved links need
+`--accept-unvetted`, broken links need the catalog-links acknowledgment), and no readiness finding
+needs an acknowledgment of its own.
+
+**2. Jev review (advisory).** With `--real` and a judgment key (`TYPESAFE_API_KEY`, or
+`OPENROUTER_API_KEY` for Jev through OpenRouter; `--jev-provider` picks one), the sheet asks Jev a
+few narrow typed questions (Noul). Each answer is shown with its probability:
+
+| Subject | Question (`readiness-jev/jev.<name>`) | GtWR characteristic |
+|---|---|---|
+| Journey | `accomplishes_outcome`: do the steps accomplish the job's outcome for this persona? | correct |
+| Journey | `end_state_proves_outcome`: do the end-state checks prove the outcome, rather than only that a page loaded? | verifiable |
+| Journey | `steps_related`: is every step needed for the job? | necessary |
+| Journey | `plausible_for_persona`: are the actions plausible for this persona's role? | appropriate |
+| Journey | `expected_matches_deltas`: does each written expected result match what the step was recorded doing? | correct |
+| Job | `outcome_oriented`, `trigger_is_situation` | necessary, conforming |
+| Job | `unambiguous`, `verifiable`, `singular`, `necessary` | the same names |
+| Persona | `unambiguous`, `singular`, `necessary` | the same names |
+
+An answer below probability 0.5 reads **"not ready because … (GtWR: <characteristic>)"**. A Jev
+finding never needs an acknowledgment and never changes an exit code. Jev advises, and code decides
+(the [invariant](./invariants.md)). Without `--real` the layer says
+`Jev review skipped: pass --real …`. With `--real` but no judgment key it says
+`skipped: no judgment key`, and the deterministic layer still runs. Asking for a model without
+`--real` would break the CLI's convention, so a configured key alone never triggers a call.
+
+**Approvals.** `persona approve`, `job approve`, `journey promote` and `demo approve` always run the
+readiness checks. They ask Jev only when given `--real` (MCP: `real: true` on `promote_journey` /
+`approve_demo`). Otherwise the sheet says the Jev review was skipped.
+
+**Cache and cost.** Answers are cached by the content hash of what was asked, in
+`.jevitate/cache/jev/<sha256>.json`. `jevitate init` gitignores `cache/`. The cache holds only
+answers (kind, value, probability). The question text and the catalog text are never written, and
+nothing secret is ever asked. Re-reviewing unchanged content asks nothing new. The sheet's `jev`
+field reports what ran: `status`, `asked`, `cached`, and `usage` (judgments, tokens, cost). Usage
+is printed on stderr like any run's.
+
 ## Catalog status
 
 ```bash

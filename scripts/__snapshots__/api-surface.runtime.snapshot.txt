@@ -701,7 +701,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (70 exports)
+# @jevitate/journey (72 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AcceptedFindingsSchema: object
@@ -718,6 +718,7 @@
   FsJourneyStore: class
   GTWR_RULES: array
   JOB_PRIORITIES: array
+  JevLayerSchema: object
   JobReviewSchema: object
   JobSchema: object
   JourneyCatalogLinksSchema: object
@@ -725,6 +726,7 @@
   JourneyReviewSchema: object
   JourneySchema: object
   JourneyStepError: class
+  JudgmentUsageSchema: object
   ParamValidationError: class
   PersonaReviewSchema: object
   ReviewChangeSchema: object

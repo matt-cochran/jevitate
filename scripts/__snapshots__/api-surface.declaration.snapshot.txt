@@ -1089,7 +1089,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (127 exports)
+# @jevitate/journey (130 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   ANCHOR_NAME_RE: variable
@@ -1135,6 +1135,8 @@
   isNoClaimExpect: function
   isOwnTargetVisible: function
   isSweepMode: function
+  JevLayer: type-alias
+  JevLayerSchema: variable
   Job: type-alias
   JOB_PRIORITIES: variable
   JobReview: type-alias
@@ -1180,6 +1182,7 @@
   JourneyWriteStep: interface
   journeyWriteSteps: function
   judgeAssertions: function
+  JudgmentUsageSchema: variable
   lintJourney: function
   listJourneyAnchors: function
   MutationFailedSite: type-alias

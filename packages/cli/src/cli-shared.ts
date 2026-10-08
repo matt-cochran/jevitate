@@ -644,7 +644,7 @@ Outcomes, stop reasons and exit codes:
 `;
 
 /** #291: the startup key check's env (opt-out) and verifier (injectable: tests never touch the network). */
-function keyPreflightOpts(deps: CliDeps): Parameters<typeof preflightRunKeys>[2] {
+export function keyPreflightOpts(deps: CliDeps): Parameters<typeof preflightRunKeys>[2] {
   return { env: deps.explore?.env ?? process.env, fetchFn: deps.explore?.verifyFetch ?? deps.ai?.verifyFetch ?? realVerifyFetch };
 }
 

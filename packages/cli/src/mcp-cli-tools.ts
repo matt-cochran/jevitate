@@ -146,6 +146,8 @@ const ENVIRONMENT = { env: s("--env"), baseUrl: s("--base-url") };
 const AI = { real: b("--real"), fakeAi: b("--fake-ai") };
 /** #429: commands that build the live Jev gateway also take the Jev provider (typesafe | openrouter). */
 const JEV_AI = { ...AI, jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) };
+/** #434: the advisory Jev layer of a review sheet / approval (judgment only, cached by content hash). */
+const JEV_ADVICE = { real: b("--real"), jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) };
 /** #243: `name=<storageState>` identities a fixture step authenticates as — each path confined as a session. */
 const FIXTURE_IDENTITY: CliParam = { kind: "named-sessions", flag: "--fixture-identity" };
 
@@ -161,7 +163,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
     command: {
       path: "journey promote",
-      params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted") },
+      params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted"), ...JEV_ADVICE },
       omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, "--review-sheet": OMIT.reviewSheet, "--accept-findings": OMIT.acceptFindings, ...JSON_FLAG },
     },
   },
@@ -169,15 +171,17 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "review_persona",
     description:
       "`jevitate persona review <id> --json` (#433): read-only. A catalog persona's review sheet — description, account role, session presence (never a credential), the jobs it serves, the Journeys linked to it, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). " +
       "Approving a persona is a person's act on the CLI (`jevitate persona approve`): there is no MCP tool for it.",
-    command: { path: "persona review", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+    command: { path: "persona review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
   },
   {
     name: "review_job",
     description:
       "`jevitate job review <id> --json` (#433): read-only. A catalog job's review sheet — its job story (\"When …, I want to …, so I can ….\"), its personas and which of them have a promoted Journey for it, the gaps, its Journeys, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). " +
       "Approving a job is a person's act on the CLI (`jevitate job approve`): there is no MCP tool for it.",
-    command: { path: "job review", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+    command: { path: "job review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
   },
   {
     name: "catalog_status",
@@ -189,10 +193,11 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "review_journey",
     description:
       "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities). " +
       "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed.",
     command: {
       path: "journey review",
-      params: { id: pos() },
+      params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE },
       omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
     },
   },
@@ -316,6 +321,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EMULATION,
         ...DEMO_SHOW,
         acceptUnvetted: s("--accept-unvetted"),
+        ...JEV_ADVICE,
       },
       omitted: { "--dir": OMIT.storeDir, "--accept-findings": OMIT.acceptFindings, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },

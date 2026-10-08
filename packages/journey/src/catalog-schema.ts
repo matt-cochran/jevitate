@@ -108,6 +108,42 @@ export const FindingSchema = z
   .strict();
 export type Finding = z.infer<typeof FindingSchema>;
 
+/**
+ * #434: what one call's model usage cost (the shape of ai-core's `UsageCounts`, so the CLI's
+ * usage line and `jevitate report` read it like any run's usage).
+ */
+export const JudgmentUsageSchema = z
+  .object({
+    judgments: z.number().int().min(0),
+    generations: z.number().int().min(0),
+    inputTokens: z.number().int().min(0),
+    outputTokens: z.number().int().min(0),
+    jevUsd: z.number().optional(),
+    generationUsd: z.number().optional(),
+    totalUsd: z.number().optional(),
+    priced: z.enum(["full", "partial", "none"]),
+    priceSource: z.array(z.string()).optional(),
+    missing: z.array(z.string()).optional(),
+    failedCalls: z.number().int().optional(),
+  })
+  .strict();
+
+/**
+ * #434: whether the advisory Jev layer ran for a sheet — `skipped` with the
+ * reason (`pass --real`, `no judgment key`), or `ran` with how many questions went to the model
+ * (`asked`) and how many answers came from the content-hash cache (`cached`), and what it cost.
+ */
+export const JevLayerSchema = z
+  .object({
+    status: z.enum(["ran", "skipped"]),
+    reason: z.string().optional(),
+    asked: z.number().int().min(0),
+    cached: z.number().int().min(0),
+    usage: JudgmentUsageSchema.optional(),
+  })
+  .strict();
+export type JevLayer = z.infer<typeof JevLayerSchema>;
+
 const JourneyRefSchema = z.object({ id: z.string(), name: z.string(), promoted: z.boolean(), needsReReview: z.boolean() }).strict();
 
 /** #433: `jevitate persona review <id> --json` (MCP `review_persona`). */
@@ -123,6 +159,8 @@ export const PersonaReviewSchema = z
     jobs: z.array(z.object({ id: z.string(), story: z.string(), status: CatalogStatusValueSchema }).strict()),
     journeys: z.array(JourneyRefSchema),
     findings: z.array(FindingSchema),
+    /** #434: the advisory Jev layer of the findings (the readiness questions). */
+    jev: JevLayerSchema.optional(),
     approval: CatalogApprovalSchema.optional(),
     contentHash: z.string().regex(/^[0-9a-f]{64}$/),
   })
@@ -155,6 +193,8 @@ export const JobReviewSchema = z
     gaps: z.array(z.string()),
     journeys: z.array(JourneyRefSchema.extend({ persona: z.string().optional() }).strict()),
     findings: z.array(FindingSchema),
+    /** #434: the advisory Jev layer of the findings (the readiness questions). */
+    jev: JevLayerSchema.optional(),
     approval: CatalogApprovalSchema.optional(),
     contentHash: z.string().regex(/^[0-9a-f]{64}$/),
   })
@@ -205,3 +245,4 @@ export const CatalogStatusSchema = z
   })
   .strict();
 export type CatalogStatusReport = z.infer<typeof CatalogStatusSchema>;
+

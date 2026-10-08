@@ -4,6 +4,7 @@ import type { CatalogApproval, Finding, Journey, JourneyApprovalWaiver, Accepted
 import { CatalogLoader, catalogJourney, journeyLinks, requireJob, requirePersona, writeJobApproval, writePersonaApproval, type Catalog } from "./catalog.js";
 import { acknowledgeFindings, preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { findProjectDir } from "./project-dir.js";
+import type { JevSetup } from "./jev-advisor.js";
 
 /**
  * #433 — the approvals of the catalog (`persona approve`, `job approve`: a person's act, CLI only)
@@ -35,6 +36,8 @@ export interface CatalogApproveOptions {
   readonly reviewedHash?: string;
   /** `--accept-findings "<reason>"`: acknowledges findings that require it (recorded with the approval). */
   readonly acceptFindings?: string;
+  /** #434/#435: the advisory Jev layer of the pre-approval readiness and analysis (`--real`), or why it is skipped. */
+  readonly jev?: JevSetup;
 }
 
 export interface CatalogApproveResult {
@@ -58,7 +61,8 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
     throw new StaleCatalogReviewError(`${kind} '${id}' changed after its review sheet was produced (reviewed ${reviewed}, now ${item.contentHash}) — review it again: jevitate ${kind} review ${id}`);
   }
   const action: ApprovalAction = kind === "persona" ? "persona approve" : "job approve";
-  const findings = await preApprovalFindings({ kind, id }, catalog, { action });
+  // #434: every approval runs the readiness checks (the Jev layer only with --real and a key).
+  const findings = await preApprovalFindings({ kind, id }, catalog, { action, readiness: true, ...(opts.jev === undefined ? {} : { jev: opts.jev }) });
   const acceptedFindings = acknowledgeFindings(`${kind} '${id}'`, findings, opts.acceptFindings);
   const approval: CatalogApproval = { contentHash: item.contentHash, at: clock.nowIso(), ...(acceptedFindings === undefined ? {} : { acceptedFindings }) };
   const file = kind === "persona" ? catalog.personasFile : catalog.jobsFile;
@@ -87,6 +91,8 @@ export interface JourneyCatalogGateOptions {
   /** `--accept-unvetted "<reason>"`: promote although a linked job/persona is not approved (recorded). */
   readonly acceptUnvetted?: string;
   readonly acceptFindings?: string;
+  /** #434/#435: the advisory Jev layer (`--real`), or why it is skipped. */
+  readonly jev?: JevSetup;
 }
 
 export interface JourneyCatalogGate {
@@ -117,7 +123,7 @@ export async function journeyCatalogGate(journey: Journey, opts: JourneyCatalogG
     }
     waivers = [{ kind: "unvetted", reason, items: [...links.unvetted] }];
   }
-  const findings = await preApprovalFindings({ kind: "journey", id }, catalog, { action: opts.action, journey });
+  const findings = await preApprovalFindings({ kind: "journey", id }, catalog, { action: opts.action, journey, readiness: true, ...(opts.jev === undefined ? {} : { jev: opts.jev }) });
   const acceptedFindings = acknowledgeFindings(`journey '${id}'`, findings, opts.acceptFindings);
   return { ...(waivers === undefined ? {} : { waivers }), ...(acceptedFindings === undefined ? {} : { acceptedFindings }), findings };
 }

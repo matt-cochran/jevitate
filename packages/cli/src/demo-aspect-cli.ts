@@ -1,6 +1,7 @@
 import { UnvettedLinksError, resolveCatalogDir } from "./catalog-api.js";
 import { CatalogInputError } from "./catalog.js";
 import { ApprovalFindingsError } from "./pre-approval.js";
+import { REAL_JEV_FLAG_HELP, jevSetupFor } from "./catalog-cli.js";
 import { reviewJourneyById } from "./journey-review-api.js";
 import { renderReviewText } from "./journey-review.js";
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
@@ -270,8 +271,10 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
     )
     .option("--accept-unvetted <reason>", "#433: approve although the Journey's linked job/persona is not approved, recording the reason in approval.waivers")
     .option("--accept-findings <reason>", "#433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings")
+    .option("--real", REAL_JEV_FLAG_HELP)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .action(async function (this: Command, id: string) {
-      const o = this.opts<ReplayFlags & { acceptUnvetted?: string; acceptFindings?: string }>();
+      const o = this.opts<ReplayFlags & { acceptUnvetted?: string; acceptFindings?: string; real?: boolean; jevProvider?: string }>();
       const out = program.configureOutput().writeOut;
       try {
         const journeysDir = resolveJourneysDir(deps, o.dir);
@@ -279,8 +282,11 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
         const environment = resolveJourneyEnvironment({ env: record.env, ...(record.persona === undefined ? {} : { persona: record.persona }), ...environmentSeams(deps) });
         assertDemoEnvironment(environment); // re-checked: the environment may have been flagged production since
         const replay = replayOptionsFrom(this, deps, o, environment);
+        // #434/#435: readiness and the catalog analysis run before the approval; Jev only with --real.
+        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { ...(o.real === undefined ? {} : { real: o.real }), ...(o.jevProvider === undefined ? {} : { jevProvider: o.jevProvider }) });
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) =>
           approveDemo({
+            jev,
             ...replay,
             ...(siteGate === undefined ? {} : { siteGate }),
             journeysDir,
@@ -305,6 +311,8 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
         const { review } = await reviewJourneyById(journeysDir, id, {
           ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath }),
           catalogDir: resolveCatalogDir(deps.catalogDir),
+          readiness: true,
+          jev,
         });
         out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${renderReviewText(review)}\n`);
         out?.(formatAnnotationChanges(result.changes));
@@ -320,6 +328,10 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
         }
         if (err instanceof CatalogInputError) {
           emitJson(program, fail(err.code, err.message));
+          return;
+        }
+        if (err instanceof GatewaySelectionError || err instanceof MissingCredentialError) {
+          emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
           return;
         }
         const r = refusalOf(err);
