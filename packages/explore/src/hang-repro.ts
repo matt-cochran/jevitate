@@ -184,12 +184,24 @@ async function countVisible(page: VerifySession["page"], selector: string, tag: 
 async function countVisibleBusy(page: VerifySession["page"]): Promise<number> {
   return page
     .evaluate(() => {
+      // #419: an indeterminate progressbar inside a toast/snackbar/notification, or one labelled a
+      // timer, is an auto-close countdown, not a busy indicator — the same exclusion detection applies.
+      const notificationContainer =
+        '[role="alert"], [data-sonner-toast], [class*="toast" i], [class*="snackbar" i], [class*="notification" i]';
+      const timerLabel = /timer|countdown|auto.?close/i;
+      const isNotificationTimer = (el: Element): boolean => {
+        if (el.closest(notificationContainer) !== null) return true;
+        const name = `${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""}`;
+        return timerLabel.test(name);
+      };
       const seen = new Set<Element>();
       for (const sel of ['[aria-busy="true"]', '[role="progressbar"]:not([aria-valuenow])', '[class*="spinner" i]', '[class*="animate-spin" i]']) {
         for (const el of Array.from(document.querySelectorAll(sel))) {
           const r = (el as HTMLElement).getBoundingClientRect();
           const s = window.getComputedStyle(el as HTMLElement);
-          if (r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0") seen.add(el);
+          if (!(r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0")) continue;
+          if (sel === '[role="progressbar"]:not([aria-valuenow])' && isNotificationTimer(el)) continue;
+          seen.add(el);
         }
       }
       return seen.size;
