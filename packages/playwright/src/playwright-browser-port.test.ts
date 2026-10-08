@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
@@ -31,7 +33,37 @@ async function browserArgvsWith(marker: string): Promise<string[]> {
 }
 
 async function browserPidsWith(marker: string): Promise<number[]> {
-  return (await browserProcsWith(marker)).map((p) => p.pid);
+  if (process.platform === "linux") return (await browserProcsWith(marker)).map((p) => p.pid);
+  return (await processTable()).filter((p) => p.argv.includes(marker) && !p.argv.includes("--type=")).map((p) => p.pid);
+}
+
+/**
+ * Every process's pid + command line where there is no /proc: `ps` on macOS, CIM on Windows.
+ * Lets the crash test SIGKILL/TerminateProcess the real browser on every OS instead of asking it
+ * to close over CDP — a polite close can stall on a starved runner, a kill cannot.
+ */
+async function processTable(): Promise<{ pid: number; argv: string }[]> {
+  if (process.platform === "win32") {
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
+      { maxBuffer: 64 * 1024 * 1024 },
+    );
+    return parseTable(stdout, "\t");
+  }
+  const { stdout } = await execFileAsync("ps", ["-axww", "-o", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 });
+  return parseTable(stdout.replace(/^\s*(\d+)\s+/gm, "$1\t"), "\t");
+}
+
+function parseTable(stdout: string, sep: string): { pid: number; argv: string }[] {
+  const rows: { pid: number; argv: string }[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const at = line.indexOf(sep);
+    if (at <= 0) continue;
+    const pid = Number(line.slice(0, at).trim());
+    if (Number.isInteger(pid) && pid > 0) rows.push({ pid, argv: line.slice(at + sep.length) });
+  }
+  return rows;
 }
 
 async function browserProcsWith(marker: string): Promise<{ pid: number; argv: string }[]> {
@@ -48,6 +80,8 @@ async function browserProcsWith(marker: string): Promise<{ pid: number; argv: st
   }
   return found;
 }
+
+const execFileAsync = promisify(execFile);
 
 describe("pooled PlaywrightBrowserPort (real Chromium)", () => {
   test("two sessions = two isolated contexts on ONE browser; admission sample is recorded", async () => {
@@ -107,18 +141,12 @@ describe("pooled PlaywrightBrowserPort (real Chromium)", () => {
     const session = await port.open({ ...base, args: [marker] });
     const browserBefore = session.page.context().browser();
     if (browserBefore === null) throw new Error("pooled session has no Browser");
-    if (process.platform === "linux") {
-      // A real crash: SIGKILL the browser process (found by its unique argv marker).
-      const pids = await browserPidsWith(marker);
-      expect(pids).toHaveLength(1);
-      process.kill(pids[0]!, "SIGKILL");
-    } else {
-      // Elsewhere there is no /proc to find the PID: the browser is shut down over
-      // CDP behind the pool's back — from the pool's view an unexpected disconnect.
-      // (CDP `Browser.crash` is not honored by headless Chromium, so it can't be used.)
-      const cdp = await browserBefore.newBrowserCDPSession();
-      await cdp.send("Browser.close");
-    }
+    // A real crash on every OS: kill the browser process (found by its unique argv marker). A CDP
+    // `Browser.close` was used off Linux before, but that polite shutdown stalled past 20 s on a
+    // CPU-starved Windows runner — a kill can't.
+    const pids = await browserPidsWith(marker);
+    expect(pids).toHaveLength(1);
+    process.kill(pids[0]!, "SIGKILL");
     await expect.poll(() => browserBefore.isConnected(), { timeout: 20_000 }).toBe(false);
     await expect(session.close()).rejects.toBeInstanceOf(BrowserCrashedError);
     const next = await port.open(base);
