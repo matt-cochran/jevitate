@@ -106,6 +106,15 @@ an OpenRouter key, so one key covers generation and judgment.
   ones are skipped unless `--force`), and `--claude-md` opts into a pointer block in the project's
   `CLAUDE.md`. `init` now names every file it skipped or refused.
 
+- **`jevitate journey review <id>` (#432)** (and the read-only MCP tool `review_journey`) produces one
+  review sheet for promotion sign-off, as text, Markdown or JSON: the goal and success criteria, each
+  step in plain words, side effects (expected write requests, controls that match safety rules, origins
+  touched), inputs by name only, the proof (end-state checks, lint, the last `journey verify --mutate`
+  verdict), what changed since the last approval, and the Journey's content hash. `journey promote`
+  shows the sheet first and accepts `--reviewed-hash` / `--review-sheet` (MCP `reviewedHash`), refusing
+  with `E_JOURNEY_REVIEW_STALE` when the Journey changed after review. Every promotion, `demo approve`
+  included, records `metadata.approval` and keeps the approved version for the next review's diff.
+
 ### Fixed
 
 - **A toast countdown is not a busy indicator (#419).** Toast libraries render the auto-close
