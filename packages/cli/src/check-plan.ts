@@ -6,6 +6,7 @@ import { assertAuthorizedExploreTarget, matchGlob, parseSecretField, resolveCove
 import { buildMissionFixtures, checkSetupRefs, type FixtureFlags } from "./fixture-cli.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { loadLogClassRules } from "./log-classes.js";
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import { loadPersonasFile, parsePersonaSpec, type Persona } from "./multi-run.js";
@@ -282,6 +283,7 @@ function itemSetup(
       correlationHeaders: parseCorrelationHeaders(x.logCorrelationHeader ?? []),
       idPatterns: parseLogIdPatterns(x.logIdPattern ?? []),
       ...(x.serverLogDrainMs === undefined ? {} : { drainMs: x.serverLogDrainMs }),
+      logClasses: loadLogClassRules(),
     };
   }
   // #313: an item's `logTriage` turns triage on (or, `false`, off) over whichever log sources apply.

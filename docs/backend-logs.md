@@ -110,6 +110,39 @@ lines matched (`occurrences` is the same number, kept for older readers). The re
 stays human prose; `defectOutcome.byKind` counts the run's defects per kind (`{"server-log": 2,
 "http-5xx": 1}`), so an aggregator never has to parse `reason`.
 
+**Environment faults vs product defects (#422).** In a local or dev environment many backend
+errors are setup, not product bugs: a placeholder API key, an unconfigured provider, a degraded health
+check. Every line that matches `--log-defect` is first classed by the project's committed
+`.jevitate/log-classes.json` (found the way `.jevitate/` is), then by built-in rules:
+
+```json
+{ "version": 1, "rules": [
+    { "id": "stripe-test-mode", "class": "environment", "message": "/No such customer.*test mode/i" },
+    { "id": "signup-422", "class": "expected-validation", "source": "^docker:api", "level": "warn",
+      "message": "/validation failed/i" },
+    { "id": "default:health-check-degraded", "class": "defect", "message": "/health.?check.*billing/i" } ] }
+```
+
+- `class` is `environment`, `expected-validation` or `defect`. `message` is matched against the
+  line's parsed message and `source` against its `--log-source` spec; each is a `/pattern/flags`
+  regex or a bare (case-sensitive) pattern. `level` is one level name, matched exactly. A rule needs
+  at least one of the three.
+- The project's rules come first, then the built-in ones; the first rule that matches wins, and a
+  project rule with a built-in rule's `id` replaces it. The built-in rules class these as
+  `environment`: `default:credential` (`/incorrect api key|invalid api key|unauthorized.*(api|key)|missing (api )?key|not configured/i`)
+  and `default:health-check-degraded` (`/health.?check.*(degraded|unhealthy)/i`). A line no rule
+  matches stays a `server-log` defect.
+- `environment` lines are not defects: the result gets `environmentFaults: { causes: [{ ruleId,
+  source, message, count }] }` (one cause per rule, source and message class; the message is
+  redacted), the human output prints an `ENV-FAULT` line for each, and `jevitate report` lists them
+  once for the whole batch under "Environment faults", so they can be fixed in setup.
+- `expected-validation` lines (a 4xx validation error the mission's own input caused) are recorded in
+  `expectedValidation: [{ ruleId, source, message, count }]` (an `EXPECTED` line) and do not fail the run.
+- The file is validated strictly: an unknown key, class or level, an invalid regex (or the `g`/`y`
+  flag), a duplicate `id` or a rule with no matcher is refused before any browser opens, naming the
+  file and the rule (`E_LOG_CLASSES`). `explore`, `check` and the mission queue (`jevitate mission
+  run`, MCP `queue_exploration`) all read it.
+
 **Result and outcome.** `serverLogs` on the result carries counts by level, the top normalized
 messages, each source's `opened`/`linesRead`/`truncated`/`error`, and `oracleOk` — false when
 `--log-defect` was given and any declared source failed to open or delivered not one line (a

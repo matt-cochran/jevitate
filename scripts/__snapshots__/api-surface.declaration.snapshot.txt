@@ -163,7 +163,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (117 exports)
+# @jevitate/domain (119 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
@@ -221,6 +221,8 @@
   IssueTarget: type-alias
   isUnboundedHeapGrowth: function
   isWithinQuietHours: function
+  LogClassCauseRecord: type-alias
+  LogClassCauseSchema: variable
   looksLikeRendererOom: function
   makeRng: function
   MAX_SAFE_NAME_LENGTH: variable
@@ -893,8 +895,9 @@
   WithheldWrite: interface
   WRITE_METHODS: variable
 
-# @jevitate/findings (44 exports)
+# @jevitate/findings (47 exports)
   CaseStatus: type-alias
+  ClassifiedLogCause: interface
   classify: function
   consolidate: function
   ConsolidatedDefect: interface
@@ -905,6 +908,8 @@
   diffRuns: function
   DiffStatus: type-alias
   EngineStamp: interface
+  environmentCausesOf: function
+  EnvironmentCauseSummary: interface
   EvidenceRef: interface
   FindingCategory: type-alias
   FindingIdentity: interface

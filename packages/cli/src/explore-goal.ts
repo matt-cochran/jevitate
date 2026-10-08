@@ -30,6 +30,7 @@ import { finishHostHealth } from "./host-health-run.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogEvidence, type ServerLogRuntimeResult, type ServerLogsSummary, type TranscriptEntryWithLogs } from "./log-correlation.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
 import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
+import type { LogClassCause } from "./log-classes.js";
 import { triageOf, type ServerLogOptions, serverLogResult, serverLogRuntimeOptions, recordingEmulation, DRAFTS_ONLY, NO_FILER, draftContext, freshSessionOpener, currentUrlSafe, assertSaveStorageStateOutsideProject, persistStorageState, browserVersionOf, type MissionTarget, declaredResult } from "./explore-shared.js";
 
 /**
@@ -268,6 +269,10 @@ export interface RunExplorationResult {
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
+  /** #422: `--log-defect` lines classed `environment` by `.jevitate/log-classes.json`/the defaults (absent when none). */
+  readonly environmentFaults?: { readonly causes: readonly LogClassCause[] };
+  /** #422: `--log-defect` lines classed `expected-validation` (absent when none). */
+  readonly expectedValidation?: readonly LogClassCause[];
   /** The fixture the mission started from (#140/#144): identity, non-secret outputs, the setup/restore log. */
   readonly fixtures?: MissionFixtureResult;
   /** The host's health over the run (#203): peaks, the slowest render, starved steps. */

@@ -39,6 +39,10 @@ import { DEFECT_OUTCOME_STATUSES, GOAL_OUTCOMES, MISSION_OUTCOMES, defectOutcome
  *    `environmentDegraded` — findings (a hang, a click timeout, a no-progress stop) met while the host
  *    was starved: advisory, never a defect or hang finding, never failing the run. Both are additive
  *    (schemaVersion 1): every result written since #203 carries them; older results parse without.
+ *  - `environmentFaults` / `expectedValidation` — #422, additive (schemaVersion 1): `--log-defect` lines
+ *    a `log-classes` rule classed `environment` (`{ causes: [{ ruleId, source, message, count }] }`) or
+ *    `expected-validation` (`[{ ruleId, source, message, count }]`). Never defects, never failing the
+ *    run; absent when there were none. (Not `environmentDegraded`, which is #203's starved-host list.)
  *  - `videoPaths` — #245, additive (schemaVersion 1): the Playwright videos a `--record-video` run
  *    wrote (every browser context it opened, oldest first), finalized before the result is written.
  *    Absent when the run did not record.
@@ -222,6 +226,19 @@ export const DefectOutcomeSchema = z.looseObject({
   advisoryByKind: z.record(z.string(), z.number().int().nonnegative()).optional(),
 });
 
+/**
+ * #422: one classified backend-log cause — a `--log-defect` line a `log-classes` rule (project
+ * `.jevitate/log-classes.json`, then the built-in defaults) classed `environment` or
+ * `expected-validation`: never a defect. Counted per (rule, source, message class).
+ */
+export const LogClassCauseSchema = z.looseObject({
+  ruleId: z.string().min(1),
+  source: z.string(),
+  message: z.string(),
+  count: z.number().int().positive(),
+});
+export type LogClassCauseRecord = z.infer<typeof LogClassCauseSchema>;
+
 /** The common fields of every strategy's result (strategy-specific fields pass through). */
 export const MissionResultSchema = z
   .looseObject({
@@ -245,6 +262,10 @@ export const MissionResultSchema = z
     /** #203 — additive: optional so results written before it still parse. */
     hostHealth: HostHealthSummarySchema.optional(),
     environmentDegraded: z.array(EnvironmentDegradedSchema).optional(),
+    /** #422 — additive: the run's environment/config faults (absent when none). */
+    environmentFaults: z.looseObject({ causes: z.array(LogClassCauseSchema).min(1) }).optional(),
+    /** #422 — additive: `--log-defect` lines classed `expected-validation` (absent when none). */
+    expectedValidation: z.array(LogClassCauseSchema).optional(),
     /** #245 — additive: the run's `--record-video` files (absent when it did not record). */
     videoPaths: z.array(z.string().min(1)).optional(),
     /** #251 — additive: the run's `--screenshots` images, contact sheet and refused captures. */
@@ -303,6 +324,10 @@ export interface MissionResultCore {
   /** #203: every result written now carries the host's health and its environment-degraded findings. */
   readonly hostHealth: HostHealthSummary;
   readonly environmentDegraded: readonly EnvironmentDegraded[];
+  /** #422: `--log-defect` lines classed `environment` (absent when none) — never defects. */
+  readonly environmentFaults?: { readonly causes: readonly LogClassCauseRecord[] };
+  /** #422: `--log-defect` lines classed `expected-validation` (absent when none) — recorded, never failing the run. */
+  readonly expectedValidation?: readonly LogClassCauseRecord[];
   /** #245: the run's `--record-video` files (absent when it did not record). */
   readonly videoPaths?: readonly string[];
   /** #251: the run's `--screenshots` images and contact sheet (absent without the flag). */

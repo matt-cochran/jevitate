@@ -148,6 +148,10 @@ export function formatMissionHuman(result: unknown): string {
   if (isRecord(result.sessionLost) && str(result.sessionLost.reason) !== undefined) lines.push(`${tag("WARNING")}${str(result.sessionLost.reason)}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d), ...evidenceLines(d));
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
+  // #422: environment/config faults and expected validation errors — named, never counted as defects.
+  const envCauses = isRecord(result.environmentFaults) ? arr(result.environmentFaults.causes).filter(isRecord) : [];
+  for (const c of envCauses) lines.push(`${tag("ENV-FAULT")}${causeText(c)} (fix in setup; not a defect)`);
+  for (const c of arr(result.expectedValidation).filter(isRecord)) lines.push(`${tag("EXPECTED")}${causeText(c)} (expected validation; not a defect)`);
   if (isRecord(result.failure)) {
     lines.push(`${tag("REASON")}${str(result.failure.kind) ?? "failure"}: ${str(result.failure.message) ?? ""}`);
     // #398: a stale journey prefix shows what the page showed, so "unavailable" reads differently from "clicked too early".
@@ -169,6 +173,12 @@ export function formatMissionHuman(result: unknown): string {
   const firstFp = [...gating, ...hangs].find((d) => d.fingerprint !== undefined)?.fingerprint;
   lines.push(nextHint(firstFp, resultPath));
   return `${lines.join("\n")}\n`;
+}
+
+/** `<rule>: <source> "<message>" ×N` — one classified backend-log cause (#422). */
+function causeText(c: Record<string, unknown>): string {
+  const count = typeof c.count === "number" && c.count > 1 ? ` ×${c.count}` : "";
+  return `${str(c.ruleId) ?? "?"}: ${str(c.source) ?? "?"} "${str(c.message) ?? ""}"${count}`;
 }
 
 /** Most per-step delta lines the human output shows (the latest ones; `--json` has every step). */

@@ -6,11 +6,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import {
   consolidate,
   diffRuns,
+  environmentCausesOf,
   renderReportMarkdown,
   runFromMissionResult,
   runFromUxReport,
   runIdOf,
   type ConsolidatedDefect,
+  type EnvironmentCauseSummary,
   type FindingsDiff,
   type RunRecord,
 } from "@jevitate/findings";
@@ -399,7 +401,9 @@ export interface ReportResult {
   readonly since?: string;
   readonly runs: readonly RunSummary[];
   readonly defects: readonly ConsolidatedDefect[];
-  readonly summary: { readonly defects: number; readonly advisory: number; readonly runs: number };
+  /** #422: the batch's environment/config faults, once each (summed over the runs) — never defects. */
+  readonly environmentFaults: readonly EnvironmentCauseSummary[];
+  readonly summary: { readonly defects: number; readonly advisory: number; readonly runs: number; readonly environmentFaults: number };
   /**
    * Model usage summed over the reported runs (#163). Runs whose result carries no `usage` (they made
    * no model call, or predate usage accounting) are counted in `unreportedRuns`, not priced.
@@ -457,6 +461,7 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
     diff = diffRuns(baselineRuns, runs);
   }
   const usage = usageOfRuns(runs);
+  const environmentFaults = environmentCausesOf(runs);
   const markdown =
     renderReportMarkdown({
       title: `Defect report${targetLabel === undefined ? "" : ` — ${targetLabel}`}${since === undefined ? "" : ` since ${since}`}`,
@@ -469,10 +474,12 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
     ...(since === undefined ? {} : { since }),
     runs: runs.map(summarizeRun),
     defects,
+    environmentFaults,
     summary: {
       defects: defects.filter((d) => d.severity === "hard").length,
       advisory: defects.filter((d) => d.severity === "advisory").length,
       runs: runs.length,
+      environmentFaults: environmentFaults.length,
     },
     usage,
     ...(diff === undefined ? {} : { diff }),

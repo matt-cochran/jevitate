@@ -1,6 +1,6 @@
 import type { ConsolidatedDefect } from "./consolidate.js";
 import { DIFF_STATUSES, type FindingsDiff } from "./diff.js";
-import type { RunRecord } from "./extract.js";
+import { environmentCausesOf, type RunRecord } from "./extract.js";
 
 /** The consolidated defect list (#139) as markdown, with the baseline diff (#138) when given. */
 export interface ReportMarkdownInput {
@@ -101,6 +101,20 @@ export function renderReportMarkdown(input: ReportMarkdownInput): string {
   out.push("## Advisory findings", "", "Advisory findings (UX, 4xx-correlated console errors, Jev flags) never gate on their own.", "");
   if (advisory.length === 0) out.push("None.", "");
   for (const d of advisory) out.push(...defectSection(d, statusOf.get(d.key)));
+  // #422: environment/config faults, ONCE for the whole batch — fix them in setup; never defects.
+  const environment = environmentCausesOf(input.runs);
+  if (environment.length > 0) {
+    out.push(
+      "## Environment faults",
+      "",
+      "Backend log lines classed `environment` (`.jevitate/log-classes.json` or a built-in rule): fix these in the test environment's setup. They are not defects and never gate.",
+      "",
+      "| rule | source | message | lines | runs |",
+      "| --- | --- | --- | --- | --- |",
+      ...environment.map((c) => `| \`${c.ruleId}\` | ${cell(c.source)} | ${cell(c.message.slice(0, 200))} | ${c.count} | ${c.runs}/${input.runs.length} |`),
+      "",
+    );
+  }
   out.push(
     "## Runs",
     "",

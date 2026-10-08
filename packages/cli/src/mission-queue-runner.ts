@@ -25,6 +25,7 @@ import { runWithMissionKillListener } from "./kill-signal.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { loadLogClassRules } from "./log-classes.js";
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
@@ -381,6 +382,8 @@ export function serverLogFromTargetConfig(targets: Readonly<Record<string, Targe
     correlationHeaders: parseCorrelationHeaders(config.logCorrelationHeaders ?? []),
     idPatterns: parseLogIdPatterns(config.logIdPatterns ?? []),
     ...(config.logTriage === true ? { triage: {} } : {}),
+    // #422: the project's .jevitate/log-classes.json (validated: throws LogClassesError) + defaults.
+    logClasses: loadLogClassRules(),
   };
 }
 

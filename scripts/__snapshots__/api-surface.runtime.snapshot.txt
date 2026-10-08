@@ -105,7 +105,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (68 exports)
+# @jevitate/domain (69 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEFECT_OUTCOME_STATUSES: array
@@ -117,6 +117,7 @@
   GOAL_OUTCOMES: array
   GOAL_OUTCOME_FOLD: object
   HostHealthSummarySchema: object
+  LogClassCauseSchema: object
   MAX_SAFE_NAME_LENGTH: const (number)
   MISSION_EXIT_CODES: object
   MISSION_OUTCOMES: array
@@ -577,13 +578,14 @@
   visibleBusyIndicator: function
   withheldReason: function
 
-# @jevitate/findings (20 exports)
+# @jevitate/findings (21 exports)
   DIFF_STATUSES: array
   RUN_MODES: array
   SARIF_SCHEMA: const (string)
   classify: function
   consolidate: function
   diffRuns: function
+  environmentCausesOf: function
   findingKey: function
   identityBasis: function
   renderJUnit: function

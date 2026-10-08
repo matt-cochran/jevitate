@@ -128,6 +128,52 @@ export interface RunRecord {
   readonly scope?: RunScope;
   /** #293: the Journey step a journey-anchored run branched from — every finding of the run came from there. */
   readonly branch?: RunBranch;
+  /** #422: the run's environment/config faults (`result.environmentFaults.causes`) — never findings. */
+  readonly environmentFaults?: readonly ClassifiedLogCause[];
+  /** #422: the run's expected-validation lines (`result.expectedValidation`) — never findings. */
+  readonly expectedValidation?: readonly ClassifiedLogCause[];
+}
+
+/** #422: one `--log-defect` line class a `log-classes` rule set aside (environment / expected-validation). */
+export interface ClassifiedLogCause {
+  readonly ruleId: string;
+  readonly source: string;
+  readonly message: string;
+  readonly count: number;
+}
+
+/** A result's classified causes (`environmentFaults.causes`, `expectedValidation`), skipping malformed entries. */
+function classifiedCauses(v: unknown): ClassifiedLogCause[] {
+  return arr(v)
+    .filter(isRecord)
+    .flatMap((c): ClassifiedLogCause[] => {
+      const ruleId = str(c.ruleId);
+      const source = typeof c.source === "string" ? c.source : undefined;
+      const message = typeof c.message === "string" ? c.message : undefined;
+      const count = num(c.count);
+      return ruleId === undefined || source === undefined || message === undefined || count === undefined ? [] : [{ ruleId, source, message, count }];
+    });
+}
+
+/** #422: a batch's environment causes, once each (rule + source + message) — summed, with how many runs hit it. */
+export interface EnvironmentCauseSummary extends ClassifiedLogCause {
+  readonly runs: number;
+}
+
+export function environmentCausesOf(runs: readonly RunRecord[]): EnvironmentCauseSummary[] {
+  const byKey = new Map<string, { cause: ClassifiedLogCause; count: number; runs: Set<string> }>();
+  for (const r of runs) {
+    for (const c of r.environmentFaults ?? []) {
+      const key = `${c.ruleId}\u0000${c.source}\u0000${c.message}`;
+      const seen = byKey.get(key) ?? { cause: c, count: 0, runs: new Set<string>() };
+      seen.count += c.count;
+      seen.runs.add(r.runId);
+      byKey.set(key, seen);
+    }
+  }
+  return [...byKey.values()]
+    .map(({ cause, count, runs: hit }) => ({ ...cause, count, runs: hit.size }))
+    .sort((a, b) => b.runs - a.runs || b.count - a.count);
 }
 
 /** #293: where a journey-anchored run branched off a promoted Journey. */
@@ -651,6 +697,8 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   const origin = originOf(str(target?.seedUrl)) ?? originOf(str(result.site));
   const scope = missionScope(mode, result);
   const branch = branchOf(result.branch);
+  const environmentFaults = classifiedCauses(isRecord(result.environmentFaults) ? result.environmentFaults.causes : undefined);
+  const expectedValidation = classifiedCauses(result.expectedValidation);
   return {
     runId,
     mode,
@@ -666,6 +714,8 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
     ...(isRecord(result.usage) ? { usage: result.usage } : {}),
     ...(scope === undefined ? {} : { scope }),
     ...(branch === undefined ? {} : { branch }),
+    ...(environmentFaults.length === 0 ? {} : { environmentFaults }),
+    ...(expectedValidation.length === 0 ? {} : { expectedValidation }),
   };
 }
 
