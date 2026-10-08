@@ -220,6 +220,7 @@ export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = 
   repeat: "a check gates each item once by finding identity; track flakes across checks with --baseline",
   minAgreement: "a check gates each item once by finding identity; track flakes across checks with --baseline",
   tag: "#426: tags are per check — `jevitate check --tag` stamps every item result; a suite item takes none of its own",
+  authCheck: "#427: the pre-flight auth check runs before `explore` runs and queued missions; a check runs its items' missions directly, without it — mint the suite's sessions with `jevitate login` before `jevitate check`",
   typeFixture: "#281: a file typed verbatim into a field is an `explore --type-fixture` binding; a suite goal declares none",
 };
 

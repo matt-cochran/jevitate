@@ -24,7 +24,7 @@ full flag list, or see the generated [CLI reference](./cli.md).
 - [Browser extensions](./extensions.md): load an unpacked extension (`--extension`) and drive its
   side panel, popup or options page.
 - [Repeats, personas and actors](./multi-run.md): vote across runs, diff roles, check cross-tenant
-  isolation.
+  isolation; mint persona sessions with `jevitate login` and catch expired ones before a run starts.
 - [Sweeps](./sweeps.md): many targets × personas from one targets file, with concurrency,
   resume and one aggregated, cross-target deduped result.
 

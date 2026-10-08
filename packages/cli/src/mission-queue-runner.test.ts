@@ -211,6 +211,8 @@ describe("mission queue runner (#117)", () => {
       const opened: Array<Record<string, unknown>> = [];
       const execute = realQueuedMissionExecutor({
         outDir: join(dir, "out"),
+        // #427: the pre-flight auth check would open the browser first; these tests capture the mission's own open.
+        authCheck: { mode: "off" },
         gateways: async () => ({ judge: {}, gen: {}, usage: new UsageTracker() }) as never,
         browserPortFactory: () => ({
           open: async (o: Record<string, unknown>) => {

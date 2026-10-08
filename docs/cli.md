@@ -27,6 +27,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`journey`](#journey): manage and run promoted Journeys (regression-test replays)
 - [`ledger`](#ledger): keep each finding's repro material by fingerprint, so verify-fix works long after the run's output is gone
 - [`load`](#load): run a promoted Journey as a load test
+- [`login`](#login): #427: sign in as a persona with credentials from environment variables and save its Playwright storage state (mode 0600) — the session `explore --storage-state/--persona` starts from. Credentials are never accepted as values, never printed or recorded
 - [`logs`](#logs): run output under .jevitate/logs (dated; pruned by retention)
 - [`mcp`](#mcp): start an MCP stdio server exposing only the allowlisted Jevitate tools
 - [`mission`](#mission): manage exploration mission targets and drain the mission queue
@@ -427,6 +428,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--api-prefix <path>` | a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/ | `[]` |  |  |  |
 | `--app-class <class>` | app class for UX calibration (required for --strategy usability), e.g. consumer\|admin\|internal |  |  |  |  |
 | `--at-step <n|name|all|anchors>` | with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`); `all` sweeps every step and `anchors` every anchor: each a fresh session (restored by --fixtures), --max-actions/--max-decisions split evenly per stop, one deduped report |  |  |  |  |
+| `--auth-check <mode>` | #427 pre-flight auth check before a run that starts from a session (--storage-state, --persona/--personas, --actor's primary): load the session, open --url and end the run fast (inconclusive, failure.kind auth-expired, exit 2) when it lands on a sign-in page — the login page is never explored. auto (default): a login-like URL (/login, /signin, /sign-in, /auth, …) or a visible password field, unless --url is itself such a route; urlExcludes:<text>: expired when the landed URL includes <text>; selector:<css>: alive only when this signed-in marker is visible; off. A persona with login parameters (a personas file entry's `login`, or .jevitate/personas.json) is signed in again once instead |  |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -487,7 +489,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--paid <pattern>` | an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze\|Draft\|Improve)\b/i: treated like the built-in paid vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it | `[]` |  |  |  |
 | `--param <kv>` | with --from-journey: a Journey param as key=value (repeatable); only the prefix's own params are required | `{}` |  |  |  |
 | `--persona <name=storageState>` | run the same mission once per persona (repeatable), serially, each from its own storageState, and diff them (#143): requests, statuses (a 403 vs 200 is a candidate RBAC finding), controls, outcome | `[]` |  |  |  |
-| `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState"}]} |  |  |  |  |
+| `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState", "login"?}]} — #427: `login` ({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, environment variable NAMES only) re-mints an expired session once. A bare --persona <name> is the project's persona of that name (.jevitate/personas.json, same format) |  |  |  |  |
 | `--polish` | (--strategy usability) polish each verified UX finding's recommendation with one generation call (opt-in; the default prose is built from templates) |  |  |  |  |
 | `--probe-guards` | (--strategy usability) opt in to clicking each destructive control once to check for a confirmation step — fail-safe: every write and destructive-looking request is aborted, and a page with an open WebSocket/EventSource or a service worker is not probed; without it those claims are reported unverifiable (docs/ux-findings.md) |  |  |  |  |
 | `--product <file>` | (--strategy usability) product facts JSON (plans/prices, key journeys, each page's intended next step) the review checks screens against in code; default .jevitate/product.json in the project when present (docs/ux-findings.md) |  |  |  |  |
@@ -1245,6 +1247,32 @@ jevitate load run [options] <journeyId>
 | `--storage-state <file>` | Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+## login
+
+```
+jevitate login [options]
+```
+
+#427: sign in as a persona with credentials from environment variables and save its Playwright storage state (mode 0600) — the session `explore --storage-state/--persona` starts from. Credentials are never accepted as values, never printed or recorded
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--allow <origin>` | an origin credentials may be typed into (repeatable; default: the sign-in page's own) — e.g. an SSO provider | `[]` |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--password-env <VAR>` | environment variable holding the password (its NAME — the value is read from the environment) |  |  |  |  |
+| `--password-field <field>` | the password field: its label, else a CSS selector (default: the visible password input) |  |  |  |  |
+| `--persona <name>` | the persona being signed in (names it in the result); with a declared persona (--personas or .jevitate/personas.json) its login parameters and storage state path are the defaults |  |  |  |  |
+| `--personas <file>` | personas JSON to read --persona's login parameters from (default: the project's .jevitate/personas.json) |  |  |  |  |
+| `--save <file>` | where to write the storage state (parent directory created; mode 0600; never inside a repo's .jevitate/) |  |  |  |  |
+| `--submit <name>` | the submit button's accessible name (default: the form's submit button, else Enter) |  |  |  |  |
+| `--success <check>` | how a successful sign-in is recognised: urlIncludes:<text> \| selector:<css> \| text:<text> (default: the page leaves the sign-in form — no login-like URL, no password field) |  |  |  |  |
+| `--timeout <seconds>` | how long each step of the sign-in may take (default 30) |  |  |  |  |
+| `--url <loginUrl>` | the sign-in page (must be an authorized origin: its own, or --allow) |  |  |  |  |
+| `--user-env <VAR>` | environment variable holding the username (its NAME — the value is read from the environment) |  |  |  |  |
+| `--user-field <field>` | the username field: its label, else a CSS selector (default: found by autocomplete/type/name) |  |  |  |  |
 
 ## logs
 

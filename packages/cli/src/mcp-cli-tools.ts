@@ -273,7 +273,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "run_exploration",
     description:
       "`jevitate explore` run DIRECTLY (every strategy: goal (default) | coverage | exploratory | adversarial | usability, or feature): drives a real browser on url (which must be on an allow origin) within its budget, and returns the typed result (read later with get_mission_result by its result id). " +
-      "For a PROMOTED target prefer queue_exploration (queue + poll). Model-driven strategies need real or fakeAi. Media: recordVideo, screenshots, evidenceVideo. Sessions: storageState, persona/actor entries 'name=<storageState path>'.",
+      "For a PROMOTED target prefer queue_exploration (queue + poll). Model-driven strategies need real or fakeAi. Media: recordVideo, screenshots, evidenceVideo. Sessions: storageState, persona/actor entries 'name=<storageState path>'; authCheck (off/auto/urlExcludes:/selector:) ends a run on an expired session as auth-expired (inconclusive), re-signing a persona in once when its personas file declares login parameters.",
     command: {
       path: "explore",
       params: { tags: TAGS, ...EXTENSION,
@@ -304,6 +304,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         saveStorageState: session("--save-storage-state"),
         persona: { kind: "named-sessions", flag: "--persona" },
         personas: path("--personas"),
+        // #427: the pre-flight auth check (off | auto | urlExcludes:<text> | selector:<css>); a persona's
+        // `login` refresh reads only the env variable NAMES the operator's personas file declares.
+        authCheck: s("--auth-check"),
         actor: { kind: "named-sessions", flag: "--actor" },
         fixtures: path("--fixtures"),
         fixtureIdentity: FIXTURE_IDENTITY,

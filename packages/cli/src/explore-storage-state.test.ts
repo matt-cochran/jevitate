@@ -71,12 +71,26 @@ describe("--storage-state reaches BrowserPort.open", () => {
       `${c.name}: the session is seeded from the storage state`,
       withStateFile(async (state) => {
         const { program, opens } = capture();
-        await program.parseAsync([...c.argv, "--storage-state", state, "--json"], { from: "user" });
+        // #427: `--auth-check off` — the pre-flight's own open is covered below; this captures the mission's.
+        const authOff = c.argv[0] === "explore" ? ["--auth-check", "off"] : [];
+        await program.parseAsync([...c.argv, "--storage-state", state, ...authOff, "--json"], { from: "user" });
         expect(opens).toHaveLength(1);
         expect(opens[0]!.storageState).toBe(state);
       }),
     );
   }
+
+  it(
+    "#427: the pre-flight auth check opens its own session from the storage state first — never recorded",
+    withStateFile(async (state) => {
+      const { program, opens, lines } = capture();
+      await program.parseAsync(["explore", "--url", URL, "--goal", "g", "--success", "urlIncludes:/x", "--storage-state", state, "--record-video", "--json"], { from: "user" });
+      expect(opens).toHaveLength(1);
+      expect(opens[0]!.storageState).toBe(state);
+      expect(opens[0]!.recordVideo).toBeUndefined();
+      expect(JSON.parse(lines.join("").trim())).toMatchObject({ ok: false, error: { code: "E_EXPLORE_RUN", message: expect.stringMatching(/pre-flight auth check failed/) } });
+    }),
+  );
 
   it("fails fast (no browser opened) when the storage state file does not exist", async () => {
     const { program, lines, opens } = capture();
