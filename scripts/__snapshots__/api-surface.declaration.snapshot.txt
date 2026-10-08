@@ -277,7 +277,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (609 exports)
+# @jevitate/explore (610 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -881,6 +881,7 @@
   VerifySession: interface
   VetoedAnswers: class
   visibleBusyIndicator: function
+  visibleBusyIndicatorContainer: function
   VOLATILITY_GAP_MS: variable
   WAIT_OP_MS: variable
   WITHHELD_ANSWER_NOTE: variable
