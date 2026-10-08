@@ -2046,6 +2046,7 @@ run many explore missions — one per target in a targets file (.tsv or .json: i
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--allow-control <regex>` | exempt a control whose name matches from the soft 'may cost money' heuristic only (repeatable, #428) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's) |  |  |  |  |
 | `--allow-log-cmd` | a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's) |  |  |  |  |
 | `--allow-writes` | let a find-out mission change the app (forwarded to every mission, as explore's) |  |  |  |  |
@@ -2056,12 +2057,13 @@ run many explore missions — one per target in a targets file (.tsv or .json: i
 | `--evidence-video` | per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's) |  |  |  |  |
 | `--fake-ai` | use deterministic fake gateways for every run (pipeline smoke only) |  |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
 | `--log-correlation-header <name>` | another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-defect <level|/regex/>` | backend log lines matching this become a server-log defect (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-id-pattern </regex/>` | how a correlation id is written in log lines (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-ignore <regex|substring>` | known-noise backend log lines to exclude (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
-| `--log-quiet-ok <spec>` | a --log-source that is legitimately quiet (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-quiet-ok <spec>` | compatibility only since 0.8.0 (#420): quiet sources are always healthy (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |

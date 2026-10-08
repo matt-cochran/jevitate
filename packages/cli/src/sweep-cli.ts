@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { withEngine } from "./engine.js";
-import { type CliDeps, emitCommandResult, environmentSeams } from "./cli-shared.js";
+import { JEV_PROVIDER_FLAG_HELP, type CliDeps, emitCommandResult, environmentSeams, jevProviderArg } from "./cli-shared.js";
 import { intArg, positiveIntArg } from "./cli-args.js";
 import { forwardedArgv, lastEnvelope } from "./multi-run-cli.js";
 import { withMissionFlags } from "./campaign-cli.js";
@@ -89,6 +89,7 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
     .option("--env <name>", "resolve each target's route against this named environment's base URL (.jevitate/environments.json)")
     .option("--real", "use live Jev + OpenRouter gateways for every run (requires keys)")
     .option("--fake-ai", "use deterministic fake gateways for every run (pipeline smoke only)")
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit the JSON envelope (default: a human summary)")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(

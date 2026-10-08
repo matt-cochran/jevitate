@@ -15,6 +15,8 @@ import { summarizeRun, type RunEnvelope, type RunSummary } from "./multi-run.js"
 import { CLI_TOOL_SPECS, buildCliArgv, type CliParam, type CliToolSpec } from "./mcp-cli-tools.js";
 import { confineMcpPath, defaultMcpPathRoots } from "./mcp-paths.js";
 import { EXPLORE_STRATEGIES } from "./cli-shared.js";
+import { validateAllowControlPatterns, validateDenyPatterns } from "@jevitate/explore";
+import { parseAuthCheck } from "./persona-login.js";
 
 /**
  * `jevitate sweep` (#425): one release check over many targets (features/routes) × personas, run
@@ -88,6 +90,8 @@ const SWEEP_OWNED: ReadonlySet<string> = new Set([
   "tags",
   "headed",
   "slowMo",
+  // One Jev provider per sweep (`sweep --jev-provider`), like the AI mode.
+  "jevProvider",
 ]);
 const VALUE_KINDS: ReadonlySet<CliParam["kind"]> = new Set(["string", "integer", "number", "boolean", "string[]", "viewport"]);
 
@@ -356,6 +360,40 @@ function optionArgvOf(options: Record<string, unknown>, where: string, problems:
   }
 }
 
+const stringList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : typeof v === "string" ? [v] : []);
+
+/**
+ * The checks `explore` itself makes on these options before a browser opens — made here, for every
+ * target, before ANY run: regexes (`deny`, `allowControl`) compile (and an allow-control pattern is
+ * never a blanket waiver), `authCheck` is a known mode, and the minimum effort is a goal run's.
+ */
+function validateRunShaping(options: Record<string, unknown>, strategy: string, where: string, problems: string[]): void {
+  for (const [key, flag, check] of [
+    ["deny", "deny", validateDenyPatterns],
+    ["allowControl", "allowControl", validateAllowControlPatterns],
+  ] as const) {
+    if (options[key] === undefined) continue;
+    try {
+      check(stringList(options[key]), flag);
+    } catch (err) {
+      problems.push(`${where}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (options.authCheck !== undefined) {
+    try {
+      parseAuthCheck(typeof options.authCheck === "string" ? options.authCheck : String(options.authCheck));
+    } catch (err) {
+      problems.push(`${where}: ${(err instanceof Error ? err.message : String(err)).replace("--auth-check", "authCheck")}`);
+    }
+  }
+  for (const key of ["minActions", "minDistinctStates"] as const) {
+    const v = options[key];
+    if (v === undefined) continue;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) problems.push(`${where}: ${key} must be a positive integer`);
+    if (strategy !== "goal" || options.feature !== undefined) problems.push(`${where}: ${key} is supported only with strategy goal (a goal or find-out run), not ${options.feature !== undefined ? "a feature run" : strategy}`);
+  }
+}
+
 /**
  * Loads and validates a targets file (`.tsv`: a header row then one target per line; `.json`: an
  * array or `{baseUrl?, defaults?, targets}`). EVERY problem is listed in one `SweepSpecError`
@@ -430,6 +468,7 @@ export function loadSweepTargets(path: string, opts: LoadSweepTargetsOptions = {
       problems.push(`${where}: strategy ${effectiveStrategy} needs a goal${effectiveStrategy === "goal" ? " (or options.feature for a feature run)" : ""}`);
     }
     const optionArgv = optionArgvOf(options, where, problems);
+    validateRunShaping(options, effectiveStrategy, where, problems);
 
     let tags: Record<string, string> = { ...defaultTags };
     if (f.tags !== undefined) {
@@ -507,6 +546,8 @@ export interface SweepTargetResult {
   readonly defectOutcome?: unknown;
   /** The run's `depth` (distinct states, actions, forms submitted), when its result carries one. */
   readonly depth?: unknown;
+  /** #428: every safety refusal an `allowControl` exemption waived in the run, as its result records them. */
+  readonly safetyOverrides?: unknown;
   /** Why the run ended as it did (its failure, a stop reason). */
   readonly failure?: { readonly kind: string; readonly message: string };
   /** Set when the run failed for an environment/setup reason (counted by --stop-on-env-failure). */
@@ -640,6 +681,7 @@ export function targetResultOf(target: SweepTarget, envelope: RunEnvelope, statu
     exitCode: envelope.ok ? s.exitCode : MISSION_EXIT_CODES.inconclusive,
     ...(data.defectOutcome === undefined ? {} : { defectOutcome: data.defectOutcome }),
     ...(data.depth === undefined ? {} : { depth: data.depth }),
+    ...(Array.isArray(data.safetyOverrides) && data.safetyOverrides.length > 0 ? { safetyOverrides: data.safetyOverrides } : {}),
     ...(failure === undefined ? {} : { failure }),
     ...(env === undefined ? {} : { environmentFailure: env }),
     defects,

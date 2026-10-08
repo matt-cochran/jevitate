@@ -132,10 +132,49 @@ describe("loadSweepTargets", () => {
     }
   });
 
+  it("#428/#424/#427: allowControl, minActions, minDistinctStates and authCheck are per-target options, validated before any run", () => {
+    const ok = file(
+      "ok.json",
+      JSON.stringify([
+        { id: "g", url: "http://x.test/", goal: "list the main features", options: { allowControl: ["^Generate key$"], minActions: 4, minDistinctStates: 3, authCheck: "urlExcludes:/login" } },
+      ]),
+    );
+    expect(loadSweepTargets(ok, { roots: roots() })[0]!.optionArgv).toEqual(
+      expect.arrayContaining(["--allow-control=^Generate key$", "--min-actions=4", "--min-distinct-states=3", "--auth-check=urlExcludes:/login"]),
+    );
+    const bad = file(
+      "bad-shaping.json",
+      JSON.stringify([
+        { id: "a", url: "http://x.test/", strategy: "adversarial", options: { allowControl: [".*"], minActions: 3 } },
+        { id: "b", url: "http://x.test/", goal: "g", options: { allowControl: ["("], authCheck: "sometimes", deny: ["/[/"] } },
+        { id: "c", url: "http://x.test/", strategy: "goal", options: { feature: "f", minDistinctStates: 2 } },
+        { id: "d", url: "http://x.test/", goal: "g", options: { jevProvider: "typesafe" } },
+      ]),
+    );
+    let msg = "";
+    try {
+      loadSweepTargets(bad, { roots: roots() });
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    for (const fragment of [
+      "matches every control name",
+      "minActions is supported only with strategy goal",
+      'allowControl "("',
+      "authCheck must be off, auto",
+      "minDistinctStates is supported only with strategy goal (a goal or find-out run), not a feature run",
+      "not-allowed explore option(s) jevProvider",
+    ]) {
+      expect(msg, fragment).toContain(fragment);
+    }
+    expect(msg).toMatch(/deny/);
+  });
+
   it("a target may set only the value-typed run_exploration options (no paths, log commands, secrets, hooks)", () => {
     const allowed = Object.keys(sweepTargetOptions());
     expect(allowed).toEqual(expect.arrayContaining(["maxActions", "maxDecisions", "deny", "allowDestructive", "feature", "route", "viewport", "device"]));
-    for (const forbidden of ["url", "goal", "strategy", "storageState", "persona", "invariants", "fixtures", "logSource", "secret", "out", "repeat", "tags", "real"]) {
+    expect(allowed).toEqual(expect.arrayContaining(["allowControl", "minActions", "minDistinctStates", "authCheck"]));
+    for (const forbidden of ["url", "goal", "strategy", "storageState", "persona", "invariants", "fixtures", "logSource", "secret", "out", "repeat", "tags", "real", "jevProvider"]) {
       expect(allowed, forbidden).not.toContain(forbidden);
     }
   });
@@ -264,6 +303,19 @@ describe("runSweep", () => {
     expect(r.aborted).toBeUndefined();
     expect(r.summary.ran).toBe(3);
     expect(r.targets[0]!.environmentFailure).toMatchObject({ kind: "crashed" });
+  });
+
+  it("#427: an auth-expired run is an environment failure; #424/#428: depth and safetyOverrides reach the target row", async () => {
+    const r = await runSweep({
+      plan: plan([target("a", { persona: { name: "admin", storageState: "/s.json" } }), target("b")]),
+      runOnce: async ({ target: t }) =>
+        t.id === "a"
+          ? result({ missionOutcome: "inconclusive", exitCode: 2, failure: { kind: "auth-expired", message: "persona admin: signed out (login page)" } })
+          : result({ depth: { distinctStates: 6, actions: 9, formsSubmitted: 2 }, safetyOverrides: [{ step: 3, control: 'button "Generate key"', rule: "paid-heuristic", regex: "^Generate key$" }] }),
+    });
+    expect(r.targets[0]).toMatchObject({ environmentFailure: { kind: "auth-expired", message: "auth-expired: persona admin: signed out (login page)" }, missionOutcome: "inconclusive" });
+    expect(r.environment.failures).toEqual([{ kind: "auth-expired", message: "auth-expired: persona admin: signed out (login page)", count: 1, targets: ["a"] }]);
+    expect(r.targets[1]).toMatchObject({ depth: { distinctStates: 6, actions: 9, formsSubmitted: 2 }, safetyOverrides: [{ regex: "^Generate key$" }] });
   });
 
   it("an in-progress aggregate is incomplete and inconclusive, its unfinished targets pending", () => {

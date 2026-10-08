@@ -440,11 +440,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         allowWrites: b("--allow-writes"),
         deny: many("--deny"),
         paid: many("--paid"),
+        allowControl: many("--allow-control"),
         invariants: { kind: "path[]", flag: "--invariants" },
         recordVideo: { kind: "optional-path", flag: "--record-video" },
         screenshots: { kind: "screenshots", flag: "--screenshots" },
         evidenceVideo: b("--evidence-video"),
-        ...AI,
+        ...JEV_AI,
       },
       omitted: {
         "--allow-log-cmd": OMIT.logCmd,

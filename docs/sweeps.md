@@ -66,13 +66,18 @@ checkout	/checkout		goal	buy the cheapest item	feature=checkout
 ```
 
 **Explore options a target may set.** Exactly the value-typed arguments MCP `run_exploration`
-takes (by their camelCase names: `maxActions`, `maxDecisions`, `deny`, `paid`, `allowDestructive`,
-`allowWrites`, `feature`, `route`, `success`, `minControlCoverage`, `requireFormSubmit`,
-`viewport`, `device`, …), minus the ones the sweep sets per target. An unknown option or a wrong
-type is refused. Options that name files, read logs, run commands or bind secrets are not
+takes (by their camelCase names: `maxActions`, `maxDecisions`, `deny`, `paid`, `allowControl`,
+`allowDestructive`, `allowWrites`, `feature`, `route`, `success`, `minActions`,
+`minDistinctStates`, `authCheck`, `minControlCoverage`, `requireFormSubmit`, `viewport`,
+`device`, …), minus the ones the sweep sets per target (and `jevProvider`: one per sweep, via
+`sweep --jev-provider`). An unknown option or a wrong type is refused, and the checks `explore`
+makes before a browser opens are made for every target before any run: `deny` and `allowControl`
+regexes must compile (an `allowControl` pattern that matches every name is refused), `authCheck`
+must be `off`, `auto`, `urlExcludes:<text>` or `selector:<css>`, and `minActions` /
+`minDistinctStates` are positive integers on a `goal` target only (not a feature run). Options that name files, read logs, run commands or bind secrets are not
 per-target options: give them once on the `sweep` command line (`--invariants`, `--log-source`,
-`--deny`, `--paid`, `--allow-destructive`, `--record-video`, `--screenshots`, …), which forwards
-them to every run, as `campaign run` does.
+`--deny`, `--paid`, `--allow-control`, `--allow-destructive`, `--record-video`, `--screenshots`,
+`--jev-provider`, …), which forwards them to every run, as `campaign run` does.
 
 **Validation.** The whole file is checked before anything runs; every problem (with its line or
 target) is listed in one refusal (`E_SWEEP_SPEC`, exit 64).
@@ -94,7 +99,8 @@ file reaches no session an MCP call could not.
   run, reads it back into the aggregate, and runs the rest. A run that could not start (an error
   envelope) is run again.
 - `--stop-on-env-failure K` stops starting runs when the first K runs of this invocation ALL
-  failed for an environment or setup reason: an expired session (`auth-expired`), a session that
+  failed for an environment or setup reason: an expired session (`auth-expired`, from the
+  pre-flight auth check — see [authentication](./authentication.md)), a session that
   was not honoured, an unreachable or unresponsive target, a starved host, a configuration or
   resource-limit failure, a crash, or a run that could not start. The runs already in flight
   finish; the rest are `skipped`, the sweep is `inconclusive` (exit 2), and the message says to
@@ -110,7 +116,7 @@ file reaches no session an MCP call could not.
 | `missionOutcome`, `exitCode` | The worst target outcome; `inconclusive` while incomplete or after a stop. |
 | `complete`, `reason`, `aborted`, `interrupted` | Whether every target finished, and why not. |
 | `summary` | Targets, `ran`, `resumed`, `errors`, `skipped`, `pending`, counts by outcome, deduped defects (advisory ones excluded) and environment failures. |
-| `targets[]` | Per target: `id`, `url`, `persona`, `strategy`, `tags` (the run's: the sweep's, the target's and `target=<id>`), `status` (`ran`, `resumed`, `error`, `skipped`, `pending`), `missionOutcome`, `goalOutcome`, `exitCode`, `defectOutcome` and `depth` (when the run's result carries them), `failure`, `environmentFailure`, the defect count, and the run's `resultPath` and `envelopePath`. |
+| `targets[]` | Per target: `id`, `url`, `persona`, `strategy`, `tags` (the run's: the sweep's, the target's and `target=<id>`), `status` (`ran`, `resumed`, `error`, `skipped`, `pending`), `missionOutcome`, `goalOutcome`, `exitCode`, `defectOutcome`, `depth` (distinct states, actions, forms submitted) and `safetyOverrides` (each refusal an `allowControl` exemption waived) when the run's result carries them, `failure`, `environmentFailure`, the defect count, and the run's `resultPath` and `envelopePath`. |
 | `defects[]` | Every defect and hang, deduped by fingerprint ACROSS targets: one entry per fingerprint with its `kind`, `title` (and `level`/`source`/`message` for a `server-log` defect), `sightingCount`, the `targets` that saw it and one `sightings[]` entry per target (route, URL, count, result path). A defect seen on five pages is one finding with five sightings. It is `advisory` only when every sighting was. |
 | `environment.causes[]` | Every run's `environmentDegraded` causes, grouped by rule, source and message, with their total count and the targets they hit. |
 | `environment.failures[]` | Runs that failed for an environment or setup reason, grouped by kind. |
@@ -121,6 +127,7 @@ Every run's own result is a normal result (`<out>/<id>/…result.json`), so `jev
 ## Over MCP
 
 `run_sweep` mirrors the command (`targets`, `concurrency`, `resume`, `out`, `stopOnEnvFailure`,
-`baseUrl`/`env`, `tags`, the forwarded safety and media flags, `real`/`fakeAi`). The targets and
+`baseUrl`/`env`, `tags`, the forwarded safety and media flags including `allowControl`,
+`real`/`fakeAi`/`jevProvider`). The targets and
 out paths are confined like every MCP path; log sources and log triage stay operator-only. A sweep
 is long-running: bound it with the targets file and `concurrency`.
