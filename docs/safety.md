@@ -65,6 +65,34 @@ security bug, and how to report one.
   `--deny`, which no mission may click. A goal asks for a `--paid` control by its action word:
   a trailing live estimate ("Confirm analysis (≈ 4–10 credits)") and confirmation words
   ("Confirm", "and") are ignored, so "analyze this text" asks for "Confirm analysis".
+- **Every refusal names its rule.** A refused step's reason ends with the rule it matched, e.g.
+  `refused by the safety policy: "Generate Your First Key" may cost money or contact real people
+  (paid) [rule builtin:may-cost-money, matched "Generate"]`, and the transcript entry carries it
+  structured: `safety: { ruleId, pattern, control, risk, waivable }`. So you can tell a built-in
+  heuristic from your own `--paid`/`--deny` pattern and decide whether to widen a guard, exempt one
+  control, or report a false positive. `jevitate site policy rules` (`--json`) lists every rule.
+- **`--allow-control <regex>`** (repeatable; `safety.allowControl` in a target's
+  `~/.jevitate/targets.json` entry; `allowControl` on a suite item; MCP `allowControl`) exempts a
+  control whose accessible name matches from the **soft built-in "may cost money" heuristic only**,
+  for that run: `--allow-control "^Generate Your First Key$"`. The regex is case-sensitive over the
+  whitespace-collapsed name (write `/…/i` for case-insensitive). An invalid regex, an empty one, or
+  one that matches every name (`.*`) is refused before any browser opens. Every click it permits is
+  recorded in the result's `safetyOverrides: [{ regex, control, ruleId, pattern, step }]`. It is
+  never written to a site policy and never applies to native dialogs. It never lifts a hard rule:
+
+  | Rule id | Matches | `--allow-control` | Lifted by |
+  | --- | --- | --- | --- |
+  | `builtin:may-cost-money` | short labels that may cost money or reach real people (Buy, Upgrade, Generate, Simulate, Send invite…) | **waives it** | `--allow-destructive`; a goal that asks for it |
+  | `builtin:destructive` | irreversible actions (Delete, Revoke, Rotate, Regenerate, Reset authenticator…) | never | `--allow-destructive`; a goal that asks for it |
+  | `builtin:session-end` | Sign out, Log out | never | `--allow-destructive`; a goal that asks for it |
+  | `builtin:nameless-control` | a nameless control when any `--deny`/`--paid` is set | never | nothing |
+  | `deny:<pattern>` | your `--deny` pattern | never | remove the pattern |
+  | `paid:<pattern>` | your `--paid` pattern (also when the heuristic matched the same control) | never | `--allow-destructive`; a goal naming its action word; narrow the pattern |
+  | `read-only:<kind>` | a find-out goal's write (`may-cost-money`, `destructive`, `session-end`, `write-flow`, `send`, `upload`) | never | `--allow-writes`; a goal that asks for a change |
+  | `boundary:off-origin` | a page or action outside the authorized origins | never | authorize the origin (`--allow`) |
+  | `boundary:forbidden-tool` | an MCP tool outside the served allowlist | never | nothing |
+  | `boundary:credentials` | credentials and secrets reaching the model or disk | never | nothing |
+
 - The usability review's guard probe (`--probe-guards`, #198) is the one place jevitate clicks a
   destructive control without a goal asking for it, and it is **opt-in**. When enabled, it clicks
   each destructive control once on a fresh page. It aborts every non-GET request and every request

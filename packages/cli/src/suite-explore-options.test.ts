@@ -124,6 +124,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     jobWaitMs: { kind: "goal", set: 3000 },
     deny: { kind: "feature", set: ["/^Archive/i"] },
     paid: { kind: "feature", set: ["/^Analyze/"] },
+    allowControl: { kind: "feature", set: ["^Generate Your First Key$"] },
     allowDestructive: { kind: "feature", set: true },
     dialogs: { kind: "feature", set: "accept" },
     allowWrites: { kind: "goal", set: true },
@@ -348,6 +349,7 @@ describe("suite validation stays path-precise (#195)", () => {
   it("names the path of a bad option value, and suggests the camelCase name for a flag spelling", () => {
     expect(() => suiteOf(item("feature", { stallTimeout: -1 }))).toThrow("$.targets[0].missions[0].stallTimeout: must be a positive number");
     expect(() => suiteOf(item("feature", { deny: ["/(/"] }))).toThrow(/\$\.targets\[0\]\.missions\[0\]\.deny: deny "\/\(\/": /);
+    expect(() => suiteOf(item("feature", { allowControl: ["(Key"] }))).toThrow(/\$\.targets\[0\]\.missions\[0\]\.allowControl: allowControl "\(Key": /);
     expect(() => suiteOf(item("coverage", { scope: "page" }))).toThrow('$.targets[0].missions[0].scope: must be "app"');
     expect(() => suiteOf({ "api-prefix": ["/api/"] })).toThrow('$.targets[0].api-prefix: unknown field; did you mean "apiPrefix"?');
     expect(() => suiteOf(item("goal", { replyMaxChars: 5 }))).toThrow("$.targets[0].goals[0].replyMaxChars: must be an integer in 20..2000");
