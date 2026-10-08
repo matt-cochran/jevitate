@@ -88,6 +88,7 @@ enter (masked) and store the keys a feature needs in ~/.jevitate/credentials.jso
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--jev-provider <provider>` | judgment only: which Jev key to set up — typesafe (TYPESAFE_API_KEY, the default) or openrouter (OPENROUTER_API_KEY: Jev through OpenRouter) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--no-verify` | store the entered key without the live auth check (offline / CI) |  |  |  |  |
 | `--replace` | prompt for a new value even when a key is already stored (rotate / replace it) |  |  |  |  |
@@ -104,6 +105,7 @@ which keys each AI feature uses, where each comes from (env or ~/.jevitate/crede
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--jev-provider <provider>` | report judgment as it would run with this Jev provider: typesafe or openrouter (default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--no-verify` | skip the live auth check (offline / CI): report presence and source only |  |  |  |  |
 
@@ -202,6 +204,7 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each of the spec's before/after hooks (default 60000; the process group is killed) |  |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--journeys-dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
 | `--log-correlation-header <name>` | another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
@@ -240,6 +243,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a one-line summary per item, then the envelope path) |  |  |  |  |
 | `--json-out <path>` | JSON envelope path (default <out>/check.json) |  |  |  |  |
 | `--junit <path>` | JUnit XML path (default <out>/junit.xml) |  |  |  |  |
@@ -337,6 +341,7 @@ explore a named non-production environment toward <aspect> (checked by --success
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--id <id>` | the Journey id (default: demo-<aspect slug>) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-actions <n>` | hard cap on explored actions |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
@@ -445,6 +450,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--ignore-overflow <selector>` | a CSS selector (repeatable) whose overflow or clipping is intentional — excluded from the horizontal-overflow and vertical-clipping signals, like --ignore-no-progress | `[]` |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON (repeatable; goal, coverage, exploratory, adversarial, --feature): checked around every action, a violation is a defect (exit 1). Validated before any browser opens; probes are GET/HEAD on an --allow origin only | `[]` |  |  |  |
 | `--issue-repo <owner/name>` | the system-under-test repo findings for THIS target are filed to |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--jevitate-repo <owner/name>` | where jevitate engine findings are filed (default matt-cochran/jevitate) |  |  |  |  |
 | `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
 | `--journeys-dir <path>` | with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
@@ -538,6 +544,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--id <id>` | journey id (used for the <id>.json filename in the store) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--ignore-no-progress <pattern>` | a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard) | `[]` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
 | `--journeys-dir <dir>` | journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -1050,6 +1057,7 @@ jevitate journey run [options] <id>
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
@@ -1262,6 +1270,7 @@ jevitate logs triage [options]
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--fake-ai` | no model: keep the correlated lines and the window's error/warning lines (code only) | `false` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--real` | score relevance with the live Jev gateway (requires keys; log text goes to the judgment model, redacted) | `false` |  |  |  |
 | `--result <path>` | the run's <run>.result.json (its <run>.signals.jsonl must sit next to it) |  |  | yes |  |
@@ -1370,6 +1379,7 @@ run queued missions (queue_exploration) through their strategy's runner; get_mis
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--interval <ms>` | --watch poll interval in ms (default 5000) | `5000` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
@@ -2000,6 +2010,7 @@ offline UX review of a saved Recording — ranked, cited usability findings
 | `--app-class <class>` | app class for calibration (required), e.g. consumer\|admin\|internal |  |  |  |  |
 | `--evidence <file>` | a live usability run's evidence sidecar (screens as analyzed + run signals); default: <stem>.evidence.json next to the Recording — with it, offline review reproduces the live run's findings |  |  |  |  |
 | `--fake-ai` | use deterministic fake gateways | `false` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--job <text>` | the job the flow pursues (improves relevance) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-findings-per-page <n>` | cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5 |  |  |  |  |

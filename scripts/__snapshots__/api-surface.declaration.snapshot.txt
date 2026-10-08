@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (150 exports)
+# @jevitate/ai-core (163 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -37,6 +37,8 @@
   FakeJudgmentGateway: class
   Feature: type-alias
   FEATURE_KEYS: variable
+  featureKeys: function
+  featureReady: function
   filterCatalog: function
   FORM_VALUE_INSTRUCTIONS: variable
   formatUsageLine: function
@@ -56,10 +58,18 @@
   GoalAnswerOutput: variable
   isTransientError: function
   JEV_PRICE_TABLE: variable
+  JEV_PROVIDER_ENV: variable
+  JEV_PROVIDER_KEYS: variable
+  JEV_PROVIDERS: variable
   JevClientCall: interface
   JevJudgmentGateway: class
   JevPricing: interface
+  JevProvider: type-alias
+  JevProviderError: class
+  jevProviderOverride: function
   JevResponseError: class
+  JevRoute: interface
+  jevRouteModel: function
   jittered: function
   JOURNEY_GOAL_INSTRUCTIONS: variable
   JOURNEY_STEP_INSTRUCTIONS: variable
@@ -83,6 +93,8 @@
   NoEligibleModelError: class
   NoulAnswer: interface
   NoulQuestion: interface
+  OPENROUTER_JEV_BASE_URL: variable
+  OPENROUTER_JEV_MODEL: variable
   OpenRouterCall: interface
   OpenRouterConfig: interface
   OpenRouterGenerationGateway: class
@@ -97,6 +109,7 @@
   redactText: function
   redactUrl: function
   requireKeys: function
+  resolveJevRoute: function
   RetryDeps: interface
   RetryExhaustedError: class
   RetryingGenerationPort: class

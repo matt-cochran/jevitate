@@ -59,7 +59,17 @@ export const JEV_PRICE_TABLE: PriceTable = {
   id: "typesafe-models@2026-09-24",
   retrieved: "2026-09-24",
   source: "https://docs.typesafe.ai/models.md",
-  models: { "jev-1.13.0": JEV_1_13, "jev-latest": JEV_1_13, "jev-preview": JEV_1_13 },
+  // #429: the same model served through OpenRouter, under OpenRouter's ids (OpenRouter's endpoints
+  // API listed the same $0.042/Mtok input, $0 output on 2026-10-08). OpenRouter reports
+  // `usage.cost` on every answered call, so these price only a response that lacks one.
+  models: {
+    "jev-1.13.0": JEV_1_13,
+    "jev-latest": JEV_1_13,
+    "jev-preview": JEV_1_13,
+    "typesafe/jev-1.13": JEV_1_13,
+    "typesafe/jev-1.13-20260917": JEV_1_13,
+    "~typesafe/jev-latest": JEV_1_13,
+  },
 };
 
 /**

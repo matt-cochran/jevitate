@@ -1,3 +1,4 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { withEngine } from "./engine.js";
@@ -82,9 +83,10 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
     .option("--hook-timeout-ms <ms>", "timeout for each of the spec's before/after hooks (default 60000; the process group is killed)", positiveIntArg)
     .option("--real", "use live Jev + OpenRouter gateways for the missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit the JSON envelope (default: a human summary)")
     .action(async function (this: Command, spec: string) {
-      const o = this.opts<{ journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; json?: boolean }>();
+      const o = this.opts<{ journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; jevProvider?: string; json?: boolean }>();
       const emit = (envelope: Parameters<typeof emitCommandResult>[1], exitCode?: number): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "campaign run", human: formatCampaignHuman, ...(exitCode === undefined ? {} : { exitCode }) });
       if (o.real !== true && o.fakeAi !== true) {

@@ -1,3 +1,4 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { existsSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
@@ -180,9 +181,10 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
     .option("--max-decisions <n>", "hard cap on model decisions", positiveIntArg)
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .action(async function (this: Command, aspect: string) {
       const o = this.opts<
-        ReplayFlags & { env?: string; success?: string; persona?: string; id?: string; start?: string; maxActions?: number; maxDecisions?: number; real?: boolean; fakeAi?: boolean }
+        ReplayFlags & { env?: string; success?: string; persona?: string; id?: string; start?: string; maxActions?: number; maxDecisions?: number; real?: boolean; fakeAi?: boolean; jevProvider?: string }
       >();
       const out = program.configureOutput().writeOut;
       try {
@@ -199,7 +201,7 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
         const replay = replayOptionsFrom(this, deps, o, environment);
         const safety: SafetyConfig | undefined = (seams.targetsFile === undefined ? loadTargetsFile() : loadTargetsFile(seams.targetsFile))[environment.baseUrl]?.safety;
         const id = o.id ?? demoJourneyId(aspect);
-        const { judge, gen, usage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false });
+        const { judge, gen, usage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false, jevProvider: o.jevProvider });
         const bounds = { ...(o.maxActions === undefined ? {} : { maxActions: o.maxActions }), ...(o.maxDecisions === undefined ? {} : { maxDecisions: o.maxDecisions }) };
 
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) =>

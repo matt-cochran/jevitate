@@ -1,3 +1,4 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { Command } from "commander";
 import { MissingCredentialError } from "@jevitate/ai-core";
 import { ok, fail } from "./envelope.js";
@@ -207,6 +208,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
     .option("--out <dir>", "where results are written (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date> — where `jevitate mcp` reads them)")
     .option("--real", "use live Jev + OpenRouter gateways for model-driven missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<
@@ -219,6 +221,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
           out?: string;
           real?: boolean;
           fakeAi?: boolean;
+        jevProvider?: string;
           json?: boolean;
         } & BrowserLaunchFlags
       >();
@@ -235,7 +238,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
       // skipped), never run against a silently-substituted fake. Feature missions are model-free.
       let gatewayRefusal: string | undefined;
       try {
-        await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false });
+        await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false, jevProvider: o.jevProvider });
       } catch (err) {
         if (!(err instanceof MissingCredentialError || err instanceof GatewaySelectionError)) throw err;
         gatewayRefusal = err.message;
@@ -250,7 +253,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         deps.missions?.execute ??
         realQueuedMissionExecutor({
           outDir: o.out ?? logsDirFor(),
-          gateways: () => buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }),
+          gateways: () => buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false, jevProvider: o.jevProvider }),
           liveJudgment: o.real === true,
           ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
           ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),

@@ -1,4 +1,14 @@
-import { FEATURE_KEYS, MissingCredentialError, envAliasesFor, type CredentialKey, type Feature, type CredentialStore, requireKeys } from "./credentials.js";
+import {
+  JEV_PROVIDER_KEYS,
+  MissingCredentialError,
+  envAliasesFor,
+  featureKeys,
+  type CredentialKey,
+  type Feature,
+  type CredentialStore,
+  type JevProvider,
+  requireKeys,
+} from "./credentials.js";
 
 /** `TYPESAFE_API_KEY` -> `TYPESAFE_API_KEY (or TYPESAFE_JEV_API_KEY)`; unchanged for a key with
  *  no accepted alias (issue #83). */
@@ -15,12 +25,18 @@ export interface SetupRequiredResult {
   precondition: "setup_required";
   feature: Feature;
   missing: CredentialKey[];
+  /** #429: ANY ONE of `missing` satisfies the feature (judgment: a TypeSafe or an OpenRouter key). */
+  anyOf?: true;
   hint: string;
 }
 export function toSetupRequiredResult(err: MissingCredentialError): SetupRequiredResult {
+  const names = err.missing.map(withAliasHint);
   return {
     ok: false, precondition: "setup_required", feature: err.feature, missing: err.missing,
-    hint: `Set ${err.missing.map(withAliasHint).join(", ")} via the host's secure credential entry, then retry.`,
+    ...(err.anyOf ? { anyOf: true as const } : {}),
+    hint: err.anyOf
+      ? `Set one of ${names.join(" or ")} via the host's secure credential entry, then retry.`
+      : `Set ${names.join(", ")} via the host's secure credential entry, then retry.`,
   };
 }
 
@@ -61,6 +77,11 @@ export interface CollectKeysOptions {
    * stored). The value never leaves this call stack.
    */
   readonly check?: (key: CredentialKey, value: string) => Promise<void>;
+  /**
+   * #429 (judgment): which Jev provider's key to collect (`ai setup judgment --jev-provider`).
+   * Absent: judgment is satisfied by either key; when neither is set, the TypeSafe key is asked for.
+   */
+  readonly jevProvider?: JevProvider;
 }
 
 /** The prompt shown for `key` (names only: never a value). */
@@ -72,7 +93,7 @@ export function keyPrompt(key: CredentialKey, replace = false): string {
 export async function collectKeys(
   feature: Feature, store: CredentialStore, io: SecureKeyIO, opts: CollectKeysOptions = {},
 ): Promise<CredentialKey[]> {
-  const keys = opts.replace === true ? [...FEATURE_KEYS[feature]] : requireKeysSafe(feature, store);
+  const keys = opts.replace === true ? replaceKeys(feature, store, opts.jevProvider) : requireKeysSafe(feature, store, opts.jevProvider);
   for (const k of keys) {
     const v = await io.promptSecret(keyPrompt(k, opts.replace === true && store.detect(k)));
     if (!v || v.trim().length === 0) throw new Error(`${k} not provided — aborting (fail-closed)`);
@@ -81,7 +102,16 @@ export async function collectKeys(
   }
   return keys;
 }
-function requireKeysSafe(feature: Feature, store: CredentialStore): CredentialKey[] {
-  try { requireKeys(feature, store); return []; }
-  catch (e) { if (e instanceof MissingCredentialError) return e.missing; throw e; }
+/** The missing keys to ask for. An any-of miss (judgment, no provider chosen) asks for the TypeSafe key only. */
+function requireKeysSafe(feature: Feature, store: CredentialStore, jevProvider?: JevProvider): CredentialKey[] {
+  try { requireKeys(feature, store, jevProvider); return []; }
+  catch (e) {
+    if (e instanceof MissingCredentialError) return e.anyOf ? [JEV_PROVIDER_KEYS.typesafe] : e.missing;
+    throw e;
+  }
+}
+/** `--replace`: the key(s) the feature uses now (judgment: its resolved route's key, else the chosen/preferred one). */
+function replaceKeys(feature: Feature, store: CredentialStore, jevProvider?: JevProvider): CredentialKey[] {
+  const keys = featureKeys(feature, store, jevProvider);
+  return feature === "judgment" && keys.length > 1 ? [JEV_PROVIDER_KEYS.typesafe] : keys;
 }

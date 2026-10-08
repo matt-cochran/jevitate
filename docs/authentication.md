@@ -111,17 +111,40 @@ fast, before any browser opens, with a clear message — instead of a confusing
 ## API keys for jevitate's own AI
 
 Jevitate's AI features each need one key: **generation** uses `OPENROUTER_API_KEY` (OpenRouter),
-**judgment** uses `TYPESAFE_API_KEY` (TypeSafe/Jev; `TYPESAFE_JEV_API_KEY` is accepted too). A key
-comes from the environment or from `~/.jevitate/credentials.json` (mode 0600). The environment
-wins when both are set.
+**judgment** (the Jev model) uses EITHER `TYPESAFE_API_KEY` (TypeSafe/Jev; `TYPESAFE_JEV_API_KEY`
+is accepted too) OR `OPENROUTER_API_KEY`, since OpenRouter serves Jev too. A key comes from the
+environment or from `~/.jevitate/credentials.json` (mode 0600). The environment wins when both
+are set.
 
-- **Enter a key:** `jevitate init` or `jevitate ai setup <generation|judgment>`. Entry needs a
+**Which key judgment uses.** With only one of the two keys, judgment uses that one. With both, the
+TypeSafe key wins. To choose explicitly, pass `--jev-provider typesafe|openrouter` (on every
+command that takes `--real`, and on `ai status`) or set `JEVITATE_JEV_PROVIDER`. The flag wins
+over the env var. Over MCP the argument is `jevProvider`, and an MCP server also honours its own
+`JEVITATE_JEV_PROVIDER`. A chosen provider whose key is missing is refused: judgment never
+switches to the other provider on its own. An unknown value is refused too.
+
+- `typesafe`: TypeSafe's API (`https://api.typesafe.ai/v1/systemone`), model `jev-latest`.
+- `openrouter`: OpenRouter's System One route (`https://openrouter.ai/api/v1/systemone`), model
+  `~typesafe/jev-latest`, the alias for the newest Jev release.
+
+Both routes send the same request and validate answers the same way. A malformed answer fails
+closed on either route. Usage records the versioned model that answered (for example
+`typesafe/jev-1.13-20260917`). An OpenRouter call also records the cost OpenRouter reports
+(`usage.cost`). Failed calls are counted too.
+
+- **Enter a key:** `jevitate init` or `jevitate ai setup <generation|judgment>`. `ai setup judgment`
+  asks for the TypeSafe key, and `ai setup judgment --jev-provider openrouter` asks for the
+  OpenRouter key. `init` doesn't ask for a TypeSafe key once an OpenRouter key is set (judgment
+  is already ready). Entry needs a
   terminal and is masked: each character shows as `•`, and the instructions stay on screen.
   Backspace erases, Ctrl-C cancels. A key is never echoed, logged or sent to a model, and key
   entry is never offered over MCP.
 - **See what is configured:** `jevitate ai status` (and `init`) prints, per feature, the key's
   name, its provider and its source, for example
   `generation: ready — OPENROUTER_API_KEY (OpenRouter), from ~/.jevitate/credentials.json: valid`.
+  The judgment line names the route as well, for example
+  `judgment: ready via OpenRouter (model ~typesafe/jev-latest; no TypeSafe key set) — …`. Its
+  `--json` has `judgment.route` (`provider`, `key`, `model`, `reason`), or `null` when no key is set.
   With `--json`, `sources` and `verification` are added per feature (names, sources and
   verdicts only, never a value). An env var that overrides a stored key is reported.
 - **Verification:** each key is checked with its provider by one authenticated, non-billable

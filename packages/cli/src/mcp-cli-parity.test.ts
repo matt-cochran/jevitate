@@ -204,6 +204,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       selfHeal: "--self-heal",
       real: "--real",
       fakeAi: "--fake-ai",
+      jevProvider: "--jev-provider",
       extension: "--extension",
       maxBrowsers: "--max-browsers",
       maxBrowserMemory: "--max-browser-memory",

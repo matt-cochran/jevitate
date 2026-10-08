@@ -717,7 +717,8 @@ test("init --json (no TTY, keys missing): never prompts, completes init, reports
   expect(parsed.ok).toBe(true);
   expect(parsed.data.keys).toMatchObject({
     generation: { required: ["OPENROUTER_API_KEY"], collected: [], missing: ["OPENROUTER_API_KEY"] },
-    judgment: { required: ["TYPESAFE_API_KEY"], collected: [], missing: ["TYPESAFE_API_KEY"] },
+    // #429: judgment runs on EITHER key — both are named when neither is set.
+    judgment: { required: ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY"], collected: [], missing: ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY"] },
   });
   // #230: exit 0 with a warning — init's other work (project dir/skills/MCP, here skipped by
   // flag) still genuinely succeeded; a missing key is expected for a fresh non-interactive
@@ -730,7 +731,7 @@ test("init (no TTY, keys missing, human output): reports 'not configured' with t
   await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project"], { from: "user" });
   const out = lines.join("");
   expect(out).toContain("keys: generation not configured — set OPENROUTER_API_KEY (OpenRouter) or run `jevitate ai setup generation`");
-  expect(out).toContain("keys: judgment not configured — set TYPESAFE_API_KEY (TypeSafe/Jev) or run `jevitate ai setup judgment`");
+  expect(out).toContain("keys: judgment not configured — set TYPESAFE_API_KEY (TypeSafe/Jev) or OPENROUTER_API_KEY (OpenRouter) or run `jevitate ai setup judgment`");
   expect(process.exitCode).toBe(0);
 });
 
