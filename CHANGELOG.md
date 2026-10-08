@@ -7,6 +7,107 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.8.0] – 2026-10-08
+
+0.8.0 makes jevitate easier to run at release scale and its results easier to aggregate. A new
+`jevitate sweep` runs many targets × personas from one targets file, with concurrency, resume and one
+cross-target deduped result, and `--tag key=value` stamps every run with the feature or journey it
+exercised. `jevitate login` mints persona sessions from credentials in the environment, and an
+expired session now ends a run at once as `auth-expired` instead of exploring the login page. Results
+separate the goal from the defects: `goalOutcome` says whether the goal was reached and why not,
+`defectOutcome` counts defects by kind, and server-log defects are structured entries in `defects[]`.
+Backend log lines caused by configuration (placeholder keys, unconfigured providers) are classified as
+environment faults rather than product defects, and a quiet but attached log source no longer makes a
+run inconclusive. Open-ended find-out goals explore to a minimum depth before concluding and return a
+grounded partial report when they can't answer. Safety refusals name the rule they matched, and one
+benign control can be exempted from the "may cost money" heuristic per run. Jev judgment can now run on
+an OpenRouter key, so one key covers generation and judgment.
+
+### Behaviour changes
+
+- **`goalOutcome` is only about the goal (#423).** A defect (an HTTP 5xx, a server-log error, a
+  violated invariant) no longer replaces a goal run's `goalOutcome`; defects are reported in the new
+  `defectOutcome` (`{status, byKind}`), and a goal that was not reached carries a structured
+  `goalReason` (`not-found`, `ungrounded`, `blocked-by-policy`, `budget`, `hang`, …). `missionOutcome`
+  is derived from both by one table (docs/outcomes.md) and every exit code is unchanged: a goal that
+  was not reached and found no defects still exits 1 — tell it apart by `defectOutcome.status: "none"`.
+- **A quiet log source is a working oracle (#420).** A `--log-source` that opened and stayed attached
+  but read zero lines no longer turns a completed mission inconclusive; the silence is recorded in
+  `serverLogs.quietSources`. Only a source that failed to attach or errored (including a `docker:`/
+  `cmd:` tail that exits non-zero on its own) degrades the run, and `serverLogs.oracleReason` names
+  each failed source and its error. `--log-quiet-ok` is still accepted but no longer changes anything.
+- **Environment faults are not defects (#422).** Backend log lines that match `--log-defect` are
+  classified by a per-project `.jevitate/log-classes.json` plus built-in rules: a placeholder or
+  invalid API key, an unconfigured provider or a degraded health check is an environment fault, listed
+  under `environmentFaults` and once per batch in `jevitate report`, and does not make the run
+  `defects-found`. `expected-validation` lines are recorded in `expectedValidation` and never fail the
+  run. An invalid classes file is refused before any browser opens.
+- **An expired persona session ends the run (#427).** Before a run that starts from a session
+  (`--storage-state`, `--persona`, queued missions), `explore` checks it is still signed in; an expired
+  one ends the run as `inconclusive` with `failure.kind: "auth-expired"` and the persona's name.
+  `--auth-check off|auto|urlExcludes:…|selector:…` configures the check.
+- **Open-ended find-outs explore before concluding (#424).** A find-out goal phrased as a survey
+  ("use the main features and report what works and every error") gets a budget-scaled minimum of
+  actions and distinct states before the model may conclude; an early report or give-up is deferred and
+  the run is steered to unvisited tabs, detail views and forms. An early grounded answer is kept.
+- **Safety refusal reasons name the rule (#428).** The reason now ends with the rule and the text it
+  matched, e.g. `[rule builtin:may-cost-money, matched "Generate"]`; tools that compare refusal reason
+  strings exactly need updating.
+- **`jevitate init` skips the TypeSafe key prompt when an OpenRouter key is set (#429)**, because
+  judgment can already run on it. Add one with `ai setup judgment --jev-provider typesafe`.
+
+### Added
+
+- **`jevitate sweep --targets <file.tsv|file.json>` (#425):** many explore missions (per feature or
+  route, optionally per persona) with `--concurrency N`, `--resume`, `--stop-on-env-failure K` and
+  `--out`. One `sweep.result.json` holds each target's outcome, depth, defect counts and tags, defects
+  deduped by fingerprint across targets (one finding with N sightings), and environment causes grouped.
+  Targets may set value options (goal, strategy, `maxActions`, `allowControl`, `minActions`,
+  `authCheck`, …); paths and log commands stay on the command line. MCP tool: `run_sweep`. See
+  docs/sweeps.md.
+- **`--tag key=value` (#426)** on `explore`, `journey run`, `check`, `load run`, `verify-fix`,
+  `regression run`, `demo`, `mission run`, `source run`, `campaign run` and `sweep` (and a `tags`
+  object on the MCP run tools): stored in `result.tags`, the `--json` envelope, `run.envelope.json` and
+  the run index, and filterable with `jevitate report --tag` / `jevitate diff --tag`. Results also
+  record `target.startUrl`, `target.strategy` and `target.persona`. Tags are never redacted — never put
+  a secret in one.
+- **`jevitate login` (#427):** signs a persona in with a username and password read from named
+  environment variables (never the command line), and saves the storage state with mode 0600. The login
+  session records no trace, video, HAR or screenshot, and no output contains the credentials. A persona
+  with `login` parameters in its personas file entry or `.jevitate/personas.json` is signed in again
+  once when its session has expired.
+- **Structured server-log defects (#421):** every server-log defect in `defects[]` carries `level`,
+  `source`, `message`, `firstSeenStep` and `count`, so tools aggregating runs never parse `reason`.
+  Every result carries `defectOutcome` with counts by kind.
+- **`--min-actions` / `--min-distinct-states` (#424)** on goal runs (`explore`, `mission queue`, MCP
+  `minEffort`, suite goals). Every goal result records `depth` (distinct states and pages, actions,
+  forms submitted, the minimum and whether it was met); a find-out that can't ground an answer returns
+  a grounded `partialReport` (per page: its own text, its controls, what was tried), printed as
+  `PARTIAL` lines.
+- **`--allow-control <regex>` (#428)** (explore, explore-author-journey, campaign run, sweep targets,
+  suite items, MCP `allowControl`, `safety.allowControl` in targets.json) exempts a named benign
+  control from the soft "may cost money" heuristic only — never from `--deny`, `--paid`, destructive,
+  sign-out, read-only or origin rules. Every use is recorded in the result's `safetyOverrides`. Each
+  refusal's transcript entry carries `safety: { ruleId, pattern, control }`, and `jevitate site policy
+  rules` lists every rule and whether it can be waived.
+- **Jev on an OpenRouter key (#429):** judgment runs on either `TYPESAFE_API_KEY` or
+  `OPENROUTER_API_KEY` (OpenRouter serves Jev as `~typesafe/jev-latest`); the TypeSafe key wins when
+  both are set. `--jev-provider typesafe|openrouter` (MCP `jevProvider`, env
+  `JEVITATE_JEV_PROVIDER`) pins one, and a pinned provider without its key is refused rather than
+  switched. `ai status` shows the route, key and model; usage and cost are recorded on both routes.
+- **Hang evidence names the indicator's container (#419):** a `ui-no-progress` hang records the stuck
+  indicator's nearest landmark (dialog, header, form, …) as `elementContainer`.
+
+### Fixed
+
+- **A toast countdown is not a busy indicator (#419).** Toast libraries render the auto-close
+  countdown as an indeterminate `role="progressbar"` and pause it while the window is unfocused —
+  always, in headless runs — so runs ended with false `ui-no-progress` hangs. An indeterminate
+  progressbar inside a toast/snackbar/notification container, or labelled a timer/countdown, is no
+  longer a busy indicator; a "Loading" progressbar in a status region still is.
+- **CI jobs can no longer hang for six hours (#417).** Every CI and release job has a
+  `timeout-minutes`, and the Playwright browser install is bounded and retried once.
+
 ## [0.7.0] – 2026-10-07
 
 0.7.0 makes a Journey prove its outcome. Authored Journeys keep the goal's success checks as their

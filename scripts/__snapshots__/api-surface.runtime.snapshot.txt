@@ -1,6 +1,6 @@
 === RUNTIME (dist/index.js) ===
 
-# @jevitate/ai-core (98 exports)
+# @jevitate/ai-core (109 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
   BACKOFF_SCHEDULE_MS: array
@@ -24,9 +24,13 @@
   GoalAnswerInput: object
   GoalAnswerOutput: object
   JEV_PRICE_TABLE: object
+  JEV_PROVIDERS: array
+  JEV_PROVIDER_ENV: const (string)
+  JEV_PROVIDER_KEYS: object
   JOURNEY_GOAL_INSTRUCTIONS: const (string)
   JOURNEY_STEP_INSTRUCTIONS: const (string)
   JevJudgmentGateway: class
+  JevProviderError: class
   JevResponseError: class
   JourneyGoalInput: object
   JourneyGoalOutput: object
@@ -39,6 +43,8 @@
   MissingCredentialError: class
   ModelConstraintsSchema: object
   NoEligibleModelError: class
+  OPENROUTER_JEV_BASE_URL: const (string)
+  OPENROUTER_JEV_MODEL: const (string)
   OpenRouterGenerationGateway: class
   REDACTION_MASK: const (string)
   REVEALED_SECRET_SELECTORS: array
@@ -71,10 +77,14 @@
   envAliasesFor: function
   envCredentialStore: function
   failureClass: function
+  featureKeys: function
+  featureReady: function
   filterCatalog: function
   formatUsageLine: function
   fromSdkAnswers: function
   isTransientError: function
+  jevProviderOverride: function
+  jevRouteModel: function
   jittered: function
   keyPrompt: function
   looksLikeOtherKey: function
@@ -86,6 +96,7 @@
   redactText: function
   redactUrl: function
   requireKeys: function
+  resolveJevRoute: function
   retryTransient: function
   revealedSecretsIn: function
   secretForms: function
@@ -105,16 +116,22 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (65 exports)
+# @jevitate/domain (83 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
+  DEFECT_OUTCOME_STATUSES: array
   DEGRADED_FINDINGS: array
+  DefectOutcomeSchema: object
   EnvironmentDegradedSchema: object
   FakeClock: class
   GOAL_ONLY_OUTCOMES: array
   GOAL_OUTCOMES: array
   GOAL_OUTCOME_FOLD: object
+  GOAL_REASONS: array
   HostHealthSummarySchema: object
+  LogClassCauseSchema: object
+  MAX_RUN_TAGS: const (number)
+  MAX_RUN_TAG_VALUE: const (number)
   MAX_SAFE_NAME_LENGTH: const (number)
   MISSION_EXIT_CODES: object
   MISSION_OUTCOMES: array
@@ -125,6 +142,7 @@
   RESULT_GOAL_OUTCOMES: array
   RESULT_MISSION_OUTCOMES: array
   RESULT_STRATEGIES: array
+  RUN_TAG_KEY: object
   ResourceGovernanceSummarySchema: object
   ResultBranchSchema: object
   ResultDefectSchema: object
@@ -132,16 +150,20 @@
   ResultHangSchema: object
   ResultTargetSchema: object
   ResultUsageSchema: object
+  RunTagError: class
+  RunTagsSchema: object
   SitePolicySchema: object
   TimeSkippingClock: class
   UnsafeNameError: class
   assertInsideRoot: function
+  assertRunTag: function
   assertSafeName: function
   attributeCrash: function
   clock: object
   combineOutcomes: function
   contentHash: function
   currentClock: function
+  defectOutcomeOf: function
   evaluateGate: function
   externalSchemeOf: function
   fileDraft: function
@@ -149,6 +171,8 @@
   foldGoalOutcome: function
   gatingDefects: function
   gaussian: function
+  goalMissionOutcome: function
+  goalReasonOf: function
   hasOwnFrame: function
   installClock: function
   isBrokenRun: function
@@ -158,21 +182,26 @@
   isWithinQuietHours: function
   looksLikeRendererOom: function
   makeRng: function
+  matchesRunTags: function
   nextOpenAfter: function
   occurrenceComment: function
   outcomeExitCode: function
+  parseRunTagSpec: function
+  parseRunTagSpecs: function
   realClock: object
   resetClock: function
   resolveThrottle: function
+  runTagsOf: function
   safeChildPath: function
   safeRunPolicy: function
   seedFrom: function
   simulateTiming: function
   targetsFor: function
   urlSchemeOf: function
+  validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (400 exports)
+# @jevitate/explore (415 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -214,6 +243,7 @@
   DEMO_OVERLAY_HIDE_STYLE: const (string)
   DESTRUCTIVE: object
   DemoOverlay: class
+  DepthLog: class
   EMPTY_SETTLE_GRACE_MS: const (number)
   EXPLORE: const (string)
   FORM_MISUSE_STRATEGIES: array
@@ -245,6 +275,7 @@
   MAX_DONE_REJECTIONS: const (number)
   MAX_GLOB_ALTERNATIVES: const (number)
   MAX_IDLE_STEPS: const (number)
+  MAX_MIN_EFFORT_REFUSALS: const (number)
   MAX_MOVING_SCROLLS: const (number)
   MAX_QUIET_WAITS: const (number)
   MAX_REPEAT_TYPE_SIGNALS: const (number)
@@ -261,6 +292,8 @@
   NO_DESTRUCTIVE_NOTE: const (string)
   NoProgressDetector: class
   ONLY_GLOBAL_NAVIGATION: const (string)
+  OPEN_ENDED_MIN_ACTIONS: const (number)
+  OPEN_ENDED_MIN_DISTINCT_STATES: const (number)
   OPS: array
   OPS_NEEDING_TARGET: object
   OVERSIZE_CHARS: const (number)
@@ -291,6 +324,7 @@
   ReplayDeltas: class
   RequestCapture: class
   RunRecorder: class
+  SAFETY_RULES: array
   SELECT_OPTION_INSTRUCTIONS: const (string)
   SESSION_END: object
   SETTLE_QUIET_MS: const (number)
@@ -342,8 +376,10 @@
   boundSecretField: function
   boundTypeFixture: function
   boundaryValueCandidates: function
+  breadthHint: function
   buildCrashReport: function
   buildJudgmentState: function
+  buildPartialReport: function
   busyIndicatorOf: function
   candidateId: function
   capFormText: function
@@ -356,6 +392,7 @@
   clickTimeoutMs: function
   clippingSummary: function
   compareDeltas: function
+  compileAllowControl: function
   controlFields: function
   controlKey: function
   controlRisk: function
@@ -413,6 +450,7 @@
   goalAsksForReply: function
   goalAsksForReport: function
   goalAsksToWrite: function
+  goalIsOpenEnded: function
   goalListsSeveral: function
   goalResultDiagnostics: function
   groundAnswer: function
@@ -462,6 +500,7 @@
   measurePageTiming: function
   messageClass: function
   messageRisk: function
+  minEffortNote: function
   monitorFor: function
   newIdentityToken: function
   noActionShortfall: function
@@ -512,6 +551,7 @@
   resolveBounds: function
   resolveCoverageSufficiencyThresholds: function
   resolveCoverageThresholds: function
+  resolveMinEffort: function
   resolveMissionFixture: function
   resolveRouteScope: function
   resolveSecretFieldValue: function
@@ -541,6 +581,7 @@
   seedRedirectReason: function
   sendCandidates: function
   sendable: function
+  shortfall: function
   shouldCheckOverflow: function
   signalFingerprint: function
   signalKey: function
@@ -565,6 +606,7 @@
   unreadablePageTiming: function
   urlMatcher: function
   vacuousCheckMessage: function
+  validateAllowControlPatterns: function
   validateDenyPatterns: function
   valueFor: function
   valueStatedInGoal: function
@@ -572,15 +614,18 @@
   verifyFix: function
   verifyReplayVerdict: function
   visibleBusyIndicator: function
+  visibleBusyIndicatorContainer: function
+  waivableRule: function
   withheldReason: function
 
-# @jevitate/findings (20 exports)
+# @jevitate/findings (21 exports)
   DIFF_STATUSES: array
   RUN_MODES: array
   SARIF_SCHEMA: const (string)
   classify: function
   consolidate: function
   diffRuns: function
+  environmentCausesOf: function
   findingKey: function
   identityBasis: function
   renderJUnit: function

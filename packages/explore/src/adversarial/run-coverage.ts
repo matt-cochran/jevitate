@@ -262,6 +262,7 @@ export function refusalNote(refused: ReadonlyArray<{ readonly name: string; read
     total === undefined ? `${refused.length} control(s)` : refused.length === total ? (total === 1 ? "the only one" : `all ${total}`) : `${refused.length}`;
   const hints: string[] = [];
   if (refused.some((r) => r.risk !== "denied")) hints.push("pass --allow-destructive to let the run click paid/destructive controls");
+  if (refused.some((r) => r.risk === "paid")) hints.push("--allow-control <regex> to exempt one benign control from the built-in money heuristic");
   if (refused.some((r) => r.risk === "denied")) hints.push("remove the --deny pattern that matches them");
   hints.push("or reclassify a misjudged control with --paid/--deny");
   return ` — ${all} refused by the safety policy (${groups.join("; ")}); to exercise them, ${hints.join(", ")}`;
@@ -273,11 +274,23 @@ export function refusalNote(refused: ReadonlyArray<{ readonly name: string; read
  * What a strategy without its own refusal tracking (feature) names in its `insufficient-coverage` reason.
  */
 export function safetyRefusalsFromTranscript(
-  entries: ReadonlyArray<{ readonly strategy?: string | null; readonly actOk?: boolean; readonly reason?: string | null }>,
+  entries: ReadonlyArray<{
+    readonly strategy?: string | null;
+    readonly actOk?: boolean;
+    readonly reason?: string | null;
+    readonly safety?: { readonly control: string; readonly risk: string } | null;
+  }>,
 ): Array<{ readonly name: string; readonly risk: string }> {
   const out = new Map<string, string>();
   for (const e of entries) {
-    if (e.strategy !== "safety-policy" || e.actOk !== false || typeof e.reason !== "string") continue;
+    if (e.strategy !== "safety-policy" || e.actOk !== false) continue;
+    // #428: the structured refusal names the control and its category directly.
+    if (e.safety !== undefined && e.safety !== null) {
+      const name = e.safety.control === "" ? "a control with no accessible name" : e.safety.control;
+      if (!out.has(name)) out.set(name, e.safety.risk);
+      continue;
+    }
+    if (typeof e.reason !== "string") continue;
     const m =
       /^refused by the safety policy: "(.*)" ((?:ends the session|is destructive|may cost money|matches --deny).*)$/.exec(e.reason) ??
       /^refused by the safety policy: (a control with no accessible name)\b.*$/.exec(e.reason);

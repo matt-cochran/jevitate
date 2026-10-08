@@ -49,6 +49,8 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "source trust": "trusting a third-party Journey (bound to its content hash) is a person's decision, like approve_action: MCP can add, pull and run a source, never vouch for it",
   "logs triage":
     "#313: sends a run's recorded log text (redacted) to the judgment model with --real — an operator opt-in for their own logs, like --log-source itself (operator-declared, never an MCP argument)",
+  login:
+    "#427: signs in by typing the values of operator environment variables the command line names (--user-env/--password-env) into a page: a request never chooses which of the operator's variables is read (the --secret-field rule). Over MCP a persona's session is refreshed only from the login parameters an operator's personas file declares (run_exploration personas + authCheck)",
   doctor:
     "#205: host maintenance for the operator (it signals processes on this machine and clears machine-wide browser slots); the same orphan sweep already runs automatically before every browser-driving MCP tool, and each result reports governance in hostHealth.resources",
 };
@@ -204,10 +206,12 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       selfHeal: "--self-heal",
       real: "--real",
       fakeAi: "--fake-ai",
+      jevProvider: "--jev-provider",
       extension: "--extension",
       maxBrowsers: "--max-browsers",
       maxBrowserMemory: "--max-browser-memory",
       actionDeltas: "--action-deltas",
+      tags: "--tag",
     },
     omitted: {
       "--ignore-host-load": OMIT.hostLoad,
@@ -244,6 +248,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       maxBrowsers: "--max-browsers",
       maxBrowserMemory: "--max-browser-memory",
       actionDeltas: "--action-deltas",
+      tags: "--tag",
     },
     omitted: {
       "--ignore-host-load": OMIT.hostLoad,
@@ -280,6 +285,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       screenshots: "--screenshots",
       evidenceVideo: "--evidence-video",
       persona: "--persona",
+      minEffort: "--min-actions --min-distinct-states",
     },
     omitted: { "--dir": OMIT.storeDir, "--targets-dir": OMIT.storeDir, "--json": OMIT.json },
   },

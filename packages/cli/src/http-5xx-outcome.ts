@@ -1,23 +1,11 @@
-import type { GoalBasedOutcome, Http5xxDefect } from "@jevitate/explore";
+import type { Http5xxDefect } from "@jevitate/explore";
 
 /**
- * How an HTTP 5xx hard-signal defect (#208, `Http5xxOracle`) folds into a run's outcome — the same
- * rule a `server-log` defect follows (#142):
- *
- *  - coverage/exploratory and feature runs count it with their own defects (a found defect wins
- *    over a thin run's `inconclusive`, exactly like a declared-invariant defect);
- *  - a goal run's own `GoalBasedOutcome`: `defects-found` over `succeeded` / `exhausted` /
- *    `blocked`. A goal whose checks held but whose run hit a server error is NOT a success: the
- *    checks' verdict stays on the result (`assertionPassed`, `checks`), and `reason` says both.
- *    A broken run (`inconclusive` / `crashed`) and a hang keep their outcome; the defect is still
- *    listed in `defects`, and `reason` names it.
+ * How an HTTP 5xx hard-signal defect (#208, `Http5xxOracle`) is worded on a run's `reason`. It
+ * counts like every other defect: coverage/exploratory and feature runs with their own defects, and
+ * a goal run through `defectOutcome` — `goalMissionOutcome` (#423) makes a `succeeded` goal
+ * `defects-found` while its `goalOutcome` stays the goal's own (`assertionPassed`/`checks` too).
  */
-const BROKEN_GOAL_OUTCOMES: ReadonlySet<GoalBasedOutcome> = new Set(["inconclusive", "crashed", "hang", "intermittent"]);
-
-export function applyHttp5xxGoalOutcome(outcome: GoalBasedOutcome, defects: readonly Http5xxDefect[]): GoalBasedOutcome {
-  return defects.length > 0 && !BROKEN_GOAL_OUTCOMES.has(outcome) ? "defects-found" : outcome;
-}
-
 /** `PUT /api/profile → 500` for each defect (first three), for a one-line `reason`. */
 export function describeHttp5xx(defects: readonly Http5xxDefect[]): string {
   const shown = defects.slice(0, 3).map((d) => {
@@ -34,7 +22,7 @@ export function describeHttp5xx(defects: readonly Http5xxDefect[]): string {
   return `${shown.join(", ")}${more}`;
 }
 
-/** The `reason` of a goal run that `applyHttp5xxGoalOutcome` turned into `defects-found`. */
+/** The `reason` of a goal run whose only finding is an HTTP 5xx (#208). */
 export function http5xxGoalReason(defects: readonly Http5xxDefect[], assertionPassed: boolean): string {
   const n = defects.length;
   const found = `${n} HTTP 5xx defect${n === 1 ? "" : "s"} found: ${describeHttp5xx(defects)}`;

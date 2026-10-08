@@ -1,3 +1,5 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import type { Command } from "commander";
 import { MissingCredentialError, formatUsageLine } from "@jevitate/ai-core";
 import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
@@ -19,7 +21,7 @@ import { TargetConfigError, loadTargetsFile } from "./target-config.js";
 
 export interface CheckCliDeps {
   /** Builds the explore gateways for `--real` / `--fake-ai` (program.ts's `buildExploreGateways`). */
-  readonly buildGateways: (sel: { real: boolean; fakeAi: boolean }) => Promise<CheckGateways>;
+  readonly buildGateways: (sel: { real: boolean; fakeAi: boolean; jevProvider?: string | undefined }) => Promise<CheckGateways>;
   readonly journeysDir: string;
   /** The site-policy database (`jevitate site policy set`) Journey items are gated by. */
   readonly sitePolicyDbPath?: string;
@@ -59,8 +61,10 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
     .option("--json-out <path>", "JSON envelope path (default <out>/check.json)")
     .option("--real", "use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit the JSON envelope (default: a one-line summary per item, then the envelope path)")
-    .action(async function (this: Command) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "check", async function (this: Command) {
       const o = this.opts<{
         suite: string;
         targetBuild?: string;
@@ -73,6 +77,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         jsonOut?: string;
         real?: boolean;
         fakeAi?: boolean;
+        jevProvider?: string;
         json?: boolean;
       }>();
       try {
@@ -80,6 +85,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         const real = o.real === true || (o.fakeAi !== true && suite.ai === "real");
         const fakeAi = o.fakeAi === true || (o.real !== true && suite.ai === "fake");
         const aiMode = real ? "real" : fakeAi ? "fake" : undefined;
+        const jevProvider = o.jevProvider;
         const browser = deps.browserLaunch?.(this.opts());
         const result = await runCheck({
           suite,
@@ -97,7 +103,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           ...(o.junit === undefined ? {} : { junitPath: o.junit }),
           ...(o.sarif === undefined ? {} : { sarifPath: o.sarif }),
           ...(o.jsonOut === undefined ? {} : { jsonPath: o.jsonOut }),
-          ...(aiMode === undefined ? {} : { aiMode, gateways: () => deps.buildGateways({ real, fakeAi }) }),
+          ...(aiMode === undefined ? {} : { aiMode, gateways: () => deps.buildGateways({ real, fakeAi, jevProvider }) }),
           ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
           ...(browser === undefined ? {} : { browser }),
           ...(deps.runners === undefined ? {} : { runners: deps.runners }),
@@ -149,5 +155,5 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           emit(program, fail("E_CHECK", err instanceof Error ? err.message : String(err)), o.json === true);
         }
       }
-    });
+    }));
 }

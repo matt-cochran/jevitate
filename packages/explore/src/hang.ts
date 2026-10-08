@@ -44,6 +44,12 @@ export interface HangSignal {
    * (`ui-no-progress`). Undefined for hang kinds with no single element to name (#87).
    */
   readonly element?: string;
+  /**
+   * The nearest landmark/container around `element` (a dialog, toast, header, form, …), described
+   * by role and name — so a reader can place the indicator at a glance (#419). Evidence only: it is
+   * never part of the element's identity or the detail text.
+   */
+  readonly elementContainer?: string;
   /** The page's used JS heap (bytes), when it could be read. */
   readonly heapBytes?: number;
   /** The host's resource pressure sampled when the hang was detected. */
@@ -135,6 +141,9 @@ export async function probeResponsive(page: Page, boundMs: number): Promise<bool
  * Self-contained on purpose: this function is serialized by its OWN source (`.toString()`) for
  * both `page.evaluate` and a `waitForFunction` predicate, so it can call no outside helper — one
  * defined elsewhere in this module would not exist in that serialized copy.
+ *
+ * A countdown rendered as an indeterminate progressbar inside a notification/toast container, or
+ * one whose own label says it is a timer, is not a busy indicator (#419).
  */
 export function visibleBusyIndicator(): string | null {
   const shown = (el: Element): boolean => {
@@ -157,10 +166,57 @@ export function visibleBusyIndicator(): string | null {
     '[class*="spinner" i]',
     '[class*="animate-spin" i]',
   ];
+  // #419: a toast/snackbar auto-close countdown renders as an indeterminate progressbar but is a
+  // timer, not work in progress — exclude it, only for this selector (aria-busy/spinners untouched).
+  // A bare role=status / aria-live region is NOT enough: "Loading…" progressbars live there too.
+  const notificationContainer =
+    '[role="alert"], [data-sonner-toast], [class*="toast" i], [class*="snackbar" i], [class*="notification" i]';
+  const timerLabel = /timer|countdown|auto.?close/i;
+  const isNotificationTimer = (el: Element): boolean => {
+    if (el.closest(notificationContainer) !== null) return true;
+    const name = `${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""}`;
+    return timerLabel.test(name);
+  };
   for (const sel of selectors) {
     for (const el of Array.from(document.querySelectorAll(sel))) {
       if (!shown(el)) continue;
+      if (sel === '[role="progressbar"]:not([aria-valuenow])' && isNotificationTimer(el)) continue;
       return describe(el);
+    }
+  }
+  return null;
+}
+
+/**
+ * BROWSER CODE — the nearest landmark/container around the element `visibleBusyIndicator` would
+ * report (same selection, same #419 exclusion), described by role and name, or null when there is
+ * no indicator or no container. Self-contained for the same reason as `visibleBusyIndicator`.
+ */
+export function visibleBusyIndicatorContainer(): string | null {
+  const shown = (el: Element): boolean => {
+    const r = (el as HTMLElement).getBoundingClientRect();
+    const s = window.getComputedStyle(el as HTMLElement);
+    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
+  };
+  const progressbar = '[role="progressbar"]:not([aria-valuenow])';
+  const selectors = ['[aria-busy="true"]', progressbar, '[class*="spinner" i]', '[class*="animate-spin" i]'];
+  const notificationContainer = '[role="alert"], [data-sonner-toast], [class*="toast" i], [class*="snackbar" i], [class*="notification" i]';
+  const timerLabel = /timer|countdown|auto.?close/i;
+  const isNotificationTimer = (el: Element): boolean =>
+    el.closest(notificationContainer) !== null || timerLabel.test(`${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""}`);
+  const landmark =
+    '[role="dialog"], [role="alertdialog"], [role="alert"], [role="status"], [role="region"], [role="banner"], [role="navigation"], [role="main"], [role="complementary"], [role="contentinfo"], [role="form"], [aria-live]:not([aria-live="off"]), dialog, header, nav, main, aside, footer, form, section[aria-label], section[aria-labelledby]';
+  for (const sel of selectors) {
+    for (const el of Array.from(document.querySelectorAll(sel))) {
+      if (!shown(el)) continue;
+      if (sel === progressbar && isNotificationTimer(el)) continue;
+      const box = el.parentElement?.closest(landmark) ?? null;
+      if (box === null) return null;
+      const role = box.getAttribute("role") ?? box.tagName.toLowerCase();
+      const labelledBy = box.getAttribute("aria-labelledby");
+      const label = box.getAttribute("aria-label") ?? (labelledBy === null ? null : document.getElementById(labelledBy)?.textContent) ?? "";
+      const name = label.trim().replace(/\s+/g, " ").slice(0, 60);
+      return name ? `role=${role} "${name}"` : `role=${role}`;
     }
   }
   return null;

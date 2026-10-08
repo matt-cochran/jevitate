@@ -17,12 +17,6 @@ export function isTimeoutFailure(reason: string | undefined): boolean {
   return /timeout/i.test(reason ?? "");
 }
 
-/** A safety refusal's category from its reason (`… (destructive); pass …`, `… matches --deny …`). */
-export function refusalRisk(reason: string): string {
-  if (/matches --deny/.test(reason)) return "denied";
-  return /\((session-end|destructive|paid)\)/.exec(reason)?.[1] ?? "refused";
-}
-
 export function isUnactionableFailure(reason: string | undefined): boolean {
   if (reason === undefined) return false;
   return /timeout|not actionable|no longer present/i.test(reason);

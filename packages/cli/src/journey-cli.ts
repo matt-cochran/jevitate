@@ -1,3 +1,5 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
@@ -144,9 +146,11 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--self-heal <mode>", "self-heal policy mode: fail-closed | hybrid | full", "fail-closed")
     .option("--real", "use live Jev + OpenRouter gateways for self-heal (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas")
     .option("--json", "emit a JSON envelope")
-    .action(async function (this: Command, id: string) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "journey run", async function (this: Command, id: string) {
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where the Journey runs (unknown env / bad file → 64, nothing opened).
       let environment: ResolvedJourneyEnvironment | undefined;
@@ -164,7 +168,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
         ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
       };
-      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, json, screenshots: _screenshots, actionDeltas, ...emulationFlags } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, jevProvider, json, screenshots: _screenshots, actionDeltas, ...emulationFlags } = this.opts<{
         actionDeltas?: boolean;
         dir?: string;
         param: Record<string, string>;
@@ -172,6 +176,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         selfHeal: string;
         real?: boolean;
         fakeAi?: boolean;
+        jevProvider?: string;
         json?: boolean;
       } & EmulationFlags & ScreenshotsFlags>();
       // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
@@ -223,7 +228,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         let judge: JudgmentPort;
         let gen: GenerationPort;
         try {
-          ({ judge, gen, usage: healUsage } = await buildExploreGateways(deps, { real: real ?? false, fakeAi: fakeAi ?? false }));
+          ({ judge, gen, usage: healUsage } = await buildExploreGateways(deps, { real: real ?? false, fakeAi: fakeAi ?? false, jevProvider }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
             emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
@@ -309,7 +314,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail("E_JOURNEY_RUN", String(err)));
         }
       }
-    });
+    }));
 
   // #124 — promote a local Journey so it becomes discoverable/runnable (journey
   // find / MCP find_capabilities / run_journey), mirroring `mission target

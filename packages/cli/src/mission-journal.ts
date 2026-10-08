@@ -1,4 +1,6 @@
 import { recordRun } from "./run-index.js";
+import { runTagsOf } from "@jevitate/domain";
+import { currentRunMetadata, stampRunMetadata, type RunMetadata } from "./run-metadata.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Recording } from "@jevitate/recording";
@@ -78,12 +80,16 @@ export function writeMissionResult(
   exitCode: number,
   result: unknown,
   usage?: UsageLedger,
+  /** #426: the run's metadata (default: the enclosing scope's — a kill handler passes the one captured at arm time). */
+  meta: RunMetadata | undefined = currentRunMetadata(),
 ): string {
   const path = resultPathFor(recordingPath);
-  writeFileSync(path, `${JSON.stringify({ missionOutcome, exitCode, result }, null, 2)}\n`, "utf8");
+  // #426: the run's tags and structured target (`startUrl`, `persona`, `strategy`) travel with it.
+  const stamped = stampRunMetadata(result, meta);
+  writeFileSync(path, `${JSON.stringify({ missionOutcome, exitCode, result: stamped }, null, 2)}\n`, "utf8");
   if (usage !== undefined) writeUsageSidecar(path, usage);
   // #213: recorded for this project, so a bare `report` finds it — wherever it was written (`--out`).
-  recordRun(path);
+  recordRun(path, { tags: runTagsOf(stamped) });
   return path;
 }
 

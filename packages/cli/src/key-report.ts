@@ -1,14 +1,19 @@
 import { homedir } from "node:os";
 import {
-  FEATURE_KEYS,
   KEY_PROVIDERS,
+  MissingCredentialError,
   credentialProvenance,
   describeVerdict,
+  envCredentialStore,
+  featureKeys,
+  jevRouteModel,
   looksLikeOtherKey,
+  resolveJevRoute,
   verifyKey,
   type CredentialKey,
   type CredentialStore,
   type Feature,
+  type JevProvider,
   type KeyVerdict,
   type VerifyFetch,
 } from "@jevitate/ai-core";
@@ -50,12 +55,42 @@ export function displayCredentialsPath(): string {
   return home !== "" && p.startsWith(home) ? `~${p.slice(home.length)}` : p;
 }
 
+/**
+ * #429: which Jev route judgment will use (`--json`: `judgment.route`, additive) — the provider,
+ * the key it authenticates with, the model it asks for, and why (`override` = `--jev-provider` /
+ * `JEVITATE_JEV_PROVIDER`; `precedence` = the TypeSafe key wins when both are set).
+ */
+export interface JevRouteReport {
+  readonly provider: JevProvider;
+  readonly key: CredentialKey;
+  readonly model: string;
+  readonly reason: "override" | "precedence";
+}
+
+/** The judgment route, or null when no key resolves one (names only — never a value). */
+export function jevRouteReport(store: CredentialStore, env: Record<string, string | undefined>, jevProvider?: JevProvider): JevRouteReport | null {
+  try {
+    const r = resolveJevRoute(store, jevProvider);
+    return { provider: r.provider, key: r.key, model: jevRouteModel(r.provider, env), reason: r.reason };
+  } catch (e) {
+    if (e instanceof MissingCredentialError) return null;
+    throw e;
+  }
+}
+
+/** `via OpenRouter (model ~typesafe/jev-latest; no TypeSafe key set)` — the route and why (names only). */
+export function describeJevRoute(route: JevRouteReport): string {
+  const why = route.reason === "override" ? "chosen by --jev-provider / JEVITATE_JEV_PROVIDER" : route.provider === "typesafe" ? "the TypeSafe key is preferred" : "no TypeSafe key set";
+  return `via ${route.provider === "openrouter" ? "OpenRouter" : "TypeSafe"} (model ${route.model}; ${why})`;
+}
+
 export function keySources(
   feature: Feature,
   env: Record<string, string | undefined>,
   localConfig: Partial<Record<CredentialKey, string>>,
+  jevProvider?: JevProvider,
 ): KeySourceReport[] {
-  return FEATURE_KEYS[feature].map((key) => {
+  return featureKeys(feature, envCredentialStore(env, localConfig), jevProvider).map((key) => {
     const p = credentialProvenance(key, env, localConfig);
     const base = { key, provider: p.provider };
     if (p.source.kind === "env") return { ...base, source: "env" as const, envVar: p.source.envVar, ...(p.shadowsStored ? { shadowsStored: true as const } : {}) };
@@ -78,9 +113,10 @@ export async function verifyFeatureKeys(
   store: CredentialStore,
   fetchFn: VerifyFetch,
   known: ReadonlyMap<CredentialKey, KeyVerdict> = new Map(),
+  jevProvider?: JevProvider,
 ): Promise<KeyVerificationReport[]> {
   const out: KeyVerificationReport[] = [];
-  for (const key of FEATURE_KEYS[feature]) {
+  for (const key of featureKeys(feature, store, jevProvider)) {
     const value = store.read(key);
     const verdict: KeyVerdict = value === undefined ? { status: "missing" } : (known.get(key) ?? (await verifyKey(key, value, fetchFn)));
     const other = value === undefined || verdict.status === "valid" ? null : looksLikeOtherKey(key, value);
@@ -124,8 +160,16 @@ export function featureKeysBody(
   feature: Feature,
   sources: readonly KeySourceReport[],
   verification: readonly KeyVerificationReport[] | undefined,
+  route?: JevRouteReport | null,
 ): string {
   const missing = sources.filter((s) => s.source === "missing");
+  if (feature === "judgment" && missing.length > 1) {
+    // #429: judgment is satisfied by EITHER key.
+    return (
+      `missing ${missing.map((s) => `${s.key} (${s.provider})`).join(" or ")} — set either in the environment, or run ` +
+      `\`jevitate ai setup judgment\` (TypeSafe key) / \`jevitate ai setup judgment --jev-provider openrouter\` (OpenRouter key)`
+    );
+  }
   if (missing.length > 0) {
     return `missing ${missing.map((s) => `${s.key} (${s.provider})`).join(", ")} — set it in the environment or run \`jevitate ai setup ${feature}\``;
   }
@@ -136,7 +180,8 @@ export function featureKeysBody(
   const bad = verification?.filter((v) => v.status === "invalid") ?? [];
   const hint = bad.length > 0 ? ` — replace it: \`jevitate ai setup ${feature} --replace\`` : "";
   const state = bad.length > 0 ? "NOT ready" : verification?.some((v) => v.status === "unreachable") ? "configured (unverified)" : "ready";
-  return `${state} — ${parts.join("; ")}${hint}`;
+  const via = route === undefined || route === null ? "" : ` ${describeJevRoute(route)}`;
+  return `${state}${via} — ${parts.join("; ")}${hint}`;
 }
 
 /** A feature's whole key line (`ai status`): `generation: ready — OPENROUTER_API_KEY (OpenRouter), from env …: valid`. */
@@ -144,8 +189,9 @@ export function describeFeatureKeys(
   feature: Feature,
   sources: readonly KeySourceReport[],
   verification: readonly KeyVerificationReport[] | undefined,
+  route?: JevRouteReport | null,
 ): string {
-  return `${feature}: ${featureKeysBody(feature, sources, verification)}`;
+  return `${feature}: ${featureKeysBody(feature, sources, verification, route)}`;
 }
 
 /** Any verification that is not a pass (invalid or unreachable). */

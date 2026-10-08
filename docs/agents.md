@@ -79,6 +79,7 @@ tool from the CLI), except the few listed below with the reason:
 | `ledger`, `regressions` | the repro ledger (`add`/`list`/`verify`); committed regressions (`capture`/`run`) | `ledger …`, `regression …` |
 | `mission_targets` | the targets missions may run against (`add`/`list`/`update`/`promote`) | `mission target …` |
 | `journey_anchors`, `run_campaign` | a Journey's named anchors (#293); a campaign of journey-anchored missions with one deduped report | `journey anchors`, `campaign run` |
+| `run_sweep` | many explore missions from a targets file (targets × personas) with concurrency and resume; one result with defects deduped across targets (#425) | `sweep` |
 | `run_load_test`, `ux_review`, `validate_invariants` | a load test of a Journey; an offline UX review of a Recording; validate invariant files | `load run`, `ux`, `invariants validate` |
 | `recordings`, `sources`, `site_policy`, `profiles`, `prune_logs`, `get_ai_status` | Recording tools (`diff`/`fit`/`postdoc`/`promote`); Journey sources (`add`/`list`/`pull`/`update`/`remove`/`run`); site policies (`get`/`set`/`simulate`); profiles (`create`/`status`); log retention; which keys are configured, their source and a live validity check (never a value) | `recording …`, `source …`, `site policy …`/`site simulate`, `profile …`, `logs prune`, `ai status` |
 | `queue_retrieval`, `queue_action`, `get_command`, `cancel_command`, `approve_action` | the command queue (`approve_action` and cancelling are human-only and refuse over MCP) | `inbox queue-retrieval`, `inbox queue-action`, `inbox command`; `inbox cancel` / `inbox approve` refuse the same way (approve or cancel in `jevitate ui`) |
@@ -142,7 +143,10 @@ running, or that could not run, exits 2, because it proves nothing yet.
 the CLI, its result lands in `.jevitate/logs/<date>/`, and its queue record moves
 `queued → running → done | failed`. `get_mission_result {id: missionId}` reports `queued`/`running`
 (`pending: true`), the finished result, or `failed` (an error: it could not run, e.g. its target was
-unpromoted meanwhile); `verify_fix` takes the missionId too once it is done.
+unpromoted meanwhile); `verify_fix` takes the missionId too once it is done. A finished result's
+status carries the two orthogonal verdicts beside `status`/`exitCode` (#423): a goal run's
+`goalOutcome` and `goalReason` (why it was not achieved: `not-found`, `ungrounded`, `budget`, …), and
+every run's `defectOutcome` (`{status: "none" | "defects", byKind}`) — read these, never `reason`.
 
 ```bash
 jevitate mission target add spa --name "App" --authorized-origin http://127.0.0.1:5193 \

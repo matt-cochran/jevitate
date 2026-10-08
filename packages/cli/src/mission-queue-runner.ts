@@ -1,10 +1,12 @@
 import { triagedServerLog } from "./explore-shared.js";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { hostname } from "node:os";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import type { GenerationPort, JudgmentPort, UsageTracker } from "@jevitate/ai-core";
 import { validateInvariantSpec } from "@jevitate/recording";
-import { resolveEmulation, type BrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
+import { authExpiredResult, ensurePersonaSession, type AuthCheck } from "./persona-login.js";
+import { artifactStamp, writeMissionResult } from "./mission-journal.js";
 import {
   targetAllowlist,
   type DrainableMissionQueueStore,
@@ -25,6 +27,7 @@ import { runWithMissionKillListener } from "./kill-signal.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { loadLogClassRules } from "./log-classes.js";
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
@@ -198,6 +201,9 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
   return { ran, recovered, skipped };
 }
 
+/** #427: how long a queued mission's pre-flight auth check may take to load its start page. */
+const QUEUED_AUTH_CHECK_TIMEOUT_MS = 30_000;
+
 /** Default: 12h — well past any bounded mission (stall timeouts, action caps), short of a lost week. */
 const ORPHAN_AFTER_MS = 12 * 60 * 60 * 1000;
 
@@ -269,6 +275,11 @@ export interface RealExecutorOptions {
   readonly targets?: Readonly<Record<string, TargetConfig>>;
   /** Where a target's `secretFields` read their values (default `process.env`). */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * #427: the pre-flight auth check before a mission that starts from a session (default `auto`).
+   * Never a request's choice: a queued mission cannot turn it off.
+   */
+  readonly authCheck?: AuthCheck;
 }
 
 /** The operator-declared auth for one queued mission's target (#175). */
@@ -381,6 +392,8 @@ export function serverLogFromTargetConfig(targets: Readonly<Record<string, Targe
     correlationHeaders: parseCorrelationHeaders(config.logCorrelationHeaders ?? []),
     idPatterns: parseLogIdPatterns(config.logIdPatterns ?? []),
     ...(config.logTriage === true ? { triage: {} } : {}),
+    // #422: the project's .jevitate/log-classes.json (validated: throws LogClassesError) + defaults.
+    logClasses: loadLogClassRules(),
   };
 }
 
@@ -418,6 +431,28 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
       ...(auth.storageState === undefined ? {} : { storageState: auth.storageState }),
       ...(auth.saveStorageState === undefined ? {} : { saveStorageState: auth.saveStorageState }),
     };
+    // #427: the session is proven alive before the mission starts — an expired one ends it now
+    // (`auth-expired`, the persona named), with a result `get_mission_result` reads; the login page is
+    // never explored. targets.json personas carry no login parameters, so nothing is re-minted here.
+    if (auth.storageState !== undefined) {
+      const session = await ensurePersonaSession({
+        ...(mission.persona === undefined ? {} : { persona: mission.persona }),
+        storageState: auth.storageState,
+        url: target.baseUrl,
+        allowlist,
+        check: opts.authCheck ?? { mode: "auto" },
+        port: (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))(),
+        ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+        env: opts.env ?? process.env,
+        timeoutMs: QUEUED_AUTH_CHECK_TIMEOUT_MS,
+      });
+      if (!session.ok) {
+        const result = authExpiredResult(mission.strategy, target.baseUrl, session, mission.persona);
+        mkdirSync(opts.outDir, { recursive: true });
+        const resultPath = writeMissionResult(join(opts.outDir, `explore-${artifactStamp(clock.nowIso())}.json`), "inconclusive", result.exitCode, result);
+        return { resultPath, missionOutcome: "inconclusive", exitCode: result.exitCode };
+      }
+    }
     // #149: per-mission viewport/device emulation. `MissionRequestSchema` already refused an
     // unknown --device / viewport+device together at enqueue time; `resolveEmulation` here is a
     // second, defense-in-depth check — refused BEFORE any browser opens — since a device could in
@@ -530,6 +565,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         url: target.baseUrl,
         goal,
         ...(mission.successAssertion === undefined ? {} : { successAssertion: mission.successAssertion }),
+        ...(mission.minEffort === undefined ? {} : { minEffort: mission.minEffort }),
         allowlist,
         judge,
         gen,

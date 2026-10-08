@@ -27,6 +27,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`journey`](#journey): manage and run promoted Journeys (regression-test replays)
 - [`ledger`](#ledger): keep each finding's repro material by fingerprint, so verify-fix works long after the run's output is gone
 - [`load`](#load): run a promoted Journey as a load test
+- [`login`](#login): #427: sign in as a persona with credentials from environment variables and save its Playwright storage state (mode 0600) — the session `explore --storage-state/--persona` starts from. Credentials are never accepted as values, never printed or recorded
 - [`logs`](#logs): run output under .jevitate/logs (dated; pruned by retention)
 - [`mcp`](#mcp): start an MCP stdio server exposing only the allowlisted Jevitate tools
 - [`mission`](#mission): manage exploration mission targets and drain the mission queue
@@ -37,6 +38,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`report`](#report): one deduped defect list for a target across every mode and run (markdown + JSON envelope)
 - [`site`](#site): per-site policies for Journey runs: human-like pacing, throttles, run budgets and quiet hours
 - [`source`](#source): manage distributed Journey sources (git-backed collections of Journeys)
+- [`sweep`](#sweep): run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. Every run is tagged target=<id> plus the sweep's and the target's tags
 - [`ui`](#ui): start the local HITL approval dashboard (loopback-only HTTP server)
 - [`ux`](#ux): offline UX review of a saved Recording — ranked, cited usability findings
 - [`verify-fix`](#verify-fix): replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay
@@ -88,6 +90,7 @@ enter (masked) and store the keys a feature needs in ~/.jevitate/credentials.jso
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--jev-provider <provider>` | judgment only: which Jev key to set up — typesafe (TYPESAFE_API_KEY, the default) or openrouter (OPENROUTER_API_KEY: Jev through OpenRouter) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--no-verify` | store the entered key without the live auth check (offline / CI) |  |  |  |  |
 | `--replace` | prompt for a new value even when a key is already stored (rotate / replace it) |  |  |  |  |
@@ -104,6 +107,7 @@ which keys each AI feature uses, where each comes from (env or ~/.jevitate/crede
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--jev-provider <provider>` | report judgment as it would run with this Jev provider: typesafe or openrouter (default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--no-verify` | skip the live auth check (offline / CI): report presence and source only |  |  |  |  |
 
@@ -193,6 +197,7 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--allow-control <regex>` | exempt a control whose name matches from the soft 'may cost money' heuristic only (repeatable, #428) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's) |  |  |  |  |
 | `--allow-log-cmd` | a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running the spec's before/after operator hooks around every run (never model-chosen) | `false` |  |  |  |
@@ -202,13 +207,14 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each of the spec's before/after hooks (default 60000; the process group is killed) |  |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--journeys-dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
 | `--log-correlation-header <name>` | another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-defect <level|/regex/>` | backend log lines matching this become a server-log defect (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-id-pattern </regex/>` | how a correlation id is written in log lines (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-ignore <regex|substring>` | known-noise backend log lines to exclude (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
-| `--log-quiet-ok <spec>` | a --log-source that is legitimately quiet (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-quiet-ok <spec>` | compatibility only since 0.8.0 (#420): quiet sources are always healthy (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |
@@ -218,6 +224,7 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--record-video [dir]` | record a video of each mission's browser context (forwarded to every mission, as explore's) |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 
 ## check
 
@@ -240,6 +247,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a one-line summary per item, then the envelope path) |  |  |  |  |
 | `--json-out <path>` | JSON envelope path (default <out>/check.json) |  |  |  |  |
 | `--junit <path>` | JUnit XML path (default <out>/junit.xml) |  |  |  |  |
@@ -249,6 +257,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--real` | use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys) | `false` |  |  |  |
 | `--sarif <path>` | SARIF path (default <out>/jevitate.sarif) |  |  |  |  |
 | `--suite <file>` | the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget) |  |  | yes |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--target-build <id>` | the target's build/commit id, stamped on every result |  |  |  |  |
 
 ## demo
@@ -337,6 +346,7 @@ explore a named non-production environment toward <aspect> (checked by --success
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--id <id>` | the Journey id (default: demo-<aspect slug>) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-actions <n>` | hard cap on explored actions |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
@@ -350,6 +360,7 @@ explore a named non-production environment toward <aspect> (checked by --success
 | `--start <path>` | the app path exploration starts from (default /) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist |  |  |  |  |
 | `--success <spec>` | independent success check that proves the aspect was shown, e.g. textIncludes:testId=status\|Saved (required) |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ## diff
@@ -373,6 +384,7 @@ classify findings new / resolved / still-present / flaky / not-rerun between two
 | --- | --- | --- | --- | --- | --- |
 | `--dir <dir>` | results dir to look run ids up in (repeatable) | `[]` |  |  |  |
 | `--json` | emit the JSON envelope instead of markdown |  |  |  |  |
+| `--tag <key=value>` | compare only runs carrying this tag, on both sides (repeatable; every tag must match) | `[]` |  |  |  |
 
 ## doctor
 
@@ -405,6 +417,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--actor <name=storageState>` | multi-actor mission (#147, goal only; repeatable): the FIRST actor is the primary (the only one the model drives, from its own storageState); every other actor is an observer in its OWN fresh context that only runs the --invariants' cross-actor checks (capture + probe as:/deniedAs) — never clicks or types. Replaces --storage-state | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it | `[]` |  |  |  |
+| `--allow-control <regex>` | #428: exempt a control whose accessible name matches this regex (case-sensitive; /src/i for case-insensitive) from the soft built-in 'may cost money' name heuristic only — e.g. --allow-control "^Generate Your First Key$" (repeatable). It never lifts --deny, --paid, destructive, session-end, read-only or origin rules; every use is recorded in the result's safetyOverrides | `[]` |  |  |  |
 | `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for |  |  |  |  |
 | `--allow-log-cmd` | opt-in: a --log-source cmd:<command> may run as a subprocess (operator-declared only; refused otherwise) | `false` |  |  |  |
 | `--allow-secret-cmd` | opt-in: a --secret-field <descriptor>=cmd:<command> may run its command (in a shell, at type time, 60s timeout) and type its output (operator-declared only; refused otherwise) | `false` |  |  |  |
@@ -415,6 +428,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--api-prefix <path>` | a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/ | `[]` |  |  |  |
 | `--app-class <class>` | app class for UX calibration (required for --strategy usability), e.g. consumer\|admin\|internal |  |  |  |  |
 | `--at-step <n|name|all|anchors>` | with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`); `all` sweeps every step and `anchors` every anchor: each a fresh session (restored by --fixtures), --max-actions/--max-decisions split evenly per stop, one deduped report |  |  |  |  |
+| `--auth-check <mode>` | #427 pre-flight auth check before a run that starts from a session (--storage-state, --persona/--personas, --actor's primary): load the session, open --url and end the run fast (inconclusive, failure.kind auth-expired, exit 2) when it lands on a sign-in page — the login page is never explored. auto (default): a login-like URL (/login, /signin, /sign-in, /auth, …) or a visible password field, unless --url is itself such a route; urlExcludes:<text>: expired when the landed URL includes <text>; selector:<css>: alive only when this signed-in marker is visible; off. A persona with login parameters (a personas file entry's `login`, or .jevitate/personas.json) is signed in again once instead |  |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -445,6 +459,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--ignore-overflow <selector>` | a CSS selector (repeatable) whose overflow or clipping is intentional — excluded from the horizontal-overflow and vertical-clipping signals, like --ignore-no-progress | `[]` |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON (repeatable; goal, coverage, exploratory, adversarial, --feature): checked around every action, a violation is a defect (exit 1). Validated before any browser opens; probes are GET/HEAD on an --allow origin only | `[]` |  |  |  |
 | `--issue-repo <owner/name>` | the system-under-test repo findings for THIS target are filed to |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--jevitate-repo <owner/name>` | where jevitate engine findings are filed (default matt-cochran/jevitate) |  |  |  |  |
 | `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
 | `--journeys-dir <path>` | with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
@@ -453,7 +468,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--log-defect <level|/regex/>` | backend log lines matching this (repeatable) become a server-log defect: a level (error\|warn\|info\|debug, matched as level>=this) or a /regex/flags/ over the raw line. Its fingerprint is the normalized message (ids/numbers/uuids/timestamps stripped) plus the correlated route; verify-fix re-checks it by re-tailing the same --log-source(s) | `[]` |  |  |  |
 | `--log-id-pattern </regex/>` | how a correlation id is written in your log lines, when not as trace_id=/request_id=/correlation_id= or a traceparent (repeatable; the first capture group is the id). Once ids correlate, a line with another request's id is never attributed to the run (#204) | `[]` |  |  |  |
 | `--log-ignore <regex|substring>` | excludes known-noise backend log lines (repeatable, /regex/flags/ over the raw line or a plain substring) from BOTH correlation and the --log-defect oracle (#169 item 3) — e.g. a periodic background job's own expected error. Counted separately as serverLogs.ignoredLines; never makes --log-quiet-ok unnecessary, since an ignored line still proves the source is being tailed | `[]` |  |  |  |
-| `--log-quiet-ok <spec>` | declares a --log-source spec (exact match, repeatable) as legitimately quiet: zero lines from it does not make the --log-defect oracle unhealthy (#169). Without it, a declared source that opened but delivered not one line makes an otherwise-clean run inconclusive, same as one that failed to open | `[]` |  |  |  |
+| `--log-quiet-ok <spec>` | compatibility only since 0.8.0 (#420): a --log-source that opens and reads zero lines is now always a healthy oracle (the silence is recorded as serverLogs.quietSources), so this flag no longer changes any outcome. Kept so existing invocations keep working | `[]` |  |  |  |
 | `--log-scope <regex|substring>` | attributes only backend log lines matching this (repeatable, /regex/flags/ or a plain substring, e.g. a tenant id) to the run (#282); the rest count as serverLogs.ignoredLines. For concurrent runs tailing one log. A line carrying one of the run's own correlation ids is in scope | `[]` |  |  |  |
 | `--log-source <spec>` | backend log source (repeatable; every strategy, incl. usability): file:<path> (tailed from its current end) \| docker:<container> (docker logs -f --since 0s) \| cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted | `[]` |  |  |  |
 | `--log-triage` | #313: record the run's whole signal timeline (backend lines at every level, the browser's console, page errors, failed requests) to <run>.signals.jsonl, and attach to each defect only the lines that relate to it (defects[].relatedLogs): code keeps the lines correlated to its request and prefilters its step's window, then, with --real, Jev scores each remaining line's relevance (log text goes to the judgment model, redacted — operator opt-in, never an MCP argument). Needs --log-source |  |  |  |  |
@@ -463,16 +478,18 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--max-decisions <n>` | hard cap on model decisions |  |  |  |  |
 | `--max-findings-per-page <n>` | (--strategy usability) cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5 |  |  |  |  |
+| `--min-actions <n>` | --strategy goal (#424): the minimum actions before the model may conclude — until then an early report, blocked or answerless done is deferred and the run steered to breadth (unvisited tabs, detail views, primary forms). Default: 12 (at most half the budget) for an open-ended find-out goal (no --success; "the main features", "what works", "every error", "explore"…), none otherwise. Capped by --max-actions (with a warning) |  |  |  |  |
 | `--min-agreement <k>` | with --repeat: runs a finding (and the outcome) must recur in to count (default: a majority of N) |  |  |  |  |
 | `--min-confidence <n>` | (--strategy usability) findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3 |  |  |  |  |
 | `--min-control-coverage <ratio>` | adversarial: share of the target's controls (0..1) a run must exercise before 'found nothing' is clean (default 0.25); below it the run is inconclusive |  |  |  |  |
+| `--min-distinct-states <n>` | --strategy goal (#424): the minimum distinct page states (URL + visible controls) observed before the model may conclude. Default: 5 (scaled to the budget) for an open-ended find-out goal, none otherwise. Capped by the budget (with a warning) |  |  |  |  |
 | `--no-overlay` | with --headed: hide the on-page overlay (step, intent, target highlight, outcome banner) |  |  |  |  |
 | `--no-require-form-submit` | adversarial: do not require a submitted form for a clean result (default: required when the target has a form) |  |  |  |  |
 | `--out <dir>` | directory to write the emitted Recording |  |  |  |  |
 | `--paid <pattern>` | an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze\|Draft\|Improve)\b/i: treated like the built-in paid vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it | `[]` |  |  |  |
 | `--param <kv>` | with --from-journey: a Journey param as key=value (repeatable); only the prefix's own params are required | `{}` |  |  |  |
 | `--persona <name=storageState>` | run the same mission once per persona (repeatable), serially, each from its own storageState, and diff them (#143): requests, statuses (a 403 vs 200 is a candidate RBAC finding), controls, outcome | `[]` |  |  |  |
-| `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState"}]} |  |  |  |  |
+| `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState", "login"?}]} — #427: `login` ({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, environment variable NAMES only) re-mints an expired session once. A bare --persona <name> is the project's persona of that name (.jevitate/personas.json, same format) |  |  |  |  |
 | `--polish` | (--strategy usability) polish each verified UX finding's recommendation with one generation call (opt-in; the default prose is built from templates) |  |  |  |  |
 | `--probe-guards` | (--strategy usability) opt in to clicking each destructive control once to check for a confirmation step — fail-safe: every write and destructive-looking request is aborted, and a page with an open WebSocket/EventSource or a service worker is not probed; without it those claims are reported unverifiable (docs/ux-findings.md) |  |  |  |  |
 | `--product <file>` | (--strategy usability) product facts JSON (plans/prices, key journeys, each page's intended next step) the review checks screens against in code; default .jevitate/product.json in the project when present (docs/ux-findings.md) |  |  |  |  |
@@ -500,6 +517,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--strategy <name>` | exploration strategy: goal (default) \| coverage \| exploratory \| adversarial \| usability (UX review: ranked, cited findings) | `goal` |  |  |  |
 | `--success <spec>` | independent success check (repeatable; every one must hold; --strategy goal and usability). Kinds: urlIncludes:<text> \| visible:<d> \| textIncludes:<d>\|<text> (case-insensitive) \| count:<d>\|min=<n>,max=<n> \| valueEquals:<d>\|<value> (a form control's value) \| reloadThen:<check> (reload first: proves it persisted) \| visual state (#148, read and decided by code): style:<d>\|<prop><op><value> (computed style of every match; <prop> an allowlisted CSS property or a channel of one, e.g. alpha(background-color)>0, color=rgb(255, 0, 0); op = != > >= < <=) \| inViewport:<d>[\|min=<ratio>] (visible fraction, default 0.5) \| box:<d>\|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n> \| overlaps:<d>\|<d2> \| noOverlap:<d>\|<d2> \| attr:<d>\|<name>=<value> (or <name> present, !<name> absent) \| flashed:<d>\|class=<cls> (or attr=<name>, animation)[\|withinMs=<n>] (a transient state gained after the last user input) \| requestMade:<METHOD> <path-glob> \| responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>. <d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x]. <path-glob> must start with "/" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method. e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]\|Litmus'. Omit it for a find-out goal (e.g. "find out how many contacts... report the answer"): the run must then end with the model's own `report` op, and the grounded answer (#101) is the verdict — no page/network check needed. | `[]` |  |  |  |
 | `--success-when <when>` | when the --success page checks must hold: final (default; on the final page) \| held (on the final page, or all together at any settled step — a one-time secret, a toast) \| each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--totp <binding>` | goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk | `[]` |  |  |  |
 | `--type-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret | `[]` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
@@ -519,6 +537,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | --- | --- | --- | --- | --- | --- |
 | `--action-deltas` | opt-in (#303; every --strategy, not --feature): record what each action changed on the page — an accessibility snapshot before and after, announcements, the action's requests — redacted, with a code verdict per step (no-change \| relevant-change \| inconclusive) used by the goal loop's no-progress check and a persistence re-check after writes (goal), and as defect evidence (adversarial, coverage); adds `delta` to every transcript step (and Recording step, goal) and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one |  |  |  |  |
 | `--allow <origin>` | authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it | `[]` |  |  |  |
+| `--allow-control <regex>` | #428: exempt a control whose accessible name matches this regex (case-sensitive; /src/i for case-insensitive) from the soft built-in 'may cost money' name heuristic only — e.g. --allow-control "^Generate Your First Key$" (repeatable). It never lifts --deny, --paid, destructive, session-end, read-only or origin rules; every use is recorded in the result's safetyOverrides | `[]` |  |  |  |
 | `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for |  |  |  |  |
 | `--allow-secret-cmd` | opt-in: a --secret-field <descriptor>=cmd:<command> may run its command (in a shell, at type time, 60s timeout) and type its output (operator-declared only; refused otherwise) | `false` |  |  |  |
 | `--allow-vacuous-checks` | downgrade a vacuous --success check to a warning. By default a check satisfied before the run's first action — a page check that held on the seed page and never changed (an empty result container), a requestMade/responseStatus matched only by a page-load or polling request — FAILS: it cannot verify the goal |  |  |  |  |
@@ -538,6 +557,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--id <id>` | journey id (used for the <id>.json filename in the store) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--ignore-no-progress <pattern>` | a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard) | `[]` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
 | `--journeys-dir <dir>` | journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -1050,6 +1070,7 @@ jevitate journey run [options] <id>
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
@@ -1060,6 +1081,7 @@ jevitate journey run [options] <id>
 | `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full | `fail-closed` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ### journey verify
@@ -1223,7 +1245,34 @@ jevitate load run [options] <journeyId>
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--seed <n>` | master RNG seed | `1` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+## login
+
+```
+jevitate login [options]
+```
+
+#427: sign in as a persona with credentials from environment variables and save its Playwright storage state (mode 0600) — the session `explore --storage-state/--persona` starts from. Credentials are never accepted as values, never printed or recorded
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--allow <origin>` | an origin credentials may be typed into (repeatable; default: the sign-in page's own) — e.g. an SSO provider | `[]` |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--password-env <VAR>` | environment variable holding the password (its NAME — the value is read from the environment) |  |  |  |  |
+| `--password-field <field>` | the password field: its label, else a CSS selector (default: the visible password input) |  |  |  |  |
+| `--persona <name>` | the persona being signed in (names it in the result); with a declared persona (--personas or .jevitate/personas.json) its login parameters and storage state path are the defaults |  |  |  |  |
+| `--personas <file>` | personas JSON to read --persona's login parameters from (default: the project's .jevitate/personas.json) |  |  |  |  |
+| `--save <file>` | where to write the storage state (parent directory created; mode 0600; never inside a repo's .jevitate/) |  |  |  |  |
+| `--submit <name>` | the submit button's accessible name (default: the form's submit button, else Enter) |  |  |  |  |
+| `--success <check>` | how a successful sign-in is recognised: urlIncludes:<text> \| selector:<css> \| text:<text> (default: the page leaves the sign-in form — no login-like URL, no password field) |  |  |  |  |
+| `--timeout <seconds>` | how long each step of the sign-in may take (default 30) |  |  |  |  |
+| `--url <loginUrl>` | the sign-in page (must be an authorized origin: its own, or --allow) |  |  |  |  |
+| `--user-env <VAR>` | environment variable holding the username (its NAME — the value is read from the environment) |  |  |  |  |
+| `--user-field <field>` | the username field: its label, else a CSS selector (default: found by autocomplete/type/name) |  |  |  |  |
 
 ## logs
 
@@ -1262,6 +1311,7 @@ jevitate logs triage [options]
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--fake-ai` | no model: keep the correlated lines and the window's error/warning lines (code only) | `false` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--real` | score relevance with the live Jev gateway (requires keys; log text goes to the judgment model, redacted) | `false` |  |  |  |
 | `--result <path>` | the run's <run>.result.json (its <run>.signals.jsonl must sit next to it) |  |  | yes |  |
@@ -1319,6 +1369,8 @@ enqueue an exploration mission against a PROMOTED target — only queues; `missi
 | `--max-actions <n>` | budget: max actions (bounded by the queue's ceiling) |  |  |  |  |
 | `--max-candidates <n>` | budget: max candidates |  |  |  |  |
 | `--max-decisions <n>` | budget: max decisions |  |  |  |  |
+| `--min-actions <n>` | goal-based (#424): the minimum actions before the model may conclude (capped by the budget; `explore --min-actions`) |  |  |  |  |
+| `--min-distinct-states <n>` | goal-based (#424): the minimum distinct page states before the model may conclude (`explore --min-distinct-states`) |  |  |  |  |
 | `--persona <name>` | run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path |  |  |  |  |
 | `--record-video` | record a video of the run (headless too), written next to its result; listed as videoPaths |  |  |  |  |
 | `--route <glob>` | coverage/exploratory/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective) |  |  |  |  |
@@ -1370,12 +1422,14 @@ run queued missions (queue_exploration) through their strategy's runner; get_mis
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--interval <ms>` | --watch poll interval in ms (default 5000) | `5000` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--once` | drain the missions queued now, then exit (default) |  |  |  |  |
 | `--out <dir>` | where results are written (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date> — where `jevitate mcp` reads them) |  |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for model-driven missions (requires keys) | `false` |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--targets-dir <path>` | mission targets directory (default: ~/.jevitate/missions/targets) |  |  |  |  |
 | `--watch` | keep draining: poll the queue every --interval ms until interrupted |  |  |  |  |
 
@@ -1709,6 +1763,7 @@ jevitate regression run [options] <id>
 | `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again | `{}` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the replay session authenticated (#129); must exist |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ## report
@@ -1728,6 +1783,7 @@ one deduped defect list for a target across every mode and run (markdown + JSON 
 | `--json` | emit the JSON envelope instead of markdown |  |  |  |  |
 | `--out <dir>` | also write report.md and report.json here |  |  |  |  |
 | `--since <run|date>` | only runs that started at/after this ISO date or this run |  |  |  |  |
+| `--tag <key=value>` | only runs carrying this tag (repeatable; every tag must match) | `[]` |  |  |  |
 | `--target <origin|name>` | the target: an origin (or URL on it), a suite target name, or a registered mission target |  |  |  |  |
 
 ## site
@@ -1766,6 +1822,20 @@ print the policy for a site (an origin) and account
 | --- | --- | --- | --- | --- | --- |
 | `--account <account>` | account id | `primary` |  |  |  |
 | `--db <path>` | sqlite db path |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+
+#### site policy rules
+
+```
+jevitate site policy rules [options]
+```
+
+#428: list the control safety rules every run applies — built-in heuristics (ids, what they match, their regex), operator patterns and hard boundaries — and whether --allow-control can waive each (only the soft 'may cost money' heuristic). A refusal names the rule id it matched
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
 #### site policy set
@@ -1922,6 +1992,7 @@ run a Journey from a trusted remote source through the run-gate
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ### source trust
@@ -1963,6 +2034,50 @@ jevitate source update [options] <name>
 | --- | --- | --- | --- | --- | --- |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
+## sweep
+
+```
+jevitate sweep [options]
+```
+
+run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. Every run is tagged target=<id> plus the sweep's and the target's tags
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--allow-control <regex>` | exempt a control whose name matches from the soft 'may cost money' heuristic only (repeatable, #428) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--allow-log-cmd` | a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's) |  |  |  |  |
+| `--allow-writes` | let a find-out mission change the app (forwarded to every mission, as explore's) |  |  |  |  |
+| `--base-url <url>` | resolve each target's route against this origin (wins over --env and the file's baseUrl; else JEVITATE_BASE_URL) |  |  |  |  |
+| `--concurrency <n>` | runs at once (default 1, at most 16; the machine-wide browser cap still applies) |  |  |  |  |
+| `--deny <pattern>` | a control no mission may click (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--env <name>` | resolve each target's route against this named environment's base URL (.jevitate/environments.json) |  |  |  |  |
+| `--evidence-video` | per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's) |  |  |  |  |
+| `--fake-ai` | use deterministic fake gateways for every run (pipeline smoke only) |  |  |  |  |
+| `--invariants <file>` | app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
+| `--log-correlation-header <name>` | another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-defect <level|/regex/>` | backend log lines matching this become a server-log defect (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-id-pattern </regex/>` | how a correlation id is written in log lines (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-ignore <regex|substring>` | known-noise backend log lines to exclude (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-quiet-ok <spec>` | compatibility only since 0.8.0 (#420): quiet sources are always healthy (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--out <dir>` | the sweep directory: <id>/ per target and sweep.result.json (default .jevitate/logs/<date>/sweep-<stamp>; required with --resume) |  |  |  |  |
+| `--paid <pattern>` | an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--real` | use live Jev + OpenRouter gateways for every run (requires keys) |  |  |  |  |
+| `--record-video [dir]` | record a video of each mission's browser context (forwarded to every mission, as explore's) |  |  |  |  |
+| `--resume` | skip every target whose run already finished in --out (its run.envelope.json); re-run the rest | `false` |  |  |  |
+| `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
+| `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--stop-on-env-failure <k>` | stop starting runs when the first K runs ALL failed for environment/setup reasons (auth expired, target unreachable, crash, a run that could not start) |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
+| `--targets <file>` | the targets file (.tsv with a header row, or .json: an array or {baseUrl?, defaults?, targets}) |  |  | yes |  |
+
 ## ui
 
 ```
@@ -2000,6 +2115,7 @@ offline UX review of a saved Recording — ranked, cited usability findings
 | `--app-class <class>` | app class for calibration (required), e.g. consumer\|admin\|internal |  |  |  |  |
 | `--evidence <file>` | a live usability run's evidence sidecar (screens as analyzed + run signals); default: <stem>.evidence.json next to the Recording — with it, offline review reproduces the live run's findings |  |  |  |  |
 | `--fake-ai` | use deterministic fake gateways | `false` |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--job <text>` | the job the flow pursues (improves relevance) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-findings-per-page <n>` | cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5 |  |  |  |  |
@@ -2062,4 +2178,5 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--secret <value|env:VAR>` | REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints; env:VAR reads it from the environment | `[]` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | override the storageState the mission ran with |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |

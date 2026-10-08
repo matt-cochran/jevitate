@@ -63,6 +63,19 @@ describe("mission result ids (#117)", () => {
     expect(parseResultOutcome("succeeded", "succeeded")).toBeNull();
   });
 
+  it("#423: with a defectOutcome, missionOutcome is derived from goalOutcome AND the defect status (one table)", () => {
+    expect(parseResultOutcome("defects-found", "succeeded", "defects")).toEqual({ outcome: "defects-found", goalOutcome: "succeeded" });
+    expect(parseResultOutcome("clean", "succeeded", "none")).toEqual({ outcome: "clean", goalOutcome: "succeeded" });
+    expect(parseResultOutcome("defects-found", "blocked", "none")).toEqual({ outcome: "defects-found", goalOutcome: "blocked" });
+    expect(parseResultOutcome("hang", "hang", "defects")).toEqual({ outcome: "hang", goalOutcome: "hang" });
+    // Corrupt: a defect-free succeeded goal never reads as defects-found, nor a defective one as clean.
+    expect(parseResultOutcome("defects-found", "succeeded", "none")).toBeNull();
+    expect(parseResultOutcome("clean", "succeeded", "defects")).toBeNull();
+    expect(parseResultOutcome("clean", "succeeded", "bogus")).toBeNull();
+    // Without a defectOutcome (written before #423) a succeeded goal still only folds onto clean.
+    expect(parseResultOutcome("defects-found", "succeeded")).toBeNull();
+  });
+
   it("folds a pre-#217 goal result's own word in missionOutcome onto the canonical one, keeping the goal's word", () => {
     expect(parseResultOutcome("clean")).toEqual({ outcome: "clean" });
     expect(parseResultOutcome("succeeded")).toEqual({ outcome: "clean", goalOutcome: "succeeded" });

@@ -94,16 +94,66 @@ occurrences on `/orders/17` and `/orders/42` are one defect) (`"(run)"` for a li
 source(s) for the same drain window — never by looking for it among DOM/console/network signals,
 which a backend log line is none of. A `cmd:` source needs `--allow-log-cmd` on `verify-fix` too.
 
+**Structured, never only prose (#421).** Every `server-log` defect is an entry of the result's
+`defects[]` — one per fingerprint, however many lines share it:
+
+```json
+{ "kind": "server-log", "fingerprint": "3f2a…", "level": "error", "source": "docker:api-1",
+  "message": "Incorrect API key provided", "firstSeenStep": 4, "count": 3, "occurrences": 3,
+  "route": "/settings", "title": "Server log error on /settings: …", "repro": { "recordingStepIndex": 3 },
+  "serverLog": { "sources": ["docker:api-1"], "matcher": "error", "normalizedMessage": "…", "drainMs": 3000 } }
+```
+
+`source` is the `--log-source` spec the first matching line came from, `firstSeenStep` the transcript
+step it was attributed to (the last step for a line outside every step window) and `count` how many
+lines matched (`occurrences` is the same number, kept for older readers). The result's `reason`
+stays human prose; `defectOutcome.byKind` counts the run's defects per kind (`{"server-log": 2,
+"http-5xx": 1}`), so an aggregator never has to parse `reason`.
+
+**Environment faults vs product defects (#422).** In a local or dev environment many backend
+errors are setup, not product bugs: a placeholder API key, an unconfigured provider, a degraded health
+check. Every line that matches `--log-defect` is first classed by the project's committed
+`.jevitate/log-classes.json` (found the way `.jevitate/` is), then by built-in rules:
+
+```json
+{ "version": 1, "rules": [
+    { "id": "stripe-test-mode", "class": "environment", "message": "/No such customer.*test mode/i" },
+    { "id": "signup-422", "class": "expected-validation", "source": "^docker:api", "level": "warn",
+      "message": "/validation failed/i" },
+    { "id": "default:health-check-degraded", "class": "defect", "message": "/health.?check.*billing/i" } ] }
+```
+
+- `class` is `environment`, `expected-validation` or `defect`. `message` is matched against the
+  line's parsed message and `source` against its `--log-source` spec; each is a `/pattern/flags`
+  regex or a bare (case-sensitive) pattern. `level` is one level name, matched exactly. A rule needs
+  at least one of the three.
+- The project's rules come first, then the built-in ones; the first rule that matches wins, and a
+  project rule with a built-in rule's `id` replaces it. The built-in rules class these as
+  `environment`: `default:credential` (`/incorrect api key|invalid api key|unauthorized.*(api|key)|missing (api )?key|not configured/i`)
+  and `default:health-check-degraded` (`/health.?check.*(degraded|unhealthy)/i`). A line no rule
+  matches stays a `server-log` defect.
+- `environment` lines are not defects: the result gets `environmentFaults: { causes: [{ ruleId,
+  source, message, count }] }` (one cause per rule, source and message class; the message is
+  redacted), the human output prints an `ENV-FAULT` line for each, and `jevitate report` lists them
+  once for the whole batch under "Environment faults", so they can be fixed in setup.
+- `expected-validation` lines (a 4xx validation error the mission's own input caused) are recorded in
+  `expectedValidation: [{ ruleId, source, message, count }]` (an `EXPECTED` line) and do not fail the run.
+- The file is validated strictly: an unknown key, class or level, an invalid regex (or the `g`/`y`
+  flag), a duplicate `id` or a rule with no matcher is refused before any browser opens, naming the
+  file and the rule (`E_LOG_CLASSES`). `explore`, `check` and the mission queue (`jevitate mission
+  run`, MCP `queue_exploration`) all read it.
+
 **Result and outcome.** `serverLogs` on the result carries counts by level, the top normalized
-messages, each source's `opened`/`linesRead`/`truncated`/`error`, and `oracleOk` — false when
-`--log-defect` was given and any declared source failed to open or delivered not one line (a
-`docker:`/`cmd:` source that exits non-zero before its first line counts as failed, not quiet). A
-source that is legitimately quiet is declared with `--log-quiet-ok <spec>` (repeatable, the exact
-`--log-source` spec); its zero lines then do not make the oracle unhealthy. A found
-`server-log` defect counts as `defects-found` (exit 1), same as a declared-invariant defect. An
-unreadable oracle (`oracleOk: false`) turns an otherwise-`clean` run `inconclusive` (exit 2) rather
+messages, each source's `opened`/`linesRead`/`truncated`/`error`, `quietSources` (specs that opened
+healthy but read zero lines) and `oracleOk`. `oracleOk` is false only when `--log-defect` was given
+and a declared source failed to attach or errored (a `docker:`/`cmd:` source that exits non-zero on
+its own counts as failed). A source that opened and stayed attached with zero lines is a WORKING
+oracle — zero server errors from it is evidence, not a hole in it — so `--log-quiet-ok` is accepted
+for compatibility only since 0.8.0 (#420). A found
+`server-log` defect counts as `defects-found` (exit 1), same as a declared-invariant defect. A failed
+oracle (`oracleOk: false`) turns an otherwise-`clean` run `inconclusive` (exit 2) rather
 than a false clean — its absence of defects proves nothing when the source that would have caught
-them was never demonstrably read. (A usability run keeps its own advisory rule instead: see above.)
+them never attached. (A usability run keeps its own advisory rule instead: see above.)
 
 **MCP / the mission queue.** A `MissionRequest`/`queue_exploration`/`verify_fix` argument may never
 name a path or a command (`packages/missions/src/schema.ts`). An operator declares `logSources` /

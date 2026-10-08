@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import {
-  FEATURE_KEYS,
+  featureKeys,
   KEY_PROVIDERS,
   KEY_VERIFY_URLS,
   MissingCredentialError,
@@ -9,6 +9,7 @@ import {
   type CredentialKey,
   type CredentialStore,
   type Feature,
+  type JevProvider,
   type KeyVerdict,
   type VerifyFetch,
 } from "@jevitate/ai-core";
@@ -91,12 +92,13 @@ async function verdictFor(key: CredentialKey, value: string, fetchFn: VerifyFetc
 export async function preflightRunKeys(
   features: readonly Feature[],
   store: CredentialStore,
-  opts: { readonly env: Record<string, string | undefined>; readonly fetchFn: VerifyFetch },
+  opts: { readonly env: Record<string, string | undefined>; readonly fetchFn: VerifyFetch; readonly jevProvider?: JevProvider },
 ): Promise<void> {
   if (keyPreflightDisabled(opts.env)) return;
   for (const feature of features) {
     const invalid: Array<{ key: CredentialKey; httpStatus: number; looksLike: CredentialKey | null }> = [];
-    for (const key of FEATURE_KEYS[feature]) {
+    // #429: judgment verifies only the key of the Jev route it will use.
+    for (const key of featureKeys(feature, store, opts.jevProvider)) {
       if (KEY_VERIFY_URLS[key] === undefined) continue;
       const value = store.read(key);
       if (value === undefined || value.trim() === "") continue;

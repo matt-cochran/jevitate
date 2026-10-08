@@ -295,6 +295,8 @@ describe("check gating (#137)", () => {
         stop: "done",
         checks: [{ check: "urlIncludes:/done", passed: false, detail: "url was /cart" }],
         target: { seedUrl: URL0 },
+        defects: [],
+        defectOutcome: { status: "none", byKind: {} },
       };
       writeFileSync(resultPath, JSON.stringify({ missionOutcome: "defects-found", exitCode: 1, result }));
       return { ...result, actions: 2, resultPath };
@@ -311,6 +313,34 @@ describe("check gating (#137)", () => {
     // The result file itself is stamped `aiMode: "fake"` — read back by `@jevitate/findings`.
     const raw = JSON.parse(readFileSync(r.items[0]?.resultPath ?? "", "utf8")) as { result: { aiMode?: string } };
     expect(raw.result.aiMode).toBe("fake");
+  });
+
+  it("#423: under `ai: \"fake\"` a goal-only miss on a run that ALSO found a defect still gates on the defect", async () => {
+    const usage = new UsageTracker();
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };
+    const goal = (async (o: { goal: string; outDir?: string }) => {
+      const resultPath = join(o.outDir ?? dir, `explore-2026-09-24T10-00-00-000Z.result.json`);
+      const defect = { kind: "http-5xx", fingerprint: "0123456789abcdef", route: "/cart", title: "PUT /api/cart → 500" };
+      const result = {
+        strategy: "goal",
+        missionOutcome: "defects-found",
+        goalOutcome: "blocked",
+        goalReason: "gave-up",
+        outcome: "blocked",
+        stop: "blocked",
+        checks: [{ check: "urlIncludes:/done", passed: false, detail: "url was /cart" }],
+        target: { seedUrl: URL0 },
+        defects: [defect],
+        defectOutcome: { status: "defects", byKind: { "http-5xx": 1 } },
+      };
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "defects-found", exitCode: 1, result }));
+      return { ...result, actions: 2, resultPath };
+    }) as unknown as CheckRunners["goal"];
+    const s = suite(0, {}, { goals: [{ name: "cart", goal: "check out", success: ["urlIncludes:/done"] }] });
+    const r = await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { goal }, gateways: async () => gw, aiMode: "fake" });
+    expect(r.items.map((i) => [i.name, i.status, i.outcome, i.goalOutcome, i.verdict])).toEqual([["cart", "ran", "defects-found", "blocked", "failed"]]);
+    expect(r.findings.some((f) => f.gating && f.identity.signal === "http-5xx")).toBe(true);
+    expect(r.exitCode).toBe(1);
   });
 });
 

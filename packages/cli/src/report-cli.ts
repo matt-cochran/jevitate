@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
+import { RunTagError, parseRunTagSpecs } from "@jevitate/domain";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { emitJsonOrRefusal } from "./cli-refusal.js";
 import { formatBaselineListHuman, formatBaselineShowHuman, formatBaselineTagHuman } from "./cli-output.js";
@@ -34,7 +35,7 @@ function emit(program: Command, envelope: JsonEnvelope<unknown>, exitCode?: numb
 }
 
 function failure(program: Command, err: unknown, code: string): void {
-  if (err instanceof ReportInputError) emit(program, fail(err.code, err.message));
+  if (err instanceof ReportInputError || err instanceof RunTagError) emit(program, fail(err.code, err.message));
   else emit(program, fail(code, err instanceof Error ? err.message : String(err)));
 }
 
@@ -48,12 +49,15 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
     .option("--since <run|date>", "only runs that started at/after this ISO date or this run")
     .option("--dir <dir>", "results dir to read (repeatable). Default: this project's runs — its .jevitate/logs plus every run recorded for it in ~/.jevitate/run-index.jsonl (including --out dirs); with --target, every .jevitate/logs dir (project and ~/.jevitate) and the 0.1.0 recordings/ux-reports dirs too", collect, [] as string[])
     .option("--baseline <run|tag|last>", "add a diff section against a baseline: a run, a `baseline tag`, or `last` (the previous run per target+mode)")
+    .option("--tag <key=value>", "only runs carrying this tag (repeatable; every tag must match)", collect, [] as string[])
     .option("--out <dir>", "also write report.md and report.json here")
     .option("--json", "emit the JSON envelope instead of markdown")
     .action(async function (this: Command) {
-      const o = this.opts<{ target?: string; since?: string; dir: string[]; baseline?: string; out?: string; json?: boolean }>();
+      const o = this.opts<{ target?: string; since?: string; dir: string[]; tag: string[]; baseline?: string; out?: string; json?: boolean }>();
       try {
+        const tags = parseRunTagSpecs(o.tag);
         const report = await buildReport({
+          ...(Object.keys(tags).length === 0 ? {} : { tags }),
           missionTargetsDir: deps.missionTargetsDir,
           dirs: o.dir,
           ...(o.target === undefined ? {} : { target: o.target }),
@@ -80,11 +84,14 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
     .command("diff <runA> <runB>")
     .description("classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline)")
     .option("--dir <dir>", "results dir to look run ids up in (repeatable)", collect, [] as string[])
+    .option("--tag <key=value>", "compare only runs carrying this tag, on both sides (repeatable; every tag must match)", collect, [] as string[])
     .option("--json", "emit the JSON envelope instead of markdown")
     .action(async function (this: Command, runA: string, runB: string) {
-      const o = this.opts<{ dir: string[]; json?: boolean }>();
+      const o = this.opts<{ dir: string[]; tag: string[]; json?: boolean }>();
       try {
+        const tags = parseRunTagSpecs(o.tag);
         const r = diffRunRefs(runA, runB, {
+          ...(Object.keys(tags).length === 0 ? {} : { tags }),
           dirs: o.dir.length > 0 ? o.dir : defaultLookupDirs(),
           ...(deps.baselinesDir === undefined ? {} : { baselinesDir: deps.baselinesDir }),
         });

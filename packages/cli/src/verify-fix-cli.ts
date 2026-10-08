@@ -1,3 +1,4 @@
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { Command } from "commander";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
@@ -86,7 +87,8 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
     )
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed and compare the defect step's delta with the one the Recording stored — a mismatch is evidence on each attempt (never the verdict)")
     .option("--json", "emit the JSON envelope (default: a human summary)")
-    .action(async function (this: Command, positional?: string) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "verify-fix", async function (this: Command, positional?: string) {
       const o = this.opts<
         {
           result?: string;
@@ -176,5 +178,5 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           emitVerify(fail("E_VERIFY_FIX", String(err instanceof Error ? err.message : err)));
         }
       }
-    });
+    }));
 }

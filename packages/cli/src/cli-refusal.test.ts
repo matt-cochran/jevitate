@@ -152,6 +152,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "profile create": { cases: TRAVERSAL().map((n) => [n]) },
   "profile status": { cases: TRAVERSAL().map((n) => [n]) },
   "site policy get": { exempt: "reports an unset policy as a status (exit 0), not a refusal" },
+  "site policy rules": { exempt: "#428: lists the static safety rules; it takes no input that could be refused" },
   "site policy set": { cases: [["x", "--file", missing, "--db", join(dir, "site.sqlite")]] },
   "site simulate": { base: ["x", "--script", validScript, "--db", join(dir, "site.sqlite")], cases: [["x", "--script", missing]] },
   "recording promote": { base: [validRecording, "--page", "0", "--step", "0", "--var", "v"], cases: [[missing, "--page", "0", "--step", "0", "--var", "v"]] },
@@ -168,6 +169,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "journey anchors": { cases: [["nope"], ["../x"]] },
   // #293: a missing/unreadable spec, and a campaign with no model gateway.
   "campaign run": { cases: [[missing, "--fake-ai"], [missing]] },
+  // #425: a missing/invalid targets file, and --resume without the sweep dir to resume.
+  sweep: { cases: [["--targets", missing], ["--targets", missing, "--resume"], ["--targets", missing, "--tag", "x"]] },
   "journey annotate": {
     base: ["nope", "--fake-ai"],
     cases: [["nope", "--fake-ai"], ["nope", "--fake-ai", "--storage-state", missing], ["nope", "--approve"], ["nope", "--approve", "--fake-ai"]],
@@ -209,6 +212,18 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--from-journey", "nope", "--at-step", "2", "--fake-ai"],
       ["--at-step", "2", "--fake-ai"],
       ["--from-journey", "nope", "--at-step", "2", "--url", URL0, "--fake-ai"],
+      // #427: an unusable --auth-check is refused before any browser opens.
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--auth-check", "sometimes"],
+    ],
+  },
+  // #427: missing flags, a value where a variable NAME belongs, an unset variable, a session file in .jevitate/.
+  login: {
+    cases: [
+      [],
+      ["--url", URL0, "--user-env", "not a var", "--password-env", "JEV_REFUSAL_PW", "--save", join(dir, "login", "s.json")],
+      ["--url", URL0, "--user-env", "JEV_REFUSAL_UNSET_USER", "--password-env", "JEV_REFUSAL_UNSET_PW", "--save", join(dir, "login", "s.json")],
+      ["--url", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, ".jevitate", "s.json")],
+      ["--url", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json"), "--success", "nonsense"],
     ],
   },
   "verify-fix": { base: ["--result", missing, "--fingerprint", FP], cases: [["--result", missing, "--fingerprint", FP], []] },

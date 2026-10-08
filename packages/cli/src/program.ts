@@ -29,7 +29,9 @@ import { registerJourneyCommands } from "./journey-cli.js";
 import { registerSourceCommands } from "./source-cli.js";
 import { registerLoadCommands } from "./load-cli.js";
 import { registerExploreCommands } from "./explore-cli.js";
+import { registerLoginCommand } from "./login-cli.js";
 import { registerCampaignCommands } from "./campaign-cli.js";
+import { registerSweepCommand } from "./sweep-cli.js";
 import { registerVerifyFixCommands } from "./verify-fix-cli.js";
 import { registerAuthorJourneyCommands } from "./author-journey-cli.js";
 import { registerDemoCommands } from "./demo-aspect-cli.js";
@@ -71,7 +73,9 @@ export function buildProgram(deps: CliDeps): Command {
   registerSourceCommands(program, deps);
   registerLoadCommands(program, deps);
   registerExploreCommands(program, deps, buildProgram);
+  registerLoginCommand(program, deps); // #427: mint a persona's storage state from env credentials
   registerCampaignCommands(program, deps, buildProgram); // #293: journey-anchored campaigns
+  registerSweepCommand(program, deps, buildProgram); // #425: many targets × personas, one aggregate
   registerVerifyFixCommands(program, deps);
 
   // `ledger add|verify|list` (#195 part 6): the repro material verify-fix needs, kept by fingerprint.

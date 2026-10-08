@@ -38,7 +38,8 @@ test("ai status --json reports generation/judgment as missing when env is empty 
   expect(parsed.ok).toBe(true);
   expect(parsed.data).toMatchObject({
     generation: { required: ["OPENROUTER_API_KEY"], missing: ["OPENROUTER_API_KEY"] },
-    judgment: { required: ["TYPESAFE_API_KEY"], missing: ["TYPESAFE_API_KEY"] },
+    // #429: judgment runs on EITHER key — both are named, and no route resolves.
+    judgment: { required: ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY"], missing: ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY"], route: null },
   });
   // never leaks a value, even if one happened to be set alongside others
   expect(lines.join("")).not.toMatch(/sk-|ts-/);

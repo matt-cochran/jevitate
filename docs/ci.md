@@ -181,6 +181,7 @@ boolean, and a number is a JSON number.
 | Secrets | `secretFields`, `totp` (`<descriptor>=env:<VAR>`), `secret` (`env:<VAR>`) | goals and usability (`secret`: also adversarial) |
 | Upload | `fixture` (the file the upload op attaches) | goals and usability |
 | Success checks (#202) | `allowVacuousChecks` (a check satisfied before the run's first action is a warning, not a failure — see [success checks](success-checks.md)) | goals |
+| Minimum effort (#424) | `minActions`, `minDistinctStates` (the model's report / blocked / answerless done is deferred until they are met; capped by the budget — see [find-out goals](success-checks.md#open-ended-find-outs-minimum-effort-depth-and-partial-reports)) | goals |
 | Conversation | `replyWaitMs`, `replyCeilingMs`, `replyMaxChars`, `jobWaitMs` | goals and usability |
 | Pacing | `stallTimeout` (seconds), `hangReplays` | `stallTimeout`: coverage, exploratory, feature; `hangReplays`: goals, adversarial |
 | Scope and coverage | `scope` (`"app"`), `minControlCoverage`, `requireFormSubmit` | `scope`: coverage, exploratory; the others: adversarial |
@@ -285,7 +286,8 @@ jevitate report --target shop --since explore-2026-09-22T11-00-00-000Z --baselin
 
 `--target` takes an origin (or any URL on it), a suite target name, or a registered mission
 target; a target no recorded run matches is refused (exit 64) with the known targets listed.
-`--since` takes an ISO date or a run. `--dir` (repeatable) reads the given results directories,
+`--since` takes an ISO date or a run. `--tag key=value` (repeatable, AND) keeps only runs
+carrying every given [tag](./results.md#run-tags); `diff --tag` narrows both sides. `--dir` (repeatable) reads the given results directories,
 including their subdirectories.
 
 Without `--dir`, a report reads **the current project's runs only**:
@@ -293,7 +295,7 @@ Without `--dir`, a report reads **the current project's runs only**:
 - the project's own `.jevitate/logs/<date>/` dirs (only this project writes there), and
 - every run recorded for this project in the run index, `~/.jevitate/run-index.jsonl` — wherever
   it was written, so runs sent to an `--out` dir are included. Each persisted result appends one
-  line `{project, path}`; the project is the directory holding the repo's `.jevitate/`, else the
+  line `{project, path}` (plus `tags` when the run was tagged, #426); the project is the directory holding the repo's `.jevitate/`, else the
   git root of the working directory, else the working directory. `JEVITATE_RUN_INDEX=off` stops
   recording.
 

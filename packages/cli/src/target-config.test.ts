@@ -55,6 +55,23 @@ describe("per-target settle/hang config (~/.jevitate/targets.json)", () => {
     expect(() => loadTargetsFile(p)).toThrow(TargetConfigError);
   });
 
+  it("#428: safety.allowControl is read from the file and --allow-control regexes are added to it", async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
+    const p = join(dir, "targets.json");
+    await writeFile(p, JSON.stringify({ "http://a.test": { safety: { allowControl: ["^Generate Your First Key$"] } } }));
+    expect(resolveTargetConfig(loadTargetsFile(p), "http://a.test", { allowControl: ["^Generate key$"] }).safety?.allowControl).toEqual([
+      "^Generate Your First Key$",
+      "^Generate key$",
+    ]);
+  });
+
+  it("#428: an invalid safety.allowControl regex fails closed when the file is read", async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
+    const p = join(dir, "targets.json");
+    await writeFile(p, JSON.stringify({ "http://a.test": { safety: { allowControl: ["^Generate (Key$"] } } }));
+    expect(() => loadTargetsFile(p)).toThrow(/safety\.allowControl "\^Generate \(Key\$": /);
+  });
+
   it("a missing file is no config; a malformed one fails closed", async () => {
     dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
     expect(loadTargetsFile(join(dir, "none.json"))).toEqual({});

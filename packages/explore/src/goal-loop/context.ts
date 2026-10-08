@@ -39,7 +39,9 @@ import {
   goalAsksForReply,
   VetoedAnswers,
   type RunAnswer,
+  type AnswerEvidence,
 } from "../answer.js";
+import { DepthLog, minEffortNote, type MinEffort } from "../run-depth.js";
 import {
   REPLY_CEILING_MS,
   REPLY_QUIET_MS,
@@ -199,6 +201,17 @@ export interface RunContext {
   readonly noteReplyText: (url: string, pageText: string) => void;
   /** The grounded answer a `report` ended the run with. */
   answer: RunAnswer | undefined;
+  /** #424: how deep the run went (states, pages, submits, controls tried per page). */
+  readonly depth: DepthLog;
+  /** #424: the minimum effort before the model may conclude (null: none applies). */
+  readonly minEffort: MinEffort | null;
+  /** #424: the model's endings refused in a row for the minimum, and the action count they were refused at. */
+  minEffortRefusals: number;
+  minEffortRefusedAt: number;
+  /** #424: a grounded answer reported before the minimum was met — kept, accepted if the run ends without a later one. */
+  deferredAnswer: RunAnswer | undefined;
+  /** #424: the grounded claims of the run's rejected reports (for the partial report). */
+  readonly reportClaims: AnswerEvidence[];
   /** Page states already goal-checked on the decision's "already met" signal (once each, #91). */
   readonly goalChecked: Set<string>;
   /** The run's own sign-in steps and the sign-in completion code observes on each state (#188). */
@@ -420,6 +433,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
       ctx.secretContext,
       typeFixtureContext(cfg.typeFixtures),
       cfg.readOnly === true ? READ_ONLY_NOTE : cfg.noDestructiveWrites === true ? NO_DESTRUCTIVE_NOTE : null,
+      cfg.minEffort === undefined ? null : minEffortNote(cfg.minEffort),
     ]
       .filter((c): c is string => c !== undefined && c !== null && c !== "")
       .join("; ") || undefined;
@@ -530,6 +544,13 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
    * into one grounded report attempt there (the answer may be plain text no control carries).
    */
   ctx.findOut = cfg.readOnly === true && !ctx.replyGoal;
+  /** #424: depth and the minimum effort (resolved by the mission; the loop only enforces it). */
+  ctx.depth = new DepthLog();
+  ctx.minEffort = cfg.minEffort ?? null;
+  ctx.minEffortRefusals = 0;
+  ctx.minEffortRefusedAt = -1;
+  ctx.deferredAnswer = undefined;
+  ctx.reportClaims = [];
   /** #207: page states whose `blocked` was already turned into a report attempt (once per state). */
   ctx.blockedReported = new Set<string>();
   /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */

@@ -3,9 +3,10 @@ import type { Command } from "commander";
 import { logsDirFor } from "./project-dir.js";
 import { resolveDataDir } from "./data-dir.js";
 import { artifactStamp } from "./mission-journal.js";
-import { runMultiRun, type MultiRunPlan, type MultiRunResult, type RunEnvelope } from "./multi-run.js";
+import { runMultiRun, type MultiRunPlan, type MultiRunResult, type Persona, type RunEnvelope } from "./multi-run.js";
 import { setKillSummary } from "./kill-signal.js";
 import { clock } from "@jevitate/domain";
+import { withRunMetadata } from "./run-metadata.js";
 
 /**
  * The `explore --repeat/--persona` CLI glue (#141/#143): each run is the SAME `explore` command,
@@ -88,13 +89,20 @@ export interface ExploreMultiRunArgs {
    * Absent: a kill prints the multi-run nothing (a library caller that owns stdout).
    */
   readonly killOutput?: (partial: MultiRunResult) => string;
+  /**
+   * #427: the pre-flight auth check, run by the orchestrator before EACH run (a persona's session,
+   * or the mission's own `--storage-state`): the result a run ends with when the session is expired
+   * (and could not be refreshed), else undefined. The runs themselves then skip it (`--auth-check off`).
+   */
+  readonly authPreflight?: (persona: Persona | undefined) => Promise<unknown>;
 }
 
 export async function runExploreMultiRun(args: ExploreMultiRunArgs): Promise<MultiRunResult> {
   const { cmd, plan } = args;
   const outDir = args.out ?? join(logsDirFor((args.nowIso ?? (() => clock.nowIso()))()), `multi-${artifactStamp((args.nowIso ?? (() => clock.nowIso()))())}`);
   // With personas, each run's --storage-state is the persona's; otherwise the mission's own is kept.
-  const base = forwardedArgv(cmd, plan.personas === null ? new Set() : new Set(["storageState"]));
+  const omit = new Set([...(plan.personas === null ? [] : ["storageState"]), ...(args.authPreflight === undefined ? [] : ["authCheck"])]);
+  const base = [...forwardedArgv(cmd, omit), ...(args.authPreflight === undefined ? [] : ["--auth-check", "off"])];
   return runMultiRun({
     plan,
     strategy: args.strategy,
@@ -106,7 +114,10 @@ export async function runExploreMultiRun(args: ExploreMultiRunArgs): Promise<Mul
         const partial = onKill({ signal, exitCode, ...(missions[0] === undefined ? {} : { partial: missions[0].partial }) });
         return args.killOutput?.(partial);
       }),
-    runOnce: async ({ storageState, outDir: runDir }) => {
+    runOnce: async ({ storageState, persona, outDir: runDir }) => {
+      // #427: an expired session ends this run fast (auth-expired) — the login page is never explored.
+      const expired = await args.authPreflight?.(persona);
+      if (expired !== undefined) return { ok: true, data: expired };
       const lines: string[] = [];
       const child = args.newProgram();
       child.exitOverride();
@@ -114,7 +125,8 @@ export async function runExploreMultiRun(args: ExploreMultiRunArgs): Promise<Mul
       const argv = ["explore", ...base, ...(storageState === undefined ? [] : ["--storage-state", storageState]), "--out", runDir, "--json"];
       let envelope: RunEnvelope;
       try {
-        await child.parseAsync(argv, { from: "user" });
+        // #426: the persona's name rides in the run's metadata scope (its result's `target.persona`).
+        await withRunMetadata(persona === undefined ? {} : { persona: persona.name }, () => child.parseAsync(argv, { from: "user" }));
         envelope = lastEnvelope(lines);
       } catch (err) {
         envelope = { ok: false, error: { code: "E_EXPLORE_RUN", message: String(err instanceof Error ? err.message : err) } };

@@ -10,8 +10,8 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type InvariantSpec, type Recording } from "@jevitate/recording";
-import type { DefectRecord, HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
-import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
+import type { DefectRecord, HostHealthSampler, InvariantDefect, InvariantReport, SafetyOverride, SideEffect } from "@jevitate/explore";
+import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import {
   runInductionMission,
   assertAuthorizedExploreTarget,
@@ -36,7 +36,7 @@ import {
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
-import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
+import { MISSION_RESULT_SCHEMA_VERSION, defectFields, unifiedDefects } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
@@ -195,6 +195,8 @@ export interface RunCoverageMissionResult {
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #428: every --allow-control exemption the run used. */
+  readonly safetyOverrides?: readonly SafetyOverride[];
   /** #303 (`--action-deltas`): verdict counts and the actions that changed nothing. */
   readonly actionDeltas?: ActionDeltaStats & { readonly noEffect?: readonly string[] };
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
@@ -206,6 +208,8 @@ export interface RunCoverageMissionResult {
    * declared-invariant defects (#86, each with its own path Recording) and `server-log` defects (#142).
    */
   readonly defects: Array<CoverageFrontierDefect | InvariantDefect | Http5xxDefect | ServerLogDefect>;
+  /** #421/#423: the gating defects counted per kind (`defectOutcomeOf(defects)`). */
+  readonly defectOutcome: DefectOutcome;
   readonly invariants?: InvariantReport[];
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
@@ -421,6 +425,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       transcriptPath: journal.transcriptPath,
       sideEffects: result.sideEffects ?? [],
       ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
+      ...(result.safetyOverrides === undefined ? {} : { safetyOverrides: result.safetyOverrides }),
       ...(result.actionDeltas === undefined ? {} : { actionDeltas: result.actionDeltas }),
       ...(result.budget === undefined ? {} : { budget: result.budget }),
       engine: currentEngineInfo(),
@@ -429,14 +434,16 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...serverLogResult(serverLogRun),
       // #209: EVERY defect in `defects` (#195) — the frontier's own (a horizontal overflow, a flagged
       // state; also in `coverage.defects`), then declared-invariant, then HTTP 5xx (#208), then server-log ones.
-      defects: unifiedDefects<CoverageFrontierDefect | InvariantDefect | Http5xxDefect>(
-        [
-          // Slim: the repro Recording stays in `coverage.defects` (not copied twice into the result).
-          ...stampedDefects.map(({ recording: _repro, reason, ...d }) => ({ ...d, title: reason })),
-          ...(opts.invariants === undefined ? [] : (result.invariantDefects ?? [])),
-          ...httpDefects,
-        ],
-        serverLogRun?.defects,
+      ...defectFields(
+        unifiedDefects<CoverageFrontierDefect | InvariantDefect | Http5xxDefect>(
+          [
+            // Slim: the repro Recording stays in `coverage.defects` (not copied twice into the result).
+            ...stampedDefects.map(({ recording: _repro, reason, ...d }) => ({ ...d, title: reason })),
+            ...(opts.invariants === undefined ? [] : (result.invariantDefects ?? [])),
+            ...httpDefects,
+          ],
+          serverLogRun?.defects,
+        ),
       ),
       resultPath: resultPathFor(journal.recordingPath),
       ...host.fields,

@@ -123,7 +123,7 @@ describe("jevitate report (#139)", () => {
       "explore-2026-09-22T11-00-00-000Z",
       "usability-2026-09-22T12-00-00-000Z",
     ]); // the other origin's run is not in this target's report
-    expect(env.data.summary).toEqual({ defects: 3, advisory: 1, runs: 4 });
+    expect(env.data.summary).toEqual({ defects: 3, advisory: 1, runs: 4, environmentFaults: 0 });
     const d503 = env.data.defects.find((d) => d.category === "defect");
     expect(d503).toMatchObject({
       occurrences: 3,

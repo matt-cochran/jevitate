@@ -250,3 +250,62 @@ becomes a report attempt, still grounded by code.
 jevitate explore --url https://app.example.test/contacts \
   --goal "find out how many contacts are overdue and report the count"
 ```
+
+### Open-ended find-outs: minimum effort, depth and partial reports
+
+**Minimum effort.** A survey-style goal ("use this tool's main features and report what works
+and every error") has no single fact to find, and the model used to give up after a page or two
+with "answer not found". `--min-actions <n>` and `--min-distinct-states <n>` set the minimum
+exploration before the model may conclude. Until both are met (and while the run can still act),
+code defers the model's `report`, its `blocked`, and, when no `--success` check decides the run,
+its `done`. Each deferral is recorded in the transcript and tells the model where breadth is
+still to be had: the top-level navigation pages it has not seen, then the untried controls on the
+current page (navigation and tabs first, then links to detail views, then form submits). A
+grounded answer reported before the minimum is kept. If the run then ends without a later answer
+(budget spent, no progress), that kept answer is the run's answer.
+
+The minimum never ends a run and never runs forever:
+
+- The action and decision budgets still stop the run.
+- A model that insists (3 deferrals in a row with no action between them) gets its ending.
+- A minimum above the budget is capped at it: `--min-actions` at `min(--max-actions,
+  --max-decisions)`, `--min-distinct-states` at one more than that. A `WARNING` line (and
+  `checkWarnings` in the result) names the cap. It is never an error.
+
+**The default rule.** With neither flag set, a minimum applies only to an **open-ended find-out**:
+a run with no `--success` check (or one whose goal asks for a report) whose goal asks for a broad
+survey. Code decides this from the goal's wording: "the main / key / all features (pages, tabs,
+sections, tools…)", "what works", "what doesn't work", "every error", "explore", "try out",
+"exercise", "look around", "walk through", "an overview". The default is 12 actions and 5
+distinct page states, each at most half the budget (so `--max-actions 6` gives 3 and 4). Any
+other goal, including a narrow question like "find out how many contacts are overdue", concludes
+as soon as its answer is grounded. Each explicit flag replaces its own default and applies to any
+goal run (`depth.minimum.source` says `flags`, `open-ended`, or `flags+open-ended`). A goal with
+`--success` checks is still decided by them: the minimum defers only its `blocked` and `report`.
+
+**Depth.** Every goal run's result records how deep it went:
+`depth: { distinctStates, distinctPages, actions, decisions, formsSubmitted, minimum? }`. A state
+is the URL plus the page's visible controls. `formsSubmitted` counts submit controls clicked and
+messages sent that went through. `minimum` is the effort that applied, with `met`. The human
+summary prints it as a `DEPTH` line.
+
+**Partial report.** A run whose answer is its verdict but that ended without a grounded answer
+also returns `partialReport: { states, claims, note }`, alongside the "answer not found (pages
+seen: …)" reason. `states` holds one entry per page visited, in order:
+
+- `url`, `title` and `heading`.
+- `seen`: lines of that page's own text, each re-checked by the same grounding code as an answer.
+  A line made only of a control's label is left out, and so is an error page's text unless the
+  goal asks about errors.
+- `controls`: the page's control names.
+- `tried`: the actions taken there and what code recorded for each (`led to /path`, `the page
+  changed`, or the failure / refusal reason).
+
+`claims` are the claims of rejected reports that code did ground. `note` is the run's end reason.
+Nothing in it is the model's own wording. The human summary prints it as `PARTIAL` lines.
+
+```bash
+jevitate explore --url https://app.example.test/ --max-actions 40 \
+  --goal "use this tool's main features and report what works and every error you see" \
+  --min-actions 15 --min-distinct-states 6
+```

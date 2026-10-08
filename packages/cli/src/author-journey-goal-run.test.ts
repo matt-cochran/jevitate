@@ -40,6 +40,7 @@ vi.mock("./explore-goal.js", async (importOriginal) => {
       return {
         goalOutcome: nextOutcome,
         outcome: nextOutcome,
+        defectOutcome: { status: "none", byKind: {} },
         stop: failed ? "no-progress" : "done",
         runOutcome: failed ? { status: "incomplete", reason: "no progress after 3 actions" } : { status: "completed", verifiedBy: "success-condition" },
         ...(failed ? { reason: "no progress after 3 actions; the success check did not hold: textIncludes:testId=status|Welcome (saw \"Wrong password\")" } : {}),
@@ -124,6 +125,7 @@ describe("explore-author-journey runs explore's goal run (#369)", () => {
       "--job-wait-ms", "7000",
       "--deny", "Archive",
       "--paid", "/^Analyze/i",
+      "--allow-control", "^Generate Your First Key$",
       "--allow-destructive",
       "--dialogs", "accept",
       "--read-rpc", "Estimate*",
@@ -163,7 +165,7 @@ describe("explore-author-journey runs explore's goal run (#369)", () => {
     ]);
     expect(typeof o.secretCommand).toBe("function");
     expect(o.typeFixtures?.map((f) => f.text)).toEqual(["line one\nline two"]);
-    expect(o.target?.safety).toMatchObject({ deny: ["Archive"], paid: ["/^Analyze/i"], readRequests: ["Estimate*"], allowDestructive: true, dialogs: "accept" });
+    expect(o.target?.safety).toMatchObject({ deny: ["Archive"], paid: ["/^Analyze/i"], allowControl: ["^Generate Your First Key$"], readRequests: ["Estimate*"], allowDestructive: true, dialogs: "accept" });
     expect(o.target?.settle).toMatchObject({ ignoreRequests: ["*/poll*"], longPollMs: 4000 });
     expect(o.target?.hangs).toMatchObject({ ignoreNoProgress: ["/busy*"] });
     expect(o.target?.timing).toMatchObject({ apiPrefixes: ["/api/"] });

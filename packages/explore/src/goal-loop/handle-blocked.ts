@@ -8,6 +8,7 @@ import { awaitWrites } from "../side-effects.js";
 import { readInProgressStatus } from "../status.js";
 import type { RunContext } from "./context.js";
 import { JOB_WAIT_SLICE_MS, MAX_EARLY_BLOCKED_REFUSALS, quote, waitOutJob } from "./helpers.js";
+import { deferEnding } from "./min-effort.js";
 import type { Flow, Step } from "./step.js";
 
 export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> {
@@ -74,6 +75,12 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
     };
     ctx.stop = "inconclusive";
     return "stop";
+  }
+  // #424: below the minimum exploration effort, giving up is deferred — the model is steered to breadth.
+  const deferred = deferEnding(ctx, step, "blocked");
+  if (deferred !== null) {
+    record(false, deferred, { origin: "engine" });
+    return "continue";
   }
   record(true, "model blocked");
   // #235: a control the goal needed may have been refused — the reason says so, actionably.

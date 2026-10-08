@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { TranscriptEntry } from "@jevitate/explore";
 import { openServerLogRuntime, parseLogScopeSpecs } from "./log-correlation.js";
 import { parseLogDefectSpec, parseLogIgnoreSpec } from "./log-lines.js";
+import { parseLogClasses, withDefaultRules } from "./log-classes.js";
 import type { LogSourceSpec } from "./log-sources.js";
 
 /**
@@ -76,6 +77,8 @@ describe("--log-ignore (#169 item 3)", () => {
       expect(result.defects).toHaveLength(1);
       expect(result.defects[0]?.occurrences).toBe(2);
       expect(result.defects[0]?.message).not.toContain("noisy");
+      // #421: the structured fields every consumer reads instead of parsing `reason`.
+      expect(result.defects[0]).toMatchObject({ kind: "server-log", level: "error", source: spec.raw, firstSeenStep: 1, count: 2 });
     },
     15_000,
   );
@@ -182,7 +185,7 @@ describe("process-based --log-source stopped at mission end (#199)", () => {
     expect(result.summary.sources[0]?.error).toMatch(/exited with code 7/);
     expect(result.summary.sources[0]?.error).toContain("the source may not be running");
     expect(result.summary.oracleOk).toBe(false);
-    expect(result.summary.oracleReason).toContain("failed to open or read a line");
+    expect(result.summary.oracleReason).toContain("failed to attach");
   }, 10_000);
 });
 
@@ -221,4 +224,112 @@ describe("--log-scope (#282): only this run's lines are attributed when runs sha
     expect(() => parseLogScopeSpecs(["/(/"])).toThrow(/--log-scope: invalid regex/);
     expect(() => parseLogScopeSpecs([""])).toThrow(/--log-scope: empty pattern/);
   });
+});
+
+/**
+ * #420 — a source that opened and stayed attached but read zero lines is a WORKING oracle: zero
+ * server errors from it is evidence. Only a source that never attached or errored degrades the run.
+ */
+describe("quiet source health (#420)", () => {
+  it("an opened source that read zero lines keeps the --log-defect oracle ok", async () => {
+    const { spec } = await openTailedFile();
+    const rt = openServerLogRuntime({
+      sources: [spec],
+      logDefect: [parseLogDefectSpec("error")],
+      secrets: [],
+      drainMs: 20,
+    });
+    const result = await rt!.finish([]);
+    expect(result.summary.oracleOk).toBe(true);
+  }, 10_000);
+
+  it("records an opened source that read zero lines in quietSources", async () => {
+    const { spec } = await openTailedFile();
+    const rt = openServerLogRuntime({
+      sources: [spec],
+      logDefect: [parseLogDefectSpec("error")],
+      secrets: [],
+      drainMs: 20,
+    });
+    const result = await rt!.finish([]);
+    expect(result.summary.quietSources).toEqual([spec.raw]);
+  }, 10_000);
+
+  it("a quiet source beside an errored source still fails the --log-defect oracle", async () => {
+    const { spec } = await openTailedFile();
+    const missingPath = join(dir as string, "never-appears.log");
+    const missing: LogSourceSpec = { kind: "file", path: missingPath, raw: `file:${missingPath}` };
+    const rt = openServerLogRuntime({
+      sources: [spec, missing],
+      logDefect: [parseLogDefectSpec("error")],
+      secrets: [],
+      drainMs: 20,
+    });
+    const result = await rt!.finish([]);
+    expect(result.summary.oracleOk).toBe(false);
+  }, 10_000);
+
+  it("names the errored source and its error in the --log-defect oracle reason", async () => {
+    const { spec } = await openTailedFile();
+    const missingPath = join(dir as string, "never-appears.log");
+    const missing: LogSourceSpec = { kind: "file", path: missingPath, raw: `file:${missingPath}` };
+    const rt = openServerLogRuntime({
+      sources: [spec, missing],
+      logDefect: [parseLogDefectSpec("error")],
+      secrets: [],
+      drainMs: 20,
+    });
+    const result = await rt!.finish([]);
+    expect(result.summary.oracleReason).toContain(`${missing.raw} failed to attach (${missingPath}: never appeared during the run)`);
+  }, 10_000);
+});
+
+describe("log classes (#422): environment / expected-validation lines are never defects", () => {
+  it(
+    "classes a --log-defect line by the rules: environment and expected-validation causes are counted apart, the rest stay defects",
+    async () => {
+      const { file, spec } = await openTailedFile();
+      const rt = openServerLogRuntime({
+        sources: [spec],
+        logDefect: [parseLogDefectSpec("warn")],
+        logClasses: withDefaultRules(
+          parseLogClasses({ version: 1, rules: [{ id: "signup-validation", class: "expected-validation", level: "warn", message: "/validation failed/i" }] }, "log-classes.json"),
+        ),
+        secrets: ["sk-live-123"],
+        drainMs: 700,
+      });
+      await sleep(300);
+
+      const e = entry("http://x.test/settings");
+      rt?.onTranscriptEntry(e, [e]);
+      await appendFile(file, "ERROR Incorrect API key provided: sk-live-123\n");
+      await appendFile(file, "ERROR Incorrect API key provided: sk-live-123\n");
+      await appendFile(file, "WARN Validation failed for field email\n");
+      await appendFile(file, "ERROR duplicate key value violates unique constraint\n");
+
+      const result = await rt!.finish([e]);
+      expect(result.defects).toHaveLength(1);
+      expect(result.defects[0]?.message).toContain("duplicate key");
+      expect(result.environment).toEqual([{ ruleId: "default:credential", source: spec.raw, message: expect.not.stringContaining("sk-live-123"), count: 2 }]);
+      expect(result.expectedValidation).toEqual([{ ruleId: "signup-validation", source: spec.raw, message: expect.stringContaining("Validation failed"), count: 1 }]);
+    },
+    15_000,
+  );
+
+  it(
+    "with nothing classed, no environment/expectedValidation keys at all",
+    async () => {
+      const { file, spec } = await openTailedFile();
+      const rt = openServerLogRuntime({ sources: [spec], logDefect: [parseLogDefectSpec("error")], secrets: [], drainMs: 700 });
+      await sleep(300);
+      const e = entry("http://x.test/");
+      rt?.onTranscriptEntry(e, [e]);
+      await appendFile(file, "ERROR boom\n");
+      const result = await rt!.finish([e]);
+      expect(result.defects).toHaveLength(1);
+      expect("environment" in result).toBe(false);
+      expect("expectedValidation" in result).toBe(false);
+    },
+    15_000,
+  );
 });

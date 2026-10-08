@@ -40,6 +40,7 @@ permissions:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # #417: never GitHub's 6 h default
     outputs:
       mode: ${{ steps.mode.outputs.mode }}
       version: ${{ steps.mode.outputs.version }}
@@ -85,6 +86,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.mode == 'version'
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # #417: never GitHub's 6 h default
     permissions:
       contents: write
       pull-requests: write
@@ -147,6 +149,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.mode == 'publish' && github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # #417: never GitHub's 6 h default
     permissions:
       contents: write # tags + GitHub releases
       id-token: write # npm OIDC Trusted Publishing (+ provenance)

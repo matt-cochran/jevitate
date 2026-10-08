@@ -17,10 +17,11 @@ import { readCliVersion } from "./version.js";
 import { type EngineInfo } from "./engine.js";
 import { MissionJournal } from "./mission-journal.js";
 import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
-import { type ServerLogDefect, type ServerLogRuntimeResult, type ServerLogsSummary } from "./log-correlation.js";
+import { type ServerLogRuntimeResult, type ServerLogsSummary } from "./log-correlation.js";
 import { signalsPathFor, triageRunResult, writeSignals, type LogTriageOptions } from "./signal-triage.js";
 import type { LogSourceSpec } from "./log-sources.js";
 import type { LogDefectMatcher, LogIgnoreMatcher } from "./log-lines.js";
+import type { LogClassCause, LogClassRule } from "./log-classes.js";
 
 /**
  * Backend log correlation (#142): already-validated `--log-source`/`--log-defect` specs, threaded
@@ -32,8 +33,8 @@ export interface ServerLogOptions {
   readonly logDefect: readonly LogDefectMatcher[];
   readonly allowLogCmd?: boolean;
   readonly drainMs?: number;
-  /** Raw `--log-source` specs (`--log-quiet-ok`, #169) allowed to deliver zero lines without making
-   *  `serverLogs.oracleOk` false — for a source the operator KNOWS is legitimately quiet. */
+  /** Raw `--log-source` specs declared via `--log-quiet-ok` (#169). Redundant since 0.8.0 (#420): an
+   *  opened source with zero lines never makes `serverLogs.oracleOk` false; kept for compatibility. */
   readonly quietOk?: readonly string[];
   /** Already-parsed `--log-ignore` matchers (#169 item 3): known-noise lines excluded from
    *  correlation and the defect oracle. */
@@ -46,6 +47,8 @@ export interface ServerLogOptions {
   readonly idPatterns?: readonly RegExp[];
   /** #313 `--log-triage`: record the run's whole signal timeline and triage it per defect (Jev when `judge` is live). */
   readonly triage?: LogTriageOptions;
+  /** #422: the project's `log-classes` rules ahead of the defaults (`loadLogClassRules`); default: the built-in rules only. */
+  readonly logClasses?: readonly LogClassRule[];
 }
 
 /**
@@ -62,6 +65,7 @@ export function serverLogRuntimeOptions(o: ServerLogOptions | undefined): {
   idPatterns: readonly RegExp[];
   drainMs?: number;
   signals?: boolean;
+  logClasses?: readonly LogClassRule[];
 } {
   return {
     sources: o?.sources ?? [],
@@ -73,6 +77,7 @@ export function serverLogRuntimeOptions(o: ServerLogOptions | undefined): {
     idPatterns: o?.idPatterns ?? [],
     ...(o?.drainMs === undefined ? {} : { drainMs: o.drainMs }),
     ...(o?.triage === undefined ? {} : { signals: true }),
+    ...(o?.logClasses === undefined ? {} : { logClasses: o.logClasses }),
   };
 }
 
@@ -80,11 +85,22 @@ export function serverLogRuntimeOptions(o: ServerLogOptions | undefined): {
  * The result's `serverLogs` summary. Server-log defects go into the result's `defects` (#195); the
  * deprecated `serverLogDefects` alias was removed in 0.3.0.
  */
-export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
+export function serverLogResult(
+  runtimeResult: Pick<ServerLogRuntimeResult, "summary" | "defects" | "environment" | "expectedValidation"> | undefined,
+): {
   serverLogs?: ServerLogsSummary;
+  environmentFaults?: { causes: readonly LogClassCause[] };
+  expectedValidation?: readonly LogClassCause[];
 } {
   if (runtimeResult === undefined) return {};
-  return { serverLogs: runtimeResult.summary };
+  // #422: environment faults and expected-validation lines beside the summary — never in `defects`.
+  const environment = runtimeResult.environment ?? [];
+  const expected = runtimeResult.expectedValidation ?? [];
+  return {
+    serverLogs: runtimeResult.summary,
+    ...(environment.length === 0 ? {} : { environmentFaults: { causes: environment } }),
+    ...(expected.length === 0 ? {} : { expectedValidation: expected }),
+  };
 }
 
 /**
