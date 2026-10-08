@@ -182,7 +182,7 @@ describe("process-based --log-source stopped at mission end (#199)", () => {
     expect(result.summary.sources[0]?.error).toMatch(/exited with code 7/);
     expect(result.summary.sources[0]?.error).toContain("the source may not be running");
     expect(result.summary.oracleOk).toBe(false);
-    expect(result.summary.oracleReason).toContain("failed to open or read a line");
+    expect(result.summary.oracleReason).toContain("failed to attach");
   }, 10_000);
 });
 
@@ -221,4 +221,62 @@ describe("--log-scope (#282): only this run's lines are attributed when runs sha
     expect(() => parseLogScopeSpecs(["/(/"])).toThrow(/--log-scope: invalid regex/);
     expect(() => parseLogScopeSpecs([""])).toThrow(/--log-scope: empty pattern/);
   });
+});
+
+/**
+ * #420 — a source that opened and stayed attached but read zero lines is a WORKING oracle: zero
+ * server errors from it is evidence. Only a source that never attached or errored degrades the run.
+ */
+describe("quiet source health (#420)", () => {
+  it("an opened source that read zero lines keeps the --log-defect oracle ok", async () => {
+    const { spec } = await openTailedFile();
+    const rt = openServerLogRuntime({
+      sources: [spec],
+      logDefect: [parseLogDefectSpec("error")],
+      secrets: [],
+      drainMs: 20,
+    });
+    const result = await rt!.finish([]);
+    expect(result.summary.oracleOk).toBe(true);
+  }, 10_000);
+
+  it("records an opened source that read zero lines in quietSources", async () => {
+    const { spec } = await openTailedFile();
+    const rt = openServerLogRuntime({
+      sources: [spec],
+      logDefect: [parseLogDefectSpec("error")],
+      secrets: [],
+      drainMs: 20,
+    });
+    const result = await rt!.finish([]);
+    expect(result.summary.quietSources).toEqual([spec.raw]);
+  }, 10_000);
+
+  it("a quiet source beside an errored source still fails the --log-defect oracle", async () => {
+    const { spec } = await openTailedFile();
+    const missingPath = join(dir as string, "never-appears.log");
+    const missing: LogSourceSpec = { kind: "file", path: missingPath, raw: `file:${missingPath}` };
+    const rt = openServerLogRuntime({
+      sources: [spec, missing],
+      logDefect: [parseLogDefectSpec("error")],
+      secrets: [],
+      drainMs: 20,
+    });
+    const result = await rt!.finish([]);
+    expect(result.summary.oracleOk).toBe(false);
+  }, 10_000);
+
+  it("names the errored source and its error in the --log-defect oracle reason", async () => {
+    const { spec } = await openTailedFile();
+    const missingPath = join(dir as string, "never-appears.log");
+    const missing: LogSourceSpec = { kind: "file", path: missingPath, raw: `file:${missingPath}` };
+    const rt = openServerLogRuntime({
+      sources: [spec, missing],
+      logDefect: [parseLogDefectSpec("error")],
+      secrets: [],
+      drainMs: 20,
+    });
+    const result = await rt!.finish([]);
+    expect(result.summary.oracleReason).toContain(`${missing.raw} failed to attach (${missingPath}: never appeared during the run)`);
+  }, 10_000);
 });

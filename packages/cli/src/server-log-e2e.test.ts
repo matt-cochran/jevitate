@@ -253,7 +253,7 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
   );
 
   it(
-    "a quiet-but-OPENED log source (file exists, zero lines) also makes an otherwise-clean run inconclusive, with its own distinct reason (#169)",
+    "a quiet-but-OPENED log source (file exists, zero lines) keeps an otherwise-clean run clean and records the silence (#420)",
     async () => {
       const outDir = await mkdtemp(join(tmpdir(), "jevitate-server-log-quiet-out-"));
       const logFile = join(await mkdtemp(join(tmpdir(), "jevitate-server-log-quiet-file-")), "app.log");
@@ -306,12 +306,12 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
       expect(result.serverLogs.sources[0].opened).toBe(true);
       expect(result.serverLogs.sources[0].linesRead).toBe(0);
       expect(result.defects.filter((d) => d.kind === "server-log")).toHaveLength(0);
-      expect(result.serverLogs.oracleOk).toBe(false);
-      expect(result.outcome).toBe("inconclusive");
-      expect(result.exitCode).toBe(2);
-      // Distinct from the "failed to open" wording above — this source WAS readable, it just never
-      // produced a line, so the oracle's health is unknown rather than proven broken.
-      expect(result.reason).toBe("log source produced no lines");
+      expect(result.serverLogs.oracleOk).toBe(true);
+      // #420: the silence is recorded as data, not treated as a hole in the oracle.
+      expect(result.serverLogs.quietSources).toEqual([`file:${logFile}`]);
+      expect(result.outcome).toBe("succeeded");
+      expect(result.exitCode).toBe(0);
+      expect(result.reason).toBeUndefined();
 
       await rm(outDir, { recursive: true, force: true });
     },

@@ -29,7 +29,7 @@ function withMissionFlags(cmd: Command): Command {
     ["--invariants <file>", "app-declared invariants JSON (repeatable)"],
     ["--log-source <spec>", "backend log source: file:<path> | docker:<container> | cmd:<command> (needs --allow-log-cmd) (repeatable)"],
     ["--log-defect <level|/regex/>", "backend log lines matching this become a server-log defect (repeatable)"],
-    ["--log-quiet-ok <spec>", "a --log-source that is legitimately quiet (repeatable)"],
+    ["--log-quiet-ok <spec>", "compatibility only since 0.8.0 (#420): quiet sources are always healthy (repeatable)"],
     ["--log-ignore <regex|substring>", "known-noise backend log lines to exclude (repeatable)"],
     ["--log-scope <regex|substring>", "attribute only backend log lines matching this (repeatable)"],
     ["--log-correlation-header <name>", "another header carrying a correlation id (repeatable)"],

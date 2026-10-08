@@ -300,12 +300,11 @@ function serverLogOutcomeReason(newOutcome: GoalBasedOutcome | MissionOutcome, r
     const n = run?.defects.length ?? 0;
     return `${n} server-log defect${n === 1 ? "" : "s"} found (--log-defect)`;
   }
-  // #169: the summary already knows WHICH source(s) made the oracle unhealthy and why (failed to
-  // open vs. declared but silent) — this default only covers the (should-be-unreachable) case of no
-  // summary at all.
+  // #169: the summary already knows WHICH source(s) failed to attach and their error text — this
+  // default only covers the (should-be-unreachable) case of no summary at all.
   return (
     run?.summary.oracleReason ??
-    "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing"
+    "the --log-defect oracle could not run: every declared --log-source failed to attach — an absence of server-log defects proves nothing"
   );
 }
 
