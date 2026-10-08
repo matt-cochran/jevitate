@@ -2,7 +2,7 @@ import type { Page, Route, Request } from "playwright";
 import { rpcMethodOf, type WriteClassifier } from "@jevitate/recording";
 import { normalizeAllowlist, requestEndpoint } from "./authorized-targets.js";
 import { FirstPartyOrigins } from "./third-party.js";
-import { controlRisk } from "./safety.js";
+import { controlRisk, type SafetyRefusal } from "./safety.js";
 import type { Control } from "./snapshot.js";
 
 /**
@@ -242,30 +242,52 @@ export class ReadOnlyGuard {
 
   /** Why an op on a control may not run under this guard, or null when it may. */
   refuses(op: string, control: Pick<Control, "name" | "role" | "submits"> | null): string | null {
+    return this.refusal(op, control)?.reason ?? null;
+  }
+
+  /**
+   * #428: the refusal with the rule that matched (`read-only:<kind>`, never waivable by
+   * `--allow-control` — `--allow-writes` lifts it), or null when the op may run.
+   */
+  refusal(op: string, control: Pick<Control, "name" | "role" | "submits"> | null): { readonly reason: string; readonly safety: SafetyRefusal } | null {
     // #403: an off-allowlist guard decides by the request's origin alone, at the network.
     if (this.#mode === "off-allowlist") return null;
     const name = (control?.name ?? "").replace(/\s+/g, " ").trim();
+    const refused = (kind: string, pattern: string, reason: string) => {
+      const ruleId = `read-only:${kind}`;
+      return { reason: `${reason} [rule ${ruleId}${pattern === "" ? "" : `, matched ${JSON.stringify(pattern)}`}]`, safety: { ruleId, pattern, control: name, risk: "read-only" as const, waivable: false } };
+    };
     if (this.#mode === "no-destructive") {
       // #270: no goal-word lift — a goal without a success check never destroys on a name match.
       if (op !== "click" || control === null) return null;
       const risk = controlRisk(name, control.role);
       if (risk?.risk !== "destructive") return null;
-      return `refused: "${name}" is destructive (destructive) and this goal has no success check — a destructive write needs --allow-writes; report what you found instead`;
+      return refused(
+        "destructive",
+        risk.matched,
+        `refused: "${name}" is destructive (destructive) and this goal has no success check — a destructive write needs --allow-writes; report what you found instead`,
+      );
     }
-    if (op === "send") return `refused: this find-out goal is read-only — sending a message is a write (pass --allow-writes to permit it)`;
-    if (op === "upload") return `refused: this find-out goal is read-only — uploading is a write (pass --allow-writes to permit it)`;
+    if (op === "send") return refused("send", "", `refused: this find-out goal is read-only — sending a message is a write (pass --allow-writes to permit it)`);
+    if (op === "upload") return refused("upload", "", `refused: this find-out goal is read-only — uploading is a write (pass --allow-writes to permit it)`);
     if (op !== "click" || control === null) return null;
     const risk = controlRisk(name, control.role);
     // #253: a form submit is NOT refused for its shape — its requests decide (a write is blocked at
     // the network, below); only a name that says it changes state is refused before the click.
+    const flow = risk === null && control.role !== "link" ? FLOW.exec(name) : null;
     const why =
       risk !== null
         ? `${risk.risk === "session-end" ? "ends the session" : risk.risk === "destructive" ? "is destructive" : "may cost money or contact real people"} (${risk.risk})`
-        : control.role !== "link" && FLOW.test(name)
+        : flow !== null
           ? "starts a flow that changes state"
           : null;
     if (why === null) return null;
-    return `refused: this find-out goal is read-only — "${name}" ${why}; find the answer on the page instead (pass --allow-writes to permit it)`;
+    const kind = risk === null ? "write-flow" : risk.risk === "paid" ? "may-cost-money" : risk.risk;
+    return refused(
+      kind,
+      risk?.matched ?? flow?.[0] ?? "",
+      `refused: this find-out goal is read-only — "${name}" ${why}; find the answer on the page instead (pass --allow-writes to permit it)`,
+    );
   }
 
   /** From now on, a write request that starts inside an action window is aborted before it leaves the browser. */

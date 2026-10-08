@@ -1,3 +1,4 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { LogsConfigError, loadLogsRetention, pruneLogs } from "./logs-retention.js";
@@ -59,9 +60,11 @@ export function registerLogsCommands(program: Command, deps: CliDeps): void {
     .option("--threshold <p>", "Jev relevance probability at or above which a line is kept (default 0.5)", (v: string) => Number(v))
     .option("--real", "score relevance with the live Jev gateway (requires keys; log text goes to the judgment model, redacted)", false)
     .option("--fake-ai", "no model: keep the correlated lines and the window's error/warning lines (code only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const o = this.opts<{ result: string; secret: string[]; threshold?: number; real?: boolean; fakeAi?: boolean; json?: boolean }>();
+      const o = this.opts<{ result: string; secret: string[]; threshold?: number; real?: boolean; fakeAi?: boolean;
+        jevProvider?: string; json?: boolean }>();
       const emit = (envelope: Parameters<typeof emitJson>[1]): void => emitJson(program, envelope);
       if (o.real === true && o.fakeAi === true) return emit(fail("E_LOGS_ARGS", "--real and --fake-ai are mutually exclusive — pass one, not both"));
       if (o.threshold !== undefined && !(o.threshold >= 0 && o.threshold <= 1)) return emit(fail("E_LOGS_ARGS", "--threshold must be a probability in 0..1"));
@@ -80,7 +83,7 @@ export function registerLogsCommands(program: Command, deps: CliDeps): void {
       try {
         const file = JSON.parse(readFileSync(o.result, "utf8")) as { result?: Record<string, unknown> };
         if (typeof file.result !== "object" || file.result === null) return emit(fail("E_LOGS_ARGS", `${o.result} is not a jevitate run result`));
-        const judge = o.real === true ? (await buildExploreGateways(deps, { real: true, fakeAi: false })).judge : undefined;
+        const judge = o.real === true ? (await buildExploreGateways(deps, { real: true, fakeAi: false, jevProvider: o.jevProvider })).judge : undefined;
         const updated = await triageRunResult(file.result, o.result, {
           secrets,
           ...(judge === undefined ? {} : { judge }),

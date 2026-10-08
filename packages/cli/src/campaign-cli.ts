@@ -1,3 +1,5 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { withEngine } from "./engine.js";
@@ -21,15 +23,16 @@ export function campaignMissionArgv(cmd: Command): string[] {
  * (destructive/paid/deny), invariants, backend-log evidence and media. Operator flags only: the
  * spec file never widens what a mission may click or read.
  */
-function withMissionFlags(cmd: Command): Command {
+export function withMissionFlags(cmd: Command): Command {
   const each = "(forwarded to every mission, as explore's)";
   const repeatable: ReadonlyArray<readonly [string, string]> = [
     ["--deny <pattern>", "a control no mission may click (repeatable)"],
     ["--paid <pattern>", "an app control that costs money or credits (repeatable)"],
+    ["--allow-control <regex>", "exempt a control whose name matches from the soft 'may cost money' heuristic only (repeatable, #428)"],
     ["--invariants <file>", "app-declared invariants JSON (repeatable)"],
     ["--log-source <spec>", "backend log source: file:<path> | docker:<container> | cmd:<command> (needs --allow-log-cmd) (repeatable)"],
     ["--log-defect <level|/regex/>", "backend log lines matching this become a server-log defect (repeatable)"],
-    ["--log-quiet-ok <spec>", "a --log-source that is legitimately quiet (repeatable)"],
+    ["--log-quiet-ok <spec>", "compatibility only since 0.8.0 (#420): quiet sources are always healthy (repeatable)"],
     ["--log-ignore <regex|substring>", "known-noise backend log lines to exclude (repeatable)"],
     ["--log-scope <regex|substring>", "attribute only backend log lines matching this (repeatable)"],
     ["--log-correlation-header <name>", "another header carrying a correlation id (repeatable)"],
@@ -82,9 +85,11 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
     .option("--hook-timeout-ms <ms>", "timeout for each of the spec's before/after hooks (default 60000; the process group is killed)", positiveIntArg)
     .option("--real", "use live Jev + OpenRouter gateways for the missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit the JSON envelope (default: a human summary)")
-    .action(async function (this: Command, spec: string) {
-      const o = this.opts<{ journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; json?: boolean }>();
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "campaign run", async function (this: Command, spec: string) {
+      const o = this.opts<{ journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; jevProvider?: string; json?: boolean }>();
       const emit = (envelope: Parameters<typeof emitCommandResult>[1], exitCode?: number): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "campaign run", human: formatCampaignHuman, ...(exitCode === undefined ? {} : { exitCode }) });
       if (o.real !== true && o.fakeAi !== true) {
@@ -113,5 +118,5 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
         if (err instanceof CampaignSpecError) emit(fail(err.code, err.message));
         else emit(fail("E_CAMPAIGN_RUN", String(err instanceof Error ? err.message : err)));
       }
-    });
+    }));
 }

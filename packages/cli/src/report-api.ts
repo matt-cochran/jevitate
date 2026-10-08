@@ -6,17 +6,19 @@ import { basename, dirname, join, resolve } from "node:path";
 import {
   consolidate,
   diffRuns,
+  environmentCausesOf,
   renderReportMarkdown,
   runFromMissionResult,
   runFromUxReport,
   runIdOf,
   type ConsolidatedDefect,
+  type EnvironmentCauseSummary,
   type FindingsDiff,
   type RunRecord,
 } from "@jevitate/findings";
 import { formatUsageLine, sumUsage, usageCountsFrom, type UsageAggregate } from "@jevitate/ai-core";
 import { resolveDataDir } from "./data-dir.js";
-import { clock } from "@jevitate/domain";
+import { clock, matchesRunTags } from "@jevitate/domain";
 
 /**
  * The programmatic surface behind `jevitate report` (#139), `jevitate diff` / `--baseline` (#138)
@@ -370,6 +372,8 @@ export function resolveSince(since: string, ctx: RunRefContext): string {
 export interface BuildReportOptions {
   readonly target?: string;
   readonly since?: string;
+  /** #426: `--tag key=value` filters — only runs carrying EVERY one (AND). */
+  readonly tags?: Readonly<Record<string, string>>;
   readonly dirs?: readonly string[];
   readonly baseline?: string;
   readonly baselinesDir?: string;
@@ -389,17 +393,27 @@ export interface RunSummary {
   readonly missionOutcome?: string;
   /** #217: a goal run's own ending, beside the canonical `missionOutcome`. */
   readonly goalOutcome?: string;
+  /** #423: why the goal was not achieved. */
+  readonly goalReason?: string;
+  /** #423: the run's defect verdict, by kind — orthogonal to `goalOutcome`. */
+  readonly defectOutcome?: { readonly status: string; readonly byKind: Readonly<Record<string, number>> };
   readonly targetBuild?: string;
   readonly engineCommit?: string;
   readonly findings: number;
+  /** #426: the run's tags. */
+  readonly tags?: Readonly<Record<string, string>>;
 }
 
 export interface ReportResult {
   readonly target?: string;
   readonly since?: string;
+  /** #426: the tag filter the report was narrowed to. */
+  readonly tags?: Readonly<Record<string, string>>;
   readonly runs: readonly RunSummary[];
   readonly defects: readonly ConsolidatedDefect[];
-  readonly summary: { readonly defects: number; readonly advisory: number; readonly runs: number };
+  /** #422: the batch's environment/config faults, once each (summed over the runs) — never defects. */
+  readonly environmentFaults: readonly EnvironmentCauseSummary[];
+  readonly summary: { readonly defects: number; readonly advisory: number; readonly runs: number; readonly environmentFaults: number };
   /**
    * Model usage summed over the reported runs (#163). Runs whose result carries no `usage` (they made
    * no model call, or predate usage accounting) are counted in `unreportedRuns`, not priced.
@@ -420,9 +434,24 @@ export function summarizeRun(r: RunRecord): RunSummary {
     ...(r.startedAt === undefined ? {} : { startedAt: r.startedAt }),
     ...(r.missionOutcome === undefined ? {} : { missionOutcome: r.missionOutcome }),
     ...(r.goalOutcome === undefined ? {} : { goalOutcome: r.goalOutcome }),
+    ...(r.goalReason === undefined ? {} : { goalReason: r.goalReason }),
+    ...(r.defectOutcome === undefined ? {} : { defectOutcome: r.defectOutcome }),
     ...(r.targetBuild === undefined ? {} : { targetBuild: r.targetBuild }),
     ...(r.engine?.commit === undefined ? {} : { engineCommit: r.engine.commit }),
+    ...(r.tags === undefined ? {} : { tags: r.tags }),
   };
+}
+
+/** #426: the runs carrying every filter tag (AND); no filter keeps them all. */
+export function filterRunsByTags<R extends { readonly tags?: Readonly<Record<string, string>> }>(runs: readonly R[], tags: Readonly<Record<string, string>> | undefined): R[] {
+  if (tags === undefined || Object.keys(tags).length === 0) return [...runs];
+  return runs.filter((r) => matchesRunTags(r.tags ?? {}, tags));
+}
+
+function tagsLabel(tags: Readonly<Record<string, string>>): string {
+  return Object.entries(tags)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(", ");
 }
 
 export async function buildReport(opts: BuildReportOptions): Promise<ReportResult> {
@@ -449,6 +478,12 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
   }
   const since = opts.since === undefined ? undefined : resolveSince(opts.since, ctx);
   if (since !== undefined) runs = runs.filter((r) => r.startedAt !== undefined && r.startedAt >= since);
+  const tagFilter = opts.tags !== undefined && Object.keys(opts.tags).length > 0 ? opts.tags : undefined;
+  runs = filterRunsByTags(runs, tagFilter);
+  // #426: like --target, a tag no run carries is refused (exit 64) — never an empty "nothing wrong" report.
+  if (tagFilter !== undefined && runs.length === 0 && opts.runs === undefined) {
+    throw new ReportInputError(`--tag ${tagsLabel(tagFilter)} matches no recorded run`);
+  }
   const defects = consolidate(runs);
   let diff: FindingsDiff | undefined;
   let baselineRuns: RunRecord[] | undefined;
@@ -457,9 +492,10 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
     diff = diffRuns(baselineRuns, runs);
   }
   const usage = usageOfRuns(runs);
+  const environmentFaults = environmentCausesOf(runs);
   const markdown =
     renderReportMarkdown({
-      title: `Defect report${targetLabel === undefined ? "" : ` — ${targetLabel}`}${since === undefined ? "" : ` since ${since}`}`,
+      title: `Defect report${targetLabel === undefined ? "" : ` — ${targetLabel}`}${since === undefined ? "" : ` since ${since}`}${tagFilter === undefined ? "" : ` tagged ${tagsLabel(tagFilter)}`}`,
       runs,
       defects,
       ...(diff === undefined ? {} : { diff }),
@@ -467,12 +503,15 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
   return {
     ...(targetLabel === undefined ? {} : { target: targetLabel }),
     ...(since === undefined ? {} : { since }),
+    ...(tagFilter === undefined ? {} : { tags: tagFilter }),
     runs: runs.map(summarizeRun),
     defects,
+    environmentFaults,
     summary: {
       defects: defects.filter((d) => d.severity === "hard").length,
       advisory: defects.filter((d) => d.severity === "advisory").length,
       runs: runs.length,
+      environmentFaults: environmentFaults.length,
     },
     usage,
     ...(diff === undefined ? {} : { diff }),
@@ -497,9 +536,17 @@ export function usageMarkdown(u: UsageAggregate): string {
 }
 
 /** `jevitate diff <runA> <runB>`: A is the baseline side, B the current side. */
-export function diffRunRefs(a: string, b: string, ctx: RunRefContext): { diff: FindingsDiff; markdown: string; baseline: RunSummary[]; current: RunSummary[] } {
-  const base = resolveRunRef(a, ctx);
-  const cur = resolveRunRef(b, ctx);
+export function diffRunRefs(
+  a: string,
+  b: string,
+  ctx: RunRefContext & { readonly tags?: Readonly<Record<string, string>> },
+): { diff: FindingsDiff; markdown: string; baseline: RunSummary[]; current: RunSummary[] } {
+  // #426: `--tag` narrows BOTH sides (a baseline tag or a dir holds runs of many features).
+  const base = filterRunsByTags(resolveRunRef(a, ctx), ctx.tags);
+  const cur = filterRunsByTags(resolveRunRef(b, ctx), ctx.tags);
+  if (ctx.tags !== undefined && Object.keys(ctx.tags).length > 0 && (base.length === 0 || cur.length === 0)) {
+    throw new ReportInputError(`--tag ${tagsLabel(ctx.tags)} matches no run of ${base.length === 0 ? a : b}`);
+  }
   const diff = diffRuns(base, cur);
   const markdown = renderReportMarkdown({ title: `Diff ${a} → ${b}`, runs: cur, defects: consolidate(cur), diff });
   return { diff, markdown, baseline: base.map(summarizeRun), current: cur.map(summarizeRun) };

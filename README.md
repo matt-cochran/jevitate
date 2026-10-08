@@ -54,8 +54,9 @@ jevitate init
 
 It creates `.jevitate/` (Journeys, regressions, baselines, logs, and an example
 `environments.json`), installs [agent skills](./docs/agents.md) for Claude Code, Codex, Cursor
-and `AGENTS.md`, registers the MCP server, and asks for any missing keys (`TYPESAFE_API_KEY` for
-Jev's judgment, `OPENROUTER_API_KEY` for text generation). Keys are optional for step 3. Without a
+and `AGENTS.md`, registers the MCP server, and asks for any missing keys (`OPENROUTER_API_KEY` for
+text generation, and also for Jev's judgment unless `TYPESAFE_API_KEY` is set; see
+[docs/authentication.md](docs/authentication.md#api-keys-for-jevitates-own-ai)). Keys are optional for step 3. Without a
 terminal (CI, a coding agent), `init` never prompts: it reports which keys are missing, and you
 add them later with `jevitate ai setup <generation|judgment>`. It ends with a short **next steps**
 list that fits what it set up.

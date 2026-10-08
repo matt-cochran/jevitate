@@ -441,6 +441,15 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("from 0 to 1") } });
   });
 
+  it("#424: refuses --min-actions / --min-distinct-states outside --strategy goal before any browser opens", async () => {
+    for (const flag of ["--min-actions", "--min-distinct-states"]) {
+      const { program, lines } = newProgram();
+      await program.parseAsync(["explore", "--strategy", "coverage", "--url", "http://127.0.0.1:3000/", "--fake-ai", flag, "3", "--json"], { from: "user" });
+      const parsed = JSON.parse(lines.join(""));
+      expect(parsed, flag).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("supported only with --strategy goal") } });
+    }
+  });
+
   it("refuses a --success-when other than held|final before any browser opens (#80)", async () => {
     const { program, lines } = newProgram();
     await program.parseAsync(

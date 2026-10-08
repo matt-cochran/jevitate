@@ -6,6 +6,7 @@ import { assertAuthorizedExploreTarget, matchGlob, parseSecretField, resolveCove
 import { buildMissionFixtures, checkSetupRefs, type FixtureFlags } from "./fixture-cli.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { loadLogClassRules } from "./log-classes.js";
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import { loadPersonasFile, parsePersonaSpec, type Persona } from "./multi-run.js";
@@ -216,7 +217,7 @@ interface ItemSetup {
 }
 
 const TARGET_FLAG_KEYS = [
-  "deny", "paid", "allowDestructive", "dialogs", "allowWrites", "allowWrite", "readRpc", "hangReplayWrites", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
+  "deny", "paid", "allowControl", "allowDestructive", "dialogs", "allowWrites", "allowWrite", "readRpc", "hangReplayWrites", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
 ] as const;
 
 function envSecret(ref: string, env: Readonly<Record<string, string | undefined>>): string {
@@ -259,6 +260,7 @@ function itemSetup(
       ...(x.apiPrefix === undefined ? {} : { apiPrefixes: x.apiPrefix }),
       ...(x.deny === undefined ? {} : { deny: x.deny }),
       ...(x.paid === undefined ? {} : { paid: x.paid }),
+      ...(x.allowControl === undefined ? {} : { allowControl: x.allowControl }),
       ...(x.readRpc === undefined ? {} : { readRpc: x.readRpc }),
       ...(x.allowDestructive === true ? { allowDestructive: true } : {}),
       ...(x.dialogs === undefined ? {} : { dialogs: x.dialogs as DialogPolicy }),
@@ -282,6 +284,7 @@ function itemSetup(
       correlationHeaders: parseCorrelationHeaders(x.logCorrelationHeader ?? []),
       idPatterns: parseLogIdPatterns(x.logIdPattern ?? []),
       ...(x.serverLogDrainMs === undefined ? {} : { drainMs: x.serverLogDrainMs }),
+      logClasses: loadLogClassRules(),
     };
   }
   // #313: an item's `logTriage` turns triage on (or, `false`, off) over whichever log sources apply.

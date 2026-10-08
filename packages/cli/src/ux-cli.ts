@@ -1,3 +1,4 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { readFile } from "node:fs/promises";
 import { Command } from "commander";
 import { RecordingSchema, type Recording } from "@jevitate/recording";
@@ -48,6 +49,7 @@ export function registerUxCommands(program: Command, deps: CliDeps): void {
     .option("--polish", "polish each verified finding's recommendation with one generation call (opt-in; the default prose is built from templates)")
     .option("--real", "use live Jev gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, recordingPath: string) {
       const o = this.opts<{
@@ -64,6 +66,7 @@ export function registerUxCommands(program: Command, deps: CliDeps): void {
         polish?: boolean;
         real?: boolean;
         fakeAi?: boolean;
+        jevProvider?: string;
         json?: boolean;
       }>();
       if (!o.appClass) {
@@ -92,7 +95,7 @@ export function registerUxCommands(program: Command, deps: CliDeps): void {
       let uxGen: GenerationPort;
       let uxUsage: UsageTracker;
       try {
-        ({ judge: uxJudge, gen: uxGen, usage: uxUsage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+        ({ judge: uxJudge, gen: uxGen, usage: uxUsage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false, jevProvider: o.jevProvider }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
           emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));

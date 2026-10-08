@@ -136,6 +136,8 @@ export async function viewPage(ctx: RunContext, step: Perceived): Promise<PageVi
     ...(ctx.documentStatus.has(ctx.docKey(ctx.page.url())) ? { status: ctx.documentStatus.get(ctx.docKey(ctx.page.url()))! } : {}),
   });
   ctx.noteReplyText(snap.url, visibleText);
+  // #424: the run's depth — every page state the loop decides on.
+  ctx.depth.noteState(snap.signature, snap.url);
 
   // #158 — the write requests the read-only guard aborted since the last decision: recorded
   // (jevitate's own refusal) and told to the model.

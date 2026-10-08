@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (150 exports)
+# @jevitate/ai-core (163 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -37,6 +37,8 @@
   FakeJudgmentGateway: class
   Feature: type-alias
   FEATURE_KEYS: variable
+  featureKeys: function
+  featureReady: function
   filterCatalog: function
   FORM_VALUE_INSTRUCTIONS: variable
   formatUsageLine: function
@@ -56,10 +58,18 @@
   GoalAnswerOutput: variable
   isTransientError: function
   JEV_PRICE_TABLE: variable
+  JEV_PROVIDER_ENV: variable
+  JEV_PROVIDER_KEYS: variable
+  JEV_PROVIDERS: variable
   JevClientCall: interface
   JevJudgmentGateway: class
   JevPricing: interface
+  JevProvider: type-alias
+  JevProviderError: class
+  jevProviderOverride: function
   JevResponseError: class
+  JevRoute: interface
+  jevRouteModel: function
   jittered: function
   JOURNEY_GOAL_INSTRUCTIONS: variable
   JOURNEY_STEP_INSTRUCTIONS: variable
@@ -83,6 +93,8 @@
   NoEligibleModelError: class
   NoulAnswer: interface
   NoulQuestion: interface
+  OPENROUTER_JEV_BASE_URL: variable
+  OPENROUTER_JEV_MODEL: variable
   OpenRouterCall: interface
   OpenRouterConfig: interface
   OpenRouterGenerationGateway: class
@@ -97,6 +109,7 @@
   redactText: function
   redactUrl: function
   requireKeys: function
+  resolveJevRoute: function
   RetryDeps: interface
   RetryExhaustedError: class
   RetryingGenerationPort: class
@@ -163,8 +176,9 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (112 exports)
+# @jevitate/domain (136 exports)
   assertInsideRoot: function
+  assertRunTag: function
   assertSafeName: function
   attributeCrash: function
   Attribution: type-alias
@@ -177,6 +191,11 @@
   currentClock: function
   DEFAULT_HEAP_GROWTH_RULE: variable
   DEFAULT_JEVITATE_REPO: variable
+  DEFECT_OUTCOME_STATUSES: variable
+  DefectOutcome: interface
+  defectOutcomeOf: function
+  DefectOutcomeSchema: variable
+  DefectOutcomeStatus: type-alias
   DEGRADED_FINDINGS: variable
   DegradedFindingKind: type-alias
   Direction: type-alias
@@ -198,8 +217,13 @@
   GOAL_ONLY_OUTCOMES: variable
   GOAL_OUTCOME_FOLD: variable
   GOAL_OUTCOMES: variable
+  GOAL_REASONS: variable
+  goalMissionOutcome: function
   GoalOnlyOutcome: type-alias
   GoalOutcome: type-alias
+  GoalReason: type-alias
+  GoalReasonInput: interface
+  goalReasonOf: function
   hasOwnFrame: function
   HeapGrowthRule: interface
   HeapSample: interface
@@ -216,8 +240,13 @@
   IssueTarget: type-alias
   isUnboundedHeapGrowth: function
   isWithinQuietHours: function
+  LogClassCauseRecord: type-alias
+  LogClassCauseSchema: variable
   looksLikeRendererOom: function
   makeRng: function
+  matchesRunTags: function
+  MAX_RUN_TAG_VALUE: variable
+  MAX_RUN_TAGS: variable
   MAX_SAFE_NAME_LENGTH: variable
   MISSION_EXIT_CODES: variable
   MISSION_OUTCOMES: variable
@@ -233,6 +262,8 @@
   occurrenceComment: function
   outcomeExitCode: function
   Pacer: class
+  parseRunTagSpec: function
+  parseRunTagSpecs: function
   PersistedMissionResult: type-alias
   PersistedMissionResultSchema: variable
   PlannedStep: type-alias
@@ -256,7 +287,12 @@
   ResultStrategy: type-alias
   ResultTargetSchema: variable
   ResultUsageSchema: variable
+  RUN_TAG_KEY: variable
   RunPolicy: interface
+  RunTagError: class
+  RunTags: type-alias
+  runTagsOf: function
+  RunTagsSchema: variable
   safeChildPath: function
   safeRunPolicy: function
   SecretMode: type-alias
@@ -275,9 +311,10 @@
   TypingModel: type-alias
   UnsafeNameError: class
   urlSchemeOf: function
+  validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (609 exports)
+# @jevitate/explore (635 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -332,6 +369,7 @@
   boundSecretField: function
   BoundsTracker: class
   boundTypeFixture: function
+  breadthHint: function
   BudgetActionInfo: interface
   BudgetGuardResult: interface
   BudgetMonitor: class
@@ -341,6 +379,7 @@
   BudgetTrajectory: interface
   buildCrashReport: function
   buildJudgmentState: function
+  buildPartialReport: function
   BuildStateInput: interface
   busyIndicatorOf: function
   CANARY_ATTRIBUTE: variable
@@ -362,6 +401,7 @@
   ClippingFinding: interface
   clippingSummary: function
   compareDeltas: function
+  compileAllowControl: function
   CompletedRequest: interface
   Control: interface
   controlFields: function
@@ -433,6 +473,7 @@
   DemoOverlay: class
   demoOverlayFor: function
   DemoOverlayIntent: interface
+  DepthLog: class
   describeAction: function
   describeAssertionSpec: function
   describeChange: function
@@ -519,6 +560,7 @@
   GoalBasedMissionConfig: interface
   GoalBasedOutcome: type-alias
   GoalBasedResult: interface
+  goalIsOpenEnded: function
   goalListsSeveral: function
   goalResultDiagnostics: function
   groundAnswer: function
@@ -611,6 +653,7 @@
   MAX_DONE_REJECTIONS: variable
   MAX_GLOB_ALTERNATIVES: variable
   MAX_IDLE_STEPS: variable
+  MAX_MIN_EFFORT_REFUSALS: variable
   MAX_MOVING_SCROLLS: variable
   MAX_QUIET_WAITS: variable
   MAX_REPEAT_TYPE_SIGNALS: variable
@@ -621,6 +664,10 @@
   MESSAGE_FIELD: variable
   messageClass: function
   messageRisk: function
+  MinEffort: interface
+  minEffortNote: function
+  MinEffortRequest: interface
+  MissCause: type-alias
   MissionRouteScope: interface
   MissionSafety: class
   MissionSessions: class
@@ -651,6 +698,8 @@
   occluderOf: function
   ONLY_GLOBAL_NAVIGATION: variable
   Op: type-alias
+  OPEN_ENDED_MIN_ACTIONS: variable
+  OPEN_ENDED_MIN_DISTINCT_STATES: variable
   OPS: variable
   OPS_NEEDING_TARGET: variable
   OutcomeCheckContext: interface
@@ -680,6 +729,9 @@
   parseNumbers: function
   parseSecretField: function
   parseTypeFixtureSpec: function
+  PartialReport: interface
+  PartialReportAction: interface
+  PartialReportState: interface
   pathGlob: function
   pendingEvidence: function
   PendingRequestEvidence: interface
@@ -741,6 +793,7 @@
   resolveBounds: function
   resolveCoverageSufficiencyThresholds: function
   resolveCoverageThresholds: function
+  resolveMinEffort: function
   resolveMissionFixture: function
   resolveRouteScope: function
   resolveSecretFieldValue: function
@@ -757,14 +810,20 @@
   rpcStatusOfResponse: function
   runAdversarialMission: function
   RunAnswer: interface
+  RunDepth: interface
   runFeatureMission: function
   runGoalBasedMission: function
   runInductionMission: function
   RunOutcome: other
   RunRecorder: class
+  SAFETY_RULES: variable
   SafetyConfig: interface
+  SafetyOverride: interface
   SafetyPolicy: class
+  SafetyRefusal: interface
   safetyRefusalsFromTranscript: function
+  SafetyRuleInfo: interface
+  SafetyRuleSource: type-alias
   SafetyVerdict: interface
   sampleHeap: function
   ScopeDeparture: interface
@@ -795,6 +854,7 @@
   SettleConfig: interface
   SettleResult: interface
   SHORT_FIELD_MAX_WORDS: variable
+  shortfall: function
   shouldCheckOverflow: function
   SideEffect: interface
   SideEffectGuard: class
@@ -867,6 +927,7 @@
   UPLOAD_OP_GUIDE: variable
   urlMatcher: function
   vacuousCheckMessage: function
+  validateAllowControlPatterns: function
   validateDenyPatterns: function
   ValueCapturingGenerationPort: class
   valueFor: function
@@ -881,15 +942,18 @@
   VerifySession: interface
   VetoedAnswers: class
   visibleBusyIndicator: function
+  visibleBusyIndicatorContainer: function
   VOLATILITY_GAP_MS: variable
   WAIT_OP_MS: variable
+  waivableRule: function
   WITHHELD_ANSWER_NOTE: variable
   withheldReason: function
   WithheldWrite: interface
   WRITE_METHODS: variable
 
-# @jevitate/findings (44 exports)
+# @jevitate/findings (47 exports)
   CaseStatus: type-alias
+  ClassifiedLogCause: interface
   classify: function
   consolidate: function
   ConsolidatedDefect: interface
@@ -900,6 +964,8 @@
   diffRuns: function
   DiffStatus: type-alias
   EngineStamp: interface
+  environmentCausesOf: function
+  EnvironmentCauseSummary: interface
   EvidenceRef: interface
   FindingCategory: type-alias
   FindingIdentity: interface
@@ -1023,7 +1089,9 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (84 exports)
+# @jevitate/journey (147 exports)
+  AcceptedFindings: interface
+  AcceptedFindingsSchema: variable
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1034,31 +1102,72 @@
   AnnotationDraftStep: type-alias
   AnnotationDraftStepSchema: variable
   applyAnnotationDraft: function
+  APPROVAL_CHANNELS: variable
+  ApprovalChannel: type-alias
+  ApprovalChannelSchema: variable
+  ApprovalProvenance: type-alias
+  ApprovalProvenanceSchema: variable
+  ApprovalsReport: type-alias
+  ApprovalsReportSchema: variable
+  ApprovalViolation: type-alias
+  ApprovalViolationSchema: variable
   AssertionProof: interface
   assertionSiteKey: function
   AssertionVerdict: type-alias
   CAMPAIGN_LIMITS: variable
   CampaignSpec: type-alias
   CampaignSpecSchema: variable
+  CandidatePair: type-alias
+  CandidatePairSchema: variable
+  CATALOG_ID_RE: variable
+  CatalogAnalysis: type-alias
+  CatalogAnalysisSchema: variable
+  CatalogApproval: type-alias
+  CatalogApprovalSchema: variable
+  CatalogItemStatus: type-alias
+  CatalogStatusReport: type-alias
+  CatalogStatusSchema: variable
+  CatalogStatusValueSchema: variable
+  checkJobStory: function
+  checkPersona: function
+  checkStatement: function
   classifyMutation: function
   deriveParamSchema: function
   describeStep: function
+  Finding: type-alias
+  FindingSchema: variable
   FlatJourneyStep: interface
   flatJourneySteps: function
   formatAnnotationChanges: function
   FsJourneyStore: class
+  GTWR_RULES: variable
+  GTWR_SET_CHARACTERISTICS: variable
+  GtwrCharacteristic: type-alias
+  GtwrRule: interface
+  GtwrSetCharacteristic: type-alias
   intentCoverage: function
   IntentCoverage: interface
   isNoClaimExpect: function
   isOwnTargetVisible: function
   isSweepMode: function
+  JevLayer: type-alias
+  JevLayerSchema: variable
+  Job: type-alias
+  JOB_PRIORITIES: variable
+  JobReview: type-alias
+  JobReviewSchema: variable
+  JobSchema: variable
   Journey: interface
   JourneyAnchor: interface
   JourneyAnchorListing: interface
+  JourneyApproval: interface
+  JourneyApprovalWaiver: interface
   journeyAssertions: function
   JourneyAssertionSite: type-alias
   journeyBranchPoint: function
   JourneyBranchPoint: interface
+  JourneyCatalogLinks: type-alias
+  JourneyCatalogLinksSchema: variable
   journeyEndState: function
   JourneyLintFinding: interface
   JourneyLintOptions: interface
@@ -1071,6 +1180,13 @@
   JourneyPrecondition: interface
   journeyPrefix: function
   JourneyRegistry: class
+  JourneyReview: type-alias
+  JourneyReviewChange: type-alias
+  JourneyReviewRiskyControl: type-alias
+  JourneyReviewSchema: variable
+  JourneyReviewStep: type-alias
+  JourneyReviewVerify: type-alias
+  JourneyReviewWriteRequest: type-alias
   journeyRunParams: function
   JourneySchema: variable
   JourneyStatusSpec: type-alias
@@ -1081,6 +1197,7 @@
   JourneyWriteStep: interface
   journeyWriteSteps: function
   judgeAssertions: function
+  JudgmentUsageSchema: variable
   lintJourney: function
   listJourneyAnchors: function
   MutationFailedSite: type-alias
@@ -1094,11 +1211,23 @@
   MutationRunResult: interface
   MutationVerdict: type-alias
   mutationWait: function
+  PAIR_RELATIONS: variable
+  PairRelation: type-alias
   ParamSchema: interface
   ParamValidationError: class
+  PersonaReview: type-alias
+  PersonaReviewSchema: variable
   planJourneyMutations: function
   prefixLandingPath: function
+  QualityFinding: interface
+  renderJobStory: function
   resolveJourneyStep: function
+  ReviewChangeSchema: variable
+  ReviewLintFindingSchema: variable
+  ReviewRiskyControlSchema: variable
+  ReviewStepSchema: variable
+  ReviewVerifySchema: variable
+  ReviewWriteRequestSchema: variable
   SECRET_PARAM_NAME_RE: variable
   secretParamNames: function
   secretParamValues: function

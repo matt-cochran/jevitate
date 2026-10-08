@@ -56,4 +56,27 @@ describe("JevJudgmentGateway (key-at-call-only, fail-closed)", () => {
     expect(seenAuthHeader).toBe("Bearer ts-SECRET");
     expect(out.proceed).toEqual({ kind: "noul", value: true, probability: 1 });
   });
+
+  it("#429: with only an OpenRouter key, the call goes the OpenRouter route with that key", async () => {
+    const store = envCredentialStore({ OPENROUTER_API_KEY: "sk-or-SECRET" }, {});
+    const seen: Array<{ auth: string; provider: string | undefined }> = [];
+    const call: JevClientCall = async (args) => {
+      expect(JSON.stringify({ state: args.state, questions: args.questions })).not.toContain("sk-or-SECRET");
+      seen.push({ auth: args.authHeader, provider: args.provider });
+      return { proceed: { kind: "noul", value: true, probability: 1 } };
+    };
+    await new JevJudgmentGateway(store, call).systemOne({ state, questions: { proceed: { kind: "noul" } } });
+    expect(seen).toEqual([{ auth: "Bearer sk-or-SECRET", provider: "openrouter" }]);
+  });
+
+  it("#429: a pinned provider uses its key even when the other is set", async () => {
+    const store = envCredentialStore({ OPENROUTER_API_KEY: "sk-or-SECRET", TYPESAFE_API_KEY: "ts-SECRET" }, {});
+    let seen = "";
+    const call: JevClientCall = async (args) => {
+      seen = `${args.provider ?? ""} ${args.authHeader}`;
+      return { proceed: { kind: "noul", value: true, probability: 1 } };
+    };
+    await new JevJudgmentGateway(store, call, "openrouter").systemOne({ state, questions: { proceed: { kind: "noul" } } });
+    expect(seen).toBe("openrouter Bearer sk-or-SECRET");
+  });
 });

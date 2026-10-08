@@ -152,7 +152,8 @@ const GITIGNORE_HEADER = "# jevitate: local run output and anything secret or ma
 /**
  * What the repo's `.jevitate/.gitignore` keeps out of git: run output (`logs/`, pruned by
  * retention), unapproved model-drafted Journey annotations (`journeys/.drafts/`, #246: a draft
- * reaches the repo only through `journey annotate --approve`, as part of its Journey), and every secret or machine-local file jevitate keeps in `~/.jevitate`, in case one
+ * reaches the repo only through `journey annotate --approve`, as part of its Journey), the Jev answer cache (`cache/`, #434/#435:
+ * answers keyed by content hash — never a secret, but machine-local), and every secret or machine-local file jevitate keeps in `~/.jevitate`, in case one
  * is ever copied or written here — credentials, config, targets, the policy database, browser
  * profiles and sessions (storage states hold live cookies), the inbox, the mission queue, trust
  * decisions, source clones, env files, HAR captures and traces. Journeys, regressions and
@@ -161,6 +162,7 @@ const GITIGNORE_HEADER = "# jevitate: local run output and anything secret or ma
 export const PROJECT_GITIGNORE: readonly string[] = [
   "logs/",
   "journeys/.drafts/",
+  "cache/",
   "/credentials.json",
   "/config.json",
   "/targets.json",

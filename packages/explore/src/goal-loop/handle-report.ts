@@ -7,6 +7,7 @@ import { readPageText, waitForReply } from "../conversation.js";
 import type { RunContext } from "./context.js";
 import { firstLine, quote } from "./helpers.js";
 import { MAX_REPORT_REJECTIONS } from "./limits.js";
+import { deferEnding } from "./min-effort.js";
 import type { Flow, Step } from "./step.js";
 
 export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
@@ -57,6 +58,16 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
             v.accept && ctx.writeGoal && !ctx.wroteOk && v.answer.absent !== true ? { accept: false, reason: UNSAVED_WRITE_REASON, answer: v.answer } : v,
           )
           .catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
+  // #424: a grounded answer before the minimum exploration effort is kept, not ended on — the model
+  // explores on (the answer is accepted at the end if no later report replaces it).
+  if (verdict.accept) {
+    const deferred = deferEnding(ctx, step, "report");
+    if (deferred !== null) {
+      ctx.deferredAnswer = verdict.answer;
+      record(false, deferred, { answer: verdict.answer, origin: "engine" });
+      return "continue";
+    }
+  }
   if (verdict.accept) {
     const on = replyPages === null ? "the observed pages" : "the reply observed after the send";
     record(true, `report accepted: answer grounded on ${on} (${verdict.answer.evidence.length} claim(s))`, {
@@ -68,6 +79,8 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
     return "stop";
   }
   ctx.reportRejections += 1;
+  // #424: what code DID ground of a rejected answer is evidence for the partial report.
+  for (const e of verdict.answer?.evidence ?? []) if (e.grounded) ctx.reportClaims.push(e);
   // #223: an answer that is on the page but does not answer the question is no answer either.
   ctx.lastReportNotFound = (verdict.answer === null && verdict.reason === NO_ANSWER_REASON) || verdict.notAnswer === true;
   ctx.lastAbsenceUncovered = verdict.absenceUncovered === true ? verdict.reason : null;
@@ -75,7 +88,8 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
   record(false, `report rejected (${ctx.reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
     answer: verdict.answer,
   });
-  if (ctx.reportRejections >= MAX_REPORT_REJECTIONS) {
+  // #424: below the minimum exploration effort, a report that found nothing does not end the run.
+  if (ctx.reportRejections >= MAX_REPORT_REJECTIONS && deferEnding(ctx, step, "report") === null) {
     ctx.incomplete = `the model reported an answer ${ctx.reportRejections} times, but ${verdict.reason}`;
     ctx.stop = "blocked";
     return "stop";

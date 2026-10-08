@@ -9,6 +9,7 @@ import { judgeGoalCompletion, type Decision } from "../decide.js";
 import { isCredentialField } from "../auth-completion.js";
 import { SaveProgress } from "../save-completion.js";
 import type { Control } from "../snapshot.js";
+import type { SafetyRefusal } from "../safety.js";
 import {
   type AnswerVerdict,
 } from "../answer.js";
@@ -85,6 +86,8 @@ export function newStep(ctx: RunContext, input: StepInput) {
       answer?: AnswerVerdict["answer"];
       /** See `TranscriptEntry.origin` — set for a refusal decided by jevitate's own guard/fail-closed logic, never after a real `act()` attempt. */
       origin?: "engine";
+      /** #428: the safety rule that refused this step. */
+      safety?: SafetyRefusal;
     } = {},
   ): void => {
     const op = extra.op ?? decision.op;
@@ -99,6 +102,9 @@ export function newStep(ctx: RunContext, input: StepInput) {
         label: target === null ? op.replace("_", " ") : `${op} ${quote(target.name || target.summary, 60)}`,
       };
     }
+    // #424: the run's depth — what was tried on this page, and the form submissions that went through.
+    if (target !== null && TARGET_OPS.has(op)) ctx.depth.noteTried(snap.url, target.name || target.summary);
+    if (actOk && target !== null && (op === "send" || (op === "click" && target.submits === true))) ctx.depth.noteSubmitted();
     if (op === "type" || op === "send") ctx.auth.noteTyped(target, snap.url, actOk, target !== null && ctx.isBound(target));
     // #225: typed credentials make the pending submit a sign-in, never a save.
     if ((op === "type" || op === "send") && actOk && target !== null && (ctx.isBound(target) || isCredentialField(target))) ctx.save.noteCredential();
@@ -122,6 +128,7 @@ export function newStep(ctx: RunContext, input: StepInput) {
       actOk,
       ...(reason === undefined ? {} : { reason }),
       ...(extra.origin === undefined ? {} : { origin: extra.origin }),
+      ...(extra.safety === undefined ? {} : { safety: extra.safety }),
       snapshot: snap,
       timing: perception.timing,
       ...(extra.message === undefined ? {} : { message: extra.message }),

@@ -87,6 +87,7 @@ export const SUITE_EXPLORE_OPTIONS = {
   // safety, settle, timing (the target config explore builds from its flags)
   deny: { shape: "strings", appliesTo: ALL_KINDS },
   paid: { shape: "strings", appliesTo: ALL_KINDS },
+  allowControl: { shape: "strings", appliesTo: ALL_KINDS },
   allowDestructive: { shape: "boolean", appliesTo: ALL_KINDS },
   dialogs: { shape: "string", appliesTo: ALL_KINDS, oneOf: ["dismiss", "accept"] },
   allowWrites: { shape: "boolean", appliesTo: ALL_KINDS },
@@ -122,6 +123,9 @@ export const SUITE_EXPLORE_OPTIONS = {
   hookTimeoutMs: { shape: "integer", appliesTo: ["goal"] },
   // #243: named identities a fixture step authenticates as (`auth.identity`), not the item's own session
   fixtureIdentity: { shape: "named-paths", appliesTo: ["goal"] },
+  // #424: the minimum exploration effort before a goal run's model may conclude
+  minActions: { shape: "integer", appliesTo: ["goal"], range: [1, 100000] },
+  minDistinctStates: { shape: "integer", appliesTo: ["goal"], range: [1, 100000] },
   // #202: a success check satisfied before the run's first action is a warning, not a failure
   allowVacuousChecks: { shape: "boolean", appliesTo: GOAL_UX },
   // #303: opt-in action deltas (every explore item kind but feature)
@@ -207,6 +211,7 @@ export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = 
   ignoreHostLoad: "#205: whether a check starts on a starved host is decided once, for the whole check: pass --ignore-host-load to `jevitate check`",
   real: "one model gateway per check: the suite's `ai` or `jevitate check --real`",
   fakeAi: "one model gateway per check: the suite's `ai` or `jevitate check --fake-ai`",
+  jevProvider: "one Jev provider per check: `jevitate check --jev-provider` (or JEVITATE_JEV_PROVIDER)",
   out: "one output directory per check (`jevitate check --out`); item results go to <out>/results",
   json: "one envelope per check (`jevitate check --json` / --json-out)",
   fileIssues: "a check is a CI gate: findings are reported in JUnit/SARIF/report.md, never filed mid-run",
@@ -214,6 +219,8 @@ export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = 
   jevitateRepo: "a check is a CI gate: findings are reported in JUnit/SARIF/report.md, never filed mid-run",
   repeat: "a check gates each item once by finding identity; track flakes across checks with --baseline",
   minAgreement: "a check gates each item once by finding identity; track flakes across checks with --baseline",
+  tag: "#426: tags are per check — `jevitate check --tag` stamps every item result; a suite item takes none of its own",
+  authCheck: "#427: the pre-flight auth check runs before `explore` runs and queued missions; a check runs its items' missions directly, without it — mint the suite's sessions with `jevitate login` before `jevitate check`",
   typeFixture: "#281: a file typed verbatim into a field is an `explore --type-fixture` binding; a suite goal declares none",
 };
 

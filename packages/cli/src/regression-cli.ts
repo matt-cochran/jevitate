@@ -1,3 +1,4 @@
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { BranchReplayInputError, JourneyPrefixStaleError, prefixFromBranch, recordedBranchOf, type JourneyPrefix, type RecordedBranch } from "./journey-prefix.js";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -223,7 +224,8 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
       {} as Record<string, string>,
     )
     .option("--json", "emit a JSON envelope")
-    .action(async function (this: Command, id: string) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "regression run", async function (this: Command, id: string) {
       // #245: demo mode (--headed/--slow-mo), resolved before any browser opens.
       let browser: ReturnType<typeof browserRunFromFlags>;
       try {
@@ -324,5 +326,5 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
       } finally {
         for (const close of opened) await close();
       }
-    });
+    }));
 }

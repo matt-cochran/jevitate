@@ -7,6 +7,7 @@
 import { Option } from "commander";
 import {
   parseSecretField,
+  validateAllowControlPatterns,
   validateDenyPatterns,
   type DialogPolicy,
   type SecretField,
@@ -135,6 +136,15 @@ export const GOAL_RUN_OPTIONS = {
     )
       .default([] as string[])
       .argParser(collect),
+  allowControl: () =>
+    new Option(
+      "--allow-control <regex>",
+      "#428: exempt a control whose accessible name matches this regex (case-sensitive; /src/i for case-insensitive) from the soft " +
+        "built-in 'may cost money' name heuristic only — e.g. --allow-control \"^Generate Your First Key$\" (repeatable). It never lifts " +
+        "--deny, --paid, destructive, session-end, read-only or origin rules; every use is recorded in the result's safetyOverrides",
+    )
+      .default([] as string[])
+      .argParser(collect),
   allowDestructive: () =>
     new Option(
       "--allow-destructive",
@@ -206,6 +216,7 @@ export interface GoalRunFlags extends EmulationFlags, ScreenshotsFlags {
   jobWaitMs?: string | number;
   deny: string[];
   paid: string[];
+  allowControl?: string[];
   allowDestructive?: boolean;
   dialogs?: string;
   readRpc: string[];
@@ -303,6 +314,7 @@ export function targetFlagsFromFlags(o: Partial<GoalRunFlags>, dialogs: DialogPo
     apiPrefixes: o.apiPrefix ?? [],
     deny: o.deny ?? [],
     paid: o.paid ?? [],
+    allowControl: o.allowControl ?? [],
     readRpc: o.readRpc ?? [],
     ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
     ...(dialogs === undefined ? {} : { dialogs }),
@@ -355,6 +367,7 @@ export function resolveGoalRunFlags(o: GoalRunFlags, url: string, deps: ResolveG
     const conversation = conversationFromFlags(o);
     validateDenyPatterns(o.deny);
     validateDenyPatterns(o.paid, "--paid");
+    validateAllowControlPatterns(o.allowControl ?? []);
     const emulation = emulationFromFlags(o);
     const secretFields = secretFieldsFromFlags(o, env);
     const typeFixtures = o.typeFixture.length === 0 ? [] : loadTypeFixtures(o.typeFixture);

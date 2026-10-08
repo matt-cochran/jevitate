@@ -43,7 +43,7 @@ import {
   type AdversarialCoverage,
   type CoverageThresholds,
 } from "../adversarial/run-coverage.js";
-import type { SafetyConfig } from "../safety.js";
+import type { SafetyConfig, SafetyOverride } from "../safety.js";
 import type { BlockedWrite } from "../read-only.js";
 import { type SideEffect } from "../side-effects.js";
 import type { InvariantSpec } from "@jevitate/recording";
@@ -274,6 +274,8 @@ export interface AdversarialOutcome {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects?: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #428: every --allow-control exemption the run used (regex, control, the soft rule it waived, step). */
+  readonly safetyOverrides?: SafetyOverride[];
   /**
    * #403: writes a misuse step fired to an origin outside `--allow`, aborted before they left the
    * browser — jevitate's refusal, never a defect of the app. Each names the origin + path and how to

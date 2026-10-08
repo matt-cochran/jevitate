@@ -73,6 +73,113 @@ and a top-level `diff` (`PersonaDiff`, `advisory: true` always) carries:
 The top-level `outcome` is that shared outcome when every persona agreed, else `"mixed"`; the
 canonical `missionOutcome` is then the most severe persona's.
 
+## Persona sessions: `jevitate login`, the pre-flight auth check and refresh
+
+Each persona needs a Playwright storage state. `jevitate login` makes one from credentials held in
+environment variables:
+
+```bash
+export ADMIN_USER=admin@example.com ADMIN_PASSWORD=...   # never on the command line
+jevitate login --persona admin --url http://localhost:3000/login \
+  --user-env ADMIN_USER --password-env ADMIN_PASSWORD \
+  --success urlIncludes:/dashboard --save ~/.jevitate/states/admin.json
+```
+
+- Only the variable **names** are given; a value pasted in their place is refused. jevitate's own keys
+  (`OPENROUTER_API_KEY`, `TYPESAFE_API_KEY`, `GITHUB_TOKEN`, `JEVITATE_*`) are never typed into a page.
+- The fields are found by label, `autocomplete`, `type` and `name` (`--user-field`/`--password-field`
+  take a label or a CSS selector; `--submit` a button name). A two-step form (username first, then a
+  password page) works too. Success is `urlIncludes:<text>`, `selector:<css>` or `text:<text>`; by
+  default, the page must leave the sign-in form (no login-like URL, no visible password field). A form
+  that shows an error (`role="alert"`, `aria-invalid`) after submitting fails at once (`E_LOGIN_FAILED`,
+  exit 2).
+- Credentials are typed only into a page on an authorized origin: the sign-in page's own, or `--allow`
+  (for example an SSO provider).
+- The login session records nothing: no trace, video, HAR or screenshot, whatever else is configured.
+  No result, error or log line carries a credential.
+- The state is written atomically with mode `0600` (parent directory created). A path inside a repo's
+  `.jevitate/` is refused. A path inside a git repository that git does not ignore gets a warning.
+
+Before a run that starts from a session (`--storage-state`, `--persona`/`--personas`, the primary
+`--actor`), `explore` checks that the session is still alive. It loads the state, opens `--url`, and
+ends the run at once if it landed on a sign-in page. The run is `inconclusive` (exit 2) with
+`failure: {kind: "auth-expired", message, persona}`, plus `persona`, `startUrl` and `landedUrl` on the
+result. The login page is never explored. `--auth-check` sets the rule:
+
+| `--auth-check` | the session counts as expired when |
+| --- | --- |
+| `auto` (default) | the start URL lands on a login-like path (`/login`, `/signin`, `/sign-in`, `/auth`, `/sso`, …) or shows a visible password field. Not checked when `--url` is itself such a route |
+| `urlExcludes:<text>` | the landed URL contains `<text>` |
+| `selector:<css>` | the signed-in marker `<css>` is not visible |
+| `off` | never checked |
+
+The check is one extra page load of the start URL, made in its own unrecorded context. When the
+start URL is bound from `--fixtures` (`<origin>${setup.x}`), the check opens the app's root instead,
+because that URL does not exist until the setup runs.
+
+If the check finds the session alive but a value in the state changed while the page loaded (for
+example a refresh cookie that rotates on every use), the live session is written back to the state
+file (atomically, mode `0600`). The mission then starts from that session, not from the token the
+check used up.
+
+In a persona matrix, every run is checked before it starts. A persona whose session expired gets an
+`auth-expired` run in its cell, and the other personas still run.
+
+**Refresh.** A persona can carry its login parameters, using environment variable names only. When the
+check finds the persona's session expired, or its state file does not exist yet, jevitate signs in
+once, saves the state over the old one, and checks again. If either step fails, the run ends
+`auth-expired` and the reason includes the sign-in failure.
+
+```json
+{
+  "personas": [
+    {
+      "name": "admin",
+      "storageState": "../.auth/admin.json",
+      "login": {
+        "url": "http://localhost:3000/login",
+        "userEnv": "ADMIN_USER",
+        "passwordEnv": "ADMIN_PASSWORD",
+        "success": "urlIncludes:/dashboard"
+      }
+    }
+  ]
+}
+```
+
+The map form takes `{"admin": {"storageState": "…", "login": {…}}}`, and a plain path still works.
+The `login` keys are `url`, `userEnv`, `passwordEnv`, `userField`, `passwordField`, `submit` and
+`success`. Any other key is refused, including a literal password. Pass the file as `--personas`, or
+commit it as the project's `.jevitate/personas.json`. With that file:
+
+- `--persona admin` (a bare name) runs that persona.
+- A single run's `--storage-state` that is a declared persona's state is checked and refreshed as
+  that persona.
+- `jevitate login --persona admin` re-mints it from the declared parameters.
+
+The storage states themselves must live outside `.jevitate/`.
+
+The same file is the [catalog](./catalog.md)'s persona list: an entry may also carry a
+`description`, a `role` and its `approval` (`jevitate persona approve`). An entry with no session
+yet (no `storageState`, no `login`) is a catalog-only persona, which runs skip.
+
+**Where the check runs.** `explore` (single runs, `--repeat`, the persona matrix, `--actor`) and queued
+missions (`mission run`, MCP `queue_exploration`) run it. A queued mission whose session expired gets
+an `auth-expired` result from `get_mission_result`. `targets.json` personas have no login parameters,
+so a queued mission is never refreshed. These do not run the check:
+
+- `explore --from-journey`: the Journey prefix replay fails closed on its own (`journey-stale`).
+- `journey run`: a deterministic replay. It does not add a page load. An expired session fails the
+  replay's own steps and assertions.
+- `jevitate check` suite items: a check runs its items' missions directly. Mint the suite's
+  sessions with `jevitate login` before the check.
+- `explore-author-journey`: an authoring run. A lost session still shows as `sessionLost`, as before.
+
+**Over MCP**, `run_exploration` takes `authCheck`. A persona's refresh uses only the login
+parameters an operator's personas file declares. `jevitate login` is CLI-only: it reads the operator
+environment variables that its own flags name, and an MCP request never chooses which of those
+variables is read.
+
 ## Multi-actor missions: `--actor` (goal missions)
 
 ```bash

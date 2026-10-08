@@ -108,12 +108,22 @@ export const OMIT = {
     "#293: a branch-point finding replays through its Journey prefix with the params its result recorded (non-secret ones); a secret param is re-supplied by the operator on the CLI, never sent as an MCP argument",
   tou: "accepting a third-party source's Terms of Use is a person's decision (like approve_action): MCP can add, pull and run a source, never accept for them",
   acceptWeak: "#401: promoting a Journey whose assertions cannot prove its outcome is a reviewer's waiver (recorded on the Journey): a person's decision on the CLI, never a request's",
+  reviewSheet: "#432: a review sheet FILE is what a person read on their screen; over MCP the same binding is the reviewedHash argument (the sheet's content hash from review_journey)",
+  acceptFindings:
+    "#433: approving despite pre-approval findings that need an acknowledgment (conflicts, broken links, …) is the approver's own judgment, recorded with the approval: a person's decision on the CLI (like --accept-weak), never a request's",
+  catalogRendering: "#433/#435: review_persona / review_job / catalog_status / analyze_catalog return the schema-checked JSON; the Markdown/text renderings and writing them to a file are for people at the CLI",
+  reviewRendering: "#432: review_journey returns the schema-checked JSON sheet; the Markdown/text renderings and writing them to a file are for people at the CLI",
+  nonInteractiveApproval:
+    "#437: the scripted-setup escape hatch for a CLI approval is the operator's choice, never a request's: an MCP approval needs no hatch — it is always recorded with provenance channel `mcp` (an agent's approval), which `check --require-approvals` fails unless the operator allows `mcp`",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
 const HOOK_FLAGS = { "--before": OMIT.hooks, "--after": OMIT.hooks, "--allow-shell-hooks": OMIT.hooks, "--hook-timeout-ms": OMIT.hooks } as const;
 const BROWSER_FLAGS = { "--browser-executable": OMIT.browserBin, "--browser-channel": OMIT.browserBin, "--browser-arg": OMIT.browserBin, "--ignore-host-load": OMIT.hostLoad } as const;
 const JSON_FLAG = { "--json": OMIT.json } as const;
+
+/** #426: `--tag key=value` → a `tags` object (`{"feature": "checkout"}`); keys/values validated by the command. */
+const TAGS: CliParam = { kind: "params", flag: "--tag" };
 
 // ── Param helpers ─────────────────────────────────────────────────────────────────────────────
 const s = (flag: string, extra: Partial<CliParam> = {}): CliParam => ({ kind: "string", flag, ...extra });
@@ -136,6 +146,10 @@ const EXTENSION = {
 const DEMO_SHOW = { headed: b("--headed"), slowMo: n("--slow-mo") };
 const ENVIRONMENT = { env: s("--env"), baseUrl: s("--base-url") };
 const AI = { real: b("--real"), fakeAi: b("--fake-ai") };
+/** #429: commands that build the live Jev gateway also take the Jev provider (typesafe | openrouter). */
+const JEV_AI = { ...AI, jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) };
+/** #434/#435: the advisory Jev layer of a review sheet / approval / catalog analysis (judgment only, cached by content hash). */
+const JEV_ADVICE = { real: b("--real"), jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) };
 /** #243: `name=<storageState>` identities a fixture step authenticates as — each path confined as a session. */
 const FIXTURE_IDENTITY: CliParam = { kind: "named-sessions", flag: "--fixture-identity" };
 
@@ -148,8 +162,68 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   },
   {
     name: "promote_journey",
-    description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
-    command: { path: "journey promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, ...JSON_FLAG } },
+    description:
+      "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey). " +
+      "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`, with the agent markers detected) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is an allowed channel. " +
+      "A promotion that must count as human sign-off is a person's act at their own terminal: hand it to them (`jevitate journey promote <id>`, typed confirmation).",
+    command: {
+      path: "journey promote",
+      params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted"), ...JEV_ADVICE },
+      omitted: {
+        "--dir": OMIT.storeDir,
+        "--accept-weak": OMIT.acceptWeak,
+        "--review-sheet": OMIT.reviewSheet,
+        "--accept-findings": OMIT.acceptFindings,
+        "--non-interactive-approval": OMIT.nonInteractiveApproval,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
+    name: "review_persona",
+    description:
+      "`jevitate persona review <id> --json` (#433): read-only. A catalog persona's review sheet — description, account role, session presence (never a credential), the jobs it serves, the Journeys linked to it, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
+      "Approving a persona is a person's act on the CLI (`jevitate persona approve`): there is no MCP tool for it.",
+    command: { path: "persona review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "review_job",
+    description:
+      "`jevitate job review <id> --json` (#433): read-only. A catalog job's review sheet — its job story (\"When …, I want to …, so I can ….\"), its personas and which of them have a promoted Journey for it, the gaps, its Journeys, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
+      "Approving a job is a person's act on the CLI (`jevitate job approve`): there is no MCP tool for it.",
+    command: { path: "job review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "catalog_status",
+    description:
+      "`jevitate catalog status --json` (#433): read-only. The catalog's coverage — the jobs × personas matrix (which pairs have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links, and stale approvals (edited personas/jobs and the Journeys linked to them: needs re-review). " +
+      "#437: `approvals` lists every recorded approval and how it was made (provenance channel tty / non-interactive / mcp / ci). requireApprovals (+ allowChannels, default tty): exit 1 when an approval is missing, stale or made over a channel not allowed.",
+    command: {
+      path: "catalog status",
+      params: { requireApprovals: b("--require-approvals"), allowChannels: s("--allow-channels") },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "analyze_catalog",
+    description:
+      "`jevitate catalog analyze --json` (#435): read-only and advisory. Problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic (complete, consistent, feasible, comprehensible, able to be validated, correct): candidate pairs chosen by code (shared persona or trigger/outcome terms, opposing writes on one resource, same role), each with why it was paired and — with real: true — Jev's typed classification (compatible | duplicate | overlapping | conflicting | dependent, with a probability), " +
+      "completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Pairs over maxPairs are listed as overflow, never dropped. It never changes the catalog and never gates.",
+    command: { path: "catalog analyze", params: { ...JEV_ADVICE, maxPairs: n("--max-pairs") }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "review_journey",
+    description:
+      "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
+      "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed.",
+    command: {
+      path: "journey review",
+      params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE },
+      omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
+    },
   },
   {
     name: "lint_journey",
@@ -233,7 +307,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate demo \"<aspect>\"` / `demo create` (#249): explore a NAMED, non-production environment (env, required) toward the aspect, checked by success (required), minimize the path (verified by replay), annotate it and render a DRAFT demo (video, .vtt, guide). Nothing is promoted until approve_demo. Needs real or fakeAi.",
     command: {
       path: "demo create",
-      params: { ...EXTENSION,
+      params: { tags: TAGS, ...EXTENSION,
         aspect: pos(),
         env: s("--env"),
         success: s("--success"),
@@ -249,7 +323,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         fixtureIdentity: FIXTURE_IDENTITY,
         ...EMULATION,
         ...DEMO_SHOW,
-        ...AI,
+        ...JEV_AI,
       },
       omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
@@ -257,21 +331,34 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "approve_demo",
     description:
-      "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1).",
+      "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1). " +
+      "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is allowed; human sign-off is the person's `jevitate demo approve <id>` at their own terminal.",
     command: {
       path: "demo approve",
-      params: { ...EXTENSION, id: pos(), out: path("--out"), pace: n("--pace"), storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, ...EMULATION, ...DEMO_SHOW },
-      omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      params: {
+        ...EXTENSION,
+        id: pos(),
+        out: path("--out"),
+        pace: n("--pace"),
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        ...EMULATION,
+        ...DEMO_SHOW,
+        acceptUnvetted: s("--accept-unvetted"),
+        ...JEV_ADVICE,
+      },
+      omitted: { "--dir": OMIT.storeDir, "--accept-findings": OMIT.acceptFindings, "--non-interactive-approval": OMIT.nonInteractiveApproval, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
     name: "run_exploration",
     description:
       "`jevitate explore` run DIRECTLY (every strategy: goal (default) | coverage | exploratory | adversarial | usability, or feature): drives a real browser on url (which must be on an allow origin) within its budget, and returns the typed result (read later with get_mission_result by its result id). " +
-      "For a PROMOTED target prefer queue_exploration (queue + poll). Model-driven strategies need real or fakeAi. Media: recordVideo, screenshots, evidenceVideo. Sessions: storageState, persona/actor entries 'name=<storageState path>'.",
+      "For a PROMOTED target prefer queue_exploration (queue + poll). Model-driven strategies need real or fakeAi. Media: recordVideo, screenshots, evidenceVideo. Sessions: storageState, persona/actor entries 'name=<storageState path>'; authCheck (off/auto/urlExcludes:/selector:) ends a run on an expired session as auth-expired (inconclusive), re-signing a persona in once when its personas file declares login parameters.",
     command: {
       path: "explore",
-      params: { ...EXTENSION,
+      params: { tags: TAGS, ...EXTENSION,
         url: s("--url"),
         // #293 journey-anchored exploration: replay a promoted Journey to a step/anchor, then the mission.
         fromJourney: s("--from-journey"),
@@ -290,12 +377,18 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         scope: s("--scope", { enum: ["app"] }),
         maxActions: n("--max-actions"),
         maxDecisions: n("--max-decisions"),
+        // #424: the minimum exploration effort (goal strategy).
+        minActions: n("--min-actions"),
+        minDistinctStates: n("--min-distinct-states"),
         stallTimeout: n("--stall-timeout"),
         invariants: { kind: "path[]", flag: "--invariants" },
         storageState: session("--storage-state"),
         saveStorageState: session("--save-storage-state"),
         persona: { kind: "named-sessions", flag: "--persona" },
         personas: path("--personas"),
+        // #427: the pre-flight auth check (off | auto | urlExcludes:<text> | selector:<css>); a persona's
+        // `login` refresh reads only the env variable NAMES the operator's personas file declares.
+        authCheck: s("--auth-check"),
         actor: { kind: "named-sessions", flag: "--actor" },
         fixtures: path("--fixtures"),
         fixtureIdentity: FIXTURE_IDENTITY,
@@ -316,6 +409,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         allowWrite: many("--allow-write"),
         deny: many("--deny"),
         paid: many("--paid"),
+        allowControl: many("--allow-control"),
         readRpc: many("--read-rpc"),
         settleIgnore: many("--settle-ignore"),
         ignoreNoProgress: many("--ignore-no-progress"),
@@ -339,7 +433,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         overlay: b("--no-overlay"),
         ...EMULATION,
         ...DEMO_SHOW,
-        ...AI,
+        ...JEV_AI,
       },
       omitted: {
         ...HOOK_FLAGS,
@@ -374,6 +468,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "campaign run",
       params: {
+        tags: TAGS,
         spec: pos("path"),
         out: path("--out"),
         // #311: forwarded to every mission, exactly as run_exploration takes them.
@@ -381,16 +476,60 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         allowWrites: b("--allow-writes"),
         deny: many("--deny"),
         paid: many("--paid"),
+        allowControl: many("--allow-control"),
         invariants: { kind: "path[]", flag: "--invariants" },
         recordVideo: { kind: "optional-path", flag: "--record-video" },
         screenshots: { kind: "screenshots", flag: "--screenshots" },
         evidenceVideo: b("--evidence-video"),
-        ...AI,
+        ...JEV_AI,
       },
       omitted: {
         "--journeys-dir": OMIT.storeDir,
         "--allow-shell-hooks": OMIT.hooks,
         "--hook-timeout-ms": OMIT.hooks,
+        "--allow-log-cmd": OMIT.logCmd,
+        "--log-source": OMIT.logCmd,
+        "--log-defect": OMIT.logCmd,
+        "--log-ignore": OMIT.logCmd,
+        "--log-scope": OMIT.logCmd,
+        "--log-correlation-header": OMIT.logCmd,
+        "--log-id-pattern": OMIT.logCmd,
+        "--log-quiet-ok": OMIT.logCmd,
+        "--server-log-drain-ms": OMIT.logCmd,
+        "--log-triage": OMIT.logTriage,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
+    name: "run_sweep",
+    description:
+      "`jevitate sweep --targets <file>` (#425): many explore missions — one per target in a .tsv/.json targets file (id, url|route, persona storage state, strategy, goal, tags, and the value-typed explore options run_exploration takes) — " +
+      "with bounded concurrency, resumable (resume + out), and ONE sweep.result.json: per-target outcome and depth, defects deduped by fingerprint across targets (one finding, N sightings), environment causes grouped. " +
+      "stopOnEnvFailure K stops starting runs when the first K all failed for environment/setup reasons. Every run is tagged target=<id> plus tags. A persona path in the file is confined like a storageState argument. Long-running: bound it with the file and concurrency.",
+    command: {
+      path: "sweep",
+      params: {
+        tags: TAGS,
+        targets: path("--targets", { required: true }),
+        concurrency: n("--concurrency"),
+        resume: b("--resume"),
+        out: path("--out"),
+        stopOnEnvFailure: n("--stop-on-env-failure"),
+        ...ENVIRONMENT,
+        // Forwarded to every run, exactly as run_exploration / run_campaign take them.
+        allowDestructive: b("--allow-destructive"),
+        allowWrites: b("--allow-writes"),
+        deny: many("--deny"),
+        paid: many("--paid"),
+        allowControl: many("--allow-control"),
+        invariants: { kind: "path[]", flag: "--invariants" },
+        recordVideo: { kind: "optional-path", flag: "--record-video" },
+        screenshots: { kind: "screenshots", flag: "--screenshots" },
+        evidenceVideo: b("--evidence-video"),
+        ...JEV_AI,
+      },
+      omitted: {
         "--allow-log-cmd": OMIT.logCmd,
         "--log-source": OMIT.logCmd,
         "--log-defect": OMIT.logCmd,
@@ -437,6 +576,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         jobWaitMs: n("--job-wait-ms"),
         deny: many("--deny"),
         paid: many("--paid"),
+        allowControl: many("--allow-control"),
         allowDestructive: b("--allow-destructive"),
         dialogs: s("--dialogs", { enum: ["dismiss", "accept"] }),
         readRpc: many("--read-rpc"),
@@ -447,7 +587,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ignoreNoProgress: many("--ignore-no-progress"),
         screenshots: { kind: "screenshots", flag: "--screenshots" },
         ...EMULATION,
-        ...AI,
+        ...JEV_AI,
       },
       omitted: {
         "--journeys-dir": OMIT.storeDir,
@@ -464,10 +604,11 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_check",
     description:
-      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding.",
+      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding. " +
+      "#437 requireApprovals (+ allowChannels, default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed.",
     command: {
       path: "check",
-      params: { ...EXTENSION,
+      params: { tags: TAGS, ...EXTENSION,
         suite: path("--suite", { required: true }),
         out: path("--out"),
         jsonOut: path("--json-out"),
@@ -476,7 +617,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         baseline: s("--baseline"),
         changedRoutes: many("--changed-routes"),
         targetBuild: s("--target-build"),
-        ...AI,
+        requireApprovals: b("--require-approvals"),
+        allowChannels: s("--allow-channels"),
+        ...JEV_AI,
       },
       omitted: { "--baseline-dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
@@ -486,14 +629,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description: "`jevitate report`: one deduped defect list for a target across every mode and run (+ an optional diff section against a baseline run, tag or `last`).",
     command: {
       path: "report",
-      params: { target: s("--target"), since: s("--since"), baseline: s("--baseline"), out: path("--out") },
+      params: { tags: TAGS, target: s("--target"), since: s("--since"), baseline: s("--baseline"), out: path("--out") },
       omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
   {
     name: "diff_runs",
     description: "`jevitate diff <runA> <runB>`: classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline).",
-    command: { path: "diff", params: { runA: pos(), runB: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "diff", params: { tags: TAGS, runA: pos(), runB: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "baselines",
@@ -524,6 +667,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "load run",
       params: {
+        tags: TAGS,
         journeyId: pos(),
         ...EXTENSION,
         authorizedOrigin: many("--authorized-origin"),
@@ -549,7 +693,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate mission run --once`: drain the missions queue_exploration queued (each through its strategy's runner; results where get_mission_result reads them), then return the drain report. Model-driven missions need real or fakeAi (others stay queued, reported as skipped).",
     command: {
       path: "mission run",
-      params: { ...EXTENSION, ...AI },
+      params: { tags: TAGS, ...EXTENSION, ...JEV_AI },
       omitted: {
         "--once": "the default: MCP drains what is queued once and returns",
         "--watch": OMIT.watch,
@@ -638,16 +782,17 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       },
       run: {
         path: "regression run",
-        params: { ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
+        params: { tags: TAGS, ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
         omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
   },
   {
     name: "site_policy",
-    description: "`jevitate site policy get | set` and `site simulate`: per-origin pacing, throttles, budgets and quiet hours (run_journey honours them).",
+    description: "`jevitate site policy get | set | rules` and `site simulate`: per-origin pacing, throttles, budgets and quiet hours (run_journey honours them); `rules` lists the control safety rules (ids, what they match, whether --allow-control can waive them).",
     actions: {
       get: { path: "site policy get", params: { site: pos(), account: s("--account") }, omitted: { "--db": OMIT.storeDir, ...JSON_FLAG } },
+      rules: { path: "site policy rules", params: {}, omitted: JSON_FLAG },
       set: { path: "site policy set", params: { site: pos(), file: path("--file", { required: true }), account: s("--account") }, omitted: { "--db": OMIT.storeDir, ...JSON_FLAG } },
       simulate: { path: "site simulate", params: { site: pos(), script: path("--script", { required: true }), seed: n("--seed"), account: s("--account") }, omitted: { "--db": OMIT.storeDir, ...JSON_FLAG } },
     },
@@ -664,7 +809,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       remove: { path: "source remove", params: { name: pos() }, omitted: JSON_FLAG },
       run: {
         path: "source run",
-        params: { ...EXTENSION, name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
+        params: { tags: TAGS, ...EXTENSION, name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
         omitted: { ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
@@ -687,7 +832,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         maxFindingsPerPage: n("--max-findings-per-page"),
         product: path("--product"),
         polish: b("--polish"),
-        ...AI,
+        ...JEV_AI,
       },
       omitted: JSON_FLAG,
     },
@@ -705,7 +850,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "get_ai_status",
     description:
       "`jevitate ai status`: which model-gateway credentials each AI feature uses, where each comes from (env or the stored file) and whether its provider accepts it (a live auth check; `verify: false` skips it) — names, sources and verdicts only, never a key value.",
-    command: { path: "ai status", params: { verify: b("--no-verify") }, omitted: JSON_FLAG },
+    command: { path: "ai status", params: { verify: b("--no-verify"), jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) }, omitted: JSON_FLAG },
   },
 ];
 

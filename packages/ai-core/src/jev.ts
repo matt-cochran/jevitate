@@ -1,18 +1,20 @@
-// jev.ts — adapter SHAPE only; live calls gated on TYPESAFE_API_KEY.
+// jev.ts — adapter SHAPE only; live calls gated on a Jev key (TYPESAFE_API_KEY or, #429, OPENROUTER_API_KEY).
 import { type JudgmentPort, type JudgmentState, type Question, type Answer } from "./judgment.js";
-import { type CredentialStore, requireKeys } from "./credentials.js";
+import { type CredentialStore, type JevProvider, resolveJevRoute } from "./credentials.js";
 import { assertNoOutboundCredential } from "./credential-guard.js";
 
 export interface JevClientCall {
-  (args: { state: JudgmentState; questions: Record<string, Question>; authHeader: string }): Promise<Record<string, Answer>>;
+  /** `provider` (#429): which Jev route `authHeader`'s key belongs to — absent means `typesafe`. */
+  (args: { state: JudgmentState; questions: Record<string, Question>; authHeader: string; provider?: JevProvider }): Promise<Record<string, Answer>>;
 }
 export class JevJudgmentGateway implements JudgmentPort {
-  constructor(private readonly store: CredentialStore, private readonly call: JevClientCall) {}
+  /** `provider` pins the Jev route (`--jev-provider` / `JEVITATE_JEV_PROVIDER`); absent: TypeSafe key first, then OpenRouter. */
+  constructor(private readonly store: CredentialStore, private readonly call: JevClientCall, private readonly provider?: JevProvider) {}
   async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
-    requireKeys("judgment", this.store);                     // fail-closed
+    const route = resolveJevRoute(this.store, this.provider); // fail-closed
     assertNoOutboundCredential(args, this.store);            // never-to-model choke point (redact-before-model already applied by caller)
-    const key = this.store.read("TYPESAFE_API_KEY")!;
-    return this.call({ ...args, authHeader: `Bearer ${key}` });
+    const key = this.store.read(route.key)!;
+    return this.call({ ...args, authHeader: `Bearer ${key}`, provider: route.provider });
   }
 }
 

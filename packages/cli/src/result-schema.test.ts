@@ -152,9 +152,19 @@ function assertNoRemovedAliases(json: unknown, strategy: string): void {
 }
 
 /** The backend-log defect is in `defects` (#195), the only list that carries it. */
-function assertServerLogDefectInDefects(result: { defects: ReadonlyArray<{ kind: string; fingerprint: string }> }): void {
+function assertServerLogDefectInDefects(result: {
+  defects: ReadonlyArray<{ kind: string; fingerprint: string; advisory?: true }>;
+  defectOutcome: { status: string; byKind: Readonly<Record<string, number>>; advisoryByKind?: Readonly<Record<string, number>> };
+}): void {
   const serverLogOnes = result.defects.filter((d) => d.kind === "server-log");
   expect(serverLogOnes.length).toBeGreaterThan(0);
+  // #421: each is a structured entry (never only in `reason`), counted by kind in `defectOutcome`.
+  for (const d of serverLogOnes) {
+    expect(d).toMatchObject({ level: expect.any(String), source: expect.any(String), message: expect.any(String), firstSeenStep: expect.any(Number), count: expect.any(Number) });
+  }
+  const advisory = serverLogOnes.every((d) => d.advisory === true);
+  const counted = advisory ? result.defectOutcome.advisoryByKind?.["server-log"] : result.defectOutcome.byKind["server-log"];
+  expect(counted).toBe(serverLogOnes.length);
 }
 
 /** Answers every decision with the same candidate action (`done`, `blocked`, `wait`, `click:0`, …). */
@@ -246,12 +256,42 @@ describe("#217 — a goal result's missionOutcome is canonical; its own ending i
         const core = assertConforms(r, "goal");
         expect(MISSION_OUTCOMES).toContain(core.missionOutcome);
         expect([core.missionOutcome, core.goalOutcome, r.outcome, r.stop]).toEqual([missionOutcome, goalOutcome, goalOutcome, stop]);
+        // #423: no defect on this backend — the miss is the goal's alone, with its structured reason.
+        expect(r.defectOutcome).toEqual({ status: "none", byKind: {} });
+        expect(r.goalReason).toBe({ succeeded: undefined, failed: "success-check-failed", blocked: "gave-up", exhausted: "budget" }[goalOutcome]);
         const file = JSON.parse(readFileSync(r.resultPath, "utf8")) as { missionOutcome: string; result: { goalOutcome: string } };
         expect([file.missionOutcome, file.result.goalOutcome]).toEqual([missionOutcome, goalOutcome]);
       },
       180_000,
     );
   }
+});
+
+describe("#423 — goalOutcome and defectOutcome are orthogonal; missionOutcome is derived from both", () => {
+  it(
+    "a goal not reached on a backend that logged an error: goalOutcome blocked (gave-up), defectOutcome defects, defects-found (exit 1)",
+    async () => {
+      const r = await runExploration({
+        url: url(),
+        goal: "save the settings",
+        allowlist: [origin],
+        judge: sequence("click:0", "blocked"),
+        gen: new FakeGenerationGateway({}),
+        successChecks: [parseSuccessSpec("textIncludes:[data-testid=status]|never")],
+        bounds: { maxActions: 2, maxDecisions: 3 },
+        outDir: await out("goal-blocked-defects"),
+        serverLog: serverLog(),
+      });
+      const core = assertConforms(r, "goal");
+      expect([core.goalOutcome, core.goalReason, core.missionOutcome, core.exitCode]).toEqual(["blocked", "gave-up", "defects-found", 1]);
+      expect(r.defectOutcome).toEqual({ status: "defects", byKind: { "server-log": 1 } });
+      // `reason` stays prose: the goal's own account first, then what the defect oracle found.
+      expect(r.reason).toMatch(/cannot be advanced.*; 1 server-log defect found \(--log-defect\)$/);
+      const file = JSON.parse(readFileSync(r.resultPath, "utf8")) as { result: { goalOutcome: string; goalReason: string; defectOutcome: unknown } };
+      expect([file.result.goalOutcome, file.result.goalReason, file.result.defectOutcome]).toEqual(["blocked", "gave-up", { status: "defects", byKind: { "server-log": 1 } }]);
+    },
+    180_000,
+  );
 });
 
 describe("one result schema across strategies (#195 part 5)", () => {
