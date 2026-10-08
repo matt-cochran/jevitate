@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { GOAL_OUTCOME_FOLD, contentHash, isGoalOutcome } from "@jevitate/domain";
+import { GOAL_OUTCOME_FOLD, contentHash, isGoalOutcome, runTagsOf } from "@jevitate/domain";
 import {
   findingKey,
   requestIdentity,
@@ -128,6 +128,8 @@ export interface RunRecord {
   readonly scope?: RunScope;
   /** #293: the Journey step a journey-anchored run branched from — every finding of the run came from there. */
   readonly branch?: RunBranch;
+  /** #426: the run's `--tag key=value` metadata (absent when it had none). */
+  readonly tags?: Readonly<Record<string, string>>;
 }
 
 /** #293: where a journey-anchored run branched off a promoted Journey. */
@@ -651,6 +653,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   const origin = originOf(str(target?.seedUrl)) ?? originOf(str(result.site));
   const scope = missionScope(mode, result);
   const branch = branchOf(result.branch);
+  const tags = runTagsOf(result);
   return {
     runId,
     mode,
@@ -666,6 +669,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
     ...(isRecord(result.usage) ? { usage: result.usage } : {}),
     ...(scope === undefined ? {} : { scope }),
     ...(branch === undefined ? {} : { branch }),
+    ...(Object.keys(tags).length === 0 ? {} : { tags }),
   };
 }
 

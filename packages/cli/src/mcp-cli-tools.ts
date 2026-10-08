@@ -115,6 +115,9 @@ const HOOK_FLAGS = { "--before": OMIT.hooks, "--after": OMIT.hooks, "--allow-she
 const BROWSER_FLAGS = { "--browser-executable": OMIT.browserBin, "--browser-channel": OMIT.browserBin, "--browser-arg": OMIT.browserBin, "--ignore-host-load": OMIT.hostLoad } as const;
 const JSON_FLAG = { "--json": OMIT.json } as const;
 
+/** #426: `--tag key=value` → a `tags` object (`{"feature": "checkout"}`); keys/values validated by the command. */
+const TAGS: CliParam = { kind: "params", flag: "--tag" };
+
 // ── Param helpers ─────────────────────────────────────────────────────────────────────────────
 const s = (flag: string, extra: Partial<CliParam> = {}): CliParam => ({ kind: "string", flag, ...extra });
 const n = (flag: string, extra: Partial<CliParam> = {}): CliParam => ({ kind: "integer", flag, ...extra });
@@ -235,7 +238,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate demo \"<aspect>\"` / `demo create` (#249): explore a NAMED, non-production environment (env, required) toward the aspect, checked by success (required), minimize the path (verified by replay), annotate it and render a DRAFT demo (video, .vtt, guide). Nothing is promoted until approve_demo. Needs real or fakeAi.",
     command: {
       path: "demo create",
-      params: { ...EXTENSION,
+      params: { tags: TAGS, ...EXTENSION,
         aspect: pos(),
         env: s("--env"),
         success: s("--success"),
@@ -273,7 +276,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "For a PROMOTED target prefer queue_exploration (queue + poll). Model-driven strategies need real or fakeAi. Media: recordVideo, screenshots, evidenceVideo. Sessions: storageState, persona/actor entries 'name=<storageState path>'.",
     command: {
       path: "explore",
-      params: { ...EXTENSION,
+      params: { tags: TAGS, ...EXTENSION,
         url: s("--url"),
         // #293 journey-anchored exploration: replay a promoted Journey to a step/anchor, then the mission.
         fromJourney: s("--from-journey"),
@@ -380,6 +383,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "campaign run",
       params: {
+        tags: TAGS,
         spec: pos("path"),
         out: path("--out"),
         // #311: forwarded to every mission, exactly as run_exploration takes them.
@@ -398,6 +402,48 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         "--journeys-dir": OMIT.storeDir,
         "--allow-shell-hooks": OMIT.hooks,
         "--hook-timeout-ms": OMIT.hooks,
+        "--allow-log-cmd": OMIT.logCmd,
+        "--log-source": OMIT.logCmd,
+        "--log-defect": OMIT.logCmd,
+        "--log-ignore": OMIT.logCmd,
+        "--log-scope": OMIT.logCmd,
+        "--log-correlation-header": OMIT.logCmd,
+        "--log-id-pattern": OMIT.logCmd,
+        "--log-quiet-ok": OMIT.logCmd,
+        "--server-log-drain-ms": OMIT.logCmd,
+        "--log-triage": OMIT.logTriage,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
+    name: "run_sweep",
+    description:
+      "`jevitate sweep --targets <file>` (#425): many explore missions — one per target in a .tsv/.json targets file (id, url|route, persona storage state, strategy, goal, tags, and the value-typed explore options run_exploration takes) — " +
+      "with bounded concurrency, resumable (resume + out), and ONE sweep.result.json: per-target outcome and depth, defects deduped by fingerprint across targets (one finding, N sightings), environment causes grouped. " +
+      "stopOnEnvFailure K stops starting runs when the first K all failed for environment/setup reasons. Every run is tagged target=<id> plus tags. A persona path in the file is confined like a storageState argument. Long-running: bound it with the file and concurrency.",
+    command: {
+      path: "sweep",
+      params: {
+        tags: TAGS,
+        targets: path("--targets", { required: true }),
+        concurrency: n("--concurrency"),
+        resume: b("--resume"),
+        out: path("--out"),
+        stopOnEnvFailure: n("--stop-on-env-failure"),
+        ...ENVIRONMENT,
+        // Forwarded to every run, exactly as run_exploration / run_campaign take them.
+        allowDestructive: b("--allow-destructive"),
+        allowWrites: b("--allow-writes"),
+        deny: many("--deny"),
+        paid: many("--paid"),
+        invariants: { kind: "path[]", flag: "--invariants" },
+        recordVideo: { kind: "optional-path", flag: "--record-video" },
+        screenshots: { kind: "screenshots", flag: "--screenshots" },
+        evidenceVideo: b("--evidence-video"),
+        ...AI,
+      },
+      omitted: {
         "--allow-log-cmd": OMIT.logCmd,
         "--log-source": OMIT.logCmd,
         "--log-defect": OMIT.logCmd,
@@ -475,7 +521,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding.",
     command: {
       path: "check",
-      params: { ...EXTENSION,
+      params: { tags: TAGS, ...EXTENSION,
         suite: path("--suite", { required: true }),
         out: path("--out"),
         jsonOut: path("--json-out"),
@@ -494,14 +540,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description: "`jevitate report`: one deduped defect list for a target across every mode and run (+ an optional diff section against a baseline run, tag or `last`).",
     command: {
       path: "report",
-      params: { target: s("--target"), since: s("--since"), baseline: s("--baseline"), out: path("--out") },
+      params: { tags: TAGS, target: s("--target"), since: s("--since"), baseline: s("--baseline"), out: path("--out") },
       omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
   {
     name: "diff_runs",
     description: "`jevitate diff <runA> <runB>`: classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline).",
-    command: { path: "diff", params: { runA: pos(), runB: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "diff", params: { tags: TAGS, runA: pos(), runB: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "baselines",
@@ -532,6 +578,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "load run",
       params: {
+        tags: TAGS,
         journeyId: pos(),
         ...EXTENSION,
         authorizedOrigin: many("--authorized-origin"),
@@ -557,7 +604,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate mission run --once`: drain the missions queue_exploration queued (each through its strategy's runner; results where get_mission_result reads them), then return the drain report. Model-driven missions need real or fakeAi (others stay queued, reported as skipped).",
     command: {
       path: "mission run",
-      params: { ...EXTENSION, ...JEV_AI },
+      params: { tags: TAGS, ...EXTENSION, ...JEV_AI },
       omitted: {
         "--once": "the default: MCP drains what is queued once and returns",
         "--watch": OMIT.watch,
@@ -646,7 +693,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       },
       run: {
         path: "regression run",
-        params: { ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
+        params: { tags: TAGS, ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
         omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
@@ -673,7 +720,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       remove: { path: "source remove", params: { name: pos() }, omitted: JSON_FLAG },
       run: {
         path: "source run",
-        params: { ...EXTENSION, name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
+        params: { tags: TAGS, ...EXTENSION, name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
         omitted: { ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },

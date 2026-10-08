@@ -1,4 +1,5 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
@@ -182,7 +183,8 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
-    .action(async function (this: Command, aspect: string) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "demo", async function (this: Command, aspect: string) {
       const o = this.opts<
         ReplayFlags & { env?: string; success?: string; persona?: string; id?: string; start?: string; maxActions?: number; maxDecisions?: number; real?: boolean; fakeAi?: boolean; jevProvider?: string }
       >();
@@ -254,7 +256,7 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
         const r = refusalOf(err);
         emitJson(program, r === null ? fail("E_DEMO", String(err instanceof Error ? err.message : err)) : fail(r.code, r.message));
       }
-    });
+    }));
 
   withReplayFlags(demo.command("approve <id>"))
     .description(

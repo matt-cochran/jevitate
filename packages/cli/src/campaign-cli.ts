@@ -1,4 +1,5 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { withEngine } from "./engine.js";
@@ -22,7 +23,7 @@ export function campaignMissionArgv(cmd: Command): string[] {
  * (destructive/paid/deny), invariants, backend-log evidence and media. Operator flags only: the
  * spec file never widens what a mission may click or read.
  */
-function withMissionFlags(cmd: Command): Command {
+export function withMissionFlags(cmd: Command): Command {
   const each = "(forwarded to every mission, as explore's)";
   const repeatable: ReadonlyArray<readonly [string, string]> = [
     ["--deny <pattern>", "a control no mission may click (repeatable)"],
@@ -86,7 +87,8 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit the JSON envelope (default: a human summary)")
-    .action(async function (this: Command, spec: string) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "campaign run", async function (this: Command, spec: string) {
       const o = this.opts<{ journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; jevProvider?: string; json?: boolean }>();
       const emit = (envelope: Parameters<typeof emitCommandResult>[1], exitCode?: number): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "campaign run", human: formatCampaignHuman, ...(exitCode === undefined ? {} : { exitCode }) });
@@ -116,5 +118,5 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
         if (err instanceof CampaignSpecError) emit(fail(err.code, err.message));
         else emit(fail("E_CAMPAIGN_RUN", String(err instanceof Error ? err.message : err)));
       }
-    });
+    }));
 }

@@ -116,7 +116,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (65 exports)
+# @jevitate/domain (76 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEGRADED_FINDINGS: array
@@ -126,6 +126,8 @@
   GOAL_OUTCOMES: array
   GOAL_OUTCOME_FOLD: object
   HostHealthSummarySchema: object
+  MAX_RUN_TAGS: const (number)
+  MAX_RUN_TAG_VALUE: const (number)
   MAX_SAFE_NAME_LENGTH: const (number)
   MISSION_EXIT_CODES: object
   MISSION_OUTCOMES: array
@@ -136,6 +138,7 @@
   RESULT_GOAL_OUTCOMES: array
   RESULT_MISSION_OUTCOMES: array
   RESULT_STRATEGIES: array
+  RUN_TAG_KEY: object
   ResourceGovernanceSummarySchema: object
   ResultBranchSchema: object
   ResultDefectSchema: object
@@ -143,10 +146,13 @@
   ResultHangSchema: object
   ResultTargetSchema: object
   ResultUsageSchema: object
+  RunTagError: class
+  RunTagsSchema: object
   SitePolicySchema: object
   TimeSkippingClock: class
   UnsafeNameError: class
   assertInsideRoot: function
+  assertRunTag: function
   assertSafeName: function
   attributeCrash: function
   clock: object
@@ -169,18 +175,23 @@
   isWithinQuietHours: function
   looksLikeRendererOom: function
   makeRng: function
+  matchesRunTags: function
   nextOpenAfter: function
   occurrenceComment: function
   outcomeExitCode: function
+  parseRunTagSpec: function
+  parseRunTagSpecs: function
   realClock: object
   resetClock: function
   resolveThrottle: function
+  runTagsOf: function
   safeChildPath: function
   safeRunPolicy: function
   seedFrom: function
   simulateTiming: function
   targetsFor: function
   urlSchemeOf: function
+  validateRunTags: function
   worstOutcome: function
 
 # @jevitate/explore (415 exports)

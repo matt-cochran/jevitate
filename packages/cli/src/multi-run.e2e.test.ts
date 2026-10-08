@@ -160,6 +160,8 @@ describe("explore --persona (#143)", () => {
             `sales=${join(dir, "sales.json")}`,
             "--out",
             join(dir, "out"),
+            "--tag",
+            "feature=billing",
             "--json",
           ],
           { from: "user" },
@@ -183,6 +185,15 @@ describe("explore --persona (#143)", () => {
         expect(Object.values(r.diff?.outcomes ?? {}).every((o) => ["clean", "defects-found", "inconclusive", "crashed", "hang", "intermittent"].includes(o))).toBe(true);
         const onDisk = JSON.parse(await readFile(join(dir, "out", "multi-run.result.json"), "utf8")) as MultiRunResult;
         expect(onDisk).toMatchObject({ missionOutcome: r.missionOutcome, engine: { version: expect.any(String) } });
+        // #426: the tag rides on the aggregate envelope and on every run's envelope, with the persona as the run's target.persona.
+        expect((env.data as unknown as { tags: unknown }).tags).toEqual({ feature: "billing" });
+        for (const persona of ["admin", "sales"]) {
+          const perRun = JSON.parse(await readFile(join(dir, "out", persona, "run-1", "run.envelope.json"), "utf8")) as {
+            data: { tags: unknown; target: { persona?: string; startUrl?: string; strategy?: string } };
+          };
+          expect(perRun.data.tags).toEqual({ feature: "billing" });
+          expect(perRun.data.target).toMatchObject({ persona, startUrl: `${origin}/app`, strategy: "adversarial" });
+        }
       } finally {
         process.exitCode = 0;
         await rm(dir, { recursive: true, force: true });

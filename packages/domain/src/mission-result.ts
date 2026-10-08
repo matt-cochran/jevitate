@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RunTagsSchema } from "./run-tags.js";
 import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outcome.js";
 
 /**
@@ -111,6 +112,10 @@ export const ResultTargetSchema = z.looseObject({
   seedUrl: z.string().min(1),
   allowlist: z.array(z.string()),
   storageStatePath: z.string().optional(),
+  /** #426 — additive: where the run started, the persona (storage-state name) it ran as, and its strategy. */
+  startUrl: z.string().min(1).optional(),
+  persona: z.string().min(1).optional(),
+  strategy: z.string().min(1).optional(),
 });
 
 /** #293: where a journey-anchored run branched off its Journey. */
@@ -233,6 +238,8 @@ export const MissionResultSchema = z
     screenshotsSkipped: z.array(z.looseObject({ step: z.number().int(), reason: z.string() })).optional(),
     /** #293 — additive: the Journey step a journey-anchored run branched from (absent otherwise). */
     branch: ResultBranchSchema.optional(),
+    /** #426 — additive: the run's `--tag key=value` metadata (never secrets: tags are not redacted). */
+    tags: RunTagsSchema.optional(),
   })
   .refine((r) => (r.strategy === "goal") === (r.goalOutcome !== undefined), {
     message: "goalOutcome is present on every goal result and on no other",
@@ -272,7 +279,17 @@ export interface MissionResultCore {
   readonly recordingPaths: readonly string[];
   readonly transcriptPath: string;
   readonly resultPath: string;
-  readonly target: { readonly seedUrl: string; readonly allowlist: readonly string[]; readonly storageStatePath?: string };
+  readonly target: {
+    readonly seedUrl: string;
+    readonly allowlist: readonly string[];
+    readonly storageStatePath?: string;
+    /** #426: where the run started, the persona it ran as, and its strategy. */
+    readonly startUrl?: string;
+    readonly persona?: string;
+    readonly strategy?: string;
+  };
+  /** #426: the run's `--tag key=value` metadata (absent without tags). */
+  readonly tags?: Readonly<Record<string, string>>;
   readonly engine: { readonly version: string; readonly commit: string; readonly builtAt: string };
   /** #203: every result written now carries the host's health and its environment-degraded findings. */
   readonly hostHealth: HostHealthSummary;

@@ -91,6 +91,7 @@
     - flags=--record-video [dir] required=false mandatory=false negate=false variadic=false default=null description=record a video of each mission's browser context (forwarded to every mission, as explore's)
     - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
     - flags=--server-log-drain-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's)
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
 
 # check
   description: CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
@@ -114,6 +115,7 @@
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys)
     - flags=--sarif <path> required=true mandatory=false negate=false variadic=false default=null description=SARIF path (default <out>/jevitate.sarif)
     - flags=--suite <file> required=true mandatory=true negate=false variadic=false default=null description=the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget)
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--target-build <id> required=true mandatory=false negate=false variadic=false default=null description=the target's build/commit id, stamped on every result
 
 # demo
@@ -185,6 +187,7 @@
     - flags=--start <path> required=true mandatory=false negate=false variadic=false default=null description=the app path exploration starts from (default /)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist
     - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=null description=independent success check that proves the aspect was shown, e.g. textIncludes:testId=status|Saved (required)
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
 # diff
@@ -195,6 +198,7 @@
   options:
     - flags=--dir <dir> required=true mandatory=false negate=false variadic=false default=[] description=results dir to look run ids up in (repeatable)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope instead of markdown
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=compare only runs carrying this tag, on both sides (repeatable; every tag must match)
 
 # doctor
   description: resource governance on this machine (#205): host load, machine-wide browser slots, jevitate browsers and orphans left by a killed run
@@ -305,6 +309,7 @@
     - flags=--strategy <name> required=true mandatory=false negate=false variadic=false default="goal" description=exploration strategy: goal (default) | coverage | exploratory | adversarial | usability (UX review: ranked, cited findings)
     - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=[] description=independent success check (repeatable; every one must hold; --strategy goal and usability). Kinds: urlIncludes:<text> | visible:<d> | textIncludes:<d>|<text> (case-insensitive) | count:<d>|min=<n>,max=<n> | valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted) | visual state (#148, read and decided by code): style:<d>|<prop><op><value> (computed style of every match; <prop> an allowlisted CSS property or a channel of one, e.g. alpha(background-color)>0, color=rgb(255, 0, 0); op = != > >= < <=) | inViewport:<d>[|min=<ratio>] (visible fraction, default 0.5) | box:<d>|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n> | overlaps:<d>|<d2> | noOverlap:<d>|<d2> | attr:<d>|<name>=<value> (or <name> present, !<name> absent) | flashed:<d>|class=<cls> (or attr=<name>, animation)[|withinMs=<n>] (a transient state gained after the last user input) | requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>. <d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x]. <path-glob> must start with "/" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method. e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'. Omit it for a find-out goal (e.g. "find out how many contacts... report the answer"): the run must then end with the model's own `report` op, and the grounded answer (#101) is the verdict — no page/network check needed.
     - flags=--success-when <when> required=true mandatory=false negate=false variadic=false default=null description=when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast) | each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--totp <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk
     - flags=--type-fixture <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal strategy: '<label|testId|type|id|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=target URL (must be an authorized origin)
@@ -628,6 +633,7 @@
     - flags=--self-heal <mode> required=true mandatory=false negate=false variadic=false default="fail-closed" description=self-heal policy mode: fail-closed | hybrid | full
     - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
 # journey verify
@@ -722,6 +728,7 @@
     - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=param as key=value (repeatable)
     - flags=--seed <n> required=true mandatory=false negate=false variadic=false default=1 description=master RNG seed
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
 # logs
@@ -805,6 +812,7 @@
     - flags=--once required=false mandatory=false negate=false variadic=false default=null description=drain the missions queued now, then exit (default)
     - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=where results are written (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date> — where `jevitate mcp` reads them)
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways for model-driven missions (requires keys)
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--targets-dir <path> required=true mandatory=false negate=false variadic=false default=null description=mission targets directory (default: ~/.jevitate/missions/targets)
     - flags=--watch required=false mandatory=false negate=false variadic=false default=null description=keep draining: poll the queue every --interval ms until interrupted
 
@@ -979,6 +987,7 @@
     - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again
     - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to open the replay session authenticated (#129); must exist
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
 # report
@@ -989,6 +998,7 @@
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope instead of markdown
     - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=also write report.md and report.json here
     - flags=--since <run|date> required=true mandatory=false negate=false variadic=false default=null description=only runs that started at/after this ISO date or this run
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=only runs carrying this tag (repeatable; every tag must match)
     - flags=--target <origin|name> required=true mandatory=false negate=false variadic=false default=null description=the target: an origin (or URL on it), a suite target name, or a registered mission target
 
 # site
@@ -1076,6 +1086,7 @@
     - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
     - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=param as key=value (repeatable)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
 # source trust
@@ -1092,6 +1103,39 @@
     - name=name required=true variadic=false default=null
   options:
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# sweep
+  description: run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. Every run is tagged target=<id> plus the sweep's and the target's tags
+  options:
+    - flags=--allow-destructive required=false mandatory=false negate=false variadic=false default=null description=let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's)
+    - flags=--allow-log-cmd required=false mandatory=false negate=false variadic=false default=null description=a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's)
+    - flags=--allow-writes required=false mandatory=false negate=false variadic=false default=null description=let a find-out mission change the app (forwarded to every mission, as explore's)
+    - flags=--base-url <url> required=true mandatory=false negate=false variadic=false default=null description=resolve each target's route against this origin (wins over --env and the file's baseUrl; else JEVITATE_BASE_URL)
+    - flags=--concurrency <n> required=true mandatory=false negate=false variadic=false default=null description=runs at once (default 1, at most 16; the machine-wide browser cap still applies)
+    - flags=--deny <pattern> required=true mandatory=false negate=false variadic=false default=[] description=a control no mission may click (repeatable) (forwarded to every mission, as explore's)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=resolve each target's route against this named environment's base URL (.jevitate/environments.json)
+    - flags=--evidence-video required=false mandatory=false negate=false variadic=false default=null description=per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's)
+    - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=null description=use deterministic fake gateways for every run (pipeline smoke only)
+    - flags=--invariants <file> required=true mandatory=false negate=false variadic=false default=[] description=app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope (default: a human summary)
+    - flags=--log-correlation-header <name> required=true mandatory=false negate=false variadic=false default=[] description=another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-defect <level|/regex/> required=true mandatory=false negate=false variadic=false default=[] description=backend log lines matching this become a server-log defect (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-id-pattern </regex/> required=true mandatory=false negate=false variadic=false default=[] description=how a correlation id is written in log lines (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-ignore <regex|substring> required=true mandatory=false negate=false variadic=false default=[] description=known-noise backend log lines to exclude (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-quiet-ok <spec> required=true mandatory=false negate=false variadic=false default=[] description=a --log-source that is legitimately quiet (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-scope <regex|substring> required=true mandatory=false negate=false variadic=false default=[] description=attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-source <spec> required=true mandatory=false negate=false variadic=false default=[] description=backend log source: file:<path> | docker:<container> | cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's)
+    - flags=--log-triage required=false mandatory=false negate=false variadic=false default=null description=record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's)
+    - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=the sweep directory: <id>/ per target and sweep.result.json (default .jevitate/logs/<date>/sweep-<stamp>; required with --resume)
+    - flags=--paid <pattern> required=true mandatory=false negate=false variadic=false default=[] description=an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's)
+    - flags=--real required=false mandatory=false negate=false variadic=false default=null description=use live Jev + OpenRouter gateways for every run (requires keys)
+    - flags=--record-video [dir] required=false mandatory=false negate=false variadic=false default=null description=record a video of each mission's browser context (forwarded to every mission, as explore's)
+    - flags=--resume required=false mandatory=false negate=false variadic=false default=false description=skip every target whose run already finished in --out (its run.envelope.json); re-run the rest
+    - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
+    - flags=--server-log-drain-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's)
+    - flags=--stop-on-env-failure <k> required=true mandatory=false negate=false variadic=false default=null description=stop starting runs when the first K runs ALL failed for environment/setup reasons (auth expired, target unreachable, crash, a run that could not start)
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
+    - flags=--targets <file> required=true mandatory=true negate=false variadic=false default=null description=the targets file (.tsv with a header row, or .json: an array or {baseUrl?, defaults?, targets})
 
 # ui
   description: start the local HITL approval dashboard (loopback-only HTTP server)
@@ -1158,4 +1202,5 @@
     - flags=--secret <value|env:VAR> required=true mandatory=false negate=false variadic=false default=[] description=REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints; env:VAR reads it from the environment
     - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=override the storageState the mission ran with
+    - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)

@@ -1,6 +1,7 @@
 // check-execute.ts — `jevitate check` item execution (#231).
 import { triagedServerLog } from "./explore-shared.js";
 import { recordRun } from "./run-index.js";
+import { stampRunMetadata } from "./run-metadata.js";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
 import { writeFile } from "node:fs/promises";
@@ -15,7 +16,7 @@ import { CLI_ADVERSARIAL_STRATEGIES, parseSuccessSpec } from "./explore-api.js";
 import { type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import { loadRunFile } from "./report-api.js";
-import { GOAL_ONLY_OUTCOMES, clock } from "@jevitate/domain";
+import { GOAL_ONLY_OUTCOMES, clock, runTagsOf } from "@jevitate/domain";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { type Json, type Planned, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
 import { applyJourneyEnvironment } from "./environments.js";
@@ -194,8 +195,10 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
       },
     };
-    await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-    recordRun(path); // #213: a bare `report` in this project finds it
+    // #426: the check's --tag metadata and structured target ride on every item result.
+    const stamped = { ...record, result: stampRunMetadata(record.result) };
+    await writeFile(path, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
+    recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
     const actions = failed && at !== undefined ? at + 1 : recordingSteps(j);
     return { status: "ran", resultPath: path, outcome: r.outcome, actions };
   }
@@ -441,8 +444,10 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
       },
     };
-    await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-    recordRun(path); // #213: a bare `report` in this project finds it
+    // #426: the check's --tag metadata and structured target ride on every item result.
+    const stamped = { ...record, result: stampRunMetadata(record.result) };
+    await writeFile(path, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
+    recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
     if (r.verdict === "inconclusive") {
       return { status: "error", resultPath: path, outcome: r.verdict, actions: 0, error: { type: "inconclusive", message: `verify-fix inconclusive: ${r.reason}` } };
     }

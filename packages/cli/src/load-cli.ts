@@ -1,3 +1,4 @@
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { ok, fail } from "./envelope.js";
@@ -48,7 +49,8 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
       "Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
     )
     .option("--json", "emit a JSON envelope")
-    .action(async function (this: Command, journeyId: string) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "load run", async function (this: Command, journeyId: string) {
       const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
@@ -121,5 +123,5 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail("E_LOAD_RUN", String(err instanceof Error ? err.message : err)));
         }
       }
-    });
+    }));
 }

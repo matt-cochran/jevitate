@@ -629,6 +629,8 @@ export type RunEnvelope =
 export interface RunOnceArgs {
   /** Persona storage state to start from (`undefined`: the mission's own `--storage-state`, if any). */
   readonly storageState?: string;
+  /** #426: the persona's name (recorded as the run's `target.persona`). */
+  readonly persona?: string;
   /** Where this run writes its artifacts. */
   readonly outDir: string;
 }
@@ -877,7 +879,7 @@ export async function runMultiRun(opts: RunMultiRunOptions): Promise<MultiRunRes
         mkdirSync(runDir, { recursive: true });
         current = { persona: p, runs, index: i, runDir };
         // Strictly one at a time: the next run starts only after this one fully ended.
-        const envelope = await opts.runOnce({ ...(p === null ? {} : { storageState: p.storageState }), outDir: runDir });
+        const envelope = await opts.runOnce({ ...(p === null ? {} : { storageState: p.storageState, persona: p.name }), outDir: runDir });
         const envelopePath = join(runDir, "run.envelope.json");
         writeJson(envelopePath, envelope);
         runs.push(summarizeRun(strategy, i, envelope, envelopePath));

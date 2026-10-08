@@ -1,4 +1,5 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { type InvariantSpec } from "@jevitate/recording";
@@ -449,7 +450,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       ].join("\n"),
     )
     .addHelpText("after", EXPLORE_OUTCOME_HELP)
-    .action(async function (this: Command) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "explore", async function (this: Command) {
       const o = this.opts<{
         invariants: string[];
         logSource: string[];
@@ -1518,5 +1520,5 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         // Every exit path restores the fixture state (a no-op when the mission already did).
         await fx?.restore();
       }
-    });
+    }));
 }

@@ -176,8 +176,9 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (112 exports)
+# @jevitate/domain (124 exports)
   assertInsideRoot: function
+  assertRunTag: function
   assertSafeName: function
   attributeCrash: function
   Attribution: type-alias
@@ -231,6 +232,9 @@
   isWithinQuietHours: function
   looksLikeRendererOom: function
   makeRng: function
+  matchesRunTags: function
+  MAX_RUN_TAG_VALUE: variable
+  MAX_RUN_TAGS: variable
   MAX_SAFE_NAME_LENGTH: variable
   MISSION_EXIT_CODES: variable
   MISSION_OUTCOMES: variable
@@ -246,6 +250,8 @@
   occurrenceComment: function
   outcomeExitCode: function
   Pacer: class
+  parseRunTagSpec: function
+  parseRunTagSpecs: function
   PersistedMissionResult: type-alias
   PersistedMissionResultSchema: variable
   PlannedStep: type-alias
@@ -269,7 +275,12 @@
   ResultStrategy: type-alias
   ResultTargetSchema: variable
   ResultUsageSchema: variable
+  RUN_TAG_KEY: variable
   RunPolicy: interface
+  RunTagError: class
+  RunTags: type-alias
+  runTagsOf: function
+  RunTagsSchema: variable
   safeChildPath: function
   safeRunPolicy: function
   SecretMode: type-alias
@@ -288,6 +299,7 @@
   TypingModel: type-alias
   UnsafeNameError: class
   urlSchemeOf: function
+  validateRunTags: function
   worstOutcome: function
 
 # @jevitate/explore (634 exports)

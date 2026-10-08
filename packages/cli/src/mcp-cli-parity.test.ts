@@ -209,6 +209,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       maxBrowsers: "--max-browsers",
       maxBrowserMemory: "--max-browser-memory",
       actionDeltas: "--action-deltas",
+      tags: "--tag",
     },
     omitted: {
       "--ignore-host-load": OMIT.hostLoad,
@@ -245,6 +246,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       maxBrowsers: "--max-browsers",
       maxBrowserMemory: "--max-browser-memory",
       actionDeltas: "--action-deltas",
+      tags: "--tag",
     },
     omitted: {
       "--ignore-host-load": OMIT.hostLoad,

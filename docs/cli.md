@@ -37,6 +37,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`report`](#report): one deduped defect list for a target across every mode and run (markdown + JSON envelope)
 - [`site`](#site): per-site policies for Journey runs: human-like pacing, throttles, run budgets and quiet hours
 - [`source`](#source): manage distributed Journey sources (git-backed collections of Journeys)
+- [`sweep`](#sweep): run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. Every run is tagged target=<id> plus the sweep's and the target's tags
 - [`ui`](#ui): start the local HITL approval dashboard (loopback-only HTTP server)
 - [`ux`](#ux): offline UX review of a saved Recording — ranked, cited usability findings
 - [`verify-fix`](#verify-fix): replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay
@@ -222,6 +223,7 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--record-video [dir]` | record a video of each mission's browser context (forwarded to every mission, as explore's) |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 
 ## check
 
@@ -254,6 +256,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--real` | use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys) | `false` |  |  |  |
 | `--sarif <path>` | SARIF path (default <out>/jevitate.sarif) |  |  |  |  |
 | `--suite <file>` | the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget) |  |  | yes |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--target-build <id>` | the target's build/commit id, stamped on every result |  |  |  |  |
 
 ## demo
@@ -356,6 +359,7 @@ explore a named non-production environment toward <aspect> (checked by --success
 | `--start <path>` | the app path exploration starts from (default /) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist |  |  |  |  |
 | `--success <spec>` | independent success check that proves the aspect was shown, e.g. textIncludes:testId=status\|Saved (required) |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ## diff
@@ -379,6 +383,7 @@ classify findings new / resolved / still-present / flaky / not-rerun between two
 | --- | --- | --- | --- | --- | --- |
 | `--dir <dir>` | results dir to look run ids up in (repeatable) | `[]` |  |  |  |
 | `--json` | emit the JSON envelope instead of markdown |  |  |  |  |
+| `--tag <key=value>` | compare only runs carrying this tag, on both sides (repeatable; every tag must match) | `[]` |  |  |  |
 
 ## doctor
 
@@ -510,6 +515,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--strategy <name>` | exploration strategy: goal (default) \| coverage \| exploratory \| adversarial \| usability (UX review: ranked, cited findings) | `goal` |  |  |  |
 | `--success <spec>` | independent success check (repeatable; every one must hold; --strategy goal and usability). Kinds: urlIncludes:<text> \| visible:<d> \| textIncludes:<d>\|<text> (case-insensitive) \| count:<d>\|min=<n>,max=<n> \| valueEquals:<d>\|<value> (a form control's value) \| reloadThen:<check> (reload first: proves it persisted) \| visual state (#148, read and decided by code): style:<d>\|<prop><op><value> (computed style of every match; <prop> an allowlisted CSS property or a channel of one, e.g. alpha(background-color)>0, color=rgb(255, 0, 0); op = != > >= < <=) \| inViewport:<d>[\|min=<ratio>] (visible fraction, default 0.5) \| box:<d>\|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n> \| overlaps:<d>\|<d2> \| noOverlap:<d>\|<d2> \| attr:<d>\|<name>=<value> (or <name> present, !<name> absent) \| flashed:<d>\|class=<cls> (or attr=<name>, animation)[\|withinMs=<n>] (a transient state gained after the last user input) \| requestMade:<METHOD> <path-glob> \| responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>. <d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x]. <path-glob> must start with "/" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method. e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]\|Litmus'. Omit it for a find-out goal (e.g. "find out how many contacts... report the answer"): the run must then end with the model's own `report` op, and the grounded answer (#101) is the verdict — no page/network check needed. | `[]` |  |  |  |
 | `--success-when <when>` | when the --success page checks must hold: final (default; on the final page) \| held (on the final page, or all together at any settled step — a one-time secret, a toast) \| each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--totp <binding>` | goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk | `[]` |  |  |  |
 | `--type-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret | `[]` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
@@ -1073,6 +1079,7 @@ jevitate journey run [options] <id>
 | `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full | `fail-closed` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ### journey verify
@@ -1236,6 +1243,7 @@ jevitate load run [options] <journeyId>
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--seed <n>` | master RNG seed | `1` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ## logs
@@ -1393,6 +1401,7 @@ run queued missions (queue_exploration) through their strategy's runner; get_mis
 | `--once` | drain the missions queued now, then exit (default) |  |  |  |  |
 | `--out <dir>` | where results are written (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date> — where `jevitate mcp` reads them) |  |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for model-driven missions (requires keys) | `false` |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--targets-dir <path>` | mission targets directory (default: ~/.jevitate/missions/targets) |  |  |  |  |
 | `--watch` | keep draining: poll the queue every --interval ms until interrupted |  |  |  |  |
 
@@ -1726,6 +1735,7 @@ jevitate regression run [options] <id>
 | `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again | `{}` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the replay session authenticated (#129); must exist |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ## report
@@ -1745,6 +1755,7 @@ one deduped defect list for a target across every mode and run (markdown + JSON 
 | `--json` | emit the JSON envelope instead of markdown |  |  |  |  |
 | `--out <dir>` | also write report.md and report.json here |  |  |  |  |
 | `--since <run|date>` | only runs that started at/after this ISO date or this run |  |  |  |  |
+| `--tag <key=value>` | only runs carrying this tag (repeatable; every tag must match) | `[]` |  |  |  |
 | `--target <origin|name>` | the target: an origin (or URL on it), a suite target name, or a registered mission target |  |  |  |  |
 
 ## site
@@ -1953,6 +1964,7 @@ run a Journey from a trusted remote source through the run-gate
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ### source trust
@@ -1993,6 +2005,48 @@ jevitate source update [options] <name>
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--json` | emit a JSON envelope |  |  |  |  |
+
+## sweep
+
+```
+jevitate sweep [options]
+```
+
+run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. Every run is tagged target=<id> plus the sweep's and the target's tags
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--allow-log-cmd` | a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's) |  |  |  |  |
+| `--allow-writes` | let a find-out mission change the app (forwarded to every mission, as explore's) |  |  |  |  |
+| `--base-url <url>` | resolve each target's route against this origin (wins over --env and the file's baseUrl; else JEVITATE_BASE_URL) |  |  |  |  |
+| `--concurrency <n>` | runs at once (default 1, at most 16; the machine-wide browser cap still applies) |  |  |  |  |
+| `--deny <pattern>` | a control no mission may click (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--env <name>` | resolve each target's route against this named environment's base URL (.jevitate/environments.json) |  |  |  |  |
+| `--evidence-video` | per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's) |  |  |  |  |
+| `--fake-ai` | use deterministic fake gateways for every run (pipeline smoke only) |  |  |  |  |
+| `--invariants <file>` | app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
+| `--log-correlation-header <name>` | another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-defect <level|/regex/>` | backend log lines matching this become a server-log defect (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-id-pattern </regex/>` | how a correlation id is written in log lines (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-ignore <regex|substring>` | known-noise backend log lines to exclude (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-quiet-ok <spec>` | a --log-source that is legitimately quiet (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--out <dir>` | the sweep directory: <id>/ per target and sweep.result.json (default .jevitate/logs/<date>/sweep-<stamp>; required with --resume) |  |  |  |  |
+| `--paid <pattern>` | an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--real` | use live Jev + OpenRouter gateways for every run (requires keys) |  |  |  |  |
+| `--record-video [dir]` | record a video of each mission's browser context (forwarded to every mission, as explore's) |  |  |  |  |
+| `--resume` | skip every target whose run already finished in --out (its run.envelope.json); re-run the rest | `false` |  |  |  |
+| `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
+| `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--stop-on-env-failure <k>` | stop starting runs when the first K runs ALL failed for environment/setup reasons (auth expired, target unreachable, crash, a run that could not start) |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
+| `--targets <file>` | the targets file (.tsv with a header row, or .json: an array or {baseUrl?, defaults?, targets}) |  |  | yes |  |
 
 ## ui
 
@@ -2094,4 +2148,5 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--secret <value|env:VAR>` | REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints; env:VAR reads it from the environment | `[]` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | override the storageState the mission ran with |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
