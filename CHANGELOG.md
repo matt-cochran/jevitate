@@ -131,6 +131,22 @@ an OpenRouter key, so one key covers generation and judgment.
   story, a user-story trigger ("As a …") and an outcome that names a feature, each with its rule id and
   GtWR characteristic.
 
+- **Readiness review before sign-off (#434).** Review sheets for Journeys, jobs and personas show a
+  Readiness section (`--readiness`, MCP `readiness: true`), and every approval shows it automatically:
+  deterministic checks (links exist and are approved, intent is complete, lint passes, the mutation
+  proof is current, INCOSE GtWR findings), each pass/warn/fail with a fix. With `--real` and a judgment
+  key, Jev answers a few narrow questions — does the Journey achieve the job's outcome for this persona,
+  does its end-state check prove it, is the job story singular and verifiable — each with its
+  probability; a low answer reads "not ready because … (GtWR: …)". Jev only advises: its answers never
+  block an approval or change an exit code, and they are cached by content hash.
+- **Catalog analysis before every approval (#435).** `jevitate catalog analyze` (MCP `analyze_catalog`)
+  finds conflicts, duplicates, overlaps, coverage gaps and stale items across the catalog, grouped by
+  INCOSE GtWR set characteristic. Code picks the candidate pairs and says why; with `--real`, Jev
+  classifies each pair (compatible, duplicate, overlapping, conflicting, dependent) with a probability.
+  The same analysis runs before every persona, job, Journey or demo approval for that item's pairs (at
+  most 8); a conflicting or duplicate classification at probability 0.7 or higher needs
+  `--accept-findings "<reason>"`, recorded with the approval. It never changes catalog files.
+
 ### Fixed
 
 - **A toast countdown is not a busy indicator (#419).** Toast libraries render the auto-close
