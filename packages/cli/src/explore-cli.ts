@@ -260,6 +260,17 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option("--max-actions <n>", "hard cap on executed actions", positiveIntArg)
     .option("--max-decisions <n>", "hard cap on model decisions", positiveIntArg)
     .option(
+      "--min-actions <n>",
+      "--strategy goal (#424): the minimum actions before the model may conclude — until then an early report, blocked or answerless done is deferred and the run steered to breadth " +
+        "(unvisited tabs, detail views, primary forms). Default: 12 (at most half the budget) for an open-ended find-out goal (no --success; \"the main features\", \"what works\", \"every error\", \"explore\"…), none otherwise. Capped by --max-actions (with a warning)",
+      positiveIntArg,
+    )
+    .option(
+      "--min-distinct-states <n>",
+      "--strategy goal (#424): the minimum distinct page states (URL + visible controls) observed before the model may conclude. Default: 5 (scaled to the budget) for an open-ended find-out goal, none otherwise. Capped by the budget (with a warning)",
+      positiveIntArg,
+    )
+    .option(
       "--stall-timeout <seconds>",
       "--strategy coverage/exploratory and --feature: end the run inconclusive (stalled) when no step completes within this many seconds (default 120)",
       positiveNumberArg,
@@ -492,6 +503,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         saveStorageState?: string;
         maxActions?: string;
         maxDecisions?: string;
+        minActions?: number;
+        minDistinctStates?: number;
         stallTimeout?: string | number;
         replyWaitMs?: string;
         replyQuietMs?: string;
@@ -833,6 +846,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // `--fixture` feeds the upload op, which only the explore loop (goal and
       // usability strategies) can issue. Refuse it elsewhere rather than
       // silently ignoring a file the user expected to be uploaded.
+      // #424: the minimum effort gates the goal loop's own endings (report / blocked / done) — a goal run's.
+      if ((o.minActions !== undefined || o.minDistinctStates !== undefined) && (o.feature !== undefined || strategy !== "goal")) {
+        emitExplore(fail("E_EXPLORE_ARGS", "--min-actions and --min-distinct-states are supported only with --strategy goal (a goal or find-out run)"));
+        return;
+      }
       if (o.fixture !== undefined && (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))) {
         emitExplore(fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
         return;
@@ -1444,6 +1462,14 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           gen,
           usage,
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
+          ...(o.minActions === undefined && o.minDistinctStates === undefined
+            ? {}
+            : {
+                minEffort: {
+                  ...(o.minActions === undefined ? {} : { minActions: Number(o.minActions) }),
+                  ...(o.minDistinctStates === undefined ? {} : { minDistinctStates: Number(o.minDistinctStates) }),
+                },
+              }),
           secrets: o.secret.length > 0 ? o.secret : undefined,
           ...(secretFields.length > 0 ? { secretFields } : {}),
           ...(secretCommand === undefined ? {} : { secretCommand }),

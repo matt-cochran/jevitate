@@ -23,7 +23,7 @@ import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
-import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
+import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http5xxDefect, type RunDepth } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogsSummary } from "./log-correlation.js";
@@ -279,6 +279,8 @@ export interface RunUsabilityMissionResult {
   readonly checks?: readonly SuccessCheckResult[];
   /** #225/#202: the success checks' warnings (a vacuous check, `held` notes), when there were any. */
   readonly checkWarnings?: readonly string[];
+  /** #424: how deep the run went — distinct states and pages, actions, decisions, forms submitted. */
+  readonly depth: RunDepth;
 }
 
 /**
@@ -801,6 +803,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       finalUrl: run.finalUrl,
       decisions: run.decisions,
       actions: run.actions,
+      depth: run.depth,
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...(hang === undefined ? {} : { hang }),
       // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is

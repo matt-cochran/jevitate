@@ -463,9 +463,11 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--max-decisions <n>` | hard cap on model decisions |  |  |  |  |
 | `--max-findings-per-page <n>` | (--strategy usability) cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5 |  |  |  |  |
+| `--min-actions <n>` | --strategy goal (#424): the minimum actions before the model may conclude — until then an early report, blocked or answerless done is deferred and the run steered to breadth (unvisited tabs, detail views, primary forms). Default: 12 (at most half the budget) for an open-ended find-out goal (no --success; "the main features", "what works", "every error", "explore"…), none otherwise. Capped by --max-actions (with a warning) |  |  |  |  |
 | `--min-agreement <k>` | with --repeat: runs a finding (and the outcome) must recur in to count (default: a majority of N) |  |  |  |  |
 | `--min-confidence <n>` | (--strategy usability) findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3 |  |  |  |  |
 | `--min-control-coverage <ratio>` | adversarial: share of the target's controls (0..1) a run must exercise before 'found nothing' is clean (default 0.25); below it the run is inconclusive |  |  |  |  |
+| `--min-distinct-states <n>` | --strategy goal (#424): the minimum distinct page states (URL + visible controls) observed before the model may conclude. Default: 5 (scaled to the budget) for an open-ended find-out goal, none otherwise. Capped by the budget (with a warning) |  |  |  |  |
 | `--no-overlay` | with --headed: hide the on-page overlay (step, intent, target highlight, outcome banner) |  |  |  |  |
 | `--no-require-form-submit` | adversarial: do not require a submitted form for a clean result (default: required when the target has a form) |  |  |  |  |
 | `--out <dir>` | directory to write the emitted Recording |  |  |  |  |
@@ -1319,6 +1321,8 @@ enqueue an exploration mission against a PROMOTED target — only queues; `missi
 | `--max-actions <n>` | budget: max actions (bounded by the queue's ceiling) |  |  |  |  |
 | `--max-candidates <n>` | budget: max candidates |  |  |  |  |
 | `--max-decisions <n>` | budget: max decisions |  |  |  |  |
+| `--min-actions <n>` | goal-based (#424): the minimum actions before the model may conclude (capped by the budget; `explore --min-actions`) |  |  |  |  |
+| `--min-distinct-states <n>` | goal-based (#424): the minimum distinct page states before the model may conclude (`explore --min-distinct-states`) |  |  |  |  |
 | `--persona <name>` | run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path |  |  |  |  |
 | `--record-video` | record a video of the run (headless too), written next to its result; listed as videoPaths |  |  |  |  |
 | `--route <glob>` | coverage/exploratory/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective) |  |  |  |  |

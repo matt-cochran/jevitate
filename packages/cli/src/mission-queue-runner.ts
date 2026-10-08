@@ -530,6 +530,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         url: target.baseUrl,
         goal,
         ...(mission.successAssertion === undefined ? {} : { successAssertion: mission.successAssertion }),
+        ...(mission.minEffort === undefined ? {} : { minEffort: mission.minEffort }),
         allowlist,
         judge,
         gen,

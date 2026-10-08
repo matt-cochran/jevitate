@@ -290,6 +290,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         scope: s("--scope", { enum: ["app"] }),
         maxActions: n("--max-actions"),
         maxDecisions: n("--max-decisions"),
+        // #424: the minimum exploration effort (goal strategy).
+        minActions: n("--min-actions"),
+        minDistinctStates: n("--min-distinct-states"),
         stallTimeout: n("--stall-timeout"),
         invariants: { kind: "path[]", flag: "--invariants" },
         storageState: session("--storage-state"),
