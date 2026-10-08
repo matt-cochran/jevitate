@@ -1,5 +1,36 @@
 # jevitate
 
+## 0.8.0
+
+### Minor Changes
+
+- 0ccbd56: Open-ended find-out goals ("use the main features and report what works and every error") no longer stop after a page or two with "answer not found". `jevitate explore --min-actions <n> --min-distinct-states <n>` (also on `mission queue`, MCP `run_exploration`/`queue_exploration`, and suite goals) sets the minimum exploration before the model may conclude, and an open-ended find-out gets a budget-scaled default; an early report or give-up is deferred and the run is steered to unvisited tabs, detail views and forms. Every goal result now records its `depth` (distinct states and pages, actions, forms submitted, the minimum and whether it was met), and a find-out that still cannot ground an answer returns a grounded `partialReport` — per page, its own text, its controls and what was tried — printed as `PARTIAL` lines.
+- 7d14107: A goal run's `goalOutcome` is now only about the goal: a defect such as an HTTP 5xx, a server-log error or a violated invariant no longer replaces it. Defects are reported separately in `defectOutcome`, and a goal that was not achieved carries a structured `goalReason` (`not-found`, `ungrounded`, `blocked-by-policy`, `budget`, `hang`, …). `missionOutcome` is derived from both by one documented table, and every exit code stays the same. MCP `get_mission_result`, `jevitate report` and the human output show both verdicts.
+- 87895dc: Judgment (the Jev model) now runs on either a TypeSafe key or an OpenRouter key. OpenRouter serves Jev at its System One route as `~typesafe/jev-latest`, so one OpenRouter key can cover both generation and judgment. When both keys are set, the TypeSafe key wins. To choose explicitly, use `--jev-provider typesafe|openrouter` (MCP `jevProvider`) or `JEVITATE_JEV_PROVIDER`. `ai status` shows which key, route and model judgment will use, and `ai setup judgment --jev-provider openrouter` sets up the OpenRouter key.
+- 9154fdd: Backend log lines that match `--log-defect` are now classified by a per-project `.jevitate/log-classes.json` and built-in rules. A placeholder or invalid API key, an unconfigured provider or a degraded health check counts as an environment fault, listed under `environmentFaults` and in `jevitate report`, and is not a defect. Lines classed `expected-validation` are recorded in `expectedValidation` without failing the run.
+- 416cf56: New `jevitate login` signs a persona in with a username and password read from named environment variables (never from the command line), and saves its Playwright storage state with mode 0600. The login session records no trace, video, HAR or screenshot. Before a run that starts from a session, `explore` and queued missions now check that it is still signed in. An expired session ends the run at once as `inconclusive` with `failure.kind: "auth-expired"` and the persona's name; the login page is never explored. `--auth-check` configures the check. A persona whose personas file entry (or `.jevitate/personas.json`) carries `login` parameters is signed in again once instead.
+- 6092a99: A `--log-source` that opened and stayed attached but delivered zero lines no longer turns a completed mission inconclusive: zero server errors from a healthy source is evidence, not a hole in the oracle. Only a source that failed to attach or errored (including a `docker:`/`cmd:` tail process that exits non-zero on its own) degrades the run, and `serverLogs.oracleReason` now names each failed source and its error. `--log-quiet-ok` keeps working for compatibility but is redundant since 0.8.0; the silence is recorded in the new `serverLogs.quietSources`.
+- eb5b503: Runs can now be tagged: `--tag key=value` (repeatable) on `explore`, `journey run`, `check`, `load run`, `verify-fix`, `regression run`, `demo`, `mission run`, `source run` and `campaign run` (and a `tags` object on the MCP run tools) stores the tags in `result.tags`, the `--json` envelope, a multi-run's `run.envelope.json` and the run index. `jevitate report --tag` and `jevitate diff --tag` filter runs by tag (every tag must match). Results also record a structured `target.startUrl`, `target.strategy` and, for persona runs, `target.persona`. Tags are plain metadata and never redacted, so never put a secret in one.
+- 64f0ffd: Every safety refusal now names the rule it matched — e.g. `[rule builtin:may-cost-money, matched "Generate"]`, `deny:<pattern>`, `paid:<pattern>` or `read-only:<kind>` — and the transcript entry carries it as `safety: { ruleId, pattern, control }`. New `--allow-control <regex>` (explore, explore-author-journey, campaign run, suite items, MCP, and `safety.allowControl` in targets.json) exempts one benign control from the soft "may cost money" heuristic only; it never lifts `--deny`, `--paid`, destructive, session-end, read-only or origin rules, and every use is recorded in the result's `safetyOverrides`. `jevitate site policy rules` lists every rule, what it matches and whether `--allow-control` can waive it.
+- a1d47a0: Every server-log defect is now a structured entry in the result's `defects[]` with `level`, `source`, `message`, `firstSeenStep` and `count`, so tools that aggregate runs never have to parse the free-text `reason`. Every result also carries `defectOutcome` (`{status, byKind}`), which counts the run's defects by kind.
+- a3be620: New `jevitate sweep --targets <file.tsv|file.json>`: run many explore missions (one per feature or route, optionally per persona) with `--concurrency N`, resume an interrupted sweep with `--resume`, and stop early with `--stop-on-env-failure K` when the environment is broken. It writes one `sweep.result.json` with each target's outcome, depth and tags, defects deduped by fingerprint across targets (one finding with N sightings), and environment causes grouped. Every run is tagged `target=<id>`; the MCP tool is `run_sweep`. See docs/sweeps.md.
+
+### Patch Changes
+
+- 2f23f02: A toast's auto-close countdown is no longer mistaken for a busy indicator (#419). Toast libraries render that countdown as an indeterminate `role="progressbar"`; because toasts pause it whenever the browser window is unfocused (always the case in headless runs), the UI looked permanently busy and a run ended with a false `ui-no-progress` hang. Jevitate now ignores an indeterminate progressbar that sits inside a toast/snackbar/notification region or is itself labelled a timer/countdown, while `aria-busy` and spinner indicators are unchanged.
+- Updated dependencies [0ccbd56]
+- Updated dependencies [7d14107]
+- Updated dependencies [2f23f02]
+- Updated dependencies [87895dc]
+- Updated dependencies [9154fdd]
+- Updated dependencies [416cf56]
+- Updated dependencies [6092a99]
+- Updated dependencies [eb5b503]
+- Updated dependencies [64f0ffd]
+- Updated dependencies [a1d47a0]
+- Updated dependencies [a3be620]
+  - @jevitate/cli@0.8.0
+
 ## 0.7.0
 
 ### Minor Changes
