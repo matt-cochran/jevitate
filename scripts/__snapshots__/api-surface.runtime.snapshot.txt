@@ -701,7 +701,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (54 exports)
+# @jevitate/journey (59 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
@@ -710,6 +710,7 @@
   CAMPAIGN_LIMITS: object
   CampaignSpecSchema: object
   FsJourneyStore: class
+  GTWR_RULES: array
   JourneyRegistry: class
   JourneyReviewSchema: object
   JourneySchema: object
@@ -725,6 +726,9 @@
   SWEEP_MODES: array
   applyAnnotationDraft: function
   assertionSiteKey: function
+  checkJobStory: function
+  checkPersona: function
+  checkStatement: function
   classifyMutation: function
   deriveParamSchema: function
   describeStep: function
@@ -750,6 +754,7 @@
   mutationWait: function
   planJourneyMutations: function
   prefixLandingPath: function
+  renderJobStory: function
   resolveJourneyStep: function
   secretParamNames: function
   secretParamValues: function
