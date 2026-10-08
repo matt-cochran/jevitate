@@ -115,6 +115,22 @@ an OpenRouter key, so one key covers generation and judgment.
   with `E_JOURNEY_REVIEW_STALE` when the Journey changed after review. Every promotion, `demo approve`
   included, records `metadata.approval` and keeps the approved version for the next review's diff.
 
+- **Catalog sign-off for personas and jobs (#433).** Personas and jobs become human-approved catalog
+  entries linked to Journeys. A job is a job story — "When [trigger], I want to [motivation], so I can
+  [outcome]." — in `.jevitate/jobs.json` (`.jevitate/campaign/jobs.json` is still read); a persona gains a
+  description, role and approval in `.jevitate/personas.json`. `jevitate persona|job review` and
+  `approve` record an approval bound to the item's content hash, and editing an approved item marks it
+  and its linked Journeys as needing re-review. `journey promote` and `demo approve` require the
+  linked job and persona to be approved, or a recorded `--accept-unvetted` waiver; every approval shows
+  pre-approval findings, and those that need it must be acknowledged with `--accept-findings`.
+  `jevitate catalog status` shows jobs × personas coverage, unlinked Journeys and stale approvals. MCP
+  gets the read-only `review_persona`, `review_job` and `catalog_status`; approving stays CLI-only.
+- **Requirements-quality checks on job stories and personas (#434).** Every job and persona review
+  lists findings from rules paraphrasing the INCOSE *Guide to Writing Requirements*: vague terms,
+  escape clauses, "and/or", open-ended lists, absolutes, negative outcomes, several outcomes in one
+  story, a user-story trigger ("As a …") and an outcome that names a feature, each with its rule id and
+  GtWR characteristic.
+
 ### Fixed
 
 - **A toast countdown is not a busy indicator (#419).** Toast libraries render the auto-close
