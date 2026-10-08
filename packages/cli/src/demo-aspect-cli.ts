@@ -1,3 +1,5 @@
+import { reviewJourneyById } from "./journey-review-api.js";
+import { renderReviewText } from "./journey-review.js";
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
@@ -280,11 +282,14 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
           emitJson(program, ok(withEngine(result)));
           return;
         }
-        out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${stepLines(result.steps)}`);
         if (result.outcome !== "approved") {
+          out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${stepLines(result.steps)}`);
           program.configureOutput().writeErr?.(`error: demo '${id}' is stale: ${result.reason ?? "unknown"}\n`);
           return;
         }
+        // #432: the same review sheet `journey review` shows, of the Journey as approved.
+        const { review } = await reviewJourneyById(journeysDir, id, deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath });
+        out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${renderReviewText(review)}\n`);
         out?.(formatAnnotationChanges(result.changes));
         out?.(`approved: journey '${id}' promoted\n`);
         if (result.final?.video !== undefined) out?.(`video: ${result.final.video}\nsubtitles: ${result.final.subtitles ?? ""}\n`);

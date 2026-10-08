@@ -83,6 +83,20 @@ export interface JourneyMetadata {
    * Validated at load: an unknown site, step or anchor is refused. Additive.
    */
   mutationPairs?: JourneyMutationPair[];
+  /**
+   * #432 — the last human approval (`journey promote`, `demo approve`): the review hash of the
+   * Journey that was approved (`journeyReviewHash`: the content hash without the approval
+   * bookkeeping — `promoted`, `approval`, `acceptedWeak`), when, and the assertion-strength waiver
+   * given at that approval. Additive: a Journey without it validates and runs exactly as before.
+   */
+  approval?: JourneyApproval;
+}
+
+/** #432: one recorded approval — see `JourneyMetadata.approval`. */
+export interface JourneyApproval {
+  contentHash: string;
+  at: string;
+  acceptedWeak?: { reason: string; rules: string[] };
 }
 
 /** #402: one declared pair — see `JourneyMetadata.mutationPairs`. */
@@ -222,6 +236,14 @@ export const JourneySchema: ZodType<Journey> = z.object({
     mutationPairs: z
       .array(z.object({ check: z.string().min(1).max(100), mustFailWhen: z.string().min(1).max(200) }).strict())
       .max(100)
+      .optional(),
+    approval: z
+      .object({
+        contentHash: z.string().regex(/^[0-9a-f]{64}$/, "approval.contentHash: a sha256 hex digest"),
+        at: z.string().min(1),
+        acceptedWeak: z.object({ reason: z.string().min(1), rules: z.array(z.string()) }).strict().optional(),
+      })
+      .strict()
       .optional(),
   }).strict(),
   recording: RecordingSchema,

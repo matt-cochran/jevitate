@@ -1089,7 +1089,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (84 exports)
+# @jevitate/journey (98 exports)
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1121,6 +1121,7 @@
   Journey: interface
   JourneyAnchor: interface
   JourneyAnchorListing: interface
+  JourneyApproval: interface
   journeyAssertions: function
   JourneyAssertionSite: type-alias
   journeyBranchPoint: function
@@ -1137,6 +1138,13 @@
   JourneyPrecondition: interface
   journeyPrefix: function
   JourneyRegistry: class
+  JourneyReview: type-alias
+  JourneyReviewChange: type-alias
+  JourneyReviewRiskyControl: type-alias
+  JourneyReviewSchema: variable
+  JourneyReviewStep: type-alias
+  JourneyReviewVerify: type-alias
+  JourneyReviewWriteRequest: type-alias
   journeyRunParams: function
   JourneySchema: variable
   JourneyStatusSpec: type-alias
@@ -1165,6 +1173,12 @@
   planJourneyMutations: function
   prefixLandingPath: function
   resolveJourneyStep: function
+  ReviewChangeSchema: variable
+  ReviewLintFindingSchema: variable
+  ReviewRiskyControlSchema: variable
+  ReviewStepSchema: variable
+  ReviewVerifySchema: variable
+  ReviewWriteRequestSchema: variable
   SECRET_PARAM_NAME_RE: variable
   secretParamNames: function
   secretParamValues: function

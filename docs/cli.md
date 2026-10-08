@@ -997,7 +997,7 @@ jevitate journey list [options]
 jevitate journey promote [options] <id>
 ```
 
-promote a local Journey (human-approval gate) so it becomes discoverable/runnable
+promote a local Journey (human-approval gate) so it becomes discoverable/runnable; shows its review sheet first and records the approval
 
 **Arguments**
 
@@ -1012,6 +1012,8 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 | `--accept-weak <reason>` | #401: promote a Journey whose assertions cannot prove its outcome, recording the reason |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--review-sheet <file>` | #432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash |  |  |  |  |
+| `--reviewed-hash <hash>` | #432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since |  |  |  |  |
 
 ### journey publish
 
@@ -1034,6 +1036,29 @@ jevitate journey publish [options] <id>
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--to <source>` | registered source name to publish into |  |  | yes |  |
+
+### journey review
+
+```
+jevitate journey review [options] <id>
+```
+
+a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
+| `--markdown` | render the sheet as Markdown |  |  |  |  |
+| `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
 
 ### journey run
 

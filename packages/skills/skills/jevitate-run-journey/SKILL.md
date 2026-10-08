@@ -86,6 +86,12 @@ artifact; your job is to find the right one and run it with the right params.
 
 ## Promoting a Journey
 
+- Before asking the human to promote, give them the review sheet:
+  `jevitate journey review <id> --markdown` (MCP `review_journey`) — steps,
+  side effects (write requests, risky controls, origins), inputs by name,
+  proof, change since the last approval, and the content hash. Pass that hash
+  as `--reviewed-hash` (MCP `reviewedHash`) so the approval is refused
+  (`E_JOURNEY_REVIEW_STALE`) if the Journey changed after they read it.
 - `jevitate journey promote <id> --json` promotes a local Journey — a
   deliberate human-approval gate (mirrors `mission target promote`'s
   semantics), never automatic — run it (or MCP `promote_journey`) only when

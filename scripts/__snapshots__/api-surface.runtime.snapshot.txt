@@ -701,7 +701,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (47 exports)
+# @jevitate/journey (54 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
@@ -711,9 +711,16 @@
   CampaignSpecSchema: object
   FsJourneyStore: class
   JourneyRegistry: class
+  JourneyReviewSchema: object
   JourneySchema: object
   JourneyStepError: class
   ParamValidationError: class
+  ReviewChangeSchema: object
+  ReviewLintFindingSchema: object
+  ReviewRiskyControlSchema: object
+  ReviewStepSchema: object
+  ReviewVerifySchema: object
+  ReviewWriteRequestSchema: object
   SECRET_PARAM_NAME_RE: object
   SWEEP_MODES: array
   applyAnnotationDraft: function

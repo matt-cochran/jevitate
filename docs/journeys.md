@@ -212,6 +212,43 @@ request. Every replay starts fresh, with the same fixtures and hooks as `journey
 app keeps state between sessions, reset it with `--fixtures`/`--before`, or the replay after a
 blocked save can still find the base replay's saved data.
 
+### Review and promotion sign-off
+
+`journey promote` is the human approval gate; `journey review` is what the reviewer reads first —
+one sheet that says what the Journey does, what it changes and what it proves:
+
+```bash
+jevitate journey review checkout                          # the sheet, as text
+jevitate journey review checkout --markdown --out review.md   # Markdown, to a file (attach it to a PR)
+jevitate journey review checkout --json                   # the schema-checked sheet (MCP: review_journey)
+```
+
+| Section | What it shows |
+|---|---|
+| Summary | goal and success criteria (from annotations); missing intent is flagged with the `journey annotate` command that drafts it |
+| Steps | each step's action in plain words, its target control (role and accessible name), objective, expected result, its own check, and the parameters it uses |
+| Side effects | the write requests it is expected to fire (method and endpoint, from recorded deltas, `expectRequests` and network end-state checks); clicked controls that match the [safety rules](safety.md) with their rule ids (`builtin:destructive`, `builtin:may-cost-money`, `builtin:session-end`, and the site's `targets.json` `safety.deny` / `safety.paid` as `deny:<pattern>` / `paid:<pattern>`); the origins it touches |
+| Inputs | parameters and secret references **by name only** — never a value (a literal typed into a credential-looking field shows as «redacted»; a secret reference shows its field and manager, never its key) |
+| Proof | end-state checks, per-step assertions (weak ones marked), the `journey lint` result, and the last `journey verify --mutate` verdict (`stale` when the Journey changed after it ran) — or "not verified" with the command to run |
+| Change since last approval | a diff of steps, assertions and side effects against the version last approved, or "first approval" |
+| Content hash | the hash an approval binds to |
+
+The content hash is the Journey's content hash without its approval bookkeeping (`promoted`,
+`approval`, `acceptedWeak`), so promoting does not change what was approved. Bind an approval to
+exactly what you read:
+
+```bash
+jevitate journey promote checkout --reviewed-hash <hash>   # refused (E_JOURNEY_REVIEW_STALE, exit 64) if the Journey changed since
+jevitate journey promote checkout --review-sheet review.md # the same, reading the hash from the sheet file (text, Markdown or JSON)
+```
+
+Without either, `journey promote` prints the sheet (human mode) and binds the approval to the hash
+it showed. Every promotion — `journey promote` and `demo approve` alike — records
+`metadata.approval` (`{ contentHash, at, acceptedWeak? }`) and keeps the approved Journey at
+`.jevitate/journeys/.approved/<id>.json`, which the next review diffs against. `journey verify
+--mutate` records its last verdict at `.jevitate/journeys/.verify/<id>.json` (bound to the same
+hash). The [assertion-strength gate](#assertion-strength) still applies: `--accept-weak` is recorded in the approval too.
+
 ## Record a flow by demonstration
 
 ```bash
@@ -277,6 +314,7 @@ key is refused when the file is read.
 | `name` | yes | A short human name |
 | `description` | no | One line, shown by `journey find` |
 | `promoted` | yes | `true` only after `journey promote` (the human approval gate) |
+| `approval` | no | the last approval: `{ contentHash, at, acceptedWeak? }` (see [Review and promotion sign-off](#review-and-promotion-sign-off)) |
 | `params` | yes | Names of the `--param` values it takes |
 | `secretRefs` | no | Password-manager references for `vault-autofill` runs |
 | `authoredBy` | no | `human-demonstration` or `jev-driven` |
