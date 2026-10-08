@@ -209,6 +209,18 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--from-journey", "nope", "--at-step", "2", "--fake-ai"],
       ["--at-step", "2", "--fake-ai"],
       ["--from-journey", "nope", "--at-step", "2", "--url", URL0, "--fake-ai"],
+      // #427: an unusable --auth-check is refused before any browser opens.
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--auth-check", "sometimes"],
+    ],
+  },
+  // #427: missing flags, a value where a variable NAME belongs, an unset variable, a session file in .jevitate/.
+  login: {
+    cases: [
+      [],
+      ["--url", URL0, "--user-env", "not a var", "--password-env", "JEV_REFUSAL_PW", "--save", join(dir, "login", "s.json")],
+      ["--url", URL0, "--user-env", "JEV_REFUSAL_UNSET_USER", "--password-env", "JEV_REFUSAL_UNSET_PW", "--save", join(dir, "login", "s.json")],
+      ["--url", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, ".jevitate", "s.json")],
+      ["--url", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json"), "--success", "nonsense"],
     ],
   },
   "verify-fix": { base: ["--result", missing, "--fingerprint", FP], cases: [["--result", missing, "--fingerprint", FP], []] },

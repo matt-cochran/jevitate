@@ -160,11 +160,19 @@ export type MissionFailureKind =
    * Adversarial (#300): an action switched the signed-in identity and the run could not return to the
    * original one — every later check would judge another user's session, so it proves nothing past it.
    */
-  | "identity-changed";
+  | "identity-changed"
+  /**
+   * #427: the pre-flight auth check found the run's session (`--storage-state`, a persona's) expired —
+   * the start URL landed on a sign-in page — and it could not be refreshed. The run ended before the
+   * mission started (the login page is never explored): `inconclusive`. `persona` names whose.
+   */
+  | "auth-expired";
 
 export interface MissionFailure {
   readonly kind: MissionFailureKind;
   readonly message: string;
+  /** #427 (`auth-expired`): the persona whose session expired, when the session was a persona's. */
+  readonly persona?: string;
   /** The error stack, when one was available (used for attribution, never sent to a model). */
   readonly stack?: string;
 }

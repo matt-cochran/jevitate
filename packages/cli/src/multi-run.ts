@@ -13,6 +13,8 @@ import {
 import { sumUsage, usageCountsFrom, type UsageAggregate, type UsageCounts } from "@jevitate/ai-core";
 import { normalizeRoute } from "@jevitate/explore";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
+import { findProjectDir } from "./project-dir.js";
+import { LoginArgsError, parsePersonaLogin, type PersonaLogin } from "./persona-login.js";
 
 /**
  * Multi-run orchestration over the existing explore strategies (#141 repeat-and-vote, #143 persona
@@ -46,6 +48,11 @@ export interface Persona {
   readonly name: string;
   /** Absolute path of the persona's Playwright storageState file (its contents are never read). */
   readonly storageState: string;
+  /**
+   * #427: how to sign in as this persona (a personas file entry's `login`): an expired session is
+   * re-minted ONCE from it by the pre-flight auth check. Environment variable NAMES only.
+   */
+  readonly login?: PersonaLogin;
 }
 
 export interface MultiRunPlan {
@@ -61,21 +68,70 @@ export interface MultiRunPlan {
 export const MAX_REPEAT = 20;
 const PERSONA_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
-function persona(name: string, storageState: string, base: string, noun = "persona"): Persona {
+function persona(name: string, storageState: string, base: string, noun = "persona", login?: PersonaLogin): Persona {
   if (!PERSONA_NAME.test(name)) {
     throw new MultiRunArgsError(`${noun} name ${JSON.stringify(name)} must be 1-64 of [A-Za-z0-9_.-], starting alphanumeric`);
   }
   if (storageState.trim() === "") throw new MultiRunArgsError(`${noun} ${name}: storage state path is empty`);
   const path = isAbsolute(storageState) ? storageState : resolve(base, storageState);
-  if (!existsSync(path)) throw new MultiRunArgsError(`${noun} ${name}: storage state not found: ${path}`);
-  return { name, storageState: path };
+  // #427: a persona with login parameters may not have a session yet — the pre-flight mints it.
+  if (login === undefined && !existsSync(path)) throw new MultiRunArgsError(`${noun} ${name}: storage state not found: ${path}`);
+  return { name, storageState: path, ...(login === undefined ? {} : { login }) };
 }
 
-/** `--persona <name>=<storageState>`: the path is resolved against the working directory. */
+/** #427: a personas file entry's optional `login` (env variable NAMES only; validated, never echoed). */
+function entryLogin(v: unknown, where: string): PersonaLogin | undefined {
+  if (v === undefined) return undefined;
+  try {
+    return parsePersonaLogin(v, where);
+  } catch (err) {
+    if (err instanceof LoginArgsError) throw new MultiRunArgsError(err.message);
+    throw err;
+  }
+}
+
+/**
+ * `--persona <name>=<storageState>`: the path is resolved against the working directory. #427: a bare
+ * `--persona <name>` is the project's persona of that name (`.jevitate/personas.json`), and a
+ * `<name>=<storageState>` persona the project also declares takes its `login` parameters from there.
+ */
 export function parsePersonaSpec(spec: string, cwd: string = process.cwd()): Persona {
   const eq = spec.indexOf("=");
-  if (eq <= 0) throw new MultiRunArgsError(`--persona must be <name>=<storageState>, got ${JSON.stringify(spec)}`);
-  return persona(spec.slice(0, eq), spec.slice(eq + 1), cwd);
+  if (eq === -1 && spec !== "") {
+    const known = projectPersonas(cwd);
+    const p = known.find((k) => k.name === spec);
+    if (p === undefined) {
+      throw new MultiRunArgsError(
+        `--persona ${JSON.stringify(spec)} is not declared in the project's .jevitate/${PROJECT_PERSONAS_FILE}` +
+          (known.length === 0 ? " (pass --persona <name>=<storageState>)" : ` — known personas: ${known.map((k) => k.name).join(", ")}`),
+      );
+    }
+    return p;
+  }
+  if (eq <= 0) throw new MultiRunArgsError(`--persona must be <name>=<storageState> (or a name declared in .jevitate/${PROJECT_PERSONAS_FILE}), got ${JSON.stringify(spec)}`);
+  const name = spec.slice(0, eq);
+  const login = projectPersonas(cwd).find((k) => k.name === name)?.login;
+  return persona(name, spec.slice(eq + 1), cwd, "persona", login);
+}
+
+/** #427: the project's persona registry, `.jevitate/personas.json` (the `--personas` file format). */
+export const PROJECT_PERSONAS_FILE = "personas.json";
+
+/** The project's declared personas (`.jevitate/personas.json`), or none when the file does not exist. */
+export function projectPersonas(cwd: string = process.cwd()): Persona[] {
+  const dir = findProjectDir({ cwd: () => cwd });
+  if (dir === null) return [];
+  const file = join(dir, PROJECT_PERSONAS_FILE);
+  return existsSync(file) ? loadPersonasFile(file) : [];
+}
+
+/**
+ * #427: the project persona whose storage state is `storageState` (a single run's `--storage-state`
+ * or `--actor`), so its name and login parameters apply to the pre-flight auth check.
+ */
+export function projectPersonaFor(storageState: string, cwd: string = process.cwd()): Persona | undefined {
+  const abs = resolve(cwd, storageState);
+  return projectPersonas(cwd).find((p) => p.storageState === abs);
 }
 
 /**
@@ -91,7 +147,10 @@ export function parseActorSpec(spec: string, cwd: string = process.cwd()): Perso
 /**
  * `--personas <file>`: JSON, either `{"admin": "admin.json", "sales": "sales.json"}` or
  * `{"personas": [{"name": "admin", "storageState": "admin.json"}]}` (a bare array also works).
- * Relative paths resolve against the personas file's own directory.
+ * Relative paths resolve against the personas file's own directory. #427: an entry may carry
+ * `login: {url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}` (the map form
+ * then takes `{"admin": {"storageState": "admin.json", "login": {…}}}`) — the pre-flight auth check
+ * re-mints an expired session from it once.
  */
 export function loadPersonasFile(path: string): Persona[] {
   if (!existsSync(path)) throw new MultiRunArgsError(`personas file not found: ${path}`);
@@ -106,15 +165,18 @@ export function loadPersonasFile(path: string): Persona[] {
   if (list !== null) {
     return list.map((p, i) => {
       if (!isRecord(p) || typeof p.name !== "string" || typeof p.storageState !== "string") {
-        throw new MultiRunArgsError(`personas file ${path}: entry ${i} must be {"name": string, "storageState": string}`);
+        throw new MultiRunArgsError(`personas file ${path}: entry ${i} must be {"name": string, "storageState": string, "login"?: {…}}`);
       }
-      return persona(p.name, p.storageState, base);
+      return persona(p.name, p.storageState, base, "persona", entryLogin(p.login, `personas file ${path}: ${p.name}.login`));
     });
   }
   if (isRecord(raw)) {
     return Object.entries(raw).map(([name, state]) => {
-      if (typeof state !== "string") throw new MultiRunArgsError(`personas file ${path}: ${name} must map to a storage state path`);
-      return persona(name, state, base);
+      if (typeof state === "string") return persona(name, state, base);
+      if (isRecord(state) && typeof state.storageState === "string") {
+        return persona(name, state.storageState, base, "persona", entryLogin(state.login, `personas file ${path}: ${name}.login`));
+      }
+      throw new MultiRunArgsError(`personas file ${path}: ${name} must map to a storage state path or {"storageState": string, "login"?: {…}}`);
     });
   }
   throw new MultiRunArgsError(`personas file ${path} must be an object or an array of personas`);
@@ -629,6 +691,8 @@ export type RunEnvelope =
 export interface RunOnceArgs {
   /** Persona storage state to start from (`undefined`: the mission's own `--storage-state`, if any). */
   readonly storageState?: string;
+  /** #427: the persona this run is (its name names an `auth-expired` failure; its `login` refreshes it). */
+  readonly persona?: Persona;
   /** Where this run writes its artifacts. */
   readonly outDir: string;
 }
@@ -877,7 +941,7 @@ export async function runMultiRun(opts: RunMultiRunOptions): Promise<MultiRunRes
         mkdirSync(runDir, { recursive: true });
         current = { persona: p, runs, index: i, runDir };
         // Strictly one at a time: the next run starts only after this one fully ended.
-        const envelope = await opts.runOnce({ ...(p === null ? {} : { storageState: p.storageState }), outDir: runDir });
+        const envelope = await opts.runOnce({ ...(p === null ? {} : { storageState: p.storageState, persona: p }), outDir: runDir });
         const envelopePath = join(runDir, "run.envelope.json");
         writeJson(envelopePath, envelope);
         runs.push(summarizeRun(strategy, i, envelope, envelopePath));
