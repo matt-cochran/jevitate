@@ -76,6 +76,8 @@ describe("--log-ignore (#169 item 3)", () => {
       expect(result.defects).toHaveLength(1);
       expect(result.defects[0]?.occurrences).toBe(2);
       expect(result.defects[0]?.message).not.toContain("noisy");
+      // #421: the structured fields every consumer reads instead of parsing `reason`.
+      expect(result.defects[0]).toMatchObject({ kind: "server-log", level: "error", source: spec.raw, firstSeenStep: 1, count: 2 });
     },
     15_000,
   );

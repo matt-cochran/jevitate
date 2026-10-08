@@ -17,14 +17,14 @@ import { conversationConfig, type ConversationOptions } from "./conversation-opt
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import { foldGoalOutcome, type GoalOutcome, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
-import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogDefect } from "./result-schema.js";
+import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, defectFields, type AdvisoryServerLogDefect } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
 import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
-import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
+import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogsSummary } from "./log-correlation.js";
 import { triageOf, serverLogRuntimeOptions } from "./explore-shared.js";
@@ -205,6 +205,8 @@ export interface RunUsabilityMissionResult {
    * a UX review's outcome.
    */
   readonly defects: Array<AdvisoryServerLogDefect | (Http5xxDefect & { readonly advisory: true })>;
+  /** #421/#423: the gating defects counted per kind (`defectOutcomeOf(defects)`). */
+  readonly defectOutcome: DefectOutcome;
   /** Hang findings (0 or 1: the review stops at a hang), as every strategy lists them (#195). */
   readonly hangs: HangFinding[];
   /** Every Recording the review wrote (#195: one list on every strategy) — a review writes one. */
@@ -807,10 +809,10 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       // always advisory, and a `server-log` defect here is treated the same way. So is an HTTP 5xx
       // hard-signal defect (#208): listed with its fingerprint (verify-fix replays it), advisory here.
       ...serverLogResult(serverLogRun),
-      defects: [
+      ...defectFields<AdvisoryServerLogDefect | (Http5xxDefect & { readonly advisory: true })>([
         ...http5xx.defects(run.transcript, run.recording.pages.flatMap((p) => p.steps)[0]?.step.kind === "navigate" ? 1 : 0).map((d) => ({ ...d, advisory: true as const })),
         ...advisoryDefects(serverLogRun?.defects),
-      ],
+      ]),
       ...(budget === null ? {} : { budget: budget.trajectory() }),
       ...(adjudication === undefined
         ? {}

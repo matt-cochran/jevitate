@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outcome.js";
+import { DEFECT_OUTCOME_STATUSES, GOAL_OUTCOMES, MISSION_OUTCOMES, defectOutcomeOf, foldGoalOutcome, type DefectOutcome } from "./mission-outcome.js";
 
 /**
  * The ONE result schema every explore strategy's result follows (#195 part 5) — what `jevitate
@@ -21,6 +21,11 @@ import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outc
  *    `kind`. A defect a strategy reports but never gates on (a usability run's `server-log`
  *    defect; a coverage/exploratory `judgment-flagged-state`, which only Jev's opinion found — #214)
  *    is marked `advisory: true`: listed, replayable by `verify-fix`, never setting the outcome.
+ *    A `server-log` defect (#421) also carries `level`, `source` (the `--log-source` spec), `message`
+ *    (redacted), `firstSeenStep` and `count` (= `occurrences`).
+ *  - `defectOutcome` — #421/#423, additive (schemaVersion 1): `{ status: "none" | "defects", byKind,
+ *    advisoryByKind? }` — the gating defects counted per kind (the run's defect summary), orthogonal
+ *    to a goal run's `goalOutcome`. Written on every result since 0.8.0; older results parse without.
  *  - `hangs` — every hang finding (0 or more), each with its fingerprint and reproduction.
  *  - `recordingPaths` — every Recording the run wrote (one for a single-path run, one per path for a
  *    frontier run); never a single `recordingPath` for one strategy and a list for another.
@@ -204,6 +209,19 @@ export const EnvironmentDegradedSchema = z.looseObject({
 });
 export type EnvironmentDegraded = z.infer<typeof EnvironmentDegradedSchema>;
 
+function sameCounts(a: Readonly<Record<string, number>>, b: Readonly<Record<string, number>>): boolean {
+  const ka = Object.keys(a).filter((k) => a[k] !== 0);
+  const kb = Object.keys(b);
+  return ka.length === kb.length && kb.every((k) => a[k] === b[k]);
+}
+
+/** #421/#423: the run's defect verdict — gating defects counted per kind (see `DefectOutcome`). */
+export const DefectOutcomeSchema = z.looseObject({
+  status: z.enum(DEFECT_OUTCOME_STATUSES),
+  byKind: z.record(z.string(), z.number().int().nonnegative()),
+  advisoryByKind: z.record(z.string(), z.number().int().nonnegative()).optional(),
+});
+
 /** The common fields of every strategy's result (strategy-specific fields pass through). */
 export const MissionResultSchema = z
   .looseObject({
@@ -214,6 +232,8 @@ export const MissionResultSchema = z
     goalOutcome: z.enum(RESULT_GOAL_OUTCOMES).optional(),
     exitCode: z.number().int().nonnegative(),
     defects: z.array(ResultDefectSchema),
+    /** #421/#423 — additive: optional so results written before 0.8.0 still parse. */
+    defectOutcome: DefectOutcomeSchema.optional(),
     hangs: z.array(ResultHangSchema),
     recordingPaths: z.array(z.string().min(1)),
     transcriptPath: z.string().min(1),
@@ -237,6 +257,10 @@ export const MissionResultSchema = z
   .refine((r) => (r.strategy === "goal") === (r.goalOutcome !== undefined), {
     message: "goalOutcome is present on every goal result and on no other",
     path: ["goalOutcome"],
+  })
+  .refine((r) => r.defectOutcome === undefined || sameCounts(r.defectOutcome.byKind, defectOutcomeOf(r.defects).byKind), {
+    message: "defectOutcome.byKind must count the result's gating defects per kind",
+    path: ["defectOutcome"],
   })
   .refine((r) => r.goalOutcome === undefined || foldGoalOutcome(r.goalOutcome) === r.missionOutcome, {
     message: "missionOutcome must be the canonical fold of goalOutcome (GOAL_OUTCOME_FOLD)",
@@ -268,6 +292,8 @@ export interface MissionResultCore {
   readonly goalOutcome?: ResultGoalOutcome;
   readonly exitCode: number;
   readonly defects: ReadonlyArray<{ readonly fingerprint: string; readonly kind: string; readonly advisory?: true }>;
+  /** #421/#423: `defectOutcomeOf(defects)` — every result written now carries it. */
+  readonly defectOutcome: DefectOutcome;
   readonly hangs: ReadonlyArray<{ readonly fingerprint: string; readonly kind: "hang" }>;
   readonly recordingPaths: readonly string[];
   readonly transcriptPath: string;

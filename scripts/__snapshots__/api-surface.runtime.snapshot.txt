@@ -105,10 +105,12 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (65 exports)
+# @jevitate/domain (68 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
+  DEFECT_OUTCOME_STATUSES: array
   DEGRADED_FINDINGS: array
+  DefectOutcomeSchema: object
   EnvironmentDegradedSchema: object
   FakeClock: class
   GOAL_ONLY_OUTCOMES: array
@@ -142,6 +144,7 @@
   combineOutcomes: function
   contentHash: function
   currentClock: function
+  defectOutcomeOf: function
   evaluateGate: function
   externalSchemeOf: function
   fileDraft: function

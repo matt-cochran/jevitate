@@ -10,10 +10,10 @@ import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
-import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
+import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
-import { foldGoalOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
+import { defectOutcomeOf, foldGoalOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -258,6 +258,8 @@ export interface RunExplorationResult {
    * `server-log` defects (#142, with `--log-defect`) — `verify-fix` replays any of them by fingerprint.
    */
   readonly defects: Array<InvariantDefect | Http5xxDefect | ServerLogDefect>;
+  /** #421/#423: the gating defects counted per kind — orthogonal to `goalOutcome`. */
+  readonly defectOutcome: DefectOutcome;
   /** Per declared invariant: applied / held / violated / unreadable counts. */
   readonly invariants?: InvariantReport[];
   /** The declared spec the run evaluated — persisted so `verify-fix` re-checks the SAME invariants. */
@@ -599,6 +601,11 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const shotFields = await capture.finish();
     const videos = await finalizeVideos(videoDir, closeSession);
 
+    // #195/#421: every defect in ONE list — server-log defects as structured entries, never only prose.
+    const defects = unifiedDefects<InvariantDefect | Http5xxDefect>(
+      [...(opts.invariants === undefined ? [] : (mission.invariantDefects ?? [])), ...httpDefects],
+      serverLogRun?.defects,
+    );
     const result: RunExplorationResult = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "goal",
@@ -680,10 +687,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
-      defects: unifiedDefects<InvariantDefect | Http5xxDefect>(
-        [...(opts.invariants === undefined ? [] : (mission.invariantDefects ?? [])), ...httpDefects],
-        serverLogRun?.defects,
-      ),
+      defects,
+      defectOutcome: defectOutcomeOf(defects),
       ...host.fields,
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).

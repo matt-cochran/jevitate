@@ -168,3 +168,34 @@ export interface MissionFailure {
   /** The error stack, when one was available (used for attribution, never sent to a model). */
   readonly stack?: string;
 }
+
+/**
+ * #421/#423 — a run's defect verdict, orthogonal to whether a goal was reached: `defects` when at
+ * least one GATING defect (`result.defects[]` not marked `advisory: true`) was recorded, else `none`.
+ * `byKind` counts those gating defects per `kind` (`server-log`, `http-5xx`, `invariant`, …) — THE
+ * per-run defect summary; `advisoryByKind` (omitted when empty) counts the advisory ones a strategy
+ * reports but never gates on. Hangs are not defects: they have their own outcome (`hang`/`intermittent`).
+ */
+export const DEFECT_OUTCOME_STATUSES = ["none", "defects"] as const;
+export type DefectOutcomeStatus = (typeof DEFECT_OUTCOME_STATUSES)[number];
+
+export interface DefectOutcome {
+  readonly status: DefectOutcomeStatus;
+  readonly byKind: Readonly<Record<string, number>>;
+  readonly advisoryByKind?: Readonly<Record<string, number>>;
+}
+
+/** The defect verdict of a run's `defects[]` (see `DefectOutcome`). */
+export function defectOutcomeOf(defects: ReadonlyArray<{ readonly kind: string; readonly advisory?: true }>): DefectOutcome {
+  const byKind: Record<string, number> = {};
+  const advisoryByKind: Record<string, number> = {};
+  for (const d of defects) {
+    const into = d.advisory === true ? advisoryByKind : byKind;
+    into[d.kind] = (into[d.kind] ?? 0) + 1;
+  }
+  return {
+    status: Object.keys(byKind).length > 0 ? "defects" : "none",
+    byKind,
+    ...(Object.keys(advisoryByKind).length > 0 ? { advisoryByKind } : {}),
+  };
+}

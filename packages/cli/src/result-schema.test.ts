@@ -152,9 +152,19 @@ function assertNoRemovedAliases(json: unknown, strategy: string): void {
 }
 
 /** The backend-log defect is in `defects` (#195), the only list that carries it. */
-function assertServerLogDefectInDefects(result: { defects: ReadonlyArray<{ kind: string; fingerprint: string }> }): void {
+function assertServerLogDefectInDefects(result: {
+  defects: ReadonlyArray<{ kind: string; fingerprint: string; advisory?: true }>;
+  defectOutcome: { status: string; byKind: Readonly<Record<string, number>>; advisoryByKind?: Readonly<Record<string, number>> };
+}): void {
   const serverLogOnes = result.defects.filter((d) => d.kind === "server-log");
   expect(serverLogOnes.length).toBeGreaterThan(0);
+  // #421: each is a structured entry (never only in `reason`), counted by kind in `defectOutcome`.
+  for (const d of serverLogOnes) {
+    expect(d).toMatchObject({ level: expect.any(String), source: expect.any(String), message: expect.any(String), firstSeenStep: expect.any(Number), count: expect.any(Number) });
+  }
+  const advisory = serverLogOnes.every((d) => d.advisory === true);
+  const counted = advisory ? result.defectOutcome.advisoryByKind?.["server-log"] : result.defectOutcome.byKind["server-log"];
+  expect(counted).toBe(serverLogOnes.length);
 }
 
 /** Answers every decision with the same candidate action (`done`, `blocked`, `wait`, `click:0`, …). */

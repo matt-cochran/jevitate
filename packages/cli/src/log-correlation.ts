@@ -140,6 +140,12 @@ export interface ServerLogDefect {
   readonly level: LogLevel;
   /** First occurrence's redacted message. */
   readonly message: string;
+  /** #421: the `--log-source` (its raw spec) the first occurrence was read from. */
+  readonly source: string;
+  /** #421: the transcript step the first occurrence was attributed to (the run's last step for an unattributed line). */
+  readonly firstSeenStep: number;
+  /** #421: how many lines of this run share the fingerprint (= `occurrences`, the name every consumer reads). */
+  readonly count: number;
   readonly occurrences: number;
   readonly repro: { readonly recordingStepIndex: number };
   /** #204: the request the first occurrence was correlated to by id, when it was. */
@@ -475,6 +481,9 @@ export class ServerLogRuntime {
           route: templatedRoute,
           level: line.level,
           message: redactText(line.message, this.#secrets),
+          source: line.source,
+          firstSeenStep: atStep,
+          count: 1,
           occurrences: 1,
           repro: { recordingStepIndex: recordingStepIndexFor(transcript, atStep) },
           ...(request === undefined ? {} : { request }),
@@ -495,7 +504,7 @@ export class ServerLogRuntime {
     }
     for (const line of unattributed) consider(line, UNATTRIBUTED_ROUTE, lastStep);
 
-    return [...grouped.values()].map(({ defect, count }) => ({ ...defect, occurrences: count }));
+    return [...grouped.values()].map(({ defect, count }) => ({ ...defect, count, occurrences: count }));
   }
 
   #summary(

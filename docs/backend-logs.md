@@ -94,6 +94,22 @@ occurrences on `/orders/17` and `/orders/42` are one defect) (`"(run)"` for a li
 source(s) for the same drain window — never by looking for it among DOM/console/network signals,
 which a backend log line is none of. A `cmd:` source needs `--allow-log-cmd` on `verify-fix` too.
 
+**Structured, never only prose (#421).** Every `server-log` defect is an entry of the result's
+`defects[]` — one per fingerprint, however many lines share it:
+
+```json
+{ "kind": "server-log", "fingerprint": "3f2a…", "level": "error", "source": "docker:api-1",
+  "message": "Incorrect API key provided", "firstSeenStep": 4, "count": 3, "occurrences": 3,
+  "route": "/settings", "title": "Server log error on /settings: …", "repro": { "recordingStepIndex": 3 },
+  "serverLog": { "sources": ["docker:api-1"], "matcher": "error", "normalizedMessage": "…", "drainMs": 3000 } }
+```
+
+`source` is the `--log-source` spec the first matching line came from, `firstSeenStep` the transcript
+step it was attributed to (the last step for a line outside every step window) and `count` how many
+lines matched (`occurrences` is the same number, kept for older readers). The result's `reason`
+stays human prose; `defectOutcome.byKind` counts the run's defects per kind (`{"server-log": 2,
+"http-5xx": 1}`), so an aggregator never has to parse `reason`.
+
 **Result and outcome.** `serverLogs` on the result carries counts by level, the top normalized
 messages, each source's `opened`/`linesRead`/`truncated`/`error`, and `oracleOk` — false when
 `--log-defect` was given and any declared source failed to open or delivered not one line (a

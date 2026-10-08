@@ -163,7 +163,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (112 exports)
+# @jevitate/domain (117 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
@@ -177,6 +177,11 @@
   currentClock: function
   DEFAULT_HEAP_GROWTH_RULE: variable
   DEFAULT_JEVITATE_REPO: variable
+  DEFECT_OUTCOME_STATUSES: variable
+  DefectOutcome: interface
+  defectOutcomeOf: function
+  DefectOutcomeSchema: variable
+  DefectOutcomeStatus: type-alias
   DEGRADED_FINDINGS: variable
   DegradedFindingKind: type-alias
   Direction: type-alias
