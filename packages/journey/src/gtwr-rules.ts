@@ -207,16 +207,3 @@ export function checkPersona(p: { description?: string; role?: string }): Qualit
   return sorted(findings);
 }
 
-/** #434: strip one leading template prefix case-insensitively, then whitespace. */
-function stripPrefix(text: string, prefix: string): string {
-  const trimmed = text.trimStart();
-  return trimmed.toLowerCase().startsWith(prefix) ? trimmed.slice(prefix.length).trimStart() : trimmed;
-}
-
-/** #434: render a job story as `When …, I want to …, so I can ….`. */
-export function renderJobStory(job: { trigger: string; motivation: string; outcome: string }): string {
-  const trigger = stripPrefix(job.trigger, "when ").trim();
-  const motivation = stripPrefix(job.motivation, "i want to ").trim();
-  const outcome = stripPrefix(job.outcome, "so i can ").trim().replace(/\.\s*$/, "").trimEnd();
-  return `When ${trigger}, I want to ${motivation}, so I can ${outcome}.`;
-}
