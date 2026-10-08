@@ -83,6 +83,11 @@ export interface CliDeps {
   logs?: { readonly autoPrune: boolean; readonly logsRoot?: string; readonly configPath?: string };
   journeysDir?: string;
   /**
+   * Optional, additive (#433): the catalog's directory — where `personas.json` and `jobs.json` live
+   * (default: the project's `.jevitate/`, found from the working directory; none outside a project).
+   */
+  catalogDir?: string;
+  /**
    * Optional, additive (#247): the environments file `--env` reads (default: the repo's
    * `.jevitate/environments.json`, found from the working directory).
    */

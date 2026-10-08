@@ -26,6 +26,7 @@ import { registerProfileCommands } from "./profile-cli.js";
 import { registerSiteCommands } from "./site-cli.js";
 import { registerRecordingCommands } from "./recording-cli.js";
 import { registerJourneyCommands } from "./journey-cli.js";
+import { registerCatalogCommands } from "./catalog-cli.js";
 import { registerSourceCommands } from "./source-cli.js";
 import { registerLoadCommands } from "./load-cli.js";
 import { registerExploreCommands } from "./explore-cli.js";
@@ -70,6 +71,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerSiteCommands(program, deps);
   registerRecordingCommands(program, deps);
   registerJourneyCommands(program, deps);
+  registerCatalogCommands(program, deps); // #433: persona/job review|approve, catalog status
   registerSourceCommands(program, deps);
   registerLoadCommands(program, deps);
   registerExploreCommands(program, deps, buildProgram);

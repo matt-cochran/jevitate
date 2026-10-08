@@ -1089,7 +1089,9 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (106 exports)
+# @jevitate/journey (127 exports)
+  AcceptedFindings: interface
+  AcceptedFindingsSchema: variable
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1106,12 +1108,21 @@
   CAMPAIGN_LIMITS: variable
   CampaignSpec: type-alias
   CampaignSpecSchema: variable
+  CATALOG_ID_RE: variable
+  CatalogApproval: type-alias
+  CatalogApprovalSchema: variable
+  CatalogItemStatus: type-alias
+  CatalogStatusReport: type-alias
+  CatalogStatusSchema: variable
+  CatalogStatusValueSchema: variable
   checkJobStory: function
   checkPersona: function
   checkStatement: function
   classifyMutation: function
   deriveParamSchema: function
   describeStep: function
+  Finding: type-alias
+  FindingSchema: variable
   FlatJourneyStep: interface
   flatJourneySteps: function
   formatAnnotationChanges: function
@@ -1124,14 +1135,22 @@
   isNoClaimExpect: function
   isOwnTargetVisible: function
   isSweepMode: function
+  Job: type-alias
+  JOB_PRIORITIES: variable
+  JobReview: type-alias
+  JobReviewSchema: variable
+  JobSchema: variable
   Journey: interface
   JourneyAnchor: interface
   JourneyAnchorListing: interface
   JourneyApproval: interface
+  JourneyApprovalWaiver: interface
   journeyAssertions: function
   JourneyAssertionSite: type-alias
   journeyBranchPoint: function
   JourneyBranchPoint: interface
+  JourneyCatalogLinks: type-alias
+  JourneyCatalogLinksSchema: variable
   journeyEndState: function
   JourneyLintFinding: interface
   JourneyLintOptions: interface
@@ -1176,6 +1195,8 @@
   mutationWait: function
   ParamSchema: interface
   ParamValidationError: class
+  PersonaReview: type-alias
+  PersonaReviewSchema: variable
   planJourneyMutations: function
   prefixLandingPath: function
   QualityFinding: interface

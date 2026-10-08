@@ -1,6 +1,7 @@
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding } from "@jevitate/journey";
 import { journeyReviewHash } from "./journey-review.js";
 import { writeApprovedSnapshot } from "./journey-review-store.js";
+import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
 import { redactText } from "@jevitate/ai-core";
 import { safeRunPolicy, type RunPolicy, clock } from "@jevitate/domain";
 import { join } from "node:path";
@@ -249,8 +250,25 @@ export async function lintJourneyById(
  * #432: records the approval (`metadata.approval`: the review hash, when, the waiver) and keeps a
  * snapshot of the approved Journey (`.approved/<id>.json`). Given `reviewedHash` (what the reviewer's
  * sheet showed), a Journey that changed since is refused (`StaleReviewError`) before anything else.
+ *
+ * #433: then the catalog gate (`journeyCatalogGate`): a Journey linking a job/persona that is not
+ * approved is refused (`UnvettedLinksError`) unless `acceptUnvetted` (recorded in
+ * `approval.waivers`), and the shared pre-approval findings are acknowledged (`acceptFindings`,
+ * recorded in `approval.acceptedFindings`) — the same pipeline `persona|job approve` and
+ * `demo approve` use. `catalogDir` (default: the project's `.jevitate/`) holds personas/jobs.
  */
-export async function promoteJourney(dir: string, id: string, opts: { acceptWeak?: string; reviewedHash?: string } = {}): Promise<Journey> {
+export interface PromoteJourneyOptions {
+  acceptWeak?: string;
+  reviewedHash?: string;
+  acceptUnvetted?: string;
+  acceptFindings?: string;
+  /** The catalog's directory; undefined: the project's `.jevitate/` (none outside a project). */
+  catalogDir?: string | null;
+  /** Which approval path asks (`demo approve` promotes through here too). */
+  action?: "journey promote" | "demo approve";
+}
+
+export async function promoteJourney(dir: string, id: string, opts: PromoteJourneyOptions = {}): Promise<Journey> {
   const store = new FsJourneyStore(dir);
   const registry = new JourneyRegistry(store);
 
@@ -278,7 +296,20 @@ export async function promoteJourney(dir: string, id: string, opts: { acceptWeak
     );
   }
   const acceptedWeak = errors.length > 0 ? { reason, rules: [...new Set(errors.map((f) => f.rule))] } : undefined;
-  const approval: JourneyApproval = { contentHash, at: clock.nowIso(), ...(acceptedWeak === undefined ? {} : { acceptedWeak }) };
+  const gate = await journeyCatalogGate(existing, {
+    catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir,
+    journeysDir: dir,
+    action: opts.action ?? "journey promote",
+    ...(opts.acceptUnvetted === undefined ? {} : { acceptUnvetted: opts.acceptUnvetted }),
+    ...(opts.acceptFindings === undefined ? {} : { acceptFindings: opts.acceptFindings }),
+  });
+  const approval: JourneyApproval = {
+    contentHash,
+    at: clock.nowIso(),
+    ...(acceptedWeak === undefined ? {} : { acceptedWeak }),
+    ...(gate.waivers === undefined ? {} : { waivers: gate.waivers }),
+    ...(gate.acceptedFindings === undefined ? {} : { acceptedFindings: gate.acceptedFindings }),
+  };
   const promoted: Journey = {
     ...existing,
     metadata: { ...existing.metadata, promoted: true, ...(acceptedWeak === undefined ? {} : { acceptedWeak }), approval },

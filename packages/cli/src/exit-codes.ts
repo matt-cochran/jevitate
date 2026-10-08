@@ -74,7 +74,8 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_REGRESSION_EXISTS", // `regression capture --id` already exists; needs --force
   "E_REGRESSION_HARD_SIGNAL", // `regression capture --fingerprint` names a hard-signal defect; use the ledger instead
   "E_JOURNEY_ANNOTATIONS_STALE", // `journey annotate --approve`: the Journey changed since the draft; re-draft
-  "E_JOURNEY_REVIEW_STALE", // #432: `journey promote --reviewed-hash`: the Journey changed since the sheet was read; review again
+  "E_JOURNEY_REVIEW_STALE",
+  "E_CATALOG_REVIEW_STALE", // #433: `persona|job approve --reviewed-hash`: the item changed since the sheet was read; review again // #432: `journey promote --reviewed-hash`: the Journey changed since the sheet was read; review again
   "E_DEMO_PRODUCTION_ENV", // #249: `demo` refuses an environment flagged production: true
   "E_DEMO_EXISTS", // #249: `demo` would overwrite an existing Journey / pending demo draft
   "E_HUMAN_APPROVAL_REQUIRED", // #254: `inbox approve`/`cancel` — human-only, in `jevitate ui` (MCP's human_approval_required)

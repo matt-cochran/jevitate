@@ -94,6 +94,15 @@
     - flags=--server-log-drain-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's)
     - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
 
+# catalog
+  description: #433: the human-vetted catalog of personas, jobs and the Journeys linked to them
+
+# catalog status
+  description: the jobs × personas matrix (which have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links and stale approvals
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked report)
+
 # check
   description: CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
   options:
@@ -127,6 +136,8 @@
   arguments:
     - name=id required=true variadic=false default=null
   options:
+    - flags=--accept-findings <reason> required=true mandatory=false negate=false variadic=false default=null description=#433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings
+    - flags=--accept-unvetted <reason> required=true mandatory=false negate=false variadic=false default=null description=#433: approve although the Journey's linked job/persona is not approved, recording the reason in approval.waivers
     - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
     - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
     - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
@@ -484,6 +495,29 @@
     - flags=--observer <name> required=true mandatory=false negate=false variadic=false default=[] description=a registered observer actor a probe `as:` / `deniedAs.actor` may name (repeatable; `explore --actor` minus the primary)
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=the run's start URL: relative probe/deniedAs paths resolve against it, and its origin is authorized
 
+# job
+  description: #433: catalog jobs — job stories in .jevitate/jobs.json ("When …, I want to …, so I can ….") — review a job's sheet, approve it (bound to its content hash)
+
+# job approve
+  description: approve a job (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in its jobs file. Editing it later makes it — and its Journeys — "needs re-review"
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--accept-findings <reason> required=true mandatory=false negate=false variadic=false default=null description=approve although pre-approval findings need an acknowledgment, recording the reason with the approval
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--reviewed-hash <hash> required=true mandatory=false negate=false variadic=false default=null description=the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the job changed since
+
+# job review
+  description: a job's review sheet: its story, its personas and which have a promoted Journey for it, the gaps, its Journeys, its approval state, the pre-approval findings, its content hash
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked sheet)
+    - flags=--markdown required=false mandatory=false negate=false variadic=false default=null description=render the sheet as Markdown
+    - flags=--out <file> required=true mandatory=false negate=false variadic=false default=null description=write the sheet (JSON with --json, Markdown with --markdown, else text) to this file
+
 # journey
   description: manage and run promoted Journeys (regression-test replays)
 
@@ -591,6 +625,8 @@
   arguments:
     - name=id required=true variadic=false default=null
   options:
+    - flags=--accept-findings <reason> required=true mandatory=false negate=false variadic=false default=null description=#433: promote although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings
+    - flags=--accept-unvetted <reason> required=true mandatory=false negate=false variadic=false default=null description=#433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers
     - flags=--accept-weak <reason> required=true mandatory=false negate=false variadic=false default=null description=#401: promote a Journey whose assertions cannot prove its outcome, recording the reason
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
@@ -899,6 +935,29 @@
     - flags=--save-storage-state [file] required=false mandatory=false negate=false variadic=false default=null description=#175: write the rotated session back after each queued mission — to --storage-state (no value) or to <file>; for rotating refresh tokens
     - flags=--secret-field <spec> required=true mandatory=false negate=false variadic=false default=null description=#175: '<label|testId|type|id|name>=<value>=env:<VAR>' typed by queued goal missions (repeatable); the value is read from the environment at run time
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=#175: Playwright storageState JSON queued missions on this target start from (must exist; wins over targets.json)
+
+# persona
+  description: #433: catalog personas (.jevitate/personas.json) — review a persona's sheet, approve it (a person's sign-off, bound to its content hash)
+
+# persona approve
+  description: approve a persona (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in personas.json. Editing it later makes it — and its Journeys — "needs re-review"
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--accept-findings <reason> required=true mandatory=false negate=false variadic=false default=null description=approve although pre-approval findings need an acknowledgment, recording the reason with the approval
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--reviewed-hash <hash> required=true mandatory=false negate=false variadic=false default=null description=the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the persona changed since
+
+# persona review
+  description: a persona's review sheet: who it is, the jobs it serves, the Journeys linked to it, its approval state (stale = needs re-review), the pre-approval findings, its content hash
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked sheet)
+    - flags=--markdown required=false mandatory=false negate=false variadic=false default=null description=render the sheet as Markdown
+    - flags=--out <file> required=true mandatory=false negate=false variadic=false default=null description=write the sheet (JSON with --json, Markdown with --markdown, else text) to this file
 
 # profile
   description: manage jevitate profiles (isolated credential/data sets)

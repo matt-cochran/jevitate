@@ -123,7 +123,7 @@ export function projectPersonas(cwd: string = process.cwd()): Persona[] {
   const dir = findProjectDir({ cwd: () => cwd });
   if (dir === null) return [];
   const file = join(dir, PROJECT_PERSONAS_FILE);
-  return existsSync(file) ? loadPersonasFile(file) : [];
+  return existsSync(file) ? loadPersonasFile(file, { requireRunnable: false }) : [];
 }
 
 /**
@@ -151,9 +151,11 @@ export function parseActorSpec(spec: string, cwd: string = process.cwd()): Perso
  * Relative paths resolve against the personas file's own directory. #427: an entry may carry
  * `login: {url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}` (the map form
  * then takes `{"admin": {"storageState": "admin.json", "login": {…}}}`) — the pre-flight auth check
- * re-mints an expired session from it once.
+ * re-mints an expired session from it once. #433: an entry may also carry the catalog's
+ * `description`, `role` and `approval` (and `id` for `name`); a catalog-only entry (no session) is
+ * not a run persona — skipped here, refused when the file has no runnable persona at all.
  */
-export function loadPersonasFile(path: string): Persona[] {
+export function loadPersonasFile(path: string, opts: { readonly requireRunnable?: boolean } = {}): Persona[] {
   if (!existsSync(path)) throw new MultiRunArgsError(`personas file not found: ${path}`);
   let raw: unknown;
   try {
@@ -163,25 +165,50 @@ export function loadPersonasFile(path: string): Persona[] {
   }
   const base = dirname(resolve(path));
   const list = Array.isArray(raw) ? raw : isRecord(raw) && Array.isArray(raw.personas) ? raw.personas : null;
+  let entries: Array<{ name: string; value: Record<string, unknown> | string; where: string }>;
   if (list !== null) {
-    return list.map((p, i) => {
-      if (!isRecord(p) || typeof p.name !== "string" || typeof p.storageState !== "string") {
+    entries = list.map((p, i) => {
+      // #433: `id` names the persona too (the catalog's word); `name` stays the #427 key.
+      const name = isRecord(p) ? (p.name ?? p.id) : undefined;
+      if (!isRecord(p) || typeof name !== "string") {
         throw new MultiRunArgsError(`personas file ${path}: entry ${i} must be {"name": string, "storageState": string, "login"?: {…}}`);
       }
-      return persona(p.name, p.storageState, base, "persona", entryLogin(p.login, `personas file ${path}: ${p.name}.login`));
+      return { name, value: p, where: `entry ${i}` };
     });
-  }
-  if (isRecord(raw)) {
-    return Object.entries(raw).map(([name, state]) => {
-      if (typeof state === "string") return persona(name, state, base);
-      if (isRecord(state) && typeof state.storageState === "string") {
-        return persona(name, state.storageState, base, "persona", entryLogin(state.login, `personas file ${path}: ${name}.login`));
-      }
+  } else if (isRecord(raw)) {
+    entries = Object.entries(raw).map(([name, state]) => {
+      if (typeof state === "string" || isRecord(state)) return { name, value: state, where: name };
       throw new MultiRunArgsError(`personas file ${path}: ${name} must map to a storage state path or {"storageState": string, "login"?: {…}}`);
     });
+  } else {
+    throw new MultiRunArgsError(`personas file ${path} must be an object or an array of personas`);
   }
-  throw new MultiRunArgsError(`personas file ${path} must be an object or an array of personas`);
+  const out: Persona[] = [];
+  for (const { name, value, where } of entries) {
+    if (typeof value === "string") {
+      out.push(persona(name, value, base));
+      continue;
+    }
+    if (typeof value.storageState === "string") {
+      out.push(persona(name, value.storageState, base, "persona", entryLogin(value.login, `personas file ${path}: ${name}.login`)));
+      continue;
+    }
+    // #433: a catalog-only persona (description/role/approval, no session yet) is not a run persona.
+    if (value.storageState === undefined && value.login === undefined && CATALOG_ONLY_KEYS.some((k) => value[k] !== undefined)) continue;
+    throw new MultiRunArgsError(
+      list !== null
+        ? `personas file ${path}: ${where} must be {"name": string, "storageState": string, "login"?: {…}}`
+        : `personas file ${path}: ${name} must map to a storage state path or {"storageState": string, "login"?: {…}}`,
+    );
+  }
+  if (out.length === 0 && entries.length > 0 && opts.requireRunnable !== false) {
+    throw new MultiRunArgsError(`personas file ${path} declares no persona with a session (a "storageState") — catalog-only personas cannot run`);
+  }
+  return out;
 }
+
+/** #433: the catalog keys that make a session-less personas file entry a catalog-only persona. */
+const CATALOG_ONLY_KEYS = ["description", "role", "approval"] as const;
 
 export interface MultiRunFlags {
   readonly repeat?: string;

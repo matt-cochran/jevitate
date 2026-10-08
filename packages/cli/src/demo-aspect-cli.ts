@@ -1,3 +1,6 @@
+import { UnvettedLinksError, resolveCatalogDir } from "./catalog-api.js";
+import { CatalogInputError } from "./catalog.js";
+import { ApprovalFindingsError } from "./pre-approval.js";
 import { reviewJourneyById } from "./journey-review-api.js";
 import { renderReviewText } from "./journey-review.js";
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
@@ -265,8 +268,10 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
       "the one human approval of a DRAFT demo: shows the Journey and its annotations, renders the final demo (no DRAFT marks) on the environment it was made on, " +
         "then applies the annotations and promotes the Journey; a replay that no longer works promotes nothing (exit 1)",
     )
+    .option("--accept-unvetted <reason>", "#433: approve although the Journey's linked job/persona is not approved, recording the reason in approval.waivers")
+    .option("--accept-findings <reason>", "#433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings")
     .action(async function (this: Command, id: string) {
-      const o = this.opts<ReplayFlags>();
+      const o = this.opts<ReplayFlags & { acceptUnvetted?: string; acceptFindings?: string }>();
       const out = program.configureOutput().writeOut;
       try {
         const journeysDir = resolveJourneysDir(deps, o.dir);
@@ -275,7 +280,16 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
         assertDemoEnvironment(environment); // re-checked: the environment may have been flagged production since
         const replay = replayOptionsFrom(this, deps, o, environment);
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) =>
-          approveDemo({ ...replay, ...(siteGate === undefined ? {} : { siteGate }), journeysDir, id, outDir: outDirFor(o.out, id, "final") }),
+          approveDemo({
+            ...replay,
+            ...(siteGate === undefined ? {} : { siteGate }),
+            journeysDir,
+            id,
+            outDir: outDirFor(o.out, id, "final"),
+            catalogDir: resolveCatalogDir(deps.catalogDir),
+            ...(o.acceptUnvetted === undefined ? {} : { acceptUnvetted: o.acceptUnvetted }),
+            ...(o.acceptFindings === undefined ? {} : { acceptFindings: o.acceptFindings }),
+          }),
         );
         process.exitCode = result.outcome === "approved" ? EXIT_CODES.ok : EXIT_CODES.defects;
         if (o.json) {
@@ -288,13 +302,26 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
           return;
         }
         // #432: the same review sheet `journey review` shows, of the Journey as approved.
-        const { review } = await reviewJourneyById(journeysDir, id, deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath });
+        const { review } = await reviewJourneyById(journeysDir, id, {
+          ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath }),
+          catalogDir: resolveCatalogDir(deps.catalogDir),
+        });
         out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${renderReviewText(review)}\n`);
         out?.(formatAnnotationChanges(result.changes));
         out?.(`approved: journey '${id}' promoted\n`);
         if (result.final?.video !== undefined) out?.(`video: ${result.final.video}\nsubtitles: ${result.final.subtitles ?? ""}\n`);
         if (result.final?.guide !== undefined) out?.(`guide: ${result.final.guide}\n`);
       } catch (err) {
+        if (err instanceof UnvettedLinksError || err instanceof ApprovalFindingsError) {
+          // #433: the catalog gate refused before anything rendered — exit 1, like `journey promote`.
+          emitJson(program, fail(err.code, err.message));
+          process.exitCode = EXIT_CODES.defects;
+          return;
+        }
+        if (err instanceof CatalogInputError) {
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
         const r = refusalOf(err);
         emitJson(program, r === null ? fail("E_DEMO", String(err instanceof Error ? err.message : err)) : fail(r.code, r.message));
       }

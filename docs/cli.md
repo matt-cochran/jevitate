@@ -15,6 +15,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`ai`](#ai): check or configure the model gateway credentials jevitate's AI features need
 - [`baseline`](#baseline): named baselines for `diff`, `report --baseline` and `check --baseline`
 - [`campaign`](#campaign): journey-anchored test campaigns (#293): many anchored missions, one deduped report
+- [`catalog`](#catalog): #433: the human-vetted catalog of personas, jobs and the Journeys linked to them
 - [`check`](#check): CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
 - [`demo`](#demo): demo one aspect of an app from a one-line request: explore → clean path → Journey → annotate → a DRAFT narrated demo; `demo approve <id>` promotes and renders the final one
 - [`diff`](#diff): classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline)
@@ -24,6 +25,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`inbox`](#inbox): the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
 - [`init`](#init): set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
 - [`invariants`](#invariants): declared-invariant files (`explore --invariants`)
+- [`job`](#job): #433: catalog jobs — job stories in .jevitate/jobs.json ("When …, I want to …, so I can ….") — review a job's sheet, approve it (bound to its content hash)
 - [`journey`](#journey): manage and run promoted Journeys (regression-test replays)
 - [`ledger`](#ledger): keep each finding's repro material by fingerprint, so verify-fix works long after the run's output is gone
 - [`load`](#load): run a promoted Journey as a load test
@@ -31,6 +33,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`logs`](#logs): run output under .jevitate/logs (dated; pruned by retention)
 - [`mcp`](#mcp): start an MCP stdio server exposing only the allowlisted Jevitate tools
 - [`mission`](#mission): manage exploration mission targets and drain the mission queue
+- [`persona`](#persona): #433: catalog personas (.jevitate/personas.json) — review a persona's sheet, approve it (a person's sign-off, bound to its content hash)
 - [`profile`](#profile): manage jevitate profiles (isolated credential/data sets)
 - [`record`](#record): record a demonstrated flow into a Recording (authoring plane)
 - [`recording`](#recording): inspect and edit recorded takes (promote, edit steps, diff, postdoc)
@@ -226,6 +229,29 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 
+## catalog
+
+```
+jevitate catalog [command]
+```
+
+#433: the human-vetted catalog of personas, jobs and the Journeys linked to them
+
+### catalog status
+
+```
+jevitate catalog status [options]
+```
+
+the jobs × personas matrix (which have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links and stale approvals
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
+
 ## check
 
 ```
@@ -286,6 +312,8 @@ the one human approval of a DRAFT demo: shows the Journey and its annotations, r
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-findings <reason>` | #433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings |  |  |  |  |
+| `--accept-unvetted <reason>` | #433: approve although the Journey's linked job/persona is not approved, recording the reason in approval.waivers |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
@@ -816,6 +844,60 @@ validate invariant files without a browser (the same pre-browser check `explore 
 | `--observer <name>` | a registered observer actor a probe `as:` / `deniedAs.actor` may name (repeatable; `explore --actor` minus the primary) | `[]` |  |  |  |
 | `--url <url>` | the run's start URL: relative probe/deniedAs paths resolve against it, and its origin is authorized |  |  |  |  |
 
+## job
+
+```
+jevitate job [command]
+```
+
+#433: catalog jobs — job stories in .jevitate/jobs.json ("When …, I want to …, so I can ….") — review a job's sheet, approve it (bound to its content hash)
+
+### job approve
+
+```
+jevitate job approve [options] <id>
+```
+
+approve a job (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in its jobs file. Editing it later makes it — and its Journeys — "needs re-review"
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the job changed since |  |  |  |  |
+
+### job review
+
+```
+jevitate job review [options] <id>
+```
+
+a job's review sheet: its story, its personas and which have a promoted Journey for it, the gaps, its Journeys, its approval state, the pre-approval findings, its content hash
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
+| `--markdown` | render the sheet as Markdown |  |  |  |  |
+| `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+
 ## journey
 
 ```
@@ -1011,6 +1093,8 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-findings <reason>` | #433: promote although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings |  |  |  |  |
+| `--accept-unvetted <reason>` | #433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers |  |  |  |  |
 | `--accept-weak <reason>` | #401: promote a Journey whose assertions cannot prove its outcome, recording the reason |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -1555,6 +1639,60 @@ set a registered target's operator-declared auth for queued missions (#175); kee
 | `--save-storage-state [file]` | #175: write the rotated session back after each queued mission — to --storage-state (no value) or to <file>; for rotating refresh tokens |  |  |  |  |
 | `--secret-field <spec>` | #175: '<label\|testId\|type\|id\|name>=<value>=env:<VAR>' typed by queued goal missions (repeatable); the value is read from the environment at run time |  |  |  |  |
 | `--storage-state <file>` | #175: Playwright storageState JSON queued missions on this target start from (must exist; wins over targets.json) |  |  |  |  |
+
+## persona
+
+```
+jevitate persona [command]
+```
+
+#433: catalog personas (.jevitate/personas.json) — review a persona's sheet, approve it (a person's sign-off, bound to its content hash)
+
+### persona approve
+
+```
+jevitate persona approve [options] <id>
+```
+
+approve a persona (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in personas.json. Editing it later makes it — and its Journeys — "needs re-review"
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the persona changed since |  |  |  |  |
+
+### persona review
+
+```
+jevitate persona review [options] <id>
+```
+
+a persona's review sheet: who it is, the jobs it serves, the Journeys linked to it, its approval state (stale = needs re-review), the pre-approval findings, its content hash
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
+| `--markdown` | render the sheet as Markdown |  |  |  |  |
+| `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
 
 ## profile
 
