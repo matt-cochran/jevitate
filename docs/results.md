@@ -36,7 +36,7 @@ fields the same way:
 | `resultPath` | string | The persisted `<stem>.result.json`. The stem starts with the strategy (`explore-` for goal, `coverage-`, `exploratory-`, `adversarial-`, `feature-`, `usability-`); readers find a result by its content, never by its prefix. |
 | `sessionLost` | object | Goal runs with `--storage-state`, only when it happened: `{reason}` — the session was not honoured (the first page was a sign-in page: a login-like URL or a password field), so the run did not start signed in as that session. A warning, printed as a `WARNING` line; it does not change the outcome. |
 | `scope` | object | Coverage, exploratory and feature runs: the route scope the run was contained to — `routeGlobs`, and `source` (`start-url` when derived from the start URL, `route` when `--route`/`--scope app` widened or set it). The human output prints it as a `SCOPE` line. |
-| `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. #426 adds structured fields: `startUrl` (where the run started), `strategy`, and `persona` (the persona name, for a `--persona` multi-run). Additive. |
+| `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. #426 adds structured fields: `startUrl` (where the run started), `strategy`, and `persona` (the persona name, for a `--persona` multi-run or a [sweep](./sweeps.md) target). Additive. |
 | `tags` | object | #426: the run's `--tag key=value` metadata (`{"feature": "checkout"}`), present only when the run was tagged. See [run tags](#run-tags). Additive. |
 | `engine` | object | The build that produced the result: `{version, commit, builtAt}`. |
 | `usage` | object | Model calls, tokens and cost. The CLI always sets it; a programmatic caller that does not track usage leaves it out. |
@@ -53,7 +53,7 @@ fields the same way:
 
 Every command that produces a run result takes `--tag key=value` (repeatable): `explore`,
 `journey run`, `check`, `load run`, `verify-fix`, `regression run`, `demo`, `mission run`,
-`source run` and `campaign run`. MCP run tools take the same thing as a `tags` object.
+`source run`, `campaign run` and `sweep` (which adds `target=<id>` to every run). MCP run tools take the same thing as a `tags` object.
 A tag says which feature, journey or release a run exercised, so a release dashboard or a coverage
 tracker can attribute the run without guessing from its output path or its final URL (a run that
 ends on a login page still says what it tested).

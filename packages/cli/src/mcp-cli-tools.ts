@@ -410,6 +410,48 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     },
   },
   {
+    name: "run_sweep",
+    description:
+      "`jevitate sweep --targets <file>` (#425): many explore missions — one per target in a .tsv/.json targets file (id, url|route, persona storage state, strategy, goal, tags, and the value-typed explore options run_exploration takes) — " +
+      "with bounded concurrency, resumable (resume + out), and ONE sweep.result.json: per-target outcome and depth, defects deduped by fingerprint across targets (one finding, N sightings), environment causes grouped. " +
+      "stopOnEnvFailure K stops starting runs when the first K all failed for environment/setup reasons. Every run is tagged target=<id> plus tags. A persona path in the file is confined like a storageState argument. Long-running: bound it with the file and concurrency.",
+    command: {
+      path: "sweep",
+      params: {
+        tags: TAGS,
+        targets: path("--targets", { required: true }),
+        concurrency: n("--concurrency"),
+        resume: b("--resume"),
+        out: path("--out"),
+        stopOnEnvFailure: n("--stop-on-env-failure"),
+        ...ENVIRONMENT,
+        // Forwarded to every run, exactly as run_exploration / run_campaign take them.
+        allowDestructive: b("--allow-destructive"),
+        allowWrites: b("--allow-writes"),
+        deny: many("--deny"),
+        paid: many("--paid"),
+        invariants: { kind: "path[]", flag: "--invariants" },
+        recordVideo: { kind: "optional-path", flag: "--record-video" },
+        screenshots: { kind: "screenshots", flag: "--screenshots" },
+        evidenceVideo: b("--evidence-video"),
+        ...AI,
+      },
+      omitted: {
+        "--allow-log-cmd": OMIT.logCmd,
+        "--log-source": OMIT.logCmd,
+        "--log-defect": OMIT.logCmd,
+        "--log-ignore": OMIT.logCmd,
+        "--log-scope": OMIT.logCmd,
+        "--log-correlation-header": OMIT.logCmd,
+        "--log-id-pattern": OMIT.logCmd,
+        "--log-quiet-ok": OMIT.logCmd,
+        "--server-log-drain-ms": OMIT.logCmd,
+        "--log-triage": OMIT.logTriage,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
     name: "author_journey",
     description:
       "`jevitate explore-author-journey`: explore url toward goal (checked by success) several takes, and author an UNPROMOTED Journey from the verified path (promote_journey makes it runnable). Each take is run_exploration's goal run (same run-shaping arguments); a not-reached result carries the discovery take's stop reason, checks and result/transcript/Recording paths. Needs real or fakeAi.",

@@ -15,6 +15,8 @@ export const ALLOWED_TOOLS = [
   "journey_anchors", "run_campaign",
   // #401 — the assertion-strength lint promote_journey applies; #402 — its mutation proof.
   "lint_journey", "verify_journey",
+  // #425 — a sweep: many explore missions over a targets file, one aggregated result.
+  "run_sweep",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [

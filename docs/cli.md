@@ -37,6 +37,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`report`](#report): one deduped defect list for a target across every mode and run (markdown + JSON envelope)
 - [`site`](#site): per-site policies for Journey runs: human-like pacing, throttles, run budgets and quiet hours
 - [`source`](#source): manage distributed Journey sources (git-backed collections of Journeys)
+- [`sweep`](#sweep): run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. Every run is tagged target=<id> plus the sweep's and the target's tags
 - [`ui`](#ui): start the local HITL approval dashboard (loopback-only HTTP server)
 - [`ux`](#ux): offline UX review of a saved Recording — ranked, cited usability findings
 - [`verify-fix`](#verify-fix): replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay
@@ -1973,6 +1974,48 @@ jevitate source update [options] <name>
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--json` | emit a JSON envelope |  |  |  |  |
+
+## sweep
+
+```
+jevitate sweep [options]
+```
+
+run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. Every run is tagged target=<id> plus the sweep's and the target's tags
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--allow-log-cmd` | a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's) |  |  |  |  |
+| `--allow-writes` | let a find-out mission change the app (forwarded to every mission, as explore's) |  |  |  |  |
+| `--base-url <url>` | resolve each target's route against this origin (wins over --env and the file's baseUrl; else JEVITATE_BASE_URL) |  |  |  |  |
+| `--concurrency <n>` | runs at once (default 1, at most 16; the machine-wide browser cap still applies) |  |  |  |  |
+| `--deny <pattern>` | a control no mission may click (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--env <name>` | resolve each target's route against this named environment's base URL (.jevitate/environments.json) |  |  |  |  |
+| `--evidence-video` | per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's) |  |  |  |  |
+| `--fake-ai` | use deterministic fake gateways for every run (pipeline smoke only) |  |  |  |  |
+| `--invariants <file>` | app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
+| `--log-correlation-header <name>` | another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-defect <level|/regex/>` | backend log lines matching this become a server-log defect (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-id-pattern </regex/>` | how a correlation id is written in log lines (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-ignore <regex|substring>` | known-noise backend log lines to exclude (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-quiet-ok <spec>` | a --log-source that is legitimately quiet (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--out <dir>` | the sweep directory: <id>/ per target and sweep.result.json (default .jevitate/logs/<date>/sweep-<stamp>; required with --resume) |  |  |  |  |
+| `--paid <pattern>` | an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
+| `--real` | use live Jev + OpenRouter gateways for every run (requires keys) |  |  |  |  |
+| `--record-video [dir]` | record a video of each mission's browser context (forwarded to every mission, as explore's) |  |  |  |  |
+| `--resume` | skip every target whose run already finished in --out (its run.envelope.json); re-run the rest | `false` |  |  |  |
+| `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
+| `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--stop-on-env-failure <k>` | stop starting runs when the first K runs ALL failed for environment/setup reasons (auth expired, target unreachable, crash, a run that could not start) |  |  |  |  |
+| `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
+| `--targets <file>` | the targets file (.tsv with a header row, or .json: an array or {baseUrl?, defaults?, targets}) |  |  | yes |  |
 
 ## ui
 

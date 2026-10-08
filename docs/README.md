@@ -25,6 +25,8 @@ full flag list, or see the generated [CLI reference](./cli.md).
   side panel, popup or options page.
 - [Repeats, personas and actors](./multi-run.md): vote across runs, diff roles, check cross-tenant
   isolation.
+- [Sweeps](./sweeps.md): many targets × personas from one targets file, with concurrency,
+  resume and one aggregated, cross-target deduped result.
 
 **Use the results**
 

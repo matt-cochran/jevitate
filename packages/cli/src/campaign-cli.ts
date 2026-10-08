@@ -22,7 +22,7 @@ export function campaignMissionArgv(cmd: Command): string[] {
  * (destructive/paid/deny), invariants, backend-log evidence and media. Operator flags only: the
  * spec file never widens what a mission may click or read.
  */
-function withMissionFlags(cmd: Command): Command {
+export function withMissionFlags(cmd: Command): Command {
   const each = "(forwarded to every mission, as explore's)";
   const repeatable: ReadonlyArray<readonly [string, string]> = [
     ["--deny <pattern>", "a control no mission may click (repeatable)"],
