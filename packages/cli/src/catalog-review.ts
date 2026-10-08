@@ -1,3 +1,4 @@
+import { describeProvenance } from "./approval-provenance.js";
 import {
   CatalogStatusSchema,
   GTWR_SET_CHARACTERISTICS,
@@ -227,7 +228,7 @@ export function renderPersonaReview(r: PersonaReview, style: Style): string {
     h1(`Persona review: ${r.id}`),
     "",
     `Content hash: ${code(r.contentHash)}`,
-    `Status: ${STATUS_WORDS[r.status]}${r.approval === undefined ? "" : ` · last approved ${r.approval.at}`}`,
+    `Status: ${STATUS_WORDS[r.status]}${r.approval === undefined ? "" : ` · last approved ${r.approval.at} — ${describeProvenance(r.approval.provenance)}`}`,
     "",
     h2("Who"),
     "",
@@ -258,7 +259,7 @@ export function renderJobReview(r: JobReview, style: Style): string {
     h1(`Job review: ${r.id}`),
     "",
     `Content hash: ${code(r.contentHash)}`,
-    `Status: ${STATUS_WORDS[r.status]}${r.approval === undefined ? "" : ` · last approved ${r.approval.at}`}`,
+    `Status: ${STATUS_WORDS[r.status]}${r.approval === undefined ? "" : ` · last approved ${r.approval.at} — ${describeProvenance(r.approval.provenance)}`}`,
     "",
     h2("Job story"),
     "",

@@ -33,8 +33,11 @@ something the app didn't do.
   (`E_DEMO_EXISTS`).
 - MCP: `create_demo({ aspect, env, success, real: true })`.
 - Show the human the DRAFT (the video and guide paths from the result) and the drafted
-  annotations. `jevitate demo approve <id>` (MCP `approve_demo`) renders the final demo and
-  promotes the Journey. It's the human's approval, so only run it when they tell you to.
+  annotations. `jevitate demo approve <id>` renders the final demo and promotes the Journey.
+  It's the human's approval: they run it in their own terminal and type the id to confirm (from
+  your shell it is refused, `E_APPROVAL_NEEDS_HUMAN`, exit 64). Never pass
+  `--non-interactive-approval` yourself. MCP `approve_demo` works only when they tell you to, and
+  it is recorded as an agent's approval (`provenance.channel: "mcp"`), not theirs.
 
 ## An existing Journey as a demo
 

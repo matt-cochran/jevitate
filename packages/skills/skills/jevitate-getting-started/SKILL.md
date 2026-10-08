@@ -81,6 +81,17 @@ you do, show them what they are approving:
 - approving a catalog persona or job, waiving an unvetted link, acknowledging findings: `jevitate persona approve <id>`, `jevitate job approve <id>`, `journey promote --accept-unvetted`, `--accept-findings` (approve and acknowledge are CLI only; MCP reads `review_persona` / `review_job` / `catalog_status` / `analyze_catalog`)
 - approving or cancelling an inbox item: only in `jevitate ui`. The MCP tools `approve_action` and `cancel_command` always refuse.
 
+Every CLI approval (`journey promote`, `demo approve`, `persona approve`, `job approve`, and the
+`--accept-weak` / `--accept-unvetted` / `--accept-findings` waivers) needs a person at an
+interactive terminal who types the item id (or the first 8 characters of the content hash on the
+review sheet). From your shell it is refused with `E_APPROVAL_NEEDS_HUMAN` (exit 64): that is
+expected. Hand the approval to the person: give them the review sheet and the exact command to
+run in their own terminal. Never pass `--non-interactive-approval` yourself — it is for scripted
+setups a person configured, and it is recorded as a non-interactive approval with your agent
+markers (e.g. `CLAUDECODE`). An approval through MCP (`promote_journey`, `approve_demo`) is
+recorded as an agent's approval (`channel: "mcp"`), and `jevitate check --require-approvals`
+fails it, so it never stands in for the person's.
+
 ## 5. Exit codes (every command)
 
 `0` clean / passed / fixed · `1` defects found, a gating finding, or still reproduces · `2`

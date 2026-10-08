@@ -3,6 +3,7 @@
  * (#231): deps and path resolution, JSON/human output, browser/emulation flags, AI gateway selection.
  */
 import { mkdir } from "node:fs/promises";
+import type { ApprovalDeps } from "./approval-provenance.js";
 import { dirname, resolve as resolvePath } from "node:path";
 import { userInfo } from "node:os";
 import { Command, InvalidArgumentError } from "commander";
@@ -126,6 +127,12 @@ export interface CliDeps {
    *  `isInteractive` (#230): whether key collection may prompt stdin;
    *  omitted in production means the real `process.stdin.isTTY` check. */
   init?: { detection?: DetectionDeps; statePath?: string; isInteractive?: () => boolean };
+  /**
+   * Optional, additive (#437): the approval confirmation's seam — the environment the agent markers
+   * are read from, whether stdin/stdout are TTYs, the terminal prompt and the OS user. Omitted in
+   * production means the real process (`process.env`, `isTTY`, a readline prompt on stderr).
+   */
+  approval?: ApprovalDeps;
   /**
    * Optional, additive: distributed-Journey-sources wiring (see source-api.ts).
    * Every field is injectable so tests never touch the network, the real home

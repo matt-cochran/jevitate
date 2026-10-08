@@ -113,6 +113,7 @@ export function buildProgram(deps: CliDeps): Command {
       sitePolicyDbPath: resolveDbPath(deps),
       ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
       ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
+      ...(deps.catalogDir === undefined ? {} : { catalogDir: deps.catalogDir }),
       ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
       browserLaunch: (flags) => browserLaunchFromFlags(flags as BrowserLaunchFlags),
     },

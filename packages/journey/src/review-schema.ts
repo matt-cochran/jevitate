@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { FindingSchema, JevLayerSchema, JourneyCatalogLinksSchema } from "./catalog-schema.js";
 import { AcceptedFindingsSchema } from "./journey.js";
+import { ApprovalProvenanceSchema } from "./approval-schema.js";
 
 /**
  * #432 — the JSON shape of a Journey's review sheet (`jevitate journey review <id> --json`, MCP
@@ -139,8 +140,10 @@ export const JourneyReviewSchema = z
       .object({
         contentHash: z.string(),
         at: z.string(),
-        acceptedWeak: z.object({ reason: z.string(), rules: z.array(z.string()) }).strict().optional(),
-        waivers: z.array(z.object({ kind: z.literal("unvetted"), reason: z.string(), items: z.array(z.string()) }).strict()).optional(),
+        /** #437: how the last approval was made (channel, agent marker names, OS user). */
+        provenance: ApprovalProvenanceSchema.optional(),
+        acceptedWeak: z.object({ reason: z.string(), rules: z.array(z.string()), provenance: ApprovalProvenanceSchema.optional() }).strict().optional(),
+        waivers: z.array(z.object({ kind: z.literal("unvetted"), reason: z.string(), items: z.array(z.string()), provenance: ApprovalProvenanceSchema.optional() }).strict()).optional(),
         acceptedFindings: AcceptedFindingsSchema.optional(),
       })
       .strict()

@@ -33,6 +33,14 @@ pass or fail:
   A Journey's routes are its Recording's pages, or the `routes` you give it. A goal's routes are
   its start URL's path, or its `routes`. Missions, invariant sweeps and verify-fix always run.
 - `--target-build <id>` stamps your build/commit on every result, next to `engine`.
+- `--require-approvals [--allow-channels tty,ci]` (#437): also an `approvals` item that fails
+  (a hard `approval` finding per problem, in JUnit and SARIF like any other) when a promoted
+  Journey (in the default and each target's journeys dir) has no approval, or a promoted Journey
+  or an approved persona/job has a stale approval (changed since) or one whose provenance channel
+  is not allowed. The default allows only `tty` — an approval a person typed at a terminal — so an
+  `mcp` (agent) or `non-interactive` approval fails. Pair it with `jevitate init --codeowners` and
+  branch protection: see [what "human approval" guarantees](./catalog.md#what-human-approval-guarantees).
+  `jevitate catalog status --require-approvals` is the same check on its own (exit 1).
 
 Exit codes: `0` pass · `1` at least one gating finding · `2` no gating finding, but an item errored
 or the budget was exceeded · `64` the suite, its preflight, the targets file or the AI setup was

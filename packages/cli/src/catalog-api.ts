@@ -5,6 +5,7 @@ import { CatalogLoader, catalogJourney, journeyLinks, requireJob, requirePersona
 import { acknowledgeFindings, preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { findProjectDir } from "./project-dir.js";
 import type { JevSetup } from "./jev-advisor.js";
+import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 
 /**
  * #433 — the approvals of the catalog (`persona approve`, `job approve`: a person's act, CLI only)
@@ -38,6 +39,11 @@ export interface CatalogApproveOptions {
   readonly acceptFindings?: string;
   /** #434/#435: the advisory Jev layer of the pre-approval readiness and analysis (`--real`), or why it is skipped. */
   readonly jev?: JevSetup;
+  /**
+   * #437: confirms the approval (after the findings gate, before the write) and returns its
+   * provenance (the CLI's `makeApprovalConfirm`). Omitted: recorded as `non-interactive`.
+   */
+  readonly confirm?: ApprovalConfirm;
 }
 
 export interface CatalogApproveResult {
@@ -64,7 +70,21 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
   // #434: every approval runs the readiness checks (the Jev layer only with --real and a key).
   const findings = await preApprovalFindings({ kind, id }, catalog, { action, readiness: true, ...(opts.jev === undefined ? {} : { jev: opts.jev }) });
   const acceptedFindings = acknowledgeFindings(`${kind} '${id}'`, findings, opts.acceptFindings);
-  const approval: CatalogApproval = { contentHash: item.contentHash, at: clock.nowIso(), ...(acceptedFindings === undefined ? {} : { acceptedFindings }) };
+  const provenance =
+    opts.confirm === undefined
+      ? programmaticProvenance()
+      : await opts.confirm({
+          kind,
+          id,
+          contentHash: item.contentHash,
+          waivers: acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: acceptedFindings.reason, detail: acceptedFindings.findings.join(", ") }],
+        });
+  const approval: CatalogApproval = {
+    contentHash: item.contentHash,
+    at: clock.nowIso(),
+    provenance,
+    ...(acceptedFindings === undefined ? {} : { acceptedFindings: { ...acceptedFindings, provenance } }),
+  };
   const file = kind === "persona" ? catalog.personasFile : catalog.jobsFile;
   // requirePersona/requireJob found the item, so its file was read.
   if (file === null) throw new Error(`${kind} '${id}' has no catalog file`);

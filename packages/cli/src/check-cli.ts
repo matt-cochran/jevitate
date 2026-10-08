@@ -9,6 +9,8 @@ import { CheckAiSetupError, CheckPreflightError, runCheck, type CheckGateways, t
 import { SuiteError, loadSuite } from "./check-suite.js";
 import { ReportInputError, defaultResultDirs } from "./report-api.js";
 import { TargetConfigError, loadTargetsFile } from "./target-config.js";
+import { ApprovalArgsError, parseAllowedChannels } from "./approval-provenance.js";
+import { resolveCatalogDir } from "./catalog-api.js";
 
 /**
  * `jevitate check --suite <file.json>` (#137). Registered by `program.ts`; its model gateways and
@@ -32,6 +34,8 @@ export interface CheckCliDeps {
   /** Maps the command's browser launch flags to launch options (program.ts's `browserLaunchFromFlags`). */
   readonly browserLaunch?: (flags: object) => BrowserLaunchOptions | undefined;
   readonly baselinesDir?: string;
+  /** #437: the catalog's directory `--require-approvals` reads (default: the project's `.jevitate/`). */
+  readonly catalogDir?: string;
   /** Test seam: replace the runners. */
   readonly runners?: Partial<CheckRunners>;
 }
@@ -64,6 +68,11 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit the JSON envelope (default: a one-line summary per item, then the envelope path)")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .option(
+      "--require-approvals",
+      "#437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed",
+    )
+    .option("--allow-channels <list>", "#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty)")
     .action(taggedAction(program, "check", async function (this: Command) {
       const o = this.opts<{
         suite: string;
@@ -79,8 +88,12 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         fakeAi?: boolean;
         jevProvider?: string;
         json?: boolean;
+        requireApprovals?: boolean;
+        allowChannels?: string;
       }>();
       try {
+        if (o.allowChannels !== undefined && o.requireApprovals !== true) throw new ApprovalArgsError("--allow-channels needs --require-approvals");
+        const allowedChannels = o.requireApprovals === true ? parseAllowedChannels(o.allowChannels) : undefined;
         const suite = loadSuite(o.suite);
         const real = o.real === true || (o.fakeAi !== true && suite.ai === "real");
         const fakeAi = o.fakeAi === true || (o.real !== true && suite.ai === "fake");
@@ -107,6 +120,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
           ...(browser === undefined ? {} : { browser }),
           ...(deps.runners === undefined ? {} : { runners: deps.runners }),
+          ...(allowedChannels === undefined ? {} : { requireApprovals: { allowedChannels, catalogDir: resolveCatalogDir(deps.catalogDir) } }),
         });
         if (o.json) emit(program, ok(result), true, result.exitCode);
         else {
@@ -146,7 +160,8 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           err instanceof CheckPreflightError ||
           err instanceof CheckAiSetupError ||
           err instanceof ReportInputError ||
-          err instanceof TargetConfigError
+          err instanceof TargetConfigError ||
+          err instanceof ApprovalArgsError
         ) {
           emit(program, fail(err.code, err.message), o.json === true);
         } else if (err instanceof MissingCredentialError || (err instanceof Error && err.name === "GatewaySelectionError")) {

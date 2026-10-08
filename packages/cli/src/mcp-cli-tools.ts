@@ -113,6 +113,8 @@ export const OMIT = {
     "#433: approving despite pre-approval findings that need an acknowledgment (conflicts, broken links, …) is the approver's own judgment, recorded with the approval: a person's decision on the CLI (like --accept-weak), never a request's",
   catalogRendering: "#433/#435: review_persona / review_job / catalog_status / analyze_catalog return the schema-checked JSON; the Markdown/text renderings and writing them to a file are for people at the CLI",
   reviewRendering: "#432: review_journey returns the schema-checked JSON sheet; the Markdown/text renderings and writing them to a file are for people at the CLI",
+  nonInteractiveApproval:
+    "#437: the scripted-setup escape hatch for a CLI approval is the operator's choice, never a request's: an MCP approval needs no hatch — it is always recorded with provenance channel `mcp` (an agent's approval), which `check --require-approvals` fails unless the operator allows `mcp`",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
@@ -160,11 +162,21 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   },
   {
     name: "promote_journey",
-    description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
+    description:
+      "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey). " +
+      "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`, with the agent markers detected) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is an allowed channel. " +
+      "A promotion that must count as human sign-off is a person's act at their own terminal: hand it to them (`jevitate journey promote <id>`, typed confirmation).",
     command: {
       path: "journey promote",
       params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted"), ...JEV_ADVICE },
-      omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, "--review-sheet": OMIT.reviewSheet, "--accept-findings": OMIT.acceptFindings, ...JSON_FLAG },
+      omitted: {
+        "--dir": OMIT.storeDir,
+        "--accept-weak": OMIT.acceptWeak,
+        "--review-sheet": OMIT.reviewSheet,
+        "--accept-findings": OMIT.acceptFindings,
+        "--non-interactive-approval": OMIT.nonInteractiveApproval,
+        ...JSON_FLAG,
+      },
     },
   },
   {
@@ -186,8 +198,13 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "catalog_status",
     description:
-      "`jevitate catalog status --json` (#433): read-only. The catalog's coverage — the jobs × personas matrix (which pairs have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links, and stale approvals (edited personas/jobs and the Journeys linked to them: needs re-review).",
-    command: { path: "catalog status", params: {}, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+      "`jevitate catalog status --json` (#433): read-only. The catalog's coverage — the jobs × personas matrix (which pairs have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links, and stale approvals (edited personas/jobs and the Journeys linked to them: needs re-review). " +
+      "#437: `approvals` lists every recorded approval and how it was made (provenance channel tty / non-interactive / mcp / ci). requireApprovals (+ allowChannels, default tty): exit 1 when an approval is missing, stale or made over a channel not allowed.",
+    command: {
+      path: "catalog status",
+      params: { requireApprovals: b("--require-approvals"), allowChannels: s("--allow-channels") },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
   },
   {
     name: "analyze_catalog",
@@ -314,7 +331,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "approve_demo",
     description:
-      "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1).",
+      "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1). " +
+      "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is allowed; human sign-off is the person's `jevitate demo approve <id>` at their own terminal.",
     command: {
       path: "demo approve",
       params: {
@@ -330,7 +348,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         acceptUnvetted: s("--accept-unvetted"),
         ...JEV_ADVICE,
       },
-      omitted: { "--dir": OMIT.storeDir, "--accept-findings": OMIT.acceptFindings, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { "--dir": OMIT.storeDir, "--accept-findings": OMIT.acceptFindings, "--non-interactive-approval": OMIT.nonInteractiveApproval, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -586,7 +604,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_check",
     description:
-      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding.",
+      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding. " +
+      "#437 requireApprovals (+ allowChannels, default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed.",
     command: {
       path: "check",
       params: { tags: TAGS, ...EXTENSION,
@@ -598,6 +617,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         baseline: s("--baseline"),
         changedRoutes: many("--changed-routes"),
         targetBuild: s("--target-build"),
+        requireApprovals: b("--require-approvals"),
+        allowChannels: s("--allow-channels"),
         ...JEV_AI,
       },
       omitted: { "--baseline-dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },

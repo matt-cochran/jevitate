@@ -137,38 +137,50 @@ function findAllMarkers(re: RegExp, content: string): RegExpMatchArray[] {
   return [...content.matchAll(new RegExp(re.source, flags))];
 }
 
+/** #437: a marked block's BEGIN/END markers (any version) and its name in fix-it messages. */
+export interface BlockMarkers {
+  readonly begin: RegExp;
+  readonly end: RegExp;
+  /** e.g. `JEVITATE SKILLS`. */
+  readonly label: string;
+}
+
+const SKILLS_MARKERS: BlockMarkers = { begin: SKILLS_BLOCK_BEGIN_RE, end: SKILLS_BLOCK_END_RE, label: "JEVITATE SKILLS" };
+
 function locateBlock(
   content: string,
+  markers: BlockMarkers = SKILLS_MARKERS,
 ): { kind: "block"; span: BlockSpan } | { kind: "none" } | { kind: "malformed"; reason: string } {
-  const begins = findAllMarkers(SKILLS_BLOCK_BEGIN_RE, content);
-  const ends = findAllMarkers(SKILLS_BLOCK_END_RE, content);
+  const begins = findAllMarkers(markers.begin, content);
+  const ends = findAllMarkers(markers.end, content);
+  const L = markers.label;
   if (begins.length === 0 && ends.length === 0) return { kind: "none" };
   if (begins.length > 1) {
     return {
       kind: "malformed",
       reason:
-        "found more than one BEGIN JEVITATE SKILLS marker — keep a single marked block (delete the extra BEGIN lines), then re-run",
+        `found more than one BEGIN ${L} marker — keep a single marked block (delete the extra BEGIN lines), then re-run`,
     };
   }
   if (ends.length > 1) {
     return {
       kind: "malformed",
       reason:
-        "found more than one END JEVITATE SKILLS marker — keep a single marked block (delete the extra END lines), then re-run",
+        `found more than one END ${L} marker — keep a single marked block (delete the extra END lines), then re-run`,
     };
   }
   if (begins.length === 1 && ends.length === 0) {
     return {
       kind: "malformed",
       reason:
-        "the BEGIN JEVITATE SKILLS marker has no matching END marker — restore the END line or delete the partial block, then re-run",
+        `the BEGIN ${L} marker has no matching END marker — restore the END line or delete the partial block, then re-run`,
     };
   }
   if (begins.length === 0) {
     return {
       kind: "malformed",
       reason:
-        "the END JEVITATE SKILLS marker has no matching BEGIN marker — restore the BEGIN line or delete the stray END, then re-run",
+        `the END ${L} marker has no matching BEGIN marker — restore the BEGIN line or delete the stray END, then re-run`,
     };
   }
   const begin = begins[0];
@@ -179,7 +191,7 @@ function locateBlock(
     return {
       kind: "malformed",
       reason:
-        "the END JEVITATE SKILLS marker appears before the BEGIN marker — reorder the markers or delete the block, then re-run",
+        `the END ${L} marker appears before the BEGIN marker — reorder the markers or delete the block, then re-run`,
     };
   }
   return {
@@ -249,7 +261,16 @@ export function renderSkillsBlock(skills: BlockSkill[], opts: RenderBlockOptions
  * malformed (#431).
  */
 export function mergeBlock(existing: string, newBlock: string): string {
-  const found = locateBlock(existing);
+  return mergeMarkedBlock(existing, newBlock, SKILLS_MARKERS);
+}
+
+/**
+ * #437: `mergeBlock` for any marked block (`BlockMarkers`) — e.g. the CODEOWNERS block of
+ * `jevitate init --codeowners`. Same rules: replaced in place, else appended; idempotent; throws
+ * `SkillsBlockMarkerError` on malformed markers.
+ */
+export function mergeMarkedBlock(existing: string, newBlock: string, markers: BlockMarkers): string {
+  const found = locateBlock(existing, markers);
   if (found.kind === "malformed") throw new SkillsBlockMarkerError(found.reason);
   if (found.kind === "block") {
     return existing.slice(0, found.span.beginStart) + newBlock + existing.slice(found.span.endEnd);

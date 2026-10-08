@@ -183,49 +183,49 @@ describe("#435 candidate pairing (deterministic)", () => {
 describe("#435 the acknowledgment rule (code over Jev's typed answer)", () => {
   it(`a conflicting classification at p ≥ ${CONFLICT_ACK_THRESHOLD} refuses the approval without --accept-findings`, async () => {
     classify("conflicting", 0.9);
-    expect((await cli(["job", "approve", "keep-private", "--real", "--json"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
+    expect((await cli(["job", "approve", "keep-private", "--real", "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
   });
 
   it("…and exits 1 (a gating finding)", async () => {
     classify("conflicting", 0.9);
-    expect((await cli(["job", "approve", "keep-private", "--real", "--json"])).code).toBe(1);
+    expect((await cli(["job", "approve", "keep-private", "--real", "--json", "--non-interactive-approval", "test"])).code).toBe(1);
   });
 
   it("with --accept-findings the approval records the reason and the conflict", async () => {
     classify("conflicting", 0.9);
-    await cli(["job", "approve", "keep-private", "--real", "--accept-findings", "different data sets", "--json"]);
+    await cli(["job", "approve", "keep-private", "--real", "--accept-findings", "different data sets", "--json", "--non-interactive-approval", "test"]);
     const jobs = JSON.parse(await readFile(join(catalogDir, "jobs.json"), "utf8")) as Array<{ id: string; approval?: { acceptedFindings?: unknown } }>;
-    expect(jobs.find((j) => j.id === "keep-private")?.approval?.acceptedFindings).toEqual({ reason: "different data sets", findings: ["catalog-analysis/conflicting:job:share-team"] });
+    expect(jobs.find((j) => j.id === "keep-private")?.approval?.acceptedFindings).toMatchObject({ reason: "different data sets", findings: ["catalog-analysis/conflicting:job:share-team"], provenance: { channel: "non-interactive", reason: "test" } });
   });
 
   it("a conflict below the threshold is informational: the approval goes through", async () => {
     classify("conflicting", 0.6);
-    expect((await cli(["job", "approve", "keep-private", "--real", "--json"])).json.ok).toBe(true);
+    expect((await cli(["job", "approve", "keep-private", "--real", "--json", "--non-interactive-approval", "test"])).json.ok).toBe(true);
   });
 
   it("a duplicate at p ≥ the threshold also refuses the approval", async () => {
     classify("duplicate", 0.8);
-    expect((await cli(["job", "approve", "keep-private", "--real", "--json"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
+    expect((await cli(["job", "approve", "keep-private", "--real", "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
   });
 
   it("a duplicate below the threshold is informational", async () => {
     classify("duplicate", 0.5);
-    expect((await cli(["job", "approve", "keep-private", "--real", "--json"])).json.ok).toBe(true);
+    expect((await cli(["job", "approve", "keep-private", "--real", "--json", "--non-interactive-approval", "test"])).json.ok).toBe(true);
   });
 
   it("an overlapping classification never needs an acknowledgment", async () => {
     classify("overlapping", 0.99);
-    expect((await cli(["job", "approve", "keep-private", "--real", "--json"])).json.ok).toBe(true);
+    expect((await cli(["job", "approve", "keep-private", "--real", "--json", "--non-interactive-approval", "test"])).json.ok).toBe(true);
   });
 
   it("journey promote applies the same rule to the Journey's pairs", async () => {
     await new FsJourneyStore(journeysDir).put(journey("publish-2", { job: "keep-private", persona: "editor" }));
     classify("duplicate", 0.95);
-    expect((await cli(["journey", "promote", "publish-2", "--real", "--accept-unvetted", "pilot", "--json"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
+    expect((await cli(["journey", "promote", "publish-2", "--real", "--accept-unvetted", "pilot", "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
   });
 
   it("without --real nothing is classified, so nothing gates on it", async () => {
-    expect((await cli(["job", "approve", "keep-private", "--json"])).json.ok).toBe(true);
+    expect((await cli(["job", "approve", "keep-private", "--json", "--non-interactive-approval", "test"])).json.ok).toBe(true);
   });
 
   it("a review sheet shows the conflict without gating (review never refuses)", async () => {
@@ -245,7 +245,7 @@ describe("#435 bounded cost", () => {
     const j = classify("compatible", 0.9);
     await cli(["job", "review", "keep-private", "--readiness", "--real", "--json"]);
     const asked = j.calls;
-    await cli(["job", "approve", "keep-private", "--real", "--json"]);
+    await cli(["job", "approve", "keep-private", "--real", "--json", "--non-interactive-approval", "test"]);
     expect(j.calls).toBe(asked);
   });
 
@@ -286,7 +286,7 @@ describe("#435 catalog analyze", () => {
   });
 
   it("advises re-reviewing an item edited since its approval", async () => {
-    await cli(["job", "approve", "read-post", "--json"]);
+    await cli(["job", "approve", "read-post", "--json", "--non-interactive-approval", "test"]);
     const jobs = JSON.parse(await readFile(join(catalogDir, "jobs.json"), "utf8")) as Array<Record<string, unknown>>;
     await writeJobs(jobs.map((j) => (j.id === "read-post" ? { ...j, outcome: "learn the latest news" } : j)));
     const correct = (await cli(["catalog", "analyze", "--json"])).json.data.groups.find((g: { characteristic: string }) => g.characteristic === "correct");

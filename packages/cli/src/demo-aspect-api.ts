@@ -1,5 +1,7 @@
 import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
 import type { JevSetup } from "./jev-advisor.js";
+import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { journeyReviewHash } from "./journey-review.js";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -482,6 +484,11 @@ export interface ApproveDemoOptions extends DemoReplayOptions {
   readonly acceptFindings?: string;
   /** #434/#435: the advisory Jev layer of the pre-approval readiness and analysis (`--real`), or why it is skipped. */
   readonly jev?: JevSetup;
+  /**
+   * #437: confirms the approval after the catalog gate and before the final render, returning its
+   * provenance (recorded on the Journey's approval). Omitted: recorded as `non-interactive`.
+   */
+  readonly confirm?: ApprovalConfirm;
 }
 
 export interface ApproveDemoResult {
@@ -540,7 +547,20 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
     ...(opts.acceptFindings === undefined ? {} : { acceptFindings: opts.acceptFindings }),
     ...(opts.jev === undefined ? {} : { jev: opts.jev }),
   };
-  await journeyCatalogGate(annotated.journey, { ...gate, journeysDir: opts.journeysDir, action: "demo approve" });
+  const gated = await journeyCatalogGate(annotated.journey, { ...gate, journeysDir: opts.journeysDir, action: "demo approve" });
+  // #437: the person confirms (or it is refused) BEFORE the final render — nothing renders or changes otherwise.
+  const provenance =
+    opts.confirm === undefined
+      ? programmaticProvenance()
+      : await opts.confirm({
+          kind: "demo",
+          id: opts.id,
+          contentHash: journeyReviewHash(annotated.journey),
+          waivers: [
+            ...(gated.waivers ?? []).map((w) => ({ flag: "--accept-unvetted", reason: w.reason, detail: w.items.join(", ") })),
+            ...(gated.acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: gated.acceptedFindings.reason, detail: gated.acceptedFindings.findings.join(", ") }]),
+          ],
+        });
   const demo = await renderDemo(opts.journeysDir, opts.id, opts, annotations, false, opts.outDir);
   if (demo.outcome !== "ok") {
     return {
@@ -554,7 +574,7 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
     };
   }
   const applied = await approveJourneyAnnotations(opts.journeysDir, opts.id);
-  const promotedJourney = await promoteJourney(opts.journeysDir, opts.id, { acceptWeak: DEMO_APPROVAL_WAIVER, ...gate, action: "demo approve" });
+  const promotedJourney = await promoteJourney(opts.journeysDir, opts.id, { acceptWeak: DEMO_APPROVAL_WAIVER, ...gate, action: "demo approve", confirm: () => Promise.resolve(provenance) });
   const waived = promotedJourney.metadata.acceptedWeak?.rules;
   await rm(demoDraftPath(opts.journeysDir, opts.id), { force: true });
   return {

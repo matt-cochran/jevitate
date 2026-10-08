@@ -63,7 +63,13 @@ afterEach(() => {
 });
 
 function deps(): CliDeps {
-  return { profiles: new ProfileManager(join(root, "profiles")), journeysDir, explore: { targetsConfigPath: join(root, "no-targets.json") } };
+  // #437: approvals here run without a terminal (`--non-interactive-approval "test"`), in a fixed environment.
+  return {
+    profiles: new ProfileManager(join(root, "profiles")),
+    journeysDir,
+    explore: { targetsConfigPath: join(root, "no-targets.json") },
+    approval: { env: {}, stdinIsTTY: () => false, stdoutIsTTY: () => false, user: () => "tester" },
+  };
 }
 
 async function cli(argv: readonly string[]): Promise<{ out: string; json: any }> {
@@ -120,53 +126,57 @@ describe("#432 journey review", () => {
 describe("#432 journey promote sign-off", () => {
   it("records the approval (content hash and time)", async () => {
     const hash = await reviewedHash();
-    await cli(["journey", "promote", "strong", "--json"]);
-    expect((await new FsJourneyStore(journeysDir).get("strong"))?.metadata.approval).toEqual({ contentHash: hash, at: "2026-10-08T12:00:00.000Z" });
+    await cli(["journey", "promote", "strong", "--json", "--non-interactive-approval", "test"]);
+    expect((await new FsJourneyStore(journeysDir).get("strong"))?.metadata.approval).toEqual({
+      contentHash: hash,
+      at: "2026-10-08T12:00:00.000Z",
+      provenance: { channel: "non-interactive", agentSignals: ["stdin-not-tty", "stdout-not-tty"], user: "tester", reason: "test" },
+    });
   });
 
   it("keeps a snapshot of the approved Journey", async () => {
-    await cli(["journey", "promote", "strong", "--json"]);
+    await cli(["journey", "promote", "strong", "--json", "--non-interactive-approval", "test"]);
     expect(existsSync(approvedSnapshotPath(journeysDir, "strong"))).toBe(true);
   });
 
   it("a later review is unchanged since that approval", async () => {
-    await cli(["journey", "promote", "strong", "--json"]);
+    await cli(["journey", "promote", "strong", "--json", "--non-interactive-approval", "test"]);
     expect((await cli(["journey", "review", "strong", "--json"])).json.data.changeSinceApproval).toMatchObject({ kind: "diff", changed: false });
   });
 
   it("refuses a reviewed hash the Journey no longer has (E_JOURNEY_REVIEW_STALE)", async () => {
     const hash = await reviewedHash();
     await new FsJourneyStore(journeysDir).put(strongJourney("strong", { description: "edited after review" }));
-    expect((await cli(["journey", "promote", "strong", "--reviewed-hash", hash, "--json"])).json.error.code).toBe("E_JOURNEY_REVIEW_STALE");
+    expect((await cli(["journey", "promote", "strong", "--reviewed-hash", hash, "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_JOURNEY_REVIEW_STALE");
   });
 
   it("a stale review promotes nothing", async () => {
     const hash = await reviewedHash();
     await new FsJourneyStore(journeysDir).put(strongJourney("strong", { description: "edited after review" }));
-    await cli(["journey", "promote", "strong", "--reviewed-hash", hash, "--json"]);
+    await cli(["journey", "promote", "strong", "--reviewed-hash", hash, "--json", "--non-interactive-approval", "test"]);
     expect((await new FsJourneyStore(journeysDir).get("strong"))?.metadata.promoted).toBe(false);
   });
 
   it("accepts the current reviewed hash", async () => {
     const hash = await reviewedHash();
-    expect((await cli(["journey", "promote", "strong", "--reviewed-hash", hash, "--json"])).json.data.approval.contentHash).toBe(hash);
+    expect((await cli(["journey", "promote", "strong", "--reviewed-hash", hash, "--json", "--non-interactive-approval", "test"])).json.data.approval.contentHash).toBe(hash);
   });
 
   it("--review-sheet binds to the sheet file's hash", async () => {
     const file = join(root, "sheet.json");
     await cli(["journey", "review", "strong", "--json", "--out", file]);
     await new FsJourneyStore(journeysDir).put(strongJourney("strong", { description: "edited after review" }));
-    expect((await cli(["journey", "promote", "strong", "--review-sheet", file, "--json"])).json.error.code).toBe("E_JOURNEY_REVIEW_STALE");
+    expect((await cli(["journey", "promote", "strong", "--review-sheet", file, "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_JOURNEY_REVIEW_STALE");
   });
 
   it("a review sheet naming no hash is refused", async () => {
     const file = join(root, "empty.md");
     await writeFile(file, "# not a sheet\n");
-    expect((await cli(["journey", "promote", "strong", "--review-sheet", file, "--json"])).json.error.code).toBe("E_JOURNEY_REVIEW_ARGS");
+    expect((await cli(["journey", "promote", "strong", "--review-sheet", file, "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_JOURNEY_REVIEW_ARGS");
   });
 
   it("human mode shows the sheet before promoting", async () => {
-    const { out } = await cli(["journey", "promote", "strong"]);
+    const { out } = await cli(["journey", "promote", "strong", "--non-interactive-approval", "test"]);
     expect(out.indexOf("CONTENT HASH")).toBeLessThan(out.indexOf("promoted journey 'strong'"));
   });
 
@@ -179,7 +189,7 @@ describe("#432 journey promote sign-off", () => {
         pages: [{ url: "/editor", steps: [{ step: { kind: "click", target: { testId: "publish" }, expect: { kind: "visible", target: { testId: "publish" } } } }] }],
       },
     });
-    await cli(["journey", "promote", "weak", "--accept-weak", "demo only", "--json"]);
+    await cli(["journey", "promote", "weak", "--accept-weak", "demo only", "--json", "--non-interactive-approval", "test"]);
     expect((await new FsJourneyStore(journeysDir).get("weak"))?.metadata.approval?.acceptedWeak?.reason).toBe("demo only");
   });
 });

@@ -11,3 +11,4 @@ export * from "./lint.js";
 export * from "./mutation-proof.js";
 export * from "./review-schema.js";
 export * from "./catalog-schema.js";
+export * from "./approval-schema.js";

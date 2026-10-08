@@ -1,4 +1,5 @@
 import { UnvettedLinksError, resolveCatalogDir } from "./catalog-api.js";
+import { approvalRefusal, checkNonInteractiveReason, makeApprovalConfirm } from "./approval-provenance.js";
 import { CatalogInputError } from "./catalog.js";
 import { ApprovalFindingsError } from "./pre-approval.js";
 import { REAL_JEV_FLAG_HELP, jevSetupFor } from "./catalog-cli.js";
@@ -273,10 +274,15 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
     .option("--accept-findings <reason>", "#433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings")
     .option("--real", `${REAL_JEV_FLAG_HELP}; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings`)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
+    .option(
+      "--non-interactive-approval <reason>",
+      "#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this",
+    )
     .action(async function (this: Command, id: string) {
-      const o = this.opts<ReplayFlags & { acceptUnvetted?: string; acceptFindings?: string; real?: boolean; jevProvider?: string }>();
+      const o = this.opts<ReplayFlags & { acceptUnvetted?: string; acceptFindings?: string; real?: boolean; jevProvider?: string; nonInteractiveApproval?: string }>();
       const out = program.configureOutput().writeOut;
       try {
+        checkNonInteractiveReason(o.nonInteractiveApproval);
         const journeysDir = resolveJourneysDir(deps, o.dir);
         const { record } = await loadDemoForApproval(journeysDir, id);
         const environment = resolveJourneyEnvironment({ env: record.env, ...(record.persona === undefined ? {} : { persona: record.persona }), ...environmentSeams(deps) });
@@ -295,6 +301,8 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
             catalogDir: resolveCatalogDir(deps.catalogDir),
             ...(o.acceptUnvetted === undefined ? {} : { acceptUnvetted: o.acceptUnvetted }),
             ...(o.acceptFindings === undefined ? {} : { acceptFindings: o.acceptFindings }),
+            // #437: a typed confirmation on a TTY (or the escape hatch, or the MCP channel), before the final render.
+            confirm: makeApprovalConfirm(deps.approval, o.nonInteractiveApproval === undefined ? {} : { nonInteractiveReason: o.nonInteractiveApproval }),
           }),
         );
         process.exitCode = result.outcome === "approved" ? EXIT_CODES.ok : EXIT_CODES.defects;
@@ -320,6 +328,12 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
         if (result.final?.video !== undefined) out?.(`video: ${result.final.video}\nsubtitles: ${result.final.subtitles ?? ""}\n`);
         if (result.final?.guide !== undefined) out?.(`guide: ${result.final.guide}\n`);
       } catch (err) {
+        const refusal = approvalRefusal(err);
+        if (refusal !== null) {
+          // #437: not confirmed by a person (no TTY, or a mismatched confirmation) — nothing rendered or promoted.
+          emitJson(program, fail(refusal.code, refusal.message));
+          return;
+        }
         if (err instanceof UnvettedLinksError || err instanceof ApprovalFindingsError) {
           // #433: the catalog gate refused before anything rendered — exit 1, like `journey promote`.
           emitJson(program, fail(err.code, err.message));

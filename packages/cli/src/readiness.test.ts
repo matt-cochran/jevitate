@@ -144,8 +144,8 @@ describe("#434 deterministic readiness — Journeys", () => {
   });
 
   it("passes the approval check once both are approved", async () => {
-    await cli(["persona", "approve", "editor", "--json"]);
-    await cli(["job", "approve", "publish-post", "--json"]);
+    await cli(["persona", "approve", "editor", "--json", "--non-interactive-approval", "test"]);
+    await cli(["job", "approve", "publish-post", "--json", "--non-interactive-approval", "test"]);
     expect(byCode(await findings(["journey", "review", "publish", "--readiness"]), "readiness.links-approved")?.severity).toBe("info");
   });
 
@@ -217,7 +217,7 @@ describe("#434 deterministic readiness — jobs and personas", () => {
   });
 
   it("every approval runs the readiness checks", async () => {
-    expect((await cli(["job", "approve", "publish-post", "--json"])).json.data.findings.some((f: Finding) => f.code === "readiness.story")).toBe(true);
+    expect((await cli(["job", "approve", "publish-post", "--json", "--non-interactive-approval", "test"])).json.data.findings.some((f: Finding) => f.code === "readiness.story")).toBe(true);
   });
 });
 
@@ -256,8 +256,8 @@ describe("#434 Jev readiness (advisory)", () => {
 
   it("all-low Jev answers never change an approval's exit code", async () => {
     useJudge((_n, q) => (q.kind === "choice" ? compatible : noul(0.01)));
-    await cli(["persona", "approve", "editor", "--json"]);
-    expect((await cli(["job", "approve", "publish-post", "--real", "--json"])).json.ok).toBe(true);
+    await cli(["persona", "approve", "editor", "--json", "--non-interactive-approval", "test"]);
+    expect((await cli(["job", "approve", "publish-post", "--real", "--json", "--non-interactive-approval", "test"])).json.ok).toBe(true);
   });
 
   it("re-reviewing unchanged content asks nothing new (cached by content hash)", async () => {

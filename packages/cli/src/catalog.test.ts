@@ -80,8 +80,12 @@ afterEach(() => {
   process.exitCode = undefined;
 });
 
+/** #437: approvals here run without a terminal (`--non-interactive-approval "test"`), in a fixed environment. */
+const NOT_A_TTY = { env: {}, stdinIsTTY: () => false, stdoutIsTTY: () => false, user: () => "tester" };
+const TEST_PROVENANCE = { channel: "non-interactive", agentSignals: ["stdin-not-tty", "stdout-not-tty"], user: "tester", reason: "test" };
+
 function deps(): CliDeps {
-  return { profiles: new ProfileManager(join(root, "profiles")), journeysDir, catalogDir, explore: { targetsConfigPath: join(root, "no-targets.json") } };
+  return { profiles: new ProfileManager(join(root, "profiles")), journeysDir, catalogDir, explore: { targetsConfigPath: join(root, "no-targets.json") }, approval: NOT_A_TTY };
 }
 
 async function cli(argv: readonly string[]): Promise<{ out: string; json: any; code: number | undefined }> {
@@ -102,8 +106,8 @@ async function cli(argv: readonly string[]): Promise<{ out: string; json: any; c
 }
 
 async function approveAll(): Promise<void> {
-  await cli(["persona", "approve", "editor", "--json"]);
-  await cli(["job", "approve", "publish-post", "--json"]);
+  await cli(["persona", "approve", "editor", "--json", "--non-interactive-approval", "test"]);
+  await cli(["job", "approve", "publish-post", "--json", "--non-interactive-approval", "test"]);
 }
 
 async function editJob(patch: Record<string, unknown>): Promise<void> {
@@ -155,31 +159,31 @@ describe("#433 personas file (extended, not a second file)", () => {
 describe("#433 approval is bound to the content hash", () => {
   it("persona approve records {contentHash, at} in personas.json", async () => {
     const hash = (await cli(["persona", "review", "editor", "--json"])).json.data.contentHash;
-    await cli(["persona", "approve", "editor", "--json"]);
+    await cli(["persona", "approve", "editor", "--json", "--non-interactive-approval", "test"]);
     const file = JSON.parse(await readFile(join(catalogDir, "personas.json"), "utf8"));
-    expect(file[0].approval).toEqual({ contentHash: hash, at: "2026-10-08T12:00:00.000Z" });
+    expect(file[0].approval).toEqual({ contentHash: hash, at: "2026-10-08T12:00:00.000Z", provenance: TEST_PROVENANCE });
   });
 
   it("job approve records {contentHash, at} in jobs.json", async () => {
     const hash = (await cli(["job", "review", "publish-post", "--json"])).json.data.contentHash;
-    await cli(["job", "approve", "publish-post", "--json"]);
-    expect(JSON.parse(await readFile(join(catalogDir, "jobs.json"), "utf8"))[0].approval).toEqual({ contentHash: hash, at: "2026-10-08T12:00:00.000Z" });
+    await cli(["job", "approve", "publish-post", "--json", "--non-interactive-approval", "test"]);
+    expect(JSON.parse(await readFile(join(catalogDir, "jobs.json"), "utf8"))[0].approval).toEqual({ contentHash: hash, at: "2026-10-08T12:00:00.000Z", provenance: TEST_PROVENANCE });
   });
 
   it("refuses a reviewed hash the job no longer has (E_CATALOG_REVIEW_STALE)", async () => {
     const hash = (await cli(["job", "review", "publish-post", "--json"])).json.data.contentHash;
     await editJob({ outcome: "readers find it" });
-    expect((await cli(["job", "approve", "publish-post", "--reviewed-hash", hash, "--json"])).json.error.code).toBe("E_CATALOG_REVIEW_STALE");
+    expect((await cli(["job", "approve", "publish-post", "--reviewed-hash", hash, "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_CATALOG_REVIEW_STALE");
   });
 
   it("approving does not change the hash it approved", async () => {
-    await cli(["job", "approve", "publish-post", "--json"]);
+    await cli(["job", "approve", "publish-post", "--json", "--non-interactive-approval", "test"]);
     expect((await cli(["job", "review", "publish-post", "--json"])).json.data.status).toBe("approved");
   });
 
   it("a map-form personas file keeps its form; a bare path entry gains the approval", async () => {
     await writeFile(join(catalogDir, "personas.json"), JSON.stringify({ editor: "editor.json" }));
-    await cli(["persona", "approve", "editor", "--json"]);
+    await cli(["persona", "approve", "editor", "--json", "--non-interactive-approval", "test"]);
     expect(JSON.parse(await readFile(join(catalogDir, "personas.json"), "utf8")).editor.storageState).toBe("editor.json");
   });
 });
@@ -193,7 +197,7 @@ describe("#433 staleness propagation", () => {
 
   it("…and every promoted Journey linked to it needs re-review", async () => {
     await approveAll();
-    await cli(["journey", "promote", "publish", "--json"]);
+    await cli(["journey", "promote", "publish", "--json", "--non-interactive-approval", "test"]);
     await editJob({ outcome: "readers find it" });
     expect((await cli(["journey", "review", "publish", "--json"])).json.data.catalog.needsReReview).toEqual(["its job 'publish-post' changed since that job's approval"]);
   });
@@ -206,50 +210,50 @@ describe("#433 staleness propagation", () => {
 
   it("catalog status lists the stale approvals", async () => {
     await approveAll();
-    await cli(["journey", "promote", "publish", "--json"]);
+    await cli(["journey", "promote", "publish", "--json", "--non-interactive-approval", "test"]);
     await editJob({ outcome: "readers find it" });
     expect((await cli(["catalog", "status", "--json"])).json.data.stale.map((s: { kind: string; id: string }) => `${s.kind}:${s.id}`)).toEqual(["job:publish-post", "journey:publish"]);
   });
 
   it("re-approval clears it", async () => {
     await approveAll();
-    await cli(["journey", "promote", "publish", "--json"]);
+    await cli(["journey", "promote", "publish", "--json", "--non-interactive-approval", "test"]);
     await editJob({ outcome: "readers find it" });
-    await cli(["job", "approve", "publish-post", "--json"]);
+    await cli(["job", "approve", "publish-post", "--json", "--non-interactive-approval", "test"]);
     expect((await cli(["catalog", "status", "--json"])).json.data.stale).toEqual([]);
   });
 });
 
 describe("#433 journey promote and the catalog", () => {
   it("refuses an unvetted link without a waiver (E_JOURNEY_UNVETTED, exit 1)", async () => {
-    const r = await cli(["journey", "promote", "publish", "--json"]);
+    const r = await cli(["journey", "promote", "publish", "--json", "--non-interactive-approval", "test"]);
     expect([r.json.error.code, r.code]).toEqual(["E_JOURNEY_UNVETTED", 1]);
   });
 
   it("an unvetted refusal promotes nothing", async () => {
-    await cli(["journey", "promote", "publish", "--json"]);
+    await cli(["journey", "promote", "publish", "--json", "--non-interactive-approval", "test"]);
     expect((await new FsJourneyStore(journeysDir).get("publish"))?.metadata.promoted).toBe(false);
   });
 
   it("--accept-unvetted records the waiver in metadata.approval.waivers", async () => {
-    await cli(["journey", "promote", "publish", "--accept-unvetted", "pilot run", "--json"]);
+    await cli(["journey", "promote", "publish", "--accept-unvetted", "pilot run", "--json", "--non-interactive-approval", "test"]);
     expect((await new FsJourneyStore(journeysDir).get("publish"))?.metadata.approval?.waivers).toEqual([
-      { kind: "unvetted", reason: "pilot run", items: ["job:publish-post (draft)", "persona:editor (draft)"] },
+      { kind: "unvetted", reason: "pilot run", items: ["job:publish-post (draft)", "persona:editor (draft)"], provenance: TEST_PROVENANCE },
     ]);
   });
 
   it("promotes once the job and persona are approved", async () => {
     await approveAll();
-    expect((await cli(["journey", "promote", "publish", "--json"])).json.data.promoted).toBe(true);
+    expect((await cli(["journey", "promote", "publish", "--json", "--non-interactive-approval", "test"])).json.data.promoted).toBe(true);
   });
 
   it("a dangling job link is unvetted too", async () => {
     await new FsJourneyStore(journeysDir).put(journey("dangling", { job: "nope", persona: "editor" }));
-    expect((await cli(["journey", "promote", "dangling", "--json"])).json.error.code).toBe("E_JOURNEY_UNVETTED");
+    expect((await cli(["journey", "promote", "dangling", "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_JOURNEY_UNVETTED");
   });
 
   it("an unlinked Journey still promotes (opt-in)", async () => {
-    expect((await cli(["journey", "promote", "loose", "--json"])).json.data.promoted).toBe(true);
+    expect((await cli(["journey", "promote", "loose", "--json", "--non-interactive-approval", "test"])).json.data.promoted).toBe(true);
   });
 
   it("an unlinked Journey's sheet says so", async () => {
@@ -260,16 +264,17 @@ describe("#433 journey promote and the catalog", () => {
 describe("#433 the shared pre-approval pipeline", () => {
   it("a finding that needs an acknowledgment refuses approval (E_APPROVAL_FINDINGS, exit 1)", async () => {
     await editJob({ personas: ["editor", "ghost"] });
-    const r = await cli(["job", "approve", "publish-post", "--json"]);
+    const r = await cli(["job", "approve", "publish-post", "--json", "--non-interactive-approval", "test"]);
     expect([r.json.error.code, r.code]).toEqual(["E_APPROVAL_FINDINGS", 1]);
   });
 
   it("--accept-findings records the reason in the approval", async () => {
     await editJob({ personas: ["editor", "ghost"] });
-    await cli(["job", "approve", "publish-post", "--accept-findings", "ghost lands next sprint", "--json"]);
+    await cli(["job", "approve", "publish-post", "--accept-findings", "ghost lands next sprint", "--json", "--non-interactive-approval", "test"]);
     expect(JSON.parse(await readFile(join(catalogDir, "jobs.json"), "utf8"))[0].approval.acceptedFindings).toEqual({
       reason: "ghost lands next sprint",
       findings: ["catalog-links/job.unknown-persona"],
+      provenance: TEST_PROVENANCE,
     });
   });
 
@@ -281,16 +286,16 @@ describe("#433 the shared pre-approval pipeline", () => {
 
   it("journey promote goes through it: a persona its job does not serve needs an acknowledgment", async () => {
     await approveAll();
-    await cli(["persona", "approve", "reader", "--json"]);
+    await cli(["persona", "approve", "reader", "--json", "--non-interactive-approval", "test"]);
     await new FsJourneyStore(journeysDir).put(journey("as-reader", { job: "publish-post", persona: "reader" }));
-    expect((await cli(["journey", "promote", "as-reader", "--json"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
+    expect((await cli(["journey", "promote", "as-reader", "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
   });
 
   it("…and --accept-findings records metadata.approval.acceptedFindings", async () => {
     await approveAll();
-    await cli(["persona", "approve", "reader", "--json"]);
+    await cli(["persona", "approve", "reader", "--json", "--non-interactive-approval", "test"]);
     await new FsJourneyStore(journeysDir).put(journey("as-reader", { job: "publish-post", persona: "reader" }));
-    await cli(["journey", "promote", "as-reader", "--accept-findings", "readers may publish in beta", "--json"]);
+    await cli(["journey", "promote", "as-reader", "--accept-findings", "readers may publish in beta", "--json", "--non-interactive-approval", "test"]);
     expect((await new FsJourneyStore(journeysDir).get("as-reader"))?.metadata.approval?.acceptedFindings?.findings).toEqual(["catalog-links/journey.persona-not-served"]);
   });
 
@@ -301,7 +306,7 @@ describe("#433 the shared pre-approval pipeline", () => {
       analyze: () => [{ analyzer: "test-conflicts", code: "conflicting", severity: "fail", message: "conflicts with reader", requiresAcknowledgment: true }],
     });
     try {
-      expect((await cli(["persona", "approve", "editor", "--json"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
+      expect((await cli(["persona", "approve", "editor", "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_APPROVAL_FINDINGS");
     } finally {
       unregister();
     }
@@ -326,7 +331,7 @@ describe("#433 the shared pre-approval pipeline", () => {
 describe("#433 catalog status", () => {
   it("the jobs × personas matrix", async () => {
     await approveAll();
-    await cli(["journey", "promote", "publish", "--json"]);
+    await cli(["journey", "promote", "publish", "--json", "--non-interactive-approval", "test"]);
     await editJob({ personas: ["editor", "reader"] });
     const { json } = await cli(["catalog", "status", "--json"]);
     expect(CatalogStatusSchema.parse(json.data).matrix).toEqual([

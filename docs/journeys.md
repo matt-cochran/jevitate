@@ -11,7 +11,7 @@ guess ([how replay finds elements](./verification.md#replay-finds-the-recorded-e
 jevitate explore-author-journey --url http://localhost:3000 \
   --goal "add a product to the cart and reach checkout" --success urlIncludes:/checkout \
   --id checkout --name "Checkout" --real
-jevitate journey promote checkout        # a human approval gate: unpromoted Journeys never run
+jevitate journey promote checkout        # a person's approval: shows the review sheet, asks you to type `checkout`
 jevitate journey run checkout
 ```
 
@@ -244,7 +244,7 @@ jevitate journey promote checkout --review-sheet review.md # the same, reading t
 
 Without either, `journey promote` prints the sheet (human mode) and binds the approval to the hash
 it showed. Every promotion — `journey promote` and `demo approve` alike — records
-`metadata.approval` (`{ contentHash, at, acceptedWeak? }`) and keeps the approved Journey at
+`metadata.approval` (`{ contentHash, at, provenance, acceptedWeak? }`) and keeps the approved Journey at
 `.jevitate/journeys/.approved/<id>.json`, which the next review diffs against. `journey verify
 --mutate` records its last verdict at `.jevitate/journeys/.verify/<id>.json` (bound to the same
 hash). The [assertion-strength gate](#assertion-strength) still applies: `--accept-weak` is recorded in the approval too.
@@ -259,6 +259,18 @@ linked job or persona is not approved (`E_JOURNEY_UNVETTED`, exit 1) unless you 
 Journey promotes as before. Every sheet also lists the **pre-approval findings**. When one needs
 an acknowledgment, promotion is refused (`E_APPROVAL_FINDINGS`, exit 1) unless you pass
 `--accept-findings "<reason>"`, which is recorded in `metadata.approval.acceptedFindings`.
+
+**Confirmation and provenance (#437).** `journey promote` and `demo approve` need an interactive
+terminal: after the sheet, type the Journey id (or the first 8 characters of its content hash),
+and once more for each waiver (`--accept-weak`, `--accept-unvetted`, `--accept-findings`). With no
+TTY the approval is refused (`E_APPROVAL_NEEDS_HUMAN`, exit 64) and nothing is promoted; a wrong
+answer is `E_APPROVAL_NOT_CONFIRMED` (exit 64). The approval, and each waiver, records
+`provenance: { channel, agentSignals, user? }` — `tty`, `non-interactive`
+(`--non-interactive-approval "<reason>"`, for scripted setups only), `ci`, or `mcp`
+(`promote_journey` / `approve_demo`: an agent's approval). `journey list` and the sheet show it,
+e.g. "approved non-interactively (likely an agent: CLAUDECODE)". A coding agent hands promotion to
+a person and never uses the escape hatch on its own. What each layer guarantees, and how to
+enforce approvals in git review and CI: [the catalog](./catalog.md#what-human-approval-guarantees).
 
 ## Record a flow by demonstration
 
@@ -325,7 +337,7 @@ key is refused when the file is read.
 | `name` | yes | A short human name |
 | `description` | no | One line, shown by `journey find` |
 | `promoted` | yes | `true` only after `journey promote` (the human approval gate) |
-| `approval` | no | the last approval: `{ contentHash, at, acceptedWeak? }` (see [Review and promotion sign-off](#review-and-promotion-sign-off)) |
+| `approval` | no | the last approval: `{ contentHash, at, provenance?, acceptedWeak?, waivers?, acceptedFindings? }` (see [Review and promotion sign-off](#review-and-promotion-sign-off)); `provenance` is `{ channel: "tty" \| "non-interactive" \| "mcp" \| "ci", agentSignals, user?, reason? }` (#437) |
 | `params` | yes | Names of the `--param` values it takes |
 | `secretRefs` | no | Password-manager references for `vault-autofill` runs |
 | `authoredBy` | no | `human-demonstration` or `jev-driven` |
