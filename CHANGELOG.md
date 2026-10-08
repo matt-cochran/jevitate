@@ -56,6 +56,18 @@ an OpenRouter key, so one key covers generation and judgment.
 - **`jevitate init` skips the TypeSafe key prompt when an OpenRouter key is set (#429)**, because
   judgment can already run on it. Add one with `ai setup judgment --jev-provider typesafe`.
 
+- **Approvals need a person at a terminal and record how they were made (#437).** `journey promote`,
+  `demo approve`, `persona approve` and `job approve` (and each `--accept-*` waiver) now require an
+  interactive terminal and a typed confirmation — the item id or the first 8 characters of its content
+  hash; without one they are refused with `E_APPROVAL_NEEDS_HUMAN` (exit 64). Scripted setups can pass
+  `--non-interactive-approval "<reason>"`, which is recorded as a non-interactive approval. Every
+  approval stores its provenance (terminal, non-interactive, CI or MCP channel, the names of any agent
+  markers such as `CLAUDECODE`, and the OS user), shown in review sheets, `catalog status` and
+  `journey list`; MCP `promote_journey`/`approve_demo` are always recorded as agent approvals. To
+  enforce human sign-off, run `jevitate check --require-approvals` (or `catalog status
+  --require-approvals`) in CI and add `jevitate init --codeowners <@team>` with branch protection;
+  docs/catalog.md says exactly what each layer guarantees.
+
 ### Added
 
 - **`jevitate sweep --targets <file.tsv|file.json>` (#425):** many explore missions (per feature or
