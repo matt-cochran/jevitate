@@ -136,6 +136,8 @@ const EXTENSION = {
 const DEMO_SHOW = { headed: b("--headed"), slowMo: n("--slow-mo") };
 const ENVIRONMENT = { env: s("--env"), baseUrl: s("--base-url") };
 const AI = { real: b("--real"), fakeAi: b("--fake-ai") };
+/** #429: commands that build the live Jev gateway also take the Jev provider (typesafe | openrouter). */
+const JEV_AI = { ...AI, jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) };
 /** #243: `name=<storageState>` identities a fixture step authenticates as — each path confined as a session. */
 const FIXTURE_IDENTITY: CliParam = { kind: "named-sessions", flag: "--fixture-identity" };
 
@@ -249,7 +251,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         fixtureIdentity: FIXTURE_IDENTITY,
         ...EMULATION,
         ...DEMO_SHOW,
-        ...AI,
+        ...JEV_AI,
       },
       omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
@@ -339,7 +341,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         overlay: b("--no-overlay"),
         ...EMULATION,
         ...DEMO_SHOW,
-        ...AI,
+        ...JEV_AI,
       },
       omitted: {
         ...HOOK_FLAGS,
@@ -385,7 +387,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         recordVideo: { kind: "optional-path", flag: "--record-video" },
         screenshots: { kind: "screenshots", flag: "--screenshots" },
         evidenceVideo: b("--evidence-video"),
-        ...AI,
+        ...JEV_AI,
       },
       omitted: {
         "--journeys-dir": OMIT.storeDir,
@@ -447,7 +449,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ignoreNoProgress: many("--ignore-no-progress"),
         screenshots: { kind: "screenshots", flag: "--screenshots" },
         ...EMULATION,
-        ...AI,
+        ...JEV_AI,
       },
       omitted: {
         "--journeys-dir": OMIT.storeDir,
@@ -476,7 +478,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         baseline: s("--baseline"),
         changedRoutes: many("--changed-routes"),
         targetBuild: s("--target-build"),
-        ...AI,
+        ...JEV_AI,
       },
       omitted: { "--baseline-dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
@@ -549,7 +551,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate mission run --once`: drain the missions queue_exploration queued (each through its strategy's runner; results where get_mission_result reads them), then return the drain report. Model-driven missions need real or fakeAi (others stay queued, reported as skipped).",
     command: {
       path: "mission run",
-      params: { ...EXTENSION, ...AI },
+      params: { ...EXTENSION, ...JEV_AI },
       omitted: {
         "--once": "the default: MCP drains what is queued once and returns",
         "--watch": OMIT.watch,
@@ -687,7 +689,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         maxFindingsPerPage: n("--max-findings-per-page"),
         product: path("--product"),
         polish: b("--polish"),
-        ...AI,
+        ...JEV_AI,
       },
       omitted: JSON_FLAG,
     },
@@ -705,7 +707,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "get_ai_status",
     description:
       "`jevitate ai status`: which model-gateway credentials each AI feature uses, where each comes from (env or the stored file) and whether its provider accepts it (a live auth check; `verify: false` skips it) — names, sources and verdicts only, never a key value.",
-    command: { path: "ai status", params: { verify: b("--no-verify") }, omitted: JSON_FLAG },
+    command: { path: "ai status", params: { verify: b("--no-verify"), jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) }, omitted: JSON_FLAG },
   },
 ];
 

@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import {
   envCredentialStore,
   ALL_CREDENTIAL_KEYS,
-  FEATURE_KEYS,
   requireKeys,
   MissingCredentialError,
   FakeGenerationGateway,
@@ -21,7 +20,11 @@ import {
   collectKeys,
   verifyKey,
   KEY_PROVIDERS,
+  featureKeys,
+  jevProviderOverride,
+  type JevProvider,
 } from "@jevitate/ai-core";
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import type { CliDeps } from "./program.js";
 import { resolveDataDir } from "./data-dir.js";
@@ -32,11 +35,13 @@ import { emitJsonOrRefusal } from "./cli-refusal.js";
 import { readMaskedLine } from "./masked-input.js";
 import {
   describeFeatureKeys,
+  jevRouteReport,
   keySources,
   realVerifyFetch,
   shadowWarnings,
   verificationProblems,
   verifyFeatureKeys,
+  type JevRouteReport,
   type KeySourceReport,
   type KeyVerificationReport,
 } from "./key-report.js";
@@ -165,6 +170,8 @@ export interface FeatureKeyStatus {
   sources: KeySourceReport[];
   /** #291: the live check per key (absent with --no-verify). */
   verification?: KeyVerificationReport[];
+  /** #429 (judgment only): the Jev route judgment will use — provider, key, model, why; null when no key resolves one. */
+  route?: JevRouteReport | null;
 }
 
 export function registerAiCommands(program: Command, deps: CliDeps): void {
@@ -173,18 +180,33 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
   ai.command("status")
     .description("which keys each AI feature uses, where each comes from (env or ~/.jevitate/credentials.json), and whether the provider accepts it (a live auth check; never prints a key)")
     .option("--no-verify", "skip the live auth check (offline / CI): report presence and source only")
+    .option("--jev-provider <provider>", "report judgment as it would run with this Jev provider: typesafe or openrouter (default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set)", jevProviderArg)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { json, verify } = this.opts<{ json?: boolean; verify: boolean }>();
+      const { json, verify, jevProvider: flag } = this.opts<{ json?: boolean; verify: boolean; jevProvider?: JevProvider }>();
       const store = buildStore(deps.ai);
       const { env, localConfig } = credentialInputs(deps.ai);
       const fetchFn = deps.ai?.verifyFetch ?? realVerifyFetch;
+      let jevProvider: JevProvider | undefined;
+      try {
+        jevProvider = jevProviderOverride(env, flag);
+      } catch (err) {
+        emitJsonOrRefusal(program, fail("E_INVALID_ARGS", err instanceof Error ? err.message : String(err)), 2);
+        return;
+      }
       const data = {} as Record<Feature, FeatureKeyStatus>;
       for (const feature of FEATURES) {
-        const required = [...FEATURE_KEYS[feature]];
+        // #429: judgment needs EITHER Jev key — `required` names the key its route uses (both when none is set).
+        const required = featureKeys(feature, store, jevProvider);
         const missing = required.filter((k) => !store.detect(k));
-        const sources = keySources(feature, env, localConfig);
-        data[feature] = { required, missing, sources, ...(verify ? { verification: await verifyFeatureKeys(feature, store, fetchFn) } : {}) };
+        const sources = keySources(feature, env, localConfig, jevProvider);
+        data[feature] = {
+          required,
+          missing,
+          sources,
+          ...(verify ? { verification: await verifyFeatureKeys(feature, store, fetchFn, undefined, jevProvider) } : {}),
+          ...(feature === "judgment" ? { route: jevRouteReport(store, env, jevProvider) } : {}),
+        };
       }
       // A key the provider refuses (or that could not be checked) is not "ready": exit 2, never 0.
       const all = FEATURES.flatMap((f) => data[f].verification ?? []);
@@ -195,7 +217,7 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
         emitJsonOrRefusal(program, envelope, exitCode);
       } else {
         const out = program.configureOutput().writeOut;
-        for (const feature of FEATURES) out?.(`${describeFeatureKeys(feature, data[feature].sources, data[feature].verification)}\n`);
+        for (const feature of FEATURES) out?.(`${describeFeatureKeys(feature, data[feature].sources, data[feature].verification, data[feature].route)}\n`);
         if (problems.unreachable.length > 0) out?.("could not reach a provider to verify a key — retry when online, or pass --no-verify to skip the check\n");
         process.exitCode = exitCode;
       }
@@ -205,39 +227,54 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
     .description("enter (masked) and store the keys a feature needs in ~/.jevitate/credentials.json (0600); each key is verified with its provider before it is stored")
     .option("--replace", "prompt for a new value even when a key is already stored (rotate / replace it)")
     .option("--no-verify", "store the entered key without the live auth check (offline / CI)")
+    .option("--jev-provider <provider>", "judgment only: which Jev key to set up — typesafe (TYPESAFE_API_KEY, the default) or openrouter (OPENROUTER_API_KEY: Jev through OpenRouter)", jevProviderArg)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, feature: string) {
-      const { json, replace, verify } = this.opts<{ json?: boolean; replace?: boolean; verify: boolean }>();
+      const { json, replace, verify, jevProvider: flag } = this.opts<{ json?: boolean; replace?: boolean; verify: boolean; jevProvider?: JevProvider }>();
       if (feature !== "generation" && feature !== "judgment") {
         emitJsonLine(program, fail("E_INVALID_FEATURE", `unknown feature '${feature}' — expected 'generation' or 'judgment'`));
+        return;
+      }
+      if (flag !== undefined && feature !== "judgment") {
+        emitJsonLine(program, fail("E_INVALID_ARGS", "--jev-provider applies to `ai setup judgment` only"));
         return;
       }
       try {
         const store = buildStore(deps.ai);
         const { env, localConfig } = credentialInputs(deps.ai);
+        // #429: judgment is satisfied by EITHER Jev key; the flag (else JEVITATE_JEV_PROVIDER) picks which one to set up.
+        const jevProvider = feature === "judgment" ? jevProviderOverride(env, flag) : undefined;
         const injected = deps.ai?.secureIO;
-        const needsPrompt = replace === true || FEATURE_KEYS[feature].some((k) => !store.detect(k));
+        const usesNow = featureKeys(feature, store, jevProvider);
+        const needsPrompt = replace === true || usesNow.some((k) => !store.detect(k));
         if (injected === undefined && needsPrompt && !(deps.ai?.isInteractive?.() ?? process.stdin.isTTY === true)) {
+          const flagHint = flag === undefined ? "" : ` --jev-provider ${flag}`;
           emitJsonLine(
             program,
-            fail("E_AI_SETUP", `key entry needs an interactive terminal (stdin is not a TTY) — run \`jevitate ai setup ${feature}${replace === true ? " --replace" : ""}\` in a terminal, or set ${FEATURE_KEYS[feature].join(", ")} in the environment`),
+            fail("E_AI_SETUP", `key entry needs an interactive terminal (stdin is not a TTY) — run \`jevitate ai setup ${feature}${flagHint}${replace === true ? " --replace" : ""}\` in a terminal, or set ${usesNow.join(feature === "judgment" ? " or " : ", ")} in the environment`),
           );
           return;
         }
         const io = injected ?? realSecureIO();
         const fetchFn = deps.ai?.verifyFetch ?? realVerifyFetch;
         const gate = enteredKeyCheck(fetchFn);
-        const collected = await collectKeys(feature, store, io, { replace: replace === true, ...(verify ? { check: gate.check } : {}) });
+        const collected = await collectKeys(feature, store, io, {
+          replace: replace === true,
+          ...(verify ? { check: gate.check } : {}),
+          ...(jevProvider === undefined ? {} : { jevProvider }),
+        });
         // What resolves NOW: the stored file plus what was just entered (env still wins).
         const nowLocal = { ...localConfig, ...Object.fromEntries(gate.entered) };
         const nowStore = envCredentialStore(env, nowLocal);
-        const sources = keySources(feature, env, verify ? nowLocal : { ...localConfig, ...Object.fromEntries(collected.map((k) => [k, "set"])) });
+        const reportLocal = verify ? nowLocal : { ...localConfig, ...Object.fromEntries(collected.map((k) => [k, "set"])) };
+        const sources = keySources(feature, env, reportLocal, jevProvider);
         const warnings = shadowWarnings(collected, sources);
         // Every key the feature uses is verified, including ones already present ("nothing missing").
-        const verification = verify ? await verifyFeatureKeys(feature, nowStore, fetchFn, gate.verdicts) : undefined;
+        const verification = verify ? await verifyFeatureKeys(feature, nowStore, fetchFn, gate.verdicts, jevProvider) : undefined;
+        const route = feature === "judgment" ? jevRouteReport(envCredentialStore(env, reportLocal), env, jevProvider) : undefined;
         const problems = verificationProblems(verification ?? []);
         if (problems.invalid.length > 0 || problems.unreachable.length > 0) {
-          const line = describeFeatureKeys(feature, sources, verification);
+          const line = describeFeatureKeys(feature, sources, verification, route);
           emitJsonLine(
             program,
             fail(
@@ -249,13 +286,25 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
           );
           return;
         }
-        const envelope = ok({ feature, collected, sources, ...(verification === undefined ? {} : { verification }), ...(warnings.length === 0 ? {} : { warnings }) });
+        const envelope = ok({
+          feature,
+          collected,
+          sources,
+          ...(verification === undefined ? {} : { verification }),
+          ...(route === undefined ? {} : { route }),
+          ...(warnings.length === 0 ? {} : { warnings }),
+        });
         if (json) {
           emitJsonLine(program, envelope);
         } else {
           const out = program.configureOutput().writeOut;
           out?.(`collected: ${collected.join(", ") || "(nothing missing)"}\n`);
-          out?.(`${describeFeatureKeys(feature, sources, verification)}\n`);
+          out?.(`${describeFeatureKeys(feature, sources, verification, route)}\n`);
+          // #429: say how to set up the other Jev key, so both routes are discoverable from setup.
+          if (feature === "judgment" && route !== undefined && route !== null && flag === undefined) {
+            const other = route.provider === "typesafe" ? "openrouter" : "typesafe";
+            out?.(`judgment can also use ${other === "openrouter" ? "an OpenRouter key (Jev through OpenRouter)" : "a TypeSafe key"}: \`jevitate ai setup judgment --jev-provider ${other}\`\n`);
+          }
           for (const w of warnings) out?.(`warning: ${w}\n`);
           process.exitCode = 0;
         }

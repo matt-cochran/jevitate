@@ -1,5 +1,6 @@
 import type { Answer, Question } from "./judgment.js";
 import type { JevClientCall } from "./jev.js";
+import type { JevProvider } from "./credentials.js";
 import { failureClass, type UsageSink } from "./usage.js";
 
 /**
@@ -9,6 +10,12 @@ import { failureClass, type UsageSink } from "./usage.js";
  * constructs `TypeSafeClient` and calls `systemOne` around the two pure functions. The SDK is
  * imported ONLY dynamically with a non-literal specifier, so this package builds (and its pure
  * translation is unit-tested) without the SDK's types; hosts (the CLI) just wire the seam.
+ *
+ * #429: the same seam serves both Jev routes. TypeSafe's own API (`TYPESAFE_API_KEY`) and
+ * OpenRouter's System One route (`OPENROUTER_API_KEY`, `POST https://openrouter.ai/api/v1/systemone`)
+ * share one wire format, so the OpenRouter route is the same SDK client pointed at OpenRouter's
+ * base URL with an OpenRouter model id — and both go through the SAME answer validation
+ * (`fromSdkAnswers`) and usage recording.
  *
  * Every unexpected response shape FAILS CLOSED (throws) — a missing answer, a wrong
  * answer type, or a choice label that was not offered is never coerced into a guess.
@@ -108,17 +115,42 @@ export function apiKeyFromAuthHeader(authHeader: string): string {
 interface SdkUsage {
   readonly input_tokens: number;
   readonly output_tokens: number;
-  /** A provider-reported call cost (#136), when a future SDK version reports one; today it never does. */
+  /** A provider-reported call cost in USD (#136): OpenRouter reports it on every call (#429); TypeSafe does not today. */
   readonly cost?: number;
 }
 
 /** The slice of `@typesafe-ai/sdk` (v0.6) the live Jev seam uses. */
 interface TypeSafeSdk {
-  TypeSafeClient: new (config: { apiKey: string }) => {
+  TypeSafeClient: new (config: { apiKey: string; baseURL?: string }) => {
     /** The model a request that names none is sent to (`jev-latest` unless configured). */
     readonly defaultModel?: string;
-    systemOne(req: { state: unknown; questions: Record<string, SdkQuestion> }): Promise<{ answers: unknown; usage: SdkUsage; model?: string }>;
+    systemOne(req: { state: unknown; questions: Record<string, SdkQuestion>; model?: string }): Promise<{ answers: unknown; usage: SdkUsage; model?: string }>;
   };
+}
+
+/**
+ * #429: the OpenRouter Jev route. The SDK appends `/v1/systemone` to the base URL. The model is
+ * OpenRouter's alias for the newest Jev release; the response names the dated snapshot that
+ * answered (e.g. `typesafe/jev-1.13-20260917`), which is what usage records.
+ */
+export const OPENROUTER_JEV_BASE_URL = "https://openrouter.ai/api";
+export const OPENROUTER_JEV_MODEL = "~typesafe/jev-latest";
+
+/**
+ * The model a Jev route asks for (for `ai status`): OpenRouter's alias, or the SDK's default for
+ * TypeSafe (`TYPESAFE_DEFAULT_MODEL` when set, else `jev-latest`).
+ */
+export function jevRouteModel(provider: JevProvider, env: Record<string, string | undefined> = {}): string {
+  if (provider === "openrouter") return OPENROUTER_JEV_MODEL;
+  const configured = env.TYPESAFE_DEFAULT_MODEL?.trim();
+  return configured !== undefined && configured !== "" ? configured : "jev-latest";
+}
+
+/** Client config + request model per Jev route. TypeSafe keeps the SDK defaults (unchanged behaviour). */
+function routeConfig(provider: JevProvider): { baseURL?: string; model?: string; costSource: string } {
+  return provider === "openrouter"
+    ? { baseURL: OPENROUTER_JEV_BASE_URL, model: OPENROUTER_JEV_MODEL, costSource: "provider:openrouter usage.cost" }
+    : { costSource: "provider:typesafe" };
 }
 
 function isTypeSafeSdk(mod: unknown): mod is TypeSafeSdk {
@@ -150,12 +182,13 @@ export async function realJevClientCall(load: SdkLoader = defaultSdkLoader, usag
     throw new Error("@typesafe-ai/sdk does not export TypeSafeClient — unsupported SDK version (expected >= 0.6)");
   }
   const sdk = mod;
-  return async ({ state, questions, authHeader }) => {
-    const client = new sdk.TypeSafeClient({ apiKey: apiKeyFromAuthHeader(authHeader) });
-    const requested = typeof client.defaultModel === "string" ? client.defaultModel : undefined;
+  return async ({ state, questions, authHeader, provider = "typesafe" }) => {
+    const route = routeConfig(provider);
+    const client = new sdk.TypeSafeClient({ apiKey: apiKeyFromAuthHeader(authHeader), ...(route.baseURL === undefined ? {} : { baseURL: route.baseURL }) });
+    const requested = route.model ?? (typeof client.defaultModel === "string" ? client.defaultModel : undefined);
     let result: { answers: unknown; usage: SdkUsage; model?: string };
     try {
-      result = await client.systemOne({ state, questions: toSdkQuestions(questions) });
+      result = await client.systemOne({ state, questions: toSdkQuestions(questions), ...(route.model === undefined ? {} : { model: route.model }) });
     } catch (e) {
       // #163: a failed attempt is still a call — recorded (unpriced unless it reported usage), then rethrown.
       usage?.recordJudgment({ inputTokens: 0, outputTokens: 0, ...(requested === undefined ? {} : { model: requested }), failure: failureClass(e) });
@@ -168,7 +201,7 @@ export async function realJevClientCall(load: SdkLoader = defaultSdkLoader, usag
       inputTokens: result.usage?.input_tokens ?? 0,
       outputTokens: result.usage?.output_tokens ?? 0,
       ...(model === undefined ? {} : { model }),
-      ...(typeof result.usage?.cost === "number" ? { usd: result.usage.cost } : {}),
+      ...(typeof result.usage?.cost === "number" && Number.isFinite(result.usage.cost) ? { usd: result.usage.cost, source: route.costSource } : {}),
     });
     return fromSdkAnswers(questions, result.answers);
   };

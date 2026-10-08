@@ -1,3 +1,4 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
@@ -101,6 +102,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
     .option("--out <dir>", "directory each take's result, transcript and Recording are written to (default: .jevitate/logs/<date>)")
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit a JSON envelope");
   // #369: every take is `explore`'s goal run, so author takes its run-shaping flags too.
   for (const name of AUTHOR_GOAL_RUN_FLAGS) cmd.addOption(GOAL_RUN_OPTIONS[name]());
@@ -131,6 +133,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         maxDecisions?: string;
         real?: boolean;
         fakeAi?: boolean;
+        jevProvider?: string;
         json?: boolean;
         storageState?: string;
         out?: string;
@@ -174,7 +177,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
       let gen: GenerationPort;
       let authorUsage: UsageTracker;
       try {
-        ({ judge, gen, usage: authorUsage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+        ({ judge, gen, usage: authorUsage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false, jevProvider: o.jevProvider }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
           emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));

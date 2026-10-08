@@ -1,3 +1,4 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { type InvariantSpec } from "@jevitate/recording";
@@ -289,6 +290,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .addOption(GOAL_RUN_OPTIONS.readRpc())
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--out <dir>", "directory to write the emitted Recording")
     .option(
       "--file-issues",
@@ -508,6 +510,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         readRpc: string[];
         real?: boolean;
         fakeAi?: boolean;
+        jevProvider?: string;
         out?: string;
         checkOverflow?: boolean;
         ignoreOverflow: string[];
@@ -1038,6 +1041,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ({ judge: covJudge, gen: covGen, usage: covUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
+            jevProvider: o.jevProvider,
           }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
@@ -1105,6 +1109,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ({ judge: advJudge, gen: advGen, usage: advUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
+            jevProvider: o.jevProvider,
           }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
@@ -1215,6 +1220,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ({ judge: uxJudge, gen: uxGen, usage: uxUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
+            jevProvider: o.jevProvider,
           }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
@@ -1389,7 +1395,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       let gen: GenerationPort;
       let usage: UsageTracker;
       try {
-        ({ judge, gen, usage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+        ({ judge, gen, usage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false, jevProvider: o.jevProvider }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
           emitExplore(fail("E_AI_SETUP_REQUIRED", err.message));

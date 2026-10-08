@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { envCredentialStore, FEATURE_KEYS, type Feature } from "@jevitate/ai-core";
+import { envCredentialStore, FEATURE_KEYS, featureReady, jevProviderOverride, type Feature } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
 import { ok, fail } from "./envelope.js";
 import { initProjectDir, type ProjectInitReport } from "./project-dir.js";
@@ -63,8 +63,11 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
           const fetchFn = deps.ai?.verifyFetch ?? realVerifyFetch;
           // #291: each entered key is checked with its provider BEFORE it is stored.
           const gate = enteredKeyCheck(fetchFn);
+          // #429: JEVITATE_JEV_PROVIDER pins which key judgment needs (an unknown value fails init).
+          const jevProvider = jevProviderOverride(deps.ai?.env ?? process.env);
           const keys = await collectAllMissingKeys(store, io, {
             interactive,
+            ...(jevProvider === undefined ? {} : { jevProvider }),
             ...(replaceKeys === true ? { replace: true } : {}),
             ...(verify ? { check: gate.check } : {}),
           });
@@ -74,10 +77,10 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
           const nowStore = envCredentialStore(env, nowLocal);
           for (const feature of Object.keys(keys) as Feature[]) {
             const r = keys[feature];
-            const sources = keySources(feature, env, verify ? nowLocal : { ...localConfig, ...Object.fromEntries(r.collected.map((k) => [k, "set"])) });
+            const sources = keySources(feature, env, verify ? nowLocal : { ...localConfig, ...Object.fromEntries(r.collected.map((k) => [k, "set"])) }, jevProvider);
             const warnings = shadowWarnings(r.collected, sources);
             r.sources = sources;
-            if (verify) r.verification = await verifyFeatureKeys(feature, nowStore, fetchFn, gate.verdicts);
+            if (verify) r.verification = await verifyFeatureKeys(feature, nowStore, fetchFn, gate.verdicts, jevProvider);
             if (warnings.length > 0) r.warnings = warnings;
           }
           data.keys = keys;
@@ -122,7 +125,8 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
               )
             : (() => {
                 const store = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? loadLocalCredentials());
-                return (Object.keys(FEATURE_KEYS) as Feature[]).every((f) => FEATURE_KEYS[f].every((k) => store.detect(k)));
+                const jevProvider = jevProviderOverride(deps.ai?.env ?? process.env);
+                return (Object.keys(FEATURE_KEYS) as Feature[]).every((f) => featureReady(f, store, jevProvider));
               })();
         const projectDir = (data.project as ProjectInitReport | undefined)?.dir ?? null;
         data.nextSteps = initNextSteps({

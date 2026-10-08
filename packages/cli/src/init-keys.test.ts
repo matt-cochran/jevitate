@@ -20,8 +20,9 @@ test("collects both features' missing keys when nothing is configured", async ()
   };
   const report = await collectAllMissingKeys(store, io);
   expect(report.generation).toEqual({ required: ["OPENROUTER_API_KEY"], collected: ["OPENROUTER_API_KEY"] });
-  expect(report.judgment).toEqual({ required: ["TYPESAFE_API_KEY"], collected: ["TYPESAFE_API_KEY"] });
-  expect(persisted).toEqual({ OPENROUTER_API_KEY: "typed-secret", TYPESAFE_API_KEY: "typed-secret" });
+  // #429: the OpenRouter key just entered also runs Jev (through OpenRouter), so judgment asks for nothing more.
+  expect(report.judgment).toEqual({ required: ["OPENROUTER_API_KEY"], collected: [] });
+  expect(persisted).toEqual({ OPENROUTER_API_KEY: "typed-secret" });
 });
 
 test("prompts for nothing when both keys are already present", async () => {

@@ -82,6 +82,31 @@ async function run(d: CliDeps, argv: string[]): Promise<{ code: number | undefin
   return { code, out: stdout.join(""), err: stderr.join("") };
 }
 
+describe("judgment on the OpenRouter key (#429)", () => {
+  it("--real builds with only an OpenRouter key: one key, verified once, no TypeSafe check", async () => {
+    const built = await buildExploreGateways(deps({ OPENROUTER_API_KEY: OPENROUTER }), { real: true, fakeAi: false });
+    expect(built.judge).toBeDefined();
+    expect(calls).toEqual(["https://openrouter.ai/api/v1/key"]);
+  });
+
+  it("--jev-provider openrouter skips a (rejected) TypeSafe key and runs judgment on the OpenRouter key", async () => {
+    const built = await buildExploreGateways(deps({ OPENROUTER_API_KEY: OPENROUTER, TYPESAFE_API_KEY: "ts-bad" }), { real: true, fakeAi: false, jevProvider: "openrouter" });
+    expect(built.judge).toBeDefined();
+    expect(calls.some((u) => u.includes("typesafe"))).toBe(false);
+  });
+
+  it("JEVITATE_JEV_PROVIDER=typesafe with no TypeSafe key refuses (no quiet switch to OpenRouter)", async () => {
+    const err = await buildExploreGateways(deps({ OPENROUTER_API_KEY: OPENROUTER, JEVITATE_JEV_PROVIDER: "typesafe" }), { real: true, fakeAi: false }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MissingCredentialError);
+    expect((err as MissingCredentialError).missing).toEqual(["TYPESAFE_API_KEY"]);
+  });
+
+  it("an unknown provider is a gateway-selection refusal", async () => {
+    const err = await buildExploreGateways(deps({ OPENROUTER_API_KEY: OPENROUTER }), { real: true, fakeAi: false, jevProvider: "nope" }).catch((e: unknown) => e);
+    expect(String(err)).toMatch(/not a Jev provider/);
+  });
+});
+
 describe("run startup key check (#291)", () => {
   it("explore --real with a rejected (misplaced) judgment key exits 64 E_AI_SETUP_REQUIRED, naming the key — never its value", async () => {
     const r = await run(deps({ OPENROUTER_API_KEY: OPENROUTER, TYPESAFE_API_KEY: MISPLACED }), [

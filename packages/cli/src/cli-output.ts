@@ -479,7 +479,9 @@ export function formatInitKeysHuman(
       // #230: the non-interactive path (no TTY on stdin) never prompts — report what's still
       // missing and how to configure it, the same command name as the E_AI_SETUP_REQUIRED refusals.
       if (missing !== undefined && missing.length > 0) {
-        return `keys: ${feature} not configured — set ${missing.map(named).join(", ")} or run \`jevitate ai setup ${feature}\``;
+        // #429: judgment is satisfied by EITHER of its keys (TypeSafe or OpenRouter).
+        const sep = feature === "judgment" ? " or " : ", ";
+        return `keys: ${feature} not configured — set ${missing.map(named).join(sep)} or run \`jevitate ai setup ${feature}\``;
       }
       if (sources === undefined) {
         const detail = collected.length > 0 ? `collected ${collected.join(", ")} now` : "already configured";

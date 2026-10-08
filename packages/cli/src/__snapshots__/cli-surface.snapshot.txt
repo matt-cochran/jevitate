@@ -21,6 +21,7 @@
   arguments:
     - name=feature required=true variadic=false default=null
   options:
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=judgment only: which Jev key to set up — typesafe (TYPESAFE_API_KEY, the default) or openrouter (OPENROUTER_API_KEY: Jev through OpenRouter)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--no-verify required=false mandatory=false negate=true variadic=false default=null description=store the entered key without the live auth check (offline / CI)
     - flags=--replace required=false mandatory=false negate=false variadic=false default=null description=prompt for a new value even when a key is already stored (rotate / replace it)
@@ -28,6 +29,7 @@
 # ai status
   description: which keys each AI feature uses, where each comes from (env or ~/.jevitate/credentials.json), and whether the provider accepts it (a live auth check; never prints a key)
   options:
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=report judgment as it would run with this Jev provider: typesafe or openrouter (default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--no-verify required=false mandatory=false negate=true variadic=false default=null description=skip the live auth check (offline / CI): report presence and source only
 
@@ -72,6 +74,7 @@
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each of the spec's before/after hooks (default 60000; the process group is killed)
     - flags=--invariants <file> required=true mandatory=false negate=false variadic=false default=[] description=app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's)
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope (default: a human summary)
     - flags=--log-correlation-header <name> required=true mandatory=false negate=false variadic=false default=[] description=another header carrying a correlation id (repeatable) (forwarded to every mission, as explore's)
@@ -101,6 +104,7 @@
     - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
     - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope (default: a one-line summary per item, then the envelope path)
     - flags=--json-out <path> required=true mandatory=false negate=false variadic=false default=null description=JSON envelope path (default <out>/check.json)
     - flags=--junit <path> required=true mandatory=false negate=false variadic=false default=null description=JUnit XML path (default <out>/junit.xml)
@@ -167,6 +171,7 @@
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--id <id> required=true mandatory=false negate=false variadic=false default=null description=the Journey id (default: demo-<aspect slug>)
     - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--max-actions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on explored actions
     - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
@@ -244,6 +249,7 @@
     - flags=--ignore-overflow <selector> required=true mandatory=false negate=false variadic=false default=[] description=a CSS selector (repeatable) whose overflow or clipping is intentional — excluded from the horizontal-overflow and vertical-clipping signals, like --ignore-no-progress
     - flags=--invariants <file> required=true mandatory=false negate=false variadic=false default=[] description=app-declared invariants JSON (repeatable; goal, coverage, exploratory, adversarial, --feature): checked around every action, a violation is a defect (exit 1). Validated before any browser opens; probes are GET/HEAD on an --allow origin only
     - flags=--issue-repo <owner/name> required=true mandatory=false negate=false variadic=false default=null description=the system-under-test repo findings for THIS target are filed to
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--jevitate-repo <owner/name> required=true mandatory=false negate=false variadic=false default=null description=where jevitate engine findings are filed (default matt-cochran/jevitate)
     - flags=--job-wait-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it
     - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
@@ -328,6 +334,7 @@
     - flags=--id <id> required=true mandatory=false negate=false variadic=false default=null description=journey id (used for the <id>.json filename in the store)
     - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
     - flags=--ignore-no-progress <pattern> required=true mandatory=false negate=false variadic=false default=[] description=a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard)
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--job-wait-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it
     - flags=--journeys-dir <dir> required=true mandatory=false negate=false variadic=false default=null description=journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
@@ -610,6 +617,7 @@
     - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
     - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
@@ -730,6 +738,7 @@
   description: #313: re-triage a finished run's signals (<run>.signals.jsonl, written by explore --log-triage): attach to each defect only the lines that relate to it (defects[].relatedLogs) — the lines correlated to its request, then, with --real, the window lines Jev scores relevant (else its error/warning lines). Rewrites the result
   options:
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=no model: keep the correlated lines and the window's error/warning lines (code only)
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=score relevance with the live Jev gateway (requires keys; log text goes to the judgment model, redacted)
     - flags=--result <path> required=true mandatory=true negate=false variadic=false default=null description=the run's <run>.result.json (its <run>.signals.jsonl must sit next to it)
@@ -789,6 +798,7 @@
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
     - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
     - flags=--interval <ms> required=true mandatory=false negate=false variadic=false default=5000 description=--watch poll interval in ms (default 5000)
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
     - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
@@ -1098,6 +1108,7 @@
     - flags=--app-class <class> required=true mandatory=false negate=false variadic=false default=null description=app class for calibration (required), e.g. consumer|admin|internal
     - flags=--evidence <file> required=true mandatory=false negate=false variadic=false default=null description=a live usability run's evidence sidecar (screens as analyzed + run signals); default: <stem>.evidence.json next to the Recording — with it, offline review reproduces the live run's findings
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways
+    - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--job <text> required=true mandatory=false negate=false variadic=false default=null description=the job the flow pursues (improves relevance)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--max-findings-per-page <n> required=true mandatory=false negate=false variadic=false default=null description=cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5

@@ -153,7 +153,7 @@ export interface McpApiDeps {
    * #255 (`run_journey {selfHeal: hybrid|full}`): builds the self-heal gateways exactly as the CLI's
    * `--real`/`--fake-ai` do (`buildExploreGateways`). Absent: a heal mode is refused (setup_required).
    */
-  selfHealGateways?: (sel: { real: boolean; fakeAi: boolean }) => Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }>;
+  selfHealGateways?: (sel: { real: boolean; fakeAi: boolean; jevProvider?: string | undefined }) => Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }>;
   /**
    * #255: the CLI in-process (mcp-cli-runner.ts) — backs every MCP tool that mirrors a CLI command
    * (mcp-cli-tools.ts). Absent: those tools refuse with `not_configured`.
@@ -679,6 +679,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const selfHeal = optEnum<SelfHealMode>(args, "selfHeal", ["fail-closed", "hybrid", "full"]) ?? "fail-closed";
     const real = optBool(args, "real") ?? false;
     const fakeAi = optBool(args, "fakeAi") ?? false;
+    // #429: the Jev provider for self-heal judgments (typesafe | openrouter), as `--jev-provider`.
+    const jevProvider = optEnum<"typesafe" | "openrouter">(args, "jevProvider", ["typesafe", "openrouter"]);
     let selfHealer: SelfHealer | undefined;
     let policy: RunPolicy = defaultRunPolicy();
     let usage: UsageTracker | undefined;
@@ -687,7 +689,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       let judge: JudgmentPort;
       let gen: GenerationPort;
       try {
-        ({ judge, gen, usage } = await deps.selfHealGateways({ real, fakeAi }));
+        ({ judge, gen, usage } = await deps.selfHealGateways({ real, fakeAi, ...(jevProvider === undefined ? {} : { jevProvider }) }));
       } catch (err) {
         throw new SetupRequired(redactCredentials(err instanceof Error ? err.message : String(err), credentialStore));
       }
@@ -765,7 +767,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
         "'viewport' {width,height} or 'device' (mutually exclusive); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
-        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). A site-policy refusal is {error: throttled, retryAfter}.",
+        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals; 'jevProvider' typesafe | openrouter picks the Jev key with real, #429); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
         properties: {
@@ -786,6 +788,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           selfHeal: { type: "string", enum: ["fail-closed", "hybrid", "full"] },
           real: { type: "boolean" },
           fakeAi: { type: "boolean" },
+          jevProvider: { type: "string", enum: ["typesafe", "openrouter"] },
           extension: { type: "array", items: { type: "string" } },
           maxBrowsers: { type: "integer", minimum: 1 },
           maxBrowserMemory: { type: "integer", minimum: 1 },

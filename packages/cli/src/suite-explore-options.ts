@@ -207,6 +207,7 @@ export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = 
   ignoreHostLoad: "#205: whether a check starts on a starved host is decided once, for the whole check: pass --ignore-host-load to `jevitate check`",
   real: "one model gateway per check: the suite's `ai` or `jevitate check --real`",
   fakeAi: "one model gateway per check: the suite's `ai` or `jevitate check --fake-ai`",
+  jevProvider: "one Jev provider per check: `jevitate check --jev-provider` (or JEVITATE_JEV_PROVIDER)",
   out: "one output directory per check (`jevitate check --out`); item results go to <out>/results",
   json: "one envelope per check (`jevitate check --json` / --json-out)",
   fileIssues: "a check is a CI gate: findings are reported in JUnit/SARIF/report.md, never filed mid-run",
