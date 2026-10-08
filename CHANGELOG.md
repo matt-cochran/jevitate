@@ -98,6 +98,14 @@ an OpenRouter key, so one key covers generation and judgment.
 - **Hang evidence names the indicator's container (#419):** a `ui-no-progress` hang records the stuck
   indicator's nearest landmark (dialog, header, form, …) as `elementContainer`.
 
+- **Managed instruction blocks survive upgrades (#431).** `jevitate init` finds its `AGENTS.md` block by
+  any `BEGIN/END JEVITATE SKILLS vN` marker pair and replaces it in place, so a future marker version
+  never appends a second block; the BEGIN line names the jevitate version that wrote it. A file whose
+  markers are broken (a BEGIN without its END, two blocks) is refused with how to fix it, never
+  appended to. `init --uninstall` removes the skill files and marked blocks `init` installed (edited
+  ones are skipped unless `--force`), and `--claude-md` opts into a pointer block in the project's
+  `CLAUDE.md`. `init` now names every file it skipped or refused.
+
 ### Fixed
 
 - **A toast countdown is not a busy indicator (#419).** Toast libraries render the auto-close
