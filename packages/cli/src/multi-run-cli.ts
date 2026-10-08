@@ -6,6 +6,7 @@ import { artifactStamp } from "./mission-journal.js";
 import { runMultiRun, type MultiRunPlan, type MultiRunResult, type RunEnvelope } from "./multi-run.js";
 import { setKillSummary } from "./kill-signal.js";
 import { clock } from "@jevitate/domain";
+import { withRunMetadata } from "./run-metadata.js";
 
 /**
  * The `explore --repeat/--persona` CLI glue (#141/#143): each run is the SAME `explore` command,
@@ -106,7 +107,7 @@ export async function runExploreMultiRun(args: ExploreMultiRunArgs): Promise<Mul
         const partial = onKill({ signal, exitCode, ...(missions[0] === undefined ? {} : { partial: missions[0].partial }) });
         return args.killOutput?.(partial);
       }),
-    runOnce: async ({ storageState, outDir: runDir }) => {
+    runOnce: async ({ storageState, persona, outDir: runDir }) => {
       const lines: string[] = [];
       const child = args.newProgram();
       child.exitOverride();
@@ -114,7 +115,8 @@ export async function runExploreMultiRun(args: ExploreMultiRunArgs): Promise<Mul
       const argv = ["explore", ...base, ...(storageState === undefined ? [] : ["--storage-state", storageState]), "--out", runDir, "--json"];
       let envelope: RunEnvelope;
       try {
-        await child.parseAsync(argv, { from: "user" });
+        // #426: the persona's name rides in the run's metadata scope (its result's `target.persona`).
+        await withRunMetadata(persona === undefined ? {} : { persona }, () => child.parseAsync(argv, { from: "user" }));
         envelope = lastEnvelope(lines);
       } catch (err) {
         envelope = { ok: false, error: { code: "E_EXPLORE_RUN", message: String(err instanceof Error ? err.message : err) } };

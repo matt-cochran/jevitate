@@ -2,6 +2,7 @@ import type { Feature } from "@jevitate/ai-core";
 import { featureKeysBody, type KeySourceReport, type KeyVerificationReport } from "./key-report.js";
 import type { Command } from "commander";
 import type { JsonEnvelope } from "./envelope.js";
+import { currentRunMetadata, stampRunMetadata } from "./run-metadata.js";
 import { EXIT_CODES, exitCodeForEnvelope, isUsageErrorCode } from "./exit-codes.js";
 
 /**
@@ -31,6 +32,8 @@ export interface EmitOptions<T> {
 }
 
 export function emitEnvelope<T>(program: Command, envelope: JsonEnvelope<T>, opts: EmitOptions<T>): void {
+  // #426: a tagged run's envelope carries its tags and structured target, like its persisted result.
+  if (envelope.ok && currentRunMetadata() !== undefined) envelope = { ...envelope, data: stampRunMetadata(envelope.data) as T };
   const out = program.configureOutput();
   if (opts.json) {
     out.writeOut?.(`${JSON.stringify(envelope)}\n`);

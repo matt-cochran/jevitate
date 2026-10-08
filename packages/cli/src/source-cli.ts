@@ -1,3 +1,4 @@
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { ParamValidationError } from "@jevitate/journey";
@@ -218,7 +219,8 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
       "Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
     )
     .option("--json", "emit a JSON envelope")
-    .action(async function (this: Command, name: string, journeyId: string) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "source run", async function (this: Command, name: string, journeyId: string) {
       const { param, storageState, json, ...emulationFlags } = this.opts<{
         param: Record<string, string>;
         storageState?: string;
@@ -284,5 +286,5 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail("E_SOURCE_RUN", String(err instanceof Error ? err.message : err)));
         }
       }
-    });
+    }));
 }

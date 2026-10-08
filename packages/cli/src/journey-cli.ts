@@ -1,3 +1,4 @@
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
@@ -146,7 +147,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas")
     .option("--json", "emit a JSON envelope")
-    .action(async function (this: Command, id: string) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "journey run", async function (this: Command, id: string) {
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where the Journey runs (unknown env / bad file → 64, nothing opened).
       let environment: ResolvedJourneyEnvironment | undefined;
@@ -309,7 +311,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail("E_JOURNEY_RUN", String(err)));
         }
       }
-    });
+    }));
 
   // #124 — promote a local Journey so it becomes discoverable/runnable (journey
   // find / MCP find_capabilities / run_journey), mirroring `mission target

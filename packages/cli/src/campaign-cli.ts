@@ -1,3 +1,4 @@
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { withEngine } from "./engine.js";
@@ -83,7 +84,8 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
     .option("--real", "use live Jev + OpenRouter gateways for the missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--json", "emit the JSON envelope (default: a human summary)")
-    .action(async function (this: Command, spec: string) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "campaign run", async function (this: Command, spec: string) {
       const o = this.opts<{ journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; json?: boolean }>();
       const emit = (envelope: Parameters<typeof emitCommandResult>[1], exitCode?: number): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "campaign run", human: formatCampaignHuman, ...(exitCode === undefined ? {} : { exitCode }) });
@@ -113,5 +115,5 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
         if (err instanceof CampaignSpecError) emit(fail(err.code, err.message));
         else emit(fail("E_CAMPAIGN_RUN", String(err instanceof Error ? err.message : err)));
       }
-    });
+    }));
 }

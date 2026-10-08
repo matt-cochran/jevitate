@@ -36,7 +36,8 @@ fields the same way:
 | `resultPath` | string | The persisted `<stem>.result.json`. The stem starts with the strategy (`explore-` for goal, `coverage-`, `exploratory-`, `adversarial-`, `feature-`, `usability-`); readers find a result by its content, never by its prefix. |
 | `sessionLost` | object | Goal runs with `--storage-state`, only when it happened: `{reason}` — the session was not honoured (the first page was a sign-in page: a login-like URL or a password field), so the run did not start signed in as that session. A warning, printed as a `WARNING` line; it does not change the outcome. |
 | `scope` | object | Coverage, exploratory and feature runs: the route scope the run was contained to — `routeGlobs`, and `source` (`start-url` when derived from the start URL, `route` when `--route`/`--scope app` widened or set it). The human output prints it as a `SCOPE` line. |
-| `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. |
+| `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. #426 adds structured fields: `startUrl` (where the run started), `strategy`, and `persona` (the persona name, for a `--persona` multi-run). Additive. |
+| `tags` | object | #426: the run's `--tag key=value` metadata (`{"feature": "checkout"}`), present only when the run was tagged. See [run tags](#run-tags). Additive. |
 | `engine` | object | The build that produced the result: `{version, commit, builtAt}`. |
 | `usage` | object | Model calls, tokens and cost. The CLI always sets it; a programmatic caller that does not track usage leaves it out. |
 | `failure` | object | Present when the run broke, proved nothing, or (goal) failed a check after the model's `done`. `failure.kind` says why the run ended `crashed` or `inconclusive` (e.g. `insufficient-coverage`, `vacuous-check`, `job-incomplete`, `degraded-environment`, `target-unresponsive`) or `failed` (`success-check-failed`), and `failure.message` names the cause. |
@@ -47,6 +48,35 @@ fields the same way:
 | `screenshotPaths`, `screenshotIndex`, `screenshotsSkipped` | string[], string, array | `--screenshots` runs only (#251): the masked images, the `index.md` contact sheet, and `{step, reason}` for each capture refused. Additive. |
 
 `verify-fix`, `ledger add`, `report`, `check` and `--repeat` voting all read defects from `defects`.
+
+## Run tags
+
+Every command that produces a run result takes `--tag key=value` (repeatable): `explore`,
+`journey run`, `check`, `load run`, `verify-fix`, `regression run`, `demo`, `mission run`,
+`source run` and `campaign run`. MCP run tools take the same thing as a `tags` object.
+A tag says which feature, journey or release a run exercised, so a release dashboard or a coverage
+tracker can attribute the run without guessing from its output path or its final URL (a run that
+ends on a login page still says what it tested).
+
+```bash
+jevitate explore --url https://app.example.test/checkout --strategy adversarial \
+  --tag feature=checkout --tag release=0.8.0
+jevitate report --tag feature=checkout --tag release=0.8.0   # only runs carrying BOTH tags
+jevitate diff before after --tag feature=checkout            # both sides narrowed to the tag
+```
+
+- A key is 1-64 of `[A-Za-z0-9_.-]`; a value is 1-256 characters with no control characters; a
+  key given twice, a malformed tag, or more than 32 tags is refused (`E_TAG_ARGS`, exit 64) before
+  anything runs.
+- Tags are stored in `result.tags` (the persisted `<stem>.result.json` and the `--json` envelope's
+  `data`), in a multi-run's per-run `run.envelope.json`, and on the run's line in the run index
+  (`~/.jevitate/run-index.jsonl`: `{project, path, tags}`).
+- `jevitate report --tag` and `jevitate diff --tag` filter with AND semantics: a run must carry
+  every given tag with exactly that value. A tag no run carries is refused (exit 64), never an
+  empty report.
+- **Tags are plain metadata and are never redacted.** Never put a secret in a tag: no password,
+  token, session id or API key, and no value read from a credential variable. jevitate does not
+  inspect tag values for secrets; it stores exactly what it is given.
 
 ## Multi-run results (`--repeat`, `--persona`)
 

@@ -48,7 +48,8 @@ import { ParamValidationError } from "@jevitate/journey";
 import type { JudgmentPort, UsageTracker } from "@jevitate/ai-core";
 import type { SelfHealer } from "@jevitate/runtime";
 import type { EmulationSpec } from "@jevitate/playwright";
-import { safeRunPolicy as defaultRunPolicy, type RunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { RunTagError, safeRunPolicy as defaultRunPolicy, validateRunTags, type RunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { stampRunMetadata, withRunMetadata } from "./run-metadata.js";
 import { JourneyRequiresAuthError, UnknownJourneyError, runJourneyProgrammatically } from "./journey-api.js";
 import { runVerifyFix, type RunVerifyFixOptions, type VerifyFixReport } from "./verify-fix-api.js";
 import { ExtensionMismatchError, type BrowserRunOptions } from "./browser-run-options.js";
@@ -564,6 +565,16 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       throw new McpArgError(err instanceof Error ? err.message : String(err));
     }
   };
+  /** #426: the run tools' `tags` object — validated like `--tag` (an invalid one is invalid_args, never dropped). */
+  const tagsArg = (args: Record<string, unknown>): { tags: Record<string, string> } | { error: Record<string, unknown> } => {
+    if (args.tags === undefined) return { tags: {} };
+    try {
+      return { tags: validateRunTags(args.tags, "tags") };
+    } catch (err) {
+      if (!(err instanceof RunTagError)) throw err;
+      return { error: { error: "invalid_args", code: err.code, message: err.message } };
+    }
+  };
   const verifyFixTool = async (args: Record<string, unknown>): Promise<McpToolResult> => {
     if (!deps.recordingsDir) {
       return errorResult({ error: "not_configured", message: "verify_fix requires recordingsDir" });
@@ -575,6 +586,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     ) {
       return errorResult({ error: "invalid_args", message: "verify_fix requires a mission result 'id' (or missionId) and a 16-hex 'fingerprint'" });
     }
+    const tagged = tagsArg(args);
+    if ("error" in tagged) return errorResult(tagged.error);
     let options: Omit<McpVerifyFixArgs, "resultPath" | "fingerprint">;
     try {
       options = verifyFixOptions(args);
@@ -604,13 +617,17 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       }
     }
     try {
-      const report = await verifyFixImpl({ ...options, resultPath, fingerprint: args.fingerprint });
-      const body = {
-        id: args.id,
-        ...(ref.missionId === undefined ? {} : { missionId: ref.missionId, resultId: ref.resultId }),
-        status: report.verdict,
-        ...report,
-      };
+      const fingerprint = args.fingerprint;
+      const report = await withRunMetadata({ tags: tagged.tags }, () => verifyFixImpl({ ...options, resultPath, fingerprint }));
+      const body = stampRunMetadata(
+        {
+          id: args.id,
+          ...(ref.missionId === undefined ? {} : { missionId: ref.missionId, resultId: ref.resultId }),
+          status: report.verdict,
+          ...report,
+        },
+        { tags: tagged.tags },
+      );
       // Neither is a pass: `inconclusive` proved nothing either way, `intermittent` (#74) means the
       // signal fired on SOME but not all fresh-context replays — never trustworthy as "fixed".
       return report.verdict === "inconclusive" || report.verdict === "intermittent" ? errorResult(body) : jsonResult(body);
@@ -717,7 +734,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "Replay a finding's reproduction (by mission result id — or a finished queue_exploration missionId — + fingerprint) N times in fresh browsers (default 3) — `jevitate verify-fix`. status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass). " +
         "#255 (same as the CLI flags): 'replays' (>= 1); 'recordVideo' (true or a directory: the before/after evidence pair — `evidence.before` is the run's own clip, `evidence.after` a captioned replay — plus videoPaths); 'screenshots'; 'headed'/'slowMo'; " +
         "'storageState' (a path inside the project or ~/.jevitate, never a repo's .jevitate/; overrides the mission's session); 'viewport' {width,height} or 'device' (refused when it differs from the finding's recorded emulation unless 'allowEmulationOverride'); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); " +
-        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'fixtureIdentity' (#243: 'name=<storageState path>' entries re-binding a fixture step's auth.identity; default: the identities the mission recorded); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with); 'actionDeltas' (#303, opt-in: the defect step's replayed delta vs the recorded one, as evidence on each attempt); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
+        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'fixtureIdentity' (#243: 'name=<storageState path>' entries re-binding a fixture step's auth.identity; default: the identities the mission recorded); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with); 'actionDeltas' (#303, opt-in: the defect step's replayed delta vs the recorded one, as evidence on each attempt); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
       inputSchema: {
         type: "object",
         properties: {
@@ -740,6 +757,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           extension: { type: "array", items: { type: "string" } },
           maxBrowsers: { type: "integer", minimum: 1 },
           maxBrowserMemory: { type: "integer", minimum: 1 },
+          tags: { type: "object", additionalProperties: { type: "string" } },
         },
         required: ["id", "fingerprint"],
       },
@@ -765,7 +783,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
         "'viewport' {width,height} or 'device' (mutually exclusive); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
-        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). A site-policy refusal is {error: throttled, retryAfter}.",
+        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret). A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
         properties: {
@@ -790,6 +808,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           maxBrowsers: { type: "integer", minimum: 1 },
           maxBrowserMemory: { type: "integer", minimum: 1 },
           actionDeltas: { type: "boolean" },
+          tags: { type: "object", additionalProperties: { type: "string" } },
         },
         required: ["id"],
       },
@@ -797,6 +816,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         if (typeof args.id !== "string" || args.id.length === 0) {
           return errorResult({ error: "invalid_args", message: "run_journey requires a non-empty string 'id'" });
         }
+        const tagged = tagsArg(args);
+        if ("error" in tagged) return errorResult(tagged.error);
         // Invariant #5: only id + params (+ a storageState PATH and the run options below) are
         // threaded through — any inline `steps`/`recording` in the arguments is deliberately ignored.
         let resolved: { params: Record<string, string>; storageState?: string; options: McpJourneyRunOptions; usage?: UsageTracker };
@@ -812,9 +833,10 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         const starved = await resourcePreflight({});
         if (starved !== null) return errorResult({ error: "refused", code: starved.error?.code, message: starved.error?.message });
         try {
-          const result = await runJourney(args.id, resolved.params, resolved.storageState, resolved.options);
-          // #163: a self-healing run's model usage lands on its result, as on the CLI.
-          return jsonResult(resolved.usage === undefined || result === null || typeof result !== "object" ? result : { ...result, usage: resolved.usage.snapshot() });
+          const id = args.id;
+          const result = await withRunMetadata({ tags: tagged.tags }, () => runJourney(id, resolved.params, resolved.storageState, resolved.options));
+          // #163: a self-healing run's model usage lands on its result, as on the CLI. #426: so do its tags.
+          return jsonResult(stampRunMetadata(resolved.usage === undefined || result === null || typeof result !== "object" ? result : { ...result, usage: resolved.usage.snapshot() }, { tags: tagged.tags }));
         } catch (err) {
           // A site-policy refusal (throttle, budget, quiet hours) is an answer the agent acts on — when to retry.
           if (err instanceof SiteGateRefusedError) {

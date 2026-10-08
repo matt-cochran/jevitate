@@ -1,3 +1,4 @@
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { Command } from "commander";
 import { MissingCredentialError } from "@jevitate/ai-core";
 import { ok, fail } from "./envelope.js";
@@ -208,7 +209,8 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
     .option("--real", "use live Jev + OpenRouter gateways for model-driven missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
-    .action(async function (this: Command) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "mission run", async function (this: Command) {
       const o = this.opts<
         {
           once?: boolean;
@@ -289,7 +291,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
       } catch (err) {
         emitJson(program, fail("E_MISSION_RUN", String(err instanceof Error ? err.message : err)));
       }
-    });
+    }));
 
   // #254: `mission queue` / `mission result` — MCP queue_exploration / get_mission_result from the CLI.
   registerMissionQueueCommands(program, mission, deps);

@@ -1,3 +1,4 @@
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import type { Command } from "commander";
 import { MissingCredentialError, formatUsageLine } from "@jevitate/ai-core";
 import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
@@ -60,7 +61,8 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
     .option("--real", "use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--json", "emit the JSON envelope (default: a one-line summary per item, then the envelope path)")
-    .action(async function (this: Command) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "check", async function (this: Command) {
       const o = this.opts<{
         suite: string;
         targetBuild?: string;
@@ -149,5 +151,5 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           emit(program, fail("E_CHECK", err instanceof Error ? err.message : String(err)), o.json === true);
         }
       }
-    });
+    }));
 }
