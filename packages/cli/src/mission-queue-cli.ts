@@ -32,6 +32,12 @@ export function missionResultExitCode(body: Record<string, unknown>): number {
   return typeof body.exitCode === "number" ? body.exitCode : EXIT_CODES.inconclusive;
 }
 
+/** `server-log 2 · http-5xx 1`, or `none` (#423). */
+function kindCounts(byKind: Record<string, unknown>): string {
+  const parts = Object.entries(byKind).flatMap(([k, n]) => (typeof n === "number" && n > 0 ? [`${k} ${n}`] : []));
+  return parts.length === 0 ? "none" : parts.join(" · ");
+}
+
 export function formatMissionResultHuman(data: unknown): string {
   if (!isRecord(data)) return "";
   const id = String(data.missionId ?? data.id);
@@ -40,9 +46,12 @@ export function formatMissionResultHuman(data: unknown): string {
   }
   if (data.status === "failed") return `FAILED  ${id}: ${String(data.error)} — the mission could not run\n`;
   const lines = [`${String(data.status).toUpperCase()}  ${id}${data.resultId === undefined ? "" : ` → ${String(data.resultId)}`}  (exit ${String(data.exitCode)})`];
-  if (data.goalOutcome !== undefined) lines.push(`  goal: ${String(data.goalOutcome)}`);
+  if (data.goalOutcome !== undefined) lines.push(`  goal: ${String(data.goalOutcome)}${typeof data.goalReason === "string" ? ` (${data.goalReason})` : ""}`);
   const result = isRecord(data.result) ? data.result : undefined;
-  if (result !== undefined && Array.isArray(result.defects)) lines.push(`  defects: ${result.defects.length}`);
+  // #423: the defect verdict by kind (structured), else (an older result) the defects' count.
+  const byKind = isRecord(data.defectOutcome) && isRecord(data.defectOutcome.byKind) ? data.defectOutcome.byKind : undefined;
+  if (byKind !== undefined) lines.push(`  defects: ${kindCounts(byKind)}`);
+  else if (result !== undefined && Array.isArray(result.defects)) lines.push(`  defects: ${result.defects.length}`);
   if (data.coverage !== undefined) lines.push(`  coverage: ${JSON.stringify(data.coverage)}`);
   lines.push(`next: jevitate mission result ${id} --json for the full typed result`);
   return `${lines.join("\n")}\n`;
@@ -62,6 +71,8 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
       .option("--max-actions <n>", "budget: max actions (bounded by the queue's ceiling)", positiveIntArg)
       .option("--max-decisions <n>", "budget: max decisions", positiveIntArg)
       .option("--max-candidates <n>", "budget: max candidates", positiveIntArg)
+      .option("--min-actions <n>", "goal-based (#424): the minimum actions before the model may conclude (capped by the budget; `explore --min-actions`)", positiveIntArg)
+      .option("--min-distinct-states <n>", "goal-based (#424): the minimum distinct page states before the model may conclude (`explore --min-distinct-states`)", positiveIntArg)
       .option("--invariants <file>", "app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret)")
       // #255 (MCP queue_exploration parity): media next to the result — never a path in a queued request.
       .option("--record-video", "record a video of the run (headless too), written next to its result; listed as videoPaths")
@@ -85,6 +96,8 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
           maxActions?: number;
           maxDecisions?: number;
           maxCandidates?: number;
+          minActions?: number;
+          minDistinctStates?: number;
           invariants?: string;
           recordVideo?: boolean;
           screenshots?: boolean | string;
@@ -144,6 +157,14 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
         ...(o.route === undefined ? {} : { route: o.route }),
         ...(successAssertion === undefined ? {} : { successAssertion }),
         ...(Object.keys(budget).length === 0 ? {} : { budget }),
+        ...(o.minActions === undefined && o.minDistinctStates === undefined
+          ? {}
+          : {
+              minEffort: {
+                ...(o.minActions === undefined ? {} : { minActions: o.minActions }),
+                ...(o.minDistinctStates === undefined ? {} : { minDistinctStates: o.minDistinctStates }),
+              },
+            }),
         ...(invariants === undefined ? {} : { invariants }),
         ...(emulation?.viewport === undefined ? {} : { viewport: emulation.viewport }),
         ...(emulation?.device === undefined ? {} : { device: emulation.device }),

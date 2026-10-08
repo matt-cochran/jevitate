@@ -1,6 +1,7 @@
 // check-execute.ts — `jevitate check` item execution (#231).
 import { triagedServerLog } from "./explore-shared.js";
 import { recordRun } from "./run-index.js";
+import { stampRunMetadata } from "./run-metadata.js";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
 import { writeFile } from "node:fs/promises";
@@ -15,7 +16,7 @@ import { CLI_ADVERSARIAL_STRATEGIES, parseSuccessSpec } from "./explore-api.js";
 import { type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import { loadRunFile } from "./report-api.js";
-import { GOAL_ONLY_OUTCOMES, clock } from "@jevitate/domain";
+import { GOAL_ONLY_OUTCOMES, clock, runTagsOf } from "@jevitate/domain";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { type Json, type Planned, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
 import { applyJourneyEnvironment } from "./environments.js";
@@ -194,8 +195,10 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
       },
     };
-    await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-    recordRun(path); // #213: a bare `report` in this project finds it
+    // #426: the check's --tag metadata and structured target ride on every item result.
+    const stamped = { ...record, result: stampRunMetadata(record.result) };
+    await writeFile(path, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
+    recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
     const actions = failed && at !== undefined ? at + 1 : recordingSteps(j);
     return { status: "ran", resultPath: path, outcome: r.outcome, actions };
   }
@@ -234,6 +237,14 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         gen,
         usage,
         bounds: bounds(g.maxActions, g.maxDecisions, remaining),
+        ...(x.minActions === undefined && x.minDistinctStates === undefined
+          ? {}
+          : {
+              minEffort: {
+                ...(x.minActions === undefined ? {} : { minActions: x.minActions }),
+                ...(x.minDistinctStates === undefined ? {} : { minDistinctStates: x.minDistinctStates }),
+              },
+            }),
         ...withSecretFields,
         ...withSecrets,
         ...withFixture,
@@ -247,10 +258,15 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       // cannot prove a goal was reached OR missed, so the goal's own judgment-driven ending
       // (`succeeded`/`failed`/`exhausted`/`blocked`: `GOAL_ONLY_OUTCOMES`) is honestly inconclusive
       // under it, never a gating FAILED. A genuine hard signal the run hit along the way (an
-      // invariant violation, a 5xx, a hang, a crash — `goalOutcome` holding a shared
-      // `MissionOutcome` directly, not a goal-only one) never depended on the judge and still
-      // gates. `succeeded` needs no override: it is the clean case.
-      if (ctx.opts.aiMode === "fake" && (GOAL_ONLY_OUTCOMES as readonly string[]).includes(r.goalOutcome) && r.goalOutcome !== "succeeded") {
+      // invariant violation, a 5xx, a server-log defect — #423: `defectOutcome.status: "defects"`; a
+      // hang or a crash — `goalOutcome` holding a shared `MissionOutcome`) never depended on the
+      // judge and still gates. `succeeded` needs no override: it is the clean (or defects) case.
+      if (
+        ctx.opts.aiMode === "fake" &&
+        (GOAL_ONLY_OUTCOMES as readonly string[]).includes(r.goalOutcome) &&
+        r.goalOutcome !== "succeeded" &&
+        r.defectOutcome.status === "none"
+      ) {
         return {
           status: "error",
           resultPath: r.resultPath,
@@ -433,8 +449,10 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
       },
     };
-    await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-    recordRun(path); // #213: a bare `report` in this project finds it
+    // #426: the check's --tag metadata and structured target ride on every item result.
+    const stamped = { ...record, result: stampRunMetadata(record.result) };
+    await writeFile(path, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
+    recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
     if (r.verdict === "inconclusive") {
       return { status: "error", resultPath: path, outcome: r.verdict, actions: 0, error: { type: "inconclusive", message: `verify-fix inconclusive: ${r.reason}` } };
     }

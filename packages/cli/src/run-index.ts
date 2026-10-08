@@ -8,7 +8,7 @@ import { findGitRoot, findProjectDir, homeDataRoot, type LayoutDeps } from "./pr
  * and still finds the runs written to an `--out` dir.
  *
  * Mechanism: every persisted result is recorded, best-effort, as one line
- * `{"project": <key>, "path": <absolute result path>}` in the per-user index `~/.jevitate/run-index.jsonl`
+ * `{"project": <key>, "path": <absolute result path>, "tags"?: {…}}` (#426: the run's `--tag`s) in the per-user index `~/.jevitate/run-index.jsonl`
  * (machine-local, like the logs themselves; never in a repo). The project key is the directory that
  * holds the project's `.jevitate/`, else the git root of the working directory, else the working
  * directory itself. A bare report reads: the project's own `.jevitate/logs` (only this project writes
@@ -35,12 +35,14 @@ export function projectKey(deps: LayoutDeps = {}): string {
 }
 
 /** Records one persisted result for the current project. Never throws: an index is a convenience. */
-export function recordRun(resultPath: string, deps: RunIndexDeps = {}): void {
+export function recordRun(resultPath: string, deps: RunIndexDeps & { readonly tags?: Readonly<Record<string, string>> } = {}): void {
   if ((deps.env ?? process.env)["JEVITATE_RUN_INDEX"] === "off") return;
   try {
     const path = runIndexPath(deps);
     mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, `${JSON.stringify({ project: projectKey(deps), path: resolve(resultPath) })}\n`, { encoding: "utf8", mode: 0o600 });
+    // #426: the run's tags ride on its index line, so an external tool attributes a run without opening it.
+    const tags = deps.tags !== undefined && Object.keys(deps.tags).length > 0 ? { tags: deps.tags } : {};
+    appendFileSync(path, `${JSON.stringify({ project: projectKey(deps), path: resolve(resultPath), ...tags })}\n`, { encoding: "utf8", mode: 0o600 });
   } catch {
     // best-effort: a run's result is never replaced by an index failure
   }

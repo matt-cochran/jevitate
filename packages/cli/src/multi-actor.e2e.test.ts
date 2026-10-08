@@ -90,6 +90,8 @@ afterAll(async () => {
 
 interface RunData {
   outcome: string;
+  missionOutcome: string;
+  defectOutcome: { status: string; byKind: Record<string, number> };
   reason?: string;
   resultPath: string;
   defects: Array<{ fingerprint: string; invariant: { id: string; kind: string; crossActor?: { owner: string; observer: string; capture: string } } }>;
@@ -157,7 +159,10 @@ describe("multi-actor missions: cross-tenant isolation (#147)", () => {
       const from = tenancy.log.length;
       const data = await explore([`a=${stateA}`, `b=${stateB}`], out);
 
-      expect(data.outcome).toBe("defects-found");
+      // #423: the invariants are the defect verdict; the goal keeps its own ending.
+      expect(data.missionOutcome).toBe("defects-found");
+      expect(data.outcome).not.toBe("defects-found");
+      expect(data.defectOutcome).toEqual({ status: "defects", byKind: { invariant: 2 } });
       expect(data.defects.map((d) => d.invariant.id).sort()).toEqual(["not-listed-cross-tenant", "not-openable-cross-tenant"]);
       for (const d of data.defects) expect(d.invariant.crossActor).toMatchObject({ owner: "a", observer: "b" });
       expect(data.target.actors?.map((a) => `${a.name}:${a.role}`)).toEqual(["a:primary", "b:observer"]);

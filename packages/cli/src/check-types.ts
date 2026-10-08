@@ -1,3 +1,4 @@
+import type { ApprovalChannel } from "@jevitate/journey";
 // check-types.ts — `jevitate check` option, result and error types (#231).
 import { type GenerationPort, type JudgmentPort, type UsageAggregate, type UsageTracker } from "@jevitate/ai-core";
 import type { BrowserPort } from "@jevitate/playwright";
@@ -108,13 +109,20 @@ export interface RunCheckOptions {
   readonly nowIso?: () => string;
   /** The suite file as the caller named it (SARIF's physical location). Default: its absolute path. */
   readonly suiteUri?: string;
+  /**
+   * #437 `--require-approvals`: every promoted Journey (in the default and each target's journeys
+   * dir) and every approved persona/job (in `catalogDir`) needs a current approval made over one of
+   * `allowedChannels` — else a gating `approval` finding (exit 1, JUnit + SARIF like any other).
+   */
+  readonly requireApprovals?: { readonly allowedChannels: readonly ApprovalChannel[]; readonly catalogDir: string | null };
 }
 
 export type ItemKind = "journey" | "goal" | "mission" | "verify-fix";
 
 export interface CheckItemReport {
   readonly target: string;
-  readonly kind: ItemKind;
+  /** #437: `approvals` — the `--require-approvals` item (target `approvals`, one per check). */
+  readonly kind: ItemKind | "approvals";
   readonly name: string;
   readonly strategy?: string;
   /** `ran`: a result exists; `error`: the item could not prove anything; `skipped`: not affected by `--changed-routes`. */

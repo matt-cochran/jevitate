@@ -11,6 +11,7 @@ import { resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { writeKillSnapshot } from "./storage-state-snapshot.js";
 import { listVideos } from "./browser-run-options.js";
+import { currentRunMetadata, stampRunMetadata, type RunMetadata } from "./run-metadata.js";
 
 /**
  * Crash-safe termination (#94). `jevitate explore`/`explore --strategy usability` runs are commonly
@@ -212,6 +213,8 @@ export type KillSummary = (killed: { signal: KillSignal; exitCode: number; missi
 let installed = false;
 /** Every armed mission, in arming order, with the kill listener scoped to the context that ran it. */
 const armed = new Map<KillableMission, KilledListener | undefined>();
+/** #426: each armed mission's run metadata (tags, persona), captured at arm time — a signal handler runs outside its scope. */
+const armedMeta = new Map<KillableMission, RunMetadata | undefined>();
 let terminating = false;
 let output: KillSwitchOutput = "none";
 let summary: KillSummary | undefined;
@@ -252,13 +255,14 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
     outcome: "inconclusive",
     missionOutcome: "inconclusive",
     // #217: a goal run's own ending travels as `goalOutcome` (a kill is the shared `inconclusive`).
-    ...(mission.strategy === "goal" ? { goalOutcome: "inconclusive" } : {}),
+    ...(mission.strategy === "goal" ? { goalOutcome: "inconclusive", goalReason: "broken-run" } : {}),
     reason: `interrupted by ${signal} after ${steps} step${steps === 1 ? "" : "s"}`,
     stop: "terminated",
     signal,
     steps,
     exitCode: code,
     defects: [],
+    defectOutcome: { status: "none", byKind: {} },
     hangs: [],
     recordingPaths: [mission.recordingPath],
     ...(videoPaths === undefined ? {} : { videoPaths }),
@@ -299,7 +303,7 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     let partial: Record<string, unknown> | undefined;
     let resultPath: string | undefined;
     try {
-      partial = partialResult(mission, signal, code, deps);
+      partial = stampRunMetadata(partialResult(mission, signal, code, deps), armedMeta.get(mission));
       // #163: a killed run's per-call usage sidecar too (the calls it made before the signal).
       const u = mission.usage;
       const ledger: UsageLedger | undefined = u?.calls === undefined ? undefined : { snapshot: () => u.snapshot(), calls: () => u.calls?.() ?? [] };
@@ -342,6 +346,7 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     }
   }
   armed.clear();
+  armedMeta.clear();
   // #220: the orchestrator's own partial aggregate — even when no mission was armed (killed between
   // two runs of a multi-run) — written and printed synchronously, like everything above.
   if (summary !== undefined) {
@@ -405,8 +410,10 @@ export function installMissionKillSwitch(deps: KillSwitchDeps = realDeps): void 
 export function armMissionKillSwitch(mission: KillableMission, deps: KillSwitchDeps = realDeps): () => void {
   install(deps);
   armed.set(mission, scopedListener.getStore());
+  armedMeta.set(mission, currentRunMetadata());
   return () => {
     armed.delete(mission);
+    armedMeta.delete(mission);
   };
 }
 
@@ -460,6 +467,7 @@ export function onMissionKilled(listener: KilledListener): () => void {
 export function __resetKillSwitchForTests(): void {
   installed = false;
   armed.clear();
+  armedMeta.clear();
   terminating = false;
   output = "none";
   summary = undefined;

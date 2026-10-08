@@ -181,6 +181,11 @@ export interface MissionRequest {
    * fields. A name only — the session itself is the operator's, never the request's.
    */
   persona?: string;
+  /**
+   * #424 (`goal-based` only): the minimum exploration effort before the model may conclude — the
+   * `explore --min-actions` / `--min-distinct-states` values, capped by the budget at run time.
+   */
+  minEffort?: { minActions?: number; minDistinctStates?: number };
 }
 
 /** #255: the screenshot modes a queued mission may ask for (`--screenshots [mode]`, never a dir). */
@@ -199,8 +204,11 @@ function strategyShapeIssues(req: {
   successAssertion?: Assertion;
   viewport?: { width: number; height: number };
   device?: string;
+  minEffort?: { minActions?: number; minDistinctStates?: number };
 }): string[] {
   const issues: string[] = [];
+  // #424: the minimum effort gates the goal loop's own endings — a goal-based mission's.
+  if (req.minEffort !== undefined && req.strategy !== "goal-based") issues.push(`minEffort is not accepted for strategy ${req.strategy} (goal-based only)`);
   // #149: mutually exclusive, whatever the strategy.
   if (req.viewport !== undefined && req.device !== undefined) issues.push("viewport and device are mutually exclusive; pass exactly one");
   if (req.strategy === "goal-based") {
@@ -236,6 +244,10 @@ const MissionRequestFields = {
   screenshots: z.enum(QUEUED_SCREENSHOT_MODES).optional(),
   evidenceVideo: z.boolean().optional(),
   persona: z.string().regex(SAFE_ID_RE, "persona must be a name (letters, digits, '.', '_', '-'), never a path").optional(),
+  minEffort: z
+    .object({ minActions: z.number().int().positive().optional(), minDistinctStates: z.number().int().positive().optional() })
+    .strict()
+    .optional(),
 };
 
 export const MissionRequestSchema: z.ZodType<MissionRequest> = z

@@ -9,6 +9,7 @@ import {
   pendingEvidence,
   probeResponsive,
   visibleBusyIndicator,
+  visibleBusyIndicatorContainer,
   type HangSignal,
 } from "./hang.js";
 import { contentHash, clock } from "@jevitate/domain";
@@ -272,6 +273,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
 
   // 3. A settled page that still shows a busy indicator: give it the rest of the ceiling to finish.
   let stuckBusy: string | null = null;
+  let stuckBusyContainer: string | null = null;
   let busyWait: { requestsCompleted: number; indicatorChanged: boolean } | undefined;
   if (settle.settled) {
     const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
@@ -289,6 +291,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
       // A target can declare an indicator (or a route) where a lasting busy state is expected.
       if (!gone && !ignoreNoProgress(busy) && !ignoreNoProgress(hangRoute(page.url()))) {
         stuckBusy = busy;
+        stuckBusyContainer = await page.evaluate(visibleBusyIndicatorContainer).catch(() => null);
         const now = await page.evaluate(visibleBusyIndicator).catch(() => null);
         busyWait = {
           // A `--settle-ignore`d beacon is no sign of the app working on the job (#284).
@@ -374,6 +377,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
           pending: evidence,
           lastState: { signature: snap.signature, controls: snap.controls.map((c) => c.summary) },
           ...(stuckBusy === null ? {} : { element: stuckBusy }),
+          ...(stuckBusy === null || stuckBusyContainer === null ? {} : { elementContainer: stuckBusyContainer }),
         };
 
   const waited = busyWait === undefined ? {} : { busyWait };

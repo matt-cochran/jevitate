@@ -1,10 +1,11 @@
 import {
   collectKeys,
-  FEATURE_KEYS,
+  featureKeys,
   type CredentialStore,
   type SecureKeyIO,
   type Feature,
   type CredentialKey,
+  type JevProvider,
 } from "@jevitate/ai-core";
 import type { KeySourceReport, KeyVerificationReport } from "./key-report.js";
 
@@ -42,6 +43,8 @@ export interface CollectAllMissingKeysOptions {
   replace?: boolean;
   /** #291: checks each entered value before it is persisted (throws to refuse it). */
   check?: (key: CredentialKey, value: string) => Promise<void>;
+  /** #429: the Jev provider override (`JEVITATE_JEV_PROVIDER`) — which key judgment needs. */
+  jevProvider?: JevProvider;
 }
 
 /**
@@ -58,19 +61,30 @@ export async function collectAllMissingKeys(
 ): Promise<KeyCollectionReport> {
   const report = {} as KeyCollectionReport;
   const interactive = opts.interactive ?? true;
+  // #429: a key entered for an earlier feature counts as configured for a later one — the OpenRouter
+  // key just entered for generation also satisfies judgment (Jev through OpenRouter), so it is not
+  // asked for a TypeSafe key too.
+  const entered = new Set<CredentialKey>();
+  const view: CredentialStore = { detect: (k) => entered.has(k) || store.detect(k), read: (k) => store.read(k) };
   for (const feature of FEATURES) {
-    const required = [...FEATURE_KEYS[feature]];
+    const required = featureKeys(feature, view, opts.jevProvider);
     if (interactive) {
-      const collected = await collectKeys(feature, store, io, {
-        ...(opts.replace === true ? { replace: true } : {}),
-        ...(opts.check === undefined ? {} : { check: opts.check }),
-      });
-      report[feature] = { required, collected };
+      // `--replace-keys`: a key already re-entered for an earlier feature is not asked for twice.
+      const alreadyEntered = opts.replace === true && required.every((k) => entered.has(k));
+      const collected = alreadyEntered
+        ? []
+        : await collectKeys(feature, view, io, {
+            ...(opts.replace === true ? { replace: true } : {}),
+            ...(opts.check === undefined ? {} : { check: opts.check }),
+            ...(opts.jevProvider === undefined ? {} : { jevProvider: opts.jevProvider }),
+          });
+      for (const k of collected) entered.add(k);
+      report[feature] = { required: featureKeys(feature, view, opts.jevProvider), collected };
     } else {
       // Never prompt: report what's still missing instead of hanging on a closed stdin. `missing`
       // is omitted (not an empty array) when nothing is missing, so a fully-configured non-TTY
       // run reads identically to the interactive path's `{ required, collected: [] }`.
-      const missing = required.filter((k) => !store.detect(k));
+      const missing = required.filter((k) => !view.detect(k));
       report[feature] = { required, collected: [], ...(missing.length > 0 ? { missing } : {}) };
     }
   }

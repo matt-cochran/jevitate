@@ -199,7 +199,7 @@ describe("jevitate demo — served (#249)", () => {
 
       // One approval: shows the Journey + annotations, promotes it, applies them, renders final outputs.
       const finalDir = join(dir, "final");
-      const human = await cli(journeysDir, judge, ["demo", "approve", d.id, "--out", finalDir, "--pace", "0"]);
+      const human = await cli(journeysDir, judge, ["demo", "approve", d.id, "--out", finalDir, "--pace", "0", "--non-interactive-approval", "test"]);
       expect(human.err).toBe("");
       expect(human.exitCode).toBe(0);
       expect(human.out).toContain(`journey '${d.id}'`);
@@ -207,6 +207,9 @@ describe("jevitate demo — served (#249)", () => {
       expect(human.out).toContain(`approved: journey '${d.id}' promoted`);
       const approved = await new FsJourneyStore(journeysDir).get(d.id);
       expect(approved?.metadata.promoted).toBe(true);
+      // #432: the approval shows the review sheet and is recorded, bound to the content hash.
+      expect(human.out).toContain("CONTENT HASH");
+      expect(approved?.metadata.approval?.contentHash).toMatch(/^[0-9a-f]{64}$/);
       expect(flatJourneySteps(approved!).every((s) => (s.recorded.objective ?? "") !== "")).toBe(true);
       expect(approved?.metadata.successCriteria?.[0]?.check).toBeDefined(); // the code check survives approval
       const finalVtt = readFileSync(join(finalDir, "demo.vtt"), "utf8");
@@ -222,7 +225,7 @@ describe("jevitate demo — served (#249)", () => {
       expect(final.every((w) => w === "null")).toBe(true);
 
       // Approving again: there is no demo draft any more (usage error, nothing re-rendered).
-      const again = await cli(journeysDir, judge, ["demo", "approve", d.id, "--json"]).catch((e: { exitCode?: number }) => ({ out: "", err: "", exitCode: e.exitCode }));
+      const again = await cli(journeysDir, judge, ["demo", "approve", d.id, "--json", "--non-interactive-approval", "test"]).catch((e: { exitCode?: number }) => ({ out: "", err: "", exitCode: e.exitCode }));
       expect(again.exitCode).toBe(64);
     },
     600_000,

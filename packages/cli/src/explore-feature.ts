@@ -10,7 +10,7 @@ import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type InvariantSpec } from "@jevitate/recording";
 import type { HostHealthSampler, InvariantDefect, SafetyConfig } from "@jevitate/explore";
-import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
+import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import {
   runFeatureMission,
   assertAuthorizedExploreTarget,
@@ -29,7 +29,7 @@ import {
 import { combineOutcomes, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
-import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
+import { MISSION_RESULT_SCHEMA_VERSION, defectFields, unifiedDefects } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { finishHostHealth } from "./host-health-run.js";
@@ -151,6 +151,8 @@ export type FeatureCliMissionResult = Omit<FeatureRunResult, "outcome"> & {
   readonly target: MissionTarget;
   /** EVERY defect the run found (#195): declared-invariant defects (#86, each with its own path Recording) and `server-log` defects (#142). */
   readonly defects: Array<InvariantDefect | Http5xxDefect | ServerLogDefect>;
+  /** #421/#423: the gating defects counted per kind (`defectOutcomeOf(defects)`). */
+  readonly defectOutcome: DefectOutcome;
   readonly invariantSpec?: InvariantSpec;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
@@ -352,9 +354,11 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       },
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...serverLogResult(serverLogRun),
-      defects: unifiedDefects<InvariantDefect | Http5xxDefect>(
-        [...(opts.invariants === undefined ? [] : (result.invariantDefects ?? [])), ...httpDefects],
-        serverLogRun?.defects,
+      ...defectFields(
+        unifiedDefects<InvariantDefect | Http5xxDefect>(
+          [...(opts.invariants === undefined ? [] : (result.invariantDefects ?? [])), ...httpDefects],
+          serverLogRun?.defects,
+        ),
       ),
       resultPath: resultPathFor(journal.recordingPath),
       usage: NO_MODEL_USAGE,

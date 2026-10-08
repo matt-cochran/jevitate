@@ -1,6 +1,6 @@
 import type { ConsolidatedDefect } from "./consolidate.js";
 import { DIFF_STATUSES, type FindingsDiff } from "./diff.js";
-import type { RunRecord } from "./extract.js";
+import { environmentCausesOf, type RunRecord } from "./extract.js";
 
 /** The consolidated defect list (#139) as markdown, with the baseline diff (#138) when given. */
 export interface ReportMarkdownInput {
@@ -64,6 +64,19 @@ function defectSection(d: ConsolidatedDefect, status?: string): string[] {
   return lines;
 }
 
+/** #423: ` (goal: blocked, not-found)` beside the verdict — the goal's ending and why, never in its place. */
+function goalText(r: RunRecord): string {
+  if (r.goalOutcome === undefined) return "";
+  return ` (goal: ${r.goalOutcome}${r.goalReason === undefined ? "" : `, ${r.goalReason}`})`;
+}
+
+/** #423: the run's defects by kind (`server-log 2, http-5xx 1`), `none`, or empty for an older result. */
+function defectsText(r: RunRecord): string {
+  if (r.defectOutcome === undefined) return "";
+  const kinds = Object.entries(r.defectOutcome.byKind).filter(([, n]) => n > 0);
+  return kinds.length === 0 ? "none" : kinds.map(([k, n]) => `${k} ${n}`).join(", ");
+}
+
 export function renderReportMarkdown(input: ReportMarkdownInput): string {
   const hard = input.defects.filter((d) => d.severity === "hard");
   const advisory = input.defects.filter((d) => d.severity === "advisory");
@@ -101,13 +114,28 @@ export function renderReportMarkdown(input: ReportMarkdownInput): string {
   out.push("## Advisory findings", "", "Advisory findings (UX, 4xx-correlated console errors, Jev flags) never gate on their own.", "");
   if (advisory.length === 0) out.push("None.", "");
   for (const d of advisory) out.push(...defectSection(d, statusOf.get(d.key)));
+  // #422: environment/config faults, ONCE for the whole batch — fix them in setup; never defects.
+  const environment = environmentCausesOf(input.runs);
+  if (environment.length > 0) {
+    out.push(
+      "## Environment faults",
+      "",
+      "Backend log lines classed `environment` (`.jevitate/log-classes.json` or a built-in rule): fix these in the test environment's setup. They are not defects and never gate.",
+      "",
+      "| rule | source | message | lines | runs |",
+      "| --- | --- | --- | --- | --- |",
+      ...environment.map((c) => `| \`${c.ruleId}\` | ${cell(c.source)} | ${cell(c.message.slice(0, 200))} | ${c.count} | ${c.runs}/${input.runs.length} |`),
+      "",
+    );
+  }
   out.push(
     "## Runs",
     "",
-    "| run | mode | target | started | outcome | build |",
-    "| --- | --- | --- | --- | --- | --- |",
+    "| run | mode | target | started | outcome | defects | build |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
     ...input.runs.map(
-      (r) => `| \`${r.runId}\` | ${r.mode} | ${r.target ?? ""} | ${r.startedAt ?? ""} | ${r.missionOutcome ?? ""}${r.goalOutcome === undefined ? "" : ` (goal: ${r.goalOutcome})`} | ${r.targetBuild ?? ""} |`,
+      (r) =>
+        `| \`${r.runId}\` | ${r.mode} | ${r.target ?? ""} | ${r.startedAt ?? ""} | ${r.missionOutcome ?? ""}${goalText(r)} | ${defectsText(r)} | ${r.targetBuild ?? ""} |`,
     ),
     "",
   );

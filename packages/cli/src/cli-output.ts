@@ -2,6 +2,7 @@ import type { Feature } from "@jevitate/ai-core";
 import { featureKeysBody, type KeySourceReport, type KeyVerificationReport } from "./key-report.js";
 import type { Command } from "commander";
 import type { JsonEnvelope } from "./envelope.js";
+import { currentRunMetadata, stampRunMetadata } from "./run-metadata.js";
 import { EXIT_CODES, exitCodeForEnvelope, isUsageErrorCode } from "./exit-codes.js";
 
 /**
@@ -31,6 +32,8 @@ export interface EmitOptions<T> {
 }
 
 export function emitEnvelope<T>(program: Command, envelope: JsonEnvelope<T>, opts: EmitOptions<T>): void {
+  // #426: a tagged run's envelope carries its tags and structured target, like its persisted result.
+  if (envelope.ok && currentRunMetadata() !== undefined) envelope = { ...envelope, data: stampRunMetadata(envelope.data) as T };
   const out = program.configureOutput();
   if (opts.json) {
     out.writeOut?.(`${JSON.stringify(envelope)}\n`);
@@ -123,7 +126,8 @@ export function formatMissionHuman(result: unknown): string {
   // own defects/hangs arrays are typically empty for these (the goal's own check failed, not a
   // discovered defect) — a "DEFECTS-FOUND … 0 defect(s)" headline self-contradicts. Lead with the
   // goal's own verdict and why instead; missionOutcome/goalOutcome stay canonical in --json (#217).
-  const selfContradicting = goal === "failed" || goal === "exhausted" || goal === "blocked";
+  // #423: only when the run found no gating defect — with defects, the canonical headline counts them.
+  const selfContradicting = (goal === "failed" || goal === "exhausted" || goal === "blocked") && gating.length === 0;
   if (selfContradicting) {
     const detail = goalFailureDetail(result);
     lines.push(`${goal.toUpperCase()}: ${strategy}${target === undefined ? "" : ` ${target}`}${detail === undefined ? "" : ` (${detail})`}`);
@@ -135,8 +139,15 @@ export function formatMissionHuman(result: unknown): string {
   const own = str(result.outcome);
   if (goal !== undefined) {
     const stop = str(result.stop);
-    lines.push(`${tag("GOAL")}${goal}${stop === undefined ? "" : ` (stop: ${stop})`}`);
+    // #423: the goal's structured miss reason beside its ending.
+    const why = [str(result.goalReason), stop === undefined ? undefined : `stop: ${stop}`].filter((s): s is string => s !== undefined);
+    lines.push(`${tag("GOAL")}${goal}${why.length === 0 ? "" : ` (${why.join(", ")})`}`);
   } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
+  // #421/#423: the defect verdict by kind, orthogonal to the goal's (none when the run found none).
+  if (isRecord(result.defectOutcome) && isRecord(result.defectOutcome.byKind)) {
+    const kinds = Object.entries(result.defectOutcome.byKind).flatMap(([k, n]) => (typeof n === "number" && n > 0 ? [`${k} ${n}`] : []));
+    lines.push(`${tag("DEFECTS")}${kinds.length === 0 ? "none" : kinds.join(" · ")}`);
+  }
   const scope = scopeLine(result.scope);
   if (scope !== undefined) lines.push(`${tag("SCOPE")}${scope}`);
   // #293: where a journey-anchored run branched off its Journey.
@@ -148,6 +159,10 @@ export function formatMissionHuman(result: unknown): string {
   if (isRecord(result.sessionLost) && str(result.sessionLost.reason) !== undefined) lines.push(`${tag("WARNING")}${str(result.sessionLost.reason)}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d), ...evidenceLines(d));
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
+  // #422: environment/config faults and expected validation errors — named, never counted as defects.
+  const envCauses = isRecord(result.environmentFaults) ? arr(result.environmentFaults.causes).filter(isRecord) : [];
+  for (const c of envCauses) lines.push(`${tag("ENV-FAULT")}${causeText(c)} (fix in setup; not a defect)`);
+  for (const c of arr(result.expectedValidation).filter(isRecord)) lines.push(`${tag("EXPECTED")}${causeText(c)} (expected validation; not a defect)`);
   if (isRecord(result.failure)) {
     lines.push(`${tag("REASON")}${str(result.failure.kind) ?? "failure"}: ${str(result.failure.message) ?? ""}`);
     // #398: a stale journey prefix shows what the page showed, so "unavailable" reads differently from "clicked too early".
@@ -161,6 +176,11 @@ export function formatMissionHuman(result: unknown): string {
   lines.push(...deltaLines(result));
   const answer = answerLine(result.answer);
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
+  lines.push(...partialReportLines(result.partialReport));
+  const depth = depthLine(result.depth);
+  if (depth !== undefined) lines.push(`${tag("DEPTH")}${depth}`);
+  // #424: the warnings about the verdict (a minimum effort capped by the budget, a vacuous check).
+  for (const w of arr(result.checkWarnings)) if (str(w) !== undefined) lines.push(`${tag("WARNING")}${str(w)}`);
   // #245: the run's --record-video files.
   for (const v of arr(result.videoPaths)) if (str(v) !== undefined) lines.push(`${tag("VIDEO")}${str(v)}`);
   lines.push(...screenshotLines(result));
@@ -169,6 +189,12 @@ export function formatMissionHuman(result: unknown): string {
   const firstFp = [...gating, ...hangs].find((d) => d.fingerprint !== undefined)?.fingerprint;
   lines.push(nextHint(firstFp, resultPath));
   return `${lines.join("\n")}\n`;
+}
+
+/** `<rule>: <source> "<message>" ×N` — one classified backend-log cause (#422). */
+function causeText(c: Record<string, unknown>): string {
+  const count = typeof c.count === "number" && c.count > 1 ? ` ×${c.count}` : "";
+  return `${str(c.ruleId) ?? "?"}: ${str(c.source) ?? "?"} "${str(c.message) ?? ""}"${count}`;
 }
 
 /** Most per-step delta lines the human output shows (the latest ones; `--json` has every step). */
@@ -241,6 +267,47 @@ function uxLines(result: Record<string, unknown>): string[] {
 }
 
 /**
+ * #424: how deep a goal run went — "4 distinct state(s) on 4 page(s), 3 action(s), 0 form(s) submitted"
+ * plus the minimum effort and whether it was met.
+ */
+function depthLine(depth: unknown): string | undefined {
+  if (!isRecord(depth) || typeof depth.distinctStates !== "number") return undefined;
+  const n = (k: string): string => (typeof depth[k] === "number" ? String(depth[k]) : "?");
+  const base = `${n("distinctStates")} distinct state(s) on ${n("distinctPages")} page(s), ${n("actions")} action(s), ${n("formsSubmitted")} form(s) submitted`;
+  const m = depth.minimum;
+  if (!isRecord(m)) return base;
+  return `${base} · minimum ${String(m.minActions)} action(s) / ${String(m.minDistinctStates)} state(s) (${str(m.source) ?? "?"}): ${m.met === true ? "met" : "NOT met"}`;
+}
+
+/** Pages / lines per page the human summary shows of a partial report (`--json` has all of it). */
+const HUMAN_PARTIAL_STATES = 8;
+const HUMAN_PARTIAL_LINES = 3;
+
+/**
+ * #424: a find-out that could not ground an answer — per page it visited, what it saw (the page's own
+ * text) and what it tried, then the grounded claims of its rejected reports.
+ */
+function partialReportLines(report: unknown): string[] {
+  if (!isRecord(report)) return [];
+  const states = arr(report.states).filter(isRecord);
+  if (states.length === 0) return [];
+  const out = [`${tag("PARTIAL")}no grounded answer — what the run saw and tried on ${states.length} page(s) (observed evidence only)`];
+  for (const st of states.slice(0, HUMAN_PARTIAL_STATES)) {
+    const name = str(st.title) ?? str(st.heading);
+    out.push(`${tag("")}${str(st.url) ?? "?"}${name === undefined ? "" : ` — ${name}`}`);
+    for (const l of arr(st.seen).map(str).filter((x): x is string => x !== undefined).slice(0, HUMAN_PARTIAL_LINES)) out.push(`${tag("")}  seen: "${l}"`);
+    const tried = arr(st.tried).filter(isRecord);
+    if (tried.length > 0) {
+      const t = tried.map((a) => `${str(a.op) ?? "?"} ${str(a.control) ?? ""} → ${a.ok === true ? "" : "failed: "}${str(a.result) ?? ""}`.replace(/\s+/g, " "));
+      out.push(`${tag("")}  tried: ${t.slice(0, 4).join("; ")}${t.length > 4 ? `; +${t.length - 4} more` : ""}`);
+    }
+  }
+  if (states.length > HUMAN_PARTIAL_STATES) out.push(`${tag("")}… and ${states.length - HUMAN_PARTIAL_STATES} more page(s) (--json)`);
+  for (const c of arr(report.claims).filter(isRecord).slice(0, 3)) out.push(`${tag("")}grounded claim: ${str(c.claim) ?? ""} ("${str(c.quote) ?? ""}")`);
+  return out;
+}
+
+/**
  * #216: a find-out's answer is `{ text, evidence }` — its text plus where it came from (the page's
  * text or a form field's value, and the page), from the grounded evidence.
  */
@@ -301,7 +368,7 @@ export function formatMultiRunHuman(result: unknown): string {
   // typically empty for these (every run's OWN check failed, not a discovered defect); a
   // "DEFECTS-FOUND … 0 agreed finding(s)" headline self-contradicts. Lead with the goal's own
   // verdict instead; missionOutcome/goalOutcome stay canonical in --json.
-  const selfContradicting = goal === "failed" || goal === "exhausted" || goal === "blocked";
+  const selfContradicting = (goal === "failed" || goal === "exhausted" || goal === "blocked") && findings.length === 0;
   const lines = [selfContradicting ? `${goal.toUpperCase()}: ${base}` : `${outcome.toUpperCase()}: ${base} · ${findings.length} agreed finding(s) · ${flaky.length} flaky`];
   if (goal !== undefined) lines.push(`${tag("GOAL")}${goal}`);
   // #220: why the multi-run is inconclusive (interrupted, runs pending, or a run broke).
@@ -479,7 +546,9 @@ export function formatInitKeysHuman(
       // #230: the non-interactive path (no TTY on stdin) never prompts — report what's still
       // missing and how to configure it, the same command name as the E_AI_SETUP_REQUIRED refusals.
       if (missing !== undefined && missing.length > 0) {
-        return `keys: ${feature} not configured — set ${missing.map(named).join(", ")} or run \`jevitate ai setup ${feature}\``;
+        // #429: judgment is satisfied by EITHER of its keys (TypeSafe or OpenRouter).
+        const sep = feature === "judgment" ? " or " : ", ";
+        return `keys: ${feature} not configured — set ${missing.map(named).join(sep)} or run \`jevitate ai setup ${feature}\``;
       }
       if (sources === undefined) {
         const detail = collected.length > 0 ? `collected ${collected.join(", ")} now` : "already configured";

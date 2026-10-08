@@ -8,17 +8,108 @@ export type CredentialKey = "OPENROUTER_API_KEY" | "TYPESAFE_API_KEY" | "GITHUB_
 export const ALL_CREDENTIAL_KEYS: readonly CredentialKey[] = ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "GITHUB_TOKEN"];
 export type Feature = "generation" | "judgment";
 
-/** feature → the keys it strictly requires. No feature maps to "no key". */
+/**
+ * feature → the keys it can use. No feature maps to "no key". `generation` needs ALL of its keys;
+ * `judgment` (#429) needs ANY ONE: Jev is served both by TypeSafe (`TYPESAFE_API_KEY`) and through
+ * OpenRouter (`OPENROUTER_API_KEY`) — `resolveJevRoute` picks the one a call uses, and `featureKeys`
+ * names the key(s) a feature will use right now.
+ */
 export const FEATURE_KEYS: Readonly<Record<Feature, readonly CredentialKey[]>> = {
   generation: ["OPENROUTER_API_KEY"],
-  judgment: ["TYPESAFE_API_KEY"],
+  judgment: ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY"],
 } as const;
 
 export class MissingCredentialError extends Error {
   readonly code = "E_MISSING_CREDENTIAL" as const;
-  constructor(readonly feature: Feature, readonly missing: CredentialKey[]) {
-    super(`feature '${feature}' requires ${missing.join(", ")} — none found in env or local config`);
+  /**
+   * `anyOf` (#429): ANY ONE of `missing` satisfies the feature (judgment with no key and no
+   * provider override) — the message says "or", never "and".
+   */
+  constructor(readonly feature: Feature, readonly missing: CredentialKey[], readonly anyOf = false) {
+    super(
+      anyOf
+        ? `feature '${feature}' requires one of ${missing.join(" or ")} — none found in env or local config`
+        : `feature '${feature}' requires ${missing.join(", ")} — none found in env or local config`,
+    );
     this.name = "MissingCredentialError";
+  }
+}
+
+/**
+ * #429: where a Jev judgment call goes. `typesafe` = TypeSafe's own API with `TYPESAFE_API_KEY`;
+ * `openrouter` = OpenRouter's System One route with `OPENROUTER_API_KEY` (the same wire format).
+ */
+export type JevProvider = "typesafe" | "openrouter";
+export const JEV_PROVIDERS: readonly JevProvider[] = ["typesafe", "openrouter"];
+/** The key each Jev provider authenticates with. */
+export const JEV_PROVIDER_KEYS: Readonly<Record<JevProvider, CredentialKey>> = {
+  typesafe: "TYPESAFE_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+};
+/** Env override of the Jev provider (`--jev-provider` wins over it). */
+export const JEV_PROVIDER_ENV = "JEVITATE_JEV_PROVIDER";
+
+/** A `--jev-provider` / `JEVITATE_JEV_PROVIDER` value that names no provider (fail-closed: never ignored). */
+export class JevProviderError extends Error {
+  readonly code = "E_JEV_PROVIDER" as const;
+  constructor(readonly value: string, readonly from: string) {
+    super(`${from} '${value}' is not a Jev provider — expected ${JEV_PROVIDERS.join(" or ")}`);
+    this.name = "JevProviderError";
+  }
+}
+
+function parseProvider(value: string | undefined, from: string): JevProvider | undefined {
+  const v = value?.trim().toLowerCase();
+  if (v === undefined || v === "") return undefined;
+  const hit = JEV_PROVIDERS.find((p) => p === v);
+  if (hit === undefined) throw new JevProviderError(value ?? "", from);
+  return hit;
+}
+
+/**
+ * The explicit Jev provider override, if any: the flag (`--jev-provider`, MCP `jevProvider`) wins
+ * over `JEVITATE_JEV_PROVIDER`. An unknown value throws `JevProviderError` (never silently dropped).
+ */
+export function jevProviderOverride(env: Record<string, string | undefined>, explicit?: string): JevProvider | undefined {
+  return parseProvider(explicit, "--jev-provider") ?? parseProvider(env[JEV_PROVIDER_ENV], JEV_PROVIDER_ENV);
+}
+
+/** The provider + key a Jev judgment call uses, and why (`override` = flag/env; `precedence` = the key that is set). */
+export interface JevRoute {
+  readonly provider: JevProvider;
+  readonly key: CredentialKey;
+  readonly reason: "override" | "precedence";
+}
+
+/**
+ * #429: resolves the Jev route. An override pins the provider (its key must be set — fail-closed,
+ * never a quiet switch to the other provider). Otherwise the TypeSafe key wins when both are set,
+ * then the OpenRouter key. Neither: `MissingCredentialError` naming BOTH keys (`anyOf`).
+ */
+export function resolveJevRoute(store: CredentialStore, override?: JevProvider): JevRoute {
+  if (override !== undefined) {
+    const key = JEV_PROVIDER_KEYS[override];
+    if (!store.detect(key)) throw new MissingCredentialError("judgment", [key]);
+    return { provider: override, key, reason: "override" };
+  }
+  for (const provider of JEV_PROVIDERS) {
+    const key = JEV_PROVIDER_KEYS[provider];
+    if (store.detect(key)) return { provider, key, reason: "precedence" };
+  }
+  throw new MissingCredentialError("judgment", JEV_PROVIDERS.map((p) => JEV_PROVIDER_KEYS[p]), true);
+}
+
+/**
+ * The key(s) `feature` uses right now: generation → its keys; judgment → the resolved route's key,
+ * or, when none resolves, the key(s) that would satisfy it (the override's key, else both).
+ */
+export function featureKeys(feature: Feature, store: CredentialStore, jevProvider?: JevProvider): CredentialKey[] {
+  if (feature !== "judgment") return [...FEATURE_KEYS[feature]];
+  try {
+    return [resolveJevRoute(store, jevProvider).key];
+  } catch (e) {
+    if (e instanceof MissingCredentialError) return [...e.missing];
+    throw e;
   }
 }
 
@@ -75,12 +166,25 @@ export function envCredentialStore(
   return { detect: (k) => resolve(k) !== undefined, read: (k) => resolve(k) };
 }
 
-/** Precondition: throws MissingCredentialError (fail-closed) unless every
- *  required key for `feature` is present. Returns the required key names on
- *  success (NOT the values). */
-export function requireKeys(feature: Feature, store: CredentialStore): CredentialKey[] {
+/** Precondition: throws MissingCredentialError (fail-closed) unless the keys
+ *  `feature` needs are present (judgment: the key of its resolved Jev route —
+ *  either key, or the overriding provider's). Returns the key names it will use
+ *  (NOT the values). */
+export function requireKeys(feature: Feature, store: CredentialStore, jevProvider?: JevProvider): CredentialKey[] {
+  if (feature === "judgment") return [resolveJevRoute(store, jevProvider).key];
   const required = FEATURE_KEYS[feature];
   const missing = required.filter((k) => !store.detect(k));
   if (missing.length > 0) throw new MissingCredentialError(feature, missing);
   return [...required];
+}
+
+/** Whether `feature` has the keys it needs (judgment: either Jev key, or the overriding provider's). Names only. */
+export function featureReady(feature: Feature, store: CredentialStore, jevProvider?: JevProvider): boolean {
+  try {
+    requireKeys(feature, store, jevProvider);
+    return true;
+  } catch (e) {
+    if (e instanceof MissingCredentialError) return false;
+    throw e;
+  }
 }

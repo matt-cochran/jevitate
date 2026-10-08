@@ -9,7 +9,7 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { InvariantSpec } from "@jevitate/recording";
-import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type SecretCommandRunner, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
+import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type SecretCommandRunner, type HangFinding, type VerifySession, type SideEffect, type SafetyOverride, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
 import { a11yChecks, analyzeClaims, buildReport, calibrationCaveat, claimsCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AnalysisOutcome, type AppContext, type GuardProbe, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
 import { captureFindingShots, planGuardProbes, runGuardProbes, skippedProbes, withProbePage } from "./ux-claim-probe.js";
 import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
@@ -17,14 +17,14 @@ import { conversationConfig, type ConversationOptions } from "./conversation-opt
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import { foldGoalOutcome, type GoalOutcome, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
-import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogDefect } from "./result-schema.js";
+import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, defectFields, type AdvisoryServerLogDefect } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
-import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
-import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
+import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http5xxDefect, type RunDepth } from "@jevitate/explore";
+import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogsSummary } from "./log-correlation.js";
 import { triageOf, serverLogRuntimeOptions } from "./explore-shared.js";
@@ -205,6 +205,8 @@ export interface RunUsabilityMissionResult {
    * a UX review's outcome.
    */
   readonly defects: Array<AdvisoryServerLogDefect | (Http5xxDefect & { readonly advisory: true })>;
+  /** #421/#423: the gating defects counted per kind (`defectOutcomeOf(defects)`). */
+  readonly defectOutcome: DefectOutcome;
   /** Hang findings (0 or 1: the review stops at a hang), as every strategy lists them (#195). */
   readonly hangs: HangFinding[];
   /** Every Recording the review wrote (#195: one list on every strategy) — a review writes one. */
@@ -238,6 +240,8 @@ export interface RunUsabilityMissionResult {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: readonly SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #428: every --allow-control exemption the run used. */
+  readonly safetyOverrides?: readonly SafetyOverride[];
   /** #303: the run's action deltas (verdict counts, per-action overhead) — only with `--action-deltas`. */
   readonly actionDeltas?: ActionDeltaStats;
   /**
@@ -279,6 +283,8 @@ export interface RunUsabilityMissionResult {
   readonly checks?: readonly SuccessCheckResult[];
   /** #225/#202: the success checks' warnings (a vacuous check, `held` notes), when there were any. */
   readonly checkWarnings?: readonly string[];
+  /** #424: how deep the run went — distinct states and pages, actions, decisions, forms submitted. */
+  readonly depth: RunDepth;
 }
 
 /**
@@ -791,6 +797,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       screenshots: capture.screenshots(),
       sideEffects: run.sideEffects,
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
+      ...(run.safetyOverrides === undefined ? {} : { safetyOverrides: run.safetyOverrides }),
       ...(run.actionDeltas === undefined ? {} : { actionDeltas: run.actionDeltas }),
       engine: currentEngineInfo(),
       ...((): { failure?: MissionFailure } => {
@@ -801,16 +808,17 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       finalUrl: run.finalUrl,
       decisions: run.decisions,
       actions: run.actions,
+      depth: run.depth,
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...(hang === undefined ? {} : { hang }),
       // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is
       // always advisory, and a `server-log` defect here is treated the same way. So is an HTTP 5xx
       // hard-signal defect (#208): listed with its fingerprint (verify-fix replays it), advisory here.
       ...serverLogResult(serverLogRun),
-      defects: [
+      ...defectFields<AdvisoryServerLogDefect | (Http5xxDefect & { readonly advisory: true })>([
         ...http5xx.defects(run.transcript, run.recording.pages.flatMap((p) => p.steps)[0]?.step.kind === "navigate" ? 1 : 0).map((d) => ({ ...d, advisory: true as const })),
         ...advisoryDefects(serverLogRun?.defects),
-      ],
+      ]),
       ...(budget === null ? {} : { budget: budget.trajectory() }),
       ...(adjudication === undefined
         ? {}

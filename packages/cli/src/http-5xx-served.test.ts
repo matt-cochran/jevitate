@@ -114,7 +114,11 @@ describe("HTTP 5xx is a hard-signal defect in every strategy (#208)", () => {
     async () => {
       const r = await goal("/profile");
       expect(r.assertionPassed).toBe(true);
-      expect(r.outcome).toBe("defects-found");
+      // #423: the goal WAS reached (goalOutcome succeeded); the 5xx is the defect verdict, and the
+      // table makes the run defects-found (exit 1) — never succeeded/clean.
+      expect([r.goalOutcome, r.outcome, r.goalReason]).toEqual(["succeeded", "succeeded", undefined]);
+      expect(r.defectOutcome).toEqual({ status: "defects", byKind: { "http-5xx": 1 } });
+      expect(r.missionOutcome).toBe("defects-found");
       expect(r.exitCode).toBe(1);
       expect(r.sideEffects.some((e) => e.request.method === "PUT" && e.request.status === 500)).toBe(true);
       const d = r.defects.find((x) => x.kind === "http-5xx");

@@ -1,11 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { Command } from "commander";
 import { SitePolicySchema, simulateTiming, type PlannedStep, type SitePolicy } from "@jevitate/domain";
+import { SAFETY_RULES } from "@jevitate/explore";
 import { ok, fail } from "./envelope.js";
 import { sitePolicyKey } from "./site-gate-cli.js";
 import { type CliDeps, resolveDbPath, withSitePolicyRepository, parsePlannedScript, emitJson } from "./cli-shared.js";
 
-/** Registers `jevitate site`: `policy get|set` and `simulate`. */
+/** Registers `jevitate site`: `policy get|set|rules` and `simulate`. */
 export function registerSiteCommands(program: Command, deps: CliDeps): void {
   const site = program
     .command("site")
@@ -43,6 +44,30 @@ export function registerSiteCommands(program: Command, deps: CliDeps): void {
       } catch (err) {
         emitJson(program, fail("E_SITE_POLICY_GET", String(err)));
       }
+    });
+
+  sitePolicy
+    .command("rules")
+    .description(
+      "#428: list the control safety rules every run applies — built-in heuristics (ids, what they match, their regex), operator patterns and hard " +
+        "boundaries — and whether --allow-control can waive each (only the soft 'may cost money' heuristic). A refusal names the rule id it matched",
+    )
+    .option("--json", "emit a JSON envelope")
+    .action(function (this: Command) {
+      const { json } = this.opts<{ json?: boolean }>();
+      const rules = SAFETY_RULES.map((r) => ({ ...r }));
+      if (json) {
+        emitJson(program, ok({ rules }));
+        return;
+      }
+      const out = program.configureOutput().writeOut;
+      for (const r of rules) {
+        out?.(`${r.id}  [${r.source}] ${r.allowControl ? "waivable by --allow-control" : "not waivable by --allow-control"}\n`);
+        out?.(`  matches: ${r.matches}\n`);
+        if (r.regex !== undefined) out?.(`  regex:   /${r.regex}/i\n`);
+        out?.(`  lifted by: ${r.liftedBy}\n`);
+      }
+      process.exitCode = 0;
     });
 
   sitePolicy

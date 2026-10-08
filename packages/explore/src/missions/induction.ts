@@ -46,7 +46,7 @@ import {
   type CoverageSufficiencyThresholds,
 } from "../coverage/sufficiency.js";
 import { MissionSafety } from "../mission-safety.js";
-import type { SafetyConfig } from "../safety.js";
+import type { SafetyConfig, SafetyOverride } from "../safety.js";
 import type { SideEffect } from "../side-effects.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { type ClippingFinding, type OverflowFinding } from "../overflow.js";
@@ -183,6 +183,8 @@ export interface InductionRunResult {
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects?: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #428: every --allow-control exemption the run used (regex, control, the soft rule it waived, step). */
+  readonly safetyOverrides?: SafetyOverride[];
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
   /** #303 (`actionDeltas`): verdict counts, and the actions that changed nothing (`noEffect`, deduped). */

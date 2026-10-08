@@ -1,6 +1,6 @@
 import { writeClassifier } from "@jevitate/recording";
 import type { PageMonitor } from "./page-monitor.js";
-import { SafetyPolicy, type SafetyConfig, type SafetyVerdict } from "./safety.js";
+import { SafetyPolicy, type SafetyConfig, type SafetyOverride, type SafetyRefusal, type SafetyVerdict } from "./safety.js";
 import { SideEffectLog, type SideEffect } from "./side-effects.js";
 import type { Control } from "./snapshot.js";
 
@@ -44,26 +44,38 @@ export class MissionSafety {
 
   /**
    * A frontier candidate the policy refuses is never enqueued (#186): it would only cost a reset
-   * and a step to be refused later. True when withheld; `onFirst` records the refusal, once per control.
+   * and a step to be refused later. True when withheld; `onFirst` records the refusal (with the rule
+   * it matched, #428), once per control.
    */
-  withholds(op: string, control: Pick<Control, "name" | "role" | "descriptor">, onFirst: (reason: string) => void): boolean {
+  withholds(
+    op: string,
+    control: Pick<Control, "name" | "role" | "descriptor">,
+    onFirst: (reason: string, refusal: SafetyRefusal) => void,
+  ): boolean {
     const unsafe = this.gate(op, control);
     if (unsafe === null) return false;
-    if (unsafe.first) onFirst(unsafe.reason);
+    if (unsafe.first) onFirst(unsafe.reason, unsafe.refusal);
     return true;
   }
 
   /** An action is about to be dispatched (its writes are attributed to `step`). */
-  mark(step: number, op: string, control: Pick<Control, "name" | "summary" | "role"> | null): void {
+  mark(step: number, op: string, control: (Pick<Control, "name" | "summary" | "role"> & { readonly descriptor?: Control["descriptor"] }) | null): void {
     const label = control === null ? op : control.name || control.summary;
+    // #428: a click an --allow-control exemption permitted is recorded with its step.
+    if (op === "click" && control !== null) this.policy.noteClick(step, control);
     this.#log.mark(step, label, control === null ? null : this.policy.riskOf(control));
   }
 
   /** The result fields: the writes fired, and how many past the listed cap. Stops capturing. */
-  result(): { readonly sideEffects: SideEffect[]; readonly sideEffectsTruncated?: number } {
+  result(): { readonly sideEffects: SideEffect[]; readonly sideEffectsTruncated?: number; readonly safetyOverrides?: SafetyOverride[] } {
     const { sideEffects, truncated } = this.#log.entries();
     this.#log.close();
-    return { sideEffects, ...(truncated > 0 ? { sideEffectsTruncated: truncated } : {}) };
+    const overrides = this.policy.overrides();
+    return {
+      sideEffects,
+      ...(truncated > 0 ? { sideEffectsTruncated: truncated } : {}),
+      ...(overrides.length === 0 ? {} : { safetyOverrides: overrides }),
+    };
   }
 
   /** The controls refused so far (their accessible names), for the evidence. */

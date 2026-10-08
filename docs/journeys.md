@@ -11,7 +11,7 @@ guess ([how replay finds elements](./verification.md#replay-finds-the-recorded-e
 jevitate explore-author-journey --url http://localhost:3000 \
   --goal "add a product to the cart and reach checkout" --success urlIncludes:/checkout \
   --id checkout --name "Checkout" --real
-jevitate journey promote checkout        # a human approval gate: unpromoted Journeys never run
+jevitate journey promote checkout        # a person's approval: shows the review sheet, asks you to type `checkout`
 jevitate journey run checkout
 ```
 
@@ -212,6 +212,66 @@ request. Every replay starts fresh, with the same fixtures and hooks as `journey
 app keeps state between sessions, reset it with `--fixtures`/`--before`, or the replay after a
 blocked save can still find the base replay's saved data.
 
+### Review and promotion sign-off
+
+`journey promote` is the human approval gate; `journey review` is what the reviewer reads first —
+one sheet that says what the Journey does, what it changes and what it proves:
+
+```bash
+jevitate journey review checkout                          # the sheet, as text
+jevitate journey review checkout --markdown --out review.md   # Markdown, to a file (attach it to a PR)
+jevitate journey review checkout --json                   # the schema-checked sheet (MCP: review_journey)
+```
+
+| Section | What it shows |
+|---|---|
+| Summary | goal and success criteria (from annotations); missing intent is flagged with the `journey annotate` command that drafts it |
+| Steps | each step's action in plain words, its target control (role and accessible name), objective, expected result, its own check, and the parameters it uses |
+| Side effects | the write requests it is expected to fire (method and endpoint, from recorded deltas, `expectRequests` and network end-state checks); clicked controls that match the [safety rules](safety.md) with their rule ids (`builtin:destructive`, `builtin:may-cost-money`, `builtin:session-end`, and the site's `targets.json` `safety.deny` / `safety.paid` as `deny:<pattern>` / `paid:<pattern>`); the origins it touches |
+| Inputs | parameters and secret references **by name only** — never a value (a literal typed into a credential-looking field shows as «redacted»; a secret reference shows its field and manager, never its key) |
+| Proof | end-state checks, per-step assertions (weak ones marked), the `journey lint` result, and the last `journey verify --mutate` verdict (`stale` when the Journey changed after it ran) — or "not verified" with the command to run |
+| Change since last approval | a diff of steps, assertions and side effects against the version last approved, or "first approval" |
+| Content hash | the hash an approval binds to |
+
+The content hash is the Journey's content hash without its approval bookkeeping (`promoted`,
+`approval`, `acceptedWeak`), so promoting does not change what was approved. Bind an approval to
+exactly what you read:
+
+```bash
+jevitate journey promote checkout --reviewed-hash <hash>   # refused (E_JOURNEY_REVIEW_STALE, exit 64) if the Journey changed since
+jevitate journey promote checkout --review-sheet review.md # the same, reading the hash from the sheet file (text, Markdown or JSON)
+```
+
+Without either, `journey promote` prints the sheet (human mode) and binds the approval to the hash
+it showed. Every promotion — `journey promote` and `demo approve` alike — records
+`metadata.approval` (`{ contentHash, at, provenance, acceptedWeak? }`) and keeps the approved Journey at
+`.jevitate/journeys/.approved/<id>.json`, which the next review diffs against. `journey verify
+--mutate` records its last verdict at `.jevitate/journeys/.verify/<id>.json` (bound to the same
+hash). The [assertion-strength gate](#assertion-strength) still applies: `--accept-weak` is recorded in the approval too.
+
+**Catalog links (#433).** A Journey can link the job it does and the persona doing it
+(`metadata.job`, `metadata.persona`: ids from `.jevitate/jobs.json` and `.jevitate/personas.json`,
+see [the catalog](./catalog.md)). The sheet then has a **Catalog** section: the linked job (its
+story) and persona with their approval state, and **needs re-review** when the Journey or a linked
+item changed since its approval. `journey promote` (and `demo approve`) refuses a Journey whose
+linked job or persona is not approved (`E_JOURNEY_UNVETTED`, exit 1) unless you pass
+`--accept-unvetted "<reason>"`, which is recorded in `metadata.approval.waivers`. An unlinked
+Journey promotes as before. Every sheet also lists the **pre-approval findings**. When one needs
+an acknowledgment, promotion is refused (`E_APPROVAL_FINDINGS`, exit 1) unless you pass
+`--accept-findings "<reason>"`, which is recorded in `metadata.approval.acceptedFindings`.
+
+**Confirmation and provenance (#437).** `journey promote` and `demo approve` need an interactive
+terminal: after the sheet, type the Journey id (or the first 8 characters of its content hash),
+and once more for each waiver (`--accept-weak`, `--accept-unvetted`, `--accept-findings`). With no
+TTY the approval is refused (`E_APPROVAL_NEEDS_HUMAN`, exit 64) and nothing is promoted; a wrong
+answer is `E_APPROVAL_NOT_CONFIRMED` (exit 64). The approval, and each waiver, records
+`provenance: { channel, agentSignals, user? }` — `tty`, `non-interactive`
+(`--non-interactive-approval "<reason>"`, for scripted setups only), `ci`, or `mcp`
+(`promote_journey` / `approve_demo`: an agent's approval). `journey list` and the sheet show it,
+e.g. "approved non-interactively (likely an agent: CLAUDECODE)". A coding agent hands promotion to
+a person and never uses the escape hatch on its own. What each layer guarantees, and how to
+enforce approvals in git review and CI: [the catalog](./catalog.md#what-human-approval-guarantees).
+
 ## Record a flow by demonstration
 
 ```bash
@@ -277,6 +337,7 @@ key is refused when the file is read.
 | `name` | yes | A short human name |
 | `description` | no | One line, shown by `journey find` |
 | `promoted` | yes | `true` only after `journey promote` (the human approval gate) |
+| `approval` | no | the last approval: `{ contentHash, at, provenance?, acceptedWeak?, waivers?, acceptedFindings? }` (see [Review and promotion sign-off](#review-and-promotion-sign-off)); `provenance` is `{ channel: "tty" \| "non-interactive" \| "mcp" \| "ci", agentSignals, user?, reason? }` (#437) |
 | `params` | yes | Names of the `--param` values it takes |
 | `secretRefs` | no | Password-manager references for `vault-autofill` runs |
 | `authoredBy` | no | `human-demonstration` or `jev-driven` |

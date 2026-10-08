@@ -1,7 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { aggregateOf, formatUsageLine, type UsageCounts } from "@jevitate/ai-core";
-import { consolidate, diffRuns, renderJUnit, renderReportMarkdown, renderSarif, type ConsolidatedDefect, type DiffEntry, type FindingsDiff, type GateCase, type RunRecord } from "@jevitate/findings";
+import { consolidate, diffRuns, findingKey, renderJUnit, renderReportMarkdown, renderSarif, type ConsolidatedDefect, type DiffEntry, type FindingIdentity, type FindingsDiff, type GateCase, type RunRecord } from "@jevitate/findings";
+import { approvalsReport } from "./approval-provenance.js";
+import { loadCatalog } from "./catalog-api.js";
 import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { runUsabilityMission } from "./ux-api.js";
@@ -26,6 +28,20 @@ const REAL_RUNNERS: CheckRunners = {
   usability: runUsabilityMission,
   verifyFix: runVerifyFix,
 };
+
+/** #437: the `--require-approvals` violations as hard `approval` defects (one per item and problem). */
+async function approvalDefects(opts: RunCheckOptions, req: NonNullable<RunCheckOptions["requireApprovals"]>): Promise<{ defects: ConsolidatedDefect[] }> {
+  const dirs = [...new Set([opts.journeysDir, ...opts.suite.targets.flatMap((t) => (t.journeysDir === undefined ? [] : [t.journeysDir]))].map((d) => resolve(d)))];
+  const catalogs = [];
+  for (const d of dirs) catalogs.push(await loadCatalog(req.catalogDir, d));
+  const report = approvalsReport(catalogs, req.allowedChannels);
+  const defects = (report.requirement?.violations ?? []).map((v): ConsolidatedDefect => {
+    const identity: FindingIdentity = { category: "approval", signal: `approval-${v.problem}`, control: `${v.kind} ${v.id}` };
+    const key = findingKey(identity);
+    return { key, keys: [key], identity, category: "approval", severity: "hard", title: v.message, fingerprints: [], modes: [], occurrences: 1, runCount: 0, evidence: [], intermittent: false };
+  });
+  return { defects };
+}
 
 export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const nowIso = opts.nowIso ?? (() => clock.nowIso());
@@ -89,7 +105,9 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     runs.push(run);
     runOf.set(ex.resultPath, run);
   }
-  const defects = consolidate(runs);
+  // #437 --require-approvals: each violation is a hard `approval` finding on the `approvals` item.
+  const approvals = opts.requireApprovals === undefined ? undefined : await approvalDefects(opts, opts.requireApprovals);
+  const defects = [...consolidate(runs), ...(approvals?.defects ?? [])];
   let diff: FindingsDiff | undefined;
   let baselineRuns: RunRecord[] | undefined;
   if (opts.baseline !== undefined) {
@@ -138,6 +156,10 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     };
   });
 
+  if (approvals !== undefined) {
+    const own = gating.filter((d) => approvals.defects.includes(d)).map((d) => d.key);
+    itemReports.push({ target: "approvals", kind: "approvals", name: "require-approvals", status: "ran", actions: 0, durationMs: 0, verdict: own.length > 0 ? "failed" : "passed", gating: own });
+  }
   const errors = itemReports.filter((i) => i.verdict === "error").length;
   const exitCode: 0 | 1 | 2 = gating.length > 0 ? 1 : errors > 0 || exceeded !== undefined ? 2 : 0;
   const junitPath = resolve(opts.junitPath ?? join(outDir, "junit.xml"));

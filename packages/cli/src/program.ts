@@ -26,10 +26,14 @@ import { registerProfileCommands } from "./profile-cli.js";
 import { registerSiteCommands } from "./site-cli.js";
 import { registerRecordingCommands } from "./recording-cli.js";
 import { registerJourneyCommands } from "./journey-cli.js";
+import { registerCatalogCommands } from "./catalog-cli.js";
+import { registerBuiltinAnalyzers } from "./builtin-analyzers.js";
 import { registerSourceCommands } from "./source-cli.js";
 import { registerLoadCommands } from "./load-cli.js";
 import { registerExploreCommands } from "./explore-cli.js";
+import { registerLoginCommand } from "./login-cli.js";
 import { registerCampaignCommands } from "./campaign-cli.js";
+import { registerSweepCommand } from "./sweep-cli.js";
 import { registerVerifyFixCommands } from "./verify-fix-cli.js";
 import { registerAuthorJourneyCommands } from "./author-journey-cli.js";
 import { registerDemoCommands } from "./demo-aspect-cli.js";
@@ -62,16 +66,21 @@ export function buildProgram(deps: CliDeps): Command {
   program.name("jevitate").description("Autonomous browser testing that turns discovered bugs into deterministic regression tests").version(versionString());
   // #218: the shared refusal path (cli-refusal.ts) needs to know which command is running.
   trackActionCommand(program);
+  // #434/#435: the readiness and catalog-analysis pre-approval analyzers (once per process).
+  registerBuiltinAnalyzers();
 
   registerInitCommands(program, deps);
   registerProfileCommands(program, deps);
   registerSiteCommands(program, deps);
   registerRecordingCommands(program, deps);
   registerJourneyCommands(program, deps);
+  registerCatalogCommands(program, deps); // #433: persona/job review|approve, catalog status
   registerSourceCommands(program, deps);
   registerLoadCommands(program, deps);
   registerExploreCommands(program, deps, buildProgram);
+  registerLoginCommand(program, deps); // #427: mint a persona's storage state from env credentials
   registerCampaignCommands(program, deps, buildProgram); // #293: journey-anchored campaigns
+  registerSweepCommand(program, deps, buildProgram); // #425: many targets × personas, one aggregate
   registerVerifyFixCommands(program, deps);
 
   // `ledger add|verify|list` (#195 part 6): the repro material verify-fix needs, kept by fingerprint.
@@ -104,6 +113,7 @@ export function buildProgram(deps: CliDeps): Command {
       sitePolicyDbPath: resolveDbPath(deps),
       ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
       ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
+      ...(deps.catalogDir === undefined ? {} : { catalogDir: deps.catalogDir }),
       ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
       browserLaunch: (flags) => browserLaunchFromFlags(flags as BrowserLaunchFlags),
     },

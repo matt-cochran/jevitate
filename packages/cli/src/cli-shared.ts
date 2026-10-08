@@ -3,6 +3,7 @@
  * (#231): deps and path resolution, JSON/human output, browser/emulation flags, AI gateway selection.
  */
 import { mkdir } from "node:fs/promises";
+import type { ApprovalDeps } from "./approval-provenance.js";
 import { dirname, resolve as resolvePath } from "node:path";
 import { userInfo } from "node:os";
 import { Command, InvalidArgumentError } from "commander";
@@ -30,6 +31,9 @@ import {
   type CatalogModel,
   type ModelConstraints,
   type UsageSink,
+  type JevProvider,
+  JevProviderError,
+  jevProviderOverride,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
 import { PlaywrightBrowserPort, readUnpackedExtension, type UnpackedExtension } from "@jevitate/playwright";
@@ -80,6 +84,11 @@ export interface CliDeps {
   logs?: { readonly autoPrune: boolean; readonly logsRoot?: string; readonly configPath?: string };
   journeysDir?: string;
   /**
+   * Optional, additive (#433): the catalog's directory — where `personas.json` and `jobs.json` live
+   * (default: the project's `.jevitate/`, found from the working directory; none outside a project).
+   */
+  catalogDir?: string;
+  /**
    * Optional, additive (#247): the environments file `--env` reads (default: the repo's
    * `.jevitate/environments.json`, found from the working directory).
    */
@@ -118,6 +127,12 @@ export interface CliDeps {
    *  `isInteractive` (#230): whether key collection may prompt stdin;
    *  omitted in production means the real `process.stdin.isTTY` check. */
   init?: { detection?: DetectionDeps; statePath?: string; isInteractive?: () => boolean };
+  /**
+   * Optional, additive (#437): the approval confirmation's seam — the environment the agent markers
+   * are read from, whether stdin/stdout are TTYs, the terminal prompt and the OS user. Omitted in
+   * production means the real process (`process.env`, `isTTY`, a readline prompt on stderr).
+   */
+  approval?: ApprovalDeps;
   /**
    * Optional, additive: distributed-Journey-sources wiring (see source-api.ts).
    * Every field is injectable so tests never touch the network, the real home
@@ -251,6 +266,21 @@ export async function makeRealBrowserActor(
     actor,
     close: () => session.close(),
   };
+}
+
+/** #429: `--jev-provider` help, shared by every command that builds the live Jev gateway. */
+export const JEV_PROVIDER_FLAG_HELP =
+  "with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set";
+
+/** Parses `--jev-provider` (an unknown provider is a usage error, never ignored). */
+export function jevProviderArg(value: string): JevProvider {
+  try {
+    const p = jevProviderOverride({}, value);
+    if (p === undefined) throw new JevProviderError(value, "--jev-provider");
+    return p;
+  } catch (err) {
+    throw new InvalidArgumentError(err instanceof Error ? err.message : String(err));
+  }
 }
 
 /** Raw commander values of the shared `--browser-*` launch flags (and #205's resource-governance flags). */
@@ -591,6 +621,10 @@ Outcomes, stop reasons and exit codes:
   --strategy goal also carries its own ending as "goalOutcome" (= its "outcome"), folded onto missionOutcome:
     succeeded → clean 0 · failed / exhausted / blocked → defects-found 1
     (defects-found, inconclusive, crashed, hang, intermittent are themselves)
+    a defect never replaces goalOutcome: every result also carries defectOutcome {status none|defects, byKind},
+    and a succeeded goal with defects is missionOutcome defects-found 1 (goalOutcome stays succeeded);
+    a goal not achieved also carries goalReason (not-found, ungrounded, blocked-by-policy, gave-up,
+    no-progress, budget, hang, vacuous-check, success-check-failed, broken-run)
   --strategy goal's "stop" (why the loop itself stopped; not separately exit-coded):
     done | blocked | exhausted | no-progress | hang | inconclusive | crashed | budget
     (a "done" code rejected ends stop done, goalOutcome failed — never blocked)
@@ -617,7 +651,7 @@ Outcomes, stop reasons and exit codes:
 `;
 
 /** #291: the startup key check's env (opt-out) and verifier (injectable: tests never touch the network). */
-function keyPreflightOpts(deps: CliDeps): Parameters<typeof preflightRunKeys>[2] {
+export function keyPreflightOpts(deps: CliDeps): Parameters<typeof preflightRunKeys>[2] {
   return { env: deps.explore?.env ?? process.env, fetchFn: deps.explore?.verifyFetch ?? deps.ai?.verifyFetch ?? realVerifyFetch };
 }
 
@@ -638,7 +672,7 @@ export const DEFAULT_EXPLORE_CONSTRAINTS: ModelConstraints = { requiredCapabilit
  */
 export async function buildExploreGateways(
   deps: CliDeps,
-  opts: { real: boolean; fakeAi: boolean },
+  opts: { real: boolean; fakeAi: boolean; jevProvider?: string },
 ): Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }> {
   // #100: ONE tracker per invocation, handed to whichever gateways are built below — real (counted
   // at the innermost seam, so a retry counts too) or fake (0 tokens, so a test can assert the shape
@@ -655,17 +689,26 @@ export async function buildExploreGateways(
   }
   const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? loadLocalCredentials());
   if (opts.real) {
+    // #429: judgment runs on the TypeSafe key or (Jev through OpenRouter) the OpenRouter key;
+    // `--jev-provider` / JEVITATE_JEV_PROVIDER pins one. An unknown provider is refused, never ignored.
+    let jevProvider: JevProvider | undefined;
+    try {
+      jevProvider = jevProviderOverride(deps.explore?.env ?? process.env, opts.jevProvider);
+    } catch (err) {
+      if (err instanceof JevProviderError) throw new GatewaySelectionError(err.message);
+      throw err;
+    }
     requireKeys("generation", store); // fail-closed
-    requireKeys("judgment", store); // fail-closed
+    requireKeys("judgment", store, jevProvider); // fail-closed
     // #291: a key the provider rejects fails the run at startup (typed setup refusal), once per process.
-    await preflightRunKeys(["generation", "judgment"], store, keyPreflightOpts(deps));
+    await preflightRunKeys(["generation", "judgment"], store, { ...keyPreflightOpts(deps), ...(jevProvider === undefined ? {} : { jevProvider }) });
     const gen = new OpenRouterGenerationGateway({
       store,
       catalog: DEFAULT_EXPLORE_CATALOG,
       constraints: DEFAULT_EXPLORE_CONSTRAINTS,
       call: await realOpenRouterCall(usage),
     });
-    const judge = new JevJudgmentGateway(store, await realJevClientCall(undefined, usage));
+    const judge = new JevJudgmentGateway(store, await realJevClientCall(undefined, usage), jevProvider);
     // Transient model/network failures are retried with exponential backoff + jitter (≈16s), then
     // fail typed; validation/auth errors fail at once (owner ruling 4).
     return { judge: new RetryingJudgmentPort(judge), gen: new RetryingGenerationPort(gen), usage };

@@ -60,6 +60,8 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
   const region = await readRegion(ctx.page, control, ctx.secrets);
   const before = stateless ? undefined : region?.state;
   ctx.clickedRegion = readState;
+  // #428: a click an --allow-control exemption permitted is recorded (result `safetyOverrides`).
+  ctx.safety.noteClick(ctx.transcript.nextStep, control);
   ctx.sideEffects.beginClick(identity, control.name || control.summary, safePath(snap.url), ctx.now(), before, region?.where);
   const r = await act(cfg.actor, { op: "click", control });
   let reply: ReplyResult | undefined;

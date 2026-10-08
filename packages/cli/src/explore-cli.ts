@@ -1,3 +1,5 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { type InvariantSpec } from "@jevitate/recording";
@@ -9,6 +11,7 @@ import {
   UnauthorizedExploreTargetError,
   resolveCoverageThresholds,
   TypeFixtureSpecError,
+  validateAllowControlPatterns,
   validateDenyPatterns,
   type CoverageThresholds,
   type DialogPolicy,
@@ -66,15 +69,17 @@ import {
 import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
 import { triagedServerLog } from "./explore-shared.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { LogClassesError, loadLogClassRules } from "./log-classes.js";
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { LogSpecError } from "./log-lines.js";
-import { MultiRunArgsError, resolveMultiRunPlan, wantsMultiRun } from "./multi-run.js";
+import { MultiRunArgsError, projectPersonaFor, resolveMultiRunPlan, wantsMultiRun, type Persona } from "./multi-run.js";
+import { authExpiredResult, ensurePersonaSession, LoginArgsError, parseAuthCheck, type AuthCheck, type AuthExpiredResult } from "./persona-login.js";
 import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import { runUsabilityMission, UsabilityInvariantsUnsupportedError } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
 import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError, ProductFactsError } from "@jevitate/ux";
-import { type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import {
   type CliDeps,
   type BrowserLaunchFlags,
@@ -128,6 +133,18 @@ import {
   successWhenFromFlags,
   targetFlagsFromFlags,
 } from "./goal-run-flags.js";
+
+/** #427: the app root of a start URL bound from --fixtures (`<origin>${setup.x}`), or undefined without an origin. */
+function fixtureBoundUrlRoot(url: string): string | undefined {
+  try {
+    return `${new URL(url.slice(0, url.indexOf("${"))).origin}/`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** #427: how long the pre-flight auth check (and a refresh's sign-in) may take to load a page. */
+const AUTH_PREFLIGHT_TIMEOUT_MS = 30_000;
 
 /**
  * #293: the flags a sweep sets on each of its missions itself (the rest of the command line is
@@ -249,6 +266,14 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
     )
     .option(
+      "--auth-check <mode>",
+      "#427 pre-flight auth check before a run that starts from a session (--storage-state, --persona/--personas, --actor's primary): " +
+        "load the session, open --url and end the run fast (inconclusive, failure.kind auth-expired, exit 2) when it lands on a sign-in page — the login page is never explored. " +
+        "auto (default): a login-like URL (/login, /signin, /sign-in, /auth, …) or a visible password field, unless --url is itself such a route; " +
+        "urlExcludes:<text>: expired when the landed URL includes <text>; selector:<css>: alive only when this signed-in marker is visible; off. " +
+        "A persona with login parameters (a personas file entry's `login`, or .jevitate/personas.json) is signed in again once instead",
+    )
+    .option(
       "--actor <name=storageState>",
       "multi-actor mission (#147, goal only; repeatable): the FIRST actor is the primary (the only one the model drives, " +
         "from its own storageState); every other actor is an observer in its OWN fresh context that only runs the " +
@@ -259,6 +284,17 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .addOption(GOAL_RUN_OPTIONS.saveStorageState())
     .option("--max-actions <n>", "hard cap on executed actions", positiveIntArg)
     .option("--max-decisions <n>", "hard cap on model decisions", positiveIntArg)
+    .option(
+      "--min-actions <n>",
+      "--strategy goal (#424): the minimum actions before the model may conclude — until then an early report, blocked or answerless done is deferred and the run steered to breadth " +
+        "(unvisited tabs, detail views, primary forms). Default: 12 (at most half the budget) for an open-ended find-out goal (no --success; \"the main features\", \"what works\", \"every error\", \"explore\"…), none otherwise. Capped by --max-actions (with a warning)",
+      positiveIntArg,
+    )
+    .option(
+      "--min-distinct-states <n>",
+      "--strategy goal (#424): the minimum distinct page states (URL + visible controls) observed before the model may conclude. Default: 5 (scaled to the budget) for an open-ended find-out goal, none otherwise. Capped by the budget (with a warning)",
+      positiveIntArg,
+    )
     .option(
       "--stall-timeout <seconds>",
       "--strategy coverage/exploratory and --feature: end the run inconclusive (stalled) when no step completes within this many seconds (default 120)",
@@ -271,6 +307,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .addOption(GOAL_RUN_OPTIONS.jobWaitMs())
     .addOption(GOAL_RUN_OPTIONS.deny())
     .addOption(GOAL_RUN_OPTIONS.paid())
+    .addOption(GOAL_RUN_OPTIONS.allowControl())
     .addOption(GOAL_RUN_OPTIONS.allowDestructive())
     .addOption(GOAL_RUN_OPTIONS.dialogs())
     .option(
@@ -289,6 +326,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .addOption(GOAL_RUN_OPTIONS.readRpc())
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--out <dir>", "directory to write the emitted Recording")
     .option(
       "--file-issues",
@@ -341,7 +379,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     )
     .option(
       "--log-quiet-ok <spec>",
-      "declares a --log-source spec (exact match, repeatable) as legitimately quiet: zero lines from it does not make the --log-defect oracle unhealthy (#169). Without it, a declared source that opened but delivered not one line makes an otherwise-clean run inconclusive, same as one that failed to open",
+      "compatibility only since 0.8.0 (#420): a --log-source that opens and reads zero lines is now always a healthy oracle (the silence is recorded as serverLogs.quietSources), so this flag no longer changes any outcome. Kept so existing invocations keep working",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -391,7 +429,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option("--personas <file>", "personas JSON: {\"<name>\": \"<storageState>\"} or {\"personas\": [{\"name\", \"storageState\"}]}")
+    .option(
+      "--personas <file>",
+      "personas JSON: {\"<name>\": \"<storageState>\"} or {\"personas\": [{\"name\", \"storageState\", \"login\"?}]} — #427: `login` " +
+        "({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, environment variable NAMES only) re-mints an expired session once. " +
+        "A bare --persona <name> is the project's persona of that name (.jevitate/personas.json, same format)",
+    )
     .option(
       "--check-overflow",
       "check the horizontal-overflow (#149) and vertical-clipping (#302: text cut off by a fixed-height box or above the page top) hard signals even at a desktop (>=1024px) viewport — --strategy coverage/exploratory " +
@@ -434,7 +477,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       ].join("\n"),
     )
     .addHelpText("after", EXPLORE_OUTCOME_HELP)
-    .action(async function (this: Command) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .action(taggedAction(program, "explore", async function (this: Command) {
       const o = this.opts<{
         invariants: string[];
         logSource: string[];
@@ -489,9 +533,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         typeFixture: string[];
         fixture?: string;
         storageState?: string;
+        authCheck?: string;
         saveStorageState?: string;
         maxActions?: string;
         maxDecisions?: string;
+        minActions?: number;
+        minDistinctStates?: number;
         stallTimeout?: string | number;
         replyWaitMs?: string;
         replyQuietMs?: string;
@@ -500,6 +547,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         jobWaitMs?: string;
         deny: string[];
         paid: string[];
+        allowControl?: string[];
         allowDestructive?: boolean;
         dialogs?: string;
         allowWrites?: boolean;
@@ -508,6 +556,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         readRpc: string[];
         real?: boolean;
         fakeAi?: boolean;
+        jevProvider?: string;
         out?: string;
         checkOverflow?: boolean;
         ignoreOverflow: string[];
@@ -536,6 +585,16 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       } catch (err) {
         if (!(err instanceof GoalRunFlagError)) throw err;
         emitExplore(fail(err.code, err.message));
+        return;
+      }
+
+      // #427: an unusable --auth-check is a usage error, refused before anything runs.
+      let authCheck: AuthCheck;
+      try {
+        authCheck = parseAuthCheck(o.authCheck);
+      } catch (err) {
+        if (!(err instanceof LoginArgsError)) throw err;
+        emitExplore(fail("E_EXPLORE_ARGS", err.message));
         return;
       }
 
@@ -726,6 +785,33 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       if (browser?.headed === true && (wantsMultiRun(o) || o.actor.length > 1)) {
         program.configureOutput().writeErr?.(multiWindowWarning(o.actor.length > 1 ? "several --actor sessions" : "--repeat/--persona"));
       }
+      /**
+       * #427: the pre-flight auth check of one session — undefined when it is alive (or refreshed, or
+       * not checked: --auth-check off, no --url, a --from-journey run whose prefix replay is its own
+       * check), or the `auth-expired` result when it is not. Throws `UnauthorizedExploreTargetError`.
+       */
+      const sessionPreflight = async (storageState: string, persona: Persona | undefined): Promise<AuthExpiredResult | undefined> => {
+        if (authCheck.mode === "off" || o.url === undefined || journeyPrefix !== undefined) return undefined;
+        const allowlist = resolveExploreAllowlist(o.url, o.allow);
+        // A start URL bound from --fixtures (`${setup.x}`) does not exist before the setup runs: the
+        // check opens the app's root instead (the mission itself starts after the setup, as before).
+        const checkUrl = o.url.includes("${") ? fixtureBoundUrlRoot(o.url) : o.url;
+        if (checkUrl === undefined) return undefined; // no origin before the placeholder: the mission's own URL check refuses it
+        const r = await ensurePersonaSession({
+          ...(persona === undefined ? {} : { persona: persona.name }),
+          ...(persona?.login === undefined ? {} : { login: persona.login }),
+          storageState,
+          url: checkUrl,
+          allowlist,
+          check: authCheck,
+          port: (deps.explore?.browserPortFactory ?? (() => new PlaywrightBrowserPort()))(),
+          ...(browser === undefined ? {} : { browser }),
+          env: deps.explore?.env ?? process.env,
+          timeoutMs: AUTH_PREFLIGHT_TIMEOUT_MS,
+          note: (line) => program.configureOutput().writeErr?.(line),
+        });
+        return r.ok ? undefined : authExpiredResult(strategy, o.url, r, persona?.name);
+      };
       // Repeat-and-vote (#141) / persona matrix (#143): the same command, run sequentially and aggregated.
       if (wantsMultiRun(o)) {
         try {
@@ -738,10 +824,22 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.out === undefined ? {} : { out: o.out }),
             // #220: a killed multi-run prints ITS partial summary, by this command's own output rule.
             killOutput: (partial) => (o.json === true ? `${JSON.stringify(ok(withEngine(partial)))}\n` : formatMultiRunHuman(partial)),
+            // #427: each run's session (its persona's, or the mission's own) is checked before it starts.
+            ...(authCheck.mode === "off"
+              ? {}
+              : {
+                  authPreflight: async (p: Persona | undefined) => {
+                    const state = p?.storageState ?? o.storageState;
+                    if (state === undefined) return undefined;
+                    const r = await sessionPreflight(state, p ?? projectPersonaFor(state));
+                    return r === undefined ? undefined : withEngine(r);
+                  },
+                }),
           });
           emitExplore(ok(withEngine(result)), result.exitCode, formatMultiRunHuman);
         } catch (err) {
           if (err instanceof MultiRunArgsError) emitExplore(fail(err.code, err.message));
+          else if (err instanceof UnauthorizedExploreTargetError) emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           else if (err instanceof MultiRunAbortedError) emitExplore(fail(err.envelope.error.code, err.envelope.error.message));
           else emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
         }
@@ -764,6 +862,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       try {
         validateDenyPatterns(o.deny);
         validateDenyPatterns(o.paid, "--paid");
+        validateAllowControlPatterns(o.allowControl ?? []);
       } catch (err) {
         emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
@@ -833,6 +932,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // `--fixture` feeds the upload op, which only the explore loop (goal and
       // usability strategies) can issue. Refuse it elsewhere rather than
       // silently ignoring a file the user expected to be uploaded.
+      // #424: the minimum effort gates the goal loop's own endings (report / blocked / done) — a goal run's.
+      if ((o.minActions !== undefined || o.minDistinctStates !== undefined) && (o.feature !== undefined || strategy !== "goal")) {
+        emitExplore(fail("E_EXPLORE_ARGS", "--min-actions and --min-distinct-states are supported only with --strategy goal (a goal or find-out run)"));
+        return;
+      }
       if (o.fixture !== undefined && (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))) {
         emitExplore(fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
         return;
@@ -862,7 +966,17 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         emitExplore(fail("E_EXPLORE_ARGS", "--action-deltas is not supported with --feature (goal, usability, coverage, exploratory and adversarial runs record deltas)"));
         return;
       }
-      if (o.storageState !== undefined && !existsSync(o.storageState)) {
+      // #427: the project persona (.jevitate/personas.json) this --storage-state is, when it is one — its
+      // session may not exist yet: the pre-flight mints it from its login parameters.
+      let projectPersona: Persona | undefined;
+      try {
+        projectPersona = o.storageState === undefined ? undefined : projectPersonaFor(o.storageState);
+      } catch (err) {
+        if (!(err instanceof MultiRunArgsError)) throw err;
+        emitExplore(fail(err.code, err.message));
+        return;
+      }
+      if (o.storageState !== undefined && !existsSync(o.storageState) && (authCheck.mode === "off" || projectPersona?.login === undefined)) {
         emitExplore(fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
       }
@@ -937,6 +1051,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           const logScope = parseLogScopeSpecs(o.logScope);
           const correlationHeaders = parseCorrelationHeaders(o.logCorrelationHeader);
           const idPatterns = parseLogIdPatterns(o.logIdPattern);
+          // #422: the project's .jevitate/log-classes.json, validated before any browser opens.
+          const logClasses = loadLogClassRules();
           serverLog = {
             sources,
             logDefect,
@@ -946,10 +1062,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             logScope,
             correlationHeaders,
             idPatterns,
+            logClasses,
             ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
           };
         } catch (err) {
-          if (err instanceof LogSourceSpecError || err instanceof LogSpecError) {
+          if (err instanceof LogSourceSpecError || err instanceof LogSpecError || err instanceof LogClassesError) {
             emitExplore(fail(err.code, err.message));
             return;
           }
@@ -1006,6 +1123,24 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         return;
       }
 
+      // #427 pre-flight auth check: a run that starts from a session first proves the session is alive
+      // (re-minting it once from a persona's login parameters) — else it ends now, `auth-expired`.
+      if (primaryStorageState !== undefined) {
+        let expired: AuthExpiredResult | undefined;
+        try {
+          expired = await sessionPreflight(primaryStorageState, actors?.primary ?? projectPersona);
+        } catch (err) {
+          if (err instanceof UnauthorizedExploreTargetError) emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          // The check could not open its browser (the mission could not have either): the run did not start.
+          else emitExplore(fail("E_EXPLORE_RUN", `the pre-flight auth check failed: ${err instanceof Error ? err.message : String(err)}`));
+          return;
+        }
+        if (expired !== undefined) {
+          emitExplore(ok(withEngine(expired)), EXIT_CODES.inconclusive);
+          return;
+        }
+      }
+
       // Additive coverage/exploratory strategy: proof-by-induction state coverage.
       // It takes no goal/success (the frontier itself is the objective), so it is
       // a distinct, goal-free path that leaves the goal strategy below unchanged.
@@ -1038,6 +1173,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ({ judge: covJudge, gen: covGen, usage: covUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
+            jevProvider: o.jevProvider,
           }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
@@ -1105,6 +1241,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ({ judge: advJudge, gen: advGen, usage: advUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
+            jevProvider: o.jevProvider,
           }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
@@ -1215,6 +1352,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ({ judge: uxJudge, gen: uxGen, usage: uxUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
+            jevProvider: o.jevProvider,
           }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
@@ -1389,7 +1527,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       let gen: GenerationPort;
       let usage: UsageTracker;
       try {
-        ({ judge, gen, usage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+        ({ judge, gen, usage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false, jevProvider: o.jevProvider }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
           emitExplore(fail("E_AI_SETUP_REQUIRED", err.message));
@@ -1444,6 +1582,14 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           gen,
           usage,
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
+          ...(o.minActions === undefined && o.minDistinctStates === undefined
+            ? {}
+            : {
+                minEffort: {
+                  ...(o.minActions === undefined ? {} : { minActions: Number(o.minActions) }),
+                  ...(o.minDistinctStates === undefined ? {} : { minDistinctStates: Number(o.minDistinctStates) }),
+                },
+              }),
           secrets: o.secret.length > 0 ? o.secret : undefined,
           ...(secretFields.length > 0 ? { secretFields } : {}),
           ...(secretCommand === undefined ? {} : { secretCommand }),
@@ -1482,5 +1628,5 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         // Every exit path restores the fixture state (a no-op when the mission already did).
         await fx?.restore();
       }
-    });
+    }));
 }

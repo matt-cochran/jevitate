@@ -33,6 +33,7 @@ export async function actOnItem(ctx: FrontierState, item: FrontierItem): Promise
         origin: "engine",
         actOk: false,
         reason: unsafe.reason,
+        safety: unsafe.refusal,
         snapshot: ctx.snap,
       });
     }

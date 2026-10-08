@@ -86,10 +86,23 @@ artifact; your job is to find the right one and run it with the right params.
 
 ## Promoting a Journey
 
-- `jevitate journey promote <id> --json` promotes a local Journey — a
-  deliberate human-approval gate (mirrors `mission target promote`'s
-  semantics), never automatic — run it (or MCP `promote_journey`) only when
-  the human tells you to. Every authored/recorded Journey starts
+- Before asking the human to promote, give them the review sheet:
+  `jevitate journey review <id> --markdown` (MCP `review_journey`) — steps,
+  side effects (write requests, risky controls, origins), inputs by name,
+  proof, change since the last approval, and the content hash. Pass that hash
+  as `--reviewed-hash` (MCP `reviewedHash`) so the approval is refused
+  (`E_JOURNEY_REVIEW_STALE`) if the Journey changed after they read it.
+- `jevitate journey promote <id>` promotes a local Journey — a person's
+  approval, never automatic. It needs an interactive terminal: after the
+  sheet, the person types the Journey id (or the first 8 characters of its
+  content hash), and again for each `--accept-*` waiver. From your shell it is
+  refused (`E_APPROVAL_NEEDS_HUMAN`, exit 64) — so hand it to the person: the
+  sheet, then "run `jevitate journey promote <id>` in your terminal". Never
+  pass `--non-interactive-approval` yourself (scripted setups only; recorded
+  as non-interactive, with your agent markers). MCP `promote_journey` works,
+  but only when the human tells you to, and it is recorded as an agent's
+  approval (`provenance.channel: "mcp"`) that `check --require-approvals`
+  fails — it never counts as the person's sign-off. Every authored/recorded Journey starts
   `metadata.promoted: false` (`explore-author-journey`, `jevitate record` +
   `recording postdoc`); only a promoted Journey is discoverable via `journey
   find`/`find_capabilities` and runnable via `journey run`/`run_journey`.

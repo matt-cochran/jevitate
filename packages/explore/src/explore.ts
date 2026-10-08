@@ -22,11 +22,14 @@
  *   handle-select.ts  options-aware `select`  handle-fill.ts     generated `type` / `select` values
  *   handle-click.ts   `click`                 handle-upload.ts   `upload`
  *   finish.ts         finishRun: end-of-run reclassification, Recording, outcome, ExploreRun
+ *   min-effort.ts     deferEnding: the minimum-effort gate on report / blocked / done (#424)
  *   helpers.ts / limits.ts  pure helpers and the loop's limits (re-declared below)
  *
  * Every handler returns a Flow: "continue" (next step), "stop" (end the run, `ctx.stop` set) or
  * "next" (not handled here — fall through), exactly the loop's former `continue` / `break` / fall-through.
  */
+import type { MinEffort, RunDepth } from "./run-depth.js";
+import type { PartialReport } from "./partial-report.js";
 import type { Actor } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
 import { type Recording } from "@jevitate/recording";
@@ -57,7 +60,7 @@ import { ChromeTracker } from "./feature/relevance.js";
 import { type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { describeFailure, isPageUnresponsive, isTargetUnresponsive } from "./mission-failure.js";
-import { type SafetyConfig } from "./safety.js";
+import { type SafetyConfig, type SafetyOverride } from "./safety.js";
 import { type TypeFixture } from "./type-fixtures.js";
 import { type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
@@ -376,7 +379,17 @@ export interface ExploreConfig {
    * advisory relevance labels; `volatilityGapMs` is the route baseline's no-action gap.
    */
   readonly actionDeltas?: boolean | { readonly jev?: boolean; readonly volatilityGapMs?: number };
+  /**
+   * #424: the minimum exploration effort before the model may conclude (resolved by the mission —
+   * `resolveMinEffort`). While unmet and the run can still act, a `report`, a `blocked` and (without a
+   * success check) a `done` are deferred and the model is steered to breadth; a grounded answer reported
+   * meanwhile is kept and accepted if the run ends without a later one. Absent: no minimum.
+   */
+  readonly minEffort?: MinEffort;
 }
+
+/** #423: the structured cause of a goal miss code can name (see `ExploreRun.missCause`). */
+export type MissCause = "not-found" | "ungrounded" | "blocked-by-policy";
 
 export interface ExploreRun {
   readonly stop: StopReason;
@@ -413,6 +426,14 @@ export interface ExploreRun {
    */
   readonly blockingCause?: string;
   /**
+   * #423: why a run that stopped short of its goal stopped, when code knows it beyond `stop`:
+   * `not-found` — a find-out goal's latest report found no answer; `ungrounded` — the model's
+   * answer was rejected as not grounded on the observed pages until the run gave up;
+   * `blocked-by-policy` — the model gave up after the safety policy refused a control it chose.
+   * Absent for a completed run and for every other stop.
+   */
+  readonly missCause?: MissCause;
+  /**
    * #209: the run ended (stop `done`, #217) because the model kept proposing `done` and code rejected
    * every proposal (the success condition never held) — the model claimed the goal, it did not give up.
    */
@@ -421,8 +442,17 @@ export interface ExploreRun {
   readonly sideEffects: SideEffect[];
   /** Writes past the listed cap (`MAX_SIDE_EFFECTS`), counted — present only when some were. */
   readonly sideEffectsTruncated?: number;
+  /** #428: every --allow-control exemption the run used (regex, control, the soft rule it waived, step). */
+  readonly safetyOverrides?: SafetyOverride[];
   /** #303: the run's action deltas — verdict counts and the per-action overhead (absent when off). */
   readonly actionDeltas?: ActionDeltaStats;
+  /** #424: how deep the run went — distinct states and pages, actions, decisions, forms submitted, the minimum. */
+  readonly depth: RunDepth;
+  /**
+   * #424: a run whose answer is its verdict (no success check, or a goal that asks for a report) that
+   * ended WITHOUT a grounded answer: what it saw and tried per page, all observed evidence. Absent otherwise.
+   */
+  readonly partialReport?: PartialReport;
 }
 
 export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {

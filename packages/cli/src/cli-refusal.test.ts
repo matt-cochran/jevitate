@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command, CommanderError } from "commander";
@@ -23,6 +23,7 @@ let validScript: string;
 let badProduct: string;
 let suiteOffAllowlist: string;
 let suiteUnknownFingerprint: string;
+let badCatalog: string;
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "jev-cli-refusal-"));
@@ -39,6 +40,10 @@ beforeAll(() => {
   // #198: a product facts file with a negative price and an unknown key.
   badProduct = join(dir, "product.json");
   writeFileSync(badProduct, JSON.stringify({ version: 1, plans: [{ name: "Pro", prices: [{ amount: -1, interval: "month" }] }], extra: true }));
+  // #433: a catalog whose jobs.json holds a job without its story's trigger.
+  badCatalog = join(dir, "bad-catalog");
+  mkdirSync(badCatalog, { recursive: true });
+  writeFileSync(join(badCatalog, "jobs.json"), JSON.stringify([{ id: "j", motivation: "m", outcome: "o" }]));
   validScript = join(dir, "script.json");
   writeFileSync(validScript, JSON.stringify([{ kind: "click", label: "open menu" }]));
   // A mission whose start URL (the target's own) is off the target's `allow` list, and a verifyFix
@@ -78,6 +83,7 @@ function deps(): CliDeps {
     profiles: new ProfileManager(join(dir, "profiles")),
     dbPath: join(dir, "site.sqlite"),
     journeysDir: join(dir, "journeys"),
+    catalogDir: join(dir, "catalog"),
     missionTargetsDir: join(dir, "targets"),
     inboxDir: join(dir, "inbox"),
     explore: { judge: new FakeJudgmentGateway({}), gen: new FakeGenerationGateway(), browserPortFactory: () => refusingPort },
@@ -152,6 +158,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "profile create": { cases: TRAVERSAL().map((n) => [n]) },
   "profile status": { cases: TRAVERSAL().map((n) => [n]) },
   "site policy get": { exempt: "reports an unset policy as a status (exit 0), not a refusal" },
+  "site policy rules": { exempt: "#428: lists the static safety rules; it takes no input that could be refused" },
   "site policy set": { cases: [["x", "--file", missing, "--db", join(dir, "site.sqlite")]] },
   "site simulate": { base: ["x", "--script", validScript, "--db", join(dir, "site.sqlite")], cases: [["x", "--script", missing]] },
   "recording promote": { base: [validRecording, "--page", "0", "--step", "0", "--var", "v"], cases: [[missing, "--page", "0", "--step", "0", "--var", "v"]] },
@@ -161,13 +168,24 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "journey list": { exempt: "a listing: an empty or missing dir lists nothing" },
   "journey find": { exempt: "a search: no match is an empty result" },
   "journey run": { base: ["nope"], cases: [["nope"], ["nope", "--storage-state", missing]] },
-  "journey promote": { cases: [["nope"]] },
+  "journey promote": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"]] },
   "journey lint": { cases: [["nope"], ["../x"]] },
+  "journey review": { cases: [["nope"], ["../x"]] },
+  // #433: an unknown persona/job, a malformed --reviewed-hash, an invalid catalog file.
+  "persona review": { cases: [["nope"], ["nope", "--dir", badCatalog]] },
+  "persona approve": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"], ["nope", "--accept-findings", " "]] },
+  "job review": { cases: [["nope"], ["j", "--dir", badCatalog]] },
+  "job approve": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"], ["j", "--dir", badCatalog]] },
+  "catalog status": { cases: [["--dir", badCatalog]] },
+  // #435: an invalid catalog file, and a --max-pairs that is not a positive integer.
+  "catalog analyze": { cases: [["--dir", badCatalog], ["--max-pairs", "0"]] },
   "journey verify": { cases: [["nope", "--mutate"], ["nope"], ["nope", "--mutate", "--storage-state", missing]] },
   // #293: an unknown Journey (or an id that tries to leave the store) is refused.
   "journey anchors": { cases: [["nope"], ["../x"]] },
   // #293: a missing/unreadable spec, and a campaign with no model gateway.
   "campaign run": { cases: [[missing, "--fake-ai"], [missing]] },
+  // #425: a missing/invalid targets file, and --resume without the sweep dir to resume.
+  sweep: { cases: [["--targets", missing], ["--targets", missing, "--resume"], ["--targets", missing, "--tag", "x"]] },
   "journey annotate": {
     base: ["nope", "--fake-ai"],
     cases: [["nope", "--fake-ai"], ["nope", "--fake-ai", "--storage-state", missing], ["nope", "--approve"], ["nope", "--approve", "--fake-ai"]],
@@ -209,6 +227,18 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--from-journey", "nope", "--at-step", "2", "--fake-ai"],
       ["--at-step", "2", "--fake-ai"],
       ["--from-journey", "nope", "--at-step", "2", "--url", URL0, "--fake-ai"],
+      // #427: an unusable --auth-check is refused before any browser opens.
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--auth-check", "sometimes"],
+    ],
+  },
+  // #427: missing flags, a value where a variable NAME belongs, an unset variable, a session file in .jevitate/.
+  login: {
+    cases: [
+      [],
+      ["--url", URL0, "--user-env", "not a var", "--password-env", "JEV_REFUSAL_PW", "--save", join(dir, "login", "s.json")],
+      ["--url", URL0, "--user-env", "JEV_REFUSAL_UNSET_USER", "--password-env", "JEV_REFUSAL_UNSET_PW", "--save", join(dir, "login", "s.json")],
+      ["--url", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, ".jevitate", "s.json")],
+      ["--url", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json"), "--success", "nonsense"],
     ],
   },
   "verify-fix": { base: ["--result", missing, "--fingerprint", FP], cases: [["--result", missing, "--fingerprint", FP], []] },

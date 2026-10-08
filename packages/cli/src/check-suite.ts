@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { parseGeolocation, parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
-import { validateDenyPatterns } from "@jevitate/explore";
+import { validateAllowControlPatterns, validateDenyPatterns } from "@jevitate/explore";
 import {
   SUITE_EXPLORE_OPTIONS,
   isSuiteExploreOption,
@@ -381,9 +381,10 @@ function readOption(r: Reader, obj: Json, key: SuiteExploreOptionName, path: str
       return v;
     case "strings": {
       const list = r.strings(obj, key, path);
-      if (key === "deny" || key === "paid") {
+      if (key === "deny" || key === "paid" || key === "allowControl") {
         try {
-          validateDenyPatterns(list, key);
+          if (key === "allowControl") validateAllowControlPatterns(list, key);
+          else validateDenyPatterns(list, key);
         } catch (e) {
           r.fail(at, e instanceof Error ? e.message : String(e));
         }

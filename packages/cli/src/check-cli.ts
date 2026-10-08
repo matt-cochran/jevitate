@@ -1,3 +1,5 @@
+import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import type { Command } from "commander";
 import { MissingCredentialError, formatUsageLine } from "@jevitate/ai-core";
 import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
@@ -7,6 +9,8 @@ import { CheckAiSetupError, CheckPreflightError, runCheck, type CheckGateways, t
 import { SuiteError, loadSuite } from "./check-suite.js";
 import { ReportInputError, defaultResultDirs } from "./report-api.js";
 import { TargetConfigError, loadTargetsFile } from "./target-config.js";
+import { ApprovalArgsError, parseAllowedChannels } from "./approval-provenance.js";
+import { resolveCatalogDir } from "./catalog-api.js";
 
 /**
  * `jevitate check --suite <file.json>` (#137). Registered by `program.ts`; its model gateways and
@@ -19,7 +23,7 @@ import { TargetConfigError, loadTargetsFile } from "./target-config.js";
 
 export interface CheckCliDeps {
   /** Builds the explore gateways for `--real` / `--fake-ai` (program.ts's `buildExploreGateways`). */
-  readonly buildGateways: (sel: { real: boolean; fakeAi: boolean }) => Promise<CheckGateways>;
+  readonly buildGateways: (sel: { real: boolean; fakeAi: boolean; jevProvider?: string | undefined }) => Promise<CheckGateways>;
   readonly journeysDir: string;
   /** The site-policy database (`jevitate site policy set`) Journey items are gated by. */
   readonly sitePolicyDbPath?: string;
@@ -30,6 +34,8 @@ export interface CheckCliDeps {
   /** Maps the command's browser launch flags to launch options (program.ts's `browserLaunchFromFlags`). */
   readonly browserLaunch?: (flags: object) => BrowserLaunchOptions | undefined;
   readonly baselinesDir?: string;
+  /** #437: the catalog's directory `--require-approvals` reads (default: the project's `.jevitate/`). */
+  readonly catalogDir?: string;
   /** Test seam: replace the runners. */
   readonly runners?: Partial<CheckRunners>;
 }
@@ -59,8 +65,15 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
     .option("--json-out <path>", "JSON envelope path (default <out>/check.json)")
     .option("--real", "use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit the JSON envelope (default: a one-line summary per item, then the envelope path)")
-    .action(async function (this: Command) {
+    .option(TAG_FLAG, TAG_HELP, collectTag, [])
+    .option(
+      "--require-approvals",
+      "#437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed",
+    )
+    .option("--allow-channels <list>", "#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty)")
+    .action(taggedAction(program, "check", async function (this: Command) {
       const o = this.opts<{
         suite: string;
         targetBuild?: string;
@@ -73,13 +86,19 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         jsonOut?: string;
         real?: boolean;
         fakeAi?: boolean;
+        jevProvider?: string;
         json?: boolean;
+        requireApprovals?: boolean;
+        allowChannels?: string;
       }>();
       try {
+        if (o.allowChannels !== undefined && o.requireApprovals !== true) throw new ApprovalArgsError("--allow-channels needs --require-approvals");
+        const allowedChannels = o.requireApprovals === true ? parseAllowedChannels(o.allowChannels) : undefined;
         const suite = loadSuite(o.suite);
         const real = o.real === true || (o.fakeAi !== true && suite.ai === "real");
         const fakeAi = o.fakeAi === true || (o.real !== true && suite.ai === "fake");
         const aiMode = real ? "real" : fakeAi ? "fake" : undefined;
+        const jevProvider = o.jevProvider;
         const browser = deps.browserLaunch?.(this.opts());
         const result = await runCheck({
           suite,
@@ -97,10 +116,11 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           ...(o.junit === undefined ? {} : { junitPath: o.junit }),
           ...(o.sarif === undefined ? {} : { sarifPath: o.sarif }),
           ...(o.jsonOut === undefined ? {} : { jsonPath: o.jsonOut }),
-          ...(aiMode === undefined ? {} : { aiMode, gateways: () => deps.buildGateways({ real, fakeAi }) }),
+          ...(aiMode === undefined ? {} : { aiMode, gateways: () => deps.buildGateways({ real, fakeAi, jevProvider }) }),
           ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
           ...(browser === undefined ? {} : { browser }),
           ...(deps.runners === undefined ? {} : { runners: deps.runners }),
+          ...(allowedChannels === undefined ? {} : { requireApprovals: { allowedChannels, catalogDir: resolveCatalogDir(deps.catalogDir) } }),
         });
         if (o.json) emit(program, ok(result), true, result.exitCode);
         else {
@@ -140,7 +160,8 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           err instanceof CheckPreflightError ||
           err instanceof CheckAiSetupError ||
           err instanceof ReportInputError ||
-          err instanceof TargetConfigError
+          err instanceof TargetConfigError ||
+          err instanceof ApprovalArgsError
         ) {
           emit(program, fail(err.code, err.message), o.json === true);
         } else if (err instanceof MissingCredentialError || (err instanceof Error && err.name === "GatewaySelectionError")) {
@@ -149,5 +170,5 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           emit(program, fail("E_CHECK", err instanceof Error ? err.message : String(err)), o.json === true);
         }
       }
-    });
+    }));
 }

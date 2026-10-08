@@ -72,7 +72,7 @@ describe("ai status — names, sources and live verification (#268, #291)", () =
     const r = run({ env: { OPENROUTER_API_KEY: OR_KEY }, localConfig: { OPENROUTER_API_KEY: "sk-or-stored-older", TYPESAFE_API_KEY: TS_KEY }, verifyFetch: fetch });
     const { out, err } = await r.parse(["ai", "status"]);
     expect(out).toContain("generation: ready — OPENROUTER_API_KEY (OpenRouter), from env OPENROUTER_API_KEY (overrides the key stored in");
-    expect(out).toMatch(/judgment: ready — TYPESAFE_API_KEY \(TypeSafe\/Jev\), from .*credentials\.json: valid/);
+    expect(out).toMatch(/judgment: ready via TypeSafe \(model jev-latest; the TypeSafe key is preferred\) — TYPESAFE_API_KEY \(TypeSafe\/Jev\), from .*credentials\.json: valid/);
     expectNoValue(out + err);
     expect(out + err).not.toContain("sk-or-stored-older");
     expect(process.exitCode).toBe(0);
@@ -101,7 +101,7 @@ describe("ai status — names, sources and live verification (#268, #291)", () =
 
     const human = run({ env: {}, localConfig: { TYPESAFE_API_KEY: OR_KEY, OPENROUTER_API_KEY: OR_KEY }, verifyFetch: stubFetch({ [OR_KEY]: 401 }).fetch });
     const h = await human.parse(["ai", "status"]);
-    expect(h.out).toContain("judgment: NOT ready — TYPESAFE_API_KEY (TypeSafe/Jev)");
+    expect(h.out).toContain("judgment: NOT ready via TypeSafe (model jev-latest; the TypeSafe key is preferred) — TYPESAFE_API_KEY (TypeSafe/Jev)");
     expect(h.out).toContain("INVALID (HTTP 401) — looks like an OpenRouter key (OPENROUTER_API_KEY)");
     expect(h.out).toContain("`jevitate ai setup judgment --replace`");
     expectNoValue(h.out + h.err);
@@ -215,6 +215,83 @@ describe("ai setup — replace, verify before storing (#268, #291)", () => {
     const json = JSON.parse((await r.parse(["ai", "setup", "generation", "--json"])).out);
     expect(json).toMatchObject({ ok: false, error: { code: "E_AI_SETUP" } });
     expect(json.error.message).toMatch(/interactive terminal/);
+  });
+});
+
+describe("judgment on either key: TypeSafe or OpenRouter (#429)", () => {
+  it("status: an OpenRouter key alone makes judgment ready via OpenRouter, naming the route and model", async () => {
+    const r = run({ env: {}, localConfig: { OPENROUTER_API_KEY: OR_KEY }, verifyFetch: stubFetch({}).fetch });
+    const { out, err } = await r.parse(["ai", "status"]);
+    expect(out).toContain("judgment: ready via OpenRouter (model ~typesafe/jev-latest; no TypeSafe key set) — OPENROUTER_API_KEY (OpenRouter)");
+    expect(process.exitCode).toBe(0);
+    expectNoValue(out + err);
+    const j = JSON.parse((await run({ env: {}, localConfig: { OPENROUTER_API_KEY: OR_KEY }, verifyFetch: stubFetch({}).fetch }).parse(["ai", "status", "--json"])).out);
+    expect(j.data.judgment).toMatchObject({
+      required: ["OPENROUTER_API_KEY"],
+      missing: [],
+      route: { provider: "openrouter", key: "OPENROUTER_API_KEY", model: "~typesafe/jev-latest", reason: "precedence" },
+    });
+  });
+
+  it("status: with both keys the TypeSafe key wins", async () => {
+    const j = JSON.parse((await run({ env: {}, localConfig: { OPENROUTER_API_KEY: OR_KEY, TYPESAFE_API_KEY: TS_KEY }, verifyFetch: stubFetch({}).fetch }).parse(["ai", "status", "--json"])).out);
+    expect(j.data.judgment.route).toEqual({ provider: "typesafe", key: "TYPESAFE_API_KEY", model: "jev-latest", reason: "precedence" });
+  });
+
+  it("status: --jev-provider openrouter overrides the TypeSafe key", async () => {
+    const j = JSON.parse(
+      (await run({ env: {}, localConfig: { OPENROUTER_API_KEY: OR_KEY, TYPESAFE_API_KEY: TS_KEY }, verifyFetch: stubFetch({}).fetch }).parse(["ai", "status", "--jev-provider", "openrouter", "--json"])).out,
+    );
+    expect(j.data.judgment.route).toMatchObject({ provider: "openrouter", reason: "override" });
+  });
+
+  it("status: JEVITATE_JEV_PROVIDER=openrouter overrides the TypeSafe key", async () => {
+    const j = JSON.parse(
+      (await run({ env: { JEVITATE_JEV_PROVIDER: "openrouter" }, localConfig: { OPENROUTER_API_KEY: OR_KEY, TYPESAFE_API_KEY: TS_KEY }, verifyFetch: stubFetch({}).fetch }).parse(["ai", "status", "--json"])).out,
+    );
+    expect(j.data.judgment.route).toMatchObject({ provider: "openrouter", reason: "override" });
+  });
+
+  it("status: --jev-provider typesafe without a TypeSafe key is missing — never a quiet switch to OpenRouter", async () => {
+    const j = JSON.parse((await run({ env: {}, localConfig: { OPENROUTER_API_KEY: OR_KEY }, verifyFetch: stubFetch({}).fetch }).parse(["ai", "status", "--jev-provider", "typesafe", "--json"])).out);
+    expect(j.data.judgment).toMatchObject({ required: ["TYPESAFE_API_KEY"], missing: ["TYPESAFE_API_KEY"], route: null });
+  });
+
+  it("status: with no key at all, the missing line names both keys", async () => {
+    const { out } = await run({ env: {}, verifyFetch: stubFetch({}).fetch }).parse(["ai", "status", "--no-verify"]);
+    expect(out).toContain("judgment: missing TYPESAFE_API_KEY (TypeSafe/Jev) or OPENROUTER_API_KEY (OpenRouter)");
+    expect(out).toContain("ai setup judgment --jev-provider openrouter");
+  });
+
+  it("status: an unknown JEVITATE_JEV_PROVIDER is refused, not ignored", async () => {
+    const { out } = await run({ env: { JEVITATE_JEV_PROVIDER: "anthropic" }, verifyFetch: stubFetch({}).fetch }).parse(["ai", "status", "--json"]);
+    expect(JSON.parse(out)).toMatchObject({ ok: false, error: { code: "E_INVALID_ARGS" } });
+  });
+
+  it("setup judgment --jev-provider openrouter asks for the OpenRouter key and reports the OpenRouter route", async () => {
+    const prompts: string[] = [];
+    const persisted: Array<{ key: CredentialKey; value: string }> = [];
+    const secureIO = {
+      promptSecret: async (m: string) => (prompts.push(m), NEW_KEY),
+      persist: async (key: CredentialKey, value: string) => void persisted.push({ key, value }),
+    };
+    const r = run({ env: {}, secureIO, verifyFetch: stubFetch({}).fetch });
+    const { out, err } = await r.parse(["ai", "setup", "judgment", "--jev-provider", "openrouter", "--json"]);
+    const json = JSON.parse(out);
+    expect(json.ok).toBe(true);
+    expect(prompts[0]).toMatch(/^Enter OPENROUTER_API_KEY /);
+    expect(persisted.map((p) => p.key)).toEqual(["OPENROUTER_API_KEY"]);
+    expect(json.data.route).toMatchObject({ provider: "openrouter", key: "OPENROUTER_API_KEY", reason: "override" });
+    expectNoValue(out + err);
+  });
+
+  it("setup judgment with only an OpenRouter key asks nothing and offers the TypeSafe key", async () => {
+    const promptSecret = vi.fn(async () => "never");
+    const r = run({ env: {}, localConfig: { OPENROUTER_API_KEY: OR_KEY }, secureIO: { promptSecret, persist: async () => {} }, verifyFetch: stubFetch({}).fetch });
+    const { out } = await r.parse(["ai", "setup", "judgment"]);
+    expect(promptSecret).not.toHaveBeenCalled();
+    expect(out).toContain("judgment: ready via OpenRouter");
+    expect(out).toContain("`jevitate ai setup judgment --jev-provider typesafe`");
   });
 });
 

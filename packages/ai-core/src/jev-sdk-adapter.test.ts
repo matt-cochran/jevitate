@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { choice, noul, score } from "@typesafe-ai/sdk";
+import { TypeSafeClient, choice, noul, score } from "@typesafe-ai/sdk";
 import type { Question } from "./judgment.js";
 import { JEV_PRICE_TABLE, UsageTracker } from "./usage.js";
 import {
   JevResponseError,
+  OPENROUTER_JEV_MODEL,
   apiKeyFromAuthHeader,
   fromSdkAnswers,
   realJevClientCall,
@@ -290,5 +291,97 @@ describe("apiKeyFromAuthHeader", () => {
   });
   test("rejects a non-Bearer header", () => {
     expect(() => apiKeyFromAuthHeader("Basic abc")).toThrow(JevResponseError);
+  });
+});
+
+/**
+ * #429: the OpenRouter route runs the REAL SDK (its wire format) against a fake fetch — the same
+ * client pointed at OpenRouter's base URL with an OpenRouter model id. No network.
+ */
+describe("realJevClientCall — Jev through OpenRouter (#429)", () => {
+  type Sent = { url: string; auth: string | undefined; body: Record<string, unknown> };
+  function sdkWithFetch(respond: (sent: Sent) => { status: number; body: unknown }): { load: () => Promise<unknown>; sent: Sent[] } {
+    const sent: Sent[] = [];
+    const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const headers = new Headers(init?.headers);
+      const s: Sent = { url: String(input), auth: headers.get("Authorization") ?? undefined, body: JSON.parse(String(init?.body)) as Record<string, unknown> };
+      sent.push(s);
+      const r = respond(s);
+      return new Response(JSON.stringify(r.body), { status: r.status, headers: { "content-type": "application/json" } });
+    };
+    class FetchInjected extends TypeSafeClient {
+      constructor(config: ConstructorParameters<typeof TypeSafeClient>[0]) {
+        super({ ...config, fetch: fakeFetch, retry: { maxRetries: 0 } });
+      }
+    }
+    return { load: async () => ({ TypeSafeClient: FetchInjected }), sent };
+  }
+
+  const args = {
+    state: { goal: "g", url: "u", controls: [], history: [] },
+    questions: {
+      op: { kind: "choice" as const, options: ["click", "done"] },
+      stuck: { kind: "noul" as const },
+      progress: { kind: "score" as const },
+    },
+    authHeader: "Bearer sk-or-v1-test",
+    provider: "openrouter" as const,
+  };
+
+  const answered = {
+    model: "typesafe/jev-1.13-20260917",
+    provider: "TypeSafe",
+    id: "gen-dec-1",
+    answers: {
+      op: { type: "choice", choice: "done", probabilities: { click: 0.1, done: 0.9 }, confidence: 0.9 },
+      stuck: { type: "noul", noul: 0.2 },
+      progress: { type: "score", score: 0.8, legend: { 0: "low", 1: "high" }, probabilities: { 0: 0.2, 1: 0.8 }, confidence: 0.8 },
+    },
+    usage: { input_tokens: 338, output_tokens: 63, cost: 0.000014196 },
+  };
+
+  test("posts to OpenRouter's System One route with the OpenRouter key and the jev-latest alias, and returns typed answers", async () => {
+    const { load, sent } = sdkWithFetch(() => ({ status: 200, body: answered }));
+    const usage = new UsageTracker();
+    const call = await realJevClientCall(load, usage);
+    const out = await call(args);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.url).toBe("https://openrouter.ai/api/v1/systemone");
+    expect(sent[0]?.auth).toBe("Bearer sk-or-v1-test");
+    expect(sent[0]?.body.model).toBe(OPENROUTER_JEV_MODEL);
+    expect(out).toEqual({
+      op: { kind: "choice", value: "done", confidence: 0.9 },
+      stuck: { kind: "noul", value: false, probability: 0.2 },
+      progress: { kind: "score", value: 0.8 },
+    });
+    expect(usage.calls()[0]).toMatchObject({ kind: "judgment", ok: true, model: "typesafe/jev-1.13-20260917", inputTokens: 338, outputTokens: 63 });
+    expect(usage.snapshot()).toMatchObject({ priced: "full", priceSource: ["provider:openrouter usage.cost"] });
+    expect(usage.snapshot().jevUsd).toBeCloseTo(0.000014196, 12);
+  });
+
+  test("a malformed OpenRouter answer fails closed (same validation as TypeSafe) — the billed call is still recorded", async () => {
+    const malformed = { ...answered, answers: { ...answered.answers, op: { type: "choice", choice: "teleport", confidence: 0.9 } } };
+    const { load } = sdkWithFetch(() => ({ status: 200, body: malformed }));
+    const usage = new UsageTracker();
+    const call = await realJevClientCall(load, usage);
+    await expect(call(args)).rejects.toThrow(JevResponseError);
+    expect(usage.calls()).toEqual([expect.objectContaining({ kind: "judgment", ok: true, model: "typesafe/jev-1.13-20260917", usd: 0.000014196 })]);
+  });
+
+  test("a failed OpenRouter call is recorded (requested model, error class only), then rethrown", async () => {
+    const { load } = sdkWithFetch(() => ({ status: 402, body: { error: { message: "insufficient credits for sk-or-v1-test" } } }));
+    const usage = new UsageTracker();
+    const call = await realJevClientCall(load, usage);
+    await expect(call(args)).rejects.toThrow();
+    expect(usage.calls()).toEqual([expect.objectContaining({ kind: "judgment", ok: false, failure: "http-402", model: OPENROUTER_JEV_MODEL, inputTokens: 0 })]);
+    expect(JSON.stringify(usage.calls())).not.toContain("sk-or-v1-test");
+  });
+
+  test("without a provider the call keeps TypeSafe's own API (unchanged default route)", async () => {
+    const { load, sent } = sdkWithFetch(() => ({ status: 200, body: { model: "jev-1.13.0", answers: answered.answers, usage: { input_tokens: 1, output_tokens: 0 } } }));
+    const call = await realJevClientCall(load);
+    const { provider: _p, ...typesafeArgs } = args;
+    await call(typesafeArgs);
+    expect(sent[0]?.url).toBe("https://api.typesafe.ai/v1/systemone");
   });
 });

@@ -28,11 +28,12 @@ export const RUN_MODES: readonly RunMode[] = ["goal", "coverage", "adversarial",
  * are hard (independent code decided them); `advisory` (a 4xx-correlated console error, a Jev
  * flag) and `ux` (a usability rubric or signal finding) are advisory.
  */
-export type FindingCategory = "defect" | "hang" | "invariant" | "journey-assertion" | "goal-check" | "advisory" | "ux";
+export type FindingCategory = "defect" | "hang" | "invariant" | "journey-assertion" | "goal-check" | "advisory" | "ux" | "approval";
 
 export type Severity = "hard" | "advisory";
 
-const HARD: ReadonlySet<FindingCategory> = new Set(["defect", "hang", "invariant", "journey-assertion", "goal-check"]);
+// #437: `approval` — `check --require-approvals` found an approval that is missing, stale or not made by a person at a terminal.
+const HARD: ReadonlySet<FindingCategory> = new Set(["defect", "hang", "invariant", "journey-assertion", "goal-check", "approval"]);
 
 export function severityOf(category: FindingCategory): Severity {
   return HARD.has(category) ? "hard" : "advisory";
