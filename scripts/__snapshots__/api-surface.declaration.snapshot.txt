@@ -1089,7 +1089,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (98 exports)
+# @jevitate/journey (106 exports)
   ANCHOR_NAME_RE: variable
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
@@ -1106,6 +1106,9 @@
   CAMPAIGN_LIMITS: variable
   CampaignSpec: type-alias
   CampaignSpecSchema: variable
+  checkJobStory: function
+  checkPersona: function
+  checkStatement: function
   classifyMutation: function
   deriveParamSchema: function
   describeStep: function
@@ -1113,6 +1116,9 @@
   flatJourneySteps: function
   formatAnnotationChanges: function
   FsJourneyStore: class
+  GTWR_RULES: variable
+  GtwrCharacteristic: type-alias
+  GtwrRule: interface
   intentCoverage: function
   IntentCoverage: interface
   isNoClaimExpect: function
@@ -1172,6 +1178,8 @@
   ParamValidationError: class
   planJourneyMutations: function
   prefixLandingPath: function
+  QualityFinding: interface
+  renderJobStory: function
   resolveJourneyStep: function
   ReviewChangeSchema: variable
   ReviewLintFindingSchema: variable
