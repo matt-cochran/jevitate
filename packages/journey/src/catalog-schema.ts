@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AcceptedFindingsSchema } from "./journey.js";
+import { ApprovalProvenanceSchema, ApprovalsReportSchema } from "./approval-schema.js";
 
 /**
  * #433 — the human-vetted catalog: personas (`.jevitate/personas.json`, the #427 file, extended) and
@@ -21,6 +22,8 @@ export const CatalogApprovalSchema = z
   .object({
     contentHash: z.string().regex(/^[0-9a-f]{64}$/, "approval.contentHash: a sha256 hex digest"),
     at: z.string().min(1),
+    /** #437: how the approval was made (channel, agent marker names, OS user). */
+    provenance: ApprovalProvenanceSchema.optional(),
     acceptedFindings: AcceptedFindingsSchema.optional(),
   })
   .strict();
@@ -202,6 +205,8 @@ export const CatalogStatusSchema = z
     /** Approvals that no longer hold: an edited persona or job, a changed Journey, a Journey linked to a stale item. */
     stale: z.array(z.object({ kind: z.enum(["persona", "job", "journey"]), id: z.string(), reason: z.string() }).strict()),
     files: z.object({ personas: z.string().nullable(), jobs: z.string().nullable() }).strict(),
+    /** #437: every recorded approval and how it was made; with `--require-approvals`, the violations. */
+    approvals: ApprovalsReportSchema.optional(),
   })
   .strict();
 export type CatalogStatusReport = z.infer<typeof CatalogStatusSchema>;

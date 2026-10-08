@@ -224,7 +224,7 @@ test("#124: journey promote <id> promotes an unpromoted journey (human-approval 
   const journeysDir = await seedJourneysDir([strongJourney({ id: "draft" })]);
   const { program, lines } = newProgram();
 
-  await program.parseAsync(["journey", "promote", "draft", "--dir", journeysDir, "--json"], { from: "user" });
+  await program.parseAsync(["journey", "promote", "draft", "--dir", journeysDir, "--json", "--non-interactive-approval", "test"], { from: "user" });
   const parsed = JSON.parse(lines.join(""));
 
   expect(parsed).toMatchObject({ v: 1, ok: true, data: { id: "draft", promoted: true } });
@@ -242,7 +242,7 @@ test("journey promote with an unknown id fails fast with E_UNKNOWN_JOURNEY and a
     const journeysDir = await seedJourneysDir([]);
     const { program, lines } = newProgram();
 
-    await program.parseAsync(["journey", "promote", "does-not-exist", "--dir", journeysDir, "--json"], { from: "user" });
+    await program.parseAsync(["journey", "promote", "does-not-exist", "--dir", journeysDir, "--json", "--non-interactive-approval", "test"], { from: "user" });
     const parsed = JSON.parse(lines.join(""));
 
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
@@ -333,7 +333,7 @@ test("#401: journey promote of a weak Journey without --accept-weak fails with E
     const dir = await seedJourneysDir([weakJourney({ id: "weak" })]);
     const { program, lines } = newProgram();
 
-    await program.parseAsync(["journey", "promote", "weak", "--dir", dir, "--json"], { from: "user" });
+    await program.parseAsync(["journey", "promote", "weak", "--dir", dir, "--json", "--non-interactive-approval", "test"], { from: "user" });
     const parsed = JSON.parse(lines.join(""));
 
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_JOURNEY_WEAK" } });
@@ -347,7 +347,7 @@ test("#401: journey promote of a weak Journey without --accept-weak leaves it un
   try {
     const dir = await seedJourneysDir([weakJourney({ id: "weak" })]);
     const { program } = newProgram();
-    await program.parseAsync(["journey", "promote", "weak", "--dir", dir, "--json"], { from: "user" });
+    await program.parseAsync(["journey", "promote", "weak", "--dir", dir, "--json", "--non-interactive-approval", "test"], { from: "user" });
 
     const { program: program2, lines: lines2 } = newProgram();
     await program2.parseAsync(["journey", "list", "--dir", dir, "--json"], { from: "user" });
@@ -363,7 +363,7 @@ test("#401: journey promote --accept-weak promotes a weak Journey", async () => 
   const dir = await seedJourneysDir([weakJourney({ id: "weak" })]);
   const { program, lines } = newProgram();
 
-  await program.parseAsync(["journey", "promote", "weak", "--accept-weak", "demo only", "--dir", dir, "--json"], { from: "user" });
+  await program.parseAsync(["journey", "promote", "weak", "--accept-weak", "demo only", "--dir", dir, "--json", "--non-interactive-approval", "test"], { from: "user" });
   const parsed = JSON.parse(lines.join(""));
 
   expect(parsed).toMatchObject({ v: 1, ok: true, data: { id: "weak", promoted: true } });
@@ -373,7 +373,7 @@ test("#401: journey promote --accept-weak records the acceptance reason in the J
   const dir = await seedJourneysDir([weakJourney({ id: "weak" })]);
   const { program, lines } = newProgram();
 
-  await program.parseAsync(["journey", "promote", "weak", "--accept-weak", "demo only", "--dir", dir, "--json"], { from: "user" });
+  await program.parseAsync(["journey", "promote", "weak", "--accept-weak", "demo only", "--dir", dir, "--json", "--non-interactive-approval", "test"], { from: "user" });
   const parsed = JSON.parse(lines.join(""));
 
   expect(parsed.data.acceptedWeak).toEqual({ reason: "demo only", rules: ["own-target-visible", "visibility-only"] });

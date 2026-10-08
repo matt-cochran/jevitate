@@ -1,4 +1,5 @@
 import { contentHash } from "@jevitate/domain";
+import { describeProvenance } from "./approval-provenance.js";
 import {
   SECRET_PARAM_NAME_RE,
   describeStep,
@@ -20,6 +21,7 @@ import {
   type JourneyReviewWriteRequest,
   type JourneyCatalogLinks,
   type Finding,
+  type ApprovalProvenance,
 } from "@jevitate/journey";
 import { renderFindings } from "./catalog-review.js";
 import { SafetyPolicy, describeCheck, type SafetyConfig } from "@jevitate/explore";
@@ -390,14 +392,28 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
           approval: {
             contentHash: m.approval.contentHash,
             at: m.approval.at,
-            ...(m.approval.acceptedWeak === undefined ? {} : { acceptedWeak: { reason: m.approval.acceptedWeak.reason, rules: [...m.approval.acceptedWeak.rules] } }),
-            ...(m.approval.waivers === undefined ? {} : { waivers: m.approval.waivers.map((w) => ({ kind: w.kind, reason: w.reason, items: [...w.items] })) }),
-            ...(m.approval.acceptedFindings === undefined ? {} : { acceptedFindings: { reason: m.approval.acceptedFindings.reason, findings: [...m.approval.acceptedFindings.findings] } }),
+            ...(m.approval.provenance === undefined ? {} : { provenance: copyProvenance(m.approval.provenance) }),
+            ...(m.approval.acceptedWeak === undefined
+              ? {}
+              : { acceptedWeak: { reason: m.approval.acceptedWeak.reason, rules: [...m.approval.acceptedWeak.rules], ...provenanceField(m.approval.acceptedWeak.provenance) } }),
+            ...(m.approval.waivers === undefined ? {} : { waivers: m.approval.waivers.map((w) => ({ kind: w.kind, reason: w.reason, items: [...w.items], ...provenanceField(w.provenance) })) }),
+            ...(m.approval.acceptedFindings === undefined
+              ? {}
+              : { acceptedFindings: { reason: m.approval.acceptedFindings.reason, findings: [...m.approval.acceptedFindings.findings], ...provenanceField(m.approval.acceptedFindings.provenance) } }),
           },
         }),
     ...(ctx.catalog === undefined ? {} : { catalog: ctx.catalog.links, findings: [...ctx.catalog.findings] }),
     contentHash: hash,
   };
+}
+
+/** #437: a copy of an approval's provenance (the sheet never shares the Journey's objects). */
+function copyProvenance(p: ApprovalProvenance): ApprovalProvenance {
+  return { channel: p.channel, agentSignals: [...p.agentSignals], ...(p.user === undefined ? {} : { user: p.user }), ...(p.reason === undefined ? {} : { reason: p.reason }) };
+}
+
+function provenanceField(p: ApprovalProvenance | undefined): { provenance?: ApprovalProvenance } {
+  return p === undefined ? {} : { provenance: copyProvenance(p) };
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────────────────────
@@ -422,7 +438,7 @@ function renderSheet(r: JourneyReview, style: Style): string {
     h1(`Journey review: ${r.name} (${r.id})`),
     "",
     `Content hash: ${code(r.contentHash)}`,
-    `Status: ${r.promoted ? "promoted" : "not promoted"}${r.approval === undefined ? "" : ` · last approved ${r.approval.at}`}`,
+    `Status: ${r.promoted ? "promoted" : "not promoted"}${r.approval === undefined ? "" : ` · last approved ${r.approval.at} — ${describeProvenance(r.approval.provenance)}`}`,
   );
 
   const s = r.summary;

@@ -4,6 +4,7 @@ import type { CatalogApproval, Finding, Journey, JourneyApprovalWaiver, Accepted
 import { CatalogLoader, catalogJourney, journeyLinks, requireJob, requirePersona, writeJobApproval, writePersonaApproval, type Catalog } from "./catalog.js";
 import { acknowledgeFindings, preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { findProjectDir } from "./project-dir.js";
+import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 
 /**
  * #433 — the approvals of the catalog (`persona approve`, `job approve`: a person's act, CLI only)
@@ -35,6 +36,11 @@ export interface CatalogApproveOptions {
   readonly reviewedHash?: string;
   /** `--accept-findings "<reason>"`: acknowledges findings that require it (recorded with the approval). */
   readonly acceptFindings?: string;
+  /**
+   * #437: confirms the approval (after the findings gate, before the write) and returns its
+   * provenance (the CLI's `makeApprovalConfirm`). Omitted: recorded as `non-interactive`.
+   */
+  readonly confirm?: ApprovalConfirm;
 }
 
 export interface CatalogApproveResult {
@@ -60,7 +66,21 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
   const action: ApprovalAction = kind === "persona" ? "persona approve" : "job approve";
   const findings = await preApprovalFindings({ kind, id }, catalog, { action });
   const acceptedFindings = acknowledgeFindings(`${kind} '${id}'`, findings, opts.acceptFindings);
-  const approval: CatalogApproval = { contentHash: item.contentHash, at: clock.nowIso(), ...(acceptedFindings === undefined ? {} : { acceptedFindings }) };
+  const provenance =
+    opts.confirm === undefined
+      ? programmaticProvenance()
+      : await opts.confirm({
+          kind,
+          id,
+          contentHash: item.contentHash,
+          waivers: acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: acceptedFindings.reason, detail: acceptedFindings.findings.join(", ") }],
+        });
+  const approval: CatalogApproval = {
+    contentHash: item.contentHash,
+    at: clock.nowIso(),
+    provenance,
+    ...(acceptedFindings === undefined ? {} : { acceptedFindings: { ...acceptedFindings, provenance } }),
+  };
   const file = kind === "persona" ? catalog.personasFile : catalog.jobsFile;
   // requirePersona/requireJob found the item, so its file was read.
   if (file === null) throw new Error(`${kind} '${id}' has no catalog file`);

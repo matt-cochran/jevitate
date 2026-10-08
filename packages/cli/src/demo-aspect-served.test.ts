@@ -199,7 +199,7 @@ describe("jevitate demo — served (#249)", () => {
 
       // One approval: shows the Journey + annotations, promotes it, applies them, renders final outputs.
       const finalDir = join(dir, "final");
-      const human = await cli(journeysDir, judge, ["demo", "approve", d.id, "--out", finalDir, "--pace", "0"]);
+      const human = await cli(journeysDir, judge, ["demo", "approve", d.id, "--out", finalDir, "--pace", "0", "--non-interactive-approval", "test"]);
       expect(human.err).toBe("");
       expect(human.exitCode).toBe(0);
       expect(human.out).toContain(`journey '${d.id}'`);
@@ -225,7 +225,7 @@ describe("jevitate demo — served (#249)", () => {
       expect(final.every((w) => w === "null")).toBe(true);
 
       // Approving again: there is no demo draft any more (usage error, nothing re-rendered).
-      const again = await cli(journeysDir, judge, ["demo", "approve", d.id, "--json"]).catch((e: { exitCode?: number }) => ({ out: "", err: "", exitCode: e.exitCode }));
+      const again = await cli(journeysDir, judge, ["demo", "approve", d.id, "--json", "--non-interactive-approval", "test"]).catch((e: { exitCode?: number }) => ({ out: "", err: "", exitCode: e.exitCode }));
       expect(again.exitCode).toBe(64);
     },
     600_000,

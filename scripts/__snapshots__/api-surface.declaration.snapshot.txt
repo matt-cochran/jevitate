@@ -1089,7 +1089,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (127 exports)
+# @jevitate/journey (136 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   ANCHOR_NAME_RE: variable
@@ -1102,6 +1102,15 @@
   AnnotationDraftStep: type-alias
   AnnotationDraftStepSchema: variable
   applyAnnotationDraft: function
+  APPROVAL_CHANNELS: variable
+  ApprovalChannel: type-alias
+  ApprovalChannelSchema: variable
+  ApprovalProvenance: type-alias
+  ApprovalProvenanceSchema: variable
+  ApprovalsReport: type-alias
+  ApprovalsReportSchema: variable
+  ApprovalViolation: type-alias
+  ApprovalViolationSchema: variable
   AssertionProof: interface
   assertionSiteKey: function
   AssertionVerdict: type-alias

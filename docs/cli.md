@@ -249,8 +249,10 @@ the jobs × personas matrix (which have a promoted Journey), approved jobs with 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty) |  |  |  |  |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
+| `--require-approvals` | #437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels) |  |  |  |  |
 
 ## check
 
@@ -264,6 +266,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty) |  |  |  |  |
 | `--baseline <run|tag|last>` | only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`) |  |  |  |  |
 | `--baseline-dir <dir>` | results dir holding baseline runs (repeatable; default: this check's results, then ~/.jevitate) | `[]` |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -281,6 +284,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--out <dir>` | output dir: results/, junit.xml, jevitate.sarif, report.md, check.json | `jevitate-check` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys) | `false` |  |  |  |
+| `--require-approvals` | #437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed |  |  |  |  |
 | `--sarif <path>` | SARIF path (default <out>/jevitate.sarif) |  |  |  |  |
 | `--suite <file>` | the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget) |  |  | yes |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
@@ -332,6 +336,7 @@ the one human approval of a DRAFT demo: shows the Journey and its annotations, r
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this |  |  |  |  |
 | `--out <dir>` | write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir) |  |  |  |  |
 | `--pace <ms>` | how long each step's caption shows before it acts (default 1500) |  |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
@@ -801,6 +806,7 @@ set up jevitate: collect API keys, install skills/MCP wiring, create the repo's 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--claude-md` | #431: also keep a marked jevitate block in the project's CLAUDE.md pointing at the installed skills (Claude Code only) |  |  |  |  |
+| `--codeowners <owners>` | #437: write/merge a marked CODEOWNERS block (.github/CODEOWNERS, or the repo's existing one) making .jevitate/journeys/, personas.json and jobs.json need these owners' review ("@org/team @user"); enable code-owner review in branch protection |  |  |  |  |
 | `--dry-run` | report planned skill-install/mcp-register actions without writing |  |  |  |  |
 | `--force` | overwrite a user-modified installed skill file/block or MCP config entry |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -873,6 +879,7 @@ approve a job (a person's sign-off; CLI only, never an MCP tool): shows its revi
 | `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this |  |  |  |  |
 | `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the job changed since |  |  |  |  |
 
 ### job review
@@ -1098,6 +1105,7 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 | `--accept-weak <reason>` | #401: promote a Journey whose assertions cannot prove its outcome, recording the reason |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person |  |  |  |  |
 | `--review-sheet <file>` | #432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash |  |  |  |  |
 | `--reviewed-hash <hash>` | #432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since |  |  |  |  |
 
@@ -1669,6 +1677,7 @@ approve a persona (a person's sign-off; CLI only, never an MCP tool): shows its 
 | `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this |  |  |  |  |
 | `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the persona changed since |  |  |  |  |
 
 ### persona review

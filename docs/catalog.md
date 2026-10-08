@@ -77,19 +77,22 @@ Each persona and job is `draft` until a person approves it:
 
 ```bash
 jevitate persona review admin                 # the sheet: who, the jobs it serves, the Journeys linked to it
-jevitate persona approve admin                # shows the sheet, then records the approval
+jevitate persona approve admin                # shows the sheet, asks you to type `admin` (or the hash's first 8 characters), records the approval
 jevitate job review invite-teammate           # the story, its personas, which have a promoted Journey, the gaps
 jevitate job approve invite-teammate --reviewed-hash <hash>   # bind the approval to exactly the sheet you read
 ```
 
-The approval records `{ contentHash, at }` on the item, in the same file, the way a Journey
-approval does. The content hash leaves the approval out, so approving changes nothing that was
+The approval records `{ contentHash, at, provenance }` on the item, in the same file, the way a
+Journey approval does (`provenance` is how it was made — see
+[What "human approval" guarantees](#what-human-approval-guarantees)). The content hash leaves the approval out, so approving changes nothing that was
 approved. A persona's hash covers what the persona is (id, description, role). Its session
 settings are not covered: re-minting a session is not a new persona. `--reviewed-hash` refuses a
 changed item (`E_CATALOG_REVIEW_STALE`, exit 64).
 
 **Approving is a human act: it is CLI only.** MCP gets the read-only `review_persona`,
-`review_job` and `catalog_status`, and there is no MCP tool that approves a persona or a job.
+`review_job` and `catalog_status`, and there is no MCP tool that approves a persona or a job. On
+the CLI, an approval needs an interactive terminal and a typed confirmation; without one it is
+refused (`E_APPROVAL_NEEDS_HUMAN`, exit 64).
 
 **Staleness.** Editing an approved persona or job changes its content hash, so it becomes
 `stale`, shown as **needs re-review**. So does every promoted Journey linked to it. The review
@@ -152,5 +155,75 @@ jevitate catalog status --json   # the schema-checked report (MCP: catalog_statu
 - **Stale approvals:** edited personas and jobs, changed Journeys, and Journeys linked to a stale
   item.
 
-The test-campaign skill's release gate reads it. The command always exits 0: it is a report, and
-whoever reads it decides what it gates.
+- **Approvals:** every recorded approval (promoted Journeys, approved personas and jobs) and how it
+  was made, e.g. `persona admin: approved at a terminal by sam (typed confirmation)` or
+  `journey invite: approved non-interactively (likely an agent: CLAUDECODE)` (`approvals` in the
+  JSON).
+
+The test-campaign skill's release gate reads it. The command exits 0: it is a report, and whoever
+reads it decides what it gates. With `--require-approvals [--allow-channels <list>]` it gates
+approvals itself, the way `jevitate check --require-approvals` does: exit 1 when a promoted
+Journey has no approval, or any approval is stale or was made over a channel that is not allowed
+(default: only `tty`).
+
+## What "human approval" guarantees
+
+Approvals (`journey promote`, `demo approve`, `persona approve`, `job approve`, and the
+`--accept-weak`, `--accept-unvetted` and `--accept-findings` waivers given with them) are meant to
+be a person's sign-off. A coding agent with a shell can run the same CLI, so jevitate has three
+layers. Each one guarantees exactly what is written here, and no more.
+
+**1. Provenance — detection.** Every approval record (a Journey's `metadata.approval`, a persona's
+or job's `approval`, and each waiver on them) carries
+`provenance: { channel, agentSignals, user?, reason? }`:
+
+| `channel` | How the approval was made |
+| --- | --- |
+| `tty` | A person typed the confirmation at an interactive terminal. |
+| `non-interactive` | `--non-interactive-approval "<reason>"` (the reason is recorded). |
+| `ci` | The same escape hatch, with a CI marker set (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `BUILDKITE`, `CIRCLECI`, `JENKINS_URL`, `TF_BUILD`). |
+| `mcp` | An MCP tool call (`promote_journey`, `approve_demo`): an agent's approval, never a person's. |
+
+`agentSignals` lists the names of the markers found in the environment, never their values:
+`CLAUDECODE` and `CLAUDE_CODE_*` (Claude Code), `CODEX_*` (Codex CLI), `CURSOR_*` (Cursor),
+`AIDER_*` (aider), `GEMINI_CLI` (Gemini CLI), the CI markers above, plus `stdin-not-tty` /
+`stdout-not-tty`. `user` is the OS user name, never an email. The review sheets,
+`catalog status` and `journey list` show it in words.
+
+This is detection, not proof. A marker is a hint: a person's terminal inside an editor may set
+one, and a determined process can clear its environment, fake a TTY or edit the JSON. Provenance
+catches the honest and the careless. It does not stop the determined.
+
+**2. The typed confirmation — friction.** Each CLI approval shows its review sheet, then asks for
+the item id or the first 8 characters of the content hash the sheet shows. Each waiver is
+confirmed the same way. This needs a real TTY on stdin and stdout. Without one the approval is
+refused with `E_APPROVAL_NEEDS_HUMAN` (exit 64), and the message says how a person approves. A
+mismatched answer is `E_APPROVAL_NOT_CONFIRMED` (exit 64). In both cases nothing is written.
+A scripted setup (seeding fixtures, a demo repo) may pass
+`--non-interactive-approval "<reason>"`. It is allowed, and it is recorded as `non-interactive`
+(or `ci`), so it is never mistaken for a person's approval. A coding agent never uses it on its
+own: it hands the approval to a person. The prompt is friction. A process that drives a
+pseudo-terminal can type the answer.
+
+**3. Git review — enforcement.** The approval records are files in the repository
+(`.jevitate/journeys/`, `.jevitate/personas.json`, `.jevitate/jobs.json`), so the real control is
+review of the change that adds them:
+
+```bash
+jevitate init --codeowners "@acme/qa"   # a marked CODEOWNERS block for those paths (idempotent)
+jevitate check --suite ci.json --require-approvals          # in CI: fails on a non-tty approval
+```
+
+`init --codeowners` writes or merges a `# BEGIN JEVITATE CODEOWNERS v1` … `# END …` block into the
+repository's CODEOWNERS (an existing one in `.github/`, the root, `docs/` or `.gitlab/`; else
+`.github/CODEOWNERS`). Re-running it replaces the block in place, and malformed markers are
+refused. CODEOWNERS does nothing alone: enable branch protection with "Require a pull request"
+and "Require review from Code Owners" (GitLab: code owner approval on protected branches). Rules
+later in the file override the block. `check --require-approvals` (and
+`catalog status --require-approvals`) then fails any approval that is missing, stale or made over
+a channel not in `--allow-channels` (default `tty`). With all three, an approval change merges
+only after a code owner reviews it, and CI flags any approval that a person did not type.
+
+**Not yet:** cryptographic signing of approvals (for example with the approver's SSH key on a
+hardware key, or one with a passphrase) would bind each approval to a person's key. It is the
+strongest option and is future work.

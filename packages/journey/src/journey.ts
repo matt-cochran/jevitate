@@ -12,6 +12,7 @@ import {
   type StatusSpec,
 } from "@jevitate/recording";
 import { mutationPairIssues } from "./mutation-proof.js";
+import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
 
 export interface SecretRef { manager: string; key: string; origin: string; field: string }
 export interface JourneyMetadata {
@@ -106,7 +107,12 @@ export interface JourneyMetadata {
 export interface JourneyApproval {
   contentHash: string;
   at: string;
-  acceptedWeak?: { reason: string; rules: string[] };
+  /**
+   * #437: how the approval was made — channel (`tty` | `non-interactive` | `mcp` | `ci`), the agent
+   * marker NAMES detected, the OS user. Absent on approvals recorded before 0.8.0.
+   */
+  provenance?: ApprovalProvenance;
+  acceptedWeak?: { reason: string; rules: string[]; provenance?: ApprovalProvenance };
   /**
    * #433: what the approver waived — `unvetted`: promoted while its linked job/persona was not
    * approved (`--accept-unvetted "<reason>"`), with the links as they stood (`job:<id> (draft)`).
@@ -121,12 +127,16 @@ export interface JourneyApprovalWaiver {
   kind: "unvetted";
   reason: string;
   items: string[];
+  /** #437: how this waiver was confirmed (the approval's provenance). */
+  provenance?: ApprovalProvenance;
 }
 
 /** #433: pre-approval findings acknowledged at an approval (`--accept-findings "<reason>"`), by `<analyzer>/<code>`. */
 export interface AcceptedFindings {
   reason: string;
   findings: string[];
+  /** #437: how this acknowledgment was confirmed (the approval's provenance). */
+  provenance?: ApprovalProvenance;
 }
 
 /** #402: one declared pair — see `JourneyMetadata.mutationPairs`. */
@@ -232,7 +242,9 @@ const SecretRefSchema = z.object({
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** #433: an `--accept-findings` acknowledgment, as a Journey's, a persona's or a job's approval records it. */
-export const AcceptedFindingsSchema = z.object({ reason: z.string().min(1), findings: z.array(z.string()).max(200) }).strict();
+export const AcceptedFindingsSchema = z
+  .object({ reason: z.string().min(1), findings: z.array(z.string()).max(200), provenance: ApprovalProvenanceSchema.optional() })
+  .strict();
 
 export const JourneySchema: ZodType<Journey> = z.object({
   metadata: z.object({
@@ -275,9 +287,10 @@ export const JourneySchema: ZodType<Journey> = z.object({
       .object({
         contentHash: z.string().regex(/^[0-9a-f]{64}$/, "approval.contentHash: a sha256 hex digest"),
         at: z.string().min(1),
-        acceptedWeak: z.object({ reason: z.string().min(1), rules: z.array(z.string()) }).strict().optional(),
+        provenance: ApprovalProvenanceSchema.optional(),
+        acceptedWeak: z.object({ reason: z.string().min(1), rules: z.array(z.string()), provenance: ApprovalProvenanceSchema.optional() }).strict().optional(),
         waivers: z
-          .array(z.object({ kind: z.literal("unvetted"), reason: z.string().min(1), items: z.array(z.string()) }).strict())
+          .array(z.object({ kind: z.literal("unvetted"), reason: z.string().min(1), items: z.array(z.string()), provenance: ApprovalProvenanceSchema.optional() }).strict())
           .max(20)
           .optional(),
         acceptedFindings: AcceptedFindingsSchema.optional(),

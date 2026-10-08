@@ -53,7 +53,9 @@ jevitate explore-author-journey --url <start-url> --goal "<outcome only>" --succ
 ```
 
 - Reached: an UNPROMOTED draft Journey is written. Promotion is a human decision. List the drafts
-  and ask the human to review and run `jevitate journey promote <id>`. Never promote yourself.
+  and ask the human to review and run `jevitate journey promote <id>` in their own terminal (it
+  asks them to type the id; from your shell it is refused with `E_APPROVAL_NEEDS_HUMAN`). Never
+  promote yourself, and never use `--non-interactive-approval`.
 - Stuck, detour, `exhausted` or `inconclusive`: that is a finding about the job itself
   (discoverability, UX, a broken step), not only a crash. Log it in the register.
 - A question rather than a task ("how many seats does the plan allow?") is a find-out run: a
@@ -157,7 +159,9 @@ broken check, never green.
 
 Read `jevitate catalog status --json` (MCP `catalog_status`) first: every approved job must have
 a promoted Journey for each persona it serves (no `gaps`), nothing in `stale` (needs re-review),
-and no `danglingLinks`. Release only when: every job in the catalog has a promoted Journey that passes; every finding is
+and no `danglingLinks`. Then `jevitate catalog status --require-approvals` (exit 1 when an approval
+is missing, stale, or was not typed by a person at a terminal — `mcp` or `non-interactive`); in
+CI, `jevitate check --suite <file> --require-approvals`. Release only when: every job in the catalog has a promoted Journey that passes; every finding is
 `fixed` by verify-fix (with a ledger entry or regression); the final round ran on the release
 build; and no `inconclusive` run was counted as a pass. Anything short of that, report it as open.
 

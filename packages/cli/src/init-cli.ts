@@ -9,6 +9,7 @@ import { collectAllMissingKeys, type KeyCollectionReport } from "./init-keys.js"
 import { formatInitKeysHuman } from "./cli-output.js";
 import { detectRuntimes, resolveInstallTargetPaths, installSkills, uninstallSkills, type InstallReport, type RuntimeId, type UninstallReport } from "./init-skills.js";
 import { currentEngineInfo } from "./engine.js";
+import { CodeownersArgsError, installCodeowners, parseOwners, type CodeownersReport } from "./init-codeowners.js";
 import { registerMcp, resolveMcpTargetPaths, type McpInstallReport } from "./init-mcp.js";
 import { initNextSteps, environmentHint } from "./init-next-steps.js";
 import { loadManifest } from "@jevitate/skills";
@@ -32,11 +33,16 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
     .option("--skip-project", "skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs)")
     .option("--claude-md", "#431: also keep a marked jevitate block in the project's CLAUDE.md pointing at the installed skills (Claude Code only)")
     .option(
+      "--codeowners <owners>",
+      "#437: write/merge a marked CODEOWNERS block (.github/CODEOWNERS, or the repo's existing one) making .jevitate/journeys/, personas.json and jobs.json need these owners' review (\"@org/team @user\"); enable code-owner review in branch protection",
+    )
+    .option(
       "--uninstall",
       "#431: remove the skill files and marked AGENTS.md/CLAUDE.md blocks jevitate installed (user-modified ones are skipped unless --force); keys, MCP registration and .jevitate/ are left alone",
     )
     .action(async function (this: Command) {
-      const { json, skipKeys, skipSkills, skipMcp, skipProject, targets, force, dryRun, replaceKeys, verify, claudeMd, uninstall } = this.opts<{
+      const { json, skipKeys, skipSkills, skipMcp, skipProject, targets, force, dryRun, replaceKeys, verify, claudeMd, uninstall, codeowners } = this.opts<{
+        codeowners?: string;
         claudeMd?: boolean;
         uninstall?: boolean;
         replaceKeys?: boolean;
@@ -74,10 +80,15 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
           }
           return;
         }
+        if (codeowners !== undefined) parseOwners(codeowners); // refused (exit 64) before anything is written
         const data: Record<string, unknown> = { initialized: true };
         // The repo's own .jevitate/ (0.2.0 layout): Journeys, regressions and baselines live with the
         // app's code; logs stay local. Secrets and machine state stay in ~/.jevitate.
         if (!skipProject) data.project = initProjectDir(deps.init?.detection?.cwd?.() ?? process.cwd(), { ...(dryRun === true ? { dryRun: true } : {}) });
+        // #437: the enforcement layer for approvals — code-owner review of .jevitate/ (with branch protection on the forge).
+        if (codeowners !== undefined) {
+          data.codeowners = await installCodeowners(deps.init?.detection?.cwd?.() ?? process.cwd(), codeowners, { ...(dryRun === true ? { dryRun: true } : {}) });
+        }
         if (!skipKeys) {
           // SECURITY: reuses the existing, already-guardrailed credential
           // collection. The report holds only key NAMES (required/collected/missing),
@@ -196,12 +207,17 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
                 : `project: ${project.dir} (${project.created.length} ${dryRun === true ? "would create" : "created"})\n`,
             );
           }
+          const owners = data.codeowners as CodeownersReport | undefined;
+          if (owners !== undefined) {
+            out?.(`codeowners: ${owners.path} (${dryRun === true && owners.action !== "unchanged" ? `would ${owners.action}` : owners.action}) — ${owners.owners.join(" ")}\n`);
+            out?.(`  note: ${owners.note}\n`);
+          }
           out?.(`next steps${(data.project as ProjectInitReport | undefined)?.dir == null ? "" : " (app URLs: .jevitate/environments.json)"}:\n`);
           for (const line of data.nextSteps as string[]) out?.(`  ${line}\n`);
           process.exitCode = 0;
         }
       } catch (err) {
-        const code = err instanceof KeyCheckError ? err.code : "E_INIT";
+        const code = err instanceof KeyCheckError || err instanceof CodeownersArgsError ? err.code : "E_INIT";
         emitCommandResult(program, fail(code, String(err instanceof Error ? err.message : err)), { json: json === true, command: "init" });
       }
     });

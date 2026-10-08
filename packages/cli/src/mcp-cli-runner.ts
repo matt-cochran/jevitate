@@ -1,5 +1,6 @@
 import { CommanderError, type Command } from "commander";
 import { EXIT_CODES } from "./exit-codes.js";
+import { runAsMcpInvocation } from "./approval-provenance.js";
 
 /**
  * #255 — the CLI, in process, for the MCP tools that mirror a CLI command (mcp-cli-tools.ts).
@@ -19,6 +20,8 @@ import { EXIT_CODES } from "./exit-codes.js";
  *   into a typed usage refusal (exit 64).
  * - `process.exitCode` (how every action reports its contract code) is saved, read and restored,
  *   and calls are serialised, so one call's code never leaks into another's or into the server's.
+ * - #437: every call runs inside `runAsMcpInvocation`, so an approval it makes (`promote_journey`,
+ *   `approve_demo`) never prompts and is recorded with provenance channel `mcp`.
  */
 
 export interface CliRunOutcome {
@@ -52,7 +55,8 @@ export function makeInProcessCliRunner(build: () => Command): McpCliRunner {
     const saved = process.exitCode;
     process.exitCode = undefined;
     try {
-      await program.parseAsync([...argv], { from: "user" });
+      // #437: an approval made inside an MCP tool call is recorded as channel `mcp` (an agent's).
+      await runAsMcpInvocation(() => program.parseAsync([...argv], { from: "user" }));
       const code = process.exitCode as number | string | undefined;
       return { stdout, exitCode: code === undefined ? 0 : Number(code) };
     } catch (err) {

@@ -7,6 +7,16 @@ import { StaleCatalogReviewError, approveCatalogItem, catalogJourneysDir, loadCa
 import { buildCatalogStatus, buildJobReview, buildPersonaReview, renderCatalogStatus, renderJobReview, renderPersonaReview } from "./catalog-review.js";
 import { ApprovalFindingsError } from "./pre-approval.js";
 import { EXIT_CODES } from "./exit-codes.js";
+import {
+  ApprovalArgsError,
+  approvalRefusal,
+  approvalsReport,
+  checkNonInteractiveReason,
+  describeProvenance,
+  makeApprovalConfirm,
+  parseAllowedChannels,
+  renderApprovals,
+} from "./approval-provenance.js";
 
 /**
  * #433 — the catalog commands: `persona review|approve <id>`, `job review|approve <id>` and
@@ -17,7 +27,10 @@ import { EXIT_CODES } from "./exit-codes.js";
 const DIR_HELP = "the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys";
 
 function refuse(program: Command, err: unknown, fallbackCode: string): void {
-  if (err instanceof UnknownCatalogItemError) {
+  const refusal = approvalRefusal(err);
+  if (refusal !== null) {
+    emitJson(program, fail(refusal.code, refusal.message));
+  } else if (err instanceof UnknownCatalogItemError) {
     emitJson(program, fail(err.code, err.message));
   } else if (err instanceof CatalogInputError || err instanceof StaleCatalogReviewError) {
     emitJson(program, fail(err.code, err.message));
@@ -90,9 +103,19 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
     .option("--dir <path>", DIR_HELP)
     .option("--reviewed-hash <hash>", `the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the ${kind} changed since`)
     .option("--accept-findings <reason>", "approve although pre-approval findings need an acknowledgment, recording the reason with the approval")
+    .option(
+      "--non-interactive-approval <reason>",
+      "#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this",
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, reviewedHash: hashFlag, acceptFindings } = this.opts<{ dir?: string; json?: boolean; reviewedHash?: string; acceptFindings?: string }>();
+      const { dir, json, reviewedHash: hashFlag, acceptFindings, nonInteractiveApproval } = this.opts<{
+        dir?: string;
+        json?: boolean;
+        reviewedHash?: string;
+        acceptFindings?: string;
+        nonInteractiveApproval?: string;
+      }>();
       let reviewedHash = hashFlag?.trim().toLowerCase();
       if (reviewedHash !== undefined && !/^[0-9a-f]{64}$/.test(reviewedHash)) {
         emitJson(program, fail(argsCode, "--reviewed-hash needs the 64-hex content hash a review sheet shows"));
@@ -103,6 +126,7 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
         return;
       }
       try {
+        checkNonInteractiveReason(nonInteractiveApproval);
         const action = kind === "persona" ? "persona approve" : "job approve";
         const { catalog, review, render } = await sheet(dir, id, action);
         if (!json) {
@@ -113,11 +137,13 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
         const result = await approveCatalogItem(kind, catalog, id, {
           ...(reviewedHash === undefined ? {} : { reviewedHash }),
           ...(acceptFindings === undefined ? {} : { acceptFindings }),
+          // #437: a typed confirmation on a TTY (or the escape hatch), recorded as provenance.
+          confirm: makeApprovalConfirm(deps.approval, nonInteractiveApproval === undefined ? {} : { nonInteractiveReason: nonInteractiveApproval }),
         });
         if (json) emitJson(program, ok(result));
         else {
           program.configureOutput().writeOut?.(
-            `approved ${kind} '${id}' (content hash ${result.approval.contentHash})${result.previousStatus === "stale" ? " — re-approved: its Journeys no longer need re-review on its account" : ""}\n`,
+            `approved ${kind} '${id}' (content hash ${result.approval.contentHash}; ${describeProvenance(result.approval.provenance)})${result.previousStatus === "stale" ? " — re-approved: its Journeys no longer need re-review on its account" : ""}\n`,
           );
           process.exitCode = 0;
         }
@@ -136,14 +162,22 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
     .command("status")
     .description("the jobs × personas matrix (which have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links and stale approvals")
     .option("--dir <path>", DIR_HELP)
+    .option("--require-approvals", "#437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels)")
+    .option("--allow-channels <list>", "#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty)")
     .option("--json", "emit a JSON envelope (the schema-checked report)")
     .action(async function (this: Command) {
-      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      const { dir, json, requireApprovals, allowChannels } = this.opts<{ dir?: string; json?: boolean; requireApprovals?: boolean; allowChannels?: string }>();
       try {
-        const report = buildCatalogStatus(await loadCatalog(resolveCatalogDir(deps.catalogDir, dir), catalogJourneysDir(dir, resolveJourneysDir(deps))));
+        if (allowChannels !== undefined && requireApprovals !== true) throw new ApprovalArgsError("--allow-channels needs --require-approvals");
+        const allowed = requireApprovals === true ? parseAllowedChannels(allowChannels) : undefined;
+        const catalog = await loadCatalog(resolveCatalogDir(deps.catalogDir, dir), catalogJourneysDir(dir, resolveJourneysDir(deps)));
+        // #437: every recorded approval and how it was made; with --require-approvals, the violations.
+        const approvals = approvalsReport([catalog], allowed);
+        const report = { ...buildCatalogStatus(catalog), approvals };
+        const failed = (approvals.requirement?.violations.length ?? 0) > 0;
         if (json) emitJson(program, ok(report));
-        else program.configureOutput().writeOut?.(renderCatalogStatus(report));
-        process.exitCode = 0;
+        else program.configureOutput().writeOut?.(`${renderCatalogStatus(report)}${renderApprovals(approvals)}`);
+        process.exitCode = failed ? EXIT_CODES.defects : 0;
       } catch (err) {
         refuse(program, err, "E_CATALOG_STATUS");
       }

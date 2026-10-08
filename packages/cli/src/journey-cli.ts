@@ -16,6 +16,7 @@ import { ReviewSidecarError } from "./journey-review-store.js";
 import { UnvettedLinksError, resolveCatalogDir } from "./catalog-api.js";
 import { CatalogInputError } from "./catalog.js";
 import { ApprovalFindingsError } from "./pre-approval.js";
+import { approvalRefusal, checkNonInteractiveReason, describeProvenance, makeApprovalConfirm } from "./approval-provenance.js";
 import { TargetConfigError } from "./target-config.js";
 import { ExtensionMismatchError } from "./browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
@@ -97,7 +98,9 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
             out?.("no journeys yet — record one with `jevitate record` (see jevitate record --help)\n");
           } else {
             for (const m of metas) {
-              out?.(`${m.id}\t${m.name}${m.promoted ? "" : " (unpromoted)"}\n`);
+              // #437: how a promoted Journey's approval was made ("approved non-interactively (likely an agent: CLAUDECODE)").
+              const how = m.promoted && m.approval !== undefined ? ` — ${describeProvenance(m.approval.provenance)}` : "";
+              out?.(`${m.id}\t${m.name}${m.promoted ? "" : " (unpromoted)"}${how}\n`);
             }
           }
           process.exitCode = 0;
@@ -343,9 +346,14 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--review-sheet <file>", "#432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash")
     .option("--accept-unvetted <reason>", "#433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers")
     .option("--accept-findings <reason>", "#433: promote although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings")
+    .option(
+      "--non-interactive-approval <reason>",
+      "#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person",
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings } = this.opts<{
+      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, nonInteractiveApproval } = this.opts<{
+        nonInteractiveApproval?: string;
         dir?: string;
         json?: boolean;
         acceptWeak?: string;
@@ -355,6 +363,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         acceptFindings?: string;
       }>();
       try {
+        checkNonInteractiveReason(nonInteractiveApproval);
         const journeysDir = resolveJourneysDir(deps, dir);
         // #432: what the reviewer read — a hash, a sheet file, or (human mode) the sheet shown below.
         let reviewedHash = hashFlag?.trim().toLowerCase();
@@ -389,16 +398,23 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           ...(acceptUnvetted === undefined ? {} : { acceptUnvetted }),
           ...(acceptFindings === undefined ? {} : { acceptFindings }),
           catalogDir: resolveCatalogDir(deps.catalogDir),
+          // #437: a typed confirmation on a TTY (or the escape hatch, or the MCP channel), recorded as provenance.
+          confirm: makeApprovalConfirm(deps.approval, nonInteractiveApproval === undefined ? {} : { nonInteractiveReason: nonInteractiveApproval }),
         });
         const envelope = ok(journeyResult.metadata);
         if (json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.(`promoted journey '${journeyResult.metadata.id}' (approved content hash ${journeyResult.metadata.approval?.contentHash ?? ""})\n`);
+          program.configureOutput().writeOut?.(
+            `promoted journey '${journeyResult.metadata.id}' (approved content hash ${journeyResult.metadata.approval?.contentHash ?? ""}; ${describeProvenance(journeyResult.metadata.approval?.provenance)})\n`,
+          );
           process.exitCode = 0;
         }
       } catch (err) {
-        if (err instanceof UnknownJourneyError) {
+        const refusal = approvalRefusal(err);
+        if (refusal !== null) {
+          emitJson(program, fail(refusal.code, refusal.message));
+        } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
         } else if (err instanceof StaleReviewError || err instanceof ReviewSheetError || err instanceof ReviewSidecarError || err instanceof TargetConfigError) {
           emitJson(program, fail(err instanceof TargetConfigError ? "E_TARGET_CONFIG" : err.code, err.message));

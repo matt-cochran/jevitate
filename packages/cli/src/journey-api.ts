@@ -1,4 +1,5 @@
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding } from "@jevitate/journey";
+import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { writeApprovedSnapshot } from "./journey-review-store.js";
 import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
@@ -266,6 +267,12 @@ export interface PromoteJourneyOptions {
   catalogDir?: string | null;
   /** Which approval path asks (`demo approve` promotes through here too). */
   action?: "journey promote" | "demo approve";
+  /**
+   * #437: confirms the approval (after every gate, before anything is written) and returns its
+   * provenance — the CLI's `makeApprovalConfirm` (a typed confirmation on a TTY, the escape hatch,
+   * or the MCP channel). Omitted: recorded as `non-interactive` (`programmaticProvenance`).
+   */
+  confirm?: ApprovalConfirm;
 }
 
 export async function promoteJourney(dir: string, id: string, opts: PromoteJourneyOptions = {}): Promise<Journey> {
@@ -303,12 +310,27 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
     ...(opts.acceptUnvetted === undefined ? {} : { acceptUnvetted: opts.acceptUnvetted }),
     ...(opts.acceptFindings === undefined ? {} : { acceptFindings: opts.acceptFindings }),
   });
+  // #437: the person confirms the approval and each waiver given with it (or it is refused) — then it is recorded with how it was made.
+  const provenance =
+    opts.confirm === undefined
+      ? programmaticProvenance()
+      : await opts.confirm({
+          kind: opts.action === "demo approve" ? "demo" : "journey",
+          id,
+          contentHash,
+          waivers: [
+            ...(acceptedWeak === undefined ? [] : [{ flag: "--accept-weak", reason: acceptedWeak.reason, detail: acceptedWeak.rules.join(", ") }]),
+            ...(gate.waivers ?? []).map((w) => ({ flag: "--accept-unvetted", reason: w.reason, detail: w.items.join(", ") })),
+            ...(gate.acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: gate.acceptedFindings.reason, detail: gate.acceptedFindings.findings.join(", ") }]),
+          ],
+        });
   const approval: JourneyApproval = {
     contentHash,
     at: clock.nowIso(),
-    ...(acceptedWeak === undefined ? {} : { acceptedWeak }),
-    ...(gate.waivers === undefined ? {} : { waivers: gate.waivers }),
-    ...(gate.acceptedFindings === undefined ? {} : { acceptedFindings: gate.acceptedFindings }),
+    provenance,
+    ...(acceptedWeak === undefined ? {} : { acceptedWeak: { ...acceptedWeak, provenance } }),
+    ...(gate.waivers === undefined ? {} : { waivers: gate.waivers.map((w) => ({ ...w, provenance })) }),
+    ...(gate.acceptedFindings === undefined ? {} : { acceptedFindings: { ...gate.acceptedFindings, provenance } }),
   };
   const promoted: Journey = {
     ...existing,

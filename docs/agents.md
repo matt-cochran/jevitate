@@ -88,7 +88,7 @@ tool from the CLI), except the few listed below with the reason:
 | `run_journey` | run a promoted Journey: `params`, `storageState`, `env`/`baseUrl`, `headed`/`slowMo`, `recordVideo` → `videoPaths`, `screenshots` → `screenshotPaths`, `viewport`/`device`, `fixtures`, `selfHeal` (+ `real`/`fakeAi`) | `journey run` |
 | `annotate_journey` | draft each step's objective/expected result into a reviewable draft; `approve: true` applies the reviewed draft (refused if the Journey changed) | `journey annotate` (`--approve`) |
 | `demo_journey` | replay a Journey as a narrated demo: `video` (.webm + .vtt) and/or `guide` (.md + screenshots) | `journey demo` |
-| `promote_journey`, `publish_journey` | promote a local Journey (refused when its assertions can't prove its outcome; only the CLI's `--accept-weak` waives that; a Journey linked to an unapproved job/persona needs `acceptUnvetted`, recorded as a waiver; findings needing an acknowledgment only the CLI's `--accept-findings` accepts); publish one to a registered source | `journey promote`, `journey publish` |
+| `promote_journey`, `publish_journey` | promote a local Journey — recorded as an agent's approval (`provenance.channel: "mcp"`) (refused when its assertions can't prove its outcome; only the CLI's `--accept-weak` waives that; a Journey linked to an unapproved job/persona needs `acceptUnvetted`, recorded as a waiver; findings needing an acknowledgment only the CLI's `--accept-findings` accepts); publish one to a registered source | `journey promote`, `journey publish` |
 | `lint_journey` | the assertions that can't prove a Journey's outcome | `journey lint` |
 | `review_journey` | read-only: the review sheet for promotion sign-off (summary, steps, side effects, inputs by name, proof, change since last approval, content hash); pass its `contentHash` as `promote_journey`'s `reviewedHash` | `journey review --json` (`promote --reviewed-hash`) |
 | `review_persona`, `review_job`, `catalog_status` | read-only: a catalog persona's / job's review sheet (job story, personas, Journeys, gaps, approval state, pre-approval findings, content hash); the jobs × personas coverage, unlinked Journeys and stale approvals. Approving a persona or a job is human-only (CLI) | `persona review --json`, `job review --json`, `catalog status --json` |
@@ -121,6 +121,18 @@ Not reachable over MCP, on purpose:
 | `record` | a person clicks through the app while it records (`author_journey` is the agent's way) |
 | `source trust` (and `source add --accept-tou`) | trusting a third-party Journey, or accepting a source's Terms of Use, is a person's decision |
 | `persona approve`, `job approve` (and `--accept-findings` on `journey promote` / `demo approve`) | signing off a catalog persona or job, or accepting findings that need an acknowledgment, is a person's decision ([the catalog](./catalog.md)); MCP reads the sheets (`review_persona`, `review_job`) |
+| `--non-interactive-approval` (on every approval command) | the scripted-setup escape hatch is the operator's choice; an MCP approval needs none — it is always recorded as channel `mcp` |
+
+**Approvals are a person's (#437).** `promote_journey` and `approve_demo` still work, but every
+approval they make is recorded with `provenance.channel: "mcp"` — an agent's approval, never a
+person's — and `jevitate check --require-approvals` fails it unless the operator allows `mcp`. On
+the CLI, every approval (`journey promote`, `demo approve`, `persona approve`, `job approve`, and
+the `--accept-*` waivers) needs an interactive terminal and a typed confirmation; an agent's shell
+gets `E_APPROVAL_NEEDS_HUMAN` (exit 64). An agent hands the approval to a person — it names the
+command and the review sheet to read — and never passes `--non-interactive-approval` on its own:
+that flag is for scripted setups a person configured, and it is recorded as `non-interactive`
+with the agent markers it detects (e.g. `CLAUDECODE`). See
+[what "human approval" guarantees](./catalog.md#what-human-approval-guarantees).
 
 **How the CLI-mirroring tools work.** Each tool that mirrors a CLI command takes typed, closed
 arguments named after the command's flags (`--storage-state` → `storageState`, a family's command

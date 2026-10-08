@@ -131,7 +131,7 @@ describe("explore-author-journey — served (#369)", () => {
     expect(journey?.metadata.parameters).toEqual([expect.objectContaining({ name: "secret1", secret: true })]);
     expect(JSON.stringify(journey)).not.toContain(PASSWORD);
 
-    await cli(journeysDir, ["journey", "promote", "signin", "--json"]);
+    await cli(journeysDir, ["journey", "promote", "signin", "--json", "--non-interactive-approval", "test"]);
     const run = await cli(journeysDir, ["journey", "run", "signin", "--param", `secret1=${PASSWORD}`, "--json"]);
     expect((JSON.parse(run.out) as { data: { outcome: string } }).data.outcome, run.out).toBe("ok");
     expect(run.out).not.toContain(PASSWORD);
