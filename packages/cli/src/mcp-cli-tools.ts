@@ -108,6 +108,8 @@ export const OMIT = {
     "#293: a branch-point finding replays through its Journey prefix with the params its result recorded (non-secret ones); a secret param is re-supplied by the operator on the CLI, never sent as an MCP argument",
   tou: "accepting a third-party source's Terms of Use is a person's decision (like approve_action): MCP can add, pull and run a source, never accept for them",
   acceptWeak: "#401: promoting a Journey whose assertions cannot prove its outcome is a reviewer's waiver (recorded on the Journey): a person's decision on the CLI, never a request's",
+  reviewSheet: "#432: a review sheet FILE is what a person read on their screen; over MCP the same binding is the reviewedHash argument (the sheet's content hash from review_journey)",
+  reviewRendering: "#432: review_journey returns the schema-checked JSON sheet; the Markdown/text renderings and writing them to a file are for people at the CLI",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
@@ -154,7 +156,22 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "promote_journey",
     description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
-    command: { path: "journey promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, ...JSON_FLAG } },
+    command: {
+      path: "journey promote",
+      params: { id: pos(), reviewedHash: s("--reviewed-hash") },
+      omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, "--review-sheet": OMIT.reviewSheet, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "review_journey",
+    description:
+      "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, and its content hash. " +
+      "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed.",
+    command: {
+      path: "journey review",
+      params: { id: pos() },
+      omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
+    },
   },
   {
     name: "lint_journey",

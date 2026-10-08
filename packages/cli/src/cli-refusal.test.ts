@@ -162,8 +162,9 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "journey list": { exempt: "a listing: an empty or missing dir lists nothing" },
   "journey find": { exempt: "a search: no match is an empty result" },
   "journey run": { base: ["nope"], cases: [["nope"], ["nope", "--storage-state", missing]] },
-  "journey promote": { cases: [["nope"]] },
+  "journey promote": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"]] },
   "journey lint": { cases: [["nope"], ["../x"]] },
+  "journey review": { cases: [["nope"], ["../x"]] },
   "journey verify": { cases: [["nope", "--mutate"], ["nope"], ["nope", "--mutate", "--storage-state", missing]] },
   // #293: an unknown Journey (or an id that tries to leave the store) is refused.
   "journey anchors": { cases: [["nope"], ["../x"]] },

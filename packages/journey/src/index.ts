@@ -8,3 +8,4 @@ export * from "./campaign-spec.js";
 export * from "./assertions.js";
 export * from "./lint.js";
 export * from "./mutation-proof.js";
+export * from "./review-schema.js";

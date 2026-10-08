@@ -17,6 +17,8 @@ export const ALLOWED_TOOLS = [
   "lint_journey", "verify_journey",
   // #425 — a sweep: many explore missions over a targets file, one aggregated result.
   "run_sweep",
+  // #432 — the read-only review sheet a person reads before promote_journey (bound by its content hash).
+  "review_journey",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [

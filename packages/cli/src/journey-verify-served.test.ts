@@ -181,6 +181,9 @@ describe("journey verify --mutate (#402, served)", () => {
     expect(blocked.failedSites).toEqual(expect.arrayContaining([{ where: "step-request", step: 3, checkIndex: 0 }, { where: "end-state", index: 0 }]));
     expect(report.verdict).toBe("proven");
     expect(exitCode).toBe(0);
+    // #432: the verdict is recorded beside the Journey, and its review sheet shows it.
+    const review = await cli(join(dir, "strong"), ["journey", "review", "strong", "--json"]);
+    expect((JSON.parse(review.out) as { data: { proof: { verify: unknown } } }).data.proof.verify).toMatchObject({ status: "recorded", verdict: "proven", stale: false });
   }, 240_000);
 
   it("block-write that did not block the step's own recorded write is not-applied, never a proof", async () => {

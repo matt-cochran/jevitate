@@ -587,13 +587,15 @@
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey promote
-  description: promote a local Journey (human-approval gate) so it becomes discoverable/runnable
+  description: promote a local Journey (human-approval gate) so it becomes discoverable/runnable; shows its review sheet first and records the approval
   arguments:
     - name=id required=true variadic=false default=null
   options:
     - flags=--accept-weak <reason> required=true mandatory=false negate=false variadic=false default=null description=#401: promote a Journey whose assertions cannot prove its outcome, recording the reason
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--review-sheet <file> required=true mandatory=false negate=false variadic=false default=null description=#432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash
+    - flags=--reviewed-hash <hash> required=true mandatory=false negate=false variadic=false default=null description=#432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since
 
 # journey publish
   description: 
@@ -605,6 +607,16 @@
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--to <source> required=true mandatory=true negate=false variadic=false default=null description=registered source name to publish into
+
+# journey review
+  description: a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked sheet)
+    - flags=--markdown required=false mandatory=false negate=false variadic=false default=null description=render the sheet as Markdown
+    - flags=--out <file> required=true mandatory=false negate=false variadic=false default=null description=write the sheet (JSON with --json, Markdown with --markdown, else text) to this file
 
 # journey run
   description: 

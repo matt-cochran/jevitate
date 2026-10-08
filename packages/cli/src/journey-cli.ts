@@ -1,7 +1,7 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { Command } from "commander";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, journeyStepCount, listJourneyAnchors, type JourneyLintFinding } from "@jevitate/journey";
 import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
@@ -9,7 +9,11 @@ import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
-import { runJourneyProgrammatically, promoteJourney, lintJourneyById, WeakJourneyError, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { runJourneyProgrammatically, promoteJourney, lintJourneyById, WeakJourneyError, UnknownJourneyError, JourneyRequiresAuthError, StaleReviewError } from "./journey-api.js";
+import { ReviewSheetError, renderReviewMarkdown, renderReviewText, reviewSheetHash } from "./journey-review.js";
+import { reviewJourneyById } from "./journey-review-api.js";
+import { ReviewSidecarError } from "./journey-review-store.js";
+import { TargetConfigError } from "./target-config.js";
 import { ExtensionMismatchError } from "./browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { withSiteGate } from "./site-gate-cli.js";
@@ -49,6 +53,12 @@ import {
 } from "./cli-shared.js";
 
 /** #401: one human line per lint finding — level, step (when it has one), rule, message. */
+/** #432: the targets.json a review sheet reads its site's safety config from (the CLI's own seam). */
+function targetsOpts(deps: CliDeps): { targetsFile?: string } {
+  const file = deps.explore?.targetsConfigPath;
+  return file === undefined ? {} : { targetsFile: file };
+}
+
 function lintFindingLine(finding: JourneyLintFinding): string {
   const message = finding.message.replace(/^step \d+: /, "");
   return `${finding.level}  ${finding.step === undefined ? "" : `step ${finding.step}  `}${finding.rule}  ${message}`;
@@ -323,24 +333,65 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   // always starts `false` — see `explore-author-journey`/`jevitate record`).
   journey
     .command("promote <id>")
-    .description("promote a local Journey (human-approval gate) so it becomes discoverable/runnable")
+    .description("promote a local Journey (human-approval gate) so it becomes discoverable/runnable; shows its review sheet first and records the approval")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--accept-weak <reason>", "#401: promote a Journey whose assertions cannot prove its outcome, recording the reason")
+    .option("--reviewed-hash <hash>", "#432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since")
+    .option("--review-sheet <file>", "#432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, acceptWeak } = this.opts<{ dir?: string; json?: boolean; acceptWeak?: string }>();
+      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet } = this.opts<{
+        dir?: string;
+        json?: boolean;
+        acceptWeak?: string;
+        reviewedHash?: string;
+        reviewSheet?: string;
+      }>();
       try {
-        const journeyResult = await promoteJourney(resolveJourneysDir(deps, dir), id, acceptWeak === undefined ? {} : { acceptWeak });
+        const journeysDir = resolveJourneysDir(deps, dir);
+        // #432: what the reviewer read — a hash, a sheet file, or (human mode) the sheet shown below.
+        let reviewedHash = hashFlag?.trim().toLowerCase();
+        if (reviewedHash !== undefined && !/^[0-9a-f]{64}$/.test(reviewedHash)) {
+          emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--reviewed-hash needs the 64-hex content hash a review sheet shows"));
+          return;
+        }
+        if (reviewSheet !== undefined) {
+          let text: string;
+          try {
+            text = await readFile(reviewSheet, "utf8");
+          } catch (e) {
+            emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", `cannot read --review-sheet ${reviewSheet}: ${e instanceof Error ? e.message : String(e)}`));
+            return;
+          }
+          const fromSheet = reviewSheetHash(text);
+          if (reviewedHash !== undefined && reviewedHash !== fromSheet) {
+            emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--reviewed-hash and --review-sheet name different content hashes"));
+            return;
+          }
+          reviewedHash = fromSheet;
+        }
+        if (!json) {
+          // Human mode: the sheet is shown before promoting, and the approval binds to what was shown.
+          const { review } = await reviewJourneyById(journeysDir, id, targetsOpts(deps));
+          program.configureOutput().writeOut?.(`${renderReviewText(review)}\n`);
+          reviewedHash ??= review.contentHash;
+        }
+        const journeyResult = await promoteJourney(journeysDir, id, {
+          ...(acceptWeak === undefined ? {} : { acceptWeak }),
+          ...(reviewedHash === undefined ? {} : { reviewedHash }),
+        });
         const envelope = ok(journeyResult.metadata);
         if (json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.(`promoted journey '${journeyResult.metadata.id}'\n`);
+          program.configureOutput().writeOut?.(`promoted journey '${journeyResult.metadata.id}' (approved content hash ${journeyResult.metadata.approval?.contentHash ?? ""})\n`);
           process.exitCode = 0;
         }
       } catch (err) {
         if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof StaleReviewError || err instanceof ReviewSheetError || err instanceof ReviewSidecarError || err instanceof TargetConfigError) {
+          emitJson(program, fail(err instanceof TargetConfigError ? "E_TARGET_CONFIG" : err.code, err.message));
         } else if (err instanceof WeakJourneyError) {
           // #401: the findings printed before the refusal (human mode); the reason the gate is here.
           if (!json) {
@@ -351,6 +402,48 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           process.exitCode = 1;
         } else {
           emitJson(program, fail("E_JOURNEY_PROMOTE", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  // #432 — the review sheet a reviewer reads before `journey promote`: what the Journey does, what it
+  // changes, what it proves, what changed since its last approval, and the content hash to bind to.
+  journey
+    .command("review <id>")
+    .description("a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--markdown", "render the sheet as Markdown")
+    .option("--out <file>", "write the sheet (JSON with --json, Markdown with --markdown, else text) to this file")
+    .option("--json", "emit a JSON envelope (the schema-checked sheet)")
+    .action(async function (this: Command, id: string) {
+      const { dir, json, markdown, out: outFile } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; out?: string }>();
+      if (json === true && markdown === true) {
+        emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--json and --markdown are exclusive: pick one rendering"));
+        return;
+      }
+      try {
+        const { review } = await reviewJourneyById(resolveJourneysDir(deps, dir), id, targetsOpts(deps));
+        const rendered = json ? `${JSON.stringify(review, null, 2)}\n` : markdown ? renderReviewMarkdown(review) : renderReviewText(review);
+        if (outFile !== undefined) await writeFile(outFile, rendered, { mode: 0o600 });
+        if (json) {
+          emitJson(program, ok(review));
+        } else if (outFile !== undefined) {
+          program.configureOutput().writeOut?.(`review sheet for journey '${review.id}' written to ${outFile} (content hash ${review.contentHash})\n`);
+        } else {
+          program.configureOutput().writeOut?.(rendered);
+        }
+        process.exitCode = 0;
+      } catch (err) {
+        if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof ReviewSidecarError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof TargetConfigError) {
+          emitJson(program, fail("E_TARGET_CONFIG", err.message));
+        } else if (err instanceof Error && err.message.startsWith("Invalid journey id")) {
+          emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", err.message));
+        } else {
+          emitJson(program, fail("E_JOURNEY_REVIEW", String(err instanceof Error ? err.message : err)));
         }
       }
     });

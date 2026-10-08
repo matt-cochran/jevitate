@@ -1,4 +1,6 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyLintFinding } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding } from "@jevitate/journey";
+import { journeyReviewHash } from "./journey-review.js";
+import { writeApprovedSnapshot } from "./journey-review-store.js";
 import { redactText } from "@jevitate/ai-core";
 import { safeRunPolicy, type RunPolicy, clock } from "@jevitate/domain";
 import { join } from "node:path";
@@ -38,6 +40,11 @@ export class JourneyRequiresAuthError extends Error {}
  * #401: the Journey's assertions cannot prove its outcome (the `lintJourney` errors). `promote`
  * refuses unless the reviewer accepts it with a non-empty `--accept-weak <reason>`.
  */
+/** #432: `journey promote --reviewed-hash`: the Journey changed after the reviewer's sheet was produced. */
+export class StaleReviewError extends Error {
+  readonly code = "E_JOURNEY_REVIEW_STALE";
+}
+
 export class WeakJourneyError extends Error {
   constructor(message: string, readonly findings: readonly JourneyLintFinding[] = []) {
     super(message);
@@ -238,14 +245,25 @@ export async function lintJourneyById(
  * #401: lints first — a Journey whose assertions cannot prove its outcome is refused
  * (`WeakJourneyError`) unless the reviewer accepts it with a non-empty `--accept-weak <reason>`,
  * which is recorded on the Journey (`metadata.acceptedWeak`). Warnings never block.
+ *
+ * #432: records the approval (`metadata.approval`: the review hash, when, the waiver) and keeps a
+ * snapshot of the approved Journey (`.approved/<id>.json`). Given `reviewedHash` (what the reviewer's
+ * sheet showed), a Journey that changed since is refused (`StaleReviewError`) before anything else.
  */
-export async function promoteJourney(dir: string, id: string, opts: { acceptWeak?: string } = {}): Promise<Journey> {
+export async function promoteJourney(dir: string, id: string, opts: { acceptWeak?: string; reviewedHash?: string } = {}): Promise<Journey> {
   const store = new FsJourneyStore(dir);
   const registry = new JourneyRegistry(store);
 
   const existing = await registry.get(id);
   if (!existing) {
     throw new UnknownJourneyError(`unknown journey '${id}'`);
+  }
+  // #432: approval binds to what the reviewer read — refused when the Journey changed since.
+  const contentHash = journeyReviewHash(existing);
+  if (opts.reviewedHash !== undefined && opts.reviewedHash.trim().toLowerCase() !== contentHash) {
+    throw new StaleReviewError(
+      `journey '${id}' changed after its review sheet was produced (reviewed ${opts.reviewedHash.trim()}, now ${contentHash}) — review it again: jevitate journey review ${id}`,
+    );
   }
   const errors = lintJourney(existing).filter((f) => f.level === "error");
   const reason = opts.acceptWeak?.trim() ?? "";
@@ -259,14 +277,16 @@ export async function promoteJourney(dir: string, id: string, opts: { acceptWeak
       errors,
     );
   }
-  if (errors.length > 0) {
-    const acceptedWeak = { reason, rules: [...new Set(errors.map((f) => f.rule))] };
-    await store.put({ ...existing, metadata: { ...existing.metadata, promoted: true, acceptedWeak } });
-    return (await registry.get(id)) ?? { ...existing, metadata: { ...existing.metadata, promoted: true, acceptedWeak } };
-  }
-  await registry.promote(id);
-  const promoted = await registry.get(id);
-  return promoted ?? { ...existing, metadata: { ...existing.metadata, promoted: true } };
+  const acceptedWeak = errors.length > 0 ? { reason, rules: [...new Set(errors.map((f) => f.rule))] } : undefined;
+  const approval: JourneyApproval = { contentHash, at: clock.nowIso(), ...(acceptedWeak === undefined ? {} : { acceptedWeak }) };
+  const promoted: Journey = {
+    ...existing,
+    metadata: { ...existing.metadata, promoted: true, ...(acceptedWeak === undefined ? {} : { acceptedWeak }), approval },
+  };
+  await store.put(promoted);
+  // #432: the Journey as approved — the next review diffs against it ("change since last approval").
+  await writeApprovedSnapshot(dir, promoted);
+  return (await registry.get(id)) ?? promoted;
 }
 
 /**

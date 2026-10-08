@@ -28,3 +28,7 @@ test("facade exposes queue_exploration alongside the existing allowlist", () => 
     expect(names.has(forbidden)).toBe(false);
   }
 });
+
+test("#432: facade exposes the read-only review_journey tool", () => {
+  expect(new Set(listToolNames()).has("review_journey")).toBe(true);
+});
