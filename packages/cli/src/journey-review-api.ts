@@ -4,7 +4,8 @@ import { readApprovedSnapshot, readVerifyRecord } from "./journey-review-store.j
 import { UnknownJourneyError } from "./journey-api.js";
 import { loadCatalog, resolveCatalogDir } from "./catalog-api.js";
 import { catalogJourney, journeyLinks } from "./catalog.js";
-import { preApprovalFindings } from "./pre-approval.js";
+import { preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
+import { jevLayerOf, type JevSetup } from "./jev-advisor.js";
 import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 
 /**
@@ -16,7 +17,7 @@ import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 export async function reviewJourneyById(
   journeysDir: string,
   id: string,
-  opts: { readonly targetsFile?: string; readonly catalogDir?: string | null } = {},
+  opts: { readonly targetsFile?: string; readonly catalogDir?: string | null; readonly readiness?: boolean; readonly jev?: JevSetup; readonly action?: ApprovalAction } = {},
 ): Promise<{ journey: Journey; review: JourneyReview }> {
   const journey = await new FsJourneyStore(journeysDir).get(id);
   if (journey === null) throw new UnknownJourneyError(`unknown journey '${id}'`);
@@ -30,7 +31,12 @@ export async function reviewJourneyById(
   // #433: the catalog links and the shared pre-approval findings, as `journey promote` gates on them.
   const catalog = await loadCatalog(opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir, journeysDir);
   const links = journeyLinks(catalog, catalogJourney(journey));
-  const findings = await preApprovalFindings({ kind: "journey", id: journey.metadata.id }, catalog, { action: "review", journey });
+  const findings = await preApprovalFindings({ kind: "journey", id: journey.metadata.id }, catalog, {
+    action: opts.action ?? "review",
+    journey,
+    ...(opts.readiness === true ? { readiness: true } : {}),
+    ...(opts.jev === undefined ? {} : { jev: opts.jev }),
+  });
   const review = buildJourneyReview(journey, {
     ...(safety === undefined ? {} : { safety }),
     catalog: { links, findings },
@@ -38,5 +44,5 @@ export async function reviewJourneyById(
     lastVerify: await readVerifyRecord(journeysDir, id),
   });
   // Fail closed: what is emitted always matches the published schema.
-  return { journey, review: JourneyReviewSchema.parse(review) };
+  return { journey, review: JourneyReviewSchema.parse(opts.jev === undefined ? review : { ...review, jev: jevLayerOf(opts.jev) }) };
 }

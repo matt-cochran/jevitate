@@ -1,4 +1,5 @@
-import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { JEV_PROVIDER_FLAG_HELP, emitUsageLine, jevProviderArg } from "./cli-shared.js";
+import { READINESS_FLAG_HELP, REAL_JEV_FLAG_HELP, jevSetupFor } from "./catalog-cli.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -343,9 +344,11 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--review-sheet <file>", "#432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash")
     .option("--accept-unvetted <reason>", "#433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers")
     .option("--accept-findings <reason>", "#433: promote although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings")
+    .option("--real", `${REAL_JEV_FLAG_HELP}; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings`)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings } = this.opts<{
+      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, real, jevProvider } = this.opts<{
         dir?: string;
         json?: boolean;
         acceptWeak?: string;
@@ -353,6 +356,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         reviewSheet?: string;
         acceptUnvetted?: string;
         acceptFindings?: string;
+        real?: boolean;
+        jevProvider?: string;
       }>();
       try {
         const journeysDir = resolveJourneysDir(deps, dir);
@@ -377,13 +382,16 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           }
           reviewedHash = fromSheet;
         }
+        // #434/#435: the readiness checks and the catalog analysis run before every approval; Jev only with --real.
+        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { real, jevProvider });
         if (!json) {
           // Human mode: the sheet is shown before promoting, and the approval binds to what was shown.
-          const { review } = await reviewJourneyById(journeysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir) });
+          const { review } = await reviewJourneyById(journeysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: true, jev, action: "journey promote" });
           program.configureOutput().writeOut?.(`${renderReviewText(review)}\n`);
           reviewedHash ??= review.contentHash;
         }
         const journeyResult = await promoteJourney(journeysDir, id, {
+          jev,
           ...(acceptWeak === undefined ? {} : { acceptWeak }),
           ...(reviewedHash === undefined ? {} : { reviewedHash }),
           ...(acceptUnvetted === undefined ? {} : { acceptUnvetted }),
@@ -416,6 +424,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           process.exitCode = 1;
         } else if (err instanceof CatalogInputError) {
           emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof GatewaySelectionError || err instanceof MissingCredentialError) {
+          emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
         } else {
           emitJson(program, fail("E_JOURNEY_PROMOTE", String(err instanceof Error ? err.message : err)));
         }
@@ -430,15 +440,19 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--markdown", "render the sheet as Markdown")
     .option("--out <file>", "write the sheet (JSON with --json, Markdown with --markdown, else text) to this file")
+    .option("--readiness", READINESS_FLAG_HELP)
+    .option("--real", REAL_JEV_FLAG_HELP)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit a JSON envelope (the schema-checked sheet)")
     .action(async function (this: Command, id: string) {
-      const { dir, json, markdown, out: outFile } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; out?: string }>();
+      const { dir, json, markdown, out: outFile, readiness, real, jevProvider } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string }>();
       if (json === true && markdown === true) {
         emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--json and --markdown are exclusive: pick one rendering"));
         return;
       }
       try {
-        const { review } = await reviewJourneyById(resolveJourneysDir(deps, dir), id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir) });
+        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { real, jevProvider });
+        const { review } = await reviewJourneyById(resolveJourneysDir(deps, dir), id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: readiness === true, jev });
         const rendered = json ? `${JSON.stringify(review, null, 2)}\n` : markdown ? renderReviewMarkdown(review) : renderReviewText(review);
         if (outFile !== undefined) await writeFile(outFile, rendered, { mode: 0o600 });
         if (json) {
@@ -448,6 +462,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         } else {
           program.configureOutput().writeOut?.(rendered);
         }
+        emitUsageLine(program, review.jev);
+        // #434: a review never fails on its findings (readiness and Jev answers are advice).
         process.exitCode = 0;
       } catch (err) {
         if (err instanceof UnknownJourneyError) {
@@ -456,6 +472,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof TargetConfigError) {
           emitJson(program, fail("E_TARGET_CONFIG", err.message));
+        } else if (err instanceof GatewaySelectionError || err instanceof MissingCredentialError) {
+          emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
         } else if (err instanceof Error && err.message.startsWith("Invalid journey id")) {
           emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", err.message));
         } else {

@@ -111,7 +111,7 @@ export const OMIT = {
   reviewSheet: "#432: a review sheet FILE is what a person read on their screen; over MCP the same binding is the reviewedHash argument (the sheet's content hash from review_journey)",
   acceptFindings:
     "#433: approving despite pre-approval findings that need an acknowledgment (conflicts, broken links, …) is the approver's own judgment, recorded with the approval: a person's decision on the CLI (like --accept-weak), never a request's",
-  catalogRendering: "#433: review_persona / review_job / catalog_status return the schema-checked JSON; the Markdown/text renderings and writing them to a file are for people at the CLI",
+  catalogRendering: "#433/#435: review_persona / review_job / catalog_status / analyze_catalog return the schema-checked JSON; the Markdown/text renderings and writing them to a file are for people at the CLI",
   reviewRendering: "#432: review_journey returns the schema-checked JSON sheet; the Markdown/text renderings and writing them to a file are for people at the CLI",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
@@ -146,6 +146,8 @@ const ENVIRONMENT = { env: s("--env"), baseUrl: s("--base-url") };
 const AI = { real: b("--real"), fakeAi: b("--fake-ai") };
 /** #429: commands that build the live Jev gateway also take the Jev provider (typesafe | openrouter). */
 const JEV_AI = { ...AI, jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) };
+/** #434/#435: the advisory Jev layer of a review sheet / approval / catalog analysis (judgment only, cached by content hash). */
+const JEV_ADVICE = { real: b("--real"), jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) };
 /** #243: `name=<storageState>` identities a fixture step authenticates as — each path confined as a session. */
 const FIXTURE_IDENTITY: CliParam = { kind: "named-sessions", flag: "--fixture-identity" };
 
@@ -161,7 +163,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
     command: {
       path: "journey promote",
-      params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted") },
+      params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted"), ...JEV_ADVICE },
       omitted: { "--dir": OMIT.storeDir, "--accept-weak": OMIT.acceptWeak, "--review-sheet": OMIT.reviewSheet, "--accept-findings": OMIT.acceptFindings, ...JSON_FLAG },
     },
   },
@@ -169,15 +171,17 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "review_persona",
     description:
       "`jevitate persona review <id> --json` (#433): read-only. A catalog persona's review sheet — description, account role, session presence (never a credential), the jobs it serves, the Journeys linked to it, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
       "Approving a persona is a person's act on the CLI (`jevitate persona approve`): there is no MCP tool for it.",
-    command: { path: "persona review", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+    command: { path: "persona review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
   },
   {
     name: "review_job",
     description:
       "`jevitate job review <id> --json` (#433): read-only. A catalog job's review sheet — its job story (\"When …, I want to …, so I can ….\"), its personas and which of them have a promoted Journey for it, the gaps, its Journeys, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
       "Approving a job is a person's act on the CLI (`jevitate job approve`): there is no MCP tool for it.",
-    command: { path: "job review", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+    command: { path: "job review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
   },
   {
     name: "catalog_status",
@@ -186,13 +190,21 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: { path: "catalog status", params: {}, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
+    name: "analyze_catalog",
+    description:
+      "`jevitate catalog analyze --json` (#435): read-only and advisory. Problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic (complete, consistent, feasible, comprehensible, able to be validated, correct): candidate pairs chosen by code (shared persona or trigger/outcome terms, opposing writes on one resource, same role), each with why it was paired and — with real: true — Jev's typed classification (compatible | duplicate | overlapping | conflicting | dependent, with a probability), " +
+      "completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Pairs over maxPairs are listed as overflow, never dropped. It never changes the catalog and never gates.",
+    command: { path: "catalog analyze", params: { ...JEV_ADVICE, maxPairs: n("--max-pairs") }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
     name: "review_journey",
     description:
       "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
       "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed.",
     command: {
       path: "journey review",
-      params: { id: pos() },
+      params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE },
       omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
     },
   },
@@ -316,6 +328,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EMULATION,
         ...DEMO_SHOW,
         acceptUnvetted: s("--accept-unvetted"),
+        ...JEV_ADVICE,
       },
       omitted: { "--dir": OMIT.storeDir, "--accept-findings": OMIT.acceptFindings, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },

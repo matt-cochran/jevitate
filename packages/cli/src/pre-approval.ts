@@ -1,4 +1,5 @@
 import type { AcceptedFindings, Finding, Journey } from "@jevitate/journey";
+import type { JevSetup } from "./jev-advisor.js";
 import { findJob, findPersona, journeyLinks, journeysForJob, journeysForPersona, personaLinkId, catalogJourney, type Catalog, type CatalogJourney } from "./catalog.js";
 
 /**
@@ -50,6 +51,16 @@ export interface PreApprovalContext {
    * applies its annotations first). Absent: the catalog's copy.
    */
   readonly journey?: Journey;
+  /**
+   * #434: include the readiness section (deterministic checks + GtWR rules, and the advisory Jev
+   * questions). Every approval sets it; a review sheet sets it with `--readiness`.
+   */
+  readonly readiness?: boolean;
+  /**
+   * #434/#435: the advisory Jev layer — an advisor (the command was given `--real` and a judgment
+   * key is configured), or why it was skipped. Absent: skipped ("pass --real").
+   */
+  readonly jev?: JevSetup;
 }
 
 export interface PreApprovalAnalyzer {

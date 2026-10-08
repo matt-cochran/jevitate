@@ -1,7 +1,11 @@
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
 import { ok, fail } from "./envelope.js";
-import { emitJson, resolveJourneysDir, type CliDeps } from "./cli-shared.js";
+import { MissingCredentialError } from "@jevitate/ai-core";
+import { GatewaySelectionError, JEV_PROVIDER_FLAG_HELP, emitJson, emitUsageLine, jevProviderArg, resolveJourneysDir, type CliDeps } from "./cli-shared.js";
+import { positiveIntArg } from "./cli-args.js";
+import { buildJevSetup, jevCacheDir, type JevSetup } from "./jev-advisor.js";
+import { analyzeCatalog, renderCatalogAnalysis, ANALYZE_PAIR_CAP } from "./catalog-analysis.js";
 import { CatalogInputError, UnknownCatalogItemError } from "./catalog.js";
 import { StaleCatalogReviewError, approveCatalogItem, catalogJourneysDir, loadCatalog, resolveCatalogDir } from "./catalog-api.js";
 import { buildCatalogStatus, buildJobReview, buildPersonaReview, renderCatalogStatus, renderJobReview, renderPersonaReview } from "./catalog-review.js";
@@ -16,8 +20,21 @@ import { EXIT_CODES } from "./exit-codes.js";
 
 const DIR_HELP = "the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys";
 
+/** #434/#435: `--readiness` / `--real` / `--jev-provider` help. */
+export const READINESS_FLAG_HELP =
+  "#434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities";
+export const REAL_JEV_FLAG_HELP =
+  "#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs";
+
+/** The Jev layer of a catalog command (`--real`), its answer cache under the catalog's data dir. */
+export function jevSetupFor(deps: CliDeps, catalogDir: string | null, o: { real?: boolean; jevProvider?: string }): Promise<JevSetup> {
+  return buildJevSetup(deps, { ...(o.real === undefined ? {} : { real: o.real }), ...(o.jevProvider === undefined ? {} : { jevProvider: o.jevProvider }), cacheDir: jevCacheDir(catalogDir) });
+}
+
 function refuse(program: Command, err: unknown, fallbackCode: string): void {
-  if (err instanceof UnknownCatalogItemError) {
+  if (err instanceof GatewaySelectionError || err instanceof MissingCredentialError) {
+    emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+  } else if (err instanceof UnknownCatalogItemError) {
     emitJson(program, fail(err.code, err.message));
   } else if (err instanceof CatalogInputError || err instanceof StaleCatalogReviewError) {
     emitJson(program, fail(err.code, err.message));
@@ -42,13 +59,13 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
   const argsCode = kind === "persona" ? "E_PERSONA_REVIEW_ARGS" : "E_JOB_REVIEW_ARGS";
 
   const load = (dir: string | undefined) => loadCatalog(resolveCatalogDir(deps.catalogDir, dir), catalogJourneysDir(dir, resolveJourneysDir(deps)));
-  const sheet = async (dir: string | undefined, id: string, action: "review" | "persona approve" | "job approve") => {
+  const sheet = async (dir: string | undefined, id: string, action: "review" | "persona approve" | "job approve", opts: { readiness: boolean; jev: JevSetup }) => {
     const catalog = await load(dir);
     if (kind === "persona") {
-      const review = await buildPersonaReview(catalog, id, action);
+      const review = await buildPersonaReview(catalog, id, action, opts);
       return { catalog, review, render: (style: "markdown" | "text") => renderPersonaReview(review, style) };
     }
-    const review = await buildJobReview(catalog, id, action);
+    const review = await buildJobReview(catalog, id, action, opts);
     return { catalog, review, render: (style: "markdown" | "text") => renderJobReview(review, style) };
   };
 
@@ -62,20 +79,26 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
     .option("--dir <path>", DIR_HELP)
     .option("--markdown", "render the sheet as Markdown")
     .option("--out <file>", "write the sheet (JSON with --json, Markdown with --markdown, else text) to this file")
+    .option("--readiness", READINESS_FLAG_HELP)
+    .option("--real", REAL_JEV_FLAG_HELP)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit a JSON envelope (the schema-checked sheet)")
     .action(async function (this: Command, id: string) {
-      const { dir, json, markdown, out: outFile } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; out?: string }>();
+      const { dir, json, markdown, out: outFile, readiness, real, jevProvider } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string }>();
       if (json === true && markdown === true) {
         emitJson(program, fail(argsCode, "--json and --markdown are exclusive: pick one rendering"));
         return;
       }
       try {
-        const { review, render } = await sheet(dir, id, "review");
+        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir, dir), { real, jevProvider });
+        const { review, render } = await sheet(dir, id, "review", { readiness: readiness === true, jev });
         const rendered = json ? `${JSON.stringify(review, null, 2)}\n` : render(markdown ? "markdown" : "text");
         if (outFile !== undefined) await writeFile(outFile, rendered, { mode: 0o600 });
         if (json) emitJson(program, ok(review));
         else if (outFile !== undefined) program.configureOutput().writeOut?.(`review sheet for ${kind} '${review.id}' written to ${outFile} (content hash ${review.contentHash})\n`);
         else program.configureOutput().writeOut?.(rendered);
+        emitUsageLine(program, review.jev);
+        // #434: a review never fails on its findings (readiness and Jev answers are advice).
         process.exitCode = 0;
       } catch (err) {
         refuse(program, err, `${code}_REVIEW`);
@@ -90,9 +113,11 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
     .option("--dir <path>", DIR_HELP)
     .option("--reviewed-hash <hash>", `the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the ${kind} changed since`)
     .option("--accept-findings <reason>", "approve although pre-approval findings need an acknowledgment, recording the reason with the approval")
+    .option("--real", `${REAL_JEV_FLAG_HELP}; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings`)
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, reviewedHash: hashFlag, acceptFindings } = this.opts<{ dir?: string; json?: boolean; reviewedHash?: string; acceptFindings?: string }>();
+      const { dir, json, reviewedHash: hashFlag, acceptFindings, real, jevProvider } = this.opts<{ dir?: string; json?: boolean; reviewedHash?: string; acceptFindings?: string; real?: boolean; jevProvider?: string }>();
       let reviewedHash = hashFlag?.trim().toLowerCase();
       if (reviewedHash !== undefined && !/^[0-9a-f]{64}$/.test(reviewedHash)) {
         emitJson(program, fail(argsCode, "--reviewed-hash needs the 64-hex content hash a review sheet shows"));
@@ -104,7 +129,9 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
       }
       try {
         const action = kind === "persona" ? "persona approve" : "job approve";
-        const { catalog, review, render } = await sheet(dir, id, action);
+        // #434/#435: every approval shows readiness and the catalog analysis; Jev only with --real.
+        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir, dir), { real, jevProvider });
+        const { catalog, review, render } = await sheet(dir, id, action, { readiness: true, jev });
         if (!json) {
           // Human mode: the sheet (with its findings) is shown before approving; the approval binds to what was shown.
           program.configureOutput().writeOut?.(`${render("text")}\n`);
@@ -113,7 +140,9 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
         const result = await approveCatalogItem(kind, catalog, id, {
           ...(reviewedHash === undefined ? {} : { reviewedHash }),
           ...(acceptFindings === undefined ? {} : { acceptFindings }),
+          jev,
         });
+        emitUsageLine(program, review.jev);
         if (json) emitJson(program, ok(result));
         else {
           program.configureOutput().writeOut?.(
@@ -146,6 +175,39 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
         process.exitCode = 0;
       } catch (err) {
         refuse(program, err, "E_CATALOG_STATUS");
+      }
+    });
+
+  catalog
+    .command("analyze")
+    .description(
+      "#435: problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic — candidate pairs (paired by code: shared persona/terms, opposing writes, same role) classified by Jev (with --real) as compatible/duplicate/overlapping/conflicting/dependent, " +
+        "completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Read-only and advisory: it never changes the catalog and never gates",
+    )
+    .option("--dir <path>", DIR_HELP)
+    .option("--real", "#435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only")
+    .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
+    .option("--max-pairs <n>", `the most candidate pairs to judge (default ${ANALYZE_PAIR_CAP}); the rest are listed as overflow, never dropped`, positiveIntArg)
+    .option("--markdown", "render the report as Markdown")
+    .option("--json", "emit a JSON envelope (the schema-checked report)")
+    .action(async function (this: Command) {
+      const { dir, json, markdown, real, jevProvider, maxPairs } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; real?: boolean; jevProvider?: string; maxPairs?: number }>();
+      if (json === true && markdown === true) {
+        emitJson(program, fail("E_CATALOG_ANALYZE_ARGS", "--json and --markdown are exclusive: pick one rendering"));
+        return;
+      }
+      try {
+        const catalogDir = resolveCatalogDir(deps.catalogDir, dir);
+        const loaded = await loadCatalog(catalogDir, catalogJourneysDir(dir, resolveJourneysDir(deps)));
+        const jev = await jevSetupFor(deps, catalogDir, { real, jevProvider });
+        const { report } = await analyzeCatalog(loaded, { jev, ...(maxPairs === undefined ? {} : { pairCap: maxPairs }) });
+        if (json) emitJson(program, ok(report));
+        else program.configureOutput().writeOut?.(renderCatalogAnalysis(report, markdown ? "markdown" : "text"));
+        emitUsageLine(program, report.jev);
+        // Advisory: the report's findings never change the exit code.
+        process.exitCode = 0;
+      } catch (err) {
+        refuse(program, err, "E_CATALOG_ANALYZE");
       }
     });
 }

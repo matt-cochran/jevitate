@@ -237,6 +237,25 @@ jevitate catalog [command]
 
 #433: the human-vetted catalog of personas, jobs and the Journeys linked to them
 
+### catalog analyze
+
+```
+jevitate catalog analyze [options]
+```
+
+#435: problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic — candidate pairs (paired by code: shared persona/terms, opposing writes, same role) classified by Jev (with --real) as compatible/duplicate/overlapping/conflicting/dependent, completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Read-only and advisory: it never changes the catalog and never gates
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
+| `--markdown` | render the report as Markdown |  |  |  |  |
+| `--max-pairs <n>` | the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped |  |  |  |  |
+| `--real` | #435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only |  |  |  |  |
+
 ### catalog status
 
 ```
@@ -329,11 +348,13 @@ the one human approval of a DRAFT demo: shows the Journey and its annotations, r
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--out <dir>` | write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir) |  |  |  |  |
 | `--pace <ms>` | how long each step's caption shows before it acts (default 1500) |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
@@ -872,7 +893,9 @@ approve a job (a person's sign-off; CLI only, never an MCP tool): shows its revi
 | --- | --- | --- | --- | --- | --- |
 | `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
 | `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the job changed since |  |  |  |  |
 
 ### job review
@@ -894,9 +917,12 @@ a job's review sheet: its story, its personas and which have a promoted Journey 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
 | `--markdown` | render the sheet as Markdown |  |  |  |  |
 | `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 
 ## journey
 
@@ -1097,7 +1123,9 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 | `--accept-unvetted <reason>` | #433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers |  |  |  |  |
 | `--accept-weak <reason>` | #401: promote a Journey whose assertions cannot prove its outcome, recording the reason |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
 | `--review-sheet <file>` | #432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash |  |  |  |  |
 | `--reviewed-hash <hash>` | #432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since |  |  |  |  |
 
@@ -1142,9 +1170,12 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
 | `--markdown` | render the sheet as Markdown |  |  |  |  |
 | `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 
 ### journey run
 
@@ -1668,7 +1699,9 @@ approve a persona (a person's sign-off; CLI only, never an MCP tool): shows its 
 | --- | --- | --- | --- | --- | --- |
 | `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
 | `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the persona changed since |  |  |  |  |
 
 ### persona review
@@ -1690,9 +1723,12 @@ a persona's review sheet: who it is, the jobs it serves, the Journeys linked to 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
 | `--markdown` | render the sheet as Markdown |  |  |  |  |
 | `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
+| `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 
 ## profile
 

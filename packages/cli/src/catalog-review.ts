@@ -1,5 +1,6 @@
 import {
   CatalogStatusSchema,
+  GTWR_SET_CHARACTERISTICS,
   JobReviewSchema,
   PersonaReviewSchema,
   type CatalogStatusReport,
@@ -9,6 +10,19 @@ import {
 } from "@jevitate/journey";
 import { journeyLinks, journeysForJob, journeysForPersona, personaLinkId, requireJob, requirePersona, type Catalog, type CatalogJourney } from "./catalog.js";
 import { preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
+import { jevLayerOf, type JevSetup } from "./jev-advisor.js";
+
+/** #434/#435: what a review sheet asks of the pipeline beyond the defaults. */
+export interface SheetOptions {
+  /** #434: include the Readiness section (`--readiness`; every approval sets it). */
+  readonly readiness?: boolean;
+  /** #434/#435: the advisory Jev layer (`--real`), or why it is skipped. */
+  readonly jev?: JevSetup;
+}
+
+function sheetCtx(action: ApprovalAction, opts: SheetOptions) {
+  return { action, ...(opts.readiness === true ? { readiness: true } : {}), ...(opts.jev === undefined ? {} : { jev: opts.jev }) };
+}
 
 /**
  * #433 — the persona and job review sheets (`persona|job review <id>`, MCP `review_persona` /
@@ -20,9 +34,9 @@ function journeyRef(catalog: Catalog, j: CatalogJourney): { id: string; name: st
   return { id: j.id, name: j.name, promoted: j.promoted, needsReReview: journeyLinks(catalog, j).needsReReview.length > 0 };
 }
 
-export async function buildPersonaReview(catalog: Catalog, id: string, action: ApprovalAction = "review"): Promise<PersonaReview> {
+export async function buildPersonaReview(catalog: Catalog, id: string, action: ApprovalAction = "review", opts: SheetOptions = {}): Promise<PersonaReview> {
   const p = requirePersona(catalog, id);
-  const findings = await preApprovalFindings({ kind: "persona", id }, catalog, { action });
+  const findings = await preApprovalFindings({ kind: "persona", id }, catalog, sheetCtx(action, opts));
   return PersonaReviewSchema.parse({
     id: p.id,
     ...(p.description === undefined ? {} : { description: p.description }),
@@ -33,14 +47,15 @@ export async function buildPersonaReview(catalog: Catalog, id: string, action: A
     jobs: catalog.jobs.filter((j) => j.personas.includes(id)).map((j) => ({ id: j.id, story: j.story, status: j.status })),
     journeys: journeysForPersona(catalog, id).map((j) => journeyRef(catalog, j)),
     findings,
+    ...(opts.jev === undefined ? {} : { jev: jevLayerOf(opts.jev) }),
     ...(p.approval === undefined ? {} : { approval: p.approval }),
     contentHash: p.contentHash,
   });
 }
 
-export async function buildJobReview(catalog: Catalog, id: string, action: ApprovalAction = "review"): Promise<JobReview> {
+export async function buildJobReview(catalog: Catalog, id: string, action: ApprovalAction = "review", opts: SheetOptions = {}): Promise<JobReview> {
   const job = requireJob(catalog, id);
-  const findings = await preApprovalFindings({ kind: "job", id }, catalog, { action });
+  const findings = await preApprovalFindings({ kind: "job", id }, catalog, sheetCtx(action, opts));
   const journeys = journeysForJob(catalog, id);
   const personas = job.personas.map((pid) => {
     const mine = journeys.filter((j) => personaLinkId(catalog, j) === pid);
@@ -67,6 +82,7 @@ export async function buildJobReview(catalog: Catalog, id: string, action: Appro
       return { ...journeyRef(catalog, j), ...(persona === undefined ? {} : { persona }) };
     }),
     findings,
+    ...(opts.jev === undefined ? {} : { jev: jevLayerOf(opts.jev) }),
     ...(job.approval === undefined ? {} : { approval: job.approval }),
     contentHash: job.contentHash,
   });
@@ -139,18 +155,64 @@ function helpers(style: Style) {
 
 const STATUS_WORDS = { draft: "draft (not approved)", approved: "approved", stale: "STALE — edited since its approval: needs re-review", unknown: "UNKNOWN — not declared in the catalog" } as const;
 
-/** #433: the pre-approval findings section every review sheet shows before an approval. */
+function findingLine(f: Finding, code: (s: string) => string): string {
+  return `${f.requiresAcknowledgment ? "⚠ NEEDS ACKNOWLEDGMENT " : ""}${f.severity} ${code(`${f.analyzer}/${f.code}`)}: ${f.message}${f.probability === undefined ? "" : ` (p=${f.probability.toFixed(2)})`}${f.characteristic === undefined ? "" : ` [GtWR: ${f.characteristic}]`}${f.fix === undefined ? "" : ` — fix: ${f.fix}`}`;
+}
+
+/** #435: catalog-analysis findings, one sub-section per INCOSE GtWR set characteristic (non-empty ones, in the guide's order). */
+export function renderAnalysisGroups(findings: readonly Finding[], style: Style): string[] {
+  const { md, li, code } = helpers(style);
+  const h3 = (s: string): string => (md ? `### ${s}` : `${s}:`);
+  const out: string[] = [];
+  for (const characteristic of GTWR_SET_CHARACTERISTICS) {
+    const mine = findings.filter((f) => f.characteristic === characteristic);
+    if (mine.length > 0) out.push(h3(`GtWR: ${characteristic}`), "", ...mine.map((f) => li(findingLine(f, code))), "");
+  }
+  const other = findings.filter((f) => !(GTWR_SET_CHARACTERISTICS as readonly string[]).includes(f.characteristic ?? ""));
+  if (other.length > 0) out.push(h3("Other"), "", ...other.map((f) => li(findingLine(f, code))), "");
+  return out;
+}
+
+/** The analyzers whose findings get their own section of the sheet (#434 readiness, #435 catalog analysis). */
+const READINESS_ANALYZER = "readiness";
+const READINESS_JEV_ANALYZER = "readiness-jev";
+const CATALOG_ANALYSIS_ANALYZER = "catalog-analysis";
+
+/**
+ * #433: the pre-approval findings every review sheet shows before an approval. #434: the readiness
+ * findings form their own Readiness section, its two layers apart (deterministic checks; the
+ * advisory Jev review). #435: the catalog analysis forms its own section, grouped by GtWR set
+ * characteristic. The acknowledgment line counts every section.
+ */
 export function renderFindings(findings: readonly Finding[], style: Style): string[] {
-  const { h2, li, em, code } = helpers(style);
+  const { h2, li, em, code, md } = helpers(style);
+  const h3 = (s: string): string => (md ? `### ${s}` : `${s}:`);
   const blocking = findings.filter((f) => f.requiresAcknowledgment).length;
-  const lines = findings.map(
-    (f) =>
-      `${f.requiresAcknowledgment ? "⚠ NEEDS ACKNOWLEDGMENT " : ""}${f.severity} ${code(`${f.analyzer}/${f.code}`)}: ${f.message}${f.probability === undefined ? "" : ` (p=${f.probability.toFixed(2)})`}${f.characteristic === undefined ? "" : ` [GtWR: ${f.characteristic}]`}${f.fix === undefined ? "" : ` — fix: ${f.fix}`}`,
-  );
+  const of = (id: string) => findings.filter((f) => f.analyzer === id);
+  const readiness = of(READINESS_ANALYZER);
+  const jev = of(READINESS_JEV_ANALYZER);
+  const analysis = of(CATALOG_ANALYSIS_ANALYZER);
+  const rest = findings.filter((f) => f.analyzer !== READINESS_ANALYZER && f.analyzer !== READINESS_JEV_ANALYZER && f.analyzer !== CATALOG_ANALYSIS_ANALYZER);
+  const lines = (fs: readonly Finding[]) => (fs.length === 0 ? [li(em("none"))] : fs.map((f) => li(findingLine(f, code))));
   return [
+    ...(readiness.length + jev.length === 0
+      ? []
+      : [
+          h2("Readiness"),
+          "",
+          h3("Deterministic checks (pass / warn / fail, with INCOSE GtWR rules)"),
+          "",
+          ...lines(readiness),
+          "",
+          h3("Jev review (advisory: never blocks, never changes an exit code)"),
+          "",
+          ...lines(jev),
+          "",
+        ]),
+    ...(analysis.length === 0 ? [] : [h2("Catalog analysis (against the rest of the catalog)"), "", ...renderAnalysisGroups(analysis, style)]),
     h2("Pre-approval findings"),
     "",
-    ...(lines.length === 0 ? [li(em("none"))] : lines.map((l) => li(l))),
+    ...lines(rest),
     ...(blocking === 0 ? [] : ["", `${blocking} finding(s) need an acknowledgment: approving refuses (E_APPROVAL_FINDINGS) unless you pass --accept-findings "<reason>".`]),
   ];
 }

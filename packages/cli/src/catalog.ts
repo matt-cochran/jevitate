@@ -106,6 +106,8 @@ export interface Catalog {
   readonly personas: readonly CatalogPersona[];
   readonly jobs: readonly CatalogJob[];
   readonly journeys: readonly CatalogJourney[];
+  /** #434/#435: the journeys directory the Journeys were loaded from (their `.verify/` records live beside them). */
+  readonly journeysDir?: string;
 }
 
 function statusOf(approval: CatalogApproval | undefined, hash: string): CatalogItemStatus {
@@ -328,7 +330,7 @@ export class CatalogLoader {
 
   async load(): Promise<Catalog> {
     const [{ file: personasFile, personas }, { file: jobsFile, jobs }, journeys] = await Promise.all([this.loadPersonas(), this.loadJobs(), this.loadJourneys()]);
-    return { dir: this.opts.catalogDir, personasFile, jobsFile, personas, jobs, journeys };
+    return { dir: this.opts.catalogDir, personasFile, jobsFile, personas, jobs, journeys, journeysDir: this.opts.journeysDir };
   }
 }
 

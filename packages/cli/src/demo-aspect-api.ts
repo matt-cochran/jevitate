@@ -1,4 +1,5 @@
 import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
+import type { JevSetup } from "./jev-advisor.js";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -479,6 +480,8 @@ export interface ApproveDemoOptions extends DemoReplayOptions {
   readonly acceptUnvetted?: string;
   /** #433: `--accept-findings "<reason>"` — acknowledge pre-approval findings that need it. */
   readonly acceptFindings?: string;
+  /** #434/#435: the advisory Jev layer of the pre-approval readiness and analysis (`--real`), or why it is skipped. */
+  readonly jev?: JevSetup;
 }
 
 export interface ApproveDemoResult {
@@ -535,6 +538,7 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
     catalogDir,
     ...(opts.acceptUnvetted === undefined ? {} : { acceptUnvetted: opts.acceptUnvetted }),
     ...(opts.acceptFindings === undefined ? {} : { acceptFindings: opts.acceptFindings }),
+    ...(opts.jev === undefined ? {} : { jev: opts.jev }),
   };
   await journeyCatalogGate(annotated.journey, { ...gate, journeysDir: opts.journeysDir, action: "demo approve" });
   const demo = await renderDemo(opts.journeysDir, opts.id, opts, annotations, false, opts.outDir);

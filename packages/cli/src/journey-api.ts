@@ -2,6 +2,7 @@ import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchem
 import { journeyReviewHash } from "./journey-review.js";
 import { writeApprovedSnapshot } from "./journey-review-store.js";
 import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
+import type { JevSetup } from "./jev-advisor.js";
 import { redactText } from "@jevitate/ai-core";
 import { safeRunPolicy, type RunPolicy, clock } from "@jevitate/domain";
 import { join } from "node:path";
@@ -266,6 +267,8 @@ export interface PromoteJourneyOptions {
   catalogDir?: string | null;
   /** Which approval path asks (`demo approve` promotes through here too). */
   action?: "journey promote" | "demo approve";
+  /** #434/#435: the advisory Jev layer of the pre-approval readiness and analysis (`--real`), or why it is skipped. */
+  jev?: JevSetup;
 }
 
 export async function promoteJourney(dir: string, id: string, opts: PromoteJourneyOptions = {}): Promise<Journey> {
@@ -302,6 +305,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
     action: opts.action ?? "journey promote",
     ...(opts.acceptUnvetted === undefined ? {} : { acceptUnvetted: opts.acceptUnvetted }),
     ...(opts.acceptFindings === undefined ? {} : { acceptFindings: opts.acceptFindings }),
+    ...(opts.jev === undefined ? {} : { jev: opts.jev }),
   });
   const approval: JourneyApproval = {
     contentHash,

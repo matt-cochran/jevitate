@@ -177,6 +177,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "job review": { cases: [["nope"], ["j", "--dir", badCatalog]] },
   "job approve": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"], ["j", "--dir", badCatalog]] },
   "catalog status": { cases: [["--dir", badCatalog]] },
+  // #435: an invalid catalog file, and a --max-pairs that is not a positive integer.
+  "catalog analyze": { cases: [["--dir", badCatalog], ["--max-pairs", "0"]] },
   "journey verify": { cases: [["nope", "--mutate"], ["nope"], ["nope", "--mutate", "--storage-state", missing]] },
   // #293: an unknown Journey (or an id that tries to leave the store) is refused.
   "journey anchors": { cases: [["nope"], ["../x"]] },
