@@ -85,6 +85,7 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
   return {
     sideEffects: fired.sideEffects,
     ...(fired.truncated > 0 ? { sideEffectsTruncated: fired.truncated } : {}),
+    ...(ctx.safety.overrides().length === 0 ? {} : { safetyOverrides: ctx.safety.overrides() }),
     ...(ctx.deltas === null ? {} : { actionDeltas: { ...ctx.deltas.stats(), ...(ctx.notPersisted.length === 0 ? {} : { notPersisted: ctx.notPersisted }) } }),
     stop: ctx.stop,
     recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? ctx.startOrigin, finished.reason),

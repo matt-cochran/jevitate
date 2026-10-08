@@ -63,7 +63,7 @@ export function startHunt(ctx: HuntState, params: AdversarialMissionParams): voi
     // switch is already in the transcript and in `identityChanges`).
     if (ctx.identitySwitchers.has(controlIdentity(c))) return true;
     if (affordedOp(c) !== "click") return false;
-    const withheld = ctx.safety.withholds("click", c, (reason) =>
+    const withheld = ctx.safety.withholds("click", c, (reason, refusal) =>
       ctx.transcript.record({
         op: null,
         control: c,
@@ -72,6 +72,7 @@ export function startHunt(ctx: HuntState, params: AdversarialMissionParams): voi
         strategy: "safety-policy",
         actOk: false,
         reason,
+        safety: refusal,
         snapshot: ctx.snap,
       }),
     );

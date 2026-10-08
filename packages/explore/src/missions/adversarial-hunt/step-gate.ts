@@ -98,6 +98,7 @@ export async function refuseMisuseStep(ctx: HuntState, ep: EpisodeState, turn: T
       strategy: ran,
       actOk: false,
       reason: joinReasons([s.note, unsafe.reason]),
+      safety: unsafe.refusal,
       snapshot: ep.stepSnap,
       ...(ep.stepTiming === undefined ? {} : { timing: ep.stepTiming }),
     });

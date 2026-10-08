@@ -277,7 +277,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (609 exports)
+# @jevitate/explore (617 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -362,6 +362,7 @@
   ClippingFinding: interface
   clippingSummary: function
   compareDeltas: function
+  compileAllowControl: function
   CompletedRequest: interface
   Control: interface
   controlFields: function
@@ -762,9 +763,14 @@
   runInductionMission: function
   RunOutcome: other
   RunRecorder: class
+  SAFETY_RULES: variable
   SafetyConfig: interface
+  SafetyOverride: interface
   SafetyPolicy: class
+  SafetyRefusal: interface
   safetyRefusalsFromTranscript: function
+  SafetyRuleInfo: interface
+  SafetyRuleSource: type-alias
   SafetyVerdict: interface
   sampleHeap: function
   ScopeDeparture: interface
@@ -867,6 +873,7 @@
   UPLOAD_OP_GUIDE: variable
   urlMatcher: function
   vacuousCheckMessage: function
+  validateAllowControlPatterns: function
   validateDenyPatterns: function
   ValueCapturingGenerationPort: class
   valueFor: function
@@ -883,6 +890,7 @@
   visibleBusyIndicator: function
   VOLATILITY_GAP_MS: variable
   WAIT_OP_MS: variable
+  waivableRule: function
   WITHHELD_ANSWER_NOTE: variable
   withheldReason: function
   WithheldWrite: interface
