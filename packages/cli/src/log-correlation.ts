@@ -83,8 +83,8 @@ export interface ServerLogSourceStatus {
   readonly linesRead: number;
   readonly truncated: boolean;
   readonly error?: string;
-  /** True when this source was declared `--log-quiet-ok` (#169): zero lines from it is expected,
-   *  not a sign the oracle never actually watched the backend. */
+  /** True when this source was declared `--log-quiet-ok` (#169). Redundant since 0.8.0 (#420): an
+   *  opened source with zero lines is always healthy; kept for compatibility. */
   readonly quietOk?: boolean;
 }
 
@@ -120,15 +120,20 @@ export interface ServerLogsSummary {
     readonly outOfScopeLines: number;
   };
   /**
-   * False when `--log-defect` was given but at least one declared source is unhealthy: it never
-   * opened/errored, OR it opened and delivered not one line while NOT declared `--log-quiet-ok`
-   * (#169) — an absence of `server-log` defects then proves nothing about the backend; it must never
-   * be read as "held"/clean (#142).
+   * #420/#169 expectation 2: false when `--log-defect` was given but at least one declared source is
+   * unhealthy — it never opened or it errored. A source that opened and stayed attached but delivered
+   * zero lines is a WORKING oracle (zero server errors from it is evidence), never a reason to doubt
+   * the run. Only then does an absence of `server-log` defects prove nothing (#142).
    */
   readonly oracleOk: boolean;
-  /** Why `oracleOk` is false — which source(s), and whether they failed to open or were silently
-   *  quiet. Unset when `oracleOk` is true. */
+  /** Why `oracleOk` is false — which source(s) failed to attach and their error text. Unset when
+   *  `oracleOk` is true. */
   readonly oracleReason?: string;
+  /**
+   * #420: raw specs that opened healthy but read zero lines. Recorded as data (the silence is
+   * evidence, not a hole in it); omitted when there are none.
+   */
+  readonly quietSources?: readonly string[];
 }
 
 export interface ServerLogDefect {
@@ -183,8 +188,9 @@ export interface ServerLogRuntimeOptions {
   readonly logDefect: readonly LogDefectMatcher[];
   readonly drainMs?: number;
   readonly secrets: readonly string[];
-  /** Raw `--log-source` specs (matched against a source's own `spec.raw`) that are allowed to
-   *  deliver zero lines without making `oracleOk` false (#169's `--log-quiet-ok`). */
+  /** Raw `--log-source` specs declared via `--log-quiet-ok` (#169). Redundant since 0.8.0 (#420): a
+   *  source that opened healthy with zero lines never makes `oracleOk` false; kept only so existing
+   *  invocations keep working. */
   readonly quietOk?: readonly string[];
   /** Already-parsed `--log-ignore` matchers (#169 item 3): known-noise lines excluded from
    *  correlation AND the defect oracle, counted separately (`serverLogs.ignoredLines`). */
@@ -526,27 +532,23 @@ export class ServerLogRuntime {
       ...(this.#quietOk.has(h.spec.raw) ? { quietOk: true } : {}),
     }));
 
-    // Per-source health (#169): a source is unhealthy when it never opened/errored, OR it opened and
-    // delivered not one line while NOT declared `--log-quiet-ok` — a source the operator KNOWS runs
-    // quiet. Every declared source must be healthy for the oracle to count as "held": one dead/silent
-    // source among several is still a hole in the evidence, not proof of anything.
-    const unhealthy = sources.filter((s) => {
-      if (!s.opened || s.error !== undefined) return true;
-      return s.linesRead === 0 && s.quietOk !== true;
-    });
+    // Per-source health (#420, #169 expectation 2): a source is unhealthy ONLY when it never opened
+    // or errored. A source that opened and stayed attached with zero lines is a WORKING oracle — zero
+    // server errors from it is evidence, not silence to doubt (#169's `--log-quiet-ok` is now
+    // redundant). Every declared source must be healthy for the oracle to count as "held".
+    const unhealthy = sources.filter((s) => !s.opened || s.error !== undefined);
+    const quietSources = sources.filter((s) => s.opened && s.error === undefined && s.linesRead === 0).map((s) => s.spec);
     const oracleOk = this.#matchers.length === 0 || unhealthy.length === 0;
-    const failedSpecs = unhealthy.filter((s) => !s.opened || s.error !== undefined).map((s) => s.spec);
-    const quietSpecs = unhealthy.filter((s) => s.opened && s.error === undefined).map((s) => s.spec);
     let oracleReason: string | undefined;
     if (oracleOk) {
       oracleReason = undefined;
-    } else if (quietSpecs.length === 0) {
+    } else if (unhealthy.length === sources.length) {
       oracleReason =
-        "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing";
-    } else if (failedSpecs.length === 0) {
-      oracleReason = "log source produced no lines";
+        "the --log-defect oracle could not run: every declared --log-source failed to attach — an absence of server-log defects proves nothing";
     } else {
-      oracleReason = `the --log-defect oracle could not run: ${failedSpecs.join(", ")} failed to open or read a line; ${quietSpecs.join(", ")} produced no lines`;
+      oracleReason = `the --log-defect oracle could not run: ${unhealthy
+        .map((s) => `${s.spec} failed to attach (${s.error ?? "unknown error"})`)
+        .join(", ")}`;
     }
 
     return {
@@ -559,6 +561,7 @@ export class ServerLogRuntime {
       ...(correlation === undefined ? {} : { correlation }),
       oracleOk,
       ...(oracleReason === undefined ? {} : { oracleReason }),
+      ...(quietSources.length === 0 ? {} : { quietSources }),
     };
   }
 }

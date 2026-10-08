@@ -32,8 +32,8 @@ export interface ServerLogOptions {
   readonly logDefect: readonly LogDefectMatcher[];
   readonly allowLogCmd?: boolean;
   readonly drainMs?: number;
-  /** Raw `--log-source` specs (`--log-quiet-ok`, #169) allowed to deliver zero lines without making
-   *  `serverLogs.oracleOk` false — for a source the operator KNOWS is legitimately quiet. */
+  /** Raw `--log-source` specs declared via `--log-quiet-ok` (#169). Redundant since 0.8.0 (#420): an
+   *  opened source with zero lines never makes `serverLogs.oracleOk` false; kept for compatibility. */
   readonly quietOk?: readonly string[];
   /** Already-parsed `--log-ignore` matchers (#169 item 3): known-noise lines excluded from
    *  correlation and the defect oracle. */

@@ -341,7 +341,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     )
     .option(
       "--log-quiet-ok <spec>",
-      "declares a --log-source spec (exact match, repeatable) as legitimately quiet: zero lines from it does not make the --log-defect oracle unhealthy (#169). Without it, a declared source that opened but delivered not one line makes an otherwise-clean run inconclusive, same as one that failed to open",
+      "compatibility only since 0.8.0 (#420): a --log-source that opens and reads zero lines is now always a healthy oracle (the silence is recorded as serverLogs.quietSources), so this flag no longer changes any outcome. Kept so existing invocations keep working",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )

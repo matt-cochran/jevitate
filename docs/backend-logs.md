@@ -95,15 +95,16 @@ source(s) for the same drain window — never by looking for it among DOM/consol
 which a backend log line is none of. A `cmd:` source needs `--allow-log-cmd` on `verify-fix` too.
 
 **Result and outcome.** `serverLogs` on the result carries counts by level, the top normalized
-messages, each source's `opened`/`linesRead`/`truncated`/`error`, and `oracleOk` — false when
-`--log-defect` was given and any declared source failed to open or delivered not one line (a
-`docker:`/`cmd:` source that exits non-zero before its first line counts as failed, not quiet). A
-source that is legitimately quiet is declared with `--log-quiet-ok <spec>` (repeatable, the exact
-`--log-source` spec); its zero lines then do not make the oracle unhealthy. A found
-`server-log` defect counts as `defects-found` (exit 1), same as a declared-invariant defect. An
-unreadable oracle (`oracleOk: false`) turns an otherwise-`clean` run `inconclusive` (exit 2) rather
+messages, each source's `opened`/`linesRead`/`truncated`/`error`, `quietSources` (specs that opened
+healthy but read zero lines) and `oracleOk`. `oracleOk` is false only when `--log-defect` was given
+and a declared source failed to attach or errored (a `docker:`/`cmd:` source that exits non-zero on
+its own counts as failed). A source that opened and stayed attached with zero lines is a WORKING
+oracle — zero server errors from it is evidence, not a hole in it — so `--log-quiet-ok` is accepted
+for compatibility only since 0.8.0 (#420). A found
+`server-log` defect counts as `defects-found` (exit 1), same as a declared-invariant defect. A failed
+oracle (`oracleOk: false`) turns an otherwise-`clean` run `inconclusive` (exit 2) rather
 than a false clean — its absence of defects proves nothing when the source that would have caught
-them was never demonstrably read. (A usability run keeps its own advisory rule instead: see above.)
+them never attached. (A usability run keeps its own advisory rule instead: see above.)
 
 **MCP / the mission queue.** A `MissionRequest`/`queue_exploration`/`verify_fix` argument may never
 name a path or a command (`packages/missions/src/schema.ts`). An operator declares `logSources` /

@@ -69,7 +69,8 @@ export interface TargetConfig {
    * what the target's `fixtures` may authenticate with (`${secretField.APP_PASSWORD}`, #166).
    */
   readonly secretFields?: readonly string[];
-  /** Raw `logSources` entries declared legitimately quiet (mirrors `--log-quiet-ok`, #169). */
+  /** Raw `logSources` entries declared quiet (mirrors `--log-quiet-ok`, #169). Compatibility only
+   *  since 0.8.0 (#420): quiet sources are always healthy. */
   readonly logQuietOk?: readonly string[];
   /**
    * #313: the operator's opt-in (mirrors `--log-triage`) for missions on this origin that are not
