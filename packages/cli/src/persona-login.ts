@@ -662,6 +662,12 @@ export interface AuthExpiredResult {
   /** Where the start URL landed (token-like query values redacted). */
   readonly landedUrl?: string;
   readonly exitCode: 2;
+  /** #423: a goal run's own ending (the shared `inconclusive`) and why — the run broke before it began. */
+  readonly goalOutcome?: "inconclusive";
+  readonly goalReason?: "broken-run";
+  /** #421/#423: nothing ran, so no defect: the defect verdict is present and `none`. */
+  readonly defects: readonly never[];
+  readonly defectOutcome: { readonly status: "none"; readonly byKind: Readonly<Record<string, number>> };
 }
 
 export function authExpiredResult(strategy: string, startUrl: string, failed: Extract<EnsureSession, { ok: false }>, persona?: string): AuthExpiredResult {
@@ -676,5 +682,8 @@ export function authExpiredResult(strategy: string, startUrl: string, failed: Ex
     startUrl: redactUrl(startUrl),
     ...(failed.landedUrl === undefined ? {} : { landedUrl: failed.landedUrl }),
     exitCode: 2,
+    ...(strategy === "goal" ? { goalOutcome: "inconclusive" as const, goalReason: "broken-run" as const } : {}),
+    defects: [],
+    defectOutcome: { status: "none", byKind: {} },
   };
 }

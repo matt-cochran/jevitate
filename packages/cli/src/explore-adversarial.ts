@@ -9,7 +9,7 @@ import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type InvariantSpec } from "@jevitate/recording";
 import type { HostHealthSampler } from "@jevitate/explore";
-import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
+import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import {
   runAdversarialMission,
   assertAuthorizedExploreTarget,
@@ -34,7 +34,7 @@ import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
-import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
+import { MISSION_RESULT_SCHEMA_VERSION, defectFields, unifiedDefects } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
@@ -174,6 +174,8 @@ export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & 
   readonly missionOutcome: MissionOutcome;
   /** EVERY defect the run found (#195): hard-signal and declared-invariant defects, then `server-log` defects (#142). */
   readonly defects: Array<AdversarialDefect | ServerLogDefect>;
+  /** #421/#423: the gating defects counted per kind (`defectOutcomeOf(defects)`). */
+  readonly defectOutcome: DefectOutcome;
   /** Every Recording the run wrote (#195: one list on every strategy) — an adversarial run writes one. */
   readonly recordingPaths: string[];
   /** #245: `--record-video` files, finalized before this result was written (absent when not recording). */
@@ -382,7 +384,7 @@ export async function runAdversarialCliMission(
       ...(opts.invariants === undefined ? {} : { invariantSpec: opts.invariants }),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
-      defects: unifiedDefects(outcome.defects, serverLogRun?.defects),
+      ...defectFields(unifiedDefects(outcome.defects, serverLogRun?.defects)),
       resultPath,
       ...(host.failure === undefined || outcome.failure !== undefined ? {} : { failure: host.failure }),
       ...host.fields,

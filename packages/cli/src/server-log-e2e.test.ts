@@ -92,8 +92,13 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
       expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
       const result = parsed.data;
       // #142 follow-up: a found server-log defect counts as `defects-found` (exit 1) even though the
-      // goal's own success assertion held — never silently "succeeded".
-      expect(result.outcome).toBe("defects-found");
+      // goal's own success assertion held — never silently clean. #423: the goal's own ending stays
+      // `succeeded`; the defect is the orthogonal `defectOutcome`.
+      expect(result.missionOutcome).toBe("defects-found");
+      expect(result.goalOutcome).toBe("succeeded");
+      expect(result.outcome).toBe("succeeded");
+      expect(result.defectOutcome).toEqual({ status: "defects", byKind: { "server-log": 1 } });
+      expect(result.reason).toBe("1 server-log defect found (--log-defect)");
       expect(result.exitCode).toBe(1);
       expect(result.transcript.map((e: { op: string | null }) => e.op)).toEqual(["click", "click", "done"]);
 

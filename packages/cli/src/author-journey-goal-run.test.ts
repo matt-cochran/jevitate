@@ -40,6 +40,7 @@ vi.mock("./explore-goal.js", async (importOriginal) => {
       return {
         goalOutcome: nextOutcome,
         outcome: nextOutcome,
+        defectOutcome: { status: "none", byKind: {} },
         stop: failed ? "no-progress" : "done",
         runOutcome: failed ? { status: "incomplete", reason: "no progress after 3 actions" } : { status: "completed", verifiedBy: "success-condition" },
         ...(failed ? { reason: "no progress after 3 actions; the success check did not hold: textIncludes:testId=status|Welcome (saw \"Wrong password\")" } : {}),

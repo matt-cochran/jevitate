@@ -176,7 +176,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (124 exports)
+# @jevitate/domain (136 exports)
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
@@ -191,6 +191,11 @@
   currentClock: function
   DEFAULT_HEAP_GROWTH_RULE: variable
   DEFAULT_JEVITATE_REPO: variable
+  DEFECT_OUTCOME_STATUSES: variable
+  DefectOutcome: interface
+  defectOutcomeOf: function
+  DefectOutcomeSchema: variable
+  DefectOutcomeStatus: type-alias
   DEGRADED_FINDINGS: variable
   DegradedFindingKind: type-alias
   Direction: type-alias
@@ -212,8 +217,13 @@
   GOAL_ONLY_OUTCOMES: variable
   GOAL_OUTCOME_FOLD: variable
   GOAL_OUTCOMES: variable
+  GOAL_REASONS: variable
+  goalMissionOutcome: function
   GoalOnlyOutcome: type-alias
   GoalOutcome: type-alias
+  GoalReason: type-alias
+  GoalReasonInput: interface
+  goalReasonOf: function
   hasOwnFrame: function
   HeapGrowthRule: interface
   HeapSample: interface
@@ -230,6 +240,8 @@
   IssueTarget: type-alias
   isUnboundedHeapGrowth: function
   isWithinQuietHours: function
+  LogClassCauseRecord: type-alias
+  LogClassCauseSchema: variable
   looksLikeRendererOom: function
   makeRng: function
   matchesRunTags: function
@@ -302,7 +314,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (634 exports)
+# @jevitate/explore (635 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -655,6 +667,7 @@
   MinEffort: interface
   minEffortNote: function
   MinEffortRequest: interface
+  MissCause: type-alias
   MissionRouteScope: interface
   MissionSafety: class
   MissionSessions: class
@@ -938,8 +951,9 @@
   WithheldWrite: interface
   WRITE_METHODS: variable
 
-# @jevitate/findings (44 exports)
+# @jevitate/findings (47 exports)
   CaseStatus: type-alias
+  ClassifiedLogCause: interface
   classify: function
   consolidate: function
   ConsolidatedDefect: interface
@@ -950,6 +964,8 @@
   diffRuns: function
   DiffStatus: type-alias
   EngineStamp: interface
+  environmentCausesOf: function
+  EnvironmentCauseSummary: interface
   EvidenceRef: interface
   FindingCategory: type-alias
   FindingIdentity: interface

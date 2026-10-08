@@ -10,18 +10,18 @@ import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
-import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
+import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
-import { foldGoalOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
+import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
-import { applyHttp5xxGoalOutcome, describeHttp5xx, http5xxGoalReason } from "./http-5xx-outcome.js";
-import { goalExitCode } from "./mission-exit.js";
+import { describeHttp5xx, http5xxGoalReason } from "./http-5xx-outcome.js";
+import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
 import { redactSecretValues } from "./journey-api.js";
@@ -30,6 +30,7 @@ import { finishHostHealth } from "./host-health-run.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogEvidence, type ServerLogRuntimeResult, type ServerLogsSummary, type TranscriptEntryWithLogs } from "./log-correlation.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
 import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
+import type { LogClassCause } from "./log-classes.js";
 import { triageOf, type ServerLogOptions, serverLogResult, serverLogRuntimeOptions, recordingEmulation, DRAFTS_ONLY, NO_FILER, draftContext, freshSessionOpener, currentUrlSafe, assertSaveStorageStateOutsideProject, persistStorageState, browserVersionOf, type MissionTarget, declaredResult } from "./explore-shared.js";
 
 /**
@@ -194,12 +195,19 @@ export interface RunExplorationResult {
    */
   readonly sessionLost?: { readonly reason: string };
   /**
-   * The portable verdict — ALWAYS canonical (#217): `goalOutcome` folded by the domain's single
-   * mapping (`GOAL_OUTCOME_FOLD`): succeeded → clean; failed/exhausted/blocked → defects-found.
+   * The portable verdict — ALWAYS canonical (#217), derived (#423) from `goalOutcome` and
+   * `defectOutcome` by the domain's ONE table (`goalMissionOutcome`): succeeded → clean, or
+   * defects-found with defects; failed/exhausted/blocked → defects-found; a hang/broken run keeps its own.
    */
   readonly missionOutcome: MissionOutcome;
-  /** The goal run's own ending (#217): succeeded/failed/exhausted/blocked, or a shared outcome. Equal to `outcome`. */
+  /**
+   * The goal run's own ending (#217): succeeded/failed/exhausted/blocked, or a shared outcome. Equal
+   * to `outcome`. #423: a defect never replaces it — a goal reached on an app that 500'd is `succeeded`
+   * here and `defects` in `defectOutcome`.
+   */
   readonly goalOutcome: GoalBasedOutcome;
+  /** #423: why the goal was not achieved (absent when `succeeded`). */
+  readonly goalReason?: GoalReason;
   readonly outcome: GoalBasedOutcome;
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
@@ -242,7 +250,7 @@ export interface RunExplorationResult {
    */
   readonly transcriptPath: string;
   readonly transcript: readonly TranscriptEntry[];
-  /** Process exit code for this outcome (see `goalExitCode`). */
+  /** Process exit code of `missionOutcome` (#423: derived from `goalOutcome` + `defectOutcome`). */
   readonly exitCode: number;
   /** Why the run ended `crashed`/`inconclusive`. */
   readonly failure?: MissionFailure;
@@ -273,6 +281,8 @@ export interface RunExplorationResult {
    * `server-log` defects (#142, with `--log-defect`) — `verify-fix` replays any of them by fingerprint.
    */
   readonly defects: Array<InvariantDefect | Http5xxDefect | ServerLogDefect>;
+  /** #421/#423: the gating defects counted per kind — orthogonal to `goalOutcome`. */
+  readonly defectOutcome: DefectOutcome;
   /** Per declared invariant: applied / held / violated / unreadable counts. */
   readonly invariants?: InvariantReport[];
   /** The declared spec the run evaluated — persisted so `verify-fix` re-checks the SAME invariants. */
@@ -281,6 +291,10 @@ export interface RunExplorationResult {
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
+  /** #422: `--log-defect` lines classed `environment` by `.jevitate/log-classes.json`/the defaults (absent when none). */
+  readonly environmentFaults?: { readonly causes: readonly LogClassCause[] };
+  /** #422: `--log-defect` lines classed `expected-validation` (absent when none). */
+  readonly expectedValidation?: readonly LogClassCause[];
   /** The fixture the mission started from (#140/#144): identity, non-secret outputs, the setup/restore log. */
   readonly fixtures?: MissionFixtureResult;
   /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
@@ -291,23 +305,8 @@ export interface RunExplorationResult {
   readonly branch?: JourneyBranchPoint;
 }
 
-/** Outcomes that already mean the run itself broke or hung — a server-log finding never downgrades
- *  (or, for the oracle-unreadable case, elevates) one of these; they already prove more, or the same. */
-const BROKEN_GOAL_OUTCOMES: ReadonlySet<GoalBasedOutcome> = new Set(["inconclusive", "crashed", "hang", "intermittent"]);
-
-/**
- * Folds a server-log correlation result into the goal mission's own `GoalBasedOutcome` (#142): a
- * found `server-log` defect makes an otherwise-not-broken run `defects-found`; an unreadable
- * `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` — mirrors
- * `applyServerLogOutcome` (the `MissionOutcome` version the other three builders use), but
- * `GoalBasedOutcome` has its own extra values (`succeeded`/`exhausted`/`blocked`).
- */
-function applyServerLogGoalOutcome(outcome: GoalBasedOutcome, run: ServerLogRuntimeResult | undefined): GoalBasedOutcome {
-  if (run === undefined) return outcome;
-  if (run.defects.length > 0 && !BROKEN_GOAL_OUTCOMES.has(outcome)) return "defects-found";
-  if (!run.summary.oracleOk && outcome === "succeeded") return "inconclusive";
-  return outcome;
-}
+/** #423: a goal's own endings a violated invariant may override (`GoalBasedResult.goalEnding`) — restored as `goalOutcome`. */
+const GOAL_ONLY: ReadonlySet<GoalBasedOutcome> = new Set(GOAL_ONLY_OUTCOMES);
 
 /** One-line reason for a server-log-driven outcome change (`reason` is unset otherwise for `succeeded`). */
 function serverLogOutcomeReason(newOutcome: GoalBasedOutcome | MissionOutcome, run: ServerLogRuntimeResult | undefined): string {
@@ -574,20 +573,43 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     };
     // Never blocks the mission itself: the drain wait happens AFTER `runGoalBasedMission` returned.
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(mission.transcript);
-    // #142 follow-up: a found server-log defect counts as `defects-found` (exit 1); an unreadable
-    // `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` (exit 2) — never clean.
-    const loggedOutcome = applyServerLogGoalOutcome(mission.outcome, serverLogRun);
+    // #423: the goal's own ending. A violated invariant's `defects-found` (#86) no longer replaces a
+    // goal-only ending (`goalEnding`): defects are their own, orthogonal verdict (`defectOutcome`).
+    const ownGoal: GoalBasedOutcome =
+      mission.outcome === "defects-found" && mission.goalEnding !== undefined && GOAL_ONLY.has(mission.goalEnding) ? mission.goalEnding : mission.outcome;
+    // #142 follow-up: an unreadable `--log-defect` oracle (and no server-log defect to show) turns an
+    // otherwise-`succeeded` run `inconclusive` (exit 2) — its silence proves nothing, never clean.
+    const oracleBroken = serverLogRun !== undefined && serverLogRun.defects.length === 0 && !serverLogRun.summary.oracleOk && ownGoal === "succeeded";
+    const goalSoFar: GoalBasedOutcome = oracleBroken ? "inconclusive" : ownGoal;
     // #208: an HTTP 5xx is a hard-signal defect — `defects-found` even when the goal's checks held.
     const httpDefects = http5xx.defects(mission.transcript, mission.recording.pages.flatMap((p) => p.steps)[0]?.step.kind === "navigate" ? 1 : 0);
-    const hardOutcome = applyHttp5xxGoalOutcome(loggedOutcome, httpDefects);
-    // #203: most steps on a starved host → `inconclusive` (degraded-environment), never a pass/fail.
-    // #213: a starved `failed` goal keeps the check that did not hold in its degraded reason.
-    const host = await finishHostHealth(health, hardOutcome, {
-      ...(hardOutcome === mission.outcome && (mission.failure?.message ?? mission.reason) !== undefined
+    // #195/#421: every defect in ONE list — server-log defects as structured entries, never only prose.
+    const defects = unifiedDefects<InvariantDefect | Http5xxDefect>(
+      [...(opts.invariants === undefined ? [] : (mission.invariantDefects ?? [])), ...httpDefects],
+      serverLogRun?.defects,
+    );
+    const defectOutcome = defectOutcomeOf(defects);
+    // #203: most steps on a starved host → `inconclusive` (degraded-environment), never a pass/fail —
+    // judged on what the run would report (`goalMissionOutcome`, never `clean` with defects): a found
+    // defect is never overridden, a goal-only miss is. #213: a starved `failed` goal keeps the check
+    // that did not hold in its degraded reason.
+    const preHost: GoalBasedOutcome =
+      defectOutcome.status === "defects" ? (goalMissionOutcome(goalSoFar, "defects") as Exclude<MissionOutcome, "clean">) : goalSoFar;
+    const host = await finishHostHealth(health, preHost, {
+      ...(preHost === mission.outcome && (mission.failure?.message ?? mission.reason) !== undefined
         ? { wouldHaveBeen: mission.failure?.message ?? mission.reason }
         : {}),
     });
-    const goalOutcome: GoalBasedOutcome = host.outcome;
+    const goalOutcome: GoalBasedOutcome = host.outcome === preHost ? goalSoFar : host.outcome;
+    // #423: THE table (domain `goalMissionOutcome`) — the exit code is unchanged for every combination.
+    const missionOutcome = goalMissionOutcome(goalOutcome, defectOutcome.status);
+    const goalReason = goalReasonOf({
+      goalOutcome,
+      ...(mission.goalEnding === undefined ? {} : { overridden: mission.goalEnding }),
+      stop: mission.run.stop,
+      ...((mission.run.failure ?? host.failure ?? mission.failure) === undefined ? {} : { failureKind: (mission.run.failure ?? host.failure ?? mission.failure)!.kind }),
+      ...(mission.run.missCause === undefined ? {} : { missCause: mission.run.missCause }),
+    });
     journal.writeRecording(recording);
     journal.writeTranscript(serverLogRun?.transcript ?? mission.transcript);
     const engine = currentEngineInfo();
@@ -617,8 +639,9 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const result: RunExplorationResult = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "goal",
-      missionOutcome: foldGoalOutcome(goalOutcome),
+      missionOutcome,
       goalOutcome,
+      ...(goalReason === undefined ? {} : { goalReason }),
       issues,
       timing: mission.run.timing,
       outcome: goalOutcome,
@@ -645,7 +668,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...shotFields,
       transcriptPath: journal.transcriptPath,
       transcript: serverLogRun?.transcript ?? mission.transcript,
-      exitCode: goalExitCode(goalOutcome),
+      exitCode: missionExitCode(missionOutcome),
       resultPath,
       target: {
         seedUrl: start.persistUrl,
@@ -685,23 +708,25 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       })(),
       ...(host.failure !== undefined
         ? { reason: host.failure.message }
-        : goalOutcome === mission.outcome
-        ? (() => {
-            const reason = withServerCause(mission.reason, goalOutcome, serverLogRun?.transcript);
-            // #208: a broken run keeps its outcome, but its reason still names the server error.
-            const withHttp = httpDefects.length === 0 ? reason : `${reason ?? goalOutcome}; HTTP 5xx: ${describeHttp5xx(httpDefects)}`;
-            return withHttp === undefined ? {} : { reason: withHttp };
-          })()
-        : loggedOutcome === mission.outcome
-          ? { reason: http5xxGoalReason(httpDefects, mission.assertionPassed) }
-          : { reason: serverLogOutcomeReason(goalOutcome, serverLogRun) }),
+        : (() => {
+            // #423: `reason` stays prose — the goal's own account (with its correlated server cause),
+            // then what the defect oracles found; the structured verdicts are goalOutcome/defectOutcome.
+            const parts: string[] = [];
+            const own = withServerCause(mission.reason, goalOutcome, serverLogRun?.transcript);
+            if (own !== undefined) parts.push(own);
+            if (oracleBroken) parts.push(serverLogOutcomeReason("inconclusive", serverLogRun));
+            if ((serverLogRun?.defects.length ?? 0) > 0) parts.push(serverLogOutcomeReason("defects-found", serverLogRun));
+            if (httpDefects.length > 0) {
+              // #208: a 5xx alone on a goal whose checks held says both; otherwise it is named beside the rest.
+              parts.push(parts.length === 0 ? http5xxGoalReason(httpDefects, mission.assertionPassed) : `HTTP 5xx: ${describeHttp5xx(httpDefects)}`);
+            }
+            return parts.length === 0 ? {} : { reason: parts.join("; ") };
+          })()),
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
-      defects: unifiedDefects<InvariantDefect | Http5xxDefect>(
-        [...(opts.invariants === undefined ? [] : (mission.invariantDefects ?? [])), ...httpDefects],
-        serverLogRun?.defects,
-      ),
+      defects,
+      defectOutcome,
       ...host.fields,
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).

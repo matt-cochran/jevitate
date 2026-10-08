@@ -210,6 +210,20 @@ describe("report — a find-out goal ends with a grounded answer (#101)", () => 
   );
 
   it(
+    "#423: a report that found no answer, repeated: the run ends 'answer not found' with missCause not-found",
+    async () => {
+      const gen = new FakeGenerationGateway({ "goal.answer": { answer: "", claims: [] } });
+      const judge = new ScriptedJudge([{ op: "report" }]);
+      const r = await run(judge, "/settings", FIND_GOAL, gen);
+      expect(r.answer).toBeUndefined();
+      expect(r.stop).toBe("blocked");
+      expect(r.outcome.status === "incomplete" && r.outcome.reason).toMatch(/^answer not found/);
+      expect(r.missCause).toBe("not-found");
+    },
+    60_000,
+  );
+
+  it(
     "rejects an ungrounded answer — never recorded as the result; repeated, the run ends incomplete",
     async () => {
       const gen = new FakeGenerationGateway({
@@ -230,6 +244,8 @@ describe("report — a find-out goal ends with a grounded answer (#101)", () => 
       expect(r.outcome.status === "incomplete" && r.outcome.reason).toMatch(
         /reported an answer 3 times, but the answer is not grounded: "5,000 credits left" — quote not found/,
       );
+      // #423: the structured cause, for goalReason — never parsed from the reason above.
+      expect(r.missCause).toBe("ungrounded");
       const reports = r.transcript.filter((e) => e.op === "report");
       expect(reports).toHaveLength(3);
       expect(reports.every((e) => !e.actOk && e.answer?.accepted === false)).toBe(true);

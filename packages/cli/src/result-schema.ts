@@ -1,3 +1,4 @@
+import { defectOutcomeOf, type DefectOutcome } from "@jevitate/domain";
 import type { ServerLogDefect } from "./log-correlation.js";
 
 /**
@@ -46,4 +47,12 @@ export function unifiedDefects<D extends { readonly fingerprint: string }>(
 /** A usability run's `server-log` defects, marked advisory: reported in `defects`, never gating its outcome. */
 export function advisoryDefects(serverLog: readonly ServerLogDefect[] | undefined): AdvisoryServerLogDefect[] {
   return unifiedDefects([], serverLog).map((d) => ({ ...d, advisory: true as const }));
+}
+
+/**
+ * #421/#423: a result's `defects` with its `defectOutcome` beside them — the gating defects counted
+ * per kind, computed from the SAME list, so the two can never disagree.
+ */
+export function defectFields<D extends { readonly kind: string; readonly advisory?: true }>(defects: D[]): { defects: D[]; defectOutcome: DefectOutcome } {
+  return { defects, defectOutcome: defectOutcomeOf(defects) };
 }

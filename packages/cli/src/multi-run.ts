@@ -6,6 +6,7 @@ import {
   MISSION_OUTCOMES,
   combineOutcomes,
   foldGoalOutcome,
+  goalMissionOutcome,
   isGoalOutcome,
   type GoalOutcome,
   type MissionOutcome,
@@ -362,6 +363,10 @@ export interface RunSummary {
   readonly missionOutcome: MissionOutcome;
   /** #226: a goal run's own ending (#217), beside `missionOutcome`. */
   readonly goalOutcome?: GoalOutcome;
+  /** #423: why the run's goal was not achieved (its result's `goalReason`). */
+  readonly goalReason?: string;
+  /** #423: the run's defect verdict by kind (its result's `defectOutcome`) — orthogonal to the goal's. */
+  readonly defectOutcome?: { readonly status: string; readonly byKind: Readonly<Record<string, number>> };
   readonly exitCode: number;
   readonly findings: readonly RunFinding[];
   readonly requests: Readonly<Record<string, readonly number[]>>;
@@ -492,12 +497,14 @@ export function voteRuns(runs: readonly RunSummary[], k: number, persona: Person
   const outcomes: Record<string, number> = {};
   for (const r of runs) outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
   const { outcome: missionOutcome, reason } = voteOutcome(runs, k, planned);
-  // A goal cell's own ending: the goal ending ≥ k runs agreed on (when it folds onto the agreed
-  // verdict), else the canonical verdict itself (a shared outcome is a goal outcome too, #217).
+  // A goal cell's own ending: the goal ending ≥ k runs agreed on (when the #423 table derives the
+  // agreed verdict from it, with or without defects), else the canonical verdict itself (a shared
+  // outcome is a goal outcome too, #217).
   const goalRuns = runs.filter((r) => r.goalOutcome !== undefined);
   const goalAgreed = goalRuns.length === 0 ? undefined : agreed(goalRuns.map((r) => r.goalOutcome!), k);
+  const derives = (g: GoalOutcome): boolean => goalMissionOutcome(g, "none") === missionOutcome || goalMissionOutcome(g, "defects") === missionOutcome;
   const goalOutcome: GoalOutcome | undefined =
-    goalRuns.length === 0 ? undefined : goalAgreed !== undefined && foldGoalOutcome(goalAgreed) === missionOutcome ? goalAgreed : missionOutcome;
+    goalRuns.length === 0 ? undefined : goalAgreed !== undefined && derives(goalAgreed) ? goalAgreed : missionOutcome;
   const outcome: string = goalOutcome ?? missionOutcome;
 
   const byId = new Map<string, { f: RunFinding; runs: number[] }>();
@@ -790,6 +797,11 @@ function runFailureKindOf(data: Record<string, unknown>): string | undefined {
   return (isRecord(data.crash) ? kindOf(data.crash.failure) : undefined) ?? kindOf(data.failure);
 }
 
+/** A `byKind` record's numeric entries only. */
+function numericCounts(v: Record<string, unknown>): Record<string, number> {
+  return Object.fromEntries(Object.entries(v).filter((e): e is [string, number] => typeof e[1] === "number"));
+}
+
 /** Summarizes one run's envelope (the only IO: its transcript file when the result omits it). */
 export function summarizeRun(strategy: string, index: number, envelope: RunEnvelope, envelopePath?: string): RunSummary {
   const base = { index, ...(envelopePath === undefined ? {} : { envelopePath }) };
@@ -827,6 +839,10 @@ export function summarizeRun(strategy: string, index: number, envelope: RunEnvel
     outcome: goalOutcome ?? missionOutcome,
     missionOutcome,
     ...(goalOutcome === undefined ? {} : { goalOutcome }),
+    ...(typeof data.goalReason === "string" ? { goalReason: data.goalReason } : {}),
+    ...(isRecord(data.defectOutcome) && (data.defectOutcome.status === "none" || data.defectOutcome.status === "defects") && isRecord(data.defectOutcome.byKind)
+      ? { defectOutcome: { status: data.defectOutcome.status, byKind: numericCounts(data.defectOutcome.byKind) } }
+      : {}),
     exitCode: typeof data.exitCode === "number" ? data.exitCode : MISSION_EXIT_CODES[missionOutcome],
     findings: extractRunFindings(data),
     requests: extractRequests(data),

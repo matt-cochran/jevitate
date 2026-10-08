@@ -116,16 +116,20 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (76 exports)
+# @jevitate/domain (83 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
+  DEFECT_OUTCOME_STATUSES: array
   DEGRADED_FINDINGS: array
+  DefectOutcomeSchema: object
   EnvironmentDegradedSchema: object
   FakeClock: class
   GOAL_ONLY_OUTCOMES: array
   GOAL_OUTCOMES: array
   GOAL_OUTCOME_FOLD: object
+  GOAL_REASONS: array
   HostHealthSummarySchema: object
+  LogClassCauseSchema: object
   MAX_RUN_TAGS: const (number)
   MAX_RUN_TAG_VALUE: const (number)
   MAX_SAFE_NAME_LENGTH: const (number)
@@ -159,6 +163,7 @@
   combineOutcomes: function
   contentHash: function
   currentClock: function
+  defectOutcomeOf: function
   evaluateGate: function
   externalSchemeOf: function
   fileDraft: function
@@ -166,6 +171,8 @@
   foldGoalOutcome: function
   gatingDefects: function
   gaussian: function
+  goalMissionOutcome: function
+  goalReasonOf: function
   hasOwnFrame: function
   installClock: function
   isBrokenRun: function
@@ -611,13 +618,14 @@
   waivableRule: function
   withheldReason: function
 
-# @jevitate/findings (20 exports)
+# @jevitate/findings (21 exports)
   DIFF_STATUSES: array
   RUN_MODES: array
   SARIF_SCHEMA: const (string)
   classify: function
   consolidate: function
   diffRuns: function
+  environmentCausesOf: function
   findingKey: function
   identityBasis: function
   renderJUnit: function

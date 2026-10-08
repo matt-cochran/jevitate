@@ -69,6 +69,7 @@ import {
 import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
 import { triagedServerLog } from "./explore-shared.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { LogClassesError, loadLogClassRules } from "./log-classes.js";
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { LogSpecError } from "./log-lines.js";
 import { MultiRunArgsError, projectPersonaFor, resolveMultiRunPlan, wantsMultiRun, type Persona } from "./multi-run.js";
@@ -1050,6 +1051,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           const logScope = parseLogScopeSpecs(o.logScope);
           const correlationHeaders = parseCorrelationHeaders(o.logCorrelationHeader);
           const idPatterns = parseLogIdPatterns(o.logIdPattern);
+          // #422: the project's .jevitate/log-classes.json, validated before any browser opens.
+          const logClasses = loadLogClassRules();
           serverLog = {
             sources,
             logDefect,
@@ -1059,10 +1062,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             logScope,
             correlationHeaders,
             idPatterns,
+            logClasses,
             ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
           };
         } catch (err) {
-          if (err instanceof LogSourceSpecError || err instanceof LogSpecError) {
+          if (err instanceof LogSourceSpecError || err instanceof LogSpecError || err instanceof LogClassesError) {
             emitExplore(fail(err.code, err.message));
             return;
           }

@@ -582,7 +582,7 @@ export interface SweepDefect {
   readonly sightings: readonly SweepSighting[];
 }
 
-/** An environment cause (a run's `environmentDegraded` entry, or a run's environment failure), grouped. */
+/** An environment cause (a run's `environmentFaults` cause or `environmentDegraded` finding, or a run's environment failure), grouped. */
 export interface SweepEnvironmentCause {
   readonly ruleId?: string;
   readonly kind?: string;
@@ -624,7 +624,7 @@ export interface SweepResult {
   readonly targets: readonly SweepTargetResult[];
   readonly defects: readonly SweepDefect[];
   readonly environment: {
-    /** Each run's `environmentDegraded` causes, grouped by rule/cause, source and message. */
+    /** Each run's `environmentFaults` causes (#422) and `environmentDegraded` findings (#203), grouped by rule/cause, source and message. */
     readonly causes: readonly SweepEnvironmentCause[];
     /** Runs that failed for an environment/setup reason, grouped by kind. */
     readonly failures: readonly SweepEnvironmentCause[];
@@ -731,8 +731,9 @@ export function dedupeSweepDefects(runs: ReadonlyArray<{ readonly target: string
 }
 
 /**
- * Every run's `environmentDegraded` causes grouped across targets. Reads both shapes: `{causes:
- * [{ruleId, source, message, count}]}` and the per-finding array (`[{finding, cause, detail}]`).
+ * Every run's environment causes grouped across targets: its classified backend-log faults
+ * (`environmentFaults: {causes: [{ruleId, source, message, count}]}`, #422) and its starved-host
+ * findings (`environmentDegraded: [{finding, cause, detail}]`, #203).
  */
 export function groupEnvironmentCauses(runs: ReadonlyArray<{ readonly target: string; readonly envelope: RunEnvelope }>): SweepEnvironmentCause[] {
   const groups = new Map<string, { ruleId?: string; source?: string; message: string; count: number; targets: Set<string> }>();
@@ -745,13 +746,17 @@ export function groupEnvironmentCauses(runs: ReadonlyArray<{ readonly target: st
   };
   for (const { target, envelope } of runs) {
     if (!envelope.ok || !isRecord(envelope.data)) continue;
-    const ed = envelope.data.environmentDegraded;
-    if (isRecord(ed) && Array.isArray(ed.causes)) {
-      for (const c of ed.causes) {
+    // #422: classified backend-log environment faults (`environmentFaults.causes`).
+    const ef = envelope.data.environmentFaults;
+    if (isRecord(ef) && Array.isArray(ef.causes)) {
+      for (const c of ef.causes) {
         if (!isRecord(c)) continue;
-        add(target, str(c.ruleId), str(c.source), str(c.message) ?? str(c.ruleId) ?? "environment degraded", typeof c.count === "number" ? c.count : 1);
+        add(target, str(c.ruleId), str(c.source), str(c.message) ?? str(c.ruleId) ?? "environment fault", typeof c.count === "number" ? c.count : 1);
       }
-    } else if (Array.isArray(ed)) {
+    }
+    // #203: findings met on a starved host (`environmentDegraded`, a per-finding array).
+    const ed = envelope.data.environmentDegraded;
+    if (Array.isArray(ed)) {
       for (const c of ed) {
         if (!isRecord(c)) continue;
         add(target, str(c.finding), undefined, str(c.cause) ?? str(c.detail) ?? "environment degraded", 1);

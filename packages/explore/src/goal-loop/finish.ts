@@ -8,7 +8,8 @@ import { answerNotFoundReason } from "../answer.js";
 import { buildPartialReport } from "../partial-report.js";
 import type { RunOutcome } from "../conversation.js";
 import { buildCrashReport } from "../crash-report.js";
-import type { ExploreRun } from "../explore.js";
+import type { ExploreRun, MissCause } from "../explore.js";
+import { MAX_REPORT_REJECTIONS } from "./limits.js";
 import { targetStoppedAnswering } from "../mission-failure.js";
 import { emptyRecording } from "../record.js";
 import { redactText, redactUrl } from "../redact.js";
@@ -91,6 +92,17 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ctx.failure = ctx.failure ?? { kind: "exception", message: `recording rejected: ${finished.reason}` };
     ctx.stop = "crashed";
   }
+  // #423: the miss's structured cause, decided from the loop's own state — never from `reason` text.
+  const missCause: MissCause | undefined =
+    finalOutcome.status === "completed" || ctx.answer !== undefined || (ctx.stop !== "blocked" && ctx.stop !== "no-progress")
+      ? undefined
+      : ctx.lastReportNotFound
+        ? "not-found"
+        : ctx.stop === "blocked" && ctx.reportRejections >= MAX_REPORT_REJECTIONS
+          ? "ungrounded"
+          : ctx.stop === "blocked" && ctx.lastRefusal !== null
+            ? "blocked-by-policy"
+            : undefined;
   const fired = ctx.effectLog.entries();
   ctx.effectLog.close();
   if (ctx.overlay !== null) {
@@ -129,6 +141,7 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     outcome: finalOutcome,
     ...(ctx.answer !== undefined && finalOutcome.status === "completed" ? { answer: ctx.answer } : {}),
     ...(cause === null ? {} : { blockingCause: cause }),
+    ...(missCause === undefined ? {} : { missCause }),
     ...(ctx.endedOnRejectedDone && ctx.stop === "done" ? { doneRejected: true as const } : {}),
     ...(ctx.stop === "crashed" && ctx.failure !== undefined
       ? { crash: buildCrashReport(ctx.failure, ctx.crashWatch.signals(), ctx.heap.samples(), { host: await ctx.probeHost() }) }

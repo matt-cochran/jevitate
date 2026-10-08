@@ -228,9 +228,9 @@ describe("runSweep", () => {
   it("dedupes defects by fingerprint ACROSS targets (one finding, N sightings) and groups environment causes", async () => {
     const byId: Record<string, RunEnvelope> = {
       a: result({ missionOutcome: "defects-found", exitCode: 1, defects: [defect("f1"), defect("f2", { kind: "server-log", level: "error", source: "file:/var/log/app.log", message: "TypeError x", count: 3 })] }),
-      b: result({ missionOutcome: "defects-found", exitCode: 1, defects: [defect("f1", { route: "/y" })], environmentDegraded: { causes: [{ ruleId: "load", source: "host", message: "load 3/core", count: 2 }] } }),
+      b: result({ missionOutcome: "defects-found", exitCode: 1, defects: [defect("f1", { route: "/y" })], environmentFaults: { causes: [{ ruleId: "load", source: "host", message: "load 3/core", count: 2 }] } }),
       c: result({ missionOutcome: "defects-found", exitCode: 1, defects: [defect("f2", { kind: "server-log", count: 1 })], hangs: [{ fingerprint: "h1", kind: "hang" }], environmentDegraded: [{ kind: "environment-degraded", finding: "hang", cause: "load 3/core", detail: "x", advisory: true }] }),
-      d: result({ environmentDegraded: { causes: [{ ruleId: "load", source: "host", message: "load 3/core", count: 1 }] } }),
+      d: result({ environmentFaults: { causes: [{ ruleId: "load", source: "host", message: "load 3/core", count: 1 }] } }),
     };
     const r = await runSweep({ plan: plan(["a", "b", "c", "d"].map((id) => target(id))), runOnce: async ({ target: t }) => byId[t.id]! });
     expect(r.missionOutcome).toBe("defects-found");

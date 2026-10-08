@@ -6,11 +6,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import {
   consolidate,
   diffRuns,
+  environmentCausesOf,
   renderReportMarkdown,
   runFromMissionResult,
   runFromUxReport,
   runIdOf,
   type ConsolidatedDefect,
+  type EnvironmentCauseSummary,
   type FindingsDiff,
   type RunRecord,
 } from "@jevitate/findings";
@@ -391,6 +393,10 @@ export interface RunSummary {
   readonly missionOutcome?: string;
   /** #217: a goal run's own ending, beside the canonical `missionOutcome`. */
   readonly goalOutcome?: string;
+  /** #423: why the goal was not achieved. */
+  readonly goalReason?: string;
+  /** #423: the run's defect verdict, by kind — orthogonal to `goalOutcome`. */
+  readonly defectOutcome?: { readonly status: string; readonly byKind: Readonly<Record<string, number>> };
   readonly targetBuild?: string;
   readonly engineCommit?: string;
   readonly findings: number;
@@ -405,7 +411,9 @@ export interface ReportResult {
   readonly tags?: Readonly<Record<string, string>>;
   readonly runs: readonly RunSummary[];
   readonly defects: readonly ConsolidatedDefect[];
-  readonly summary: { readonly defects: number; readonly advisory: number; readonly runs: number };
+  /** #422: the batch's environment/config faults, once each (summed over the runs) — never defects. */
+  readonly environmentFaults: readonly EnvironmentCauseSummary[];
+  readonly summary: { readonly defects: number; readonly advisory: number; readonly runs: number; readonly environmentFaults: number };
   /**
    * Model usage summed over the reported runs (#163). Runs whose result carries no `usage` (they made
    * no model call, or predate usage accounting) are counted in `unreportedRuns`, not priced.
@@ -426,6 +434,8 @@ export function summarizeRun(r: RunRecord): RunSummary {
     ...(r.startedAt === undefined ? {} : { startedAt: r.startedAt }),
     ...(r.missionOutcome === undefined ? {} : { missionOutcome: r.missionOutcome }),
     ...(r.goalOutcome === undefined ? {} : { goalOutcome: r.goalOutcome }),
+    ...(r.goalReason === undefined ? {} : { goalReason: r.goalReason }),
+    ...(r.defectOutcome === undefined ? {} : { defectOutcome: r.defectOutcome }),
     ...(r.targetBuild === undefined ? {} : { targetBuild: r.targetBuild }),
     ...(r.engine?.commit === undefined ? {} : { engineCommit: r.engine.commit }),
     ...(r.tags === undefined ? {} : { tags: r.tags }),
@@ -482,6 +492,7 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
     diff = diffRuns(baselineRuns, runs);
   }
   const usage = usageOfRuns(runs);
+  const environmentFaults = environmentCausesOf(runs);
   const markdown =
     renderReportMarkdown({
       title: `Defect report${targetLabel === undefined ? "" : ` — ${targetLabel}`}${since === undefined ? "" : ` since ${since}`}${tagFilter === undefined ? "" : ` tagged ${tagsLabel(tagFilter)}`}`,
@@ -495,10 +506,12 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
     ...(tagFilter === undefined ? {} : { tags: tagFilter }),
     runs: runs.map(summarizeRun),
     defects,
+    environmentFaults,
     summary: {
       defects: defects.filter((d) => d.severity === "hard").length,
       advisory: defects.filter((d) => d.severity === "advisory").length,
       runs: runs.length,
+      environmentFaults: environmentFaults.length,
     },
     usage,
     ...(diff === undefined ? {} : { diff }),

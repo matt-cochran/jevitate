@@ -388,6 +388,9 @@ export interface ExploreConfig {
   readonly minEffort?: MinEffort;
 }
 
+/** #423: the structured cause of a goal miss code can name (see `ExploreRun.missCause`). */
+export type MissCause = "not-found" | "ungrounded" | "blocked-by-policy";
+
 export interface ExploreRun {
   readonly stop: StopReason;
   readonly recording: Recording;
@@ -422,6 +425,14 @@ export interface ExploreRun {
    * message, a visible alert. Absent when none was seen. Advisory evidence for the run's `reason`.
    */
   readonly blockingCause?: string;
+  /**
+   * #423: why a run that stopped short of its goal stopped, when code knows it beyond `stop`:
+   * `not-found` — a find-out goal's latest report found no answer; `ungrounded` — the model's
+   * answer was rejected as not grounded on the observed pages until the run gave up;
+   * `blocked-by-policy` — the model gave up after the safety policy refused a control it chose.
+   * Absent for a completed run and for every other stop.
+   */
+  readonly missCause?: MissCause;
   /**
    * #209: the run ended (stop `done`, #217) because the model kept proposing `done` and code rejected
    * every proposal (the success condition never held) — the model claimed the goal, it did not give up.

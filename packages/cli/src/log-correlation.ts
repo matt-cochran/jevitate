@@ -22,6 +22,7 @@ import {
   type LogLevel,
   type LogLine,
 } from "./log-lines.js";
+import { DEFAULT_LOG_CLASS_RULES, classifyLogLine, type LogClassCause, type LogClassRule } from "./log-classes.js";
 import { RequestIdLedger, declaredIds, type CorrelatedRequest, type RequestEvents } from "./log-trace.js";
 import { observeBrowserSignals, redactSignalText, type RawBrowserSignal, type SignalEntry } from "./signal-triage.js";
 
@@ -145,6 +146,12 @@ export interface ServerLogDefect {
   readonly level: LogLevel;
   /** First occurrence's redacted message. */
   readonly message: string;
+  /** #421: the `--log-source` (its raw spec) the first occurrence was read from. */
+  readonly source: string;
+  /** #421: the transcript step the first occurrence was attributed to (the run's last step for an unattributed line). */
+  readonly firstSeenStep: number;
+  /** #421: how many lines of this run share the fingerprint (= `occurrences`, the name every consumer reads). */
+  readonly count: number;
   readonly occurrences: number;
   readonly repro: { readonly recordingStepIndex: number };
   /** #204: the request the first occurrence was correlated to by id, when it was. */
@@ -164,6 +171,10 @@ export interface ServerLogRuntimeResult {
   readonly transcript: readonly TranscriptEntryWithLogs[];
   readonly summary: ServerLogsSummary;
   readonly defects: ServerLogDefect[];
+  /** #422: `--log-defect` lines a `log-classes` rule classed `environment` — never defects (empty when none). */
+  readonly environment?: readonly LogClassCause[];
+  /** #422: `--log-defect` lines a rule classed `expected-validation` — recorded, never failing the run. */
+  readonly expectedValidation?: readonly LogClassCause[];
   /** #313 (`signals: true`): the run's whole redacted signal timeline — every backend line at every
    *  level plus the browser's console, page errors and failed requests — each placed in its step. */
   readonly signals?: { readonly entries: readonly SignalEntry[]; readonly truncated: boolean };
@@ -204,6 +215,8 @@ export interface ServerLogRuntimeOptions {
   readonly idPatterns?: readonly RegExp[];
   /** #313 `--log-triage`: also record the whole signal timeline (`ServerLogRuntimeResult.signals`). */
   readonly signals?: boolean;
+  /** #422: how a `--log-defect` line is classed (project `.jevitate/log-classes.json` + defaults); default: the built-in rules. */
+  readonly logClasses?: readonly LogClassRule[];
   /** The journal's own listener — still called for every entry (the crash-safe flush is unchanged). */
   readonly onTranscriptEntry?: (entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void;
 }
@@ -230,6 +243,7 @@ export class ServerLogRuntime {
   readonly #logIgnore: readonly LogIgnoreMatcher[];
   readonly #logScope: readonly LogIgnoreMatcher[];
   readonly #idPatterns: readonly RegExp[];
+  readonly #logClasses: readonly LogClassRule[];
   readonly #ledger: RequestIdLedger;
   #ignoredLines = 0;
   readonly #inner: ((entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void) | undefined;
@@ -250,6 +264,7 @@ export class ServerLogRuntime {
     this.#logIgnore = opts.logIgnore ?? [];
     this.#logScope = opts.logScope ?? [];
     this.#idPatterns = opts.idPatterns ?? [];
+    this.#logClasses = opts.logClasses ?? DEFAULT_LOG_CLASS_RULES;
     this.#ledger = new RequestIdLedger({ headers: opts.correlationHeaders ?? [] });
     this.#inner = opts.onTranscriptEntry;
     this.#signalsOn = opts.signals === true;
@@ -411,13 +426,18 @@ export class ServerLogRuntime {
       return logs === undefined || logs.length === 0 ? entry : { ...entry, serverLogs: logs };
     });
 
-    const defects = this.#matchers.length === 0 ? [] : this.#buildDefects(transcript, perStepRaw, unattributed, requests);
+    const classified = this.#matchers.length === 0 ? undefined : this.#buildDefects(transcript, perStepRaw, unattributed, requests);
+    const defects = classified?.defects ?? [];
+    const classes = {
+      ...(classified === undefined || classified.environment.length === 0 ? {} : { environment: classified.environment }),
+      ...(classified === undefined || classified.expectedValidation.length === 0 ? {} : { expectedValidation: classified.expectedValidation }),
+    };
     const correlation =
       this.#ledger.requestsWithIds > 0 || this.#logScope.length > 0
         ? { requestsWithIds: this.#ledger.requestsWithIds, idMatchedLines: kept.filter((l) => byId.has(l)).length, foreignLines, outOfScopeLines }
         : undefined;
     const summary = this.#summary(unattributed, kept, attachedLines, correlation);
-    if (!this.#signalsOn) return { transcript: augmented, summary, defects };
+    if (!this.#signalsOn) return { transcript: augmented, summary, defects, ...classes };
     // #313: every kept line (all levels) and every browser signal, redacted, placed in its step.
     const place = (step: number | undefined): Pick<SignalEntry, "step" | "recordingStepIndex"> =>
       step === undefined ? {} : { step, recordingStepIndex: recordingStepIndexFor(transcript, step) };
@@ -444,7 +464,7 @@ export class ServerLogRuntime {
         ...place(windows.find((w) => b.epochMs >= w.startMs && b.epochMs <= w.endMs)?.step),
       })),
     ].sort((a, b) => a.epochMs - b.epochMs);
-    return { transcript: augmented, summary, defects, signals: { entries, truncated: this.#signalsDropped } };
+    return { transcript: augmented, summary, defects, ...classes, signals: { entries, truncated: this.#signalsDropped } };
   }
 
   #buildDefects(
@@ -452,14 +472,30 @@ export class ServerLogRuntime {
     perStepRaw: ReadonlyMap<number, LogLine[]>,
     unattributed: readonly LogLine[],
     requests: ReadonlyMap<LogLine, ServerLogRequest>,
-  ): ServerLogDefect[] {
+  ): { defects: ServerLogDefect[]; environment: LogClassCause[]; expectedValidation: LogClassCause[] } {
     const grouped = new Map<string, { defect: ServerLogDefect; count: number }>();
+    // #422: a candidate a `log-classes` rule classes `environment` / `expected-validation` is not a
+    // defect — one cause per (rule, source, message class), counted.
+    const causes = { environment: new Map<string, LogClassCause>(), "expected-validation": new Map<string, LogClassCause>() };
     const lastStep = transcript.length > 0 ? (transcript[transcript.length - 1] as TranscriptEntry).step : 0;
 
     const consider = (line: LogLine, route: string, atStep: number): void => {
       const matched = this.#matchers.find((m) => matchesLogDefect(line, m));
       if (matched === undefined) return;
       const normalizedMessage = normalizeLogMessage(line.message);
+      const rule = classifyLogLine(this.#logClasses, line);
+      if (rule !== undefined && rule.class !== "defect") {
+        const into = causes[rule.class];
+        const key = `${rule.id}|${line.source}|${normalizedMessage}`;
+        const seen = into.get(key);
+        into.set(
+          key,
+          seen === undefined
+            ? { ruleId: rule.id, source: line.source, message: redactText(line.message, this.#secrets), count: 1 }
+            : { ...seen, count: seen.count + 1 },
+        );
+        return;
+      }
       const fp = serverLogFingerprint(route, normalizedMessage, line.target);
       const existing = grouped.get(fp);
       if (existing !== undefined) {
@@ -481,6 +517,9 @@ export class ServerLogRuntime {
           route: templatedRoute,
           level: line.level,
           message: redactText(line.message, this.#secrets),
+          source: line.source,
+          firstSeenStep: atStep,
+          count: 1,
           occurrences: 1,
           repro: { recordingStepIndex: recordingStepIndexFor(transcript, atStep) },
           ...(request === undefined ? {} : { request }),
@@ -501,7 +540,11 @@ export class ServerLogRuntime {
     }
     for (const line of unattributed) consider(line, UNATTRIBUTED_ROUTE, lastStep);
 
-    return [...grouped.values()].map(({ defect, count }) => ({ ...defect, occurrences: count }));
+    return {
+      defects: [...grouped.values()].map(({ defect, count }) => ({ ...defect, count, occurrences: count })),
+      environment: [...causes.environment.values()],
+      expectedValidation: [...causes["expected-validation"].values()],
+    };
   }
 
   #summary(

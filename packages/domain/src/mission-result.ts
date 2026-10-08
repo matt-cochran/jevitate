@@ -1,6 +1,16 @@
 import { z } from "zod";
 import { RunTagsSchema } from "./run-tags.js";
-import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outcome.js";
+import {
+  DEFECT_OUTCOME_STATUSES,
+  GOAL_OUTCOMES,
+  GOAL_REASONS,
+  MISSION_OUTCOMES,
+  defectOutcomeOf,
+  foldGoalOutcome,
+  goalMissionOutcome,
+  type DefectOutcome,
+  type GoalReason,
+} from "./mission-outcome.js";
 
 /**
  * The ONE result schema every explore strategy's result follows (#195 part 5) — what `jevitate
@@ -17,11 +27,19 @@ import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outc
  *  - `goalOutcome` — a goal run's own ending (`succeeded`/`failed`/`exhausted`/`blocked`, or a shared
  *    outcome it ended with directly), present on every goal result and on no other; it folds onto
  *    `missionOutcome` by the domain's single mapping (`GOAL_OUTCOME_FOLD`). Additive (schemaVersion 1).
+ *    #423: a goal result's `missionOutcome` is derived from `goalOutcome` AND `defectOutcome` by ONE
+ *    table (`goalMissionOutcome` in `mission-outcome.ts`); `goalOutcome` is the goal's own ending — a
+ *    defect no longer replaces it — and `goalReason` names why a goal was not achieved.
  *  - `defects` — EVERY defect the run found, whatever oracle found it: hard-signal defects,
  *    declared-invariant defects and `server-log` defects alike, each with its `fingerprint` and
  *    `kind`. A defect a strategy reports but never gates on (a usability run's `server-log`
  *    defect; a coverage/exploratory `judgment-flagged-state`, which only Jev's opinion found — #214)
  *    is marked `advisory: true`: listed, replayable by `verify-fix`, never setting the outcome.
+ *    A `server-log` defect (#421) also carries `level`, `source` (the `--log-source` spec), `message`
+ *    (redacted), `firstSeenStep` and `count` (= `occurrences`).
+ *  - `defectOutcome` — #421/#423, additive (schemaVersion 1): `{ status: "none" | "defects", byKind,
+ *    advisoryByKind? }` — the gating defects counted per kind (the run's defect summary), orthogonal
+ *    to a goal run's `goalOutcome`. Written on every result since 0.8.0; older results parse without.
  *  - `hangs` — every hang finding (0 or more), each with its fingerprint and reproduction.
  *  - `recordingPaths` — every Recording the run wrote (one for a single-path run, one per path for a
  *    frontier run); never a single `recordingPath` for one strategy and a list for another.
@@ -35,6 +53,10 @@ import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outc
  *    `environmentDegraded` — findings (a hang, a click timeout, a no-progress stop) met while the host
  *    was starved: advisory, never a defect or hang finding, never failing the run. Both are additive
  *    (schemaVersion 1): every result written since #203 carries them; older results parse without.
+ *  - `environmentFaults` / `expectedValidation` — #422, additive (schemaVersion 1): `--log-defect` lines
+ *    a `log-classes` rule classed `environment` (`{ causes: [{ ruleId, source, message, count }] }`) or
+ *    `expected-validation` (`[{ ruleId, source, message, count }]`). Never defects, never failing the
+ *    run; absent when there were none. (Not `environmentDegraded`, which is #203's starved-host list.)
  *  - `videoPaths` — #245, additive (schemaVersion 1): the Playwright videos a `--record-video` run
  *    wrote (every browser context it opened, oldest first), finalized before the result is written.
  *    Absent when the run did not record.
@@ -209,6 +231,32 @@ export const EnvironmentDegradedSchema = z.looseObject({
 });
 export type EnvironmentDegraded = z.infer<typeof EnvironmentDegradedSchema>;
 
+function sameCounts(a: Readonly<Record<string, number>>, b: Readonly<Record<string, number>>): boolean {
+  const ka = Object.keys(a).filter((k) => a[k] !== 0);
+  const kb = Object.keys(b);
+  return ka.length === kb.length && kb.every((k) => a[k] === b[k]);
+}
+
+/** #421/#423: the run's defect verdict — gating defects counted per kind (see `DefectOutcome`). */
+export const DefectOutcomeSchema = z.looseObject({
+  status: z.enum(DEFECT_OUTCOME_STATUSES),
+  byKind: z.record(z.string(), z.number().int().nonnegative()),
+  advisoryByKind: z.record(z.string(), z.number().int().nonnegative()).optional(),
+});
+
+/**
+ * #422: one classified backend-log cause — a `--log-defect` line a `log-classes` rule (project
+ * `.jevitate/log-classes.json`, then the built-in defaults) classed `environment` or
+ * `expected-validation`: never a defect. Counted per (rule, source, message class).
+ */
+export const LogClassCauseSchema = z.looseObject({
+  ruleId: z.string().min(1),
+  source: z.string(),
+  message: z.string(),
+  count: z.number().int().positive(),
+});
+export type LogClassCauseRecord = z.infer<typeof LogClassCauseSchema>;
+
 /** The common fields of every strategy's result (strategy-specific fields pass through). */
 export const MissionResultSchema = z
   .looseObject({
@@ -217,8 +265,12 @@ export const MissionResultSchema = z
     missionOutcome: z.enum(RESULT_MISSION_OUTCOMES),
     /** #217 — additive: a goal run's own ending (present on every goal result, on no other). */
     goalOutcome: z.enum(RESULT_GOAL_OUTCOMES).optional(),
+    /** #423 — additive: why the goal was not achieved (goal results whose goalOutcome is not `succeeded`). */
+    goalReason: z.enum(GOAL_REASONS).optional(),
     exitCode: z.number().int().nonnegative(),
     defects: z.array(ResultDefectSchema),
+    /** #421/#423 — additive: optional so results written before 0.8.0 still parse. */
+    defectOutcome: DefectOutcomeSchema.optional(),
     hangs: z.array(ResultHangSchema),
     recordingPaths: z.array(z.string().min(1)),
     transcriptPath: z.string().min(1),
@@ -230,6 +282,10 @@ export const MissionResultSchema = z
     /** #203 — additive: optional so results written before it still parse. */
     hostHealth: HostHealthSummarySchema.optional(),
     environmentDegraded: z.array(EnvironmentDegradedSchema).optional(),
+    /** #422 — additive: the run's environment/config faults (absent when none). */
+    environmentFaults: z.looseObject({ causes: z.array(LogClassCauseSchema).min(1) }).optional(),
+    /** #422 — additive: `--log-defect` lines classed `expected-validation` (absent when none). */
+    expectedValidation: z.array(LogClassCauseSchema).optional(),
     /** #245 — additive: the run's `--record-video` files (absent when it did not record). */
     videoPaths: z.array(z.string().min(1)).optional(),
     /** #251 — additive: the run's `--screenshots` images, contact sheet and refused captures. */
@@ -245,10 +301,25 @@ export const MissionResultSchema = z
     message: "goalOutcome is present on every goal result and on no other",
     path: ["goalOutcome"],
   })
-  .refine((r) => r.goalOutcome === undefined || foldGoalOutcome(r.goalOutcome) === r.missionOutcome, {
-    message: "missionOutcome must be the canonical fold of goalOutcome (GOAL_OUTCOME_FOLD)",
-    path: ["missionOutcome"],
-  });
+  .refine((r) => r.defectOutcome === undefined || sameCounts(r.defectOutcome.byKind, defectOutcomeOf(r.defects).byKind), {
+    message: "defectOutcome.byKind must count the result's gating defects per kind",
+    path: ["defectOutcome"],
+  })
+  .refine((r) => r.goalReason === undefined || (r.goalOutcome !== undefined && r.goalOutcome !== "succeeded"), {
+    message: "goalReason is only on a goal result whose goal was not achieved",
+    path: ["goalReason"],
+  })
+  .refine(
+    (r) =>
+      r.goalOutcome === undefined ||
+      (r.defectOutcome === undefined
+        ? foldGoalOutcome(r.goalOutcome) === r.missionOutcome // a result written before #423
+        : goalMissionOutcome(r.goalOutcome, r.defectOutcome.status) === r.missionOutcome),
+    {
+      message: "missionOutcome must be derived from goalOutcome and defectOutcome (goalMissionOutcome; GOAL_OUTCOME_FOLD before #423)",
+      path: ["missionOutcome"],
+    },
+  );
 export type MissionResult = z.infer<typeof MissionResultSchema>;
 
 /** A persisted `<stem>.result.json`: the verdict beside the result it summarizes. */
@@ -273,8 +344,12 @@ export interface MissionResultCore {
   readonly missionOutcome: ResultMissionOutcome;
   /** #217: a goal run's own ending (goal results only). */
   readonly goalOutcome?: ResultGoalOutcome;
+  /** #423: why the goal was not achieved (goal results whose goal was not `succeeded`). */
+  readonly goalReason?: GoalReason;
   readonly exitCode: number;
   readonly defects: ReadonlyArray<{ readonly fingerprint: string; readonly kind: string; readonly advisory?: true }>;
+  /** #421/#423: `defectOutcomeOf(defects)` — every result written now carries it. */
+  readonly defectOutcome: DefectOutcome;
   readonly hangs: ReadonlyArray<{ readonly fingerprint: string; readonly kind: "hang" }>;
   readonly recordingPaths: readonly string[];
   readonly transcriptPath: string;
@@ -294,6 +369,10 @@ export interface MissionResultCore {
   /** #203: every result written now carries the host's health and its environment-degraded findings. */
   readonly hostHealth: HostHealthSummary;
   readonly environmentDegraded: readonly EnvironmentDegraded[];
+  /** #422: `--log-defect` lines classed `environment` (absent when none) — never defects. */
+  readonly environmentFaults?: { readonly causes: readonly LogClassCauseRecord[] };
+  /** #422: `--log-defect` lines classed `expected-validation` (absent when none) — recorded, never failing the run. */
+  readonly expectedValidation?: readonly LogClassCauseRecord[];
   /** #245: the run's `--record-video` files (absent when it did not record). */
   readonly videoPaths?: readonly string[];
   /** #251: the run's `--screenshots` images and contact sheet (absent without the flag). */

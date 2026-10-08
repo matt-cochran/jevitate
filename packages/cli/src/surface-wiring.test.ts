@@ -313,12 +313,14 @@ const ENVELOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     hang: "→ hangs[]",
     warnings: "→ checkWarnings",
     invariantDefects: "→ defects (declaredResult)",
+    goalEnding: "→ goalOutcome (#423: the goal's own ending an invariant overrode) and goalReason",
   },
   "ExploreRun → RunExplorationResult": {
     hang: "→ hangs[]",
     heap: "per-step samples; a crash carries them in crash.heap",
     blockingCause: "folded into the run's reason (withCause)",
     doneRejected: "folded into the goal outcome: `failed` (a done code rejected), never `blocked` (#209)",
+    missCause: "→ goalReason (#423: not-found / ungrounded / blocked-by-policy)",
   },
   "InductionRunResult → RunCoverageMissionResult": {
     recordings: "written to disk → recordingPaths",
@@ -332,6 +334,7 @@ const ENVELOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     blockingCause: "folded into the run's reason (withCause)",
     doneRejected: "folded into outcome.reason (the model proposed done N times…) and failure job-incomplete (#209)",
     partialReport: "#424: a usability review is judged by its UX findings and the job's checks, never by a reported answer",
+    missCause: "not surfaced: a usability review carries no goalReason (its job outcome is advisory; reason names the miss)",
   },
 };
 
