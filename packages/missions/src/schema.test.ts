@@ -114,6 +114,15 @@ describe("MissionRequestSchema", () => {
     }
   });
 
+  it("#424: accepts a minimum effort on a goal-based mission only (positive integers, no other keys)", () => {
+    const minEffort = { minActions: 8, minDistinctStates: 4 };
+    expect(MissionRequestSchema.parse({ ...baseRequest, minEffort })).toMatchObject({ minEffort });
+    expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy: "coverage", minEffort })).toThrow(/minEffort is not accepted for strategy coverage/);
+    for (const bad of [{ minActions: 0 }, { minActions: 1.5 }, { minDistinctStates: -1 }, { maxActions: 3 }]) {
+      expect(() => MissionRequestSchema.parse({ ...baseRequest, minEffort: bad }), JSON.stringify(bad)).toThrow();
+    }
+  });
+
   it("accepts coverage/adversarial with no goal and no success assertion, optionally scoped by a route glob (#117)", () => {
     for (const strategy of ["coverage", "adversarial"]) {
       expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy })).not.toThrow();

@@ -62,6 +62,8 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
       .option("--max-actions <n>", "budget: max actions (bounded by the queue's ceiling)", positiveIntArg)
       .option("--max-decisions <n>", "budget: max decisions", positiveIntArg)
       .option("--max-candidates <n>", "budget: max candidates", positiveIntArg)
+      .option("--min-actions <n>", "goal-based (#424): the minimum actions before the model may conclude (capped by the budget; `explore --min-actions`)", positiveIntArg)
+      .option("--min-distinct-states <n>", "goal-based (#424): the minimum distinct page states before the model may conclude (`explore --min-distinct-states`)", positiveIntArg)
       .option("--invariants <file>", "app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret)")
       // #255 (MCP queue_exploration parity): media next to the result — never a path in a queued request.
       .option("--record-video", "record a video of the run (headless too), written next to its result; listed as videoPaths")
@@ -85,6 +87,8 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
           maxActions?: number;
           maxDecisions?: number;
           maxCandidates?: number;
+          minActions?: number;
+          minDistinctStates?: number;
           invariants?: string;
           recordVideo?: boolean;
           screenshots?: boolean | string;
@@ -144,6 +148,14 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
         ...(o.route === undefined ? {} : { route: o.route }),
         ...(successAssertion === undefined ? {} : { successAssertion }),
         ...(Object.keys(budget).length === 0 ? {} : { budget }),
+        ...(o.minActions === undefined && o.minDistinctStates === undefined
+          ? {}
+          : {
+              minEffort: {
+                ...(o.minActions === undefined ? {} : { minActions: o.minActions }),
+                ...(o.minDistinctStates === undefined ? {} : { minDistinctStates: o.minDistinctStates }),
+              },
+            }),
         ...(invariants === undefined ? {} : { invariants }),
         ...(emulation?.viewport === undefined ? {} : { viewport: emulation.viewport }),
         ...(emulation?.device === undefined ? {} : { device: emulation.device }),

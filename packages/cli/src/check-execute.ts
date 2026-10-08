@@ -234,6 +234,14 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         gen,
         usage,
         bounds: bounds(g.maxActions, g.maxDecisions, remaining),
+        ...(x.minActions === undefined && x.minDistinctStates === undefined
+          ? {}
+          : {
+              minEffort: {
+                ...(x.minActions === undefined ? {} : { minActions: x.minActions }),
+                ...(x.minDistinctStates === undefined ? {} : { minDistinctStates: x.minDistinctStates }),
+              },
+            }),
         ...withSecretFields,
         ...withSecrets,
         ...withFixture,

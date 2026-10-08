@@ -840,7 +840,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     },
     queue_exploration: {
       description:
-        "Enqueue an exploration mission against a PROMOTED target. Never runs anything — only queues; `jevitate mission run` drains the queue, and get_mission_result {id: missionId} reports its status/result. strategy: goal-based (goal|feature|route + successAssertion) | coverage | exploratory (novelty-first coverage) | adversarial (optional in-scope route glob) | feature (feature name, optional route glob); a usability review is not queueable — use run_exploration {strategy: usability}. The target's authorized origin plus its declared apiOrigins are the only reachable origins. Refuses unknown/unpromoted targets, over-ceiling budgets and invalid declared `invariants` (an optional closed spec checked around every action; probes GET/HEAD on the target origin only). Optional 'viewport' ({width,height}) or 'device' (a Playwright devices registry name, e.g. \"iPhone 13\") — mutually exclusive (#149); default: Playwright's own default viewport. An unknown device is refused before any browser opens. #255: 'recordVideo' / 'evidenceVideo' (booleans) and 'screenshots' (screens | steps) write media next to the result (listed in it) — a queued request never names a path; 'persona' names a persona in the operator's ~/.jevitate/targets.json for the target's origin (its session, never the caller's). Same as `jevitate mission queue`.",
+        "Enqueue an exploration mission against a PROMOTED target. Never runs anything — only queues; `jevitate mission run` drains the queue, and get_mission_result {id: missionId} reports its status/result. strategy: goal-based (goal|feature|route + successAssertion) | coverage | exploratory (novelty-first coverage) | adversarial (optional in-scope route glob) | feature (feature name, optional route glob); a usability review is not queueable — use run_exploration {strategy: usability}. The target's authorized origin plus its declared apiOrigins are the only reachable origins. Refuses unknown/unpromoted targets, over-ceiling budgets and invalid declared `invariants` (an optional closed spec checked around every action; probes GET/HEAD on the target origin only). Optional 'viewport' ({width,height}) or 'device' (a Playwright devices registry name, e.g. \"iPhone 13\") — mutually exclusive (#149); default: Playwright's own default viewport. An unknown device is refused before any browser opens. #255: 'recordVideo' / 'evidenceVideo' (booleans) and 'screenshots' (screens | steps) write media next to the result (listed in it) — a queued request never names a path; 'persona' names a persona in the operator's ~/.jevitate/targets.json for the target's origin (its session, never the caller's). #424: 'minEffort' {minActions, minDistinctStates} (goal-based only) — the minimum exploration before the model may conclude, capped by the budget. Same as `jevitate mission queue`.",
       inputSchema: {
         type: "object",
         properties: {
@@ -874,6 +874,11 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           screenshots: { type: "string", enum: [...QUEUED_SCREENSHOT_MODES] },
           evidenceVideo: { type: "boolean" },
           persona: { type: "string" },
+          // #424 (goal-based only): the minimum exploration effort before the model may conclude.
+          minEffort: {
+            type: "object",
+            properties: { minActions: { type: "number" }, minDistinctStates: { type: "number" } },
+          },
         },
         required: ["target"],
       },

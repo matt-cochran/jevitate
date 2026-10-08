@@ -6,6 +6,7 @@
 import { GOAL_CHECK_TRIGGER } from "../conversation.js";
 import type { RunContext } from "./context.js";
 import { MAX_DONE_REJECTIONS } from "./limits.js";
+import { deferEnding } from "./min-effort.js";
 import type { Flow, Step } from "./step.js";
 
 export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
@@ -29,7 +30,9 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
     // #207: a find-out goal is verified by a grounded answer; its `blocked` (after a report
     // attempt on this state found none) never becomes an answerless "goal already met".
     !(ctx.findOut && decision.op === "blocked") &&
-    !ctx.goalChecked.has(snap.signature)
+    !ctx.goalChecked.has(snap.signature) &&
+    // #424: without a success check, "already met" is a conclusion — not before the minimum effort.
+    !(cfg.successCheck === undefined && ctx.minEffort !== null && ctx.depth.report(ctx.tracker.actions, ctx.tracker.decisions, ctx.minEffort).minimum?.met === false)
   ) {
     ctx.goalChecked.add(snap.signature);
     const { verdict, judgments } = await groundGoal();
@@ -68,6 +71,15 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
       return "stop";
     }
     return "continue";
+  }
+  // #424: without a success check, the model's `done` concludes the run — deferred below the minimum
+  // exploration effort (a goal with checks is decided by them, never by the minimum).
+  if (decision.op === "done" && cfg.successCheck === undefined) {
+    const deferred = deferEnding(ctx, step, "done");
+    if (deferred !== null) {
+      record(false, deferred, { origin: "engine" });
+      return "continue";
+    }
   }
   // `done` is a PROPOSAL (guardrail #4), grounded by `groundGoal`.
   if (decision.op === "done") {

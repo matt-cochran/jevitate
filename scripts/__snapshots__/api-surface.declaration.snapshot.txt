@@ -290,7 +290,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (618 exports)
+# @jevitate/explore (634 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -345,6 +345,7 @@
   boundSecretField: function
   BoundsTracker: class
   boundTypeFixture: function
+  breadthHint: function
   BudgetActionInfo: interface
   BudgetGuardResult: interface
   BudgetMonitor: class
@@ -354,6 +355,7 @@
   BudgetTrajectory: interface
   buildCrashReport: function
   buildJudgmentState: function
+  buildPartialReport: function
   BuildStateInput: interface
   busyIndicatorOf: function
   CANARY_ATTRIBUTE: variable
@@ -447,6 +449,7 @@
   DemoOverlay: class
   demoOverlayFor: function
   DemoOverlayIntent: interface
+  DepthLog: class
   describeAction: function
   describeAssertionSpec: function
   describeChange: function
@@ -533,6 +536,7 @@
   GoalBasedMissionConfig: interface
   GoalBasedOutcome: type-alias
   GoalBasedResult: interface
+  goalIsOpenEnded: function
   goalListsSeveral: function
   goalResultDiagnostics: function
   groundAnswer: function
@@ -625,6 +629,7 @@
   MAX_DONE_REJECTIONS: variable
   MAX_GLOB_ALTERNATIVES: variable
   MAX_IDLE_STEPS: variable
+  MAX_MIN_EFFORT_REFUSALS: variable
   MAX_MOVING_SCROLLS: variable
   MAX_QUIET_WAITS: variable
   MAX_REPEAT_TYPE_SIGNALS: variable
@@ -635,6 +640,9 @@
   MESSAGE_FIELD: variable
   messageClass: function
   messageRisk: function
+  MinEffort: interface
+  minEffortNote: function
+  MinEffortRequest: interface
   MissionRouteScope: interface
   MissionSafety: class
   MissionSessions: class
@@ -665,6 +673,8 @@
   occluderOf: function
   ONLY_GLOBAL_NAVIGATION: variable
   Op: type-alias
+  OPEN_ENDED_MIN_ACTIONS: variable
+  OPEN_ENDED_MIN_DISTINCT_STATES: variable
   OPS: variable
   OPS_NEEDING_TARGET: variable
   OutcomeCheckContext: interface
@@ -694,6 +704,9 @@
   parseNumbers: function
   parseSecretField: function
   parseTypeFixtureSpec: function
+  PartialReport: interface
+  PartialReportAction: interface
+  PartialReportState: interface
   pathGlob: function
   pendingEvidence: function
   PendingRequestEvidence: interface
@@ -755,6 +768,7 @@
   resolveBounds: function
   resolveCoverageSufficiencyThresholds: function
   resolveCoverageThresholds: function
+  resolveMinEffort: function
   resolveMissionFixture: function
   resolveRouteScope: function
   resolveSecretFieldValue: function
@@ -771,6 +785,7 @@
   rpcStatusOfResponse: function
   runAdversarialMission: function
   RunAnswer: interface
+  RunDepth: interface
   runFeatureMission: function
   runGoalBasedMission: function
   runInductionMission: function
@@ -814,6 +829,7 @@
   SettleConfig: interface
   SettleResult: interface
   SHORT_FIELD_MAX_WORDS: variable
+  shortfall: function
   shouldCheckOverflow: function
   SideEffect: interface
   SideEffectGuard: class

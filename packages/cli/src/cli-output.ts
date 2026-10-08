@@ -161,6 +161,11 @@ export function formatMissionHuman(result: unknown): string {
   lines.push(...deltaLines(result));
   const answer = answerLine(result.answer);
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
+  lines.push(...partialReportLines(result.partialReport));
+  const depth = depthLine(result.depth);
+  if (depth !== undefined) lines.push(`${tag("DEPTH")}${depth}`);
+  // #424: the warnings about the verdict (a minimum effort capped by the budget, a vacuous check).
+  for (const w of arr(result.checkWarnings)) if (str(w) !== undefined) lines.push(`${tag("WARNING")}${str(w)}`);
   // #245: the run's --record-video files.
   for (const v of arr(result.videoPaths)) if (str(v) !== undefined) lines.push(`${tag("VIDEO")}${str(v)}`);
   lines.push(...screenshotLines(result));
@@ -238,6 +243,47 @@ function uxLines(result: Record<string, unknown>): string[] {
   }
   if (findings.length > TOP) lines.push(`${tag("")}  … and ${findings.length - TOP} more in the report`);
   return lines;
+}
+
+/**
+ * #424: how deep a goal run went — "4 distinct state(s) on 4 page(s), 3 action(s), 0 form(s) submitted"
+ * plus the minimum effort and whether it was met.
+ */
+function depthLine(depth: unknown): string | undefined {
+  if (!isRecord(depth) || typeof depth.distinctStates !== "number") return undefined;
+  const n = (k: string): string => (typeof depth[k] === "number" ? String(depth[k]) : "?");
+  const base = `${n("distinctStates")} distinct state(s) on ${n("distinctPages")} page(s), ${n("actions")} action(s), ${n("formsSubmitted")} form(s) submitted`;
+  const m = depth.minimum;
+  if (!isRecord(m)) return base;
+  return `${base} · minimum ${String(m.minActions)} action(s) / ${String(m.minDistinctStates)} state(s) (${str(m.source) ?? "?"}): ${m.met === true ? "met" : "NOT met"}`;
+}
+
+/** Pages / lines per page the human summary shows of a partial report (`--json` has all of it). */
+const HUMAN_PARTIAL_STATES = 8;
+const HUMAN_PARTIAL_LINES = 3;
+
+/**
+ * #424: a find-out that could not ground an answer — per page it visited, what it saw (the page's own
+ * text) and what it tried, then the grounded claims of its rejected reports.
+ */
+function partialReportLines(report: unknown): string[] {
+  if (!isRecord(report)) return [];
+  const states = arr(report.states).filter(isRecord);
+  if (states.length === 0) return [];
+  const out = [`${tag("PARTIAL")}no grounded answer — what the run saw and tried on ${states.length} page(s) (observed evidence only)`];
+  for (const st of states.slice(0, HUMAN_PARTIAL_STATES)) {
+    const name = str(st.title) ?? str(st.heading);
+    out.push(`${tag("")}${str(st.url) ?? "?"}${name === undefined ? "" : ` — ${name}`}`);
+    for (const l of arr(st.seen).map(str).filter((x): x is string => x !== undefined).slice(0, HUMAN_PARTIAL_LINES)) out.push(`${tag("")}  seen: "${l}"`);
+    const tried = arr(st.tried).filter(isRecord);
+    if (tried.length > 0) {
+      const t = tried.map((a) => `${str(a.op) ?? "?"} ${str(a.control) ?? ""} → ${a.ok === true ? "" : "failed: "}${str(a.result) ?? ""}`.replace(/\s+/g, " "));
+      out.push(`${tag("")}  tried: ${t.slice(0, 4).join("; ")}${t.length > 4 ? `; +${t.length - 4} more` : ""}`);
+    }
+  }
+  if (states.length > HUMAN_PARTIAL_STATES) out.push(`${tag("")}… and ${states.length - HUMAN_PARTIAL_STATES} more page(s) (--json)`);
+  for (const c of arr(report.claims).filter(isRecord).slice(0, 3)) out.push(`${tag("")}grounded claim: ${str(c.claim) ?? ""} ("${str(c.quote) ?? ""}")`);
+  return out;
 }
 
 /**

@@ -28,6 +28,8 @@ import {
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { goalAsksForChange } from "../read-only.js";
 import { goalAsksForReport } from "../answer.js";
+import { resolveMinEffort, type MinEffortRequest } from "../run-depth.js";
+import { resolveBounds } from "../bounds.js";
 
 /** #286: the pseudo-check a goal that asks for a report adds to its `--success` checks. */
 const REPORT_CHECK = "report (the goal asks for a grounded answer)";
@@ -99,7 +101,13 @@ import { secretFieldSecrets } from "../secret-fields.js";
  * The durable product is always the emitted `Recording`, whatever the outcome.
  */
 
-export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionContext"> {
+export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionContext" | "minEffort"> {
+  /**
+   * #424: the minimum exploration effort asked for (`--min-actions` / `--min-distinct-states`). Each
+   * explicit value wins; without one, an open-ended find-out (no success check, `goalIsOpenEnded`) gets
+   * the default. Capped by the budget (a warning names the cap). See `resolveMinEffort`.
+   */
+  readonly minEffort?: MinEffortRequest;
   /**
    * #293: how a retried run (#126) gets back to its start state instead of loading `startUrl` — a
    * journey-anchored run re-replays its Journey prefix. `false`: it could not (the retry then loads
@@ -543,6 +551,18 @@ async function adjudicatedRun(
   // #270 — the goal's own words never lift the guard on a DESTRUCTIVE write ("Remove a product…"
   // clicked a member row's "Remove" → RemoveMember 200): only the operator can.
   const noDestructiveWrites = !hasChecks && !readOnly && !writesLifted && cfg.safety?.allowDestructive !== true;
+  // #424: the minimum exploration effort before the model may conclude (never past the budget).
+  const bounds = resolveBounds(cfg.bounds);
+  const effort = resolveMinEffort({
+    goal: cfg.goal,
+    answerIsVerdict: !hasChecks || answerRequired,
+    ...(cfg.minEffort === undefined ? {} : { request: cfg.minEffort }),
+    maxActions: bounds.maxActions,
+    maxDecisions: bounds.maxDecisions,
+  });
+  // The loop takes the RESOLVED minimum, never the request.
+  const exploreBase: Omit<GoalBasedMissionConfig, "minEffort"> = { ...cfg };
+  delete (exploreBase as { minEffort?: unknown }).minEffort;
   let attempts = 0;
   const runOnce = async (): Promise<ExploreRun> => {
     // A retried run (#126) starts over from the seed: nothing the first attempt saw carries over.
@@ -561,10 +581,11 @@ async function adjudicatedRun(
     changedSinceSeed.clear();
     firstActionAt = null;
     return explore({
-      ...cfg,
+      ...exploreBase,
       startInPlace,
       readOnly,
       noDestructiveWrites,
+      ...(effort.minEffort === null ? {} : { minEffort: effort.minEffort }),
       missionContext: `${cfg.missionBrief === undefined ? "" : `${cfg.missionBrief}; `}${
         hasChecks
           ? `success is judged independently by user-supplied checks — your \`done\` is only a proposal, not the verdict${
@@ -751,6 +772,7 @@ async function adjudicatedRun(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       reason: whyNot(run, []),
+      ...(effort.warnings.length === 0 ? {} : { warnings: effort.warnings }),
       ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
     };
   }
@@ -770,6 +792,8 @@ async function adjudicatedRun(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       ...(succeeded ? {} : { reason: whyNot(run, []) }),
+      // #424: a minimum effort capped by the budget is named.
+      ...(effort.warnings.length === 0 ? {} : { warnings: effort.warnings }),
       // #126 evidence on the find-out path too, like every other outcome (surface-wiring audit).
       ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
     };
@@ -875,6 +899,7 @@ async function adjudicatedRun(
       }`,
     );
   }
+  warnings.push(...effort.warnings);
   // #286: the goal asked for a report — without a grounded answer the checks alone are not the goal.
   if (answerRequired && run.answer === undefined) {
     results = [...results, { check: REPORT_CHECK, passed: false, detail: "the goal asks to report what was found, but the run reported no grounded answer" }];

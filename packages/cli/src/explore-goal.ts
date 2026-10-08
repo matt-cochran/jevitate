@@ -9,7 +9,7 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
-import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, SafetyOverride, SideEffect } from "@jevitate/explore";
+import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
@@ -79,6 +79,12 @@ export interface RunExplorationOptions {
    */
   readonly usage?: UsageTracker;
   readonly bounds?: Partial<Bounds>;
+  /**
+   * #424 (`--min-actions` / `--min-distinct-states`): the minimum exploration effort before the model
+   * may conclude. Each value wins over its default; without one, an open-ended find-out gets the
+   * default (`resolveMinEffort`). Capped by the budget, with a warning in `checkWarnings`.
+   */
+  readonly minEffort?: MinEffortRequest;
   readonly secrets?: readonly string[];
   /**
    * Secret field bindings (CLI `--secret-field` / `--totp`, resolved from the environment): typed
@@ -209,6 +215,13 @@ export interface RunExplorationResult {
   readonly runOutcome: RunOutcome;
   /** A find-out goal's answer (#101), present only when code grounded it on the observed pages. */
   readonly answer?: RunAnswer;
+  /**
+   * #424: a run whose answer is its verdict that ended WITHOUT a grounded answer — per page visited,
+   * what it showed (its own text, grounded), its controls, and what was tried there. Absent otherwise.
+   */
+  readonly partialReport?: PartialReport;
+  /** #424: how deep the run went — distinct states and pages, actions, decisions, forms submitted, the minimum. */
+  readonly depth: RunDepth;
   readonly assertionPassed: boolean;
   /** Each success check's verdict and what the oracle saw. */
   readonly checks: SuccessCheckResult[];
@@ -530,6 +543,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
       ...(opts.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
       bounds: opts.bounds,
+      ...(opts.minEffort === undefined ? {} : { minEffort: opts.minEffort }),
       secrets,
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
       ...(secretCommand === undefined ? {} : { secretCommand }),
@@ -610,6 +624,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       outcome: goalOutcome,
       runOutcome: mission.run.outcome,
       ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
+      ...(mission.run.partialReport === undefined ? {} : { partialReport: mission.run.partialReport }),
+      depth: mission.run.depth,
       assertionPassed: mission.assertionPassed,
       checks: mission.checks,
       ...(mission.warnings === undefined ? {} : { checkWarnings: mission.warnings }),

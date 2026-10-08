@@ -281,6 +281,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       screenshots: "--screenshots",
       evidenceVideo: "--evidence-video",
       persona: "--persona",
+      minEffort: "--min-actions --min-distinct-states",
     },
     omitted: { "--dir": OMIT.storeDir, "--targets-dir": OMIT.storeDir, "--json": OMIT.json },
   },

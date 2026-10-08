@@ -84,6 +84,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariants: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
     invariantAuthTokens: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
     journeyPrefix: NO_ANCHORED_HERE,
+    minEffort: "#424: every take is checked by --success and stops at the first verified path; a minimum effort would only delay it (`explore --min-actions`)",
     serverLog: "backend log sources are operator-declared `explore --log-source`; authoring needs only the goal's checks",
   },
   "explore-cli.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
@@ -330,6 +331,7 @@ const ENVELOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     heap: "per-step samples; a crash carries them in crash.heap",
     blockingCause: "folded into the run's reason (withCause)",
     doneRejected: "folded into outcome.reason (the model proposed done N times…) and failure job-incomplete (#209)",
+    partialReport: "#424: a usability review is judged by its UX findings and the job's checks, never by a reported answer",
   },
 };
 

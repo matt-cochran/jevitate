@@ -183,7 +183,7 @@
   urlSchemeOf: function
   worstOutcome: function
 
-# @jevitate/explore (405 exports)
+# @jevitate/explore (415 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -225,6 +225,7 @@
   DEMO_OVERLAY_HIDE_STYLE: const (string)
   DESTRUCTIVE: object
   DemoOverlay: class
+  DepthLog: class
   EMPTY_SETTLE_GRACE_MS: const (number)
   EXPLORE: const (string)
   FORM_MISUSE_STRATEGIES: array
@@ -256,6 +257,7 @@
   MAX_DONE_REJECTIONS: const (number)
   MAX_GLOB_ALTERNATIVES: const (number)
   MAX_IDLE_STEPS: const (number)
+  MAX_MIN_EFFORT_REFUSALS: const (number)
   MAX_MOVING_SCROLLS: const (number)
   MAX_QUIET_WAITS: const (number)
   MAX_REPEAT_TYPE_SIGNALS: const (number)
@@ -272,6 +274,8 @@
   NO_DESTRUCTIVE_NOTE: const (string)
   NoProgressDetector: class
   ONLY_GLOBAL_NAVIGATION: const (string)
+  OPEN_ENDED_MIN_ACTIONS: const (number)
+  OPEN_ENDED_MIN_DISTINCT_STATES: const (number)
   OPS: array
   OPS_NEEDING_TARGET: object
   OVERSIZE_CHARS: const (number)
@@ -354,8 +358,10 @@
   boundSecretField: function
   boundTypeFixture: function
   boundaryValueCandidates: function
+  breadthHint: function
   buildCrashReport: function
   buildJudgmentState: function
+  buildPartialReport: function
   busyIndicatorOf: function
   candidateId: function
   capFormText: function
@@ -426,6 +432,7 @@
   goalAsksForReply: function
   goalAsksForReport: function
   goalAsksToWrite: function
+  goalIsOpenEnded: function
   goalListsSeveral: function
   goalResultDiagnostics: function
   groundAnswer: function
@@ -475,6 +482,7 @@
   measurePageTiming: function
   messageClass: function
   messageRisk: function
+  minEffortNote: function
   monitorFor: function
   newIdentityToken: function
   noActionShortfall: function
@@ -525,6 +533,7 @@
   resolveBounds: function
   resolveCoverageSufficiencyThresholds: function
   resolveCoverageThresholds: function
+  resolveMinEffort: function
   resolveMissionFixture: function
   resolveRouteScope: function
   resolveSecretFieldValue: function
@@ -554,6 +563,7 @@
   seedRedirectReason: function
   sendCandidates: function
   sendable: function
+  shortfall: function
   shouldCheckOverflow: function
   signalFingerprint: function
   signalKey: function

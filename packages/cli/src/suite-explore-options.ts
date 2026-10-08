@@ -123,6 +123,9 @@ export const SUITE_EXPLORE_OPTIONS = {
   hookTimeoutMs: { shape: "integer", appliesTo: ["goal"] },
   // #243: named identities a fixture step authenticates as (`auth.identity`), not the item's own session
   fixtureIdentity: { shape: "named-paths", appliesTo: ["goal"] },
+  // #424: the minimum exploration effort before a goal run's model may conclude
+  minActions: { shape: "integer", appliesTo: ["goal"], range: [1, 100000] },
+  minDistinctStates: { shape: "integer", appliesTo: ["goal"], range: [1, 100000] },
   // #202: a success check satisfied before the run's first action is a warning, not a failure
   allowVacuousChecks: { shape: "boolean", appliesTo: GOAL_UX },
   // #303: opt-in action deltas (every explore item kind but feature)
