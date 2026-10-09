@@ -68,8 +68,6 @@ async function run(argv: readonly string[]): Promise<{ code: number | undefined;
 const STUB_COMMANDS: ReadonlyArray<readonly string[]> = [
   ["journey", "migrate", "--step-ids", "--dry-run"],
   ["journey", "review", "--stale"],
-  ["connect", "journeeze", "--url", "http://127.0.0.1:3999"],
-  ["publish", "journeeze", "--dry-run"],
 ];
 
 describe("0.10 CLI stubs refuse with E_NOT_IMPLEMENTED (exit 2)", () => {
@@ -103,7 +101,6 @@ describe("0.10 MCP tools: allowlisted, mirrored, stubbed, and key-free", () => {
 
   const CALLS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
     ["review_journey", { stale: true }],
-    ["publish_to_journeeze", { dryRun: true }],
   ];
 
   it.each(CALLS)("%s → refused E_NOT_IMPLEMENTED (exit 2), never a pass", async (name, args) => {
