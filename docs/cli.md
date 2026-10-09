@@ -543,7 +543,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--paid <pattern>` | an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze\|Draft\|Improve)\b/i: treated like the built-in paid vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it | `[]` |  |  |  |
 | `--param <kv>` | with --from-journey: a Journey param as key=value (repeatable); only the prefix's own params are required | `{}` |  |  |  |
 | `--persona <name=storageState>` | run the same mission once per persona (repeatable), serially, each from its own storageState, and diff them (#143): requests, statuses (a 403 vs 200 is a candidate RBAC finding), controls, outcome | `[]` |  |  |  |
-| `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState", "login"?}]} — #427: `login` ({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, environment variable NAMES only) re-mints an expired session once. A bare --persona <name> is the project's persona of that name (.jevitate/personas.json, same format) |  |  |  |  |
+| `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState", "login"?}]} — #427: `login` ({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, or #449 {api, userEnv, passwordEnv} for an HTTP sign-in endpoint; environment variable NAMES only) re-mints an expired session once. A bare --persona <name> is the project's persona of that name (.jevitate/personas.json, same format) |  |  |  |  |
 | `--polish` | (--strategy usability) polish each verified UX finding's recommendation with one generation call (opt-in; the default prose is built from templates) |  |  |  |  |
 | `--probe-guards` | (--strategy usability) opt in to clicking each destructive control once to check for a confirmation step — fail-safe: every write and destructive-looking request is aborted, and a page with an open WebSocket/EventSource or a service worker is not probed; without it those claims are reported unverifiable (docs/ux-findings.md) |  |  |  |  |
 | `--product <file>` | (--strategy usability) product facts JSON (plans/prices, key journeys, each page's intended next step) the review checks screens against in code; default .jevitate/product.json in the project when present (docs/ux-findings.md) |  |  |  |  |
@@ -1412,18 +1412,26 @@ jevitate login [options]
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--allow <origin>` | an origin credentials may be typed into (repeatable; default: the sign-in page's own) — e.g. an SSO provider | `[]` |  |  |  |
+| `--api <url>` | #449: sign in through this HTTP endpoint instead of a form: the credentials are POSTed as JSON (must be an authorized origin; redirects are never followed) |  |  |  |  |
+| `--api-password-key <key>` | with --api: the JSON body key the password is sent under (default password) |  |  |  |  |
+| `--api-user-key <key>` | with --api: the JSON body key the username is sent under (default username) |  |  |  |  |
+| `--auth-check <check>` | with --api: how --verify-url proves the session: off \| auto \| urlExcludes:<text> \| selector:<css> (default auto) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--password-env <VAR>` | environment variable holding the password (its NAME — the value is read from the environment) |  |  |  |  |
 | `--password-field <field>` | the password field: its label, else a CSS selector (default: the visible password input) |  |  |  |  |
 | `--persona <name>` | the persona being signed in (names it in the result); with a declared persona (--personas or .jevitate/personas.json) its login parameters and storage state path are the defaults |  |  |  |  |
 | `--personas <file>` | personas JSON to read --persona's login parameters from (default: the project's .jevitate/personas.json) |  |  |  |  |
 | `--save <file>` | where to write the storage state (parent directory created; mode 0600; never inside a repo's .jevitate/) |  |  |  |  |
+| `--storage <where>` | with --token-path: local (the only choice — a Playwright storage state has no sessionStorage) |  |  |  |  |
+| `--storage-key <key>` | with --token-path: the localStorage key the token is written under (default: the path's last segment) |  |  |  |  |
 | `--submit <name>` | the submit button's accessible name (default: the form's submit button, else Enter) |  |  |  |  |
 | `--success <check>` | how a successful sign-in is recognised: urlIncludes:<text> \| selector:<css> \| text:<text> (default: the page leaves the sign-in form — no login-like URL, no password field) |  |  |  |  |
 | `--timeout <seconds>` | how long each step of the sign-in may take (default 30) |  |  |  |  |
+| `--token-path <path>` | with --api: a dotted path into the JSON response whose value is the session token (e.g. token, data.accessToken); without it the response's cookies are the session |  |  |  |  |
 | `--url <loginUrl>` | the sign-in page (must be an authorized origin: its own, or --allow) |  |  |  |  |
 | `--user-env <VAR>` | environment variable holding the username (its NAME — the value is read from the environment) |  |  |  |  |
 | `--user-field <field>` | the username field: its label, else a CSS selector (default: found by autocomplete/type/name) |  |  |  |  |
+| `--verify-url <url>` | with --api: the app page the new session is proven on, and whose origin receives the token (default: the endpoint's origin root) |  |  |  |  |
 
 ## logs
 

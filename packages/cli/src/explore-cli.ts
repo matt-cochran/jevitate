@@ -433,7 +433,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option(
       "--personas <file>",
       "personas JSON: {\"<name>\": \"<storageState>\"} or {\"personas\": [{\"name\", \"storageState\", \"login\"?}]} — #427: `login` " +
-        "({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, environment variable NAMES only) re-mints an expired session once. " +
+        "({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, or #449 {api, userEnv, passwordEnv} for an HTTP sign-in endpoint; environment variable NAMES only) re-mints an expired session once. " +
         "A bare --persona <name> is the project's persona of that name (.jevitate/personas.json, same format)",
     )
     .option(
