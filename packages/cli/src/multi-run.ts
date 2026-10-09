@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   MISSION_EXIT_CODES,
-  MISSION_OUTCOMES,
+  EXPLORE_MISSION_OUTCOMES,
+  type ExploreMissionOutcome,
   combineOutcomes,
   foldGoalOutcome,
   goalMissionOutcome,
@@ -149,7 +150,8 @@ export function parseActorSpec(spec: string, cwd: string = process.cwd()): Perso
  * `--personas <file>`: JSON, either `{"admin": "admin.json", "sales": "sales.json"}` or
  * `{"personas": [{"name": "admin", "storageState": "admin.json"}]}` (a bare array also works).
  * Relative paths resolve against the personas file's own directory. #427: an entry may carry
- * `login: {url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}` (the map form
+ * `login: {url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}` (#449: or
+ * `{api, userEnv, passwordEnv}`, a sign-in through an HTTP endpoint) (the map form
  * then takes `{"admin": {"storageState": "admin.json", "login": {…}}}`) — the pre-flight auth check
  * re-mints an expired session from it once. #433: an entry may also carry the catalog's
  * `description`, `role` and `approval` (and `id` for `name`); a catalog-only entry (no session) is
@@ -328,8 +330,8 @@ export function extractRunFindings(data: unknown): RunFinding[] {
   return out;
 }
 
-function isMissionOutcome(v: unknown): v is MissionOutcome {
-  return typeof v === "string" && (MISSION_OUTCOMES as readonly string[]).includes(v);
+function isMissionOutcome(v: unknown): v is ExploreMissionOutcome {
+  return typeof v === "string" && (EXPLORE_MISSION_OUTCOMES as readonly string[]).includes(v);
 }
 
 /** A goal run's own ending (#217): its `goalOutcome`, else (an older result) its `outcome`. */
@@ -343,7 +345,7 @@ function goalOutcomeOf(data: Record<string, unknown>): GoalOutcome | undefined {
  * ending folded (`GOAL_OUTCOME_FOLD`), or another strategy's `outcome` when it already is one; else
  * `crashed` — a run that says nothing readable proves nothing.
  */
-export function runMissionOutcomeOf(strategy: string, data: unknown): MissionOutcome {
+export function runMissionOutcomeOf(strategy: string, data: unknown): ExploreMissionOutcome {
   if (!isRecord(data)) return "crashed";
   if (isMissionOutcome(data.missionOutcome)) return data.missionOutcome;
   if (strategy === "goal") {
@@ -387,7 +389,7 @@ export interface RunSummary {
   /** The run's own ending: a goal run's `goalOutcome`, else its canonical outcome. */
   readonly outcome: string;
   /** #226: the run's canonical verdict (#217) — what the vote counts. */
-  readonly missionOutcome: MissionOutcome;
+  readonly missionOutcome: ExploreMissionOutcome;
   /** #226: a goal run's own ending (#217), beside `missionOutcome`. */
   readonly goalOutcome?: GoalOutcome;
   /** #423: why the run's goal was not achieved (its result's `goalReason`). */
@@ -444,7 +446,7 @@ export interface CellResult {
    * #226: the canonical verdict (#217) the runs agreed on — voted over each run's `missionOutcome`, so
    * goal runs that failed in different ways (exhausted, blocked) still agree they found a defect.
    */
-  readonly missionOutcome: MissionOutcome;
+  readonly missionOutcome: ExploreMissionOutcome;
   /** #226: goal runs only — the goal ending ≥ k runs agreed on, else the canonical outcome (#217). */
   readonly goalOutcome?: GoalOutcome;
   /** #220: why the outcome is `inconclusive` (which runs broke, or how many are missing). */
@@ -476,7 +478,7 @@ export interface CellResult {
 }
 
 /** #213: endings that say nothing about what the app shows a persona — the environment, not access. */
-const ENVIRONMENT_FAILURES: ReadonlySet<string> = new Set(["degraded-environment", "target-unreachable", "target-unresponsive"]);
+const ENVIRONMENT_FAILURES: ReadonlySet<string> = new Set(["degraded-environment", "host-starved", "target-unreachable", "target-unresponsive"]);
 
 /** Outcomes that mean the run itself broke — it proves nothing about the app, so it never makes a vote `intermittent`. */
 function isBrokenRunSummary(r: RunSummary): boolean {
@@ -498,7 +500,7 @@ function agreed<T extends string>(values: readonly T[], k: number): T | undefine
  * reached it (and it is not tied); otherwise `inconclusive` when runs are still missing or a run broke
  * (with the reason), and `intermittent` only when every run finished with a real verdict and they disagree.
  */
-function voteOutcome(runs: readonly RunSummary[], k: number, planned: number): { outcome: MissionOutcome; reason?: string } {
+function voteOutcome(runs: readonly RunSummary[], k: number, planned: number): { outcome: ExploreMissionOutcome; reason?: string } {
   const top = agreed(
     runs.map((r) => r.missionOutcome),
     k,
@@ -749,7 +751,7 @@ export interface MultiRunResult {
    * (`combineOutcomes`: a broken persona run dominates, a confirmed hang beats a defect). While runs
    * are pending (`complete: false`, or a killed multi-run) it is `inconclusive`.
    */
-  readonly missionOutcome: MissionOutcome;
+  readonly missionOutcome: ExploreMissionOutcome;
   /** #226: `--goal` multi-runs only — the goal ending the runs agreed on, else the canonical outcome (#217). */
   readonly goalOutcome?: GoalOutcome;
   /** #220: why the outcome is `inconclusive` (runs pending or interrupted, or a run broke). */
@@ -901,14 +903,14 @@ export function aggregateCells(
   const outcomes = new Set(cells.map((c) => c.outcome));
   const voted = !personas ? (cells[0]?.outcome ?? "inconclusive") : outcomes.size === 1 ? [...outcomes][0]! : "mixed";
   // #226: the canonical verdict — one persona's (or the mission's), or the most severe persona's.
-  const votedMission: MissionOutcome = cells.length === 0 ? "inconclusive" : combineOutcomes(cells.map((c) => c.missionOutcome));
+  const votedMission: ExploreMissionOutcome = cells.length === 0 ? "inconclusive" : combineOutcomes(cells.map((c) => c.missionOutcome));
   const goals = cells.map((c) => c.goalOutcome).filter((g): g is GoalOutcome => g !== undefined);
   // #220: a multi-run with runs still pending proves nothing yet — never `intermittent`.
   const finished = cells.reduce((n, c) => n + c.runs.length, 0);
   const planned = plan.repeat * (plan.personas?.length ?? 1);
   const cellReason = cells.find((c) => c.reason !== undefined)?.reason;
   const outcome = complete ? voted : "inconclusive";
-  const missionOutcome: MissionOutcome = complete ? votedMission : "inconclusive";
+  const missionOutcome: ExploreMissionOutcome = complete ? votedMission : "inconclusive";
   const goalOutcome: GoalOutcome | undefined =
     strategy !== "goal" ? undefined : complete && goals.length === cells.length && new Set(goals).size === 1 ? goals[0] : missionOutcome;
   const reason = complete ? (missionOutcome === "inconclusive" ? cellReason : undefined) : `incomplete: ${finished} of ${planned} run(s) finished`;

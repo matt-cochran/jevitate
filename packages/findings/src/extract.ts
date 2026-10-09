@@ -36,6 +36,28 @@ export interface EvidenceRef {
   /** A persisted `<stem>.result.json` the finding was re-observed from (#213: never labeled "recording" — that's the Recording file itself). */
   readonly result?: string;
   readonly screen?: string;
+  /** #453: the self-heal attempts of a Journey run (healed, exhausted or unexplained), in order. */
+  readonly healAttempts?: readonly HealAttemptRow[];
+  /** #453: the Journey revision a healed run proposed (`journey-heal-pending`). */
+  readonly proposal?: ProposalRef;
+}
+
+/** One self-heal attempt as a report prints it (no raw hunks, no values). */
+export interface HealAttemptRow {
+  readonly n: number;
+  readonly step?: number;
+  readonly hypothesis: string;
+  readonly evidence: string;
+  readonly candidate: string;
+  readonly observation: string;
+  readonly result: string;
+  readonly rejection: string;
+}
+
+export interface ProposalRef {
+  readonly id: string;
+  readonly path?: string;
+  readonly steps: readonly { readonly number: number; readonly before: string; readonly after: string }[];
 }
 
 export interface FindingObservation {
@@ -495,12 +517,69 @@ function goalCheckObservations(result: Json, ctx: Ctx): FindingObservation[] {
   return out;
 }
 
-/** A Journey record written by `jevitate check`: a quarantined run is a failed assertion. */
+function stepWords(step: unknown): string {
+  if (!isRecord(step)) return "(none)";
+  const t = isRecord(step.target) ? step.target : undefined;
+  const anchor = t === undefined ? str(step.url) : [t.role, str(t.name) ?? str(t.label) ?? str(t.text) ?? str(t.testId) ?? str(t.css)].filter((x): x is string => typeof x === "string").join(" ");
+  return `${str(step.kind) ?? "step"}${anchor === undefined || anchor === "" ? "" : ` ${anchor}`}`;
+}
+
+function healAttemptRows(heal: Json | undefined): HealAttemptRow[] {
+  return arr(heal?.attempts)
+    .filter(isRecord)
+    .map((a) => {
+      const ev = arr(a.evidence)
+        .filter(isRecord)
+        .map((e) => `${str(e.kind) ?? "evidence"}${str(e.before) === undefined ? "" : ` '${str(e.before)}'`}${str(e.after) === undefined ? "" : ` → '${str(e.after)}'`}${str(e.file) === undefined ? "" : ` (${str(e.file)}${num(e.line) === undefined ? "" : `:${num(e.line)}`})`}`)
+        .join("; ");
+      const obs = isRecord(a.observation) ? (str(a.observation.screenshot) ?? str(a.observation.snapshot) ?? "") : "";
+      const rej = isRecord(a.rejection) ? `${str(a.rejection.code) ?? "rejected"}${str(a.rejection.detail) === undefined ? "" : `: ${str(a.rejection.detail)}`}` : "";
+      return {
+        n: num(a.n) ?? 0,
+        ...(num(a.stepIndex) === undefined ? {} : { step: (num(a.stepIndex) ?? 0) + 1 }),
+        hypothesis: str(a.hypothesis) ?? "",
+        evidence: ev,
+        candidate: a.candidate === null || a.candidate === undefined ? "(none)" : stepWords(a.candidate),
+        observation: obs,
+        result: str(a.result) ?? "",
+        rejection: rej,
+      };
+    });
+}
+
+/** A Journey record (`check`, or a `journey run` with a self-heal): a quarantined or heal-exhausted run is a failed assertion; a healed one is a pending proposal. */
 function journeyObservations(result: Json): FindingObservation[] {
-  if (str(result.outcome) !== "quarantined") return [];
+  const outcome = str(result.outcome);
+  if (outcome !== "quarantined" && outcome !== "heal-exhausted" && outcome !== "healed-pending-review") return [];
   const id = str(result.journeyId) ?? "(unknown)";
   const at = num(result.at);
   const route = routeTemplate(str(result.url));
+  const heal = isRecord(result.heal) ? result.heal : undefined;
+  const healAttempts = healAttemptRows(heal);
+  const attemptsEvidence = healAttempts.length === 0 ? {} : { healAttempts };
+  if (outcome === "healed-pending-review") {
+    const p = isRecord(result.proposal) ? result.proposal : undefined;
+    const steps = arr(p?.steps)
+      .filter(isRecord)
+      .map((s) => ({ number: num(s.number) ?? 0, before: str(s.before) ?? "", after: str(s.after) ?? "" }));
+    const proposal: ProposalRef | undefined = str(p?.id) === undefined ? undefined : { id: str(p?.id) ?? "", ...(str(p?.path) === undefined ? {} : { path: str(p?.path) }), steps };
+    const what = steps.map((s) => `step ${s.number} ${s.before} → ${s.after}`).join("; ");
+    return [
+      observation(
+        { category: "journey-heal-pending", signal: `journey:${id}`, ...(steps[0] === undefined ? {} : { control: `step ${steps[0].number}` }) },
+        {
+          title: `Journey "${id}" healed — a proposed revision awaits review${what === "" ? "" : `: ${what}`}`,
+          occurrences: 1,
+          evidence: [{ ...attemptsEvidence, ...(proposal === undefined ? {} : { proposal }) }],
+          reproduce: `jevitate journey review ${id}`,
+        },
+      ),
+    ];
+  }
+  const reason = str(result.reason) ?? outcome;
+  const exhausted = outcome === "heal-exhausted";
+  const unexplained = !exhausted && str(heal?.verdict) === "unexplained";
+  const detail = exhausted ? `${reason} — heal exhausted after ${healAttempts.length} attempts` : unexplained ? `likely regression: ${reason}` : reason;
   return [
     observation(
       {
@@ -510,9 +589,9 @@ function journeyObservations(result: Json): FindingObservation[] {
         ...(at === undefined ? {} : { control: `step ${at}` }),
       },
       {
-        title: `Journey "${id}" failed${at === undefined ? "" : ` at step ${at}`}: ${str(result.reason) ?? "quarantined"}`,
+        title: `Journey "${id}" failed${at === undefined ? "" : ` at step ${at}`}: ${detail}`,
         occurrences: 1,
-        evidence: [{ ...(at === undefined ? {} : { step: at }), ...(str(result.url) === undefined ? {} : { url: str(result.url) }) }],
+        evidence: [{ ...(at === undefined ? {} : { step: at }), ...(str(result.url) === undefined ? {} : { url: str(result.url) }), ...attemptsEvidence }],
         reproduce: `jevitate journey run ${id}`,
       },
     ),

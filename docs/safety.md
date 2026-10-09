@@ -248,6 +248,12 @@ built-in verb (`Preview*`, `Recalculate*`, …).
 - Code, not the model, types a bound secret into a field. The model sees `«secret:VAR»`.
 - `--storage-state` files go only to the browser. Artifacts record their path, never their
   contents.
+- `jevitate login` (#427, #449) reads credentials only from the environment variables its flags
+  name, and sends them only to an authorized origin: typed into a sign-in page (`--url`), or
+  POSTed as JSON to an endpoint (`--api`, redirects never followed). The session token an `--api`
+  response returns joins the redaction set with both credentials: no result, error or log line
+  carries any of them. The only thing written is the storage state (mode `0600`, outside
+  `.jevitate/`), and only after the session is proven; a failed sign-in writes nothing.
 - Demo video, defect evidence clips and step screenshots (`demo`, `journey demo`,
   `--evidence-video`, `--record-video`, `--screenshots`) mask every registered secret in pixels,
   from the video's first frame, and re-prove the mask at every step. This fails closed: a clip or

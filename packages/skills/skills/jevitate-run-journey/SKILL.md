@@ -28,11 +28,13 @@ artifact; your job is to find the right one and run it with the right params.
 - MCP: `run_journey({ id, params, storageState? })` — same param-schema
   validation, same refusal on an unknown id or params. It NEVER accepts inline
   steps or a raw recording — a published id only.
-- Read the JSON envelope's `outcome` field. `"ok"` and `"healed"` (a run that
-  recovered via self-heal) are both successes (exit 0); `"quarantined"` (exit 1)
-  and any other value, including a secret-handback pause, mean it did not
-  complete — report that honestly, with the step it stopped at. Exit 64 is a
-  refusal before anything ran (unknown id, bad params, a step off the allowlist).
+- Read the JSON envelope's `outcome` field (MCP: also `exitCode`). Only `"ok"`
+  (exit 0) is a pass. `"healed-pending-review"` (exit 5) is NOT a pass: a
+  self-heal retargeted steps and proposed a Journey revision a person must
+  accept. `"heal-exhausted"` and `"quarantined"` (exit 1) and any other value,
+  including a secret-handback pause, mean it did not complete — report that
+  honestly, with the step it stopped at. Exit 64 is a refusal before anything
+  ran (unknown id, bad params, a step off the allowlist).
 
 ## Where it runs (`--env`) and what it records
 
@@ -70,6 +72,24 @@ artifact; your job is to find the right one and run it with the right params.
   preserves the plain, unhealed behavior. `hybrid`/`full` need an AI gateway
   (`--real` after `jevitate ai setup`, or `--fake-ai` for a pipeline smoke);
   requesting a heal mode without one fails closed rather than running unhealed.
+- A heal mode also needs a change context, or it is refused (exit 64):
+  `--changes <git range>` (e.g. `HEAD~1..HEAD`, read-only) and/or one or more
+  `--change-note "renamed \"Create New\" to \"Create\""`. MCP: `changes`,
+  `changeNote`. Only a break that change explains is retargeted, one step for
+  one step; assertions, waits and request checks are never changed. A break the
+  change does not explain stays `quarantined` (a likely regression).
+- Budgets bound the heal: `--heal-max-attempts` (2) / `--heal-max-model-calls`
+  (6) / `--heal-max-ms` per broken step; `--heal-max-run-attempts` (4) /
+  `--heal-max-run-ms` per run. Exhausting them ends `heal-exhausted` (exit 1)
+  with every attempt in the result.
+- A healed run ends `healed-pending-review` (exit 5) and writes a proposal
+  (`result.proposal`: id, path, steps, `reviewCommand`, `acceptCommand`); the
+  stored Journey is untouched. Next: `jevitate journey review <id>` (MCP
+  `review_journey`), then a person accepts with
+  `jevitate journey promote <id> --proposal <pid>` or rejects with
+  `--reject-proposal <pid> --reason "<text>"`. Do not accept a proposal on the
+  user's behalf unless they asked you to. Show the user the changed steps and
+  the evidence it cites.
 - A write/irreversible step NEVER auto-heals in any mode — that floor is
   enforced by the runtime, not something you can override from a flag.
 

@@ -54,7 +54,7 @@ MCP, each directory must be inside the project or `~/.jevitate/`, like every oth
 By default a run is headless. Playwright's default headless binary, the *headless shell*, cannot
 load extensions. So a headless run with `--extension` uses Playwright's full Chromium build in its
 new headless mode (`channel: "chromium"`). That build must be installed:
-`npx playwright install chromium`. `--headed` works too, but it needs a display.
+`jevitate install-browser`. `--headed` works too, but it needs a display.
 
 Branded Google Chrome (version 137 and later) no longer loads unpacked extensions from the command
 line. A `--browser-channel chrome` run with `--extension` therefore fails at the load check. Use

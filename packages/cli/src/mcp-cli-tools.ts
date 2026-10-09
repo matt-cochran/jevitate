@@ -165,10 +165,19 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description:
       "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey). " +
       "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`, with the agent markers detected) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is an allowed channel. " +
-      "A promotion that must count as human sign-off is a person's act at their own terminal: hand it to them (`jevitate journey promote <id>`, typed confirmation).",
+      "A promotion that must count as human sign-off is a person's act at their own terminal: hand it to them (`jevitate journey promote <id>`, typed confirmation). " +
+      "#453: proposal <pid> accepts a pending self-heal revision (review_journey shows it; bind with reviewedHash = its proposedHash) — the same gates, recorded as channel `mcp` (an agent's approval) with approval.proposal; rejectProposal <pid> + reason rejects it, leaving the stored Journey untouched.",
     command: {
       path: "journey promote",
-      params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted"), ...JEV_ADVICE },
+      params: {
+        id: pos(),
+        reviewedHash: s("--reviewed-hash"),
+        acceptUnvetted: s("--accept-unvetted"),
+        proposal: s("--proposal"),
+        rejectProposal: s("--reject-proposal"),
+        reason: s("--reason"),
+        ...JEV_ADVICE,
+      },
       omitted: {
         "--dir": OMIT.storeDir,
         "--accept-weak": OMIT.acceptWeak,
@@ -216,7 +225,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "review_journey",
     description:
-      "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, and its content hash. " +
+      "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, a pending self-heal proposal (#453: per-step before/after, hypothesis, evidence, staleness, proposedHash), and its content hash. " +
       "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
       "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed.",
     command: {
@@ -360,6 +369,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       path: "explore",
       params: { tags: TAGS, ...EXTENSION,
         url: s("--url"),
+        targetId: s("--target"),
         // #293 journey-anchored exploration: replay a promoted Journey to a step/anchor, then the mission.
         fromJourney: s("--from-journey"),
         atStep: s("--at-step"),
@@ -506,7 +516,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description:
       "`jevitate sweep --targets <file>` (#425): many explore missions — one per target in a .tsv/.json targets file (id, url|route, persona storage state, strategy, goal, tags, and the value-typed explore options run_exploration takes) — " +
       "with bounded concurrency, resumable (resume + out), and ONE sweep.result.json: per-target outcome and depth, defects deduped by fingerprint across targets (one finding, N sightings), environment causes grouped. " +
-      "stopOnEnvFailure K stops starting runs when the first K all failed for environment/setup reasons. Every run is tagged target=<id> plus tags. A persona path in the file is confined like a storageState argument. Long-running: bound it with the file and concurrency.",
+      "stopOnEnvFailure K stops starting runs when the first K all failed for environment/setup reasons. A target that stalled on a starved host (host-starved) is retried once after load drops; hostStarvedRetry: false records the first result instead. Every run is tagged target=<id> plus tags. A persona path in the file is confined like a storageState argument. Long-running: bound it with the file and concurrency.",
     command: {
       path: "sweep",
       params: {
@@ -516,6 +526,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         resume: b("--resume"),
         out: path("--out"),
         stopOnEnvFailure: n("--stop-on-env-failure"),
+        hostStarvedRetry: b("--no-host-starved-retry"),
         ...ENVIRONMENT,
         // Forwarded to every run, exactly as run_exploration / run_campaign take them.
         allowDestructive: b("--allow-destructive"),
@@ -604,7 +615,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_check",
     description:
-      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding. " +
+      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding; exit 5 = nothing failed but a self-heal proposed Journey revision(s) awaiting review. " +
+      "#453 selfHeal hybrid|full (+ changes <git range> and/or changeNote[], and a gateway — real or fakeAi; healMax* budgets): a Journey that quarantines is re-run ONCE with a change-aware self-heal; a proposed revision is pending review (exit 5), never a pass. " +
       "#437 requireApprovals (+ allowChannels, default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed.",
     command: {
       path: "check",
@@ -619,6 +631,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         targetBuild: s("--target-build"),
         requireApprovals: b("--require-approvals"),
         allowChannels: s("--allow-channels"),
+        selfHeal: s("--self-heal", { enum: ["fail-closed", "hybrid", "full"] }),
+        changes: s("--changes"),
+        changeNote: many("--change-note"),
+        healMaxAttempts: n("--heal-max-attempts"),
+        healMaxModelCalls: n("--heal-max-model-calls"),
+        healMaxMs: n("--heal-max-ms"),
+        healMaxRunAttempts: n("--heal-max-run-attempts"),
+        healMaxRunMs: n("--heal-max-run-ms"),
         ...JEV_AI,
       },
       omitted: { "--baseline-dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },

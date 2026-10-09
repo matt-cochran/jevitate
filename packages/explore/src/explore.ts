@@ -389,7 +389,7 @@ export interface ExploreConfig {
 }
 
 /** #423: the structured cause of a goal miss code can name (see `ExploreRun.missCause`). */
-export type MissCause = "not-found" | "ungrounded" | "blocked-by-policy";
+export type MissCause = "not-found" | "ungrounded" | "blocked-by-policy" | "no-controls";
 
 export interface ExploreRun {
   readonly stop: StopReason;

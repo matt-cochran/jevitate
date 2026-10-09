@@ -186,7 +186,9 @@ export type GoalBasedOutcome =
   | "hang"
   | "intermittent"
   | "inconclusive"
-  | "crashed";
+  | "crashed"
+  /** #448: reported by the CLI when the run executed zero actions (the mission itself never ends so). */
+  | "not-started";
 
 export interface GoalBasedResult {
   readonly outcome: GoalBasedOutcome;

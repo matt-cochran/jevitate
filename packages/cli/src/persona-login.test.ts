@@ -10,6 +10,8 @@ import {
   ensurePersonaSession,
   LoginArgsError,
   loginFromFlags,
+  mintStorageState,
+  parseApiLogin,
   parseAuthCheck,
   parseLoginSuccess,
   parsePersonaLogin,
@@ -66,6 +68,64 @@ describe("#427 parsing", () => {
     expect(() => resolveLoginSecrets(LOGIN, { APP_USER: "alice" })).toThrow(/APP_PASSWORD is not set/);
     expect(() => resolveLoginSecrets(LOGIN, { APP_USER: "alice", APP_PASSWORD: "" })).toThrow(/APP_PASSWORD is not set/);
     expect(resolveLoginSecrets(LOGIN, { APP_USER: "alice", APP_PASSWORD: "pw" })).toEqual({ username: "alice", password: "pw" });
+  });
+});
+
+describe("#449 API login parsing", () => {
+  const API = "http://127.0.0.1:3000/api/login";
+
+  it("--api defaults: username/password body keys, cookies only, the endpoint origin as the app", () => {
+    expect(parseApiLogin({ url: API })).toEqual({ url: API, userKey: "username", passwordKey: "password", storage: "local" });
+  });
+
+  it("the storage key defaults to the token path's last segment", () => {
+    expect(parseApiLogin({ url: API, tokenPath: "data.accessToken" }).storageKey).toBe("accessToken");
+  });
+
+  it("a token path that is not a simple dotted path is refused", () => {
+    for (const bad of ["", "a..b", "a[0]", "$.token", "__proto__.x", "a.constructor", "a b", "1.2.3.4.5.6.7.8.9"]) expect(() => parseApiLogin({ url: API, tokenPath: bad }), bad).toThrow(/--token-path must be a simple dotted path/);
+  });
+
+  it("a storage key that is not a safe identifier is refused", () => {
+    expect(() => parseApiLogin({ url: API, tokenPath: "token", storageKey: "a key<script>" })).toThrow(/--storage-key must be a safe identifier/);
+  });
+
+  it("--storage session is refused: a storage state has no sessionStorage", () => {
+    expect(() => parseApiLogin({ url: API, tokenPath: "token", storage: "session" })).toThrow(/has no sessionStorage|holds cookies and localStorage only/);
+  });
+
+  it("--storage-key without --token-path is refused", () => {
+    expect(() => parseApiLogin({ url: API, storageKey: "token" })).toThrow(/pass --token-path too/);
+  });
+
+  it("a body key that is not a plain identifier is refused", () => {
+    expect(() => parseApiLogin({ url: API, userKey: "user.name" })).toThrow(/--api-user-key must be a JSON key/);
+  });
+
+  it("a non-http(s) endpoint is refused", () => {
+    expect(() => parseApiLogin({ url: "file:///etc/passwd" })).toThrow(/--api must be an absolute http\(s\) URL/);
+  });
+
+  it("--api beside a form-only flag is refused", () => {
+    expect(() => loginFromFlags({ api: { url: API }, userEnv: "APP_USER", passwordEnv: "APP_PASSWORD", submit: "Sign in" })).toThrow(/--submit does not apply/);
+  });
+
+  it("a personas file `login.api` (a URL or an object) is validated", () => {
+    expect(parsePersonaLogin({ api: API, userEnv: "APP_USER", passwordEnv: "APP_PASSWORD" }, "p.login").api?.url).toBe(API);
+    expect(parsePersonaLogin({ api: { url: API, tokenPath: "token" }, userEnv: "APP_USER", passwordEnv: "APP_PASSWORD" }, "p.login").api?.storageKey).toBe("token");
+    expect(() => parsePersonaLogin({ api: { url: API, password: "x" }, userEnv: "APP_USER", passwordEnv: "APP_PASSWORD" }, "p.login")).toThrow(/p\.login\.api\.password: unknown key/);
+    expect(() => parsePersonaLogin({ api: API, url: LOGIN.url, userEnv: "APP_USER", passwordEnv: "APP_PASSWORD" }, "p.login")).toThrow(/form keys url do not apply/);
+  });
+
+  it("an endpoint off the allowlist is refused before any browser or network", async () => {
+    const port = {
+      open: async () => {
+        throw new Error("no browser expected");
+      },
+    };
+    await expect(
+      mintStorageState({ login: { api: parseApiLogin({ url: "http://evil.test/api/login" }), userEnv: "APP_USER", passwordEnv: "APP_PASSWORD" }, save: join(dir, "s.json"), allowlist: ["http://127.0.0.1:3000"], env: { APP_USER: "u", APP_PASSWORD: "p" }, port, timeoutMs: 1000 }),
+    ).rejects.toThrow(/login endpoint .* is not an authorized origin/);
   });
 });
 

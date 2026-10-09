@@ -22,7 +22,7 @@ import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
-import { finishHostHealth } from "./host-health-run.js";
+import { failureWithHostStarved, finishHostHealth } from "./host-health-run.js";
 import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http5xxDefect, type RunDepth } from "@jevitate/explore";
 import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -766,6 +766,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       (checked === "clean" || (checked === undefined && run.outcome.status === "completed" && run.outcome.verifiedBy !== "grounded-judgment"));
     const host = await finishHostHealth(health, jobVerdict, {
       verified: jobVerified,
+      ...(run.failure === undefined ? {} : { failure: run.failure }),
       ...(jobFailure === undefined ? {} : { wouldHaveBeen: jobFailure.message }),
     });
     const runOutcome: MissionOutcome = host.outcome;
@@ -801,7 +802,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(run.actionDeltas === undefined ? {} : { actionDeltas: run.actionDeltas }),
       engine: currentEngineInfo(),
       ...((): { failure?: MissionFailure } => {
-        const f = run.failure ?? host.failure ?? jobFailure;
+        const f = failureWithHostStarved(host, run.failure ?? host.failure ?? jobFailure);
         return f === undefined ? {} : { failure: f };
       })(),
       ...(run.crash === undefined ? {} : { crash: run.crash }),

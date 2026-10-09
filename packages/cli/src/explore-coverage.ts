@@ -41,7 +41,7 @@ import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
-import { finishHostHealth } from "./host-health-run.js";
+import { failureWithHostStarved, finishHostHealth } from "./host-health-run.js";
 import {
   applyServerLogOutcome,
   openServerLogRuntime,
@@ -383,12 +383,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     ]);
     // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
     // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
-    const host = await finishHostHealth(health, applyServerLogOutcome(preLogOutcome, serverLogRun));
+    const host = await finishHostHealth(health, applyServerLogOutcome(preLogOutcome, serverLogRun), result.failure === undefined ? {} : { failure: result.failure });
     const missionOutcome: MissionOutcome = host.outcome;
     const coverageFailure: MissionFailure | undefined = thin
       ? { kind: "insufficient-coverage", message: `coverage below thresholds: ${result.coverage.sufficiency.shortfalls.join("; ")}` }
       : undefined;
-    const failure = result.failure ?? host.failure ?? coverageFailure;
+    const failure = failureWithHostStarved(host, result.failure ?? host.failure ?? coverageFailure);
 
     const exitCode = missionExitCode(missionOutcome);
     // #245: every context closed (videos finalized) before the result naming them is written.

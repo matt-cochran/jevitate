@@ -46,9 +46,9 @@ import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ParamValidationError } from "@jevitate/journey";
 import type { JudgmentPort, UsageTracker } from "@jevitate/ai-core";
-import type { SelfHealer } from "@jevitate/runtime";
+import type { ChangeScope, SelfHealer } from "@jevitate/runtime";
 import type { EmulationSpec } from "@jevitate/playwright";
-import { RunTagError, safeRunPolicy as defaultRunPolicy, validateRunTags, type RunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { RunTagError, JOURNEY_RUN_OUTCOMES, journeyExitCode, safeRunPolicy as defaultRunPolicy, validateRunTags, type JourneyRunOutcome, type RunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { stampRunMetadata, withRunMetadata } from "./run-metadata.js";
 import { JourneyRequiresAuthError, UnknownJourneyError, runJourneyProgrammatically } from "./journey-api.js";
 import { runVerifyFix, type RunVerifyFixOptions, type VerifyFixReport } from "./verify-fix-api.js";
@@ -58,7 +58,9 @@ import { environmentFromFlags, isEnvironmentError, type ResolvedJourneyEnvironme
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "./mission-fixtures.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
-import { makeExploreSelfHealer } from "./self-heal-adapter.js";
+import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
+import { JourneyHealArgsError, MCP_HEAL_NAMES, journeyHealBudget, readJourneyChangeScope, validateJourneyHeal, type JourneyHealRequest } from "./journey-heal.js";
+import { ChangesArgsError, ChangesInputError } from "./change-context.js";
 import { McpArgError, argErrorBody, optBool, optEnum, optInt, optNamedSessions, optPath, optExtensions, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "./mcp-args.js";
 import { defaultMcpPathRoots } from "./mcp-paths.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
@@ -103,6 +105,8 @@ export interface McpTool {
 export interface McpJourneyRunOptions {
   readonly policy?: RunPolicy;
   readonly selfHealer?: SelfHealer;
+  /** #453: the change context a hybrid/full self-heal is explained by (`changes`/`changeNote`). */
+  readonly heal?: { readonly scope: ChangeScope };
   readonly environment?: ResolvedJourneyEnvironment;
   readonly browser?: BrowserRunOptions;
   readonly emulation?: EmulationSpec;
@@ -251,6 +255,14 @@ function assertAllowlisted(name: string): void {
   }
 }
 
+/** #453: a Journey run result with the CLI's exit code for its outcome (anything else unchanged). */
+function withJourneyExitCode(result: unknown): unknown {
+  if (result === null || typeof result !== "object") return result;
+  const outcome = (result as { outcome?: unknown }).outcome;
+  if (typeof outcome !== "string" || !(JOURNEY_RUN_OUTCOMES as readonly string[]).includes(outcome)) return result;
+  return { ...result, exitCode: journeyExitCode(outcome as JourneyRunOutcome) };
+}
+
 function jsonResult(value: unknown): McpToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
 }
@@ -321,6 +333,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           ...(storageState !== undefined ? { storageState } : {}),
           ...(siteGate === undefined ? {} : { siteGate }),
           ...(o?.selfHealer === undefined ? {} : { selfHealer: o.selfHealer }),
+          ...(o?.heal === undefined ? {} : { heal: o.heal }),
           ...(o?.environment === undefined ? {} : { environment: o.environment }),
           ...(o?.browser === undefined ? {} : { browser: o.browser }),
           ...(o?.emulation === undefined ? {} : { emulation: o.emulation }),
@@ -717,20 +730,40 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const fakeAi = optBool(args, "fakeAi") ?? false;
     // #429: the Jev provider for self-heal judgments (typesafe | openrouter), as `--jev-provider`.
     const jevProvider = optEnum<"typesafe" | "openrouter">(args, "jevProvider", ["typesafe", "openrouter"]);
+    // #453 Q1: the same refusals as `journey run` — a heal needs a change context, the change and
+    // budget arguments need a heal — before any gateway, Journey lookup or browser.
+    const changes = optString(args, "changes");
+    const healMaxAttempts = optInt(args, "healMaxAttempts", 1);
+    const healMaxModelCalls = optInt(args, "healMaxModelCalls", 1);
+    const healMaxMs = optInt(args, "healMaxMs", 1);
+    const healMaxRunAttempts = optInt(args, "healMaxRunAttempts", 1);
+    const healMaxRunMs = optInt(args, "healMaxRunMs", 1);
+    const healRequest: JourneyHealRequest = {
+      selfHeal,
+      ...(changes === undefined ? {} : { changes }),
+      changeNotes: optStringArray(args, "changeNote") ?? [],
+      ...(healMaxAttempts === undefined ? {} : { maxAttempts: healMaxAttempts }),
+      ...(healMaxModelCalls === undefined ? {} : { maxModelCalls: healMaxModelCalls }),
+      ...(healMaxMs === undefined ? {} : { maxMs: healMaxMs }),
+      ...(healMaxRunAttempts === undefined ? {} : { maxRunAttempts: healMaxRunAttempts }),
+      ...(healMaxRunMs === undefined ? {} : { maxRunMs: healMaxRunMs }),
+    };
+    validateJourneyHeal(healRequest, MCP_HEAL_NAMES);
+    const healScope = selfHeal === "fail-closed" ? undefined : await readJourneyChangeScope(healRequest, deps.journeysDir);
     let selfHealer: SelfHealer | undefined;
     let policy: RunPolicy = defaultRunPolicy();
     let usage: UsageTracker | undefined;
     if (selfHeal !== "fail-closed") {
       if (deps.selfHealGateways === undefined) throw new SetupRequired("run_journey selfHeal needs the model gateways, which this server was not given");
-      let judge: JudgmentPort;
+      // #453: the healer is evidence-only — its model is an advisory ranker; judgment never decides a heal.
       let gen: GenerationPort;
       try {
-        ({ judge, gen, usage } = await deps.selfHealGateways({ real, fakeAi, ...(jevProvider === undefined ? {} : { jevProvider }) }));
+        ({ gen, usage } = await deps.selfHealGateways({ real, fakeAi, ...(jevProvider === undefined ? {} : { jevProvider }) }));
       } catch (err) {
         throw new SetupRequired(redactCredentials(err instanceof Error ? err.message : String(err), credentialStore));
       }
-      selfHealer = makeExploreSelfHealer(judge, gen);
-      policy = { ...policy, selfHeal: { mode: selfHeal } };
+      selfHealer = makeEvidenceSelfHealer(gen, usage === undefined ? {} : { usage });
+      policy = { ...policy, selfHeal: { mode: selfHeal, budget: journeyHealBudget(healRequest) } };
     }
     return {
       params,
@@ -739,6 +772,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         policy,
         fixtures,
         ...(selfHealer === undefined ? {} : { selfHealer }),
+        ...(healScope === undefined ? {} : { heal: { scope: healScope } }),
         ...(environment === undefined ? {} : { environment }),
         ...(browser === undefined ? {} : { browser }),
         ...(emulation === undefined ? {} : { emulation }),
@@ -804,7 +838,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
         "'viewport' {width,height} or 'device' (mutually exclusive); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
-        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals; 'jevProvider' typesafe | openrouter picks the Jev key with real, #429); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret). A site-policy refusal is {error: throttled, retryAfter}.",
+        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals; 'jevProvider' typesafe | openrouter picks the Jev key with real, #429) — #453: a heal mode needs a change context, 'changes' (a git range such as HEAD~1..HEAD, read-only) and/or 'changeNote' (strings), else it is refused; only a break that change explains is retargeted, one-for-one, and the run ends healed-pending-review (exitCode 5: a proposed revision a person accepts, never a pass); budgets 'healMaxAttempts'/'healMaxModelCalls'/'healMaxMs' (per broken step) and 'healMaxRunAttempts'/'healMaxRunMs' (per run), each >= 1; the result's 'exitCode' is the CLI's (0 ok, 5 pending review, 1 failed); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret). A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
         properties: {
@@ -823,6 +857,13 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           fixtures: { type: "string" },
           fixtureIdentity: { type: "array", items: { type: "string" } },
           selfHeal: { type: "string", enum: ["fail-closed", "hybrid", "full"] },
+          changes: { type: "string" },
+          changeNote: { type: "array", items: { type: "string" } },
+          healMaxAttempts: { type: "integer", minimum: 1 },
+          healMaxModelCalls: { type: "integer", minimum: 1 },
+          healMaxMs: { type: "integer", minimum: 1 },
+          healMaxRunAttempts: { type: "integer", minimum: 1 },
+          healMaxRunMs: { type: "integer", minimum: 1 },
           real: { type: "boolean" },
           fakeAi: { type: "boolean" },
           jevProvider: { type: "string", enum: ["typesafe", "openrouter"] },
@@ -848,6 +889,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         } catch (err) {
           const body = argErrorBody(err) ?? (isEnvironmentError(err) ? { error: "invalid_args", code: err.code, message: err.message } : undefined);
           if (body !== undefined) return errorResult(body);
+          if (err instanceof JourneyHealArgsError || err instanceof ChangesArgsError || err instanceof ChangesInputError) {
+            return errorResult({ error: "invalid_args", code: err.code, message: err.message });
+          }
           if (err instanceof SetupRequired) return errorResult({ error: "setup_required", message: err.message });
           throw err;
         }
@@ -858,7 +902,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           const id = args.id;
           const result = await withRunMetadata({ tags: tagged.tags }, () => runJourney(id, resolved.params, resolved.storageState, resolved.options));
           // #163: a self-healing run's model usage lands on its result, as on the CLI. #426: so do its tags.
-          return jsonResult(stampRunMetadata(resolved.usage === undefined || result === null || typeof result !== "object" ? result : { ...result, usage: resolved.usage.snapshot() }, { tags: tagged.tags }));
+          const withUsage = resolved.usage === undefined || result === null || typeof result !== "object" ? result : { ...result, usage: resolved.usage.snapshot() };
+          // #453: the CLI's exit code for the outcome — 0 ok, 5 healed-pending-review (a proposed revision, never a pass), 1 otherwise.
+          return jsonResult(stampRunMetadata(withJourneyExitCode(withUsage), { tags: tagged.tags }));
         } catch (err) {
           // A site-policy refusal (throttle, budget, quiet hours) is an answer the agent acts on — when to retry.
           if (err instanceof SiteGateRefusedError) {

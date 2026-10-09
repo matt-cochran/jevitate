@@ -127,6 +127,54 @@ describe("mcp-api wired handlers", () => {
     expect(result2.isError).toBeUndefined();
   });
 
+  it("#453: run_journey refuses a heal without a change context, and change/budget args without a heal — before the runner", async () => {
+    let ran = 0;
+    const tools = buildMcpTools({
+      ...baseDeps,
+      runJourney: async () => {
+        ran++;
+        return { outcome: "ok" };
+      },
+      selfHealGateways: async () => {
+        throw new Error("never reached");
+      },
+    });
+    const runTool = tools.find((t) => t.name === "run_journey")!;
+    for (const [args, code] of [
+      [{ selfHeal: "hybrid", fakeAi: true }, "E_JOURNEY_RUN_ARGS"],
+      [{ changes: "HEAD~1..HEAD" }, "E_JOURNEY_RUN_ARGS"],
+      [{ changeNote: ["x"] }, "E_JOURNEY_RUN_ARGS"],
+      [{ healMaxAttempts: 2 }, "E_JOURNEY_RUN_ARGS"],
+      [{ selfHeal: "hybrid", fakeAi: true, changes: "a;id" }, "E_CHANGES_ARGS"],
+      [{ selfHeal: "hybrid", fakeAi: true, changes: "a..b..c" }, "E_CHANGES_ARGS"],
+    ] as const) {
+      const result = await runTool.handler({ id: "checkout", ...args });
+      expect(result.isError, JSON.stringify(args)).toBe(true);
+      expect(JSON.parse(result.content[0].text), JSON.stringify(args)).toMatchObject({ error: "invalid_args", code });
+    }
+    const zero = await runTool.handler({ id: "checkout", selfHeal: "hybrid", changeNote: ["x"], healMaxMs: 0 });
+    expect(JSON.parse(zero.content[0].text)).toMatchObject({ error: "invalid_args" });
+    expect(ran).toBe(0);
+  });
+
+  it("#453: run_journey threads the change scope and budget to the runner and returns the CLI exit code (5 = pending review)", async () => {
+    const seen: Array<{ heal?: unknown; budget?: unknown }> = [];
+    const tools = buildMcpTools({
+      ...baseDeps,
+      runJourney: async (_id, _params, _state, o) => {
+        seen.push({ heal: o?.heal, budget: o?.policy?.selfHeal.budget });
+        return { outcome: "healed-pending-review", output: {}, revision: { steps: [] } };
+      },
+      selfHealGateways: async () => ({ judge: {} as never, gen: new FakeGenerationGateway(), usage: { snapshot: () => ({}) } as never }),
+    });
+    const runTool = tools.find((t) => t.name === "run_journey")!;
+    const result = await runTool.handler({ id: "checkout", selfHeal: "hybrid", fakeAi: true, changeNote: ['"Create New" -> "Create"'], healMaxAttempts: 3 });
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ outcome: "healed-pending-review", exitCode: 5 });
+    expect(seen[0]!.heal).toMatchObject({ scope: { evidence: [expect.objectContaining({ before: "Create New", after: "Create" })] } });
+    expect(seen[0]!.budget).toMatchObject({ perStep: { maxAttempts: 3 } });
+  });
+
   it("run_journey rejects a missing id with a structured error (never a fake success)", async () => {
     const tools = buildMcpTools({ ...baseDeps, runJourney: async () => ({ outcome: "ok" }) });
     const runTool = tools.find((t) => t.name === "run_journey")!;

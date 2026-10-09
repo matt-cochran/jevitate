@@ -29,6 +29,36 @@ export const ReviewStepSchema = z
   })
   .strict();
 
+/** #453: a pending self-heal proposal, as the review sheet shows it. */
+export const ReviewProposalSchema = z
+  .object({
+    proposalId: z.string(),
+    baseHash: z.string(),
+    proposedHash: z.string(),
+    createdAt: z.string(),
+    /** True when the Journey changed since the proposal was made (it cannot be accepted: re-run the self-heal). */
+    stale: z.boolean(),
+    /** Why it cannot be accepted (stale, or its proof fields were touched). */
+    problem: z.string().optional(),
+    changes: z.object({ range: z.string().optional(), baseSha: z.string().optional(), headSha: z.string().optional(), notes: z.array(z.string()) }).strict(),
+    steps: z.array(
+      z
+        .object({
+          number: z.number().int().min(1),
+          before: z.string(),
+          after: z.string(),
+          hypothesis: z.string(),
+          evidence: z.array(z.string()),
+          screenshots: z.array(z.string()),
+        })
+        .strict(),
+    ),
+    attempts: z.object({ total: z.number().int(), rejected: z.number().int() }).strict(),
+    /** The command that accepts exactly this proposal. */
+    acceptCommand: z.string(),
+  })
+  .strict();
+
 export const ReviewWriteRequestSchema = z
   .object({
     method: z.string(),
@@ -154,11 +184,14 @@ export const JourneyReviewSchema = z
     findings: z.array(FindingSchema).optional(),
     /** #434/#435: the advisory Jev layer of the findings (readiness questions, pair classifications). */
     jev: JevLayerSchema.optional(),
+    /** #453: the pending self-heal proposal, when there is one. */
+    proposal: ReviewProposalSchema.optional(),
     /** `journeyReviewHash`: what `journey promote --reviewed-hash` binds an approval to. */
     contentHash: z.string().regex(/^[0-9a-f]{64}$/),
   })
   .strict();
 
+export type JourneyReviewProposal = z.infer<typeof ReviewProposalSchema>;
 export type JourneyReview = z.infer<typeof JourneyReviewSchema>;
 export type JourneyReviewStep = z.infer<typeof ReviewStepSchema>;
 export type JourneyReviewWriteRequest = z.infer<typeof ReviewWriteRequestSchema>;

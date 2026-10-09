@@ -96,6 +96,7 @@ fails it, so it never stands in for the person's.
 
 `0` clean / passed / fixed · `1` defects found, a gating finding, or still reproduces · `2`
 inconclusive: the run proved nothing, so never report it as a pass · `3` the app hung (reproduced) ·
-`4` intermittent · `64` usage error, nothing ran (bad flag, unknown id, missing keys
+`4` intermittent · `5` pending review: a self-heal proposed a Journey revision that a person must
+accept (`jevitate journey review <id>`; never report it as a pass) · `64` usage error, nothing ran (bad flag, unknown id, missing keys
 `E_AI_SETUP_REQUIRED`, target not allowed) · `130`/`143` interrupted, but the partial result was
 written. Report the outcome the tool gave you. Never round it up.

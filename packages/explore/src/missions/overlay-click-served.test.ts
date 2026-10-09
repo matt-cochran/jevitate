@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
+import type { Assertion } from "@jevitate/recording";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
 import { PreferenceJudge, withSession, type Preference, useSkippingTime } from "../testkit.js";
@@ -54,12 +55,22 @@ const MODAL = `<div id="ov" role="dialog" aria-modal="true" aria-label="What wou
 const UNMARKED = MODAL.replace(' aria-modal="true"', "").replace("position:fixed;inset:0", "position:absolute;top:0;left:0;width:100%;height:6000px");
 /** The same overlay with no way out. */
 const NO_EXIT = UNMARKED.replace('<a href="#" id="close">Close</a>', "");
+/** #441: a closed off-canvas drawer — aria-modal, but inert and wholly outside the viewport. */
+const drawerPage = (): string => `<!doctype html><html><body style="margin:0">
+<main><h1>Items</h1><button id="add">Add item</button><button>Refresh</button></main>
+<div role="dialog" aria-modal="true" inert aria-hidden="true" style="position:fixed;left:100vw;top:0;width:384px;height:100vh">
+<button>Close</button><input aria-label="Name"><button>Save</button></div>
+<p id="out"></p>
+<script>
+  document.getElementById("add").addEventListener("click", () => { document.getElementById("out").textContent = "Item added"; });
+</script>
+</body></html>`;
 
 let server: Server;
 let origin: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const html = req.url === "/modal" ? page(MODAL) : req.url === "/unmarked" ? page(UNMARKED) : page(NO_EXIT);
+    const html = req.url === "/modal" ? page(MODAL) : req.url === "/unmarked" ? page(UNMARKED) : req.url === "/drawer" ? drawerPage() : page(NO_EXIT);
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -71,7 +82,7 @@ afterAll(async () => {
 
 const GOAL = "Answer the follow-up questions until you can see what will be investigated next.";
 
-async function run(path: string, prefs: readonly Preference[], fallback: Preference["op"] = "done"): Promise<{ result: GoalBasedResult; judge: PreferenceJudge }> {
+async function run(path: string, prefs: readonly Preference[], fallback: Preference["op"] = "done", successAssertion?: Assertion): Promise<{ result: GoalBasedResult; judge: PreferenceJudge }> {
   const judge = new PreferenceJudge(prefs, fallback);
   const result = await withSession(
     "overlay-click-",
@@ -86,6 +97,7 @@ async function run(path: string, prefs: readonly Preference[], fallback: Prefere
         startUrl: `${origin}${path}`,
         waitOpMs: 300,
         bounds: { maxDecisions: 20 },
+        ...(successAssertion === undefined ? {} : { successAssertion }),
       });
     },
     origin,
@@ -145,5 +157,16 @@ describe("#272 — controls behind an open dialog", () => {
       expect(result.transcript.length).toBeLessThanOrEqual(6);
     },
     120_000,
+  );
+});
+
+describe("#441 — a closed inert drawer is not an open modal", () => {
+  it(
+    "a goal run reaches the main page's Add item text through a closed off-canvas drawer",
+    async () => {
+      const { result } = await run("/drawer", [{ op: "click", name: "Add item" }], "done", { kind: "visible", target: { text: "Item added" } });
+      expect(result.outcome).toBe("succeeded");
+    },
+    90_000,
   );
 });

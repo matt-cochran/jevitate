@@ -6,6 +6,7 @@ import { loadCatalog, resolveCatalogDir } from "./catalog-api.js";
 import { catalogJourney, journeyLinks } from "./catalog.js";
 import { preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { jevLayerOf, type JevSetup } from "./jev-advisor.js";
+import { checkProposal, readJourneyProposal } from "./journey-proposal-store.js";
 import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 
 /**
@@ -37,7 +38,13 @@ export async function reviewJourneyById(
     ...(opts.readiness === true ? { readiness: true } : {}),
     ...(opts.jev === undefined ? {} : { jev: opts.jev }),
   });
+  // #453: a pending self-heal proposal, re-checked against the stored Journey (stale, or its proof touched).
+  const pending = await readJourneyProposal(journeysDir, id);
+  const proposalProblem = pending === null ? null : checkProposal(journey, pending);
   const review = buildJourneyReview(journey, {
+    ...(pending === null
+      ? {}
+      : { proposal: { proposal: pending, stale: proposalProblem?.code === "E_JOURNEY_PROPOSAL_STALE", ...(proposalProblem === null ? {} : { problem: proposalProblem.message }) } }),
     ...(safety === undefined ? {} : { safety }),
     catalog: { links, findings },
     approvedSnapshot: await readApprovedSnapshot(journeysDir, id),

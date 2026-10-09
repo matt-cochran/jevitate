@@ -89,3 +89,13 @@ test("resumeFrom(0) on a 3-step recording runs all three steps, equivalent to a 
   expect(locator.click).toHaveBeenCalledTimes(1);
   expect(result).toEqual({ outcome: "completed", vars: {} });
 });
+
+// === runRange (#453: a heal probe runs the candidate step alone) ===
+
+test("runRange(0, 0) runs only the first step and leaves the rest of the recording unexecuted", async () => {
+  const { actor, rec, page, locator } = threeStepRecording();
+
+  const result = await new RecordingInterpreter().runRange(actor as any, rec, 0, 0);
+
+  expect({ goto: page.goto.mock.calls.length, click: locator.click.mock.calls.length, outcome: result.outcome }).toEqual({ goto: 1, click: 0, outcome: "completed" });
+});

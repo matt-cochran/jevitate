@@ -42,11 +42,38 @@ pass or fail:
   branch protection: see [what "human approval" guarantees](./catalog.md#what-human-approval-guarantees).
   `jevitate catalog status --require-approvals` is the same check on its own (exit 1).
 
+### Self-heal in CI (`--self-heal`)
+
+`jevitate check --suite … --self-heal hybrid|full --changes origin/main...HEAD [--change-note <text>] --fake-ai|--real`
+runs every Journey fail-closed first. A Journey that quarantines is re-run **once** with a
+change-aware self-heal: the git range (read once, at preflight, in the Journeys directory's repo)
+and the notes say what changed, so only a break the change explains may be retargeted, one step at a
+time, never an assertion. The re-run is charged to the check's budget (actions, minutes, USD) and
+bounded by `--heal-max-attempts`, `--heal-max-model-calls`, `--heal-max-ms`, `--heal-max-run-attempts`
+and `--heal-max-run-ms` (same meaning as on `journey run`).
+
+- A re-run that completes only through a retarget is **pending review**, never a pass: the item is
+  `pending-review`, the check exits `5`, JUnit carries `<failure type="healed-pending-review">` with
+  the proposal path, SARIF carries a `jevitate/journey-heal-pending-review` warning, and `check.json`
+  lists `proposals: [{journeyId, proposalId, path}]` (`summary.pendingReview` counts them).
+- A re-run that exhausts its candidates or budget is `heal-exhausted`: exit `1`.
+- The stored Journey is untouched. The proposal is written under `.proposals/` next to the Journeys;
+  have the PR carry that directory, so the reviewer sees the revision in the diff, then
+  `jevitate journey review <id>` and `jevitate journey promote <id> --proposal <pid>` (human-only).
+- `--self-heal` without `--changes`/`--change-note`, `--changes`/`--change-note`/`--heal-max-*`
+  without `--self-heal`, an unsafe range, or no gateway (`--real`/`--fake-ai`) is refused (exit 64)
+  before anything runs.
+
+Each healed item writes both `…-<seq>.result.json` (the fail-closed run) and
+`…-<seq>.heal.result.json` (the re-run; its `healOf` names the first). The item's outcome is the
+re-run's, and only the re-run feeds the findings.
+
 Exit codes: `0` pass · `1` at least one gating finding · `2` no gating finding, but an item errored
-or the budget was exceeded · `64` the suite, its preflight, the targets file or the AI setup was
-refused, so nothing ran (see [exit codes](./outcomes.md#exit-codes)). Gate CI on `1`, and treat `2`
-and `64` as a broken check, not a pass. Outputs go under `--out` (default
-`jevitate-check/`):
+or the budget was exceeded · `5` nothing failed, but a self-heal proposed a Journey revision that
+awaits review (below) · `64` the suite, its preflight, the targets file or the AI setup was
+refused, so nothing ran (see [exit codes](./outcomes.md#exit-codes)). Precedence `1 > 2 > 5 > 0`.
+Gate CI on `1`, and treat `2` and `64` as a broken check, not a pass; `5` is never a pass either.
+Outputs go under `--out` (default `jevitate-check/`):
 
 | File | What |
 | --- | --- |
@@ -251,7 +278,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - run: npm i -g @jevitate/cli && npx playwright install --with-deps chromium
+      - run: npm i -g @jevitate/cli && jevitate install-browser --with-deps
       - name: Changed routes
         id: routes
         run: echo "globs=$(git diff --name-only origin/${{ github.base_ref }}... | ./scripts/routes-for-files.sh)" >> "$GITHUB_OUTPUT"
@@ -354,3 +381,16 @@ that an adversarial-only defect is gone. New and resolved are decided before fla
 needs enough comparable reruns to rule out the baseline's own hit rate. `last` means the previous run on the same
 target, per mode. A tag is a snapshot stored under `.jevitate/baselines/<name>.json` (commit it
 with the repo), so it survives pruned result files.
+
+## Sharing the pinned browser with project scripts
+
+`jevitate install-browser` installs the exact Chromium (and headless shell) revision jevitate pins, using the Playwright CLI jevitate itself depends on. It sets `PLAYWRIGHT_SKIP_BROWSER_GC=1`, so it never removes other revisions that other projects still use, and it honours an inherited `PLAYWRIGHT_BROWSERS_PATH`. `--with-deps` also installs OS packages (needs privileges).
+
+`jevitate browser-path` prints the pinned revisions, the browsers directory in use and the executable path; `--json` is machine output. A project script that drives its own Playwright can reuse the same directory instead of downloading a second copy:
+
+```bash
+eval "$(jevitate browser-path --export)"   # export PLAYWRIGHT_BROWSERS_PATH=...
+node my-script.mjs
+```
+
+The script's Playwright must pin the same Chromium revision to find the browser there; `jevitate doctor` reports whether the pinned revision is installed, missing, or only other revisions are present, and the fix command.

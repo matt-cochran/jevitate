@@ -2,6 +2,7 @@ import { hostname } from "node:os";
 import { Command } from "commander";
 import {
   cleanupOrphanBrowsers,
+  pinnedBrowserReport,
   jevitateBrowsers,
   sharedResourceGovernor,
   type OrphanCleanup,
@@ -10,6 +11,7 @@ import {
   type ResourceLimits,
   type SlotState,
 } from "@jevitate/playwright";
+import { formatPinnedBrowser } from "./browser-cli.js";
 import { fail, ok, type JsonEnvelope } from "./envelope.js";
 import { emitJsonOrRefusal } from "./cli-refusal.js";
 
@@ -215,8 +217,9 @@ export function registerDoctorCommand(program: Command, deps: PreflightDeps = {}
       const o = this.opts<{ cleanup?: boolean; json?: boolean }>();
       try {
         const report = await doctorReport({ ...deps, ...(o.cleanup === true ? { cleanup: true } : {}) });
-        if (o.json === true) emitJsonOrRefusal(program, ok(report));
-        else program.configureOutput().writeOut?.(formatDoctor(report));
+        const pinnedBrowser = pinnedBrowserReport();
+        if (o.json === true) emitJsonOrRefusal(program, ok({ ...report, pinnedBrowser }));
+        else program.configureOutput().writeOut?.(`${formatDoctor(report)}${formatPinnedBrowser(pinnedBrowser)}`);
       } catch (err) {
         emitJsonOrRefusal(program, fail("E_DOCTOR", err instanceof Error ? err.message : String(err)));
       }
