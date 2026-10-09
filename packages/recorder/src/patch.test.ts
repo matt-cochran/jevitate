@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { startServer, SEED_THREADS } from "@jevitate/example-site";
-import { RecordingSchema, type Recording } from "@jevitate/recording";
+import { RecordingSchema, ensureStepIds, type Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { recordPatch } from "./patch.js";
 
@@ -166,6 +166,31 @@ test(
       expect(result.outcome).toBe("completed");
       expect(result.vars.messageText).toContain(FIRST_MESSAGE.text);
       expect(fresh.page.url()).toContain(`/thread/${FIRST_THREAD.id}`);
+    });
+  },
+  120_000,
+);
+
+test(
+  "#467 recordPatch keeps every base step's id and gives the patched-in step a new unique one",
+  async () => {
+    const base = ensureStepIds(RecordingSchema.parse(makeBase()));
+    const ids = (r: Recording): (string | undefined)[] => r.pages.flatMap((p) => p.steps.map((s) => s.stepId));
+    const patched = await withSession("jevitate-patch-ids-", async (session) =>
+      recordPatch({
+        base,
+        checkpoint: ids(base).length - 1,
+        browser: session,
+        allowedOrigins: [site.url],
+        demonstrate: async (demoSession) => {
+          await demoSession.page.locator(MESSAGE_CSS).click();
+        },
+      }),
+    );
+    const after = ids(patched);
+    expect({ kept: after.slice(0, -1), unique: new Set(after.filter((id) => id !== undefined)).size }).toEqual({
+      kept: ids(base),
+      unique: ids(base).length + 1,
     });
   },
   120_000,

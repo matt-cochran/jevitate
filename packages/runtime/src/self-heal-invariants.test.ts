@@ -139,6 +139,11 @@ describe("assertRecordingProofUntouched", () => {
     const pages = base.pages.map((p) => ({ ...p, steps: p.steps.map((s, i) => (i === 1 ? { ...s, expectRequests: [{ kind: "requestMade" as const, method: "GET", pathGlob: "/x" }] } : s)) }));
     expect(assertRecordingProofUntouched(base, { ...base, pages })?.code).toBe("proof-field-changed");
   });
+
+  it("#467 refuses a revision that renames a step's id as proof-field-changed", () => {
+    const withId = (id: string): Recording => ({ ...base, pages: base.pages.map((p) => ({ ...p, steps: p.steps.map((s, i) => (i === 1 ? { ...s, stepId: id } : s)) })) });
+    expect(assertRecordingProofUntouched(withId("s-before"), withId("s-after"))?.code).toBe("proof-field-changed");
+  });
 });
 
 test("#8 the write floor holds in full mode: a broken select step never reaches the healer", async () => {

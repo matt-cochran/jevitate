@@ -30,7 +30,7 @@ The findings are the same, because models never decide them.
 
 ## Prerequisites
 
-- Node.js 20+, pnpm 9, `git`, and `jq` (used only to trim the `--json` output; without `--json`
+- Node.js 22+, pnpm 9, `git`, and `jq` (used only to trim the `--json` output; without `--json`
   each command prints a human summary instead).
 - A few hundred MB of disk space for dependencies and Chromium. On a fresh Linux machine, use
   `playwright install --with-deps chromium` to also install Chromium's system libraries.

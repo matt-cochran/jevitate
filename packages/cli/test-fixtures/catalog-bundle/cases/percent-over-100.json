@@ -1,0 +1,16 @@
+{
+  "description": "A percent target is at most 100.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/catalog/jobs/0/desiredOutcomes/1/target/value",
+      "value": 120
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/catalog/jobs/0/desiredOutcomes/1/target/value",
+    "keyword": "maximum"
+  }
+}

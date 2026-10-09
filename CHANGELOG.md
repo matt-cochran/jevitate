@@ -7,6 +7,95 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.10.0] – 2026-10-09
+
+0.10.0 connects jevitate's catalog to Journeeze and makes Journeys sturdier as the app under test improves.
+- **Journeeze:** `jevitate catalog export` writes the Journeeze catalog bundle v1, and `jevitate connect journeeze` / `publish journeeze` upload it with a protected product key.
+- **Jobs:** desired outcomes, job steps and metrics, with reference checks and AI-drafted outcomes for the team to approve.
+- **Anchors and baselines:** anchors mark job-step boundaries, and clean replays export a machine baseline per anchor.
+- **Approvals:** an approval can come from a reviewed, merged pull request, verified through the GitHub API.
+- **Step ids:** every step has a stable id, and `journey migrate --step-ids` adds them to existing recordings.
+- **Locator health:** reports every step that needs a brittle locator, with the `data-testid` to add to the app.
+- **Fixes:** strict-mode providers such as Azure work again, quoted goal values and loose select options are read correctly, and returning to the starting tab is no longer reported as a hang.
+
+### Breaking changes
+
+- **Node 22 or later is required (#459).** jevitate now uses better-sqlite3 13, which no longer pulls in the deprecated `prebuild-install`, so installs no longer warn. Node 20 is end-of-life.
+- **Promoted Journeys need re-approval after the step-id backfill (#467).**
+  - `jevitate journey migrate --step-ids` adds a stable id to every step of every local Journey and regression capture. `--dry-run` previews the changes, and a second run changes nothing.
+  - Adding ids changes each Journey's content hash, so its approval becomes stale. Any later save of an older Journey does the same.
+  - `jevitate journey review --stale` lists the affected Journeys, labelled "ids added only (warn path)", and prints the command to re-approve each one.
+  - Re-approving an ids-only change uses the warning path; the new anchor rules are not enforced on it.
+  - Do the migration in one reviewed pull request.
+
+### Behaviour changes
+
+- **Anchor rules (#466).**
+  - New promotions, and re-promotions that change more than step ids, must follow the anchor rules:
+    - lowercase anchor names matching `[a-z0-9._:-]{1,64}`;
+    - every anchor points at an existing step;
+    - a Journey linked to a job has at least one named anchor;
+    - `jobStep` and `serves` name the job's own steps and outcomes.
+  - Existing Journeys still load and run. `journey lint`, SARIF output and the review sheet show each problem as a warning with its fix.
+- **Job approval checks references (#465).** `job approve` refuses a job with structural reference errors (exit 64, `E_JOB_BROKEN_REF`): duplicate step or outcome ids, an outcome pointing at an unknown step, an unknown parent, or a parent cycle. Other reference problems are warnings.
+- **Goal values are paired quote by quote (#461).** Quoted values in a goal are paired left to right, so `enter '+14155550199'` types the number, not the text between two quotes. A lone typed value binds to the field the goal names.
+- **Selects pick an unambiguous loose match (#462).** When exactly one option contains every wanted word ("own rules" → "Own rules only"), it is chosen. A fail-closed refusal now lists the options it saw.
+- **Returning to an earlier tab is not a hang (#463).** A click on a tab, or on a control marked `aria-current`, whose requests settled and which left the page stable is no longer reported as no progress, even when it returns to an earlier state.
+
+### Added
+
+- **Journeeze catalog bundle (#464).**
+  - `jevitate catalog export --format journeeze-bundle --out <dir>`, and MCP `export_catalog_bundle`, write `bundle.json` per the Journeeze catalog bundle v1 contract. The bundle carries:
+    - personas, jobs and promoted Journeys with their approvals;
+    - links from each Journey to its job, persona, anchors and served outcomes;
+    - check results, with machine baselines, per target and commit;
+    - findings, fingerprinted per the contract.
+  - Every exported approval hash can be recomputed by the reader.
+  - No session keys, typed values, query strings or personal data are exported.
+  - Demo media is not exported in 0.10 (#471).
+  - The MCP tool only writes inside the project.
+- **Journeeze upload (#464).**
+  - `jevitate connect journeeze` (CLI only) verifies a product upload key, then saves only a reference to where the key is held: an environment variable, a secret command, or a password-manager entry. The reference is bound to the Journeeze origin, and the key itself is never written to disk.
+  - `jevitate publish journeeze [--dry-run]`, and MCP `publish_to_journeeze`, build the bundle and upload it. CI uses `JOURNEEZE_UPLOAD_KEY`.
+  - Each project uses only its own connection.
+  - Hosts are pinned, and loopback hosts need `JEVITATE_JOURNEEZE_DEV=1`. Redirects are refused.
+  - The key never reaches a model, an MCP argument or result, or a log.
+- **Job outcomes and steps (#465).**
+  - Jobs gain optional `kind`, `parent`, `context`, `steps` (with job-map stages), `desiredOutcomes` (direction, measure, object, metric, target, guardrail), `constraints`, `provenance`, `revision`, `lastValidated`, and a namespaced `extensions` object.
+  - `catalog status`, `catalog analyze` and `job review` show reference checks.
+  - All new fields count toward the job's approval hash.
+- **AI-drafted outcomes (#465).** `jevitate job draft-outcomes <jobId> [--count 1-3]`, and MCP `draft_job_outcomes`, draft rough desired outcomes for the team to review. The job's provenance becomes `ai_draft`, and the drafted outcome ids are listed under `extensions["jevitate-draft"]`. Drafting never approves, and an approved job becomes stale until it is re-approved.
+- **Anchors as job-step boundaries (#466).** Anchors take an optional `stepId`, `jobStep` and `boundary`, and Journey metadata takes `serves` and `extensions`.
+- **Stable step ids (#467).**
+  - Steps carry a `stepId`. It is assigned when a Journey is saved, never when it is read.
+  - The id is kept across edits, splices, heals and proposals.
+  - A revision that renames an id is refused.
+- **`data-tflow-id` is recorded as `tflowId` (#468).** It is tracking metadata only: it is exported with findings and the bundle, and it is never used to locate an element.
+- **Verified pull-request approvals (#469).**
+  - In CI, `job approve`, `persona approve` and `journey promote` record the approval channel `pr-review` only after the GitHub API confirms all of the following:
+    - the approved content came from a merged pull request into the default branch;
+    - the PR has an approving review on its head commit, and the content at that head is exactly the content being approved;
+    - the reviewer is a person who is neither the PR's author nor a contributor of any of its commits, and has write access;
+    - optionally, the reviewer is a CODEOWNER (`JEVITATE_PR_REVIEW_REQUIRE_CODEOWNER=1`).
+  - `check --require-approvals --allow-channels pr-review` re-verifies these approvals. One that does not verify is reported as `unverified`.
+  - Successful verifications are cached for 24 hours. The cache is never read on pull-request events, and it is refused when it is tracked by git or reached through a symlink.
+  - The token comes only from the CI environment, and no flag or MCP argument can set this channel.
+- **Machine baselines per anchor (#469).** A clean replay records the steps taken, the total time, and the time at which each anchor's step completed. They appear in `check.json` and in the bundle.
+- **Locator health (#470).**
+  - `jevitate locator-health [--journey <id> | --run <result.json>]`, and MCP `locator_health`, report for each step:
+    - which locator rung resolved it: test id, role and name, label, text, or CSS;
+    - how stable that rung is;
+    - why it is brittle;
+    - a concrete fix for the app, such as `add data-testid="save-contact" to the "Save" button on /contacts/new`.
+  - Fixes are de-duplicated across runs, and `--baseline` reports the trend.
+  - `check` shows the results as warnings. `check --max-brittle-steps <n>` makes them a gate.
+  - The test-id attributes come from `testIdAttributes` in `.jevitate/project.json`, which defaults to `data-testid` and `data-test`. `data-tflow-id` is never accepted as one.
+- **The review sheet** shows anchor warnings with fixes, brittle steps with fixes, and pull-request approval details. `journey review --stale` lists stale Journeys.
+
+### Fixed
+
+- **Strict-mode providers work again (#460).** On Azure and OpenAI strict mode, every goal report failed because the `absent` field (added in 0.9.0) was missing from the response schema's `required` list. A test now checks every model output schema for strict-mode validity.
+
 ## [0.9.0] – 2026-10-09
 
 0.9.0 makes self-heal safe to use in CI and fixes everything a pre-ship sweep of a React SPA turned up.

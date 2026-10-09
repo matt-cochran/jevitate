@@ -2,10 +2,10 @@ import type { Assertion, Recording, RecordedStep, Step, StepTiming } from "@jevi
 import { RecordingSchema } from "@jevitate/recording";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { installFlashRecorder } from "./flash-recorder.js";
-import type { InterpretResult } from "./interpret-result.js";
+import type { InterpretResult, StepResolution } from "./interpret-result.js";
 import type { StepWait } from "./outcome-wait.js";
 import { runStep } from "./run-step.js";
-import { ReplayTargetError, type ResolveTargetOptions } from "./resolve-target.js";
+import { ReplayTargetError, type ResolveTargetOptions, type ResolvedTarget } from "./resolve-target.js";
 import type { RecordingSink } from "./sink.js";
 import { clock } from "@jevitate/domain";
 
@@ -292,8 +292,23 @@ async function runFlat(
   }
   // #409: each waited step's outcome wait, reported on the result (only when a step waited).
   const waits: StepWait[] = [];
-  const stepOpts = { ...targetOpts, onWait: (w: StepWait) => void waits.push(w) };
-  const withWaits = <R extends InterpretResult>(r: R): R => (waits.length === 0 ? r : { ...r, waits });
+  // #470: how each step's target resolved — metadata for locator health, never a change to replay.
+  const resolved: StepResolution[] = [];
+  let resolving: { index: number; stepId?: string; done: boolean } = { index: -1, done: true };
+  const stepOpts = {
+    ...targetOpts,
+    onWait: (w: StepWait) => void waits.push(w),
+    onResolved: (via: ResolvedTarget) => {
+      targetOpts.onResolved?.(via);
+      if (resolving.done) return;
+      resolving.done = true;
+      resolved.push({ ...via, index: resolving.index, ...(resolving.stepId === undefined ? {} : { stepId: resolving.stepId }) });
+    },
+  };
+  const withWaits = <R extends InterpretResult>(r: R): R => {
+    const out = waits.length === 0 ? r : { ...r, waits };
+    return resolved.length === 0 ? out : { ...out, resolved };
+  };
   const runStartedAt = clock.monotonicMs();
   let lastSunkStepEndedAt = runStartedAt;
   for (let i = startIndex; i <= lastIndex; i++) {
@@ -307,6 +322,7 @@ async function runFlat(
       continue;
     }
     const stepStartedAt = clock.monotonicMs();
+    resolving = { index: i, ...(recorded.stepId === undefined ? {} : { stepId: recorded.stepId }), done: false };
     try {
       outcome = await runStep(actor, flat[i], vars, i, stepOpts);
     } catch (err) {

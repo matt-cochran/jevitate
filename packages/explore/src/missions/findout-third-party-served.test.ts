@@ -126,7 +126,7 @@ async function run(steps: ScriptedStep[], safety?: SafetyConfig): Promise<GoalBa
         actor,
         judge,
         gen: new FakeGenerationGateway({
-          "goal.answer": { answer: "Pro costs $49/mo.", claims: [{ claim: "Pro costs $49/mo", quote: "Pro: $49/mo." }] },
+          "goal.answer": { answer: "Pro costs $49/mo.", claims: [{ claim: "Pro costs $49/mo", quote: "Pro: $49/mo.", absent: null }] },
         }),
         goal: "Find out what the Pro plan costs.",
         allowlist: [origin],

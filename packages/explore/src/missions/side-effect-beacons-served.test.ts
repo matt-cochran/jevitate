@@ -91,7 +91,7 @@ async function run(steps: ScriptedStep[], settle?: SettleConfig): Promise<GoalBa
         actor,
         judge: new ScriptedJudge(steps),
         gen: new FakeGenerationGateway({
-          "goal.answer": { answer: "The menu lists Profile and Billing.", claims: [{ claim: "Profile is a row", quote: "Profile" }] },
+          "goal.answer": { answer: "The menu lists Profile and Billing.", claims: [{ claim: "Profile is a row", quote: "Profile", absent: null }] },
         }),
         goal: "Open the menu twice and report its rows.",
         allowlist: [origin],

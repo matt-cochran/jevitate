@@ -1,0 +1,15 @@
+{
+  "description": "A boundary marks a job step, so it needs `jobStep`.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "remove",
+      "path": "/catalog/journeys/0/link/anchors/0/jobStep"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/catalog/journeys/0/link/anchors/0",
+    "keyword": "dependentRequired"
+  }
+}

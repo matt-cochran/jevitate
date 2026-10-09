@@ -76,7 +76,7 @@ test("resumeFrom(2) on a 3-step recording only executes step 2 (steps 0,1 not in
   // is that click (step 2's action) fired exactly once and navigate never did.
   expect(locator.click).toHaveBeenCalledTimes(1);
 
-  expect(result).toEqual({ outcome: "completed", vars: {} });
+  expect(result).toMatchObject({ outcome: "completed", vars: {} });
 });
 
 test("resumeFrom(0) on a 3-step recording runs all three steps, equivalent to a full run", async () => {
@@ -87,7 +87,7 @@ test("resumeFrom(0) on a 3-step recording runs all three steps, equivalent to a 
 
   expect(page.goto).toHaveBeenCalledTimes(1);
   expect(locator.click).toHaveBeenCalledTimes(1);
-  expect(result).toEqual({ outcome: "completed", vars: {} });
+  expect(result).toMatchObject({ outcome: "completed", vars: {} });
 });
 
 // === runRange (#453: a heal probe runs the candidate step alone) ===

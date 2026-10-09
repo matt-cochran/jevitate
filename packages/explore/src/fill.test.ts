@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { FORM_VALUE_INSTRUCTIONS, FakeGenerationGateway, FormValueInput } from "@jevitate/ai-core";
-import { FillHelper, SELECT_OPTION_INSTRUCTIONS, checkFieldValue, valueStatedInGoal } from "./index.js";
+import { FillHelper, SELECT_OPTION_INSTRUCTIONS, checkFieldValue, valueStatedInGoal, valuesStatedInGoal, exactLiterals, echoesGoal } from "./index.js";
 
 const base = { goal: "sign in", visibleContext: "login form", history: [] as string[] };
 
@@ -152,5 +152,43 @@ describe("#273 — select placeholders and loosely spelled options", () => {
     const { matchOption } = await import("./fill.js");
     expect(matchOption("$10k-$100k", ["—", "$10k–$100k"])).toBe("$10k–$100k");
     expect(matchOption("Owner's plan", ["Owner’s plan"])).toBe("Owner’s plan");
+  });
+});
+
+describe("#461 — goal quotes pair with their own closer", () => {
+  const GOAL = "Click 'Add Phone Number', then set Phone Number to '+14155550199' and save";
+  it("takes the value from the quote pair that follows the field label, not the text between two pairs", () => {
+    expect(valuesStatedInGoal(GOAL, "Phone Number", TEXT)).toEqual(["+14155550199"]);
+  });
+  it("binds a lone typed value to the field whose label the goal mentions", () => {
+    expect(valuesStatedInGoal("Click 'Add Phone Number', enter '+14155550199', choose SMS", "Phone Number", TEXT)).toEqual(["+14155550199"]);
+  });
+  it("leaves a typed value aimed at another named field to the model", () => {
+    expect(valuesStatedInGoal("Click 'Add Phone Number', enter 'Ada' in the Name field", "Phone Number", TEXT)).toEqual([]);
+  });
+  it("does not open a quote on an apostrophe inside a word", () => {
+    expect(valuesStatedInGoal("Don't skip it: set Name to 'Ada' and doesn't matter", "Name", TEXT)).toEqual(["Ada"]);
+  });
+  it("pairs curly quotes with their own closer", () => {
+    expect(valuesStatedInGoal("Open “Add Phone Number”, set Phone Number to “+1 415” now", "Phone Number", TEXT)).toEqual(["+1 415"]);
+  });
+  it("reads an exactly-literal from a pair that holds an apostrophe", () => {
+    expect(exactLiterals("set it to exactly \"Owner's plan\" and save")).toEqual(["Owner's plan"]);
+  });
+});
+
+describe("#462 — a select option named loosely", () => {
+  const OPTS = ["Everyone", "Own rules only", "Team defaults"];
+  it("picks the one option that contains the wanted words", async () => {
+    const { matchOption } = await import("./fill.js");
+    expect(matchOption("own rules", OPTS)).toBe("Own rules only");
+  });
+  it("refuses when two options contain the wanted words", async () => {
+    const { matchOption } = await import("./fill.js");
+    expect(matchOption("rules", ["Own rules only", "Team rules"])).toBeNull();
+  });
+  it("refuses when no option contains the wanted words", async () => {
+    const { matchOption } = await import("./fill.js");
+    expect(matchOption("admin", OPTS)).toBeNull();
   });
 });

@@ -1,0 +1,16 @@
+{
+  "description": "The exit code is fixed by the outcome: clean exits 0.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/checks/0/exitCode",
+      "value": 1
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/checks/0/exitCode",
+    "keyword": "const"
+  }
+}

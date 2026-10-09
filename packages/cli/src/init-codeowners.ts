@@ -100,3 +100,73 @@ export async function installCodeowners(cwd: string, ownersValue: string, opts: 
   }
   return { path, action, owners, note: BRANCH_PROTECTION_NOTE };
 }
+
+// ── Reading CODEOWNERS (#469: is a pull-request reviewer a code owner of a path?) ──────────────
+
+/** Where GitHub looks for CODEOWNERS, in its order (the first file found is the one it uses). */
+export const GITHUB_CODEOWNERS_LOCATIONS: readonly string[] = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+
+/** One CODEOWNERS rule: the pattern as written, its matcher, and its owners (`@user`, `@org/team`, emails). */
+export interface CodeownersRule {
+  readonly pattern: string;
+  readonly matches: (path: string) => boolean;
+  readonly owners: readonly string[];
+}
+
+function globToRegexBody(glob: string): string {
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i] as string;
+    if (ch === "*") {
+      if (glob[i + 1] === "*") {
+        // `**/` matches zero or more directories; a bare `**` anything.
+        if (glob[i + 2] === "/") {
+          out += "(?:.*/)?";
+          i += 2;
+        } else {
+          out += ".*";
+          i += 1;
+        }
+      } else out += "[^/]*";
+    } else if (ch === "?") out += "[^/]";
+    else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return out;
+}
+
+/**
+ * A gitignore-style CODEOWNERS pattern as GitHub reads it: a leading `/` or a `/` inside anchors it
+ * to the repository root (else it matches at any depth); a trailing `/` matches a directory's
+ * contents; a pattern naming a directory also matches everything under it; `*` stays within one
+ * path segment, `**` crosses them.
+ */
+export function codeownersMatcher(pattern: string): (path: string) => boolean {
+  const dirOnly = pattern.endsWith("/");
+  const trimmed = pattern.replace(/^\/+/, "").replace(/\/+$/, "");
+  const anchored = pattern.startsWith("/") || trimmed.includes("/");
+  const body = globToRegexBody(trimmed);
+  const re = new RegExp(`^${anchored ? "" : "(?:.*/)?"}${body}${dirOnly ? "/.*" : "(?:/.*)?"}$`);
+  return (path) => re.test(path.replace(/^\/+/, ""));
+}
+
+/** The rules of a CODEOWNERS file, in file order. Comments, blank lines and section headers are skipped. */
+export function parseCodeownersFile(text: string): CodeownersRule[] {
+  const rules: CodeownersRule[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/(^|\s)#.*$/, "").trim();
+    if (line === "" || line.startsWith("[") || line.startsWith("^[")) continue;
+    const [pattern, ...owners] = line.split(/\s+/);
+    if (pattern === undefined) continue;
+    rules.push({ pattern, matches: codeownersMatcher(pattern), owners });
+  }
+  return rules;
+}
+
+/** The owners of a repository-relative path: the LAST matching rule wins (none: no owners). */
+export function codeownersOf(rules: readonly CodeownersRule[], path: string): readonly string[] {
+  for (let i = rules.length - 1; i >= 0; i--) {
+    const r = rules[i] as CodeownersRule;
+    if (r.matches(path)) return r.owners;
+  }
+  return [];
+}

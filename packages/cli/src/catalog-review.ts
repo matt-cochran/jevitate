@@ -4,13 +4,17 @@ import {
   GTWR_SET_CHARACTERISTICS,
   JobReviewSchema,
   PersonaReviewSchema,
+  type CatalogRefIssue,
   type CatalogStatusReport,
+  type DesiredOutcome,
   type Finding,
+  type Job,
   type JobReview,
   type PersonaReview,
 } from "@jevitate/journey";
 import { journeyLinks, journeysForJob, journeysForPersona, personaLinkId, requireJob, requirePersona, type Catalog, type CatalogJourney } from "./catalog.js";
 import { preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
+import { catalogRefIssues, describeRefIssue, jobSheetRefIssues } from "./catalog-refs.js";
 import { jevLayerOf, type JevSetup } from "./jev-advisor.js";
 
 /** #434/#435: what a review sheet asks of the pipeline beyond the defaults. */
@@ -86,7 +90,16 @@ export async function buildJobReview(catalog: Catalog, id: string, action: Appro
     ...(opts.jev === undefined ? {} : { jev: jevLayerOf(opts.jev) }),
     ...(job.approval === undefined ? {} : { approval: job.approval }),
     contentHash: job.contentHash,
+    ...jtbdFields(job.job),
+    refIssues: jobSheetRefIssues(catalog, id),
   });
+}
+
+/** #465: the job's jtbd fields as written, each only when present. */
+function jtbdFields(job: Job): Partial<JobReview> {
+  const { kind, parent, context, steps, desiredOutcomes, constraints, provenance, revision, lastValidated, extensions } = job;
+  const all = { kind, parent, context, steps, desiredOutcomes, constraints, provenance, revision, lastValidated, extensions };
+  return Object.fromEntries(Object.entries(all).filter(([, v]) => v !== undefined)) as Partial<JobReview>;
 }
 
 /** #433: `catalog status` — the jobs × personas matrix, gaps, unlinked Journeys, dangling links, stale approvals. */
@@ -135,6 +148,7 @@ export function buildCatalogStatus(catalog: Catalog): CatalogStatusReport {
     danglingLinks,
     stale,
     files: { personas: catalog.personasFile, jobs: catalog.jobsFile },
+    refIssues: catalogRefIssues(catalog),
   });
 }
 
@@ -270,6 +284,7 @@ export function renderJobReview(r: JobReview, style: Style): string {
     li(`Outcome (so I can): ${r.outcome}`),
     ...(r.priority === undefined ? [] : [li(`Priority: ${r.priority}`)]),
     "",
+    ...renderJobMap(r, style),
     h2("Personas"),
     "",
     ...(r.personas.length === 0
@@ -286,6 +301,7 @@ export function renderJobReview(r: JobReview, style: Style): string {
       ? [li(em("none"))]
       : r.journeys.map((j) => li(`${code(j.id)} — ${j.name}${j.persona === undefined ? "" : ` as ${j.persona}`} (${j.promoted ? "promoted" : "not promoted"})${j.needsReReview ? " — needs re-review" : ""}`))),
     "",
+    ...renderRefIssues(r.refIssues, style, "approving refuses a job with a structural problem (E_JOB_BROKEN_REF); the others are gaps"),
     ...renderFindings(r.findings, style),
     "",
     h2("Approve"),
@@ -293,6 +309,54 @@ export function renderJobReview(r: JobReview, style: Style): string {
     `Approve exactly this version: ${code(`jevitate job approve ${r.id} --reviewed-hash ${r.contentHash}`)}`,
   ];
   return finish(out);
+}
+
+/** #465: a metric in words: `duration p50 from a to b`, `abandon at x`, `answer got_it_done = yes`. */
+export function describeMetric(m: NonNullable<DesiredOutcome["metric"]>): string {
+  if (m.kind === "duration") return `duration ${m.stat}${m.threshold === undefined ? "" : ` ${m.threshold}s`} from ${m.from} to ${m.to}`;
+  if (m.kind === "completion") return `completion from ${m.from} to ${m.to}`;
+  if (m.kind === "answer") return `answer ${m.question} = ${m.value}`;
+  return `${m.kind} at ${m.at}`;
+}
+
+function outcomeLine(o: DesiredOutcome, code: (s: string) => string): string {
+  return [
+    `${code(o.id)}${o.guardrail === true ? " GUARDRAIL (must never get worse)" : ""}: ${o.direction} ${o.measure} — ${o.object}`,
+    o.clarifier === undefined ? "" : ` (${o.clarifier})`,
+    o.step === undefined ? " · whole job" : ` · step ${code(o.step)}`,
+    o.metric === undefined ? " · no metric" : ` · metric: ${describeMetric(o.metric)}`,
+    o.target === undefined ? "" : ` · target ${o.target.op} ${o.target.value} ${o.target.unit}`,
+    o.gulf === undefined ? "" : ` · gulf: ${o.gulf}`,
+    o.priority === undefined ? "" : ` · priority: ${o.priority}`,
+  ].join("");
+}
+
+/** #465: the job map — kind, parent, context, steps, desired outcomes, constraints, provenance, extensions (only what the job has). */
+function renderJobMap(r: JobReview, style: Style): string[] {
+  const { h2, li, code } = helpers(style);
+  const about = [
+    ...(r.kind === undefined ? [] : [li(`Kind: ${r.kind}`)]),
+    ...(r.parent === undefined ? [] : [li(`Parent job: ${code(r.parent)}`)]),
+    ...(r.context === undefined ? [] : [li(`Context: ${r.context.join("; ")}`)]),
+    ...(r.provenance === undefined ? [] : [li(`Provenance: ${r.provenance}`)]),
+    ...(r.revision === undefined ? [] : [li(`Revision: ${r.revision}`)]),
+    ...(r.lastValidated === undefined ? [] : [li(`Last validated: ${r.lastValidated}`)]),
+  ];
+  const section = (title: string, lines: string[]): string[] => (lines.length === 0 ? [] : [h2(title), "", ...lines, ""]);
+  return [
+    ...section("About the job", about),
+    ...section("Job steps", (r.steps ?? []).map((st) => li(`${code(st.id)} — ${st.name}${st.stage === undefined ? "" : ` (${st.stage})`}`))),
+    ...section("Desired outcomes", (r.desiredOutcomes ?? []).map((o) => li(outcomeLine(o, code)))),
+    ...section("Constraints", (r.constraints ?? []).map((c) => li(c))),
+    ...section("Extensions", Object.entries(r.extensions ?? {}).map(([ns, v]) => li(`${ns}: ${JSON.stringify(v)}`))),
+  ];
+}
+
+/** #465: the reference checks section (only when there are problems). */
+function renderRefIssues(issues: readonly CatalogRefIssue[] | undefined, style: Style, note: string): string[] {
+  const { h2, li } = helpers(style);
+  if (issues === undefined || issues.length === 0) return [];
+  return [h2("Reference checks"), "", ...issues.map((i) => li(`${i.severity}${i.structural ? " (structural)" : " (gap)"} ${describeRefIssue(i)}`)), "", note, ""];
 }
 
 const CELL = { "n/a": "·", promoted: "✓", draft: "draft", missing: "MISSING" } as const;
@@ -319,5 +383,6 @@ export function renderCatalogStatus(r: CatalogStatusReport): string {
   section("Journeys linked to nothing", r.unlinkedJourneys);
   section("Dangling links", r.danglingLinks.map((d) => `journey ${d.journey} → ${d.kind} '${d.id}' (not declared)`));
   section("Stale approvals (needs re-review)", r.stale.map((s) => `${s.kind} ${s.id}: ${s.reason}`));
+  section("Reference checks (warnings; a structural one refuses job approve)", (r.refIssues ?? []).map(describeRefIssue));
   return `${out.join("\n")}\n`;
 }

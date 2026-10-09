@@ -196,7 +196,18 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
     ],
   },
   "journey lint": { cases: [["nope"], ["../x"]] },
-  "journey review": { cases: [["nope"], ["../x"]] },
+  // #467: --stale takes no id (and none of one sheet's flags); neither an id nor --stale is refused.
+  "journey review": { cases: [["nope"], ["../x"], [], ["nope", "--stale"], ["--stale", "--markdown"]] },
+  // #467b: the migration must be named.
+  "journey migrate": { cases: [[], ["--dry-run"]] },
+  // #465b: a bad job id, --count outside 1-3, and no (or both) generation gateways.
+  "job draft-outcomes": { base: ["j", "--fake-ai"], cases: [["../x", "--fake-ai"], ["j", "--fake-ai", "--count", "4"], ["j", "--fake-ai", "--count", "0"], ["j"], ["j", "--real", "--fake-ai"]] },
+  // #470: exclusive sources, a traversal journey id, a missing run result.
+  "locator-health": { cases: [["--journey", "a", "--run", missing], ["--journey", "../x"], ["--run", missing]] },
+  // #464: an unknown bundle format; an unusable Journeeze URL (never a key flag: there is none).
+  "catalog export": { cases: [["--format", "csv", "--out", join(dir, "bundle")], ["--out", join(dir, "bundle")]] },
+  "connect journeeze": { cases: [["--url", "not-a-url"], ["--url", "ftp://journeeze.test"], ["--url", "https://u:p@journeeze.test"], ["--key", "jzu_x"]] },
+  "publish journeeze": { exempt: "#464: no file, id or number input — the bundle comes from the project's catalog and the key from jevitate's secret store" },
   // #433: an unknown persona/job, a malformed --reviewed-hash, an invalid catalog file.
   "persona review": { cases: [["nope"], ["nope", "--dir", badCatalog]] },
   "persona approve": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"], ["nope", "--accept-findings", " "]] },
@@ -348,6 +359,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--suite", suiteValid, "--out", join(dir, "check"), "--changes", "HEAD~1..HEAD"],
       ["--suite", suiteValid, "--out", join(dir, "check"), "--self-heal", "hybrid", "--changes", "a;id"],
       ["--suite", suiteValid, "--out", join(dir, "check"), "--self-heal", "hybrid"],
+      // #470: the brittle-step threshold is a non-negative integer.
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--max-brittle-steps", "-1"],
     ],
   },
   report: { cases: [["--since", "not-a-run-or-date"]] },

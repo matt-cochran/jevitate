@@ -232,3 +232,45 @@ describe("#453 review: committed proposals hold no credential", () => {
     expect((await readFile(w.path, "utf8")).includes(key)).toBe(false);
   });
 });
+
+describe("#467 step ids in proposals", () => {
+  const withIds = (): Journey => {
+    const base = baseJourney();
+    const page = base.recording.pages[0]!;
+    return { ...base, recording: { ...base.recording, pages: [{ ...page, steps: [{ ...page.steps[0]!, stepId: "s-fill01" }, { ...page.steps[1]!, stepId: "s-click1" }] }] } };
+  };
+  const namedDraft = (base: Journey, stepId: string): ProposedRevisionDraft => {
+    const d = draftOf(base);
+    return { ...d, steps: d.steps.map((s) => ({ ...s, stepId })) };
+  };
+
+  it("keeps the healed step's id in the proposed recording", async () => {
+    const base = withIds();
+    await write(base, namedDraft(base, "s-click1"));
+    expect((await readJourneyProposal(dir, "pub"))?.recording.pages[0]!.steps[1]!.stepId).toBe("s-click1");
+  });
+
+  it("names each changed step by its stepId beside its index", async () => {
+    const base = withIds();
+    await write(base, namedDraft(base, "s-click1"));
+    expect((await readJourneyProposal(dir, "pub"))?.steps[0]).toMatchObject({ index: 1, stepId: "s-click1" });
+  });
+
+  it("carries the broken step's stepId on each attempt", async () => {
+    const base = withIds();
+    await writeJourneyProposal(dir, { journeyId: "pub", base, draft: namedDraft(base, "s-click1"), attempts: [{ ...ATTEMPT, stepId: "s-click1" }], changes: {} });
+    expect((await readJourneyProposal(dir, "pub"))?.attempts[0]?.stepId).toBe("s-click1");
+  });
+
+  it("refuses a proposal whose step id is not the stored step's at that index", async () => {
+    const base = withIds();
+    await expect(write(base, namedDraft(base, "s-fill01"))).rejects.toBeInstanceOf(JourneyProposalProofError);
+  });
+
+  it("checkProposal refuses a pending proposal whose step id was edited", async () => {
+    const base = withIds();
+    await write(base, namedDraft(base, "s-click1"));
+    const p = (await readJourneyProposal(dir, "pub"))!;
+    expect(checkProposal(base, { ...p, steps: p.steps.map((s) => ({ ...s, stepId: "s-other1" })) })).toBeInstanceOf(JourneyProposalProofError);
+  });
+});

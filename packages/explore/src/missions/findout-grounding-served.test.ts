@@ -82,10 +82,10 @@ describe("find-out list answers ground (#236, #234)", () => {
         answer:
           "You are currently not subscribed to any plan. The available plans are:\n1. **Design Partner** — 250 credits / month for $300/month.\n2. **Startup Program** — 150 credits / month for $300/month.\n3. **Premium (annual)** — 2,000 credits / month for $45,000/year.",
         claims: [
-          { claim: "You are currently not subscribed to any plan.", quote: "No subscription" },
-          { claim: "Design Partner: 250 credits / month for $300/month", quote: "Design Partner — 250 credits / month for $300/month" },
-          { claim: "Startup Program: 150 credits / month for $300/month", quote: "Startup Program — 150 credits / month for $300/month" },
-          { claim: "Premium (annual): 2,000 credits / month for $45,000/year", quote: "Premium (annual) — 2,000 credits / month for $45,000/year" },
+          { claim: "You are currently not subscribed to any plan.", quote: "No subscription", absent: null },
+          { claim: "Design Partner: 250 credits / month for $300/month", quote: "Design Partner — 250 credits / month for $300/month", absent: null },
+          { claim: "Startup Program: 150 credits / month for $300/month", quote: "Startup Program — 150 credits / month for $300/month", absent: null },
+          { claim: "Premium (annual): 2,000 credits / month for $45,000/year", quote: "Premium (annual) — 2,000 credits / month for $45,000/year", absent: null },
         ],
       };
       const r = await run("/settings", "See what plan you're subscribed to and what other plans you could change to. Finish by reporting the current plan and the available plans.", [{ op: "report" }], answer);
@@ -100,7 +100,7 @@ describe("find-out list answers ground (#236, #234)", () => {
     "#234: section headings quoted one per line (non-contiguous on the page) ground as the page's list",
     async () => {
       const quote = "Workspace settings\nTeam\nPeople in this workspace. Invite teammates and manage roles.\nCredits\nPlans\nAPI keys\nDelete workspace or account";
-      const answer = { answer: "Team, Credits, Plans, API keys, Delete workspace or account", claims: [{ claim: "The settings page's sections", quote }] };
+      const answer = { answer: "Team, Credits, Plans, API keys, Delete workspace or account", claims: [{ claim: "The settings page's sections", quote, absent: null }] };
       const r = await run("/settings", "Find where your account and workspace settings live. Finish by reporting which sections are there.", [{ op: "report" }], answer);
       expect(reports(r)[0]).toMatch(/report accepted/);
       expect(r.outcome).toBe("succeeded");
@@ -112,7 +112,7 @@ describe("find-out list answers ground (#236, #234)", () => {
   it(
     "#234: a stitched quote with a line the page lacks is rejected with a repairable reason, and its identical resubmission is named as a repeat",
     async () => {
-      const answer = { answer: "Team and Billing history", claims: [{ claim: "The settings page's sections", quote: "Team\nBilling history" }] };
+      const answer = { answer: "Team and Billing history", claims: [{ claim: "The settings page's sections", quote: "Team\nBilling history", absent: null }] };
       const r = await run("/settings", "Find where your account and workspace settings live. Finish by reporting which sections are there.", [{ op: "report" }], answer);
       const rs = reports(r);
       expect(rs[0]).toMatch(/lines are not all on one page in that order — quote one contiguous passage, or give one claim per list entry/);

@@ -28,7 +28,7 @@ export const RUN_MODES: readonly RunMode[] = ["goal", "coverage", "adversarial",
  * are hard (independent code decided them); `advisory` (a 4xx-correlated console error, a Jev
  * flag) and `ux` (a usability rubric or signal finding) are advisory.
  */
-export type FindingCategory = "defect" | "hang" | "invariant" | "journey-assertion" | "journey-heal-pending" | "goal-check" | "advisory" | "ux" | "approval";
+export type FindingCategory = "defect" | "hang" | "invariant" | "journey-assertion" | "journey-heal-pending" | "goal-check" | "advisory" | "ux" | "approval" | "locator-health";
 
 /**
  * `pending` (#453): a self-heal proposed a Journey revision that a person has yet to accept — not a
@@ -37,7 +37,8 @@ export type FindingCategory = "defect" | "hang" | "invariant" | "journey-asserti
 export type Severity = "hard" | "advisory" | "pending";
 
 // #437: `approval` — `check --require-approvals` found an approval that is missing, stale or not made by a person at a terminal.
-const HARD: ReadonlySet<FindingCategory> = new Set(["defect", "hang", "invariant", "journey-assertion", "goal-check", "approval"]);
+// #470: `locator-health` — `check --max-brittle-steps` found a Journey with more brittle locator steps than the team allows (only raised when the opt-in gate is set).
+const HARD: ReadonlySet<FindingCategory> = new Set(["defect", "hang", "invariant", "journey-assertion", "goal-check", "approval", "locator-health"]);
 
 export function severityOf(category: FindingCategory): Severity {
   if (category === "journey-heal-pending") return "pending";
@@ -52,6 +53,11 @@ export interface FindingIdentity {
   readonly route?: string;
   /** The implicated control (e.g. `button "Save"`), when known. */
   readonly control?: string;
+  /**
+   * The implicated control's `data-tflow-id`, when known (#468). Metadata only: it is NOT part of
+   * `identityBasis`, so a finding's key never depends on it.
+   */
+  readonly tflowId?: string;
   /** The implicated request (`<status|kind> <endpoint template>`), when known. */
   readonly request?: string;
   /** The engine's stable fingerprint, when the finding has one — it is then the identity. */

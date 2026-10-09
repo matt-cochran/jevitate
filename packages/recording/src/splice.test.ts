@@ -34,6 +34,11 @@ function recording(pages: PageSegment[]): Recording {
   return { version: "1", site: "https://example.com", pages };
 }
 
+/** The pages without step ids (#467: splicing mints an id for every spliced-in step; ids are covered in step-ids.test.ts). */
+function withoutIds(pages: PageSegment[]): PageSegment[] {
+  return pages.map((p) => ({ ...p, steps: p.steps.map(({ stepId: _id, ...s }) => s) }));
+}
+
 describe("spliceRecording", () => {
   describe("mode: insert", () => {
     it("splices a 2-step segment in mid-recording, re-flowing pages/indices, and validates", () => {
@@ -50,7 +55,7 @@ describe("spliceRecording", () => {
       const result = spliceRecording(base, { page: 0, step: 1 }, segment, "insert");
 
       // Base page splits around the checkpoint: [A] | segment pages | [B, C]
-      expect(result.pages).toEqual([
+      expect(withoutIds(result.pages)).toEqual([
         { url: "/a", steps: [rs(A)] },
         { url: "/seg", steps: [rs(S1), rs(S2)] },
         { url: "/a", steps: [rs(B), rs(C)] },
@@ -75,7 +80,7 @@ describe("spliceRecording", () => {
       // Insert at step 0: nothing precedes the checkpoint on this page.
       const result = spliceRecording(base, { page: 0, step: 0 }, segment, "insert");
 
-      expect(result.pages).toEqual([
+      expect(withoutIds(result.pages)).toEqual([
         { url: "/seg", steps: [rs(S1)] },
         { url: "/a", steps: [rs(A), rs(B)] },
       ]);
@@ -94,7 +99,7 @@ describe("spliceRecording", () => {
       // on this page, so no "after" half should be emitted.
       const result = spliceRecording(base, { page: 0, step: 2 }, segment, "insert");
 
-      expect(result.pages).toEqual([
+      expect(withoutIds(result.pages)).toEqual([
         { url: "/a", steps: [rs(A), rs(B)] },
         { url: "/seg", steps: [rs(S1)] },
       ]);
@@ -132,7 +137,7 @@ describe("spliceRecording", () => {
 
       // One PageSegment for "/a", not three: before, segment, and after all
       // merge, steps in [before, segment, after] order.
-      expect(result.pages).toEqual([
+      expect(withoutIds(result.pages)).toEqual([
         { url: "/a", steps: [rs(A), rs(S1), rs(S2), rs(B), rs(C)] },
       ]);
       expect(RecordingSchema.safeParse(result).success).toBe(true);
@@ -153,7 +158,7 @@ describe("spliceRecording", () => {
 
       // [A] survives (before the checkpoint); B, C and the whole /b page are
       // dropped; segment's page is appended.
-      expect(result.pages).toEqual([
+      expect(withoutIds(result.pages)).toEqual([
         { url: "/a", steps: [rs(A)] },
         { url: "/seg", steps: [rs(S1)] },
       ]);
@@ -167,7 +172,7 @@ describe("spliceRecording", () => {
 
       const result = spliceRecording(base, { page: 0, step: 0 }, segment, "replace-from");
 
-      expect(result.pages).toEqual([page("/seg", [click("seg-1")])]);
+      expect(withoutIds(result.pages)).toEqual([page("/seg", [click("seg-1")])]);
     });
   });
 

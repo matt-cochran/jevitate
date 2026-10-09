@@ -125,6 +125,24 @@ export function savedAndLeft(
 }
 
 /**
+ * #463: a click whose target is a navigation control — a `tab`, or a nav item the page now marks
+ * current (`aria-current`) — and whose requests all settled (none pending, none failed; it may have
+ * sent none) went where it was asked. Returning to a tab already shown (Accounts → Billing →
+ * Accounts) is navigation, not an action that silently undid itself. A control that is no
+ * navigation (Confirm & Continue that drops back to the start) is never exempted here.
+ */
+export function settledNavigation(
+  label: string,
+  controls: readonly { readonly role: string; readonly name: string; readonly ariaCurrent?: string | null }[],
+  lastClick: { readonly settled: boolean } | null,
+): boolean {
+  if (!label.startsWith("click ") || lastClick?.settled !== true) return false;
+  return controls.some(
+    (c) => `click ${c.name}` === label && (c.role === "tab" || ((c.ariaCurrent ?? null) !== null && c.ariaCurrent !== "false")),
+  );
+}
+
+/**
  * Actions whose own name says "go back" (Back, Cancel, Close, Undo, …): returning to an earlier
  * state is exactly their target state, never a stall.
  */

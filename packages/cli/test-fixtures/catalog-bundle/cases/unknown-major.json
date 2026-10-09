@@ -1,0 +1,16 @@
+{
+  "description": "Version 2 is a different major: refused, never pruned.",
+  "base": "minimal",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/version",
+      "value": 2
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/version",
+    "keyword": "const"
+  }
+}

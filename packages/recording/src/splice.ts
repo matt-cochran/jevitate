@@ -1,5 +1,70 @@
-import type { Recording, PageSegment } from "./schema.js";
-import { RecordingSchema } from "./schema.js";
+import type { Recording, PageSegment, RecordedStep } from "./schema.js";
+import { RecordingSchema, mintStepId } from "./schema.js";
+
+// === Step ids (#467) ===
+
+/** Every `stepId` a recording's steps carry. */
+export function stepIdsOf(rec: Recording): Set<string> {
+  const ids = new Set<string>();
+  for (const p of rec.pages) for (const s of p.steps) if (s.stepId !== undefined) ids.add(s.stepId);
+  return ids;
+}
+
+/** Deterministic JSON (object keys sorted, undefined dropped). */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (v !== null && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .filter((k) => o[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson(o[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(v) ?? "null";
+}
+
+/**
+ * A `[0, 1)` generator seeded by the recording's content (FNV-1a → mulberry32): minting the same
+ * id-less recording twice gives the same ids, so writing one Journey to two stores (a staging store,
+ * then the real one) — or re-writing it — never churns its ids or its content hash.
+ */
+function seededRandom(rec: Recording): () => number {
+  let h = 0x811c9dc5;
+  const text = canonicalJson(rec);
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  let a = h;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * #467: `rec` with a new stable id (`mintStepId`) on every step that lacks one, unique within the
+ * recording; a step that has one keeps it. Returns `rec` itself (same object) when every step
+ * already has an id, so a write of an id-complete recording never changes it. `random` defaults to a
+ * generator seeded by `rec`'s content (deterministic). Never removes or renames an id; duplicate ids
+ * are left for `RecordingSchema` to refuse.
+ */
+export function ensureStepIds(rec: Recording, random?: () => number): Recording {
+  if (rec.pages.every((p) => p.steps.every((s) => s.stepId !== undefined))) return rec;
+  const taken = stepIdsOf(rec);
+  const draw = random ?? seededRandom(rec);
+  const mint = (s: RecordedStep): RecordedStep => {
+    if (s.stepId !== undefined) return s;
+    const stepId = mintStepId(taken, draw);
+    taken.add(stepId);
+    return { ...s, stepId };
+  };
+  return { ...rec, pages: rec.pages.map((p) => ({ ...p, steps: p.steps.map(mint) })) };
+}
 
 /**
  * A checkpoint position within a `Recording`: `pages[page].steps[step]`.
@@ -47,6 +112,10 @@ export type SpliceMode = "insert" | "replace-from";
  * are merged (never across a differing-url page in between), so a segment
  * that genuinely navigates to a different URL still becomes its own page.
  *
+ * Step ids (#467): every base step that survives keeps its `stepId`. A spliced-in step keeps its
+ * own id unless a kept base step already has it; a spliced-in step with no id, or a colliding one,
+ * gets a newly minted id unique within the result.
+ *
  * Pure: neither `base` nor `segment` is mutated, and the same inputs always
  * produce the same output. Fails closed: the result is validated against
  * `RecordingSchema` before being returned, so a caller can never receive a
@@ -84,7 +153,27 @@ export function spliceRecording(
     newPages.push({ ...targetPage, steps: beforeSteps });
   }
 
-  newPages.push(...segment.pages);
+  const keptBase: PageSegment[] = [...newPages];
+  if (mode === "insert") {
+    if (afterSteps.length > 0) keptBase.push({ ...targetPage, steps: afterSteps });
+    keptBase.push(...base.pages.slice(at.page + 1));
+  }
+  // A spliced-in step keeps its id only when no kept base step (nor an earlier spliced-in step) has it.
+  const claimed = stepIdsOf({ ...base, pages: keptBase });
+  const segmentPages: PageSegment[] = segment.pages.map((p) => ({
+    ...p,
+    steps: p.steps.map((s) => {
+      if (s.stepId === undefined) return s;
+      if (claimed.has(s.stepId)) {
+        const { stepId: _dropped, ...rest } = s;
+        return rest;
+      }
+      claimed.add(s.stepId);
+      return s;
+    }),
+  }));
+
+  newPages.push(...segmentPages);
 
   if (mode === "insert") {
     if (afterSteps.length > 0) {
@@ -94,16 +183,36 @@ export function spliceRecording(
   }
   // "replace-from": afterSteps and every following base page are dropped.
 
-  const result: Recording = {
-    ...base,
-    pages: mergeAdjacentSameUrlPages(newPages),
-  };
+  const result: Recording = ensureSegmentIds(
+    { ...base, pages: mergeAdjacentSameUrlPages(newPages) },
+    new Set(segmentPages.flatMap((p) => p.steps)),
+  );
 
   const validation = RecordingSchema.safeParse(result);
   if (!validation.success) {
     throw new Error(`Recording validation failed: ${validation.error.message}`);
   }
   return validation.data;
+}
+
+/** `rec` with an id minted for each spliced-in step (by identity in `spliced`) that has none. */
+function ensureSegmentIds(rec: Recording, spliced: ReadonlySet<RecordedStep>): Recording {
+  const missing = rec.pages.some((p) => p.steps.some((s) => spliced.has(s) && s.stepId === undefined));
+  if (!missing) return rec;
+  const taken = stepIdsOf(rec);
+  const draw = seededRandom(rec);
+  return {
+    ...rec,
+    pages: rec.pages.map((p) => ({
+      ...p,
+      steps: p.steps.map((s) => {
+        if (!spliced.has(s) || s.stepId !== undefined) return s;
+        const stepId = mintStepId(taken, draw);
+        taken.add(stepId);
+        return { ...s, stepId };
+      }),
+    })),
+  };
 }
 
 /**

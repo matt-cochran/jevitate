@@ -58,7 +58,7 @@ afterAll(async () => {
 
 const QUOTED: SuccessCheck = { kind: "requestMade", method: "POST", pathGlob: "/v1/billing/action-quote" };
 const GOAL = "Refine one of your customer types into more specific variations. Stop at the price and don't pay. Finish by reporting the price shown.";
-const PRICE = { answer: "40 credits", claims: [{ claim: "The price shown is 40 credits", quote: "Price: 40 credits" }] };
+const PRICE = { answer: "40 credits", claims: [{ claim: "The price shown is 40 credits", quote: "Price: 40 credits", absent: null }] };
 
 async function run(steps: ScriptedStep[], goal = GOAL): Promise<GoalBasedResult> {
   return withSession(

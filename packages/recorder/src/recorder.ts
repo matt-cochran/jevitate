@@ -649,6 +649,8 @@ function toFacts(raw: unknown): ElementFacts | undefined {
     value: str(f.value),
     labelText: str(f.labelText),
     testId: str(f.testId),
+    testIdAttr: str(f.testIdAttr),
+    tflowId: str(f.tflowId),
     css: str(f.css),
   };
 }

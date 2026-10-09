@@ -1,0 +1,16 @@
+{
+  "description": "Closed vocabulary: `measure` is time, likelihood, effort or count.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/catalog/jobs/0/desiredOutcomes/0/measure",
+      "value": "speed"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/catalog/jobs/0/desiredOutcomes/0/measure",
+    "keyword": "enum"
+  }
+}

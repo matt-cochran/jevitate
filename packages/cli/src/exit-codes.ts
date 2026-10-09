@@ -89,6 +89,21 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_HUMAN_APPROVAL_REQUIRED", // #254: `inbox approve`/`cancel` — human-only, in `jevitate ui` (MCP's human_approval_required)
   "E_INBOX_INPUT_PENDING", // #254: `inbox command` would consume a human's unread input; pass --reveal to receive it
   "E_MISSION_QUEUE_REFUSED", // #254: `mission queue` — unknown/unpromoted target, bad shape, over-ceiling budget, invalid invariants
+  // #464: Journeeze refusals where nothing was sent or a person must act (connect, a valid key, a pinned
+  // host). E_JOURNEEZE_REF/_CONFIG are usage by suffix; _BUNDLE, _CONFLICT, _UNAVAILABLE, _HTTP and
+  // _REDIRECT stay 2 (the publish could not finish).
+  "E_JOURNEEZE_URL",
+  "E_JOURNEEZE_ORIGIN",
+  "E_JOURNEEZE_NOT_CONNECTED",
+  "E_JOURNEEZE_KEY_FORMAT",
+  "E_JOURNEEZE_KEY_UNRESOLVABLE",
+  "E_JOURNEEZE_KEY_REFUSED",
+  "E_JOURNEEZE_KEY_REVOKED",
+  "E_JOURNEEZE_FORBIDDEN",
+  "E_CONNECT_NEEDS_TTY", // `connect journeeze` without a terminal: a person connects (CI uses JOURNEEZE_UPLOAD_KEY)
+  "E_CONNECT_NEEDS_HUMAN", // `connect journeeze` inside an MCP call
+  "E_CONNECT_DECLINED", // the person declined the product at the confirmation — nothing was saved
+  "E_JOURNEY_ANCHOR_RULES", // #466: `journey promote` of a Journey breaking the 0.10 anchor rules — fix the Journey
 ]);
 
 /** True when a refused command's error code is a usage/input error (exit 64). */

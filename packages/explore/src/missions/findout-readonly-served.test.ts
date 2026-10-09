@@ -112,8 +112,8 @@ const ANSWER = {
   "goal.answer": {
     answer: "Design Partner costs $299/mo for 24 months, then moves to Validate. It includes 2FA and the v2 API.",
     claims: [
-      { claim: "Design Partner costs $299/mo for 24 months, then Validate", quote: "Design Partner: $299/mo · 24 months, then Validate" },
-      { claim: "It includes 2FA and the v2 API", quote: "Every plan includes 2FA and the v2 API" },
+      { claim: "Design Partner costs $299/mo for 24 months, then Validate", quote: "Design Partner: $299/mo · 24 months, then Validate", absent: null },
+      { claim: "It includes 2FA and the v2 API", quote: "Every plan includes 2FA and the v2 API", absent: null },
     ],
   },
 };
@@ -201,7 +201,7 @@ describe("read-only blocks only what an action fires — the app's own writes pa
     "a timer-driven rotating token refresh and a heartbeat go through (session stays valid); a click-triggered POST is aborted",
     async () => {
       const gen = new FakeGenerationGateway({
-        "goal.answer": { answer: "12 of 250 seats are used.", claims: [{ claim: "12 of 250 seats are used", quote: "Seats used: 12 of 250" }] },
+        "goal.answer": { answer: "12 of 250 seats are used.", claims: [{ claim: "12 of 250 seats are used", quote: "Seats used: 12 of 250", absent: null }] },
       });
       // Controls: [0] Show usage. Wait (background only), click (its POST is blocked), wait, report.
       const { result } = await run(

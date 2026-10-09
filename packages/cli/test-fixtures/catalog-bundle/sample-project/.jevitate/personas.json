@@ -1,0 +1,27 @@
+[
+  {
+    "name": "reviewer",
+    "description": "Someone who judges review items on the board",
+    "role": "reviewer",
+    "seniority": "any",
+    "storageState": "state/reviewer.json",
+    "login": {
+      "journey": "sign-in"
+    },
+    "approval": {
+      "contentHash": "f76279fa83b9b92e80e811525dcba7a02fef8e1f51a840f43eec1f1272ad2c8f",
+      "at": "2026-10-09T12:00:00.000Z",
+      "provenance": {
+        "channel": "tty",
+        "agentSignals": [],
+        "user": "someone-local",
+        "reason": "reviewed at the desk"
+      }
+    }
+  },
+  {
+    "name": "admin",
+    "description": "Someone who manages the team and its projects",
+    "role": "owner"
+  }
+]

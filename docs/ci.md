@@ -42,6 +42,131 @@ pass or fail:
   branch protection: see [what "human approval" guarantees](./catalog.md#what-human-approval-guarantees).
   `jevitate catalog status --require-approvals` is the same check on its own (exit 1).
 
+### Approvals verified from pull-request reviews (`pr-review`)
+
+`pr-review` (#469) is an approval channel a team can **allow** but no one can **claim**: no flag,
+file field or MCP argument sets it. jevitate records it only when it verifies, itself, through the
+GitHub API with the CI job's own `GITHUB_TOKEN`, that the entry being approved came from a merged
+pull request someone else approved:
+
+- the run is GitHub Actions on github.com (`GITHUB_ACTIONS=true`; a `GITHUB_API_URL` or
+  `GITHUB_SERVER_URL` naming another host, i.e. GitHub Enterprise, is refused), on a **push to the
+  default branch** — never a `pull_request*` event, whose pull request controls the very files it
+  would approve;
+- the entry's file on the default branch holds the content being approved, and the commit that
+  last changed it is on the default branch and belongs to a pull request merged into it;
+- that pull request has an `APPROVED` review on its head commit by a person (not a bot) who is not
+  its author, authored or committed none of its commits, and has write access;
+- with `JEVITATE_PR_REVIEW_REQUIRE_CODEOWNER=1`, that reviewer must also be a CODEOWNER of the
+  entry's file (the default branch's CODEOWNERS).
+
+**Recording it.** Run the ordinary approve commands in a workflow on push to the default branch:
+`jevitate journey promote <id>`, `jevitate job approve <id>`, `jevitate persona approve <id>`. With
+no terminal they first ask the forge; on success the approval is recorded with `provenance.channel:
+"pr-review"` and the pull request (number, reviewer, author, merged sha). When the forge does not
+confirm it, the reason is printed (`pr-review not granted for journey 'checkout': …`) and the
+command falls back to the usual rules: refused with `E_APPROVAL_NEEDS_HUMAN` (exit 64), or recorded
+as `ci` with `--non-interactive-approval "<reason>"`. An approval with a waiver (`--accept-weak`,
+`--accept-unvetted`, `--accept-findings`) or a self-heal proposal (`--proposal`) is never
+`pr-review` — no reviewer saw the waiver — and neither is `demo approve <aspect>`, which renders a
+new draft no pull request contained. The approval is written to the checkout like any other; commit
+it back through your normal pull-request flow (approval bookkeeping is outside the content hash,
+so that commit does not count as a change to the entry).
+
+**Enforcing it.** `jevitate check --require-approvals --allow-channels tty,pr-review` (or `catalog
+status --require-approvals --allow-channels …`) re-verifies every recorded `pr-review` approval
+through the forge, on any event. One the forge does not confirm — hand-written, re-verified without
+a token, offline — is an `unverified` violation, never a pass. A verified approval also requires
+the content at the pull request's approved head to be exactly the approved content (`pr-mismatch`
+otherwise), so an intermediate or merge-resolved change no reviewer saw never passes. Positive
+re-verifications are cached for 24 hours under `<.jevitate>/cache/pr-review/`, keyed by the merged
+sha (`cache/` is in the `.gitignore` `jevitate init` writes). The cache is ignored entirely when any
+file in it is tracked by git — a committed "verified" entry would be a claim, not a verification —
+or when any part of its path is a symlink, and it is never read or written on a pull-request event.
+
+```yaml
+name: jevitate approvals
+on:
+  push: { branches: [main] }
+permissions: { contents: read, pull-requests: read }
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm i -g @jevitate/cli
+      - name: Record pr-review approvals
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          JEVITATE_PR_REVIEW_REQUIRE_CODEOWNER: "1"   # optional
+        run: jevitate journey promote checkout && jevitate job approve invite-teammate
+```
+
+On the gate side, give the `jevitate check` step the same `env: GITHUB_TOKEN: ${{ github.token }}`
+and `permissions` (`contents: read, pull-requests: read`), and pass `--require-approvals
+--allow-channels pr-review` (plus `tty` if people also approve at a terminal).
+
+### Locator health in CI (`--max-brittle-steps`)
+
+Every Journey item of a check reports its **locator health** (#470): per step, the selector rung its
+target resolved by and whether it meets the project's test-id convention
+([locator health](./journeys.md#locator-health)). It is advisory by default:
+
+- each Journey item's fixes are **JUnit warnings** on its test case (a `<property name="warning">`
+  per fix and `WARNING: …` lines in its output) — never a failure;
+- each element to fix is a **SARIF warning** (rule `jevitate/locator-health/brittle-locator`,
+  `level: warning`, `gating: false`), de-duplicated by element across Journeys;
+- `check.json` has `locatorHealth` (`journeys`, `stable`, `brittle`, the `testIdAttributes` in
+  force, a summary `line`) and, with `--baseline`, its `trend` (steps improved / regressed and the
+  brittle delta against the baseline run's Journeys).
+
+`--max-brittle-steps <n>` is the opt-in gate: a Journey item with more than `n` brittle steps gets
+a hard `locator-health` finding (exit 1, with `jevitate locator-health --journey <id>` as its
+reproduction), and the per-step warnings are left out (the finding carries them). With the gate,
+a malformed `.jevitate/project.json` refuses the check before anything runs (`E_CHECK_SUITE`, exit
+64) instead of gating on a guessed convention; without it, the defaults apply.
+
+### Machine baselines in `check.json`
+
+A Journey item that ran clean records, in `check.json`, the review hash of the Journey it replayed
+(`journeyHash`) and its machine `baseline` (#469): `steps`, `totalMs` (first step's start to the last
+step's completion) and `anchors[]` — `job_start` at 0, each of the Journey's anchors with its
+`step`, `stepId` and `atMs` (milliseconds to that step's completion), and `job_end`. A run that did
+not complete records no baseline. `jevitate catalog export` / `publish journeeze` read these from
+`jevitate-check/check.json` (the `--out` default) to send them to Journeeze.
+
+### Publishing the catalog to Journeeze from CI
+
+`jevitate publish journeeze` exports the catalog bundle (personas, jobs, promoted Journeys with
+their approvals, check results with their baselines, findings; no media in 0.10) and uploads it to
+the connected Journeeze product ([the catalog](./catalog.md)). In CI there is no terminal to
+`connect` from: set the product's upload key as `JOURNEEZE_UPLOAD_KEY` (a CI secret; never a flag or
+argument) and, for a non-default host, `JOURNEEZE_URL` (a bare origin; the key is only ever sent to
+`https://app.journeeze.dev`, `https://app.staging.journeeze.dev`, or a loopback host).
+
+```yaml
+      - name: jevitate check
+        run: jevitate check --suite ci/jevitate-suite.json --real --target-build ${{ github.sha }}
+      - name: Publish to Journeeze
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          JOURNEEZE_UPLOAD_KEY: ${{ secrets.JOURNEEZE_UPLOAD_KEY }}
+        run: jevitate publish journeeze --json
+```
+
+`--dry-run` exports and validates the bundle and resolves the key and URL, but sends nothing.
+Exit codes: `0` imported (or a dry run) · `1` Journeeze refused the bundle (its errors are in the
+result) · `64` a setup problem nothing was sent for — `E_JOURNEEZE_NOT_CONNECTED` (no key),
+`E_JOURNEEZE_KEY_FORMAT`, `E_JOURNEEZE_URL`/`E_JOURNEEZE_ORIGIN` (an unpinned host),
+`E_JOURNEEZE_KEY_REFUSED`/`E_JOURNEEZE_KEY_REVOKED`/`E_JOURNEEZE_FORBIDDEN` (the key is invalid,
+revoked or lacks the upload scope) · `2` the upload could not finish — `E_JOURNEEZE_UNAVAILABLE`
+(retry later; the same bundle reuses its Idempotency-Key), `E_JOURNEEZE_CONFLICT`,
+`E_JOURNEEZE_HTTP`, `E_JOURNEEZE_BUNDLE`. The key never appears in a result, an error or a file.
+Publishing never approves anything.
+
 ### Self-heal in CI (`--self-heal`)
 
 `jevitate check --suite … --self-heal hybrid|full --changes origin/main...HEAD [--change-note <text>] --fake-ai|--real`
@@ -80,7 +205,7 @@ Outputs go under `--out` (default `jevitate-check/`):
 | `results/` | every run's persisted result (what `report`, `diff` and `baseline tag` read) |
 | `junit.xml` | one `<testsuite>` per target, one `<testcase>` per item (`--junit` to move it) |
 | `jevitate.sarif` | SARIF 2.1.0, one result per finding, keyed by its finding key (`--sarif`) |
-| `check.json` | the JSON envelope, also a run reference for `diff`/`baseline tag` (`--json-out`) |
+| `check.json` | the JSON envelope, also a run reference for `diff`/`baseline tag` (`--json-out`); also each clean Journey item's machine `baseline` and the `locatorHealth` summary (below) |
 | `report.md` | the consolidated defect list, with the baseline diff |
 
 The suite schema (validated in full before any browser opens; an unknown field is refused, and
@@ -277,7 +402,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 22 }
       - run: npm i -g @jevitate/cli && jevitate install-browser --with-deps
       - name: Changed routes
         id: routes

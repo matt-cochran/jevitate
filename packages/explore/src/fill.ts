@@ -166,12 +166,53 @@ export const GOAL_ECHO_RUN_CHARS = 40;
 
 const words = (s: string): string[] => s.toLowerCase().match(/[\p{L}\p{N}$]+(?:['’][\p{L}]+)?/gu) ?? [];
 
+const QUOTE_CLOSER: Readonly<Record<string, string>> = { '"': '"', "\u201c": "\u201d", "\u2018": "\u2019", "`": "`", "'": "'" };
+const isWordChar = (c: string | undefined): boolean => c !== undefined && /[\p{L}\p{N}]/u.test(c);
+
+/**
+ * #461: the quoted span OPENING at `s[at]`, paired with its own closer — `"`…`"`, `“`…`”`, `‘`…`’`,
+ * backtick…backtick, `'`…`'`. A single-quote form opens only at a word boundary and closes only before a
+ * non-word char, so an apostrophe ("don't") never opens or ends a span. `null` when nothing opens there
+ * or no closer follows within `max` chars on the line; `text` is the inside, `end` is past the closer.
+ */
+export function quoteSpanAt(s: string, at: number, max: number): { text: string; end: number } | null {
+  const open = s[at];
+  if (open === undefined) return null;
+  const close = QUOTE_CLOSER[open];
+  if (close === undefined) return null;
+  const apostrophic = open === "'" || open === "\u2018";
+  if (apostrophic && isWordChar(s[at - 1])) return null;
+  for (let j = at + 1; j < s.length && j <= at + max + 1; j++) {
+    const c = s[j];
+    if (c === "\n") return null;
+    if (c !== close) continue;
+    if (apostrophic && isWordChar(s[j + 1])) continue;
+    return { text: s.slice(at + 1, j), end: j + 1 };
+  }
+  return null;
+}
+
+/** #461: every quoted span of `s`, left to right, each opener paired only with its own closer (empty pairs skipped). */
+export function quoteSpans(s: string, max = 200): { text: string; start: number; end: number }[] {
+  const out: { text: string; start: number; end: number }[] = [];
+  for (let i = 0; i < s.length; ) {
+    const span = QUOTE_CLOSER[s[i]!] === undefined ? null : quoteSpanAt(s, i, max);
+    if (span === null) {
+      i++;
+      continue;
+    }
+    if (span.text !== "") out.push({ text: span.text, start: i, end: span.end });
+    i = span.end;
+  }
+  return out;
+}
+
 /**
  * Segments the goal puts in quotes, or states `exactly: <text>` (#185): a value the goal states
  * verbatim is a stated value, never an echo.
  */
 function quotedSegments(goal: string): string[] {
-  return [...[...goal.matchAll(/["“'‘\u0060]([^"”'’\u0060\n]{1,200})["”'’\u0060]/gu)].map((m) => m[1] ?? ""), ...exactLiterals(goal)];
+  return [...quoteSpans(goal).map((q) => q.text), ...exactLiterals(goal)];
 }
 
 /**
@@ -179,9 +220,20 @@ function quotedSegments(goal: string): string[] {
  * `set it to exactly "<text>"` — up to the sentence's end; label-free, so the caller decides the field.
  */
 export function exactLiterals(goal: string): string[] {
-  const quoted = String.raw`["“'‘\u0060]([^"”'’\u0060\n]{1,500})["”'’\u0060]`;
-  const re = new RegExp(String.raw`\bexactly\s*[:=]?\s*(?:${quoted}|(?!["“'‘\u0060])(\S.{0,499}?)(?=\.(?:\s|$)|[\n;]|\s*$))`, "giu");
-  return [...goal.matchAll(re)].map((m) => (m[1] ?? m[2] ?? "").trim()).filter((v) => v !== "");
+  const out: string[] = [];
+  for (const m of goal.matchAll(/\bexactly\s*[:=]?\s*/giu)) {
+    const at = m.index + m[0].length;
+    if (QUOTE_CLOSER[goal[at] ?? ""] !== undefined) {
+      const q = quoteSpanAt(goal, at, 500);
+      if (q !== null) out.push(q.text.trim());
+      continue;
+    }
+    const bare = /(\S.{0,499}?)(?=\.(?:\s|$)|[\n;]|\s*$)/uy;
+    bare.lastIndex = at;
+    const b = bare.exec(goal);
+    if (b !== null) out.push((b[1] ?? "").trim());
+  }
+  return out.filter((v) => v !== "");
 }
 
 /** #338: the imperatives a goal's instruction clause opens with (see `INSTRUCTION_VERBS`). */
@@ -213,7 +265,12 @@ function goalValueSpans(goal: string): { spans: string[]; prose: string } {
       const at = m.lastIndexOf(span);
       return `${m.slice(0, at)} ; ${m.slice(at + span.length)}`;
     });
-  let prose = cut(/["“'‘\u0060]([^"”'’\u0060\n]{1,200})["”'’\u0060]/gu, goal);
+  let prose = goal;
+  for (const q of quoteSpans(goal).reverse()) {
+    if (q.text.trim() === "") continue;
+    spans.unshift(q.text.trim());
+    prose = `${prose.slice(0, q.start + 1)} ; ${prose.slice(q.end - 1)}`;
+  }
   for (const literal of exactLiterals(goal)) {
     spans.push(literal);
     prose = prose.split(literal).join(" ; ");
@@ -502,8 +559,11 @@ export function valuesStatedInGoal(goal: string, fieldLabel: string, field: Fiel
   if (label !== "" && label.length <= 60) {
     const l = escapeRe(label).replace(/ /g, "\\s+");
     const head = String.raw`(?<![\p{L}\p{N}])${l}(?![\p{L}\p{N}])(?:\s+(?:field|input|box))?(?:\s+value)?`;
-    const quoted = String.raw`["“'‘\u0060]([^"”'’\u0060\n]{1,200})["”'’\u0060]`;
-    for (const m of goal.matchAll(new RegExp(String.raw`${head}\s*(?:[:=]|\bis\b|\bas\b|\bof\b|\bto\b)?\s*${quoted}`, "giu"))) add(m[1]);
+    // #461: a quoted value opens right after the label and pairs with its own closer.
+    const opener = String.raw`(?=["“'‘\u0060])`;
+    for (const m of goal.matchAll(new RegExp(String.raw`${head}\s*(?:[:=]|\bis\b|\bas\b|\bof\b|\bto\b)?\s*${opener}`, "giu"))) {
+      add(quoteSpanAt(goal, m.index + m[0].length, 200)?.text);
+    }
     for (const m of goal.matchAll(new RegExp(String.raw`${head}\s*[:=]\s*(?!["“'‘\u0060])(\S.{0,199}?)${VALUE_END}`, "giu"))) add(m[1]);
     if (found.size === 0) {
       for (const m of goal.matchAll(new RegExp(String.raw`${head}\s+(?:(?:is|as|of|to)\s+)?(?!["“'‘\u0060])(\S.{0,79}?)${WORD_VALUE_END}`, "giu"))) {
@@ -511,9 +571,33 @@ export function valuesStatedInGoal(goal: string, fieldLabel: string, field: Fiel
       }
     }
     if (found.size === 0 && /\b(?:name|title)\b/i.test(label)) {
-      for (const m of goal.matchAll(new RegExp(String.raw`\b(?:named|called|titled)\s+(?:${quoted}|(\S+?)${WORD_VALUE_END})`, "giu"))) {
-        add(m[1] ?? m[2]);
+      for (const m of goal.matchAll(/\b(?:named|called|titled)\s+/giu)) {
+        const at = m.index + m[0].length;
+        if (QUOTE_CLOSER[goal[at] ?? ""] !== undefined) {
+          const q = quoteSpanAt(goal, at, 200);
+          if (q !== null) {
+            add(q.text);
+            continue;
+          }
+        }
+        const bare = new RegExp(String.raw`(\S+?)${WORD_VALUE_END}`, "iuy");
+        bare.lastIndex = at;
+        add(bare.exec(goal)?.[1]);
       }
+    }
+  }
+  // #461: `enter '<v>'` with no label of its own binds to this field when the goal mentions the field's
+  // label and gives exactly one such typed value, not aimed at another named field ("… in the Name field").
+  if (found.size === 0 && label !== "" && (field.tag === "input" || field.tag === "textarea")) {
+    const verbs = [...goal.matchAll(/\b(?:enter|type|input|fill(?:\s+in)?|put)\s+(?=["“'‘\u0060])/giu)];
+    const typed = verbs.flatMap((m) => {
+      const q = quoteSpanAt(goal, m.index + m[0].length, 200);
+      return q === null ? [] : [q];
+    });
+    const labelRe = new RegExp(String.raw`(?<![\p{L}\p{N}])${escapeRe(label).replace(/ /g, "\\s+")}(?![\p{L}\p{N}])`, "iu");
+    if (typed.length === 1 && labelRe.test(goal)) {
+      const aimed = /^\s*(?:in|into|to|for)\s+(?:the\s+)?([^,.;\n]{1,40}?)\s+(?:field|input|box)\b/iu.exec(goal.slice(typed[0]!.end));
+      if (aimed === null || labelRe.test(aimed[1] ?? "")) add(typed[0]!.text);
     }
   }
   // #281: a passage the goal quotes as the text to type ("import this text: \"…\"") — typed VERBATIM,
@@ -729,7 +813,7 @@ export class FillHelper {
 }
 
 /**
- * The option a generated select value names — exact, then case/whitespace-insensitive. `null` when
+ * The option a generated select value names — exact, then case/whitespace-insensitive, then the one option holding every wanted word (#462). `null` when
  * it names none: the caller never selects a guessed option.
  */
 export function matchOption(text: string, options: readonly string[]): string | null {
@@ -745,7 +829,18 @@ export function matchOption(text: string, options: readonly string[]): string | 
   const exact = options.find((o) => o === text);
   if (exact !== undefined) return exact;
   const t = n(text);
-  return options.find((o) => n(o) === t) ?? null;
+  const same = options.find((o) => n(o) === t);
+  if (same !== undefined) return same;
+  // #462: a loosely named option ("own rules" for "Own rules only") — only when exactly one option holds
+  // every wanted word (or the wanted phrase whole); none or several stay null, so the select fails closed.
+  const tokens = (x: string): string[] => x.match(/[\p{L}\p{N}$]+/gu) ?? [];
+  const wanted = tokens(t);
+  if (wanted.length === 0) return null;
+  const loose = options.filter((o) => {
+    const have = new Set(tokens(n(o)));
+    return wanted.every((w) => have.has(w));
+  });
+  return loose.length === 1 ? loose[0]! : null;
 }
 
 /**

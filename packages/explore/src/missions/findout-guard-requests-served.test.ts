@@ -135,7 +135,7 @@ describe("#253: a find-out submit is judged by the requests it sends", () => {
         "form.value": { text: "demo" },
         "goal.answer": {
           answer: "Workspace demo earns $120 revenue and costs $45.",
-          claims: [{ claim: "revenue $120, cost $45", quote: "Revenue: $120 · Cost: $45" }],
+          claims: [{ claim: "revenue $120, cost $45", quote: "Revenue: $120 · Cost: $45", absent: null }],
         },
       });
       // Controls: [0] Workspace id, [1] Load, [2] Credits, [3] Grant credits, [4] Record.
@@ -168,7 +168,7 @@ describe("#270: a goal without a success check never destroys without --allow-wr
     new FakeGenerationGateway({
       "goal.answer": {
         answer: "The settings page lists the product Acme Analytics but offers no way to remove it.",
-        claims: [{ claim: "the product is Acme Analytics", quote: "Product: Acme Analytics" }],
+        claims: [{ claim: "the product is Acme Analytics", quote: "Product: Acme Analytics", absent: null }],
       },
     });
 
