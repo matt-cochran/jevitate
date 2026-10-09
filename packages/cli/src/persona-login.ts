@@ -230,6 +230,28 @@ function fieldBySpec(page: Page, spec: string): Locator[] {
   return [page.getByLabel(spec, { exact: true }), page.getByLabel(spec), page.locator(spec)];
 }
 
+/**
+ * Waits (bounded by `timeoutMs`) until a login field is visible: any candidate from the user list or
+ * the password list. A client-rendered form (an SPA that mounts after load) therefore gets its chance
+ * before the "no username field" verdict. A timeout (or a candidate selector that is not CSS) is
+ * swallowed, so the existing field-not-found errors are still what the operator sees.
+ */
+async function waitForLoginField(page: Page, login: PersonaLogin, timeoutMs: number): Promise<void> {
+  const candidates = [
+    ...(login.userField === undefined ? userCandidates(page) : fieldBySpec(page, login.userField)),
+    ...(login.passwordField === undefined ? passwordCandidates(page) : fieldBySpec(page, login.passwordField)),
+  ];
+  try {
+    await candidates
+      .map((c) => c.filter({ visible: true }))
+      .reduce((a, b) => a.or(b))
+      .first()
+      .waitFor({ state: "visible", timeout: timeoutMs });
+  } catch {
+    // No field appeared within the bound (or a candidate was not a valid selector): the lookups below decide.
+  }
+}
+
 function userCandidates(page: Page): Locator[] {
   return [
     page.locator(`${TEXT_INPUT}[autocomplete~="username"]`),
@@ -380,6 +402,7 @@ export async function performLogin(page: Page, login: PersonaLogin, secrets: Log
   try {
     await page.goto(login.url, { waitUntil: "load", timeout: t });
     assertPageAuthorized(page, opts.allowlist);
+    await waitForLoginField(page, login, t);
     const findUser = async (): Promise<Locator | undefined> => firstVisible(login.userField === undefined ? userCandidates(page) : fieldBySpec(page, login.userField));
     const findPassword = async (): Promise<Locator | undefined> =>
       firstVisible(login.passwordField === undefined ? passwordCandidates(page) : fieldBySpec(page, login.passwordField));

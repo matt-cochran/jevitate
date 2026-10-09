@@ -45,11 +45,31 @@ const loginPage = (error: string): string =>
     <button type="submit">Sign in</button>
   </form></body></html>`;
 
+// The same form as `loginPage`, but inserted by an inline script ~1.5 s after load (a client-rendered form).
+const lazyLoginPage = (): string =>
+  `<!doctype html><html><head><title>Sign in</title></head><body><div id="root"></div>
+  <script>
+    setTimeout(function () {
+      document.getElementById("root").innerHTML = ${JSON.stringify(
+        `<h1>Sign in</h1>
+  <form method="post" action="/login">
+    <label for="e">Email</label><input id="e" name="email" type="email" autocomplete="username">
+    <label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password">
+    <button type="submit">Sign in</button>
+  </form>`,
+      )};
+    }, 1500);
+  </script></body></html>`;
+
 beforeAll(async () => {
   server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
     if (url.pathname === "/login" && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(loginPage(""));
+      return;
+    }
+    if (url.pathname === "/login-lazy" && req.method === "GET") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(lazyLoginPage());
       return;
     }
     if (url.pathname === "/login" && req.method === "POST") {
@@ -207,6 +227,14 @@ describe("#427 persona login + pre-flight auth check (served, real browser)", ()
     expect(ok.envelope.ok, ok.out + ok.err).toBe(true);
     expect((ok.envelope.data?.failure as { kind?: string } | undefined)?.kind).not.toBe("auth-expired");
     expect(ok.envelope.data?.missionOutcome).toBe("clean");
+  }, 120_000);
+
+  it("login waits for a form the page renders client-side after a delay", async () => {
+    const save = join(dir, "states", "lazy.json");
+    const r = await run(["login", "--url", `${origin}/login-lazy`, "--user-env", "JEV_T_USER", "--password-env", "JEV_T_PASSWORD", "--save", save, "--json"]);
+    record(r);
+    const state = existsSync(save) ? (JSON.parse(await readFile(save, "utf8")) as { cookies: Array<{ name: string; value: string }> }) : undefined;
+    expect(r.envelope.ok && sessions.has(state?.cookies.find((c) => c.name === "sid")?.value ?? ""), r.out + r.err).toBe(true);
   }, 120_000);
 
   it("an authenticated API-credentials page with only a password field is not judged signed out", async () => {
