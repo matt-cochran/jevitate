@@ -102,3 +102,41 @@ describe("#399: lowercase-%xx and +-for-space forms are matched too", () => {
     expect(redactText(`v=${odd}`, [odd])).toBe(`v=${REDACTION_MASK}`);
   });
 });
+
+describe("short secrets (#454) — matched as whole tokens, never inside ordinary words", () => {
+  it("leaves a word that merely contains a short secret's letters unchanged", () => {
+    expect(redactText("Timeout waiting for the form", ["me"])).toBe("Timeout waiting for the form");
+  });
+
+  it("redacts a short secret that stands alone as a word", () => {
+    expect(redactText("user me logged in", ["me"])).toBe(`user ${REDACTION_MASK} logged in`);
+  });
+
+  it("redacts a short secret bounded by an @ sign", () => {
+    expect(redactText("me@x.io", ["me"])).toBe(`${REDACTION_MASK}@x.io`);
+  });
+
+  it("redacts a short secret bounded by URL parameter punctuation", () => {
+    expect(redactText("pass=me&x", ["me"])).toBe(`pass=${REDACTION_MASK}&x`);
+  });
+
+  it("still redacts a long secret embedded inside a word", () => {
+    expect(redactText("prefixhunter2xsuffix", ["hunter2x"])).toBe(`prefix${REDACTION_MASK}suffix`);
+  });
+
+  it("redacts the percent-encoded form of a short secret standing as a token", () => {
+    expect(redactText("/login?u=a%20b&next=1", ["a b"])).toBe(`/login?u=${REDACTION_MASK}&next=1`);
+  });
+
+  it("makes the payload guard reject a short secret appearing as a token", () => {
+    expect(() => assertNoSecretInPayload({ text: "signed in as me" }, ["me"])).toThrow(SecretLeakError);
+  });
+
+  it("makes the payload guard accept a word that merely contains a short secret's letters", () => {
+    expect(() => assertNoSecretInPayload({ text: "Timeout" }, ["me"])).not.toThrow();
+  });
+
+  it("makes the payload guard reject a short secret right after a newline inside a structured payload", () => {
+    expect(() => assertNoSecretInPayload({ text: "line one\nme" }, ["me"])).toThrow(SecretLeakError);
+  });
+});

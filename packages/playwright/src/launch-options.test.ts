@@ -102,7 +102,7 @@ describe("PlaywrightBrowserPort.open launch options (pooled)", () => {
     expect(pool.inUse).toBe(0);
   });
 
-  test("a missing pinned Chromium surfaces an actionable `npx playwright install chromium` error", async () => {
+  test("a missing pinned Chromium surfaces an actionable `jevitate install-browser` error", async () => {
     const launch: typeof chromium.launch = async () => {
       throw new Error(
         "browserType.launch: Executable doesn't exist at /home/u/.cache/ms-playwright/chromium-1/chrome\n" +
@@ -115,7 +115,7 @@ describe("PlaywrightBrowserPort.open launch options (pooled)", () => {
       (e: unknown) => e,
     );
     if (!(err instanceof BrowserNotInstalledError)) throw new Error(`expected BrowserNotInstalledError, got ${String(err)}`);
-    expect(err.message).toContain("npx playwright install chromium");
+    expect(err.message).toContain("jevitate install-browser");
     expect(err.message).toContain("/home/u/.cache/ms-playwright/chromium-1/chrome");
     expect(err.cause).toBeInstanceOf(Error);
   });

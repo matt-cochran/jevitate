@@ -1,6 +1,6 @@
 === RUNTIME (dist/index.js) ===
 
-# @jevitate/ai-core (109 exports)
+# @jevitate/ai-core (116 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
   BACKOFF_SCHEDULE_MS: array
@@ -23,6 +23,9 @@
   GOAL_ANSWER_INSTRUCTIONS: const (string)
   GoalAnswerInput: object
   GoalAnswerOutput: object
+  HEAL_RANK_INSTRUCTIONS: const (string)
+  HealRankInput: object
+  HealRankOutput: object
   JEV_PRICE_TABLE: object
   JEV_PROVIDERS: array
   JEV_PROVIDER_ENV: const (string)
@@ -40,6 +43,7 @@
   KEY_VERIFY_TIMEOUT_MS: const (number)
   KEY_VERIFY_URLS: object
   MAX_CHOICE_OPTIONS: const (number)
+  MIN_SUBSTRING_SECRET_LENGTH: const (number)
   MissingCredentialError: class
   ModelConstraintsSchema: object
   NoEligibleModelError: class
@@ -72,6 +76,7 @@
   assertNoSecretInPayload: function
   collectKeys: function
   collectMissingKeys: function
+  containsSecret: function
   credentialProvenance: function
   describeVerdict: function
   envAliasesFor: function
@@ -83,6 +88,7 @@
   formatUsageLine: function
   fromSdkAnswers: function
   isTransientError: function
+  isWeakSecret: function
   jevProviderOverride: function
   jevRouteModel: function
   jittered: function
@@ -100,6 +106,7 @@
   retryTransient: function
   revealedSecretsIn: function
   secretForms: function
+  secretPattern: function
   selectModel: function
   sumUsage: function
   summarizeCalls: function
@@ -116,12 +123,13 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (83 exports)
+# @jevitate/domain (88 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEFECT_OUTCOME_STATUSES: array
   DEGRADED_FINDINGS: array
   DefectOutcomeSchema: object
+  EXPLORE_MISSION_OUTCOMES: array
   EnvironmentDegradedSchema: object
   FakeClock: class
   GOAL_ONLY_OUTCOMES: array
@@ -129,6 +137,8 @@
   GOAL_OUTCOME_FOLD: object
   GOAL_REASONS: array
   HostHealthSummarySchema: object
+  JOURNEY_MISSION_OUTCOME: object
+  JOURNEY_RUN_OUTCOMES: array
   LogClassCauseSchema: object
   MAX_RUN_TAGS: const (number)
   MAX_RUN_TAG_VALUE: const (number)
@@ -180,6 +190,7 @@
   isGoalOutcome: function
   isUnboundedHeapGrowth: function
   isWithinQuietHours: function
+  journeyExitCode: function
   looksLikeRendererOom: function
   makeRng: function
   matchesRunTags: function
@@ -196,12 +207,13 @@
   safeRunPolicy: function
   seedFrom: function
   simulateTiming: function
+  startedOutcome: function
   targetsFor: function
   urlSchemeOf: function
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (415 exports)
+# @jevitate/explore (420 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -213,6 +225,7 @@
   BoundsTracker: class
   BudgetMonitor: class
   CANARY_ATTRIBUTE: const (string)
+  CDP_PROBE_TIMEOUT_MS: const (number)
   CONVERSATION_GUIDE: const (string)
   CORRELATION_WINDOW_MS: const (number)
   CoverageTracker: class
@@ -332,6 +345,7 @@
   SINGLE_LINE_MAX_CHARS: const (number)
   SNAPSHOT_BUDGET_MS: const (number)
   STARVATION_WINDOW_MS: const (number)
+  STARVED_CDP_LATENCY_MS: const (number)
   STARVED_EVENT_LOOP_LAG_MS: const (number)
   STARVED_LOAD_PER_CORE: const (number)
   STREAMING_CONTENT: object
@@ -464,6 +478,7 @@
   headingHint: function
   hideDemoOverlayForCapture: function
   hostProbe: function
+  hostStarvedFailure: function
   hotp: function
   http5xxSignalOf: function
   identityKind: function
@@ -485,6 +500,7 @@
   isRecurringRead: function
   isResourceLoadEcho: function
   isSecretLike: function
+  isStallFailure: function
   isTargetUnresponsive: function
   isUnreachableTarget: function
   jevitateCodeRoots: function
@@ -589,6 +605,7 @@
   srOnlyLabelOf: function
   startRouteGlobs: function
   starvationAttributionFromEnv: function
+  starvationMeasurements: function
   starvedHostSentence: function
   summarizeTimings: function
   targetCandidates: function
@@ -618,7 +635,7 @@
   waivableRule: function
   withheldReason: function
 
-# @jevitate/findings (21 exports)
+# @jevitate/findings (22 exports)
   DIFF_STATUSES: array
   RUN_MODES: array
   SARIF_SCHEMA: const (string)
@@ -627,6 +644,7 @@
   diffRuns: function
   environmentCausesOf: function
   findingKey: function
+  healAttemptTable: function
   identityBasis: function
   renderJUnit: function
   renderReportMarkdown: function
@@ -701,7 +719,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (81 exports)
+# @jevitate/journey (89 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_NAME_RE: object
   APPROVAL_CHANNELS: array
@@ -710,6 +728,7 @@
   AnnotationDraftSchema: object
   AnnotationDraftStepSchema: object
   ApprovalChannelSchema: object
+  ApprovalProposalSchema: object
   ApprovalProvenanceSchema: object
   ApprovalViolationSchema: object
   ApprovalsReportSchema: object
@@ -721,15 +740,19 @@
   CatalogApprovalSchema: object
   CatalogStatusSchema: object
   CatalogStatusValueSchema: object
+  ChangeEvidenceRefSchema: object
   FindingSchema: object
   FsJourneyStore: class
   GTWR_RULES: array
   GTWR_SET_CHARACTERISTICS: array
+  HEAL_REJECTION_CODES: array
+  HealAttemptSchema: object
   JOB_PRIORITIES: array
   JevLayerSchema: object
   JobReviewSchema: object
   JobSchema: object
   JourneyCatalogLinksSchema: object
+  JourneyProposalSchema: object
   JourneyRegistry: class
   JourneyReviewSchema: object
   JourneySchema: object
@@ -738,8 +761,11 @@
   PAIR_RELATIONS: array
   ParamValidationError: class
   PersonaReviewSchema: object
+  ProposalStepSchema: object
+  RejectedProposalSchema: object
   ReviewChangeSchema: object
   ReviewLintFindingSchema: object
+  ReviewProposalSchema: object
   ReviewRiskyControlSchema: object
   ReviewStepSchema: object
   ReviewVerifySchema: object
@@ -837,7 +863,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (91 exports)
+# @jevitate/playwright (98 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -859,6 +885,7 @@
   EXTENSION_ID: object
   ExtensionDirError: class
   ExtensionLoadError: class
+  INSTALL_COMMAND: const (string)
   InvalidGeolocationError: class
   LinuxResourceSignals: class
   MachineBrowserSlots: class
@@ -871,6 +898,8 @@
   Win32ResourceSignals: class
   admissionViolation: function
   browserPoolOptionsFromEnv: function
+  browsersDir: function
+  classifyInstalled: function
   cleanupOrphanBrowsers: function
   closeSharedBrowserPool: function
   closestDeviceNames: function
@@ -898,6 +927,8 @@
   extensionOrigin: function
   findOrphanBrowsers: function
   governanceFromEnv: function
+  installBrowser: function
+  installPlan: function
   isTransientSlotError: function
   jevitateBrowsers: function
   knownDeviceNames: function
@@ -915,6 +946,8 @@
   parseViewport: function
   parseVmPressureLevel: function
   parseVmStatAvailableBytes: function
+  pinnedBrowserReport: function
+  pinnedBrowsers: function
   probeReachable: function
   processAlive: function
   readUnpackedExtension: function
@@ -956,7 +989,7 @@
   rungLocator: function
   validateCandidates: function
 
-# @jevitate/recording (86 exports)
+# @jevitate/recording (87 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -991,6 +1024,7 @@
   STYLE_PROPERTIES: array
   SecretMaterializationError: class
   StatusSpecSchema: object
+  StepSchema: object
   TargetDescriptorSchema: object
   UNKNOWN: const (symbol)
   WAIT_FOR_MAX_MS: const (number)
@@ -1061,16 +1095,33 @@
   reproduceFailure: function
   reproduceFailureAt: function
 
-# @jevitate/runtime (10 exports)
+# @jevitate/runtime (27 exports)
+  DEFAULT_HEAL_BUDGET: object
+  EMPTY_CHANGE_SCOPE: object
+  HealBudgetMeter: class
   JourneyRunner: class
   PolicyEnforcementError: class
   SiteGateRefusedError: class
+  anchorValues: function
+  assertProofUntouched: function
+  assertRecordedProofUntouched: function
+  assertRecordingProofUntouched: function
   enterSiteGate: function
-  extractTail: function
+  evidenceRef: function
+  explainsBreak: function
+  extractChangeEvidence: function
   flattenRecording: function
-  healRecording: function
+  healFloor: function
+  isGuardedStep: function
+  isSkippedChangePath: function
   isWriteStep: function
-  postconditionOf: function
+  newAnchorsInChange: function
+  normalizeAnchor: function
+  noteMentions: function
+  retargetRecording: function
+  sanitizeStep: function
+  stepAnchors: function
+  summarizeChangeScope: function
   throttleClassOf: function
 
 # @jevitate/screenplay (16 exports)

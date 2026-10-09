@@ -35,6 +35,11 @@ APP_API_TOKEN=… jevitate explore --url https://app.example.test/ --goal "…" 
   `--save-storage-state` enforces in code (#195): it refuses a path that resolves inside a
   repo's `.jevitate/`, since that directory is partly committed (Journeys, regressions,
   baselines) and never the right place for live cookies.
+- **Mint the state from credentials: `jevitate login`.** It signs in with a username and
+  password read from environment variables it names (`--user-env`/`--password-env`), either by
+  driving the sign-in form (`--url`) or, with no form at all, by POSTing them as JSON to a sign-in
+  endpoint (`--api`, #449). It saves the storage state with mode 0600. See
+  [Persona sessions](./multi-run.md#persona-sessions-jevitate-login-the-pre-flight-auth-check-and-refresh).
 - **Rotating refresh tokens.** When the app rotates its refresh token on every use,
   a saved state goes stale after the first run that refreshes it. Pass
   `--save-storage-state <file>` (it may be the `--storage-state` file itself) to write the

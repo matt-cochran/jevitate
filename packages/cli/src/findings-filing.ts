@@ -3,11 +3,13 @@ import { join } from "node:path";
 import {
   DEFAULT_JEVITATE_REPO,
   fileDraft,
+  fingerprintMarker,
   type FilingConfig,
   type FilingOutcome,
   type IssueDraft,
   type IssueFilerPort,
 } from "@jevitate/domain";
+import { healAttemptTable, type HealAttemptRow } from "@jevitate/findings";
 import { resolveDataDir } from "./data-dir.js";
 
 /**
@@ -108,6 +110,19 @@ export function resolveFilingConfig(file: FilingFileConfig, flags: FilingFlags, 
 /** `<dir>/<stem>.json` → `<dir>/<stem>.issues/`. */
 export function issuesDirFor(recordingPath: string): string {
   return recordingPath.endsWith(".json") ? `${recordingPath.slice(0, -".json".length)}.issues` : `${recordingPath}.issues`;
+}
+
+/**
+ * #453: a draft for a failed self-healed Journey carries the heal's attempt table — "Self-heal
+ * attempts", before the fingerprint marker the body ends with. No attempts: the draft unchanged.
+ */
+export function withSelfHealSection(draft: IssueDraft, attempts: readonly HealAttemptRow[]): IssueDraft {
+  if (attempts.length === 0) return draft;
+  const marker = fingerprintMarker(draft.fingerprint);
+  const section = ["## Self-heal attempts", "", ...healAttemptTable(attempts).slice(2), ""].join("\n");
+  const at = draft.body.lastIndexOf(marker);
+  const body = at < 0 ? `${draft.body}\n\n${section}` : `${draft.body.slice(0, at)}${section}\n${draft.body.slice(at)}`;
+  return { ...draft, body };
 }
 
 export interface WrittenDraft {

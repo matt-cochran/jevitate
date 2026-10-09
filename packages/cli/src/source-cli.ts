@@ -2,6 +2,7 @@ import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js"
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { ParamValidationError } from "@jevitate/journey";
+import { journeyExitCode } from "@jevitate/domain";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError } from "@jevitate/runtime";
 import { UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
@@ -254,10 +255,11 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
-          if (result.outcome === "quarantined") process.exitCode = 1;
+          const code = journeyExitCode(result.outcome);
+          if (code !== 0) process.exitCode = code;
         } else {
           writeRawResult(program, result);
-          process.exitCode = result.outcome === "quarantined" ? 1 : 0;
+          process.exitCode = journeyExitCode(result.outcome);
         }
       } catch (err) {
         // Each run-gate refusal maps to a distinct E_SOURCE_RUN* code so a

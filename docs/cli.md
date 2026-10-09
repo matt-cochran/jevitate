@@ -14,6 +14,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 
 - [`ai`](#ai): check or configure the model gateway credentials jevitate's AI features need
 - [`baseline`](#baseline): named baselines for `diff`, `report --baseline` and `check --baseline`
+- [`browser-path`](#browser-path): print the pinned browser revision(s), the browsers dir in use and the executable path
 - [`campaign`](#campaign): journey-anchored test campaigns (#293): many anchored missions, one deduped report
 - [`catalog`](#catalog): #433: the human-vetted catalog of personas, jobs and the Journeys linked to them
 - [`check`](#check): CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
@@ -24,6 +25,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`explore-author-journey`](#explore-author-journey): Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 - [`inbox`](#inbox): the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
 - [`init`](#init): set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
+- [`install-browser`](#install-browser): install the Chromium revision jevitate pins into the shared browsers dir (never removes other revisions)
 - [`invariants`](#invariants): declared-invariant files (`explore --invariants`)
 - [`job`](#job): #433: catalog jobs — job stories in .jevitate/jobs.json ("When …, I want to …, so I can ….") — review a job's sheet, approve it (bound to its content hash)
 - [`journey`](#journey): manage and run promoted Journeys (regression-test replays)
@@ -174,6 +176,21 @@ snapshot runs (result files, run ids, check records or other tags) as a named ba
 | `--dir <dir>` | results dir to look run ids up in (repeatable) | `[]` |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
+## browser-path
+
+```
+jevitate browser-path [options]
+```
+
+print the pinned browser revision(s), the browsers dir in use and the executable path
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--export` | print only the PLAYWRIGHT_BROWSERS_PATH export line for a project script |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+
 ## campaign
 
 ```
@@ -291,9 +308,16 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--change-note <text>` | #453: a change note that explains a break (repeatable) — needs --self-heal hybrid\|full | `[]` |  |  |  |
 | `--changed-routes <globs>` | only run Journeys and goals touching these route globs (comma list, repeatable), e.g. '/settings/**' | `[]` |  |  |  |
+| `--changes <range>` | #453: the git range that explains a break (e.g. main...HEAD; read once, in the journeys dir's repo) — needs --self-heal hybrid\|full |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
+| `--heal-max-attempts <n>` | #453: candidates tried per broken step (default 2) |  |  |  |  |
+| `--heal-max-model-calls <n>` | #453: model calls per broken step (default 6) |  |  |  |  |
+| `--heal-max-ms <ms>` | #453: healing time per broken step in ms (default 60000) |  |  |  |  |
+| `--heal-max-run-attempts <n>` | #453: candidates tried per re-run (default 4) |  |  |  |  |
+| `--heal-max-run-ms <ms>` | #453: healing time per re-run in ms (default 180000) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a one-line summary per item, then the envelope path) |  |  |  |  |
@@ -305,6 +329,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--real` | use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys) | `false` |  |  |  |
 | `--require-approvals` | #437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed |  |  |  |  |
 | `--sarif <path>` | SARIF path (default <out>/jevitate.sarif) |  |  |  |  |
+| `--self-heal <mode>` | #453: fail-closed \| hybrid \| full — re-run a Journey that quarantined ONCE with a change-aware self-heal (needs --changes and/or --change-note, and --real/--fake-ai); a proposed revision is pending review (exit 5), never a pass | `fail-closed` |  |  |  |
 | `--suite <file>` | the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget) |  |  | yes |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--target-build <id>` | the target's build/commit id, stamped on every result |  |  |  |  |
@@ -543,7 +568,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--paid <pattern>` | an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze\|Draft\|Improve)\b/i: treated like the built-in paid vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it | `[]` |  |  |  |
 | `--param <kv>` | with --from-journey: a Journey param as key=value (repeatable); only the prefix's own params are required | `{}` |  |  |  |
 | `--persona <name=storageState>` | run the same mission once per persona (repeatable), serially, each from its own storageState, and diff them (#143): requests, statuses (a 403 vs 200 is a candidate RBAC finding), controls, outcome | `[]` |  |  |  |
-| `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState", "login"?}]} — #427: `login` ({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, environment variable NAMES only) re-mints an expired session once. A bare --persona <name> is the project's persona of that name (.jevitate/personas.json, same format) |  |  |  |  |
+| `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState", "login"?}]} — #427: `login` ({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, or #449 {api, userEnv, passwordEnv} for an HTTP sign-in endpoint; environment variable NAMES only) re-mints an expired session once. A bare --persona <name> is the project's persona of that name (.jevitate/personas.json, same format) |  |  |  |  |
 | `--polish` | (--strategy usability) polish each verified UX finding's recommendation with one generation call (opt-in; the default prose is built from templates) |  |  |  |  |
 | `--probe-guards` | (--strategy usability) opt in to clicking each destructive control once to check for a confirmation step — fail-safe: every write and destructive-looking request is aborted, and a page with an open WebSocket/EventSource or a service worker is not probed; without it those claims are reported unverifiable (docs/ux-findings.md) |  |  |  |  |
 | `--product <file>` | (--strategy usability) product facts JSON (plans/prices, key journeys, each page's intended next step) the review checks screens against in code; default .jevitate/product.json in the project when present (docs/ux-findings.md) |  |  |  |  |
@@ -572,6 +597,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--success <spec>` | independent success check (repeatable; every one must hold; --strategy goal and usability). Kinds: urlIncludes:<text> \| visible:<d> \| textIncludes:<d>\|<text> (case-insensitive) \| count:<d>\|min=<n>,max=<n> \| valueEquals:<d>\|<value> (a form control's value) \| reloadThen:<check> (reload first: proves it persisted) \| visual state (#148, read and decided by code): style:<d>\|<prop><op><value> (computed style of every match; <prop> an allowlisted CSS property or a channel of one, e.g. alpha(background-color)>0, color=rgb(255, 0, 0); op = != > >= < <=) \| inViewport:<d>[\|min=<ratio>] (visible fraction, default 0.5) \| box:<d>\|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n> \| overlaps:<d>\|<d2> \| noOverlap:<d>\|<d2> \| attr:<d>\|<name>=<value> (or <name> present, !<name> absent) \| flashed:<d>\|class=<cls> (or attr=<name>, animation)[\|withinMs=<n>] (a transient state gained after the last user input) \| requestMade:<METHOD> <path-glob> \| responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>. <d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x]. <path-glob> must start with "/" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method. e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]\|Litmus'. Omit it for a find-out goal (e.g. "find out how many contacts... report the answer"): the run must then end with the model's own `report` op, and the grounded answer (#101) is the verdict — no page/network check needed. | `[]` |  |  |  |
 | `--success-when <when>` | when the --success page checks must hold: final (default; on the final page) \| held (on the final page, or all together at any settled step — a one-time secret, a toast) \| each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
+| `--target <id>` | the target this run was meant to cover, stamped as target.id in the result, its envelope and the run index (1-64 of [A-Za-z0-9_.-]; a sweep sets it per target); key on it to attribute a run |  |  |  |  |
 | `--totp <binding>` | goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk | `[]` |  |  |  |
 | `--type-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret | `[]` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
@@ -839,6 +865,20 @@ set up jevitate: collect API keys, install skills/MCP wiring, create the repo's 
 | `--skip-skills` | skip skill installation |  |  |  |  |
 | `--targets <ids>` | comma-separated runtime ids to force-install to, overriding detection |  |  |  |  |
 | `--uninstall` | #431: remove the skill files and marked AGENTS.md/CLAUDE.md blocks jevitate installed (user-modified ones are skipped unless --force); keys, MCP registration and .jevitate/ are left alone |  |  |  |  |
+
+## install-browser
+
+```
+jevitate install-browser [options]
+```
+
+install the Chromium revision jevitate pins into the shared browsers dir (never removes other revisions)
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--with-deps` | also install OS packages the browser needs (may need privileges) |  |  |  |  |
 
 ## invariants
 
@@ -1133,7 +1173,10 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person |  |  |  |  |
+| `--proposal <pid>` | #453: accept this pending self-heal proposal (journey review shows it): the Journey is replaced by the proposed revision through every gate, bound to its proposedHash |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
+| `--reason <text>` | #453: why the proposal is rejected (recorded with the rejection) |  |  |  |  |
+| `--reject-proposal <pid>` | #453: reject this pending self-heal proposal (needs --reason); the stored Journey is untouched |  |  |  |  |
 | `--review-sheet <file>` | #432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash |  |  |  |  |
 | `--reviewed-hash <hash>` | #432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since |  |  |  |  |
 
@@ -1209,6 +1252,8 @@ jevitate journey run [options] <id>
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--change-note <text>` | #453: a change note that explains a break (e.g. 'renamed "Create New" to "Create"'; repeatable) — needs --self-heal hybrid\|full | `[]` |  |  |  |
+| `--changes <range>` | #453: the git range that explains a break (e.g. HEAD~1..HEAD, main...HEAD; read-only, in the journeys dir's repo) — needs --self-heal hybrid\|full |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
@@ -1218,6 +1263,11 @@ jevitate journey run [options] <id>
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
+| `--heal-max-attempts <n>` | #453: candidates tried per broken step (default 2) |  |  |  |  |
+| `--heal-max-model-calls <n>` | #453: model calls per broken step (default 6) |  |  |  |  |
+| `--heal-max-ms <ms>` | #453: healing time per broken step in ms (default 60000) |  |  |  |  |
+| `--heal-max-run-attempts <n>` | #453: candidates tried in the whole run (default 4) |  |  |  |  |
+| `--heal-max-run-ms <ms>` | #453: healing time in the whole run in ms (default 180000) |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
@@ -1228,7 +1278,7 @@ jevitate journey run [options] <id>
 | `--real` | use live Jev + OpenRouter gateways for self-heal (requires keys) | `false` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
-| `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full | `fail-closed` |  |  |  |
+| `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass) | `fail-closed` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
@@ -1411,18 +1461,26 @@ jevitate login [options]
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--allow <origin>` | an origin credentials may be typed into (repeatable; default: the sign-in page's own) — e.g. an SSO provider | `[]` |  |  |  |
+| `--api <url>` | #449: sign in through this HTTP endpoint instead of a form: the credentials are POSTed as JSON (must be an authorized origin; redirects are never followed) |  |  |  |  |
+| `--api-password-key <key>` | with --api: the JSON body key the password is sent under (default password) |  |  |  |  |
+| `--api-user-key <key>` | with --api: the JSON body key the username is sent under (default username) |  |  |  |  |
+| `--auth-check <check>` | with --api: how --verify-url proves the session: off \| auto \| urlExcludes:<text> \| selector:<css> (default auto) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--password-env <VAR>` | environment variable holding the password (its NAME — the value is read from the environment) |  |  |  |  |
 | `--password-field <field>` | the password field: its label, else a CSS selector (default: the visible password input) |  |  |  |  |
 | `--persona <name>` | the persona being signed in (names it in the result); with a declared persona (--personas or .jevitate/personas.json) its login parameters and storage state path are the defaults |  |  |  |  |
 | `--personas <file>` | personas JSON to read --persona's login parameters from (default: the project's .jevitate/personas.json) |  |  |  |  |
 | `--save <file>` | where to write the storage state (parent directory created; mode 0600; never inside a repo's .jevitate/) |  |  |  |  |
+| `--storage <where>` | with --token-path: local (the only choice — a Playwright storage state has no sessionStorage) |  |  |  |  |
+| `--storage-key <key>` | with --token-path: the localStorage key the token is written under (default: the path's last segment) |  |  |  |  |
 | `--submit <name>` | the submit button's accessible name (default: the form's submit button, else Enter) |  |  |  |  |
 | `--success <check>` | how a successful sign-in is recognised: urlIncludes:<text> \| selector:<css> \| text:<text> (default: the page leaves the sign-in form — no login-like URL, no password field) |  |  |  |  |
 | `--timeout <seconds>` | how long each step of the sign-in may take (default 30) |  |  |  |  |
+| `--token-path <path>` | with --api: a dotted path into the JSON response whose value is the session token (e.g. token, data.accessToken); without it the response's cookies are the session |  |  |  |  |
 | `--url <loginUrl>` | the sign-in page (must be an authorized origin: its own, or --allow) |  |  |  |  |
 | `--user-env <VAR>` | environment variable holding the username (its NAME — the value is read from the environment) |  |  |  |  |
 | `--user-field <field>` | the username field: its label, else a CSS selector (default: found by autocomplete/type/name) |  |  |  |  |
+| `--verify-url <url>` | with --api: the app page the new session is proven on, and whose origin receives the token (default: the endpoint's origin root) |  |  |  |  |
 
 ## logs
 
@@ -2277,6 +2335,7 @@ run many explore missions — one per target in a targets file (.tsv or .json: i
 | `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--no-host-starved-retry` | record a target whose run stalled on a starved host (failure.kind host-starved) as is; by default it is retried ONCE after the host's load drops (bounded wait, #452) |  |  |  |  |
 | `--out <dir>` | the sweep directory: <id>/ per target and sweep.result.json (default .jevitate/logs/<date>/sweep-<stamp>; required with --resume) |  |  |  |  |
 | `--paid <pattern>` | an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for every run (requires keys) |  |  |  |  |

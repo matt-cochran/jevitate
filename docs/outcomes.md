@@ -14,11 +14,12 @@ command's codes only as a reminder; this is the reference.
 | `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error, or `ledger verify` matched no entries (nothing was verified). It proves nothing. |
 | `3` | hang | the app hung, and the hang reproduced on replay |
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
+| `5` | pending-review | a self-heal produced a proposed Journey revision; nothing passes until a person accepts it (`journey promote <id> --proposal <pid>`) |
 | `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …) or number (`--max-actions abc`, `--replays 0`: refused while the command line is parsed), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_UX_INPUT`, `E_TARGET_CONFIG`, …), an unknown id (`E_UNKNOWN_JOURNEY`, `E_REGRESSION_NOT_FOUND`, `E_BASELINE_NOT_FOUND`, …), a `journey annotate --approve` draft that is missing, invalid or stale (`E_JOURNEY_ANNOTATIONS_STALE`: the Journey changed since the draft), missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist — including a `check` suite item whose start URL is off its target's allowlist, or whose `verifyFix` fingerprint is not in its result (refused up front, like a missing result file) |
 | `129` / `130` / `143` | killed | SIGHUP (or the parent died) / SIGINT / SIGTERM; the partial result is still written and every browser is closed (see [operations](./operations.md)) |
 
-`64` is `EX_USAGE` from `sysexits.h`. It is deliberately not `5`, so a future outcome code never
-collides with it. A refused command's code comes from its error code: `_ARGS`, `_INPUT`,
+`64` is `EX_USAGE` from `sysexits.h`. It is deliberately not a small integer, so a new outcome code
+(such as `5`) never collides with it. A refused command's code comes from its error code: `_ARGS`, `_INPUT`,
 `_ASSERTION`, `_SPEC`, `_CONFIG`, `_NOT_FOUND` and `E_UNKNOWN_*` codes are usage errors (64), and any
 other error is `2`.
 
@@ -51,6 +52,20 @@ clean.
 | `hang` | 3 | the app under test hung, and the hang reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
+### Journey run outcomes (#453)
+
+`jevitate journey run` (and MCP `run_journey`, whose result carries the same `exitCode`) ends in one of:
+
+| Journey outcome | Exit code | Mission outcome | Meaning |
+|---|---|---|---|
+| `ok` | 0 | `clean` | every step and the end state held as recorded |
+| `healed-pending-review` | 5 | `pending-review` | a self-heal completed the run only after retargeting steps the change explains; a proposed revision was written and nothing passes until a person accepts it |
+| `heal-exhausted` | 1 | `defects-found` | the break was explained but every candidate (or the budget) ran out; the attempts are in the result |
+| `quarantined` | 1 | `defects-found` | a step failed and no self-heal ran, or the change does not explain the break (`heal.verdict: "unexplained"`: a likely regression) |
+
+Exit `5` is not a failure and not a pass: review the proposal (`jevitate journey review <id>`), then
+`journey promote <id> --proposal <pid>`. Missions never end `pending-review`.
+
 The MCP tool `get_mission_result` returns the same status and code for a
 finished run; a broken run comes back as an error result. Its `id` is a result stem —
 `explore-<stamp>` (a goal run: `status` is its canonical `missionOutcome`, and its own
@@ -82,6 +97,7 @@ whose success check did not hold is `missionOutcome: "defects-found"`, `goalOutc
 | `blocked` | `defects-found` | 1 | the loop stopped without the goal met and without claiming it: the model gave up (e.g. no matching control), or no progress was possible |
 | `defects-found` | `defects-found` | 1 | only when a violated declared invariant overrode an `inconclusive` budget or vacuous-check stop (#423: a defect no longer replaces `succeeded`/`failed`/`exhausted`/`blocked` — see the table below) |
 | `inconclusive` | `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) — or every failing success check was **vacuous** (#202: satisfied before the run's first action), so the run proved nothing either way: `failure.kind: "vacuous-check"`, naming the check |
+| `not-started` | `inconclusive` | 2 | #448: the run executed **zero actions** (no controls offered, the auth check failed, a preflight failed), so nothing was exercised — never `clean`, never `succeeded`, whatever else it saw; treated exactly like `inconclusive`. `goalReason` says why (`no-controls`, `auth-failed`, `preflight-failed`, `no-actions`). Defects found passively (console, server log) are still listed in `defects[]` but do not make the run "exercised". A zero-action hang, crash or environment ending (starved host, unreachable target, …) keeps its own outcome. `--allow-vacuous-checks` is the operator's explicit acceptance of a goal that already held before any action: its `succeeded` stays |
 | `crashed` | `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
 | `hang` | `hang` | 3 | the app under test hung, and it reproduced on replay |
 | `intermittent` | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
@@ -104,6 +120,7 @@ and so the exit code — is derived from both by ONE table (`goalMissionOutcome`
 | `hang` | `hang` (3) | `hang` (3) |
 | `intermittent` | `intermittent` (4) | `intermittent` (4) |
 | `inconclusive` / `crashed` | that outcome (2) | that outcome (2) |
+| `not-started` | `inconclusive` (2) | `inconclusive` (2) |
 
 Every exit code is the same as in 0.7.0. In particular a goal that was not achieved with no defect
 still exits 1 (the long-standing "the check failed" code): read `defectOutcome.status: "none"` and
@@ -221,6 +238,7 @@ run's own baseline. The thresholds (`packages/explore/src/host-health.ts`) are:
 | admission sample | over the browser pool's own thresholds (memory pressure, < 400 MiB available, CPU PSI > 80%) |
 | load average | > 2 runnable tasks per core (every task gets ≤ half a core) |
 | driver event-loop lag | > 500 ms (longer than the settle rule's quiet window) **and** load ≥ 1 runnable task per core. The lag histogram also counts the driver's own synchronous work, so lag with idle cores (e.g. 506 ms at 0.70/core) is self-inflicted and never counts (#213) |
+| CDP round-trip (#452) | a cheap CDP command (`Browser.getVersion`) to the run's browser takes > 1000 ms; a probe with no reply in 5 s reads as 5000 ms (the browser is unresponsive). Reported as `hostHealth.peakCdpLatencyMs` |
 | render trend | the median of the last 3 renders ≥ 5x the run's baseline (median of its first 3) and ≥ 3 s, **and** a host sample in the last 15 s at load ≥ 1 runnable task per core (#368). A slow render is a symptom, not host evidence: on a healthy host (spare cores, free memory) slow renders are the app's own timing — reported in `slowestRenderMs` and the timing summary, and a hang or no-progress stop they cause is judged as an app finding — never "the host was starved" |
 
 A render is the page's own time: a navigation's DOMContentLoaded, or an action's time to settle
@@ -256,8 +274,18 @@ A starved sample explains the 15 s after it. Then:
   never observed the app is left out of the persona diff (`diff.notCompared`, printed as `DIFF
   <persona>: not compared — …`), so a starved load never reads as an access difference (#213).
 
+A run that STALLED while those signals show starvation is `host-starved` (#452): the stall
+(`failure.kind` `stalled` or `target-unresponsive`, or a bare page-load timeout) is classified
+`inconclusive` with `failure.kind: "host-starved"`, and `failure.message` records the measurements
+(peak CDP round-trip, peak driver event-loop lag, a page load against the run's own baseline, the
+starved samples' causes). Here the lag counts without a corroborating load reading, because the run
+did stall. It is never `crashed` and never a finding about the app. It differs from
+`degraded-environment` (most STEPS ran starved, so a pass/fail proves nothing): host-starved is a
+stall. Both are environment failures in `jevitate sweep`, and a sweep retries a `host-starved`
+target once (see [sweeps](./sweeps.md)). With `JEVITATE_HOST_STARVATION=off` nothing is classified `host-starved`.
+
 Every result carries `hostHealth`: `peakLoadPerCore`, `minFreeMemoryBytes`,
-`peakEventLoopLagMs`, `slowestRenderMs` (and the `baselineRenderMs` it is judged against),
+`peakEventLoopLagMs`, `peakCdpLatencyMs` (when the run took a CDP probe), `slowestRenderMs` (and the `baselineRenderMs` it is judged against),
 `steps`/`degradedSteps`, `degraded`, the distinct `starvation` causes (one per kind of signal, not one per reading), and `attribution`.
 `JEVITATE_HOST_STARVATION=off` keeps the sampling and the summary but never attributes a finding to
 the host (`attribution: "off"`) — for a harness that guarantees a quiet host itself.

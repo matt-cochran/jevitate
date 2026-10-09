@@ -13,3 +13,4 @@ export * from "./extensions.js";
 export * from "./browser-processes.js";
 export * from "./machine-slots.js";
 export * from "./resource-governor.js";
+export * from "./pinned-browser.js";

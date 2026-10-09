@@ -1,8 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
-import { JourneyRunner, PolicyEnforcementError } from "./index.js";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { DEFAULT_HEAL_BUDGET, EMPTY_CHANGE_SCOPE, JourneyRunner, PolicyEnforcementError, flattenRecording, retargetRecording, type ChangeEvidence, type ChangeScope, type HealWriteGuard } from "./index.js";
 import type { SelfHealer } from "./self-heal.js";
-import type { Recording } from "@jevitate/recording";
-import { safeRunPolicy } from "@jevitate/domain";
+import type { Recording, RecordedStep, Step } from "@jevitate/recording";
+import { FakeClock, installClock, resetClock, safeRunPolicy, type HealBudget, type RunPolicy } from "@jevitate/domain";
 
 const journeyNoVars = {
   metadata: { id: "j", name: "j", promoted: true, params: [], createdAtIso: "x" },
@@ -74,18 +74,14 @@ describe("JourneyRunner invariants", () => {
   });
 });
 
-// === Self-heal (Ticket #7) ===
+// === #453: change-aware self-heal ===
 
 const baseMetadata = { id: "j", name: "j", promoted: true, params: [], createdAtIso: "x" };
+const hybrid = (budget?: HealBudget): RunPolicy => ({ selfHeal: { mode: "hybrid", ...(budget === undefined ? {} : { budget }) }, direction: { direction: "deterministic" }, secret: { secretMode: "fail-closed" } });
+const full = (budget?: HealBudget): RunPolicy => ({ ...hybrid(budget), selfHeal: { mode: "full", ...(budget === undefined ? {} : { budget }) } });
 
-const healedSegment: Recording = {
-  version: "1.0",
-  site: "https://example.test",
-  pages: [{ url: "/a", steps: [{ step: { kind: "click", target: { testId: "new-button" }, expect: { kind: "visible", target: { testId: "next" } } } }] }],
-};
-
-function journeyWithBrokenReadOnlyStep(): Recording {
-  // navigate (0, ok) -> assert (1, the broken READ-ONLY step) -> assert (2, tail)
+/** navigate (0) → click "Create New" (1, the step a change renamed) → assert (2). */
+function renamedButtonJourney(recordedExtra: Partial<RecordedStep> = {}): Recording {
   return {
     version: "1.0",
     site: "https://example.test",
@@ -94,153 +90,226 @@ function journeyWithBrokenReadOnlyStep(): Recording {
         url: "/a",
         steps: [
           { step: { kind: "navigate", url: "/a", expect: { kind: "visible", target: { testId: "loaded" } } } },
-          { step: { kind: "assert", check: { kind: "visible", target: { testId: "next" } } } },
-        ],
-      },
-      { url: "/b", steps: [{ step: { kind: "assert", check: { kind: "urlIncludes", text: "/b" } } }] },
-    ],
-  };
-}
-
-function journeyWithBrokenWriteStep(): Recording {
-  // navigate (0, ok) -> fill (1, the broken WRITE step) — must NEVER auto-heal
-  return {
-    version: "1.0",
-    site: "https://example.test",
-    pages: [
-      {
-        url: "/a",
-        steps: [
-          { step: { kind: "navigate", url: "/a", expect: { kind: "visible", target: { testId: "loaded" } } } },
-          { step: { kind: "fill", target: { testId: "field" }, value: { redacted: true, length: 3 }, expect: { kind: "visible", target: { testId: "next" } } } },
+          { step: { kind: "click", label: "Create", target: { role: "button", name: "Create New" }, expect: { kind: "visible", target: { testId: "editor" } } }, ...recordedExtra },
+          { step: { kind: "assert", check: { kind: "urlIncludes", text: "/a/new" } } },
         ],
       },
     ],
   };
 }
 
-function fakeHealer(response: Awaited<ReturnType<SelfHealer["reLearnStep"]>>): SelfHealer {
-  return { reLearnStep: vi.fn(async () => response) };
-}
+const renameScope = (evidence: Partial<ChangeEvidence> = {}): ChangeScope => ({
+  range: "HEAD~1..HEAD",
+  evidence: [{ id: "e1", kind: "accessible-name", before: "Create New", after: "Create", file: "src/ui/Toolbar.tsx", line: 42, ...evidence }],
+  scanned: { files: 1, hunks: 1, skipped: [] },
+});
 
-/** run() -> failed at 1; resumeFrom -> still failed at 1 (no recovery). */
-function fakeInterpreterThatFails() {
+/**
+ * A fake interpreter for a broken step 1: the first pass fails there (target not found); a probe of
+ * step 1 alone (`runRange`) completes only when step 1's target is named `accepts`; the remainder
+ * (`resumeFrom`) completes, after `rest()`.
+ */
+function brokenAtStep1(accepts = "Create", rest: () => Promise<void> = async () => undefined) {
   return {
-    run: vi.fn().mockResolvedValue({ outcome: "failed", at: 1, error: "boom" }),
-    resumeFrom: vi.fn().mockResolvedValue({ outcome: "failed", at: 1, error: "boom" }),
+    run: vi.fn().mockResolvedValue({ outcome: "failed", at: 1, error: "replay-target-not-found: button 'Create New'", reason: "replay-target-not-found" }),
+    runRange: vi.fn(async (_actor: unknown, rec: Recording, from: number) => {
+      const step = flattenRecording(rec)[from]!.step as { target?: { name?: string } };
+      return step.target?.name === accepts
+        ? { outcome: "completed", vars: {} }
+        : { outcome: "failed", at: from, error: "replay-target-not-found", reason: "replay-target-not-found" };
+    }),
+    resumeFrom: vi.fn(async () => {
+      await rest();
+      return { outcome: "completed", vars: {} };
+    }),
   } as any;
 }
 
-/** run() -> failed at 1; resumeFrom -> completed (the splice recovered it). */
-function fakeInterpreterThatFailsThenHeals() {
-  return {
-    run: vi.fn().mockResolvedValue({ outcome: "failed", at: 1, error: "boom" }),
-    resumeFrom: vi.fn().mockResolvedValue({ outcome: "completed", vars: {} }),
-  } as any;
+/** A write blocker that reports `blocked` from every probe. */
+function writeGuard(blocked: { method: string; url: string }[] = []): HealWriteGuard {
+  return { armAt: vi.fn(async () => undefined), disarm: vi.fn(async () => blocked) };
 }
 
-describe("JourneyRunner self-heal (Ticket #7)", () => {
-  it("hybrid + read-only broken step + a healer that succeeds -> outcome 'healed', run completes", async () => {
-    const recording = journeyWithBrokenReadOnlyStep();
-    const healer = fakeHealer({ outcome: "healed", segment: healedSegment });
-    const runner = new JourneyRunner(fakeActor, fakeInterpreterThatFailsThenHeals(), undefined, undefined, healer);
+const notRisky = (): string | null => null;
 
-    const result = await runner.run({
-      journey: { metadata: baseMetadata, recording } as any,
-      params: {},
-      policy: { selfHeal: { mode: "hybrid" }, direction: { direction: "deterministic" }, secret: { secretMode: "fail-closed" } },
+function modelHealer(propose: SelfHealer["proposeCandidates"], actsOnPage = false): SelfHealer {
+  return { actsOnPage, proposeCandidates: vi.fn(propose) };
+}
+
+/** A healer proposing a fresh (never-matching) button name on every call. */
+function alwaysWrongHealer(): SelfHealer {
+  let k = 0;
+  return modelHealer(async ({ brokenStep }) => {
+    k++;
+    return { candidates: [{ step: { ...(brokenStep as Extract<Step, { kind: "click" }>), target: { role: "button", name: `Guess ${k}` } }, hypothesis: `renamed to Guess ${k}` }], usage: { modelCalls: 1 } };
+  });
+}
+
+function run(runner: JourneyRunner, recording: Recording, policy: RunPolicy, params: Record<string, string> = {}, metadata: object = baseMetadata) {
+  return runner.run({ journey: { metadata, recording } as any, params, policy });
+}
+
+describe("JourneyRunner change-aware self-heal (#453)", () => {
+  afterEach(() => resetClock());
+
+  it("heals an explained renamed-label click into healed-pending-review with a revision whose only change is the target", async () => {
+    const recording = renamedButtonJourney();
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, recording, hybrid());
+    expect(result).toMatchObject({ outcome: "healed-pending-review", revision: { recording: retargetRecording(recording, 1, { ...(flattenRecording(recording)[1]!.step as Extract<Step, { kind: "click" }>), target: { role: "button", name: "Create" } }) } });
+  });
+
+  it("leaves an unexplained break quarantined with an unexplained verdict naming the step", async () => {
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, undefined, { scope: renameScope({ before: "Delete", after: "Remove" }), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result).toMatchObject({ outcome: "quarantined", heal: { verdict: "unexplained", reason: expect.stringContaining('step 2 "Create" (click)') } });
+  });
+
+  it("treats an empty change scope as explaining nothing (Q1)", async () => {
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, alwaysWrongHealer(), { scope: EMPTY_CHANGE_SCOPE, riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), full());
+    expect(result.heal?.verdict).toBe("unexplained");
+  });
+
+  it("ends heal-exhausted after exactly perStep.maxAttempts 2 refuted attempts, each with hypothesis, evidence and rejection", async () => {
+    const budget: HealBudget = { ...DEFAULT_HEAL_BUDGET, perStep: { ...DEFAULT_HEAL_BUDGET.perStep, maxAttempts: 2 } };
+    const scope = renameScope({ after: undefined }); // explains the break, implies no replacement
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, alwaysWrongHealer(), { scope, riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), full(budget));
+    const attempt = { hypothesis: expect.stringMatching(/Guess/), evidence: [expect.objectContaining({ id: "e1" })], rejection: { code: "no-match", detail: expect.any(String) } };
+    expect(result).toMatchObject({ outcome: "heal-exhausted", heal: { verdict: "exhausted", budget: { exhaustedBy: "attempts" }, attempts: [attempt, attempt] } });
+  });
+
+  it("rejects a guarded click whose probe fires a POST as write-attempted", async () => {
+    const guard = writeGuard([{ method: "POST", url: "https://example.test/api/items" }]);
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: guard });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.attempts[0]?.rejection?.code).toBe("write-attempted");
+  });
+
+  it("never probes a guarded click on a page its write guard cannot guard (a service worker)", async () => {
+    const interpreter = brokenAtStep1();
+    const guard: HealWriteGuard = { ...writeGuard(), unguardable: async () => "a service worker is registered for this page" };
+    const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: guard });
+    await run(runner, renamedButtonJourney(), hybrid());
+    expect(interpreter.runRange).not.toHaveBeenCalled();
+  });
+
+  it("never probes a click whose recorded expectRequests expects a POST", async () => {
+    const interpreter = brokenAtStep1();
+    const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
+    await run(runner, renamedButtonJourney({ expectRequests: [{ kind: "requestMade", method: "POST", pathGlob: "/api/items" }] }), hybrid());
+    expect(interpreter.runRange).not.toHaveBeenCalled();
+  });
+
+  it("never heals a click the safety classification calls risky", async () => {
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, undefined, { scope: renameScope(), riskOf: () => "destructive", writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.verdict).toBe("refused-write");
+  });
+
+  it("never heals a click when no write blocker is wired", async () => {
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.verdict).toBe("refused-write");
+  });
+
+  it("never consults a healer that acts on the page for a guarded click", async () => {
+    const healer = modelHealer(async () => ({ candidates: [], usage: { modelCalls: 1 } }), true);
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, healer, { scope: renameScope({ after: undefined }), riskOf: notRisky, writeGuard: writeGuard() });
+    await run(runner, renamedButtonJourney(), hybrid());
+    expect(healer.proposeCandidates).not.toHaveBeenCalled();
+  });
+
+  it("in hybrid, rejects a model candidate whose new anchor no change evidence names", async () => {
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, alwaysWrongHealer(), { scope: renameScope({ after: undefined }), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.attempts[0]?.rejection?.code).toBe("not-explained-by-change");
+  });
+
+  it("stops healing when the step's wall-clock budget runs out on the clock", async () => {
+    const fake = new FakeClock();
+    installClock(fake);
+    const healer = modelHealer(async ({ brokenStep }) => {
+      await fake.advanceBy(DEFAULT_HEAL_BUDGET.perStep.maxMs);
+      return { candidates: [{ step: { ...(brokenStep as Extract<Step, { kind: "click" }>), target: { role: "button", name: "Create" } }, hypothesis: "renamed" }], usage: { modelCalls: 1 } };
     });
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, healer, { scope: renameScope({ after: undefined }), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), full());
+    expect(result).toMatchObject({ outcome: "heal-exhausted", heal: { budget: { exhaustedBy: "wallClock" }, attempts: [] } });
+  });
 
-    expect(result.outcome).toBe("healed");
-    expect(healer.reLearnStep).toHaveBeenCalledOnce();
+  it("charges only the candidate step's probe to the heal budget, not the replay of the rest of the Journey", async () => {
+    const fake = new FakeClock();
+    installClock(fake);
+    const interpreter = brokenAtStep1("Create", () => fake.advanceBy(10 * DEFAULT_HEAL_BUDGET.perRun.maxMs));
+    const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.budget.used.ms).toBe(0);
+  });
+
+  it("rejects a probe still running at the heal deadline as budget-exhausted", async () => {
+    const fake = new FakeClock();
+    installClock(fake);
+    const interpreter = brokenAtStep1();
+    interpreter.runRange = vi.fn(async () => {
+      await fake.advanceBy(DEFAULT_HEAL_BUDGET.perStep.maxMs + 1);
+      return { outcome: "completed", vars: {} };
+    });
+    const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.attempts[0]?.rejection?.code).toBe("budget-exhausted");
+  });
+
+  it("in hybrid, rejects a model candidate whose new anchor only an unrelated change's after names", async () => {
+    const scope: ChangeScope = {
+      evidence: [
+        { id: "e1", kind: "accessible-name", before: "Create New" },
+        { id: "e2", kind: "accessible-name", before: "Delete", after: "Make" },
+      ],
+      scanned: { files: 1, hunks: 2, skipped: [] },
+    };
+    const healer = modelHealer(async ({ brokenStep }) => ({ candidates: [{ step: { ...(brokenStep as Extract<Step, { kind: "click" }>), target: { role: "button", name: "Make" } }, hypothesis: "renamed to Make" }], usage: { modelCalls: 1 } }));
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1("Make"), undefined, undefined, healer, { scope, riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.attempts[0]?.rejection?.code).toBe("not-explained-by-change");
+  });
+
+  it("charges a model call when the healer throws", async () => {
+    const healer = modelHealer(async () => {
+      throw new Error("gateway down");
+    });
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, healer, { scope: renameScope({ after: undefined }), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.budget.used.modelCalls).toBe(1);
   });
 
   it("#399: the healer is handed the run's secret parameter values (a token in a navigate URL) to redact", async () => {
-    const recording = journeyWithBrokenReadOnlyStep();
-    const healer = fakeHealer({ outcome: "not-healed", reason: "x" });
-    const runner = new JourneyRunner(fakeActor, fakeInterpreterThatFails(), undefined, undefined, healer);
-    const metadata = { ...baseMetadata, params: [], parameters: [{ name: "inviteToken", secret: true }] };
-    const withParam = { ...recording, pages: [{ ...recording.pages[0]!, steps: [{ step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } } }, ...recording.pages[0]!.steps.slice(1)] }, ...recording.pages.slice(1)] };
-    await runner.run({
-      journey: { metadata, recording: withParam } as any,
-      params: { inviteToken: "tok-399" },
-      policy: { selfHeal: { mode: "hybrid" }, direction: { direction: "deterministic" }, secret: { secretMode: "fail-closed" } },
-    });
-    expect(healer.reLearnStep).toHaveBeenCalledWith(expect.objectContaining({ secrets: ["tok-399"] }));
+    const healer = modelHealer(async () => ({ candidates: [], usage: { modelCalls: 1 } }));
+    const recording: Recording = {
+      version: "1.0",
+      site: "https://example.test",
+      pages: [
+        {
+          url: "/accept",
+          steps: [
+            { step: { kind: "navigate", url: "/accept?token=${inviteToken}", expect: { kind: "urlIncludes", text: "/accept" } } },
+            { step: { kind: "extract", target: { testId: "Create New" }, as: "v", expect: { kind: "visible", target: { testId: "x" } } } },
+          ],
+        },
+      ],
+    };
+    const metadata = { ...baseMetadata, parameters: [{ name: "inviteToken", secret: true }] };
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, healer, { scope: renameScope({ kind: "test-id", after: undefined }) });
+    await run(runner, recording, hybrid(), { inviteToken: "tok-399" }, metadata);
+    expect(healer.proposeCandidates).toHaveBeenCalledWith(expect.objectContaining({ secrets: ["tok-399"] }));
   });
 
-  it("hybrid + WRITE broken step (fill) -> healer is NEVER called, quarantines (invariant #8)", async () => {
-    const recording = journeyWithBrokenWriteStep();
-    const healer = fakeHealer({ outcome: "healed", segment: healedSegment });
-    const runner = new JourneyRunner(fakeActor, fakeInterpreterThatFails(), undefined, undefined, healer);
-
-    const result = await runner.run({
-      journey: { metadata: baseMetadata, recording } as any,
-      params: {},
-      policy: { selfHeal: { mode: "hybrid" }, direction: { direction: "deterministic" }, secret: { secretMode: "fail-closed" } },
-    });
-
-    expect(healer.reLearnStep).not.toHaveBeenCalled();
-    expect(result.outcome).toBe("quarantined");
-  });
-
-  it("full + WRITE broken step -> still refuses (the floor is not bypassed by 'full')", async () => {
-    const recording = journeyWithBrokenWriteStep();
-    const healer = fakeHealer({ outcome: "healed", segment: healedSegment });
-    const runner = new JourneyRunner(fakeActor, fakeInterpreterThatFails(), undefined, undefined, healer);
-
-    const result = await runner.run({
-      journey: { metadata: baseMetadata, recording } as any,
-      params: {},
-      policy: { selfHeal: { mode: "full" }, direction: { direction: "deterministic" }, secret: { secretMode: "fail-closed" } },
-    });
-
-    expect(healer.reLearnStep).not.toHaveBeenCalled();
-    expect(result.outcome).toBe("quarantined");
-  });
-
-  it("fail-closed (default) -> healer never called even when wired and read-only", async () => {
-    const recording = journeyWithBrokenReadOnlyStep();
-    const healer = fakeHealer({ outcome: "healed", segment: healedSegment });
-    const runner = new JourneyRunner(fakeActor, fakeInterpreterThatFails(), undefined, undefined, healer);
-
-    const result = await runner.run({
-      journey: { metadata: baseMetadata, recording } as any,
-      params: {},
-      policy: safeRunPolicy(),
-    });
-
-    expect(healer.reLearnStep).not.toHaveBeenCalled();
-    expect(result.outcome).toBe("quarantined");
-  });
-
-  it("hybrid + read-only step + healer reports not-healed -> quarantines (no false recovery)", async () => {
-    const recording = journeyWithBrokenReadOnlyStep();
-    const healer = fakeHealer({ outcome: "not-healed", reason: "could not reach the postcondition" });
-    const runner = new JourneyRunner(fakeActor, fakeInterpreterThatFails(), undefined, undefined, healer);
-
-    const result = await runner.run({
-      journey: { metadata: baseMetadata, recording } as any,
-      params: {},
-      policy: { selfHeal: { mode: "hybrid" }, direction: { direction: "deterministic" }, secret: { secretMode: "fail-closed" } },
-    });
-
-    expect(result.outcome).toBe("quarantined");
-  });
-
-  it("hybrid + read-only step healed but the resumed splice STILL fails -> quarantines, heals that index at most once (invariant #4)", async () => {
-    const recording = journeyWithBrokenReadOnlyStep();
-    const healer = fakeHealer({ outcome: "healed", segment: healedSegment });
-    const runner = new JourneyRunner(fakeActor, fakeInterpreterThatFails(), undefined, undefined, healer);
-
-    const result = await runner.run({
-      journey: { metadata: baseMetadata, recording } as any,
-      params: {},
-      policy: { selfHeal: { mode: "hybrid" }, direction: { direction: "deterministic" }, secret: { secretMode: "fail-closed" } },
-    });
-
-    expect(result.outcome).toBe("quarantined");
-    expect(healer.reLearnStep).toHaveBeenCalledOnce(); // never re-heals the same index in a loop
+  it("fail-closed (default) never consults the healer, even with an explaining change", async () => {
+    const healer = alwaysWrongHealer();
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, healer, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
+    await run(runner, renamedButtonJourney(), safeRunPolicy());
+    expect(healer.proposeCandidates).not.toHaveBeenCalled();
   });
 });
 

@@ -53,12 +53,20 @@ Relative paths resolve against the suite file.
 - `--baseline <run|tag|last>` gates only findings not in the baseline. Findings already known are
   listed but don't gate. Tag a known-good run with `jevitate baseline tag <name> <runs...>`.
 
+- `--self-heal hybrid|full --changes <base>...HEAD [--change-note <text>]` (MCP `run_check`
+  `selfHeal`, `changes`, `changeNote`, `healMax*`; needs `--fake-ai`/`--real`) re-runs a Journey that
+  quarantined ONCE with the change as evidence. A heal never passes: it is `pending-review` (exit 5)
+  with a proposal in `.proposals/` for a person to `journey review` / `journey promote --proposal`;
+  commit `.proposals/` with the PR. Without a change context the flag is refused (64).
+
 ## Exit codes: gate on 1, and treat 2 and 64 as broken
 
 `0` pass · `1` at least one gating finding (a Journey assertion, an invariant, a goal check, a
 verify-fix that still reproduces or is intermittent, a hard-signal defect or hang) · `2` no
 gating finding, but an item errored, was inconclusive, or the budget ran out · `64` the suite,
-targets file or AI setup was refused, so nothing ran. Exit 2 or 64 is never "green". Report it as
+targets file or AI setup was refused, so nothing ran · `5` (only with `--self-heal`) nothing failed
+but a self-heal proposed a Journey revision awaiting human review (precedence 1 > 2 > 5 > 0; read
+`proposals` in `check.json`). Exit 2, 5 or 64 is never "green". Report it as
 a broken check, with the item and reason from `check.json`.
 
 ## Read and compare results

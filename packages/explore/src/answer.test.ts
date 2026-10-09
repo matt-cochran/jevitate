@@ -572,3 +572,56 @@ describe("#395 — the heading hint is not for the content a goal supplies or ty
     expect(headingHint(page, "Find out the name of the current project")).toContain("Roadmap");
   });
 });
+
+describe("#447 — an absence claim grounded on the observed control inventory", () => {
+  const callsOff = [{ url: "http://app.test/calls", text: "Calls\nCalling is off", controls: ["Settings", "Help"] }];
+  const goal = "check there is no Launch control";
+  const absence = { answer: "There is no Launch control.", claims: [{ claim: "No control launches anything", quote: "", absent: "Launch" }] };
+
+  it("accepts the claim when no observed control or text matches the absent name", () => {
+    expect(groundAnswer(absence, callsOff, { goal }).accept).toBe(true);
+  });
+
+  it("cites the control inventory as the claim's evidence", () => {
+    const v = groundAnswer(absence, callsOff, { goal });
+    expect(v.answer?.evidence[0]).toMatchObject({ grounded: true, source: "control-inventory", url: "http://app.test/calls", inventory: ["Settings", "Help"] });
+  });
+
+  it("rejects the claim when an observed control matches the absent name", () => {
+    const withLaunch = [{ ...callsOff[0]!, controls: ["Settings", "Launch call"] }];
+    expect(groundAnswer(absence, withLaunch, { goal }).reason).toMatch(/control "Launch call" matches "Launch"/);
+  });
+
+  it("rejects the claim when an observed control matches an inflection of the absent name", () => {
+    const withLauncher = [{ ...callsOff[0]!, contentLinks: ["Open the launcher"] }];
+    expect(groundAnswer(absence, withLauncher, { goal }).accept).toBe(false);
+  });
+
+  it("rejects the claim when the visible text of an observed page matches the absent name", () => {
+    const said = [callsOff[0]!, { url: "http://app.test/other", text: "Launch a call from here" }];
+    expect(groundAnswer(absence, said, { goal }).reason).toMatch(/page text on http:\/\/app\.test\/other matches "Launch"/);
+  });
+
+  it("rejects an absent name made only of words that name a kind of control", () => {
+    const vague = { ...absence, claims: [{ ...absence.claims[0]!, absent: "the button" }] };
+    expect(groundAnswer(vague, callsOff, { goal }).accept).toBe(false);
+  });
+
+  it("rejects the claim for a goal that does not ask whether something exists", () => {
+    expect(groundAnswer(absence, callsOff, { goal: "what is the call quota?" }).accept).toBe(false);
+  });
+
+  it("still rejects a positive claim whose quote is not on any page", () => {
+    const positive = { answer: "Calls are on.", claims: [{ claim: "Calls are on", quote: "Calling is on" }] };
+    expect(groundAnswer(positive, callsOff, { goal }).reason).toMatch(/quote not found/);
+  });
+
+  it("tells a negative claim with a missing quote how to state an absence", () => {
+    const negative = { answer: "No launch.", claims: [{ claim: "No controls allow launching calls", quote: "no launch control" }] };
+    expect(groundAnswer(negative, callsOff, { goal }).reason).toMatch(/set `absent`/);
+  });
+
+  it("treats 'check there is no …' as a goal that admits absence", () => {
+    expect(goalAdmitsAbsence(goal)).toBe(true);
+  });
+});

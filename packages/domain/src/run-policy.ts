@@ -8,8 +8,19 @@ export type Direction = "deterministic" | "jev-directed" | "goal-based";
 // packages/journey/src/journey.ts's `SecretRef`), never from RunPolicy.
 export type SecretMode = "vault-autofill" | "visible-handback" | "fail-closed";
 
+/**
+ * #453: how much a change-aware self-heal may spend. One candidate tried = one attempt; model calls
+ * and tokens are what the healer reports; wall-clock is measured on `clock`. `perStep` bounds one
+ * broken step, `perRun` the whole run (`maxBrokenSteps`: how many distinct steps may be healed).
+ */
+export interface HealBudget {
+  perStep: { maxAttempts: number; maxModelCalls: number; maxTokens?: number; maxMs: number };
+  perRun: { maxAttempts: number; maxModelCalls: number; maxTokens?: number; maxMs: number; maxBrokenSteps: number };
+}
+
 export interface RunPolicy {
-  selfHeal: { mode: SelfHealMode };
+  /** `budget` absent → the runtime's `DEFAULT_HEAL_BUDGET`. Ignored under `fail-closed`. */
+  selfHeal: { mode: SelfHealMode; budget?: HealBudget };
   direction: { direction: Direction };
   secret: { secretMode: SecretMode };
 }

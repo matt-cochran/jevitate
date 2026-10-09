@@ -28,14 +28,19 @@ export const RUN_MODES: readonly RunMode[] = ["goal", "coverage", "adversarial",
  * are hard (independent code decided them); `advisory` (a 4xx-correlated console error, a Jev
  * flag) and `ux` (a usability rubric or signal finding) are advisory.
  */
-export type FindingCategory = "defect" | "hang" | "invariant" | "journey-assertion" | "goal-check" | "advisory" | "ux" | "approval";
+export type FindingCategory = "defect" | "hang" | "invariant" | "journey-assertion" | "journey-heal-pending" | "goal-check" | "advisory" | "ux" | "approval";
 
-export type Severity = "hard" | "advisory";
+/**
+ * `pending` (#453): a self-heal proposed a Journey revision that a person has yet to accept — not a
+ * defect and not advisory noise; it is listed apart and never counted as a defect.
+ */
+export type Severity = "hard" | "advisory" | "pending";
 
 // #437: `approval` — `check --require-approvals` found an approval that is missing, stale or not made by a person at a terminal.
 const HARD: ReadonlySet<FindingCategory> = new Set(["defect", "hang", "invariant", "journey-assertion", "goal-check", "approval"]);
 
 export function severityOf(category: FindingCategory): Severity {
+  if (category === "journey-heal-pending") return "pending";
   return HARD.has(category) ? "hard" : "advisory";
 }
 

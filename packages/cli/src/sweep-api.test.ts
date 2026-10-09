@@ -216,7 +216,7 @@ describe("runSweep", () => {
     expect(peak).toBe(2);
     expect(seen.map((s) => s.target.id).sort()).toEqual(["a", "b", "c", "d", "e"]);
     const argv = seen.find((s) => s.target.id === "c")!.argv;
-    expect(argv.slice(0, 5)).toEqual(["explore", "--url", "http://app.test/c", "--strategy", "adversarial"]);
+    expect(argv.slice(0, 7)).toEqual(["explore", "--url", "http://app.test/c", "--target", "c", "--strategy", "adversarial"]);
     expect(argv).toEqual(expect.arrayContaining(["--tag", "release=0.8.0", "--tag", "feature=c", "--tag", "target=c", "--fake-ai", "--out", join(dir, "out", "c"), "--json"]));
     expect(r).toMatchObject({ kind: "sweep", complete: true, missionOutcome: "clean", exitCode: 0, summary: { targets: 5, ran: 5, errors: 0, skipped: 0, pending: 0 } });
     expect(r.targets[0]).toMatchObject({ id: "a", status: "ran", depth: { distinctStates: 3 }, tags: { release: "0.8.0", feature: "a", target: "a" } });
@@ -295,6 +295,48 @@ describe("runSweep", () => {
     ]);
   });
 
+  it("counts goal runs that executed zero actions as notStarted in the summary", async () => {
+    const r = await runSweep({
+      plan: plan(["a", "b"].map((id) => target(id, { strategy: "goal" }))),
+      runOnce: async ({ target: t }) =>
+        t.id === "a"
+          ? result({ strategy: "goal", missionOutcome: "inconclusive", exitCode: 2, goalOutcome: "not-started", goalReason: "no-controls" })
+          : result({ strategy: "goal", goalOutcome: "succeeded" }),
+    });
+    expect(r.summary.notStarted).toBe(1);
+  });
+
+  const starved = (): RunEnvelope =>
+    result({ missionOutcome: "inconclusive", exitCode: 2, failure: { kind: "host-starved", message: "the run stalled while the host was starved: CDP command round-trip peaked at 4200ms" } });
+
+  it("retries a host-starved target once after the load drops, and records the retry's result", async () => {
+    let calls = 0;
+    let waited = 0;
+    const r = await runSweep({
+      plan: plan([target("a")]),
+      runOnce: async () => (++calls === 1 ? starved() : result({})),
+      awaitLowLoad: async () => void waited++,
+    });
+    expect([calls, waited, r.targets[0]!.missionOutcome, r.targets[0]!.hostStarvedRetry !== undefined]).toEqual([2, 1, "clean", true]);
+  });
+
+  it("retries a host-starved target only once: a second host-starved is recorded as the environment failure", async () => {
+    let calls = 0;
+    const r = await runSweep({ plan: plan([target("a")]), runOnce: async () => (calls++, starved()), awaitLowLoad: async () => undefined });
+    expect([calls, r.targets[0]!.environmentFailure?.kind]).toEqual([2, "host-starved"]);
+  });
+
+  it("does not retry a host-starved target when the retry is disabled", async () => {
+    let calls = 0;
+    await runSweep({ plan: plan([target("a")], { retryHostStarved: false }), runOnce: async () => (calls++, starved()), awaitLowLoad: async () => undefined });
+    expect(calls).toBe(1);
+  });
+
+  it("counts host-starved as an environment failure in the summary", async () => {
+    const r = await runSweep({ plan: plan([target("a")], { retryHostStarved: false }), runOnce: async () => starved() });
+    expect(r.summary.environmentFailures).toBe(1);
+  });
+
   it("does not stop when one of the first K runs reached the app", async () => {
     const r = await runSweep({
       plan: plan(["a", "b", "c"].map((id) => target(id)), { stopOnEnvFailure: 2 }),
@@ -328,9 +370,14 @@ describe("runSweep", () => {
   it("targetArgv: the sweep's operator flags come before the target's options; the target's tag of the same key wins", () => {
     const argv = targetArgv({ tags: { owner: "qa", feature: "x" }, runArgs: ["--deny", "Delete"] }, target("t", { goal: "g", tags: { feature: "y" }, optionArgv: ["--max-actions=3"] }), "/out/t");
     expect(argv).toEqual([
-      "explore", "--url", "http://app.test/t", "--strategy", "adversarial", "--goal", "g",
+      "explore", "--url", "http://app.test/t", "--target", "t", "--strategy", "adversarial", "--goal", "g",
       "--tag", "owner=qa", "--tag", "feature=y", "--tag", "target=t",
       "--deny", "Delete", "--max-actions=3", "--out", "/out/t", "--json",
     ]);
+  });
+
+  it("targetArgv passes the target's id as --target", () => {
+    const argv = targetArgv({ tags: {}, runArgs: [] }, target("checkout"), "/out/checkout");
+    expect(argv).toEqual(expect.arrayContaining(["--target", "checkout"]));
   });
 });

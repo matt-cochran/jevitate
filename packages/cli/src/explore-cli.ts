@@ -1,5 +1,5 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
-import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
+import { TAG_FLAG, TAG_HELP, TARGET_FLAG, TARGET_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { type InvariantSpec } from "@jevitate/recording";
@@ -173,6 +173,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     ),
   )))
     .option("--url <url>", "target URL (must be an authorized origin)")
+    .option(TARGET_FLAG, TARGET_HELP)
     .option(
       "--from-journey <id>",
       "journey-anchored exploration (#293): start from a PROMOTED Journey instead of --url — its first --at-step steps are replayed " +
@@ -432,7 +433,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option(
       "--personas <file>",
       "personas JSON: {\"<name>\": \"<storageState>\"} or {\"personas\": [{\"name\", \"storageState\", \"login\"?}]} — #427: `login` " +
-        "({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, environment variable NAMES only) re-mints an expired session once. " +
+        "({url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}, or #449 {api, userEnv, passwordEnv} for an HTTP sign-in endpoint; environment variable NAMES only) re-mints an expired session once. " +
         "A bare --persona <name> is the project's persona of that name (.jevitate/personas.json, same format)",
     )
     .option(

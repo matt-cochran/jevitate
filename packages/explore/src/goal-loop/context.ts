@@ -134,6 +134,10 @@ export interface RunContext {
   cycleMark: number;
   /** #390: the page's visible text (and its URL) at the last progress check — what an action added to it is told. */
   pageText: { readonly url: string; readonly text: string } | null;
+  /** #446: the acted-on control's form text right before the action (null: no form, or no action). */
+  formBefore: { readonly control: Control; readonly lines: readonly string[] } | null;
+  /** #446: text that newly showed in the acted-on form after an action (redacted), while it still shows. */
+  formMessage: { readonly lines: readonly string[]; readonly after: string } | null;
   /** #390: the last action was a conversation turn whose reply was already told (its text is not told again). */
   replyTold: boolean;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
@@ -185,6 +189,8 @@ export interface RunContext {
   readonly blockedReported: Set<string>;
   /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
   lastReportNotFound: boolean;
+  /** #448: the run stopped fail-closed because the page offered no interactive control (the cause of a `blocked` miss). */
+  noControls: boolean;
   /** #238: the latest report's "none exists" was below the coverage floor (its reason), else null. */
   lastAbsenceUncovered: string | null;
   /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */
@@ -486,6 +492,8 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.cycleAction = null;
   ctx.cycleMark = clock.now();
   ctx.pageText = null;
+  ctx.formBefore = null;
+  ctx.formMessage = null;
   ctx.replyTold = false;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   ctx.lastChanceGiven = false;
@@ -555,6 +563,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.blockedReported = new Set<string>();
   /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
   ctx.lastReportNotFound = false;
+  ctx.noControls = false;
   /** #238: the latest report's "none exists" was below the coverage floor (its reason), else null. */
   ctx.lastAbsenceUncovered = null;
   /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */

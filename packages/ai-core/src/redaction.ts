@@ -3,7 +3,7 @@
 // promoted here from `@jevitate/explore` so every autonomous producer — the
 // exploration engine AND `@jevitate/ux` — redacts through ONE implementation
 // (spec: "no divergent redaction path"). `@jevitate/explore` re-exports these.
-import { assertNoSecretInPayload, secretForms } from "./credential-guard.js";
+import { assertNoSecretInPayload, isWeakSecret, secretForms, secretPattern } from "./credential-guard.js";
 
 /** What a scrubbed secret is replaced with — a marker, never the value/length. */
 export const REDACTION_MASK = "«redacted»";
@@ -11,13 +11,16 @@ export const REDACTION_MASK = "«redacted»";
 /**
  * Replaces every occurrence of every non-blank secret with the mask — both the
  * raw value and its `encodeURIComponent` form (a secret that rode into a URL is
- * percent-encoded there, and the raw-value match alone would miss it).
+ * percent-encoded there, and the raw-value match alone would miss it). A secret shorter than
+ * `MIN_SUBSTRING_SECRET_LENGTH` is replaced only where it stands as a whole token (#454), so a
+ * username `me` never turns "Timeout" into "Ti«redacted»out".
  */
 export function redactText(text: string, secrets: readonly string[]): string {
   let out = text;
   for (const s of secrets) {
     if (!s || s.trim().length === 0) continue;
-    for (const form of secretForms(s)) out = out.split(form).join(REDACTION_MASK);
+    if (isWeakSecret(s)) out = out.replace(secretPattern(s), REDACTION_MASK);
+    else for (const form of secretForms(s)) out = out.split(form).join(REDACTION_MASK);
   }
   return out;
 }

@@ -68,9 +68,9 @@ function cli(extra: Partial<CliDeps> = {}) {
 const URL = "http://127.0.0.1:3999/";
 
 describe("one exit-code table (#210)", () => {
-  it("keeps the mission codes 0–4 and gives usage errors their own code", () => {
-    expect(EXIT_CODES).toEqual({ ok: 0, defects: 1, inconclusive: 2, hang: 3, intermittent: 4, usage: 64 });
-    expect(MISSION_EXIT_CODES).toEqual({ clean: 0, "defects-found": 1, inconclusive: 2, crashed: 2, hang: 3, intermittent: 4 });
+  it("keeps the mission codes 0–4, adds pending-review 5 (#453) and gives usage errors their own code", () => {
+    expect(EXIT_CODES).toEqual({ ok: 0, defects: 1, inconclusive: 2, hang: 3, intermittent: 4, pendingReview: 5, usage: 64 });
+    expect(MISSION_EXIT_CODES).toEqual({ clean: 0, "pending-review": 5, "defects-found": 1, inconclusive: 2, crashed: 2, hang: 3, intermittent: 4 });
     for (const code of ["E_EXPLORE_ARGS", "E_EXPLORE_ASSERTION", "E_CHECK_SUITE", "E_LEDGER_INPUT", "E_VERIFY_FIX_ARGS", "E_UNKNOWN_JOURNEY"]) {
       expect(exitCodeForError(code), code).toBe(64);
     }
