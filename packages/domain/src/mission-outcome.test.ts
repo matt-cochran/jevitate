@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { GOAL_OUTCOMES, MISSION_EXIT_CODES, defectOutcomeOf, foldGoalOutcome, goalMissionOutcome, goalReasonOf, type MissionOutcome } from "./mission-outcome.js";
+import { GOAL_OUTCOMES, MISSION_EXIT_CODES, combineOutcomes, defectOutcomeOf, foldGoalOutcome, goalMissionOutcome, goalReasonOf, worstOutcome, type MissionOutcome } from "./mission-outcome.js";
+import { journeyExitCode } from "./journey-outcome.js";
 
 describe("defectOutcomeOf (#421/#423)", () => {
   it("no defects: status none, empty byKind, no advisoryByKind", () => {
@@ -66,5 +67,23 @@ describe("goalReasonOf (#423): decided from the run's state, never from reason t
     // An invariant overrode a budget stop: the overridden ending explains the goal.
     expect(goalReasonOf({ goalOutcome: "defects-found", overridden: "inconclusive", stop: "budget" })).toBe("budget");
     expect(goalReasonOf({ goalOutcome: "defects-found" })).toBe("defects");
+  });
+});
+
+describe("pending-review (#453)", () => {
+  it("exits 5", () => {
+    expect(MISSION_EXIT_CODES["pending-review"]).toBe(5);
+  });
+  it("is worse than clean", () => {
+    expect(worstOutcome("clean", "pending-review")).toBe("pending-review");
+  });
+  it("is milder than defects-found", () => {
+    expect(combineOutcomes(["pending-review", "defects-found"])).toBe("defects-found");
+  });
+});
+
+describe("journeyExitCode (#453)", () => {
+  it("maps ok/healed-pending-review/heal-exhausted/quarantined to 0/5/1/1", () => {
+    expect((["ok", "healed-pending-review", "heal-exhausted", "quarantined"] as const).map(journeyExitCode)).toEqual([0, 5, 1, 1]);
   });
 });

@@ -11,6 +11,7 @@ describe("mission outcome → exit code (owner ruling 1: a distinct code per out
       intermittent: 4,
       inconclusive: 2,
       crashed: 2,
+      "pending-review": 5,
     });
   });
 
