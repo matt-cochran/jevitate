@@ -1,5 +1,6 @@
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { journeyEntry } from "./forge-verify.js";
 import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { writeApprovedSnapshot } from "./journey-review-store.js";
@@ -375,6 +376,8 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
     ...(opts.jev === undefined ? {} : { jev: opts.jev }),
   });
   // #437: the person confirms the approval and each waiver given with it (or it is refused) — then it is recorded with how it was made.
+  // #469: in CI, the confirmation first asks the forge whether a merged, approved PR made this Journey (`pr-review`).
+  const entry = journeyEntry(dir, id, contentHash);
   const provenance =
     opts.confirm === undefined
       ? programmaticProvenance()
@@ -382,6 +385,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
           kind: opts.action === "demo approve" ? "demo" : "journey",
           id,
           contentHash,
+          ...(entry === null ? {} : { entry }),
           ...(proposal === null
             ? {}
             : {

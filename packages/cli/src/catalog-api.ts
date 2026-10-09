@@ -7,6 +7,7 @@ import { acknowledgeFindings, preApprovalFindings, type ApprovalAction } from ".
 import { findProjectDir } from "./project-dir.js";
 import type { JevSetup } from "./jev-advisor.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { catalogItemEntry } from "./forge-verify.js";
 
 /**
  * #433 — the approvals of the catalog (`persona approve`, `job approve`: a person's act, CLI only)
@@ -74,6 +75,9 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
   // #434: every approval runs the readiness checks (the Jev layer only with --real and a key).
   const findings = await preApprovalFindings({ kind, id }, catalog, { action, readiness: true, ...(opts.jev === undefined ? {} : { jev: opts.jev }) });
   const acceptedFindings = acknowledgeFindings(`${kind} '${id}'`, findings, opts.acceptFindings);
+  const file = kind === "persona" ? catalog.personasFile : catalog.jobsFile;
+  // requirePersona/requireJob found the item, so its file was read.
+  if (file === null) throw new Error(`${kind} '${id}' has no catalog file`);
   const provenance =
     opts.confirm === undefined
       ? programmaticProvenance()
@@ -81,6 +85,8 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
           kind,
           id,
           contentHash: item.contentHash,
+          // #469: in CI, the confirmation first asks the forge whether a merged, approved PR made this entry (`pr-review`).
+          entry: catalogItemEntry(kind, file, id, item.contentHash),
           waivers: acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: acceptedFindings.reason, detail: acceptedFindings.findings.join(", ") }],
         });
   const approval: CatalogApproval = {
@@ -89,9 +95,6 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
     provenance,
     ...(acceptedFindings === undefined ? {} : { acceptedFindings: { ...acceptedFindings, provenance } }),
   };
-  const file = kind === "persona" ? catalog.personasFile : catalog.jobsFile;
-  // requirePersona/requireJob found the item, so its file was read.
-  if (file === null) throw new Error(`${kind} '${id}' has no catalog file`);
   if (kind === "persona") await writePersonaApproval(file, id, approval);
   else await writeJobApproval(file, id, approval);
   return { kind, id, approval, previousStatus: item.status, findings, file };

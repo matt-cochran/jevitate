@@ -72,8 +72,13 @@ export const ApprovalViolationSchema = z
   .object({
     kind: z.enum(["journey", "persona", "job"]),
     id: z.string(),
-    /** `missing`: promoted with no approval; `stale`: changed since; `no-provenance`: approved before provenance was recorded; `channel`: made over a channel not allowed. */
-    problem: z.enum(["missing", "stale", "no-provenance", "channel"]),
+    /**
+     * `missing`: promoted with no approval; `stale`: changed since; `no-provenance`: approved before
+     * provenance was recorded; `channel`: made over a channel not allowed; `unverified` (#469): a
+     * `pr-review` approval the forge does not confirm (or that could not be re-verified: no token,
+     * offline) — never a pass, even when `pr-review` is allowed.
+     */
+    problem: z.enum(["missing", "stale", "no-provenance", "channel", "unverified"]),
     message: z.string(),
   })
   .strict();
