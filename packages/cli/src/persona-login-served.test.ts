@@ -27,6 +27,7 @@ useSkippingTime({ per: "all" });
 const USER = `alice-${randomUUID().slice(0, 8)}@example.test`;
 const PASSWORD = `pw-${randomUUID()}-Zq9`;
 const sessions = new Set<string>();
+const tokens = new Set<string>();
 const pendingEmails = new Map<string, string>();
 let server: Server;
 let origin: string;
@@ -139,6 +140,52 @@ beforeAll(async () => {
       }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(
         `<!doctype html><html><head><title>API credentials</title></head><body><nav>Signed in as a@b.c</nav><h1>API credentials</h1><label>App secret <input type="password"></label><button type="button">Save</button></body></html>`,
+      );
+      return;
+    }
+    // #449: a JSON sign-in endpoint returning a token, one setting a cookie, and an app that reads localStorage.token.
+    if ((url.pathname === "/api/login" || url.pathname === "/api/login-cookie") && req.method === "POST") {
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c.toString("utf8")));
+      req.on("end", () => {
+        let creds: Record<string, unknown> = {};
+        try {
+          creds = JSON.parse(body) as Record<string, unknown>;
+        } catch {
+          // not JSON: rejected below
+        }
+        const cookie = url.pathname === "/api/login-cookie";
+        if ((cookie ? creds.email : creds.username) !== USER || creds.password !== PASSWORD) {
+          res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid credentials" }));
+          return;
+        }
+        if (cookie) {
+          const sid = randomUUID();
+          sessions.add(sid);
+          res.writeHead(200, { "content-type": "application/json", "set-cookie": `sid=${sid}; Path=/; HttpOnly` }).end(JSON.stringify({ ok: true }));
+          return;
+        }
+        const token = `tok-${randomUUID()}`;
+        tokens.add(token);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ token }));
+      });
+      return;
+    }
+    if (url.pathname === "/api/me") {
+      const auth = req.headers.authorization ?? "";
+      res.writeHead(auth.startsWith("Bearer ") && tokens.has(auth.slice(7)) ? 200 : 401, { "content-type": "application/json" }).end("{}");
+      return;
+    }
+    if (url.pathname === "/app") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(
+        `<!doctype html><html><head><title>App</title></head><body><div id="root">Loading…</div><script>
+          var t = localStorage.getItem("token");
+          if (!t) location.replace("/login?next=/app");
+          else fetch("/api/me", { headers: { authorization: "Bearer " + t } }).then(function (r) {
+            if (r.ok) document.getElementById("root").innerHTML = "<h1>Dashboard</h1><button type=button>New report</button>";
+            else location.replace("/login?next=/app");
+          });
+        </script></body></html>`,
       );
       return;
     }
@@ -355,5 +402,101 @@ describe("#427 persona login + pre-flight auth check (served, real browser)", ()
         expect(bytes.includes(Buffer.from(secret)), `${f} holds a credential`).toBe(false);
       }
     }
+  });
+});
+
+describe("#449 jevitate login --api (served, real browser)", () => {
+  let dir: string;
+  const transcript: string[] = [];
+  const record = (r: { out: string; err: string }): void => {
+    transcript.push(r.out, r.err);
+  };
+  const apiLogin = (save: string, ...extra: string[]): string[] => [
+    "login", "--api", `${origin}/api/login`, "--token-path", "token", "--verify-url", `${origin}/app`,
+    "--user-env", "JEV_T_USER", "--password-env", "JEV_T_PASSWORD", "--save", save, "--json", ...extra,
+  ];
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-login-api-served-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("login --api writes the endpoint's token into the app origin's localStorage, and the session passes --auth-check", async () => {
+    const save = join(dir, "states", "api.json");
+    const r = await run(apiLogin(save));
+    record(r);
+    const state = existsSync(save) ? (JSON.parse(await readFile(save, "utf8")) as { origins: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }> }) : undefined;
+    const token = state?.origins.find((o) => o.origin === origin)?.localStorage.find((e) => e.name === "token")?.value ?? "";
+    expect(r.envelope.ok && r.envelope.data?.method === "api" && tokens.has(token) && (statSync(save).mode & 0o777) === 0o600, r.out + r.err).toBe(true);
+  }, 120_000);
+
+  it("the API-minted session starts a run on the app without any form interaction", async () => {
+    const save = join(dir, "states", "api.json");
+    const r = await run([
+      "explore", "--url", `${origin}/app`, "--goal", "see the dashboard", "--success", "textIncludes:css=h1|Dashboard",
+      "--allow-vacuous-checks", "--storage-state", save, "--out", join(dir, "out-api"), "--json",
+    ]);
+    record(r);
+    expect(r.envelope.data?.missionOutcome, r.out + r.err).toBe("clean");
+  }, 120_000);
+
+  it("login --api without --token-path saves the cookie the endpoint set", async () => {
+    const save = join(dir, "states", "api-cookie.json");
+    const r = await run([
+      "login", "--api", `${origin}/api/login-cookie`, "--api-user-key", "email", "--verify-url", `${origin}/dashboard`,
+      "--user-env", "JEV_T_USER", "--password-env", "JEV_T_PASSWORD", "--save", save, "--json",
+    ]);
+    record(r);
+    const state = existsSync(save) ? (JSON.parse(await readFile(save, "utf8")) as { cookies: Array<{ name: string; value: string }> }) : undefined;
+    expect(r.envelope.ok && sessions.has(state?.cookies.find((c) => c.name === "sid")?.value ?? ""), r.out + r.err).toBe(true);
+  }, 120_000);
+
+  it("login --api with wrong credentials: E_LOGIN_FAILED (exit 2), nothing saved", async () => {
+    const save = join(dir, "states", "api-wrong.json");
+    const r = await run(["login", "--api", `${origin}/api/login`, "--token-path", "token", "--user-env", "JEV_T_USER", "--password-env", "JEV_T_WRONG", "--save", save, "--json"]);
+    record(r);
+    expect({ code: r.envelope.error?.code, exitCode: r.exitCode, saved: existsSync(save) }, r.out + r.err).toEqual({ code: "E_LOGIN_FAILED", exitCode: 2, saved: false });
+  }, 120_000);
+
+  it("login --api with a token path the response lacks: E_LOGIN_FAILED, nothing saved", async () => {
+    const save = join(dir, "states", "api-nopath.json");
+    const r = await run(apiLogin(save, "--token-path", "data.accessToken", "--storage-key", "token"));
+    record(r);
+    expect({ code: r.envelope.error?.code, saved: existsSync(save) }, r.out + r.err).toEqual({ code: "E_LOGIN_FAILED", saved: false });
+  }, 120_000);
+
+  it("login --api whose session the app does not accept fails --auth-check: E_LOGIN_FAILED, nothing saved", async () => {
+    const save = join(dir, "states", "api-unread.json");
+    const r = await run(apiLogin(save, "--storage-key", "not_the_apps_key"));
+    record(r);
+    expect({ code: r.envelope.error?.code, saved: existsSync(save), files: (await readdir(join(dir, "states"))).filter((f) => f.includes("api-unread")) }, r.out + r.err).toEqual({ code: "E_LOGIN_FAILED", saved: false, files: [] });
+  }, 120_000);
+
+  it("a persona with login.api is re-minted on an expired session, and the run goes on", async () => {
+    const save = join(dir, "states", "api.json");
+    tokens.clear(); // the backend revoked every token
+    const personas = join(dir, "personas.json");
+    const login = { api: { url: `${origin}/api/login`, tokenPath: "token" }, userEnv: "JEV_T_USER", passwordEnv: "JEV_T_PASSWORD" };
+    await writeFile(personas, JSON.stringify({ personas: [{ name: "bob", storageState: save, login }] }));
+    const r = await run([
+      "explore", "--url", `${origin}/app`, "--goal", "see the dashboard", "--success", "textIncludes:css=h1|Dashboard",
+      "--allow-vacuous-checks", "--personas", personas, "--out", join(dir, "out-api-refresh"), "--json",
+    ]);
+    record(r);
+    const cells = r.envelope.data?.cells as Array<{ persona: string; missionOutcome: string }> | undefined;
+    expect({ refreshed: /persona bob: .*signed in again/.test(r.err), cell: cells?.[0] }, r.out + r.err).toMatchObject({ refreshed: true, cell: { persona: "bob", missionOutcome: "clean" } });
+  }, 120_000);
+
+  it("no credential or token appears in any output, and no credential in any file the runs wrote", async () => {
+    expect(transcript.length).toBeGreaterThan(0);
+    const leaks: string[] = [];
+    for (const t of transcript) for (const secret of [PASSWORD, USER, ENV.JEV_T_WRONG, ...tokens]) if (t.includes(secret)) leaks.push(secret === PASSWORD || secret === USER || secret === ENV.JEV_T_WRONG ? "a credential in output" : "a token in output");
+    for (const f of await allFiles(dir)) {
+      const bytes = await readFile(f);
+      for (const secret of [PASSWORD, USER, ENV.JEV_T_WRONG, encodeURIComponent(PASSWORD), encodeURIComponent(USER)]) if (bytes.includes(Buffer.from(secret))) leaks.push(`${f} holds a credential`);
+    }
+    expect(leaks).toEqual([]);
   });
 });

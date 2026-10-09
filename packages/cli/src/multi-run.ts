@@ -149,7 +149,8 @@ export function parseActorSpec(spec: string, cwd: string = process.cwd()): Perso
  * `--personas <file>`: JSON, either `{"admin": "admin.json", "sales": "sales.json"}` or
  * `{"personas": [{"name": "admin", "storageState": "admin.json"}]}` (a bare array also works).
  * Relative paths resolve against the personas file's own directory. #427: an entry may carry
- * `login: {url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}` (the map form
+ * `login: {url, userEnv, passwordEnv, userField?, passwordField?, submit?, success?}` (#449: or
+ * `{api, userEnv, passwordEnv}`, a sign-in through an HTTP endpoint) (the map form
  * then takes `{"admin": {"storageState": "admin.json", "login": {…}}}`) — the pre-flight auth check
  * re-mints an expired session from it once. #433: an entry may also carry the catalog's
  * `description`, `role` and `approval` (and `id` for `name`); a catalog-only entry (no session) is

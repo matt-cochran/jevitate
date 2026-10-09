@@ -29,10 +29,34 @@ import { findGitRoot, sessionFileInProjectRefusal } from "./project-dir.js";
 
 // ── configuration ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * #449: a sign-in through an HTTP endpoint (`jevitate login --api`, a personas file's `login.api`):
+ * the credentials are POSTed as JSON, and the response's cookies and/or a token read from its JSON
+ * body (written into the app origin's localStorage) become the storage state. No form is driven.
+ */
+export interface ApiLogin {
+  /** The sign-in endpoint (absolute http(s) URL on an authorized origin). */
+  readonly url: string;
+  /** The JSON body key the username is sent under (default `username`). */
+  readonly userKey: string;
+  /** The JSON body key the password is sent under (default `password`). */
+  readonly passwordKey: string;
+  /** A simple dotted path into the JSON response (`token`, `data.accessToken`) whose value is the session token. */
+  readonly tokenPath?: string;
+  /** The localStorage key the token is written under (default: the token path's last segment). */
+  readonly storageKey?: string;
+  /** Where the token goes: only `local` (a Playwright storage state has no sessionStorage). */
+  readonly storage: "local";
+  /** The page that proves the session (`--verify-url`); default the endpoint's origin root. Its origin receives the token. */
+  readonly verifyUrl?: string;
+}
+
 /** A persona's login parameters (`jevitate login` flags, or a personas file entry's `login`). */
 export interface PersonaLogin {
-  /** The sign-in page (absolute http(s) URL). */
-  readonly url: string;
+  /** The sign-in page (absolute http(s) URL) — the form path. Exactly one of `url` and `api` is set. */
+  readonly url?: string;
+  /** #449: sign in through an HTTP endpoint instead of a form. */
+  readonly api?: ApiLogin;
   /** Environment variable holding the username (its NAME — never the value). */
   readonly userEnv: string;
   /** Environment variable holding the password (its NAME — never the value). */
@@ -90,32 +114,151 @@ function httpUrl(v: string, what: string): string {
   return u.href;
 }
 
-const LOGIN_KEYS = ["url", "userEnv", "passwordEnv", "userField", "passwordField", "submit", "success"] as const;
+const LOGIN_KEYS = ["url", "api", "userEnv", "passwordEnv", "userField", "passwordField", "submit", "success"] as const;
+/** The keys only a form sign-in uses (refused beside `api`). */
+const FORM_ONLY_KEYS = ["url", "userField", "passwordField", "submit", "success"] as const;
+const API_KEYS = ["url", "userKey", "passwordKey", "tokenPath", "storageKey", "storage", "verifyUrl"] as const;
+
+/** A JSON body key: a plain identifier (letters, digits, `_`, `-`). */
+const BODY_KEY = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+/** One segment of a token path: an identifier or an array index. */
+const PATH_SEGMENT = /^(?:[A-Za-z_][A-Za-z0-9_-]{0,63}|0|[1-9][0-9]{0,5})$/;
+const UNSAFE_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+/** A storage key: a safe identifier (letters, digits, `_`, `-`, `.`, `:`, `$`). */
+const STORAGE_KEY = /^[A-Za-z_$][A-Za-z0-9_$.:-]{0,127}$/;
+
+/** The names an API login's settings go by in error messages (flags, or a personas file's `login.api.*`). */
+interface ApiLoginLabels {
+  readonly url: string;
+  readonly userKey: string;
+  readonly passwordKey: string;
+  readonly tokenPath: string;
+  readonly storageKey: string;
+  readonly storage: string;
+  readonly verifyUrl: string;
+}
+
+const FLAG_LABELS: ApiLoginLabels = {
+  url: "--api",
+  userKey: "--api-user-key",
+  passwordKey: "--api-password-key",
+  tokenPath: "--token-path",
+  storageKey: "--storage-key",
+  storage: "--storage",
+  verifyUrl: "--verify-url",
+};
+
+/** `a.b.0.c` → its segments (strict: identifiers or indexes, no prototype keys). */
+export function parseTokenPath(path: string, what: string): string[] {
+  const segments = path.split(".");
+  if (segments.length > 8 || segments.some((s) => !PATH_SEGMENT.test(s) || UNSAFE_SEGMENTS.has(s))) {
+    throw new LoginArgsError(`${what} must be a simple dotted path of identifiers or array indexes (e.g. token, data.accessToken; at most 8 segments), got ${JSON.stringify(path)}`);
+  }
+  return segments;
+}
+
+/** Validates an API login's settings (fail closed before any network). */
+export function parseApiLogin(
+  raw: {
+    readonly url: string;
+    readonly userKey?: string | undefined;
+    readonly passwordKey?: string | undefined;
+    readonly tokenPath?: string | undefined;
+    readonly storageKey?: string | undefined;
+    readonly storage?: string | undefined;
+    readonly verifyUrl?: string | undefined;
+  },
+  labels: ApiLoginLabels = FLAG_LABELS,
+): ApiLogin {
+  const url = httpUrl(raw.url, labels.url);
+  for (const [k, label] of [["userKey", labels.userKey], ["passwordKey", labels.passwordKey]] as const) {
+    const v = raw[k];
+    if (v !== undefined && !BODY_KEY.test(v)) throw new LoginArgsError(`${label} must be a JSON key of letters, digits, _ or - (starting with a letter or _), got ${JSON.stringify(v)}`);
+  }
+  const userKey = raw.userKey ?? "username";
+  const passwordKey = raw.passwordKey ?? "password";
+  if (userKey === passwordKey) throw new LoginArgsError(`${labels.userKey} and ${labels.passwordKey} must differ (both are ${JSON.stringify(userKey)})`);
+  if (raw.storage !== undefined && raw.storage !== "local") {
+    if (raw.storage === "session") {
+      throw new LoginArgsError(
+        `${labels.storage} session is not supported: a Playwright storage state holds cookies and localStorage only, so a sessionStorage token could not be saved or restored — use ${labels.storage} local, or a cookie session`,
+      );
+    }
+    throw new LoginArgsError(`${labels.storage} must be local, got ${JSON.stringify(raw.storage)}`);
+  }
+  let segments: string[] | undefined;
+  if (raw.tokenPath !== undefined) segments = parseTokenPath(raw.tokenPath, labels.tokenPath);
+  else if (raw.storageKey !== undefined || raw.storage !== undefined) throw new LoginArgsError(`${labels.storageKey}/${labels.storage} place the token ${labels.tokenPath} reads: pass ${labels.tokenPath} too`);
+  if (raw.storageKey !== undefined && !STORAGE_KEY.test(raw.storageKey)) {
+    throw new LoginArgsError(`${labels.storageKey} must be a safe identifier (letters, digits, _ $ . : -; starting with a letter, _ or $), got ${JSON.stringify(raw.storageKey)}`);
+  }
+  const storageKey = raw.storageKey ?? segments?.at(-1);
+  if (storageKey !== undefined && !STORAGE_KEY.test(storageKey)) {
+    throw new LoginArgsError(`${labels.tokenPath} ends in ${JSON.stringify(storageKey)}, which is not a storage key: name one with ${labels.storageKey}`);
+  }
+  return {
+    url,
+    userKey,
+    passwordKey,
+    ...optional("tokenPath", raw.tokenPath),
+    ...optional("storageKey", storageKey),
+    storage: "local",
+    ...optional("verifyUrl", raw.verifyUrl === undefined ? undefined : httpUrl(raw.verifyUrl, labels.verifyUrl)),
+  };
+}
 
 /** Validates a personas file entry's `login` object (`where` names it in errors). */
 export function parsePersonaLogin(v: unknown, where: string): PersonaLogin {
-  if (v === null || typeof v !== "object" || Array.isArray(v)) throw new LoginArgsError(`${where} must be an object {url, userEnv, passwordEnv, …}`);
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw new LoginArgsError(`${where} must be an object {url | api, userEnv, passwordEnv, …}`);
   const o = v as Record<string, unknown>;
   for (const k of Object.keys(o)) {
     if (!(LOGIN_KEYS as readonly string[]).includes(k)) {
       throw new LoginArgsError(`${where}.${k}: unknown key (allowed: ${LOGIN_KEYS.join(", ")}; credentials are read from the environment variables userEnv/passwordEnv name)`);
     }
   }
-  const str = (k: (typeof LOGIN_KEYS)[number], required: boolean): string | undefined => {
-    const x = o[k];
+  const str = (from: Record<string, unknown>, k: string, label: string, required: boolean): string | undefined => {
+    const x = from[k];
     if (x === undefined && !required) return undefined;
-    if (typeof x !== "string" || x.trim() === "") throw new LoginArgsError(`${where}.${k} must be a non-empty string`);
+    if (typeof x !== "string" || x.trim() === "") throw new LoginArgsError(`${label} must be a non-empty string`);
     return x;
   };
-  const login: PersonaLogin = {
-    url: httpUrl(str("url", true)!, `${where}.url`),
-    userEnv: str("userEnv", true)!,
-    passwordEnv: str("passwordEnv", true)!,
-    ...optional("userField", str("userField", false)),
-    ...optional("passwordField", str("passwordField", false)),
-    ...optional("submit", str("submit", false)),
-    ...optional("success", str("success", false)),
-  };
+  const userEnv = str(o, "userEnv", `${where}.userEnv`, true)!;
+  const passwordEnv = str(o, "passwordEnv", `${where}.passwordEnv`, true)!;
+  let login: PersonaLogin;
+  if (o.api !== undefined) {
+    const formKeys = FORM_ONLY_KEYS.filter((k) => o[k] !== undefined);
+    if (formKeys.length > 0) throw new LoginArgsError(`${where}: api signs in through an HTTP endpoint — the form keys ${formKeys.join(", ")} do not apply beside it`);
+    const a = typeof o.api === "string" ? { url: o.api } : o.api;
+    if (a === null || typeof a !== "object" || Array.isArray(a)) throw new LoginArgsError(`${where}.api must be the endpoint URL or an object {url, userKey?, passwordKey?, tokenPath?, storageKey?, storage?, verifyUrl?}`);
+    const ao = a as Record<string, unknown>;
+    for (const k of Object.keys(ao)) {
+      if (!(API_KEYS as readonly string[]).includes(k)) throw new LoginArgsError(`${where}.api.${k}: unknown key (allowed: ${API_KEYS.join(", ")})`);
+    }
+    const label = (k: string): string => `${where}.api${typeof o.api === "string" && k === "url" ? "" : `.${k}`}`;
+    const api = parseApiLogin(
+      {
+        url: str(ao, "url", label("url"), true)!,
+        userKey: str(ao, "userKey", label("userKey"), false),
+        passwordKey: str(ao, "passwordKey", label("passwordKey"), false),
+        tokenPath: str(ao, "tokenPath", label("tokenPath"), false),
+        storageKey: str(ao, "storageKey", label("storageKey"), false),
+        storage: str(ao, "storage", label("storage"), false),
+        verifyUrl: str(ao, "verifyUrl", label("verifyUrl"), false),
+      },
+      { url: label("url"), userKey: label("userKey"), passwordKey: label("passwordKey"), tokenPath: label("tokenPath"), storageKey: label("storageKey"), storage: label("storage"), verifyUrl: label("verifyUrl") },
+    );
+    login = { api, userEnv, passwordEnv };
+  } else {
+    login = {
+      url: httpUrl(str(o, "url", `${where}.url`, true)!, `${where}.url`),
+      userEnv,
+      passwordEnv,
+      ...optional("userField", str(o, "userField", `${where}.userField`, false)),
+      ...optional("passwordField", str(o, "passwordField", `${where}.passwordField`, false)),
+      ...optional("submit", str(o, "submit", `${where}.submit`, false)),
+      ...optional("success", str(o, "success", `${where}.success`, false)),
+    };
+  }
   assertEnvVarName(login.userEnv, `${where}.userEnv`);
   assertEnvVarName(login.passwordEnv, `${where}.passwordEnv`);
   if (login.success !== undefined) parseLoginSuccess(login.success);
@@ -128,7 +271,8 @@ function optional<K extends string, V>(k: K, v: V | undefined): { [P in K]?: V }
 
 /** `jevitate login`'s flags → a validated `PersonaLogin` (fail closed before any browser opens). */
 export function loginFromFlags(f: {
-  readonly url: string;
+  readonly url?: string;
+  readonly api?: Parameters<typeof parseApiLogin>[0];
   readonly userEnv: string;
   readonly passwordEnv: string;
   readonly userField?: string;
@@ -136,6 +280,25 @@ export function loginFromFlags(f: {
   readonly submit?: string;
   readonly success?: string;
 }): PersonaLogin {
+  if (f.api !== undefined) {
+    if (f.url !== undefined) throw new LoginArgsError("--api and --url are two ways to sign in: pass one");
+    const formFlags = (
+      [
+        ["--user-field", f.userField],
+        ["--password-field", f.passwordField],
+        ["--submit", f.submit],
+        ["--success", f.success],
+      ] as const
+    )
+      .filter(([, v]) => v !== undefined)
+      .map(([k]) => k);
+    if (formFlags.length > 0) throw new LoginArgsError(`--api signs in through an HTTP endpoint, not a form: ${formFlags.join(", ")} ${formFlags.length === 1 ? "does" : "do"} not apply`);
+    const login: PersonaLogin = { api: parseApiLogin(f.api), userEnv: f.userEnv, passwordEnv: f.passwordEnv };
+    assertEnvVarName(login.userEnv, "--user-env");
+    assertEnvVarName(login.passwordEnv, "--password-env");
+    return login;
+  }
+  if (f.url === undefined) throw new LoginArgsError("missing --url (or --api)");
   const login: PersonaLogin = {
     url: httpUrl(f.url, "--url"),
     userEnv: f.userEnv,
@@ -202,9 +365,9 @@ export function resolveLoginSecrets(login: PersonaLogin, env: Readonly<Record<st
   return { username: read(login.userEnv, "--user-env"), password: read(login.passwordEnv, "--password-env") };
 }
 
-/** Removes both credentials (and URL credentials/tokens) from a text before it leaves this module. */
-function scrub(text: string, secrets: LoginSecrets): string {
-  return redactText(text, [secrets.password, secrets.username]);
+/** Removes both credentials, and any session token read (#449), (and URL credentials/tokens) from a text before it leaves this module. */
+function scrub(text: string, secrets: LoginSecrets, token?: string): string {
+  return redactText(text, token === undefined ? [secrets.password, secrets.username] : [token, secrets.password, secrets.username]);
 }
 
 // ── the login ─────────────────────────────────────────────────────────────────────────────────
@@ -400,6 +563,7 @@ export async function performLogin(page: Page, login: PersonaLogin, secrets: Log
   const success = login.success === undefined ? undefined : parseLoginSuccess(login.success);
   const t = opts.timeoutMs;
   try {
+    if (login.url === undefined) throw new LoginFailedError("no sign-in page: the login parameters name an API endpoint, not a form");
     await page.goto(login.url, { waitUntil: "load", timeout: t });
     assertPageAuthorized(page, opts.allowlist);
     await waitForLoginField(page, login, t);
@@ -510,6 +674,11 @@ export interface MintOptions {
   readonly port: BrowserPort;
   readonly browser?: BrowserRunOptions;
   readonly timeoutMs: number;
+  /**
+   * #449 (an API login only): prove the new session before it is saved — the state is checked against
+   * this URL with this rule (`checkSession`), and nothing is written when the check fails.
+   */
+  readonly verify?: { readonly url: string; readonly check: AuthCheck };
 }
 
 export interface MintResult {
@@ -519,18 +688,24 @@ export interface MintResult {
   readonly landedUrl: string;
 }
 
+function assertLoginOriginAuthorized(url: string, allowlist: readonly string[], what: string): void {
+  try {
+    assertAuthorizedExploreTarget(url, allowlist);
+  } catch (err) {
+    if (err instanceof UnauthorizedExploreTargetError) throw new LoginArgsError(`${what} ${JSON.stringify(redactUrl(url))} is not an authorized origin (allowed: ${allowlist.join(", ") || "<none>"}) — refused`);
+    throw err;
+  }
+}
+
 /** Signs in on a fresh, unrecorded session and saves its storage state (mode 0600). */
 export async function mintStorageState(o: MintOptions): Promise<MintResult> {
-  const secrets = resolveLoginSecrets(o.login, o.env);
+  if (o.login.api !== undefined) return mintApiStorageState(o, o.login.api);
+  if (o.login.url === undefined) throw new LoginArgsError("the login parameters name neither a sign-in page (url) nor an endpoint (api)");
   const save = resolve(o.save);
   const refusal = sessionFileInProjectRefusal(save, "the storage state");
   if (refusal !== undefined) throw new LoginArgsError(refusal);
-  try {
-    assertAuthorizedExploreTarget(o.login.url, o.allowlist);
-  } catch (err) {
-    if (err instanceof UnauthorizedExploreTargetError) throw new LoginArgsError(`login URL ${JSON.stringify(o.login.url)} is not an authorized origin (allowed: ${o.allowlist.join(", ") || "<none>"}) — refused`);
-    throw err;
-  }
+  assertLoginOriginAuthorized(o.login.url, o.allowlist, "login URL");
+  const secrets = resolveLoginSecrets(o.login, o.env);
   // Never recorded: no video directory, no tracing, no screenshots — whatever the run's own flags say.
   const { recordVideo: _video, ...launch } = o.browser ?? {};
   let session: BrowserSession | undefined;
@@ -544,6 +719,115 @@ export async function mintStorageState(o: MintOptions): Promise<MintResult> {
     if (err instanceof LoginFailedError || err instanceof LoginArgsError) throw err;
     throw new LoginFailedError(scrub(`the sign-in failed: ${err instanceof Error ? err.message.split("\n")[0]! : String(err)}`, secrets));
   } finally {
+    await session?.close().catch(() => undefined);
+  }
+}
+
+/** The value at a dotted path in a parsed JSON body (own properties only), or undefined. */
+function valueAtPath(body: unknown, segments: readonly string[]): unknown {
+  let cur: unknown = body;
+  for (const s of segments) {
+    if (cur === null || typeof cur !== "object" || !Object.prototype.hasOwnProperty.call(cur, s)) return undefined;
+    cur = (cur as Record<string, unknown>)[s];
+  }
+  return cur;
+}
+
+/** The app page an API login's session is proven on (and whose origin receives the token). */
+export function apiVerifyUrl(api: ApiLogin): string {
+  return api.verifyUrl ?? `${new URL(api.url).origin}/`;
+}
+
+/**
+ * #449: signs in through an HTTP endpoint. The credentials are POSTed as JSON (from a fresh,
+ * unrecorded browser context, so the response's `Set-Cookie` lands in its cookie jar); redirects are
+ * never followed. The storage state is the context's cookies plus, with a token path, the token
+ * written into the verify URL origin's localStorage. Every message is scrubbed of both credentials
+ * and the token; a failed sign-in or verification writes nothing.
+ */
+async function mintApiStorageState(o: MintOptions, api: ApiLogin): Promise<MintResult> {
+  const save = resolve(o.save);
+  const refusal = sessionFileInProjectRefusal(save, "the storage state");
+  if (refusal !== undefined) throw new LoginArgsError(refusal);
+  const appUrl = apiVerifyUrl(api);
+  assertLoginOriginAuthorized(api.url, o.allowlist, "login endpoint");
+  assertLoginOriginAuthorized(appUrl, o.allowlist, "the app page (--verify-url)");
+  if (o.verify !== undefined) assertLoginOriginAuthorized(o.verify.url, o.allowlist, "the app page (--verify-url)");
+  const secrets = resolveLoginSecrets(o.login, o.env);
+  const segments = api.tokenPath === undefined ? undefined : parseTokenPath(api.tokenPath, "--token-path");
+  const { recordVideo: _video, ...launch } = o.browser ?? {};
+  let session: BrowserSession | undefined;
+  let token: string | undefined;
+  let tmp: string | undefined;
+  try {
+    session = await o.port.open({ ...sessionLaunchOptions(launch), allowedOrigins: [...o.allowlist], baseUrl: appUrl });
+    const context = session.page.context();
+    const response = await context.request.post(api.url, {
+      data: { [api.userKey]: secrets.username, [api.passwordKey]: secrets.password },
+      headers: { accept: "application/json" },
+      maxRedirects: 0,
+      failOnStatusCode: false,
+      timeout: o.timeoutMs,
+    });
+    const status = response.status();
+    const where = pathOf(api.url);
+    if (status >= 300 && status < 400) {
+      const location = response.headers()["location"];
+      const target = location === undefined ? undefined : originOf(new URL(location, api.url).href);
+      if (target !== undefined && target !== new URL(api.url).origin) {
+        throw new LoginFailedError(`the sign-in endpoint ${where} redirected (HTTP ${status}) to another origin, ${target} — redirects are never followed`);
+      }
+      if (segments !== undefined) throw new LoginFailedError(`the sign-in endpoint ${where} answered HTTP ${status} (a redirect, not followed), not a JSON body holding --token-path ${api.tokenPath}`);
+    } else if (status < 200 || status >= 300) {
+      throw new LoginFailedError(`the sign-in endpoint ${where} answered HTTP ${status} — the credentials in ${o.login.userEnv}/${o.login.passwordEnv} were not accepted`);
+    }
+    if (segments !== undefined) {
+      let body: unknown;
+      try {
+        body = JSON.parse(await response.text());
+      } catch {
+        throw new LoginFailedError(`the sign-in endpoint ${where} answered HTTP ${status} with a body that is not JSON — --token-path ${api.tokenPath} cannot be read`);
+      }
+      const v = valueAtPath(body, segments);
+      if (typeof v === "number" && Number.isFinite(v)) token = String(v);
+      else if (typeof v === "string" && v !== "") token = v;
+      else throw new LoginFailedError(`the sign-in endpoint's JSON response has no ${v === undefined || v === null ? "value" : "string value"} at --token-path ${api.tokenPath}`);
+    }
+    const raw = session.captureStorageState !== undefined ? await session.captureStorageState() : JSON.stringify(await context.storageState());
+    const state = JSON.parse(raw) as { cookies?: unknown[]; origins?: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }> };
+    if (token === undefined && (state.cookies ?? []).length === 0) {
+      throw new LoginFailedError(`the sign-in endpoint ${where} answered HTTP ${status} but set no cookie — name the token in its JSON response with --token-path`);
+    }
+    if (token !== undefined) {
+      const origin = new URL(appUrl).origin;
+      const origins = (state.origins ?? []).filter((x) => x.origin !== origin);
+      const existing = (state.origins ?? []).find((x) => x.origin === origin)?.localStorage ?? [];
+      origins.push({ origin, localStorage: [...existing.filter((e) => e.name !== api.storageKey), { name: api.storageKey!, value: token }] });
+      state.origins = origins;
+    }
+    await session.close().catch(() => undefined);
+    session = undefined;
+    let landed = appUrl;
+    const json = JSON.stringify(state);
+    if (o.verify === undefined) {
+      writeStorageStateFile(save, json);
+    } else {
+      // Proven before it replaces anything: the check runs on a 0600 temp file beside the target.
+      tmp = join(dirname(save), `.${basename(save)}.${randomUUID()}.verify.json`);
+      writeStorageStateFile(tmp, json);
+      const verdict = await checkSession({ storageState: tmp, url: o.verify.url, allowlist: o.allowlist, check: o.verify.check, port: o.port, ...(o.browser === undefined ? {} : { browser: o.browser }), timeoutMs: o.timeoutMs });
+      if (!verdict.ok) throw new LoginFailedError(`signed in through ${where}, but ${verdict.reason.replace(basename(tmp), "the new storage state")} — nothing saved`);
+      if (verdict.landedUrl !== undefined) landed = verdict.landedUrl;
+      renameSync(tmp, save);
+      tmp = undefined;
+    }
+    return { saved: save, landedUrl: scrub(redactUrl(landed), secrets, token) };
+  } catch (err) {
+    if (err instanceof LoginFailedError) throw new LoginFailedError(scrub(err.message, secrets, token));
+    if (err instanceof LoginArgsError) throw new LoginArgsError(scrub(err.message, secrets, token));
+    throw new LoginFailedError(scrub(`the sign-in failed: ${err instanceof Error ? err.message.split("\n")[0]! : String(err)}`, secrets, token));
+  } finally {
+    if (tmp !== undefined) rmSync(tmp, { force: true });
     await session?.close().catch(() => undefined);
   }
 }
