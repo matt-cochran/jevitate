@@ -173,6 +173,7 @@ export function formatMissionHuman(result: unknown): string {
     lines.push(`${tag("REASON")}${str(result.reason)}`);
   }
   for (const l of uxLines(result)) lines.push(l);
+  lines.push(...locatorHealthLines(result.locatorHealth));
   lines.push(...deltaLines(result));
   const answer = answerLine(result.answer);
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
@@ -189,6 +190,26 @@ export function formatMissionHuman(result: unknown): string {
   const firstFp = [...gating, ...hangs].find((d) => d.fingerprint !== undefined)?.fingerprint;
   lines.push(nextHint(firstFp, resultPath));
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * #470: a run's / report's locator health (`result.locatorHealth`, the compact form) as human lines —
+ * the one-line summary, then the top fixes for the app. Advisory: nothing here gates. Empty when the
+ * result carries none, or when every step is on a stable locator (only the summary then).
+ */
+export function locatorHealthLines(health: unknown, top = 3): string[] {
+  if (!isRecord(health) || typeof health.stable !== "number" || typeof health.brittle !== "number") return [];
+  const line = str(health.line) ?? `${health.stable}/${health.stable + health.brittle} steps on stable locators; ${health.brittle} brittle`;
+  const lines = [`${tag("LOCATORS")}${line}`];
+  const fixes = arr(health.suggestions).filter(isRecord);
+  for (const f of fixes.slice(0, top)) {
+    const fix = str(f.fix);
+    if (fix === undefined) continue;
+    const steps = typeof f.steps === "number" ? f.steps : arr(f.occurrences).length;
+    lines.push(`${tag("FIX")}${fix}${steps > 1 ? ` (${steps} steps)` : ""}`);
+  }
+  if (fixes.length > top) lines.push(`${tag("FIX")}… ${fixes.length - top} more: jevitate locator-health`);
+  return lines;
 }
 
 /** `<rule>: <source> "<message>" ×N` — one classified backend-log cause (#422). */

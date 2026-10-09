@@ -73,7 +73,7 @@ test("run: a 3-step recording (navigate -> extract -> assert) all succeed -> com
   const interp = new RecordingInterpreter();
   const result = await interp.run(actor as any, rec);
 
-  expect(result).toEqual({ outcome: "completed", vars: { name: "Ada Lovelace" } });
+  expect(result).toMatchObject({ outcome: "completed", vars: { name: "Ada Lovelace" } });
 });
 
 test("run: seeds initial vars and threads them through the whole recording", async () => {
@@ -95,7 +95,7 @@ test("run: seeds initial vars and threads them through the whole recording", asy
   const interp = new RecordingInterpreter();
   const result = await interp.run(actor as any, rec, { greeting: "hello" });
 
-  expect(result).toEqual({ outcome: "completed", vars: { greeting: "hello" } });
+  expect(result).toMatchObject({ outcome: "completed", vars: { greeting: "hello" } });
   expect(locator.fill).toHaveBeenCalledWith("hello");
 });
 
@@ -190,7 +190,7 @@ test("run: a non-PostconditionFailed error (unset {var}) resolves {outcome:'fail
   ]);
 
   const interp = new RecordingInterpreter();
-  await expect(interp.run(actor as any, rec)).resolves.toEqual({
+  await expect(interp.run(actor as any, rec)).resolves.toMatchObject({
     outcome: "failed",
     at: 1,
     error: expect.stringContaining("unknown variable"),
@@ -223,7 +223,7 @@ test("run: a non-PostconditionFailed error on page 2 (extract with no matching a
 
   const interp = new RecordingInterpreter();
   // page 0 has 2 steps (indexes 0,1); page 1's step 0 is global index 2.
-  await expect(interp.run(actor as any, rec)).resolves.toEqual({
+  await expect(interp.run(actor as any, rec)).resolves.toMatchObject({
     outcome: "failed",
     at: 2,
     error: expect.stringContaining('attribute "data-id" not found'),
@@ -339,7 +339,7 @@ test("runToCheckpoint(1) on a 3-step recording only executes steps 0 and 1", asy
   const interp = new RecordingInterpreter();
   const result = await interp.runToCheckpoint(actor as any, rec, 1);
 
-  expect(result).toEqual({ outcome: "completed", vars: { name: "" } });
+  expect(result).toMatchObject({ outcome: "completed", vars: { name: "" } });
   expect(locator.click).not.toHaveBeenCalled();
 });
 
@@ -357,7 +357,7 @@ test("runToCheckpoint with an out-of-range stepIndex (past the end) runs the who
   const interp = new RecordingInterpreter();
   const result = await interp.runToCheckpoint(actor as any, rec, 999);
 
-  expect(result).toEqual({ outcome: "completed", vars: {} });
+  expect(result).toMatchObject({ outcome: "completed", vars: {} });
   expect(locator.click).toHaveBeenCalledTimes(1);
 });
 

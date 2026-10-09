@@ -1,4 +1,4 @@
-import type { ReplayTargetFailure } from "./resolve-target.js";
+import type { ReplayTargetFailure, ResolvedTarget } from "./resolve-target.js";
 import type { Assertion } from "@jevitate/recording";
 import type { StepWait } from "./outcome-wait.js";
 
@@ -43,4 +43,12 @@ export type InterpretResult = (
    * order (a failed waited step included). Absent when no step waited.
    */
   waits?: StepWait[];
+  /**
+   * #470: how each step's target resolved (the rung, and any ordinal it needed), in run order — the
+   * dynamic half of locator health. Absent when no step resolved a target.
+   */
+  resolved?: StepResolution[];
 };
+
+/** #470: one step's resolved target — its flat index, its stable id when it has one, and how. */
+export type StepResolution = ResolvedTarget & { readonly index: number; readonly stepId?: string };

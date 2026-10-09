@@ -33,7 +33,8 @@ export function descriptorToTarget(d: TargetDescriptor): Target {
 }
 
 function targetName(d: TargetDescriptor): string {
-  if (d.testId) return `testId=${d.testId}`;
+  // #470: a test id from another attribute than `data-testid` names it (it resolves by `[attr=…]`).
+  if (d.testId) return d.testIdAttr === undefined || d.testIdAttr === "data-testid" ? `testId=${d.testId}` : `testId[${d.testIdAttr}]=${d.testId}`;
   if (d.role && d.name) return `role=${d.role} name=${d.name}`;
   if (d.label) return `label=${d.label}`;
   if (d.text) return `${d.textMatch === "contains" ? "textContains" : "text"}=${d.text}`;

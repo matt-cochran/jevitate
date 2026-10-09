@@ -2,7 +2,7 @@ import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, EnterSecret } from "@jevitate/screenplay";
 import { clock, type RunPolicy } from "@jevitate/domain";
 import { deriveParamSchema, secretParamValues, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
-import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult, type StepWait } from "@jevitate/interpreter";
+import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult, type StepResolution, type StepWait } from "@jevitate/interpreter";
 import { RecordingSchema, type Recording, type RecordedStep, type Step } from "@jevitate/recording";
 import {
   SecretOriginMismatchError,
@@ -59,6 +59,11 @@ export type JourneyRunResult = (
    * healed run's waits included) — a slow job is a performance signal. Absent when no step waited.
    */
   waits?: StepWait[];
+  /**
+   * #470: how each step's target resolved (one per step: a step re-run by a resume or a heal keeps
+   * its last resolution), in step order. Metadata for locator health; absent when none resolved.
+   */
+  resolved?: StepResolution[];
   /** #453: what the self-heal did — present when the policy allowed one and a step broke. */
   heal?: HealReport;
 };
@@ -205,8 +210,10 @@ export class JourneyRunner {
   async run(req: JourneyRunRequest): Promise<JourneyRunResult> {
     // #409: every interpreter pass's step waits, reported on whatever result the run ends with.
     const waits: StepWait[] = [];
+    const resolvedByStep = new Map<number, StepResolution>();
     const collect = (r: InterpretResult): InterpretResult => {
       waits.push(...(r.waits ?? []));
+      for (const res of r.resolved ?? []) resolvedByStep.set(res.index, res);
       return r;
     };
     let out: JourneyRunResult;
@@ -215,7 +222,9 @@ export class JourneyRunner {
     } finally {
       await Promise.all(this.#dangling.splice(0));
     }
-    return waits.length === 0 ? out : { ...out, waits };
+    const withWaits = waits.length === 0 ? out : { ...out, waits };
+    const resolved = [...resolvedByStep.values()].sort((a, b) => a.index - b.index);
+    return resolved.length === 0 ? withWaits : { ...withWaits, resolved };
   }
 
   async #run(req: JourneyRunRequest, collect: (r: InterpretResult) => InterpretResult): Promise<JourneyRunResult> {
@@ -458,7 +467,9 @@ export class JourneyRunner {
         const next =
           probe.outcome === "completed" ? await this.interpreter.resumeFrom(this.actor, tryResult.recording, i + 1, probe.vars) : probe;
         const waits = [...(probe.outcome === "completed" ? (probe.waits ?? []) : []), ...(next.waits ?? [])];
-        return { kind: "accepted", recording: tryResult.recording, next: waits.length === 0 ? next : { ...next, waits } };
+        const resolved = [...(probe.outcome === "completed" ? (probe.resolved ?? []) : []), ...(next.resolved ?? [])];
+        const merged = waits.length === 0 ? next : { ...next, waits };
+        return { kind: "accepted", recording: tryResult.recording, next: resolved.length === 0 ? merged : { ...merged, resolved } };
       }
       refuted++;
       if (tryResult.kind === "write-attempted") {
