@@ -52,6 +52,11 @@ export interface FindingIdentity {
   readonly route?: string;
   /** The implicated control (e.g. `button "Save"`), when known. */
   readonly control?: string;
+  /**
+   * The implicated control's `data-tflow-id`, when known (#468). Metadata only: it is NOT part of
+   * `identityBasis`, so a finding's key never depends on it.
+   */
+  readonly tflowId?: string;
   /** The implicated request (`<status|kind> <endpoint template>`), when known. */
   readonly request?: string;
   /** The engine's stable fingerprint, when the finding has one — it is then the identity. */
