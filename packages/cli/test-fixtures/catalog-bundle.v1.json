@@ -1,0 +1,2346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://app.journeeze.dev/schemas/catalog-bundle.v1.json",
+  "title": "Journeeze catalog bundle, version 1",
+  "description": "The one versioned, Journeeze-owned format a product sends Journeeze: its catalog (personas, jobs with steps and desired outcomes, Jevitate journeys verbatim with their links), demo media manifests, check results with machine baselines, and machine findings (docs/contract/catalog-bundle-v1.md). A bundle is `bundle.json` (this document) plus the media files it lists, as a directory or a ZIP with `bundle.json` at its root. The whole bundle is validated before anything is written. It never carries real typed values, query strings, credentials or personal data. This schema is v1.0: a reader prunes unknown fields only from a bundle whose `minor` is greater than its own (contract § Versioning).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "version",
+    "minor",
+    "producer",
+    "product"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "maxLength": 2048
+    },
+    "kind": {
+      "const": "journeeze.catalog-bundle"
+    },
+    "version": {
+      "const": 1,
+      "description": "The major version. A reader refuses any other major."
+    },
+    "minor": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 999,
+      "description": "The minor version. Minors only add optional fields; this schema is minor 0."
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "product": {
+      "$ref": "#/$defs/product"
+    },
+    "generatedAt": {
+      "$ref": "#/$defs/dateTime"
+    },
+    "catalog": {
+      "$ref": "#/$defs/catalog"
+    },
+    "demos": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/demo"
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "findings": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 4000,
+      "items": {
+        "$ref": "#/$defs/file"
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "type": "object",
+      "required": [
+        "catalog"
+      ],
+      "properties": {
+        "catalog": true
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "demos"
+      ],
+      "properties": {
+        "demos": true
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "checks"
+      ],
+      "properties": {
+        "checks": true
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "findings"
+      ],
+      "properties": {
+        "findings": true
+      }
+    }
+  ],
+  "dependentRequired": {
+    "demos": [
+      "files"
+    ]
+  },
+  "$defs": {
+    "catalogId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "description": "A catalog id (persona, job, job step, desired outcome): Jevitate's id rule, 1-64 of [A-Za-z0-9._-] starting alphanumeric. Maps to jz_domain::catalog::{PersonaId, JobId, JobStepId, OutcomeId}."
+    },
+    "jevitateId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "description": "A bare Jevitate journey id (`metadata.id`). Lowercased, it is the journey slug in the product (jz_domain::JourneySlug); it MUST equal the `journeyId` the host sets on the journey's pages."
+    },
+    "anchorName": {
+      "type": "string",
+      "allOf": [
+        {
+          "$ref": "#/$defs/catalogId"
+        },
+        {
+          "not": {
+            "enum": [
+              "job_start",
+              "job_end"
+            ]
+          }
+        }
+      ],
+      "description": "A named anchor on a journey step (jz_domain::catalog::AnchorName). `job_start` and `job_end` are reserved for metric references and refused as anchor names."
+    },
+    "anchorRef": {
+      "type": "string",
+      "allOf": [
+        {
+          "$ref": "#/$defs/catalogId"
+        }
+      ],
+      "description": "Where a metric or a baseline point measures: an anchor name, or the reserved `job_start` / `job_end` (jz_domain::catalog::AnchorRef)."
+    },
+    "targetId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+      "description": "A Jevitate run target id (`result.target.id`, `explore --target`): 1-64 of [A-Za-z0-9_.-]. Check results are keyed on it, never on a start URL."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "A lowercase hex SHA-256."
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "A git commit id (abbreviated or full, lowercase hex)."
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]{1,40})?$"
+    },
+    "dateTime": {
+      "type": "string",
+      "maxLength": 40,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "An RFC 3339 timestamp."
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "A calendar date, YYYY-MM-DD."
+    },
+    "tflowId": {
+      "type": "string",
+      "pattern": "^[a-z0-9._:-]{1,96}$",
+      "description": "A `data-tflow-id` value (jz_domain::TflowId)."
+    },
+    "routeTemplate": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^(/(\\{[A-Za-z][A-Za-z0-9_]{0,63}\\}|[A-Za-z0-9._~-]+))*/?$"
+        },
+        {
+          "$ref": "#/$defs/noRecordIds"
+        }
+      ],
+      "description": "A path or route template within the app (`/settings/sites`, `/projects/{projectId}/board`), as in journey-candidates.v1.json: no scheme, host, query string, fragment or record id."
+    },
+    "noPersonalData": {
+      "description": "Refuses text that looks like personal data: an email address, or a run of 9 or more digits (phone, account or card numbers).",
+      "not": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "[^\\s@/]+@[^\\s@/]+\\.[A-Za-z]{2,}"
+          },
+          {
+            "type": "string",
+            "pattern": "[0-9]{9,}"
+          }
+        ]
+      }
+    },
+    "noUrls": {
+      "description": "Refuses text that contains a URL (`://`, or `www.`).",
+      "not": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "://"
+          },
+          {
+            "type": "string",
+            "pattern": "(?:^|[^A-Za-z0-9])[Ww][Ww][Ww]\\."
+          }
+        ]
+      }
+    },
+    "noRecordIds": {
+      "description": "Refuses values that embed a record id: a UUID, 8 or more hex characters including a digit, or 6 or more digits.",
+      "not": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+          },
+          {
+            "type": "string",
+            "pattern": "(?<![0-9A-Za-z])(?=[0-9a-fA-F]*[0-9])[0-9a-fA-F]{8,}(?![0-9A-Za-z])"
+          },
+          {
+            "type": "string",
+            "pattern": "[0-9]{6,}"
+          }
+        ]
+      }
+    },
+    "catalogText": {
+      "type": "string",
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"
+        },
+        {
+          "$ref": "#/$defs/noPersonalData"
+        }
+      ],
+      "description": "Repo-authored catalog text (job story, step name, outcome object): one printable, non-blank line with no personal data. The length bound is set where it is used."
+    },
+    "machineText": {
+      "type": "string",
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"
+        },
+        {
+          "$ref": "#/$defs/noPersonalData"
+        },
+        {
+          "$ref": "#/$defs/noUrls"
+        },
+        {
+          "$ref": "#/$defs/noRecordIds"
+        }
+      ],
+      "description": "Producer-written text (guide captions, finding observations): one printable line, no personal data, no URL, no record id. Written by the producer, never copied from a page or a typed value."
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool",
+        "version"
+      ],
+      "properties": {
+        "tool": {
+          "enum": [
+            "jevitate",
+            "journeeze",
+            "custom"
+          ],
+          "description": "`jevitate` (export / connect), `journeeze` (the board's download, re-uploaded), `custom` (a product's own exporter, e.g. a CI step)."
+        },
+        "name": {
+          "type": "string",
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogId"
+            }
+          ],
+          "description": "The exporter's name; required when `tool` is `custom`."
+        },
+        "version": {
+          "type": "string",
+          "allOf": [
+            {
+              "$ref": "#/$defs/semver"
+            }
+          ],
+          "description": "The producing tool's version."
+        },
+        "commit": {
+          "type": "string",
+          "allOf": [
+            {
+              "$ref": "#/$defs/commit"
+            }
+          ],
+          "description": "The product repository commit the catalog was read at (not the tool's own build). Recorded per connection as the last imported commit."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "const": "custom"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": true
+            }
+          }
+        }
+      ]
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "host",
+        "namespace",
+        "name"
+      ],
+      "properties": {
+        "provider": {
+          "enum": [
+            "github",
+            "gitlab",
+            "bitbucket",
+            "azure_devops"
+          ]
+        },
+        "host": {
+          "type": "string",
+          "pattern": "^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$"
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,4}$"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,100}$"
+        },
+        "catalogPath": {
+          "type": "string",
+          "pattern": "^(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+){0,9}/?$",
+          "description": "The catalog path in the repository (`.jevitate/` by default, or a namespace folder)."
+        }
+      },
+      "description": "A hint naming the repository the catalog came from (ADR 0016 `RepoRef` + catalog path). Never authority: the upload credential decides the product and connection."
+    },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogText"
+            }
+          ],
+          "description": "The product's name in Journeeze. A guard: import refuses a bundle whose name differs from the product the upload credential belongs to."
+        },
+        "connection": {
+          "$ref": "#/$defs/connection"
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contentHash",
+        "at"
+      ],
+      "properties": {
+        "contentHash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "channel": {
+          "enum": [
+            "tty",
+            "mcp",
+            "ci",
+            "non-interactive",
+            "pr-review",
+            "other"
+          ],
+          "description": "How the approval was given (Jevitate `approval.provenance.channel`). Informational: Journeeze decides approved/stale by recomputing the hash."
+        }
+      },
+      "description": "A Jevitate approval: the content hash that was approved. Journeeze recomputes the entry's hash; equal = approved, different = stale, absent = draft (jz_domain::catalog::Approval)."
+    },
+    "persona": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/catalogId"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogText"
+            }
+          ]
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogText"
+            }
+          ]
+        },
+        "approval": {
+          "$ref": "#/$defs/approval"
+        },
+        "otherFields": {
+          "type": "object",
+          "maxProperties": 20,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+            "not": {
+              "enum": [
+                "id",
+                "name",
+                "description",
+                "role",
+                "approval",
+                "storageState",
+                "login"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000,
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/noPersonalData"
+                  }
+                ]
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "description": "Any other descriptive keys of the persona's `personas.json` entry, verbatim, so the content hash recomputes. Journeeze never stores or shows them. Session keys (`storageState`, `login`) are never exported (they are outside the hash)."
+        }
+      },
+      "description": "A persona (executor role), from `.jevitate/personas.json`. Maps to jz_domain::catalog::Persona."
+    },
+    "jobStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/catalogId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogText"
+            }
+          ]
+        },
+        "stage": {
+          "enum": [
+            "define",
+            "locate",
+            "prepare",
+            "confirm",
+            "execute",
+            "monitor",
+            "modify",
+            "resolve",
+            "conclude"
+          ]
+        }
+      },
+      "description": "A solution-free job step (jz_domain::catalog::JobStep)."
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "duration",
+            "completion",
+            "abandon",
+            "repeat",
+            "error",
+            "assisted",
+            "answer"
+          ]
+        },
+        "from": {
+          "$ref": "#/$defs/anchorRef"
+        },
+        "to": {
+          "$ref": "#/$defs/anchorRef"
+        },
+        "stat": {
+          "enum": [
+            "p50",
+            "p75",
+            "share_under"
+          ]
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "description": "Seconds; only with `share_under`."
+        },
+        "at": {
+          "$ref": "#/$defs/anchorRef"
+        },
+        "question": {
+          "enum": [
+            "got_it_done",
+            "harder_than_expected",
+            "understood"
+          ]
+        },
+        "value": {
+          "enum": [
+            "yes",
+            "partly",
+            "no"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "duration"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "from",
+              "to",
+              "stat"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "at"
+                  ],
+                  "properties": {
+                    "at": true
+                  }
+                },
+                {
+                  "required": [
+                    "question"
+                  ],
+                  "properties": {
+                    "question": true
+                  }
+                },
+                {
+                  "required": [
+                    "value"
+                  ],
+                  "properties": {
+                    "value": true
+                  }
+                }
+              ]
+            },
+            "properties": {
+              "from": true,
+              "to": true,
+              "stat": true
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "completion"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "from",
+              "to"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "stat"
+                  ],
+                  "properties": {
+                    "stat": true
+                  }
+                },
+                {
+                  "required": [
+                    "threshold"
+                  ],
+                  "properties": {
+                    "threshold": true
+                  }
+                },
+                {
+                  "required": [
+                    "at"
+                  ],
+                  "properties": {
+                    "at": true
+                  }
+                },
+                {
+                  "required": [
+                    "question"
+                  ],
+                  "properties": {
+                    "question": true
+                  }
+                },
+                {
+                  "required": [
+                    "value"
+                  ],
+                  "properties": {
+                    "value": true
+                  }
+                }
+              ]
+            },
+            "properties": {
+              "from": true,
+              "to": true
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "abandon",
+                  "repeat",
+                  "error",
+                  "assisted"
+                ]
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "at"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "from"
+                  ],
+                  "properties": {
+                    "from": true
+                  }
+                },
+                {
+                  "required": [
+                    "to"
+                  ],
+                  "properties": {
+                    "to": true
+                  }
+                },
+                {
+                  "required": [
+                    "stat"
+                  ],
+                  "properties": {
+                    "stat": true
+                  }
+                },
+                {
+                  "required": [
+                    "threshold"
+                  ],
+                  "properties": {
+                    "threshold": true
+                  }
+                },
+                {
+                  "required": [
+                    "question"
+                  ],
+                  "properties": {
+                    "question": true
+                  }
+                },
+                {
+                  "required": [
+                    "value"
+                  ],
+                  "properties": {
+                    "value": true
+                  }
+                }
+              ]
+            },
+            "properties": {
+              "at": true
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "answer"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "question",
+              "value"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "from"
+                  ],
+                  "properties": {
+                    "from": true
+                  }
+                },
+                {
+                  "required": [
+                    "to"
+                  ],
+                  "properties": {
+                    "to": true
+                  }
+                },
+                {
+                  "required": [
+                    "stat"
+                  ],
+                  "properties": {
+                    "stat": true
+                  }
+                },
+                {
+                  "required": [
+                    "threshold"
+                  ],
+                  "properties": {
+                    "threshold": true
+                  }
+                },
+                {
+                  "required": [
+                    "at"
+                  ],
+                  "properties": {
+                    "at": true
+                  }
+                }
+              ]
+            },
+            "properties": {
+              "question": true,
+              "value": true
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": [
+              "stat"
+            ],
+            "properties": {
+              "stat": {
+                "const": "share_under"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "threshold"
+            ],
+            "properties": {
+              "threshold": true
+            }
+          },
+          "else": {
+            "type": "object",
+            "not": {
+              "required": [
+                "threshold"
+              ],
+              "properties": {
+                "threshold": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "const": "partly"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "question": {
+                "const": "got_it_done"
+              }
+            }
+          }
+        }
+      ],
+      "description": "One of the closed metric kinds over anchors and in-app answers (jz_domain::catalog::Metric; jtbd-data-model.md §3). Each kind carries exactly its own fields. Whether `from`/`to`/`at` name an anchor some journey of the job has is a catalog rule (a gap, never an error)."
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "value",
+        "unit"
+      ],
+      "properties": {
+        "op": {
+          "enum": [
+            "<",
+            "<=",
+            ">",
+            ">="
+          ]
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0
+        },
+        "unit": {
+          "enum": [
+            "s",
+            "percent",
+            "count"
+          ]
+        }
+      },
+      "description": "What good enough is (jz_domain::catalog::OutcomeTarget). A percent is at most 100. A unit that does not fit the metric is a catalog warning, not a refusal.",
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "unit": {
+                "const": "percent"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "number",
+                "maximum": 100
+              }
+            }
+          }
+        }
+      ]
+    },
+    "desiredOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "direction",
+        "measure",
+        "object"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/catalogId"
+        },
+        "step": {
+          "type": "string",
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogId"
+            }
+          ],
+          "description": "The job step it is about; absent = the whole job."
+        },
+        "direction": {
+          "enum": [
+            "minimize",
+            "maximize"
+          ]
+        },
+        "measure": {
+          "enum": [
+            "time",
+            "likelihood",
+            "effort",
+            "count"
+          ]
+        },
+        "object": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogText"
+            }
+          ]
+        },
+        "clarifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogText"
+            }
+          ]
+        },
+        "gulf": {
+          "enum": [
+            "execution",
+            "evaluation"
+          ]
+        },
+        "metric": {
+          "$ref": "#/$defs/metric"
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "guardrail": {
+          "type": "boolean"
+        },
+        "priority": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        }
+      },
+      "description": "What to optimize (jz_domain::catalog::DesiredOutcome)."
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "trigger",
+        "motivation",
+        "outcome"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/catalogId"
+        },
+        "trigger": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogText"
+            }
+          ]
+        },
+        "motivation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogText"
+            }
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogText"
+            }
+          ]
+        },
+        "personas": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/catalogId"
+          },
+          "uniqueItems": true
+        },
+        "priority": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "description": "Absent imports as `medium` (the domain requires one)."
+        },
+        "approval": {
+          "$ref": "#/$defs/approval"
+        },
+        "kind": {
+          "enum": [
+            "core",
+            "setup",
+            "related"
+          ]
+        },
+        "parent": {
+          "type": "string",
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogId"
+            }
+          ]
+        },
+        "context": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "allOf": [
+              {
+                "$ref": "#/$defs/catalogText"
+              }
+            ]
+          }
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 30,
+          "items": {
+            "$ref": "#/$defs/jobStep"
+          }
+        },
+        "desiredOutcomes": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/desiredOutcome"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "allOf": [
+              {
+                "$ref": "#/$defs/catalogText"
+              }
+            ]
+          }
+        },
+        "provenance": {
+          "enum": [
+            "ai_draft",
+            "team_hypothesis",
+            "customer_evidenced",
+            "behaviour_validated"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "lastValidated": {
+          "$ref": "#/$defs/date"
+        },
+        "extensions": {
+          "type": "object",
+          "maxProperties": 16,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "description": "Namespaced tool-specific fields (jtbd-data-model.md §7.3), verbatim for the hash. Journeeze v1 reads none of them."
+        },
+        "persona": {
+          "type": "string",
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogId"
+            }
+          ],
+          "description": "Jevitate's legacy single persona (folded into `personas` on import)."
+        },
+        "storageState": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Jevitate test-campaign field, verbatim for the hash (a path, never the file). Ignored on import."
+        },
+        "goal": {
+          "type": "string",
+          "maxLength": 2000,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noPersonalData"
+            }
+          ],
+          "description": "Jevitate test-campaign field, verbatim for the hash. Ignored on import."
+        },
+        "success": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "maxLength": 1000,
+            "allOf": [
+              {
+                "$ref": "#/$defs/noPersonalData"
+              }
+            ]
+          },
+          "description": "Jevitate test-campaign field. Ignored on import."
+        },
+        "preconditions": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "maxLength": 1000,
+            "allOf": [
+              {
+                "$ref": "#/$defs/noPersonalData"
+              }
+            ]
+          },
+          "description": "Jevitate test-campaign field. Ignored on import."
+        },
+        "mutates": {
+          "type": "boolean",
+          "description": "Jevitate test-campaign field. Ignored on import."
+        },
+        "order": {
+          "type": "integer",
+          "description": "Jevitate test-campaign field. Ignored on import."
+        }
+      },
+      "description": "A job, exactly as its `.jevitate/jobs.json` entry (Jevitate 0.9 fields plus the optional jtbd-data-model.md §3 fields), so its content hash recomputes. Maps to jz_domain::catalog::Job."
+    },
+    "typedValues": {
+      "description": "Walks a verbatim Jevitate journey: every typed value Jevitate kept in clear (`{\"redacted\": false, \"value\": …}`) must pass noPersonalData. Values come from a seeded, synthetic tenant; real ones are refused.",
+      "anyOf": [
+        {
+          "type": "object",
+          "if": {
+            "type": "object",
+            "required": [
+              "redacted",
+              "value"
+            ],
+            "properties": {
+              "redacted": {
+                "const": false
+              },
+              "value": true
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/noPersonalData"
+              }
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/typedValues"
+          }
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/typedValues"
+          }
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "journeyFile": {
+      "type": "object",
+      "required": [
+        "metadata",
+        "recording"
+      ],
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "required": [
+            "id",
+            "name"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/jevitateId"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "job": {
+              "$ref": "#/$defs/catalogId"
+            },
+            "persona": {
+              "$ref": "#/$defs/catalogId"
+            },
+            "approval": {
+              "type": "object",
+              "required": [
+                "contentHash"
+              ],
+              "properties": {
+                "contentHash": {
+                  "$ref": "#/$defs/sha256"
+                }
+              }
+            }
+          }
+        },
+        "recording": {
+          "type": "object"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/typedValues"
+        }
+      ],
+      "description": "The Jevitate journey file (`.jevitate/journeys/<id>.json`) byte-for-byte as JSON, so its review hash recomputes (crates/jz_host/src/jevitate_hash.rs). Opaque beyond the fields named here: Journeeze reads only the fields crates/jz_host/src/journey_import.rs reads, holds the rest in memory to check the hash, and never stores it."
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "step"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/anchorName"
+        },
+        "step": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "The journey step, numbered from 1 over the recorded steps."
+        },
+        "jobStep": {
+          "type": "string",
+          "allOf": [
+            {
+              "$ref": "#/$defs/catalogId"
+            }
+          ]
+        },
+        "boundary": {
+          "enum": [
+            "start",
+            "end"
+          ]
+        }
+      },
+      "description": "jz_domain::catalog::JourneyAnchor. A boundary marks a job step, so it needs `jobStep`.",
+      "dependentRequired": {
+        "boundary": [
+          "jobStep"
+        ]
+      }
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job"
+      ],
+      "properties": {
+        "job": {
+          "$ref": "#/$defs/catalogId"
+        },
+        "persona": {
+          "$ref": "#/$defs/catalogId"
+        },
+        "anchors": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/anchor"
+          }
+        },
+        "serves": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/catalogId"
+          },
+          "uniqueItems": true,
+          "description": "Desired-outcome ids of `job` this path is meant to move."
+        }
+      },
+      "description": "The journey's place in the catalog (jz_domain::catalog::JourneyCatalogLink). Where the journey's own metadata also names `job`, `persona` or anchors, they must agree (an import check)."
+    },
+    "journeyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journey"
+      ],
+      "properties": {
+        "journey": {
+          "$ref": "#/$defs/journeyFile"
+        },
+        "link": {
+          "$ref": "#/$defs/link"
+        }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "personas",
+        "jobs",
+        "journeys"
+      ],
+      "properties": {
+        "personas": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/persona"
+          }
+        },
+        "jobs": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/job"
+          }
+        },
+        "journeys": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/journeyEntry"
+          }
+        }
+      },
+      "description": "A full snapshot of the product's catalog from one source at `producer.commit`. An entry missing from a later snapshot is marked removed upstream, never deleted."
+    },
+    "screenshotPath": {
+      "type": "string",
+      "pattern": "^media/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/step-[0-9]{2,3}\\.(png|webp)$"
+    },
+    "videoPath": {
+      "type": "string",
+      "pattern": "^media/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/demo\\.webm$"
+    },
+    "subtitlesPath": {
+      "type": "string",
+      "pattern": "^media/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/demo\\.vtt$"
+    },
+    "findingScreenshotPath": {
+      "type": "string",
+      "pattern": "^media/findings/[0-9a-f]{16}\\.(png|webp)$"
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes",
+        "type"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/screenshotPath"
+            },
+            {
+              "$ref": "#/$defs/videoPath"
+            },
+            {
+              "$ref": "#/$defs/subtitlesPath"
+            },
+            {
+              "$ref": "#/$defs/findingScreenshotPath"
+            }
+          ],
+          "description": "Relative to the bundle root. The journey segment is the journey id."
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "enum": [
+            "image/png",
+            "image/webp",
+            "video/webm",
+            "text/vtt"
+          ]
+        }
+      },
+      "description": "One media file in the bundle. Every file in the archive is listed here exactly once, and every reference elsewhere names a listed path (import checks).",
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "image/png"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "\\.png$"
+              },
+              "bytes": {
+                "type": "integer",
+                "maximum": 2097152
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "image/webp"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "\\.webp$"
+              },
+              "bytes": {
+                "type": "integer",
+                "maximum": 2097152
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "video/webm"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "\\.webm$"
+              },
+              "bytes": {
+                "type": "integer",
+                "maximum": 52428800
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "text/vtt"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "\\.vtt$"
+              },
+              "bytes": {
+                "type": "integer",
+                "maximum": 262144
+              }
+            }
+          }
+        }
+      ]
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mask",
+        "data",
+        "method",
+        "regions"
+      ],
+      "properties": {
+        "mask": {
+          "const": "jz-mask-v1"
+        },
+        "data": {
+          "const": "synthetic"
+        },
+        "method": {
+          "enum": [
+            "dom-before-capture",
+            "pixels-after-capture"
+          ]
+        },
+        "regions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        }
+      },
+      "description": "The producer's attestation, as in journey-candidates.v1.json: every screenshot and the video were masked under jz-mask-v1 (fails closed), and the run used a seeded, synthetic tenant."
+    },
+    "demoStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "caption"
+      ],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "caption": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "allOf": [
+            {
+              "$ref": "#/$defs/machineText"
+            }
+          ]
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "allOf": [
+            {
+              "$ref": "#/$defs/machineText"
+            }
+          ]
+        },
+        "screenshot": {
+          "$ref": "#/$defs/screenshotPath"
+        }
+      }
+    },
+    "demo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journey",
+        "renderedFrom",
+        "status",
+        "steps",
+        "privacy"
+      ],
+      "properties": {
+        "journey": {
+          "$ref": "#/$defs/jevitateId"
+        },
+        "renderedFrom": {
+          "type": "string",
+          "allOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ],
+          "description": "The journey review hash the demo was rendered from. Import refuses a demo whose hash is not the journey's approved hash (a demo of a stale or draft journey)."
+        },
+        "status": {
+          "const": "approved",
+          "description": "Only `jevitate demo approve` output is exported; drafts never become help."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "allOf": [
+            {
+              "$ref": "#/$defs/machineText"
+            }
+          ]
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/demoStep"
+          }
+        },
+        "video": {
+          "$ref": "#/$defs/videoPath"
+        },
+        "subtitles": {
+          "$ref": "#/$defs/subtitlesPath"
+        },
+        "privacy": {
+          "$ref": "#/$defs/privacy"
+        }
+      },
+      "description": "The demo media manifest of one journey: the guide (`guide.md` steps), screenshots, video and subtitles. Replaces reading Jevitate's demo folder layout."
+    },
+    "baselinePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchor",
+        "step",
+        "atMs"
+      ],
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/anchorRef"
+        },
+        "step": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "atMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000,
+          "description": "Milliseconds from the run's first step to the anchor's step completing."
+        }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "steps",
+        "totalMs",
+        "anchors"
+      ],
+      "properties": {
+        "steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Steps the replay took."
+        },
+        "totalMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000
+        },
+        "anchors": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 202,
+          "items": {
+            "$ref": "#/$defs/baselinePoint"
+          }
+        }
+      },
+      "description": "The machine baseline (jtbd-data-model.md §5): when a clean replay reached each anchor. Time between two anchors is the floor for a `duration` outcome."
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "commit",
+        "at",
+        "outcome",
+        "exitCode"
+      ],
+      "properties": {
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/targetId"
+            },
+            "kind": {
+              "enum": [
+                "journey",
+                "goal",
+                "mission",
+                "invariant",
+                "verify_fix",
+                "regression"
+              ]
+            }
+          }
+        },
+        "commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "journey": {
+          "$ref": "#/$defs/jevitateId"
+        },
+        "journeyHash": {
+          "type": "string",
+          "allOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ],
+          "description": "The journey review hash the run replayed. A failure on the approved hash marks the guide Stale; a clean run on it records \"last proven\"."
+        },
+        "outcome": {
+          "enum": [
+            "clean",
+            "defects-found",
+            "inconclusive",
+            "crashed",
+            "hang",
+            "intermittent",
+            "pending-review"
+          ],
+          "description": "Jevitate's canonical MissionOutcome, plus `pending-review` (a self-heal proposal awaits a person)."
+        },
+        "exitCode": {
+          "type": "integer",
+          "description": "The item's exit code; fixed by the outcome."
+        },
+        "journeyOutcome": {
+          "enum": [
+            "ok",
+            "healed-pending-review",
+            "heal-exhausted",
+            "quarantined"
+          ]
+        },
+        "failureKind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "description": "Jevitate `failure.kind` (e.g. `insufficient-coverage`, `target-unresponsive`)."
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000
+        },
+        "baseline": {
+          "$ref": "#/$defs/baseline"
+        }
+      },
+      "description": "One check result, keyed by (target.id, commit, runId). Append-only evidence.",
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "const": "clean"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "const": 0
+              }
+            }
+          },
+          "else": {
+            "type": "object",
+            "not": {
+              "required": [
+                "baseline"
+              ],
+              "properties": {
+                "baseline": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "const": "defects-found"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "const": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "inconclusive",
+                  "crashed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "const": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "const": "hang"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "const": 3
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "const": "intermittent"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "const": 4
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "const": "pending-review"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "const": 5
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": [
+              "baseline"
+            ],
+            "properties": {
+              "baseline": true
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "journey",
+              "journeyHash"
+            ],
+            "properties": {
+              "journey": true,
+              "journeyHash": true
+            }
+          }
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fingerprint",
+        "kind",
+        "severity",
+        "at",
+        "observation"
+      ],
+      "properties": {
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$",
+          "description": "Jevitate's 16-hex finding fingerprint (defects, hangs); for UX findings, the contract's derived fingerprint (§ Findings). The finding's identity; the issue marker."
+        },
+        "kind": {
+          "enum": [
+            "ux",
+            "defect",
+            "hang"
+          ]
+        },
+        "claim": {
+          "enum": [
+            "next-step-unclear",
+            "no-feedback",
+            "blocked-action",
+            "error-unrecoverable",
+            "destructive-unguarded",
+            "fact-conflict",
+            "other"
+          ],
+          "description": "The UX claim type (Jevitate `ClaimType`). `other` + `producerClaim` for a type this version does not know."
+        },
+        "producerClaim": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "minor",
+            "major"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "target": {
+          "$ref": "#/$defs/targetId"
+        },
+        "journey": {
+          "$ref": "#/$defs/jevitateId"
+        },
+        "step": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "anchor": {
+          "$ref": "#/$defs/anchorName"
+        },
+        "route": {
+          "$ref": "#/$defs/routeTemplate"
+        },
+        "tflowId": {
+          "$ref": "#/$defs/tflowId"
+        },
+        "controls": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "allOf": [
+              {
+                "$ref": "#/$defs/machineText"
+              }
+            ]
+          }
+        },
+        "observation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600,
+          "allOf": [
+            {
+              "$ref": "#/$defs/machineText"
+            }
+          ]
+        },
+        "userImpact": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600,
+          "allOf": [
+            {
+              "$ref": "#/$defs/machineText"
+            }
+          ]
+        },
+        "recommendation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600,
+          "allOf": [
+            {
+              "$ref": "#/$defs/machineText"
+            }
+          ]
+        },
+        "citation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "ref"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "ref": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+            }
+          }
+        },
+        "screenshot": {
+          "$ref": "#/$defs/findingScreenshotPath"
+        },
+        "box": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
+          ],
+          "properties": {
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            }
+          },
+          "description": "The implicated element's box on the screenshot, in CSS pixels."
+        }
+      },
+      "description": "A machine finding: machine evidence, never human feedback. No on-screen quotes are exported (they may hold personal data).",
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "ux"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "claim",
+              "confidence",
+              "route"
+            ],
+            "properties": {
+              "claim": true,
+              "confidence": true,
+              "route": true
+            }
+          },
+          "else": {
+            "type": "object",
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "claim"
+                  ],
+                  "properties": {
+                    "claim": true
+                  }
+                },
+                {
+                  "required": [
+                    "producerClaim"
+                  ],
+                  "properties": {
+                    "producerClaim": true
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": [
+              "claim"
+            ],
+            "properties": {
+              "claim": {
+                "const": "other"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "producerClaim"
+            ],
+            "properties": {
+              "producerClaim": true
+            }
+          },
+          "else": {
+            "type": "object",
+            "not": {
+              "required": [
+                "producerClaim"
+              ],
+              "properties": {
+                "producerClaim": true
+              }
+            }
+          }
+        },
+        {
+          "dependentRequired": {
+            "box": [
+              "screenshot"
+            ]
+          },
+          "type": "object"
+        }
+      ]
+    }
+  }
+}

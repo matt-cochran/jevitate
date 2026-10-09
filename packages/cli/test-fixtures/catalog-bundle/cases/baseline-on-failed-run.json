@@ -1,0 +1,21 @@
+{
+  "description": "A machine baseline comes only from a clean run.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/checks/0/outcome",
+      "value": "defects-found"
+    },
+    {
+      "op": "replace",
+      "path": "/checks/0/exitCode",
+      "value": 1
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/checks/0",
+    "keyword": "not"
+  }
+}

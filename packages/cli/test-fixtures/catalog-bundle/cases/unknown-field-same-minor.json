@@ -1,0 +1,16 @@
+{
+  "description": "A field unknown at the reader's own minor is refused (closed allowlist).",
+  "base": "minimal",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/catalog/jobs/0/estimate",
+      "value": "three days"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/catalog/jobs/0",
+    "keyword": "additionalProperties"
+  }
+}

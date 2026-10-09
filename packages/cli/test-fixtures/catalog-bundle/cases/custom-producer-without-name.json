@@ -1,0 +1,16 @@
+{
+  "description": "A custom exporter must name itself.",
+  "base": "minimal",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/producer/tool",
+      "value": "custom"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/producer",
+    "keyword": "required"
+  }
+}

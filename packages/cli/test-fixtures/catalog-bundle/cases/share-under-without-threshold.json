@@ -1,0 +1,15 @@
+{
+  "description": "A `share_under` duration needs its threshold.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "remove",
+      "path": "/catalog/jobs/0/desiredOutcomes/1/metric/threshold"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/catalog/jobs/0/desiredOutcomes/1/metric",
+    "keyword": "required"
+  }
+}

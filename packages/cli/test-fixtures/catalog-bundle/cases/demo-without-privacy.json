@@ -1,0 +1,15 @@
+{
+  "description": "Every demo carries the jz-mask-v1 + synthetic-data attestation.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "remove",
+      "path": "/demos/0/privacy"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/demos/0",
+    "keyword": "required"
+  }
+}

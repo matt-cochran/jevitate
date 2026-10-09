@@ -1,0 +1,80 @@
+{
+  "metadata": {
+    "id": "jz-guide-fixture",
+    "name": "Reviewer records a verdict",
+    "goal": "Judge one review item",
+    "promoted": true,
+    "params": [],
+    "authoredBy": "human-demonstration",
+    "createdAtIso": "2026-10-06T12:00:00.000Z",
+    "requiresAuth": true,
+    "job": "record-verdict",
+    "persona": "reviewer",
+    "serves": [
+      "verdict-fast",
+      "verdict-wrong-item"
+    ],
+    "anchors": [
+      {
+        "name": "verdict-recorded",
+        "step": 2,
+        "stepId": "s-verdict",
+        "jobStep": "judge",
+        "boundary": "end",
+        "description": "The item carries the verdict"
+      }
+    ],
+    "approval": {
+      "contentHash": "627218a7f4a6be3e3324115eb3e1488a6afe703acbaa778176e3ff8414d671f9",
+      "at": "2026-10-09T12:00:00.000Z",
+      "provenance": {
+        "channel": "tty",
+        "agentSignals": [],
+        "user": "someone-local",
+        "reason": "reviewed at the desk"
+      }
+    }
+  },
+  "recording": {
+    "version": "1",
+    "site": "http://localhost:28088",
+    "intent": "Record a verdict on a review item",
+    "pages": [
+      {
+        "url": "/board",
+        "steps": [
+          {
+            "stepId": "s-open",
+            "step": {
+              "kind": "navigate",
+              "url": "/board?project=demo#top",
+              "expect": {
+                "kind": "urlIncludes",
+                "text": "/board"
+              }
+            }
+          },
+          {
+            "stepId": "s-verdict",
+            "step": {
+              "kind": "click",
+              "target": {
+                "testId": "item.verdict.broken",
+                "role": "button",
+                "name": "Broken"
+              },
+              "expect": {
+                "kind": "textIncludes",
+                "target": {
+                  "testId": "item.status"
+                },
+                "text": "Broken"
+              }
+            },
+            "objective": "Mark the item as broken"
+          }
+        ]
+      }
+    ]
+  }
+}

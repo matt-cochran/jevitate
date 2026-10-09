@@ -1,0 +1,24 @@
+{
+  "kind": "journeeze.catalog-bundle",
+  "version": 1,
+  "minor": 0,
+  "producer": {
+    "tool": "jevitate",
+    "version": "0.9.0"
+  },
+  "product": {
+    "name": "Journeeze board"
+  },
+  "catalog": {
+    "personas": [],
+    "jobs": [
+      {
+        "id": "record-verdict",
+        "trigger": "a review item is waiting for my judgement",
+        "motivation": "record whether it works",
+        "outcome": "the team knows what to fix next"
+      }
+    ],
+    "journeys": []
+  }
+}

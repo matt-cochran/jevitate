@@ -1,0 +1,16 @@
+{
+  "description": "`job_start` and `job_end` are metric references, not anchor names.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/catalog/journeys/0/link/anchors/0/name",
+      "value": "job_end"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/catalog/journeys/0/link/anchors/0/name",
+    "keyword": "not"
+  }
+}
