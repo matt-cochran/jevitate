@@ -24,12 +24,19 @@ useSkippingTime({ per: "all" });
  * commit touches nothing related: the break is unexplained → quarantined (exit 1), naming the step.
  */
 
-type Version = "v1" | "v2" | "v3" | "v4";
+type Version = "v1" | "v2" | "v3" | "v4" | "v5";
+/** Every non-GET request the server received (v5: a heal probe must never send one). */
+const writes: string[] = [];
 let version: Version = "v1";
 
 const page = (v: Version): string => {
-  const label = v === "v2" ? "Create" : v === "v4" ? "Make It" : "Create New";
-  const handler = v === "v3" ? "" : `document.getElementById("b").addEventListener("click", () => { document.getElementById("out").textContent = "Created!"; });`;
+  const label = v === "v2" || v === "v5" ? "Create" : v === "v4" ? "Make It" : "Create New";
+  const handler =
+    v === "v3"
+      ? ""
+      : v === "v5"
+        ? `document.getElementById("b").addEventListener("click", () => { fetch("/api/token", { method: "POST" }).then(() => { document.getElementById("out").textContent = "Created!"; }); });`
+        : `document.getElementById("b").addEventListener("click", () => { document.getElementById("out").textContent = "Created!"; });`;
   return `<!doctype html><html><head><title>Items</title></head><body><main>
   <h1>Items</h1>
   <button type="button" id="b">${label}</button>
@@ -42,7 +49,11 @@ let server: Server;
 let origin: string;
 let root: string;
 beforeAll(async () => {
-  server = createServer((_req, res) => {
+  server = createServer((req, res) => {
+    if (req.method !== "GET") {
+      writes.push(`${req.method} ${req.url}`);
+      return void res.writeHead(204).end();
+    }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page(version));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -226,6 +237,16 @@ describe("#453 journey run --self-heal hybrid --changes (served, real browser)",
     const defects = (JSON.parse(report.out) as { data: { defects: { title: string; evidence: { healAttempts?: unknown[] }[] }[] } }).data.defects;
     expect(defects[0]!.title).toMatch(/heal exhausted after 2 attempts$/);
     expect(defects[0]!.evidence[0]!.healAttempts).toHaveLength(2);
+  }, 120_000);
+
+  it("v5: a renamed button whose click POSTs to a /token path is never healed — the probe's write is blocked (write-attempted) and never reaches the server", async () => {
+    version = "v5";
+    writes.length = 0;
+    const repo = await repoWith("v5", { "src/Toolbar.html": toolbar("Create New") }, { "src/Toolbar.html": toolbar("Create") });
+    const { journeysDir } = await seed(repo);
+    const r = await inRepo(repo, () => cli(journeysDir, ["journey", "run", "create-item", "--dir", journeysDir, "--self-heal", "hybrid", "--changes", "HEAD~1..HEAD", "--fake-ai", "--json"]));
+    const data = (JSON.parse(r.out) as { data: RunData & { heal?: { attempts: { rejection?: { code: string } }[] } } }).data;
+    expect({ outcome: data.outcome, rejection: data.heal?.attempts[0]?.rejection?.code, writes: [...writes] }).toEqual({ outcome: "quarantined", rejection: "write-attempted", writes: [] });
   }, 120_000);
 
   it("v3: a break no change explains (the handler is gone, the diff is unrelated) stays quarantined (exit 1), naming the step", async () => {

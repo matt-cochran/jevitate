@@ -80,14 +80,16 @@ export interface BlockedWriteRef {
 }
 
 /**
- * #453 (Q2): the write blocker a guarded click/fill probe runs under. `armAt(i)` makes the NEXT
- * interpreter pass abort every mutating request sent during flat step `i`'s action window (the CLI
- * composes its `ReadOnlyGuard` observer into the interpreter); `disarm()` stops and returns what
- * it blocked. Any blocked request rejects the candidate (`write-attempted`).
+ * #453 (Q2): the write blocker a guarded click/fill probe runs under. `armAt(i)` blocks every
+ * mutating request (and WebSocket send) from then until `disarm()`, which stops and returns what it
+ * blocked. Any blocked request rejects the candidate (`write-attempted`). `unguardable()`, asked
+ * before the probe, names why the page cannot be guarded (e.g. a service worker could send
+ * requests the blocker never sees) — the candidate is then rejected `write-attempted` unprobed.
  */
 export interface HealWriteGuard {
   armAt(flatIndex: number): Promise<void>;
   disarm(): Promise<readonly BlockedWriteRef[]>;
+  unguardable?(): Promise<string | null>;
 }
 
 /** #453: the change-aware self-heal wiring of a `JourneyRunner` (its 6th constructor argument). */
@@ -522,6 +524,10 @@ export class JourneyRunner {
     // stopped), within the heal deadline: past it the attempt is rejected `budget-exhausted`.
     const guard = guarded ? this.heal?.writeGuard : undefined;
     let blocked: readonly BlockedWriteRef[] = [];
+    const unguardable = guard?.unguardable === undefined ? null : await guard.unguardable().catch((e: unknown) => `the write guard could not inspect the page: ${e instanceof Error ? e.message : String(e)}`);
+    if (unguardable !== null) {
+      return { kind: "write-attempted", attempt: attempt("rejected", { code: "write-attempted", detail: `the probe cannot be guarded: ${unguardable}` }) };
+    }
     if (guard !== undefined) await guard.armAt(i);
     const probe = this.interpreter.runRange(this.actor, candRecording, i, i, req.params);
     let timer: ReturnType<typeof clock.setTimeout> | undefined;

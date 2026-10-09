@@ -187,6 +187,14 @@ describe("JourneyRunner change-aware self-heal (#453)", () => {
     expect(result.heal?.attempts[0]?.rejection?.code).toBe("write-attempted");
   });
 
+  it("never probes a guarded click on a page its write guard cannot guard (a service worker)", async () => {
+    const interpreter = brokenAtStep1();
+    const guard: HealWriteGuard = { ...writeGuard(), unguardable: async () => "a service worker is registered for this page" };
+    const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: guard });
+    await run(runner, renamedButtonJourney(), hybrid());
+    expect(interpreter.runRange).not.toHaveBeenCalled();
+  });
+
   it("never probes a click whose recorded expectRequests expects a POST", async () => {
     const interpreter = brokenAtStep1();
     const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });

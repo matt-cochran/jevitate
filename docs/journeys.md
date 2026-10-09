@@ -317,6 +317,11 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
   (exit `1`). Budgets: `--heal-max-attempts` (default 2) and `--heal-max-model-calls`/`--heal-max-ms`
   per broken step, `--heal-max-run-attempts` (4) and `--heal-max-run-ms` per run. Write and
   irreversible steps are never auto-healed; a click/fill is retargeted only under a write guard.
+  The heal probe runs the candidate step alone under a guard with NO exemptions: every
+  non-GET/HEAD/OPTIONS request from any page of the browser context (popups included), to any
+  origin and any path (`/token`, `/oauth/...` included), is aborted, and so is every WebSocket
+  frame the page sends; any of them rejects the candidate (`write-attempted`). A page with a
+  service worker registered is never probed (its requests can bypass the guard).
 - Review a proposal with `jevitate journey review <id>`, accept it with
   `jevitate journey promote <id> --proposal <pid>` (every promote gate applies; a person confirms),
   or reject it with `--reject-proposal <pid> --reason "<text>"`. A self-heal run also writes
