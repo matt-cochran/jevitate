@@ -4,9 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExportCatalogBundleRequest, ExportCatalogBundleResult } from "./catalog-bundle-api.js";
+import { runAsMcpInvocation } from "./approval-provenance.js";
 import { connectJourneeze, publishToJourneeze, type PublishDeps, type PublishJourneezeResult } from "./journeeze-api.js";
 import {
   connectionsPath,
+  loadConnection,
   pinnedJourneezeOrigin,
   saveConnection,
   type ConnectTerminal,
@@ -210,16 +212,26 @@ describe("pinned Journeeze hosts (contract §2)", () => {
   it.each([
     ["https://app.journeeze.dev", "https://app.journeeze.dev"],
     ["https://app.staging.journeeze.dev/", "https://app.staging.journeeze.dev"],
+  ])("%s is allowed", (url, origin) => {
+    expect(pinnedJourneezeOrigin(url, {})).toBe(origin);
+  });
+
+  it.each([
     ["http://localhost:8080", "http://localhost:8080"],
     ["http://127.0.0.1:3999", "http://127.0.0.1:3999"],
-  ])("%s is allowed", (url, origin) => {
-    expect(pinnedJourneezeOrigin(url)).toBe(origin);
+    ["https://[::1]:8443", "https://[::1]:8443"],
+  ])("%s is allowed with JEVITATE_JOURNEEZE_DEV=1", (url, origin) => {
+    expect(pinnedJourneezeOrigin(url, { JEVITATE_JOURNEEZE_DEV: "1" })).toBe(origin);
+  });
+
+  it.each(["http://localhost:8080", "http://127.0.0.1:3999", "https://[::1]:8443"])("%s is refused without JEVITATE_JOURNEEZE_DEV=1", (url) => {
+    expect(() => pinnedJourneezeOrigin(url, {})).toThrow(/JEVITATE_JOURNEEZE_DEV=1/);
   });
 
   it.each(["http://app.journeeze.dev", "https://evil.example", "https://app.journeeze.dev.evil.example", "https://u:p@app.journeeze.dev", "https://app.journeeze.dev/x"])(
     "%s is refused",
     (url) => {
-      expect(() => pinnedJourneezeOrigin(url)).toThrow(/E_JOURNEEZE_URL|only ever sent|bare origin/);
+      expect(() => pinnedJourneezeOrigin(url, { JEVITATE_JOURNEEZE_DEV: "1" })).toThrow(/E_JOURNEEZE_URL|only ever sent|bare origin/);
     },
   );
 });
@@ -352,6 +364,33 @@ describe("publish journeeze", () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await errorOf(publish(http, { JOURNEEZE_UPLOAD_KEY: KEY, JOURNEEZE_URL: "https://evil.example" }));
     expect(requests).toEqual([]);
+  });
+
+  it("a project without its own connection never uploads with the global (*) one", async () => {
+    await saveConnection(null, { baseUrl: PROD, product: PRODUCT, keyPrefix: "jzu_abcd", keyRef: { manager: "env", key: "MY_JZ_KEY", origin: PROD, field: "journeeze-upload-key" }, connectedAt: "2026-10-09T00:00:00Z" }, { homedir });
+    const { http } = fakeJourneeze(OK_ROUTES());
+    const err = await errorOf(publish(http, { MY_JZ_KEY: KEY }));
+    expect([err.code, /this project is not connected.*jevitate connect journeeze/.test(err.message)]).toEqual(["E_JOURNEEZE_NOT_CONNECTED", true]);
+  });
+
+  it("a project never uploads with another project's connection", async () => {
+    await saveConnection(join(home, "other", ".jevitate"), { baseUrl: PROD, product: PRODUCT, keyPrefix: "jzu_abcd", keyRef: { manager: "env", key: "MY_JZ_KEY", origin: PROD, field: "journeeze-upload-key" }, connectedAt: "2026-10-09T00:00:00Z" }, { homedir });
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await errorOf(publish(http, { MY_JZ_KEY: KEY }));
+    expect(requests).toEqual([]);
+  });
+
+  it("outside a project the global (*) connection is used", async () => {
+    await saveConnection(null, { baseUrl: PROD, product: PRODUCT, keyPrefix: "jzu_abcd", keyRef: { manager: "env", key: "MY_JZ_KEY", origin: PROD, field: "journeeze-upload-key" }, connectedAt: "2026-10-09T00:00:00Z" }, { homedir });
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    const env = { MY_JZ_KEY: KEY };
+    await publishToJourneeze({ catalogDir: null, journeysDir: join(home, "journeys"), dryRun: false }, { homedir, env, http, exportBundle: fakeExport, sleep: async () => {}, sources: sources(env) });
+    expect(requests[0]!.headers.Authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it("an MCP call never uses the global (*) connection, even outside a project", async () => {
+    await saveConnection(null, { baseUrl: PROD, product: PRODUCT, keyPrefix: "jzu_abcd", keyRef: { manager: "env", key: "MY_JZ_KEY", origin: PROD, field: "journeeze-upload-key" }, connectedAt: "2026-10-09T00:00:00Z" }, { homedir });
+    expect(await runAsMcpInvocation(() => loadConnection(null, { homedir }))).toBeUndefined();
   });
 
   it("not connected: a clear refusal telling a person to run connect", async () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
@@ -10,6 +10,7 @@ import {
   forgeContextFromEnv,
   GITHUB_API_BASE,
   GitHubForge,
+  gitTracksAnything,
   PrReviewCache,
   reverifyPrReview,
   reverifyPrReviewCached,
@@ -61,6 +62,7 @@ class FakeForge implements ForgePort {
     [C2, { parents: [C1], files: { [JOBS]: jobsFile("v1") } }],
     [C3, { parents: [C2], files: { [JOBS]: jobsFile("v1"), "README.md": "hi" } }],
     [OFF, { parents: [C3], files: { [JOBS]: jobsFile("v1") } }],
+    [HEAD7, { parents: [C1], files: { [JOBS]: jobsFile("v1") } }],
   ]);
   main = [C3, C2, C1];
   pulls: Record<string, ForgePull[]> = { [C2]: [{ number: 7, url: "https://github.com/acme/shop/pull/7", mergedAt: "2026-10-01T00:00:00Z", baseRef: "main", headSha: HEAD7, author: "alice" }] };
@@ -233,6 +235,52 @@ describe("#469 verifying an approval in CI", () => {
   });
 });
 
+describe("pr-review binds to the content the reviewer approved (the PR's approved head)", () => {
+  const X = sha("a"); // PR #9: sets the content no reviewer approved
+  const Y = sha("b"); // PR #9: reverts it — the head the reviewer approved
+  const M = sha("c"); // the merge commit
+  const H = sha("d"); // PR #10's approved head (holds v2)
+  const pull = (number: number, headSha: string): ForgePull => ({ number, mergedAt: "2026-10-02T00:00:00Z", baseRef: "main", headSha, author: "alice" });
+
+  function intermediateCommitScenario(): void {
+    forge.commits.set(X, { parents: [C1], files: { [JOBS]: jobsFile("v1") } });
+    forge.commits.set(Y, { parents: [X], files: { [JOBS]: jobsFile("v0") } });
+    forge.commits.set(M, { parents: [C1, Y], files: { [JOBS]: jobsFile("v0") } });
+    forge.main = [M, Y, X, C1];
+    forge.pulls = { [X]: [pull(9, Y)], [Y]: [pull(9, Y)], [M]: [pull(9, Y)] };
+    forge.reviewList[9] = [{ login: "bob", isBot: false, state: "APPROVED", commitId: Y }];
+    forge.prCommits[9] = [{ authorLogin: "alice" }];
+  }
+
+  function evilMergeScenario(): void {
+    forge.commits.set(H, { parents: [C1], files: { [JOBS]: jobsFile("v2") } });
+    forge.commits.set(M, { parents: [C1, H], files: { [JOBS]: jobsFile("v1") } });
+    forge.main = [M, C1];
+    forge.pulls = { [M]: [pull(10, H)], [H]: [pull(10, H)] };
+    forge.reviewList[10] = [{ login: "bob", isBot: false, state: "APPROVED", commitId: H }];
+    forge.prCommits[10] = [{ authorLogin: "alice" }];
+  }
+
+  it("refuses a recorded intermediate PR commit whose content the approved head reverted", async () => {
+    intermediateCommitScenario();
+    expect(await reverify({ ...RECORDED, number: 9, mergedSha: X })).toMatchObject({ ok: false, code: "pr-mismatch" });
+  });
+
+  it("refuses to grant an evil merge whose content differs from the approved head", async () => {
+    evilMergeScenario();
+    expect(await approve()).toMatchObject({ ok: false, code: "pr-mismatch" });
+  });
+
+  it("refuses to re-verify an evil merge whose content differs from the approved head", async () => {
+    evilMergeScenario();
+    expect(await reverify({ ...RECORDED, number: 10, mergedSha: M })).toMatchObject({ ok: false, code: "pr-mismatch" });
+  });
+
+  it("grants when the approved head holds the merged content", async () => {
+    expect((await approve()).ok).toBe(true);
+  });
+});
+
 describe("#469 re-verifying a recorded pr-review", () => {
   it("confirms the recorded PR, merged sha and reviewer", async () => {
     expect((await reverify()).ok).toBe(true);
@@ -286,6 +334,45 @@ describe("#469 the re-verification cache", () => {
   it("is never written on a pull_request event", async () => {
     await reverifyPrReviewCached(entry, RECORDED, { ...CI_ENV, GITHUB_EVENT_NAME: "pull_request" }, new PrReviewCache(cacheDir(), async () => false), () => forge);
     expect(await readdir(cacheDir()).catch(() => [])).toEqual([]);
+  });
+
+  it("is never read on a pull_request event (always re-verified live)", async () => {
+    await reverifyPrReviewCached(entry, RECORDED, CI_ENV, new PrReviewCache(cacheDir(), async () => false), () => forge);
+    forge.calls = 0;
+    await reverifyPrReviewCached(entry, RECORDED, { ...CI_ENV, GITHUB_EVENT_NAME: "pull_request_target" }, new PrReviewCache(cacheDir(), async () => false), () => forge);
+    expect(forge.calls).toBeGreaterThan(0);
+  });
+
+  it("a cached success expires after 24 hours", async () => {
+    await reverifyPrReviewCached(entry, RECORDED, CI_ENV, new PrReviewCache(cacheDir(), async () => false), () => forge);
+    forge.calls = 0;
+    installClock(new FakeClock({ startMs: Date.parse("2026-10-09T12:00:00.000Z") + 24 * 60 * 60 * 1000 }));
+    await reverifyPrReviewCached(entry, RECORDED, CI_ENV, new PrReviewCache(cacheDir(), async () => false), () => forge);
+    expect(forge.calls).toBeGreaterThan(0);
+  });
+
+  it("is never read through a symlinked cache dir", async () => {
+    // A valid cache entry, moved outside the repo and pointed at by a (committed) symlink.
+    await reverifyPrReviewCached(entry, RECORDED, CI_ENV, new PrReviewCache(cacheDir(), async () => false), () => forge);
+    const outside = join(await mkdtemp(join(tmpdir(), "jev-469-outside-")), "cache");
+    await rename(join(root, ".jevitate", "cache"), outside);
+    await symlink(outside, join(root, ".jevitate", "cache"));
+    forge.calls = 0;
+    await reverifyPrReviewCached(entry, RECORDED, CI_ENV, new PrReviewCache(cacheDir(), async () => false), () => forge);
+    expect(forge.calls).toBeGreaterThan(0);
+  });
+
+  it("is never written through a symlinked cache dir", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "jev-469-outside-"));
+    await mkdir(join(root, ".jevitate"), { recursive: true });
+    await symlink(outside, join(root, ".jevitate", "cache"));
+    await reverifyPrReviewCached(entry, RECORDED, CI_ENV, new PrReviewCache(cacheDir(), async () => false), () => forge);
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it("is untrusted when git fails (fail closed)", async () => {
+    // `root` has an empty `.git` dir: jevitate sees a repository, git does not — git ls-files errors.
+    expect(await gitTracksAnything(cacheDir())).toBe(true);
   });
 
   it("does not cache a refusal", async () => {

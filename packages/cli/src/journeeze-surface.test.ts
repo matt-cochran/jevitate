@@ -80,7 +80,7 @@ describe("CLI connect journeeze", () => {
     };
     tree(program);
     try {
-      await program.parseAsync(["connect", "journeeze", "--url", "http://127.0.0.1:3999", "--json"], { from: "user" });
+      await program.parseAsync(["connect", "journeeze", "--url", "https://app.journeeze.dev", "--json"], { from: "user" });
     } catch (err) {
       if (!(err instanceof CommanderError)) throw err;
     }
