@@ -194,6 +194,21 @@ export function proposalFloorViolation(stored: Journey, proposed: Recording): st
   return null;
 }
 
+/**
+ * #467: a proposal names each changed step by its flat index AND, when the step has one, its stable
+ * id — refused when they disagree (the index points at a different step than the one that was healed,
+ * or the file was edited). Null when every named id is the stored step's at that index.
+ */
+export function proposalStepIdViolation(stored: Journey, steps: readonly { readonly index: number; readonly stepId?: string }[]): string | null {
+  const flat = flattenRecording(stored.recording);
+  for (const s of steps) {
+    if (s.stepId === undefined) continue;
+    const have = flat[s.index]?.recorded.stepId;
+    if (have !== s.stepId) return `step ${s.index + 1} is named ${s.stepId}, but the Journey's step ${s.index + 1} is ${have ?? "(no id)"}`;
+  }
+  return null;
+}
+
 export interface WriteJourneyProposalInput {
   readonly journeyId: string;
   /** The stored Journey the revision was made against. */
@@ -227,6 +242,8 @@ export async function writeJourneyProposal(journeysDir: string, input: WriteJour
   if (violation !== null) throw new JourneyProposalProofError(`refusing to store a proposal that touches the Journey's proof (${violation.code}): ${violation.detail}`);
   const floor = proposalFloorViolation(input.base, input.draft.recording);
   if (floor !== null) throw new JourneyProposalProofError(`refusing to store a proposal the heal floor refuses: ${floor}`);
+  const idClash = proposalStepIdViolation(input.base, input.draft.steps);
+  if (idClash !== null) throw new JourneyProposalProofError(`refusing to store a proposal whose step ids disagree with the Journey: ${idClash}`);
   const baseHash = journeyReviewHash(input.base);
   const secrets = [...(input.secrets ?? [])];
   // Every string: the run's secret values. Free text (not the recording or a step): also
@@ -250,6 +267,7 @@ export async function writeJourneyProposal(journeysDir: string, input: WriteJour
     const after = s.evidence[0]?.after;
     return {
       index: s.index,
+      ...(s.stepId === undefined ? {} : { stepId: s.stepId }),
       before: sanitizeStep(s.before),
       after: sanitizeStep(s.after),
       justification: {
@@ -346,6 +364,8 @@ export function checkProposal(stored: Journey, proposal: JourneyProposal): Journ
   if (violation !== null) return new JourneyProposalProofError(`proposal '${proposal.proposalId}' touches the Journey's proof (${violation.code}): ${violation.detail}`);
   const floor = proposalFloorViolation(stored, proposal.recording);
   if (floor !== null) return new JourneyProposalProofError(`proposal '${proposal.proposalId}' changes a step the heal floor refuses: ${floor}`);
+  const idClash = proposalStepIdViolation(stored, proposal.steps);
+  if (idClash !== null) return new JourneyProposalProofError(`proposal '${proposal.proposalId}' names a step by an id the Journey's step does not have: ${idClash}`);
   if (journeyReviewHash(proposedJourney(stored, proposal)) !== proposal.proposedHash) {
     return new JourneyProposalProofError(`proposal '${proposal.proposalId}' does not match its recorded hash — the file was edited`);
   }

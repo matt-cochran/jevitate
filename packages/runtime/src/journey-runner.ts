@@ -446,6 +446,7 @@ export class JourneyRunner {
         s.meter.endStep();
         s.changes.push({
           index: i,
+          ...(entry.recorded.stepId === undefined ? {} : { stepId: entry.recorded.stepId }),
           before: entry.step,
           after: cand.step,
           attempt: tryResult.attempt.n,
@@ -494,6 +495,7 @@ export class JourneyRunner {
     const attempt = (result: "accepted" | "rejected", rejection?: { code: HealRejection; detail: string }): HealAttempt => ({
       n,
       stepIndex: i,
+      ...(broken.stepId === undefined ? {} : { stepId: broken.stepId }),
       source: cand.source,
       hypothesis: cand.hypothesis,
       evidence: cand.evidence,

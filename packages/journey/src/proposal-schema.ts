@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RecordingSchema, StepSchema } from "@jevitate/recording";
+import { RecordingSchema, STEP_ID_RE, StepSchema } from "@jevitate/recording";
 import { ApprovalProvenanceSchema } from "./approval-schema.js";
 
 /**
@@ -44,6 +44,8 @@ export const HealAttemptSchema = z
   .object({
     n: z.number().int().min(1),
     stepIndex: z.number().int().min(0),
+    /** #467 (optional): the broken step's stable id, beside its index. */
+    stepId: z.string().regex(STEP_ID_RE, "stepId: 1-64 of [a-z0-9._:-]").optional(),
     source: z.enum(["change-evidence", "model"]),
     hypothesis: z.string().max(4000),
     evidence: z.array(ChangeEvidenceRefSchema).max(100),
@@ -60,6 +62,8 @@ export const ProposalStepSchema = z
   .object({
     /** The flat 0-based step index the revision changes. */
     index: z.number().int().min(0),
+    /** #467 (optional): the changed step's stable id, beside its index (a retarget keeps it). */
+    stepId: z.string().regex(STEP_ID_RE, "stepId: 1-64 of [a-z0-9._:-]").optional(),
     before: StepSchema,
     after: StepSchema,
     justification: z

@@ -31,6 +31,9 @@ import { Recorder } from "./recorder.js";
  *     immediately after the checkpoint step, re-flowing page segmentation
  *     (including merging the split with `segment`'s first page when they
  *     share a URL — commit 8b3a959).
+ *
+ * #467: every base step keeps its `stepId`; the captured step(s) arrive with ids minted by the
+ * recorder, and `spliceRecording` re-mints any that a base step already has.
  */
 export interface RecordPatchOptions {
   /** The recording to patch. Never mutated. */

@@ -52,3 +52,10 @@ test("retargetRecording replaces exactly the step at the index, keeping every ot
   const out = retargetRecording(base, 1, step);
   expect(out).toEqual({ ...base, pages: [{ ...base.pages[0]!, steps: [base.pages[0]!.steps[0]!, { step }] }, base.pages[1]] });
 });
+
+test("#467 retargetRecording keeps the healed step's stepId", () => {
+  const base = baseRecording();
+  const withId: Recording = { ...base, pages: [{ ...base.pages[0]!, steps: [base.pages[0]!.steps[0]!, { ...base.pages[0]!.steps[1]!, stepId: "s-button" }] }, base.pages[1]!] };
+  const step: Step = { kind: "click", target: { testId: "new-button" }, expect: { kind: "visible", target: { testId: "next" } } };
+  expect(retargetRecording(withId, 1, step).pages[0]!.steps[1]!.stepId).toBe("s-button");
+});

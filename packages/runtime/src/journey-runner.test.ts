@@ -330,3 +330,24 @@ describe("JourneyRunner — #409 step waits", () => {
     expect(await r.run({ journey: journeyNoVars, params: {}, policy: safeRunPolicy() })).toMatchObject({ outcome: "quarantined", at: 2, waits: [wait(3, 30_000, "hang")] });
   });
 });
+
+describe("JourneyRunner self-heal keeps step ids (#467)", () => {
+  afterEach(() => resetClock());
+  const healed = () => {
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
+    return run(runner, renamedButtonJourney({ stepId: "s-create" }), hybrid());
+  };
+
+  it("a healed step keeps its stepId in the proposed revision", async () => {
+    const result = await healed();
+    expect(result.outcome === "healed-pending-review" ? result.revision.recording.pages[0]!.steps[1]!.stepId : null).toBe("s-create");
+  });
+
+  it("a proposed step change carries the healed step's stepId beside its index", async () => {
+    expect(await healed()).toMatchObject({ revision: { steps: [{ index: 1, stepId: "s-create" }] } });
+  });
+
+  it("every heal attempt carries the broken step's stepId beside its index", async () => {
+    expect(await healed()).toMatchObject({ heal: { attempts: [{ stepIndex: 1, stepId: "s-create" }] } });
+  });
+});
