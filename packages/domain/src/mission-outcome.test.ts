@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { GOAL_OUTCOMES, MISSION_EXIT_CODES, defectOutcomeOf, foldGoalOutcome, goalMissionOutcome, goalReasonOf, startedOutcome, type MissionOutcome } from "./mission-outcome.js";
+import { GOAL_OUTCOMES, MISSION_EXIT_CODES, combineOutcomes, defectOutcomeOf, foldGoalOutcome, goalMissionOutcome, goalReasonOf, startedOutcome, worstOutcome, type MissionOutcome } from "./mission-outcome.js";
+import { journeyExitCode } from "./journey-outcome.js";
 
 describe("defectOutcomeOf (#421/#423)", () => {
   it("no defects: status none, empty byKind, no advisoryByKind", () => {
@@ -108,5 +109,23 @@ describe("not-started (#448): a run with zero executed actions was never exercis
 
   it("falls back to no-actions when the cause is unknown", () => {
     expect(goalReasonOf({ goalOutcome: "not-started" })).toBe("no-actions");
+  });
+});
+
+describe("pending-review (#453)", () => {
+  it("exits 5", () => {
+    expect(MISSION_EXIT_CODES["pending-review"]).toBe(5);
+  });
+  it("is worse than clean", () => {
+    expect(worstOutcome("clean", "pending-review")).toBe("pending-review");
+  });
+  it("is milder than defects-found", () => {
+    expect(combineOutcomes(["pending-review", "defects-found"])).toBe("defects-found");
+  });
+});
+
+describe("journeyExitCode (#453)", () => {
+  it("maps ok/healed-pending-review/heal-exhausted/quarantined to 0/5/1/1", () => {
+    expect((["ok", "healed-pending-review", "heal-exhausted", "quarantined"] as const).map(journeyExitCode)).toEqual([0, 5, 1, 1]);
   });
 });

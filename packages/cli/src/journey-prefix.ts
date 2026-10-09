@@ -246,9 +246,9 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
         throw new JourneyPrefixStaleError(`journey '${opts.id}' did not replay to ${where}: ${message}`, branch, undefined, await stalePageEvidence(session.page, secretValues));
       }
       if (run.outcome !== "ok") {
-        const failed = run.outcome === "quarantined" && run.at !== undefined ? run.at + 1 : undefined;
+        const failed = (run.outcome === "quarantined" || run.outcome === "heal-exhausted") && run.at !== undefined ? run.at + 1 : undefined;
         // #398: the runner's reason names the failed step 1-based, like `--at-step` and `failedStep`.
-        const reason = run.outcome === "quarantined" ? run.reason : "the replay healed a step (a self-healed prefix is never a branch point)";
+        const reason = run.outcome === "quarantined" || run.outcome === "heal-exhausted" ? run.reason : "the replay healed a step (a self-healed prefix is never a branch point)";
         throw new JourneyPrefixStaleError(`journey '${opts.id}' is stale: it no longer reaches ${where} — ${reason}`, branch, failed, await stalePageEvidence(session.page, secretValues));
       }
       return session.page.url();

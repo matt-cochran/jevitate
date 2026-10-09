@@ -54,6 +54,26 @@ fields the same way:
 
 `verify-fix`, `ledger add`, `report`, `check` and `--repeat` voting all read defects from `defects`.
 
+## Journey results (`journey-<id>-<stamp>.result.json`)
+
+`journey run` with `--self-heal hybrid|full`, and `check`, persist `{missionOutcome, exitCode, result}`
+for a Journey run (a plain fail-closed `journey run` prints its result and writes no file). The
+`result` has:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `"journey"` |
+| `journeyId`, `startedAt`, `target` | which Journey, when, on what origin |
+| `outcome` | `ok`, `healed-pending-review`, `heal-exhausted` or `quarantined` (see [journey run outcomes](./outcomes.md#journey-run-outcomes-453)) |
+| `reason`, `at`, `url` | why and at which step (0-based) a failed run stopped |
+| `heal` | when a self-heal ran: `mode`, `verdict`, `changeScope` (range, SHAs, counts; never raw hunks), `budget` (limits, used, `exhaustedBy`) and `attempts` |
+| `heal.attempts[]` | `n`, `stepIndex`, `source`, `hypothesis`, `evidence` (kind, before/after, file:line), `candidate` (values hidden), `observation` (a masked screenshot under `journey-<id>-<stamp>.heal/`), `result`, `rejection {code, detail}`, `usage` |
+| `proposal` | `{id, path, steps, reviewCommand, acceptCommand}` of the revision a `healed-pending-review` run wrote |
+
+Every string is redacted of the run's secret params. `jevitate report` turns `heal-exhausted` and
+unexplained breaks into defects (with the attempt table) and a pending proposal into a
+`journey-heal-pending` finding that is not counted as a defect.
+
 ## Run tags
 
 Every command that produces a run result takes `--tag key=value` (repeatable): `explore`,

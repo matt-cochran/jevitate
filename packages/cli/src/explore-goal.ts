@@ -594,7 +594,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     // defect is never overridden, a goal-only miss is. #213: a starved `failed` goal keeps the check
     // that did not hold in its degraded reason.
     const preHost: GoalBasedOutcome =
-      defectOutcome.status === "defects" ? (goalMissionOutcome(goalSoFar, "defects") as Exclude<MissionOutcome, "clean">) : goalSoFar;
+      defectOutcome.status === "defects" ? (goalMissionOutcome(goalSoFar, "defects") as Exclude<MissionOutcome, "clean" | "pending-review">) : goalSoFar;
     const host = await finishHostHealth(health, preHost, {
       ...((mission.run.failure ?? mission.failure) === undefined ? {} : { failure: (mission.run.failure ?? mission.failure)! }),
       ...(preHost === mission.outcome && (mission.failure?.message ?? mission.reason) !== undefined

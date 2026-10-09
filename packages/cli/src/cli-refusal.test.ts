@@ -22,6 +22,7 @@ let validRecording: string;
 let validScript: string;
 let badProduct: string;
 let suiteOffAllowlist: string;
+let suiteValid: string;
 let suiteUnknownFingerprint: string;
 let badCatalog: string;
 
@@ -53,6 +54,8 @@ beforeAll(() => {
     suiteOffAllowlist,
     JSON.stringify({ version: 1, ai: "fake", targets: [{ name: "t", url: "http://127.0.0.1:3999/", allow: ["http://other.test"], missions: [{ strategy: "coverage" }] }] }),
   );
+  suiteValid = join(dir, "valid.suite.json");
+  writeFileSync(suiteValid, JSON.stringify({ version: 1, ai: "fake", targets: [{ name: "t", url: "http://127.0.0.1:3999/", missions: [{ strategy: "feature", feature: "f" }] }] }));
   const result = join(dir, "adversarial.result.json");
   writeFileSync(
     result,
@@ -167,8 +170,29 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "recording postdoc": { cases: [[missing]] },
   "journey list": { exempt: "a listing: an empty or missing dir lists nothing" },
   "journey find": { exempt: "a search: no match is an empty result" },
-  "journey run": { base: ["nope"], cases: [["nope"], ["nope", "--storage-state", missing]] },
-  "journey promote": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"]] },
+  "journey run": {
+    base: ["nope"],
+    cases: [
+      ["nope"],
+      ["nope", "--storage-state", missing],
+      // #453: the change range is validated before any Journey lookup; a self-heal needs a change context (Q1).
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "--output=/tmp/x"],
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "a;id"],
+      ["nope", "--changes", "HEAD~1..HEAD"],
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "a..b..c"],
+      ["nope", "--self-heal", "hybrid", "--fake-ai"],
+    ],
+  },
+  "journey promote": {
+    cases: [
+      ["nope"],
+      ["nope", "--reviewed-hash", "abc"],
+      // #453: a proposal id is 12 hex characters, never a path; accept and reject are exclusive; a rejection needs its reason.
+      ["nope", "--proposal", "../x"],
+      ["nope", "--proposal", "aaaaaaaaaaaa", "--reject-proposal", "aaaaaaaaaaaa"],
+      ["nope", "--reject-proposal", "aaaaaaaaaaaa"],
+    ],
+  },
   "journey lint": { cases: [["nope"], ["../x"]] },
   "journey review": { cases: [["nope"], ["../x"]] },
   // #433: an unknown persona/job, a malformed --reviewed-hash, an invalid catalog file.
@@ -318,6 +342,10 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--suite", missing, "--out", join(dir, "check")],
       ["--suite", suiteOffAllowlist, "--out", join(dir, "check")],
       ["--suite", suiteUnknownFingerprint, "--out", join(dir, "check")],
+      // #453: a change context needs --self-heal; the range is validated; a heal needs a change context.
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--changes", "HEAD~1..HEAD"],
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--self-heal", "hybrid", "--changes", "a;id"],
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--self-heal", "hybrid"],
     ],
   },
   report: { cases: [["--since", "not-a-run-or-date"]] },

@@ -151,6 +151,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     observer: OBSERVER_INTERNAL,
     policy: "#293: a prefix replays with the fail-closed safeRunPolicy() — paid/destructive steps refused as in any run",
     selfHealer: "#293: a prefix never self-heals: a healed prefix is no branch point — it is a stale Journey (journey-stale)",
+    heal: "#293 × #453: a prefix never self-heals, so it has no change context",
   },
   "journey-annotate-api.ts runJourneyProgrammatically": {
     interpreter: OBSERVER_NOT_INTERPRETER,
@@ -168,6 +169,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     interpreter: "#249: a clean-path candidate replay only needs its verdict (the demo/annotate stages observe their own replays)",
     policy: "a clean-path candidate replays with the fail-closed safeRunPolicy() — paid/destructive steps refused as in any run",
     selfHealer: "a clean-path candidate never self-heals: a step it cannot do without is kept",
+    heal: "#453: a clean-path candidate never self-heals, so it has no change context",
     mask: "a clean-path candidate captures no media (the demo stage masks its own)",
     observer: OBSERVER_INTERNAL,
     screenshots: "a clean-path candidate captures no media (the demo stage renders the screenshots)",
@@ -192,6 +194,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     account: SITE_ACCOUNT,
     policy: "a suite Journey replays with the fail-closed safeRunPolicy()",
     selfHealer: "check never self-heals: a broken step fails the gate",
+    heal: "#453: check never self-heals yet (`check --self-heal --changes` is a later lane), so it has no change context",
     interpreter: ANNOTATE_OBSERVER,
     session: WHOLE_JOURNEY,
     stopAfterStep: WHOLE_JOURNEY,

@@ -306,8 +306,23 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
   outcome before a Journey is promoted; `journey verify checkout --mutate` proves each one can fail
   by replaying the Journey with each write skipped or blocked ([details](#proving-assertions-can-fail)).
 - `--self-heal fail-closed` (the default) stops and quarantines on a broken step. `hybrid` and
-  `full` re-learn only the broken step and need `--real` (or `--fake-ai`). Write and irreversible
-  steps are never auto-healed in any mode.
+  `full` are change-aware (#453): they need a change context, `--changes <git range>` and/or
+  `--change-note "<text>"` (repeatable), and need `--real` (or `--fake-ai`). A broken step is
+  retargeted only when that change explains it (a renamed label, test id, route...); the retarget
+  replaces the step one-for-one and never touches its proof (`expect`, assertions, request checks,
+  end state). A healed run is never a pass: it ends `healed-pending-review` (exit `5`) and writes
+  a proposal beside the Journey (`.jevitate/journeys/.proposals/<id>.json`, committed like
+  `.approved/`); the stored Journey stays byte-identical. A break the change does not explain stays
+  `quarantined` (exit `1`, a likely regression); candidates that all fail end `heal-exhausted`
+  (exit `1`). Budgets: `--heal-max-attempts` (default 2) and `--heal-max-model-calls`/`--heal-max-ms`
+  per broken step, `--heal-max-run-attempts` (4) and `--heal-max-run-ms` per run. Write and
+  irreversible steps are never auto-healed; a click/fill is retargeted only under a write guard.
+- Review a proposal with `jevitate journey review <id>`, accept it with
+  `jevitate journey promote <id> --proposal <pid>` (every promote gate applies; a person confirms),
+  or reject it with `--reject-proposal <pid> --reason "<text>"`. A self-heal run also writes
+  `journey-<id>-<stamp>.result.json` (heal attempts, proposal) under the logs dir, which
+  `jevitate report` reads: heal-exhausted is a defect, a pending proposal is listed under
+  "Proposed Journey revisions" and is not counted as a defect.
 - A Journey that declares `metadata.requiresAuth: true` refuses to start without
   `--storage-state`, before any browser opens.
 - `load run` replays a promoted Journey with a seeded pool of actors, human-paced when the site has

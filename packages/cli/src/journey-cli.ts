@@ -5,15 +5,22 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { Command } from "commander";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, journeyStepCount, listJourneyAnchors, type JourneyLintFinding } from "@jevitate/journey";
-import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
-import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
-import { makeExploreSelfHealer } from "./self-heal-adapter.js";
+import { MissingCredentialError, UsageTracker, type GenerationPort } from "@jevitate/ai-core";
+import { journeyExitCode, safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
+import { CLI_HEAL_NAMES, JourneyHealArgsError, journeyHealBudget, journeyRunSummary, readJourneyChangeScope, validateJourneyHeal, type JourneyHealRequest } from "./journey-heal.js";
+import { ChangesArgsError, ChangesInputError } from "./change-context.js";
+import { positiveIntArg } from "./cli-args.js";
+import type { ChangeScope } from "@jevitate/runtime";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, lintJourneyById, WeakJourneyError, UnknownJourneyError, JourneyRequiresAuthError, StaleReviewError } from "./journey-api.js";
 import { ReviewSheetError, renderReviewMarkdown, renderReviewText, reviewSheetHash } from "./journey-review.js";
 import { reviewJourneyById } from "./journey-review-api.js";
 import { ReviewSidecarError } from "./journey-review-store.js";
+import { JourneyProposalArgsError } from "./journey-api.js";
+import { JourneyProposalInvalidError, JourneyProposalNotFoundError, JourneyProposalProofError, JourneyProposalStaleError, isProposalId } from "./journey-proposal-store.js";
+import { rejectionProvenance } from "./approval-provenance.js";
 import { UnvettedLinksError, resolveCatalogDir } from "./catalog-api.js";
 import { CatalogInputError } from "./catalog.js";
 import { ApprovalFindingsError } from "./pre-approval.js";
@@ -160,7 +167,14 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     // runtime's write floor). `hybrid`/`full` need an AI gateway, selected
     // with --real/--fake-ai (mirrors `explore`); requesting a heal mode
     // without one fails CLOSED, never a silent unhealed run.
-    .option("--self-heal <mode>", "self-heal policy mode: fail-closed | hybrid | full", "fail-closed")
+    .option("--self-heal <mode>", "self-heal policy mode: fail-closed | hybrid | full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass)", "fail-closed")
+    .option("--changes <range>", "#453: the git range that explains a break (e.g. HEAD~1..HEAD, main...HEAD; read-only, in the journeys dir's repo) — needs --self-heal hybrid|full")
+    .option("--change-note <text>", "#453: a change note that explains a break (e.g. 'renamed \"Create New\" to \"Create\"'; repeatable) — needs --self-heal hybrid|full", (v: string, prev: string[]) => [...prev, v], [] as string[])
+    .option("--heal-max-attempts <n>", "#453: candidates tried per broken step (default 2)", positiveIntArg)
+    .option("--heal-max-model-calls <n>", "#453: model calls per broken step (default 6)", positiveIntArg)
+    .option("--heal-max-ms <ms>", "#453: healing time per broken step in ms (default 60000)", positiveIntArg)
+    .option("--heal-max-run-attempts <n>", "#453: candidates tried in the whole run (default 4)", positiveIntArg)
+    .option("--heal-max-run-ms <ms>", "#453: healing time in the whole run in ms (default 180000)", positiveIntArg)
     .option("--real", "use live Jev + OpenRouter gateways for self-heal (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
@@ -185,7 +199,33 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
         ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
       };
-      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, jevProvider, json, screenshots: _screenshots, actionDeltas, ...emulationFlags } = this.opts<{
+      const {
+        dir,
+        param,
+        storageState: storageStateFlag,
+        selfHeal,
+        real,
+        fakeAi,
+        jevProvider,
+        json,
+        screenshots: _screenshots,
+        actionDeltas,
+        changes,
+        changeNote,
+        healMaxAttempts,
+        healMaxModelCalls,
+        healMaxMs,
+        healMaxRunAttempts,
+        healMaxRunMs,
+        ...emulationFlags
+      } = this.opts<{
+        changes?: string;
+        changeNote: string[];
+        healMaxAttempts?: number;
+        healMaxModelCalls?: number;
+        healMaxMs?: number;
+        healMaxRunAttempts?: number;
+        healMaxRunMs?: number;
         actionDeltas?: boolean;
         dir?: string;
         param: Record<string, string>;
@@ -232,6 +272,29 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         return;
       }
       const selfHealMode = selfHeal as SelfHealMode;
+      // #453 Q1: a heal needs a change context, and the change/budget flags need a heal — refused
+      // (64) before any Journey lookup, git read, model gateway or browser.
+      const healRequest: JourneyHealRequest = {
+        selfHeal: selfHealMode,
+        ...(changes === undefined ? {} : { changes }),
+        changeNotes: changeNote,
+        ...(healMaxAttempts === undefined ? {} : { maxAttempts: healMaxAttempts }),
+        ...(healMaxModelCalls === undefined ? {} : { maxModelCalls: healMaxModelCalls }),
+        ...(healMaxMs === undefined ? {} : { maxMs: healMaxMs }),
+        ...(healMaxRunAttempts === undefined ? {} : { maxRunAttempts: healMaxRunAttempts }),
+        ...(healMaxRunMs === undefined ? {} : { maxRunMs: healMaxRunMs }),
+      };
+      let healScope: ChangeScope | undefined;
+      try {
+        validateJourneyHeal(healRequest, CLI_HEAL_NAMES);
+        if (selfHealMode !== "fail-closed") healScope = await readJourneyChangeScope(healRequest, resolveJourneysDir(deps, dir));
+      } catch (err) {
+        if (err instanceof JourneyHealArgsError || err instanceof ChangesArgsError || err instanceof ChangesInputError) {
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
+        throw err;
+      }
 
       // When a heal mode is requested, build the SelfHealer HERE (this action
       // owns `deps` + the credential preflight); a missing/unselected gateway
@@ -242,10 +305,10 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       // #163: a self-healing run makes model calls — their usage (and full cost) lands on its result.
       let healUsage: UsageTracker | undefined;
       if (selfHealMode !== "fail-closed") {
-        let judge: JudgmentPort;
+        // #453: the healer is evidence-only — its model is an advisory ranker; judgment never decides a heal.
         let gen: GenerationPort;
         try {
-          ({ judge, gen, usage: healUsage } = await buildExploreGateways(deps, { real: real ?? false, fakeAi: fakeAi ?? false, jevProvider }));
+          ({ gen, usage: healUsage } = await buildExploreGateways(deps, { real: real ?? false, fakeAi: fakeAi ?? false, jevProvider }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
             emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
@@ -254,8 +317,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           }
           return;
         }
-        selfHealer = makeExploreSelfHealer(judge, gen);
-        policy = { ...policy, selfHeal: { mode: selfHealMode } };
+        selfHealer = makeEvidenceSelfHealer(gen);
+        policy = { ...policy, selfHeal: { mode: selfHealMode, budget: journeyHealBudget(healRequest) } };
       }
 
       try {
@@ -270,6 +333,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           params: param,
           policy,
           selfHealer,
+          ...(healScope === undefined ? {} : { heal: { scope: healScope } }),
           browserPortFactory: deps.explore?.browserPortFactory,
           ...(browser === undefined ? {} : { browser }),
           ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
@@ -300,12 +364,14 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         const envelope = ok(intent === undefined ? result : { ...result, intent });
         if (json) {
           emitJson(program, envelope);
-          // "ok" and "healed" (a recovered run) are both successes; only
-          // "quarantined" is a non-zero exit.
-          if (result.outcome === "quarantined") process.exitCode = 1;
+          // #453: ok → 0; healed-pending-review → 5 (a proposed revision, never a pass); else 1.
+          const code = journeyExitCode(result.outcome);
+          if (code !== 0) process.exitCode = code;
         } else {
           writeRawResult(program, envelope.data);
-          process.exitCode = result.outcome === "quarantined" ? 1 : 0;
+          // #453: a self-heal run also says, in words, what happened and what a person does next.
+          if (selfHealMode !== "fail-closed") program.configureOutput().writeErr?.(journeyRunSummary(id, result));
+          process.exitCode = journeyExitCode(result.outcome);
         }
       } catch (err) {
         if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {
@@ -353,9 +419,15 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       "--non-interactive-approval <reason>",
       "#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person",
     )
+    .option("--proposal <pid>", "#453: accept this pending self-heal proposal (journey review shows it): the Journey is replaced by the proposed revision through every gate, bound to its proposedHash")
+    .option("--reject-proposal <pid>", "#453: reject this pending self-heal proposal (needs --reason); the stored Journey is untouched")
+    .option("--reason <text>", "#453: why the proposal is rejected (recorded with the rejection)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, real, jevProvider, nonInteractiveApproval } = this.opts<{
+      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, real, jevProvider, nonInteractiveApproval, proposal, rejectProposal, reason } = this.opts<{
+        proposal?: string;
+        rejectProposal?: string;
+        reason?: string;
         nonInteractiveApproval?: string;
         dir?: string;
         json?: boolean;
@@ -370,6 +442,42 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       try {
         checkNonInteractiveReason(nonInteractiveApproval);
         const journeysDir = resolveJourneysDir(deps, dir);
+        // #453: the proposal flags, validated before anything is read (an id is 12 hex characters — never a path).
+        for (const [flag, value] of [["--proposal", proposal], ["--reject-proposal", rejectProposal]] as const) {
+          if (value !== undefined && !isProposalId(value)) {
+            emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", `${flag} needs a proposal id (12 hex characters, shown by \`journey review\`), not '${value}'`));
+            return;
+          }
+        }
+        if (proposal !== undefined && rejectProposal !== undefined) {
+          emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", "--proposal and --reject-proposal are exclusive: accept or reject, not both"));
+          return;
+        }
+        if (rejectProposal !== undefined && (reason ?? "").trim() === "") {
+          emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", "--reject-proposal needs --reason <text> (it is recorded with the rejection)"));
+          return;
+        }
+        if (reason !== undefined && rejectProposal === undefined) {
+          emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", "--reason belongs to --reject-proposal"));
+          return;
+        }
+        if (proposal !== undefined && reviewSheet !== undefined) {
+          emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", "--review-sheet binds the stored Journey's hash; with --proposal bind with --reviewed-hash <proposedHash>"));
+          return;
+        }
+        if (rejectProposal !== undefined) {
+          const rejected = await promoteJourney(journeysDir, id, {
+            rejectProposal,
+            reason: reason ?? "",
+            rejectProvenance: rejectionProvenance(deps.approval, reason ?? ""),
+          });
+          if (json) emitJson(program, ok({ ...rejected.metadata, rejectedProposal: rejectProposal }));
+          else {
+            program.configureOutput().writeOut?.(`rejected proposal ${rejectProposal} for journey '${rejected.metadata.id}'; the stored Journey is unchanged\n`);
+            process.exitCode = 0;
+          }
+          return;
+        }
         // #432: what the reviewer read — a hash, a sheet file, or (human mode) the sheet shown below.
         let reviewedHash = hashFlag?.trim().toLowerCase();
         if (reviewedHash !== undefined && !/^[0-9a-f]{64}$/.test(reviewedHash)) {
@@ -397,10 +505,11 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           // Human mode: the sheet is shown before promoting, and the approval binds to what was shown.
           const { review } = await reviewJourneyById(journeysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: true, jev, action: "journey promote" });
           program.configureOutput().writeOut?.(`${renderReviewText(review)}\n`);
-          reviewedHash ??= review.contentHash;
+          reviewedHash ??= proposal === undefined ? review.contentHash : review.proposal?.proposedHash;
         }
         const journeyResult = await promoteJourney(journeysDir, id, {
           jev,
+          ...(proposal === undefined ? {} : { proposal }),
           ...(acceptWeak === undefined ? {} : { acceptWeak }),
           ...(reviewedHash === undefined ? {} : { reviewedHash }),
           ...(acceptUnvetted === undefined ? {} : { acceptUnvetted }),
@@ -424,6 +533,14 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail(refusal.code, refusal.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (
+          err instanceof JourneyProposalArgsError ||
+          err instanceof JourneyProposalNotFoundError ||
+          err instanceof JourneyProposalStaleError ||
+          err instanceof JourneyProposalProofError ||
+          err instanceof JourneyProposalInvalidError
+        ) {
+          emitJson(program, fail(err.code, err.message));
         } else if (err instanceof StaleReviewError || err instanceof ReviewSheetError || err instanceof ReviewSidecarError || err instanceof TargetConfigError) {
           emitJson(program, fail(err instanceof TargetConfigError ? "E_TARGET_CONFIG" : err.code, err.message));
         } else if (err instanceof WeakJourneyError) {

@@ -85,7 +85,7 @@ class UnionFind {
   }
 }
 
-const SEVERITY_ORDER: Readonly<Record<Severity, number>> = { hard: 0, advisory: 1 };
+const SEVERITY_ORDER: Readonly<Record<Severity, number>> = { hard: 0, pending: 1, advisory: 2 };
 
 function byTime(a: string | undefined, b: string | undefined): number {
   return (a ?? "").localeCompare(b ?? "");

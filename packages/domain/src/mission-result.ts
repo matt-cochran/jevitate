@@ -4,7 +4,7 @@ import {
   DEFECT_OUTCOME_STATUSES,
   GOAL_OUTCOMES,
   GOAL_REASONS,
-  MISSION_OUTCOMES,
+  EXPLORE_MISSION_OUTCOMES,
   defectOutcomeOf,
   foldGoalOutcome,
   goalMissionOutcome,
@@ -89,8 +89,11 @@ export const MISSION_RESULT_SCHEMA_VERSION = 1 as const;
 export const RESULT_STRATEGIES = ["goal", "coverage", "exploratory", "adversarial", "feature", "usability"] as const;
 export type ResultStrategy = (typeof RESULT_STRATEGIES)[number];
 
-/** #217: the canonical outcomes only — a goal run's own ending is `goalOutcome`, never `missionOutcome`. */
-export const RESULT_MISSION_OUTCOMES = MISSION_OUTCOMES;
+/**
+ * #217: the canonical outcomes only — a goal run's own ending is `goalOutcome`, never `missionOutcome`.
+ * #453: `pending-review` is a Journey run's ending only; no mission (explore strategy) result holds it.
+ */
+export const RESULT_MISSION_OUTCOMES = EXPLORE_MISSION_OUTCOMES;
 export type ResultMissionOutcome = (typeof RESULT_MISSION_OUTCOMES)[number];
 
 /** A goal run's own ending (#217), carried beside the canonical `missionOutcome`. */

@@ -14,11 +14,12 @@ command's codes only as a reminder; this is the reference.
 | `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error, or `ledger verify` matched no entries (nothing was verified). It proves nothing. |
 | `3` | hang | the app hung, and the hang reproduced on replay |
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
+| `5` | pending-review | a self-heal produced a proposed Journey revision; nothing passes until a person accepts it (`journey promote <id> --proposal <pid>`) |
 | `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …) or number (`--max-actions abc`, `--replays 0`: refused while the command line is parsed), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_UX_INPUT`, `E_TARGET_CONFIG`, …), an unknown id (`E_UNKNOWN_JOURNEY`, `E_REGRESSION_NOT_FOUND`, `E_BASELINE_NOT_FOUND`, …), a `journey annotate --approve` draft that is missing, invalid or stale (`E_JOURNEY_ANNOTATIONS_STALE`: the Journey changed since the draft), missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist — including a `check` suite item whose start URL is off its target's allowlist, or whose `verifyFix` fingerprint is not in its result (refused up front, like a missing result file) |
 | `129` / `130` / `143` | killed | SIGHUP (or the parent died) / SIGINT / SIGTERM; the partial result is still written and every browser is closed (see [operations](./operations.md)) |
 
-`64` is `EX_USAGE` from `sysexits.h`. It is deliberately not `5`, so a future outcome code never
-collides with it. A refused command's code comes from its error code: `_ARGS`, `_INPUT`,
+`64` is `EX_USAGE` from `sysexits.h`. It is deliberately not a small integer, so a new outcome code
+(such as `5`) never collides with it. A refused command's code comes from its error code: `_ARGS`, `_INPUT`,
 `_ASSERTION`, `_SPEC`, `_CONFIG`, `_NOT_FOUND` and `E_UNKNOWN_*` codes are usage errors (64), and any
 other error is `2`.
 
@@ -50,6 +51,20 @@ clean.
 | `inconclusive` / `crashed` | 2 | the run itself broke (page never rendered, model unavailable, browser/page crash), or it proved nothing: a run that exercised too little of its target to call its silence clean (`failure.kind: "insufficient-coverage"`), a goal whose only failing checks were vacuous (`vacuous-check`), a usability review whose job was never completed (`job-incomplete`), an app that stopped answering navigation mid-run (`target-unresponsive`, always `inconclusive`) |
 | `hang` | 3 | the app under test hung, and the hang reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
+
+### Journey run outcomes (#453)
+
+`jevitate journey run` (and MCP `run_journey`, whose result carries the same `exitCode`) ends in one of:
+
+| Journey outcome | Exit code | Mission outcome | Meaning |
+|---|---|---|---|
+| `ok` | 0 | `clean` | every step and the end state held as recorded |
+| `healed-pending-review` | 5 | `pending-review` | a self-heal completed the run only after retargeting steps the change explains; a proposed revision was written and nothing passes until a person accepts it |
+| `heal-exhausted` | 1 | `defects-found` | the break was explained but every candidate (or the budget) ran out; the attempts are in the result |
+| `quarantined` | 1 | `defects-found` | a step failed and no self-heal ran, or the change does not explain the break (`heal.verdict: "unexplained"`: a likely regression) |
+
+Exit `5` is not a failure and not a pass: review the proposal (`jevitate journey review <id>`), then
+`journey promote <id> --proposal <pid>`. Missions never end `pending-review`.
 
 The MCP tool `get_mission_result` returns the same status and code for a
 finished run; a broken run comes back as an error result. Its `id` is a result stem —

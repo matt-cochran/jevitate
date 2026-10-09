@@ -102,7 +102,7 @@ export class JourneyOutcomeChecks {
     let result: JourneyRunResult;
     try {
       result = await replay();
-      if (result.outcome === "quarantined") return result;
+      if (result.outcome === "quarantined" || result.outcome === "heal-exhausted") return result;
       // A step's postcondition can hold before the write it triggered finished: wait for the network
       // to go idle (bounded) before reading what was sent.
       await monitor.waitSettled({ ceilingMs: SETTLE_CEILING_MS }).catch(() => undefined);
@@ -150,6 +150,10 @@ export class JourneyOutcomeChecks {
       ...(endFailures.length === 0 ? [] : [`success check${endFailures.length === 1 ? "" : "s"} not met after the last step: ${endFailures.join("; ")}`]),
     ];
     if (reasons.length === 0) return result;
+    // #453: a healed run whose end state does not hold proposes nothing — it is a failure.
+    if (result.outcome === "healed-pending-review") {
+      return { outcome: "quarantined", reason: `the healed run's end state differs from the Journey's assertions: ${reasons.join("; ")}`, ...(result.heal === undefined ? {} : { heal: result.heal }) };
+    }
     return { outcome: "quarantined", reason: reasons.join("; ") };
   }
 }
