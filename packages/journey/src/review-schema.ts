@@ -86,6 +86,35 @@ export const ReviewLintFindingSchema = z
   .object({ rule: z.string(), level: z.enum(["error", "warning"]), step: z.number().int().optional(), message: z.string() })
   .strict();
 
+/** #466: one anchor-rule (or catalog anchor/serves reference) problem, with the fix. */
+export const ReviewAnchorWarningSchema = z
+  .object({ code: z.string(), severity: z.enum(["warning", "error"]), path: z.string(), step: z.number().int().optional(), message: z.string(), fix: z.string().optional() })
+  .strict();
+
+/** #470: locator health on the sheet — advisory; the brittle steps with the fix for each. */
+export const ReviewLocatorHealthSchema = z
+  .object({
+    line: z.string(),
+    stable: z.number().int(),
+    brittle: z.number().int(),
+    brittleSteps: z.array(
+      z
+        .object({
+          stepId: z.string().optional(),
+          index: z.number().int(),
+          kind: z.string(),
+          rung: z.string(),
+          level: z.string(),
+          route: z.string().optional(),
+          locator: z.string(),
+          reasons: z.array(z.string()),
+          fix: z.string(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
 export const ReviewVerifySchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("not-verified"), hint: z.string() }).strict(),
   z
@@ -109,13 +138,15 @@ export const ReviewChangeSchema = z.discriminatedUnion("kind", [
   /** Promoted before approvals were recorded (no approval, no snapshot). */
   z.object({ kind: z.literal("no-record") }).strict(),
   /** Approved, but its approved snapshot is gone: only the hash can be compared. */
-  z.object({ kind: z.literal("snapshot-missing"), approvedHash: z.string(), approvedAt: z.string().optional(), changed: z.boolean() }).strict(),
+  z.object({ kind: z.literal("snapshot-missing"), approvedHash: z.string(), approvedAt: z.string().optional(), changed: z.boolean(), stepIdOnly: z.boolean().optional() }).strict(),
   z
     .object({
       kind: z.literal("diff"),
       approvedHash: z.string(),
       approvedAt: z.string().optional(),
       changed: z.boolean(),
+      /** #467: the only change since approval is minted step ids (re-approval takes the warn path). */
+      stepIdOnly: z.boolean().optional(),
       steps: DiffSchema,
       assertions: DiffSchema,
       sideEffects: DiffSchema,
@@ -184,6 +215,10 @@ export const JourneyReviewSchema = z
     findings: z.array(FindingSchema).optional(),
     /** #434/#435: the advisory Jev layer of the findings (readiness questions, pair classifications). */
     jev: JevLayerSchema.optional(),
+    /** #466: the 0.10 anchor-rule warnings of this Journey (existing Journeys still load; promoting a changed one enforces them). */
+    anchorWarnings: z.array(ReviewAnchorWarningSchema).optional(),
+    /** #470: advisory locator health (stable vs brittle steps, with fixes). */
+    locatorHealth: ReviewLocatorHealthSchema.optional(),
     /** #453: the pending self-heal proposal, when there is one. */
     proposal: ReviewProposalSchema.optional(),
     /** `journeyReviewHash`: what `journey promote --reviewed-hash` binds an approval to. */
@@ -197,4 +232,6 @@ export type JourneyReviewStep = z.infer<typeof ReviewStepSchema>;
 export type JourneyReviewWriteRequest = z.infer<typeof ReviewWriteRequestSchema>;
 export type JourneyReviewRiskyControl = z.infer<typeof ReviewRiskyControlSchema>;
 export type JourneyReviewVerify = z.infer<typeof ReviewVerifySchema>;
+export type JourneyReviewAnchorWarning = z.infer<typeof ReviewAnchorWarningSchema>;
+export type JourneyReviewLocatorHealth = z.infer<typeof ReviewLocatorHealthSchema>;
 export type JourneyReviewChange = z.infer<typeof ReviewChangeSchema>;

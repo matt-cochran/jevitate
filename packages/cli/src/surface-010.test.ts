@@ -67,7 +67,6 @@ async function run(argv: readonly string[]): Promise<{ code: number | undefined;
 /** Evaluated lazily (paths exist only after beforeAll); `<dir>`/`<suite>` are placeholders. */
 const STUB_COMMANDS: ReadonlyArray<readonly string[]> = [
   ["journey", "migrate", "--step-ids", "--dry-run"],
-  ["journey", "review", "--stale"],
 ];
 
 describe("0.10 CLI stubs refuse with E_NOT_IMPLEMENTED (exit 2)", () => {
@@ -98,22 +97,6 @@ describe("0.10 MCP tools: allowlisted, mirrored, stubbed, and key-free", () => {
     return new Map(buildMcpTools({ journeysDir: join(dir, "journeys"), pathRoots: [dir], runCli }).map((t) => [t.name, t]));
   };
   const body = (r: { content: Array<{ text: string }> }): Record<string, unknown> => JSON.parse(r.content[0]!.text) as Record<string, unknown>;
-
-  const CALLS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
-    ["review_journey", { stale: true }],
-  ];
-
-  it.each(CALLS)("%s → refused E_NOT_IMPLEMENTED (exit 2), never a pass", async (name, args) => {
-    const cwd = process.cwd();
-    process.chdir(dir); // relative MCP paths resolve against the server's working directory
-    try {
-      const res = await tools().get(name)!.handler(args);
-      expect(res.isError, JSON.stringify(body(res))).toBe(true);
-      expect(body(res)).toMatchObject({ error: "refused", code: "E_NOT_IMPLEMENTED", exitCode: 2 });
-    } finally {
-      process.chdir(cwd);
-    }
-  });
 
   it("the new tools are allowlisted and served; connect_journeeze is forbidden and not served", () => {
     const served = tools();
