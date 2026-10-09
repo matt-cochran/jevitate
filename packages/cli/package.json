@@ -30,7 +30,7 @@
     "jevitate"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "bin": { "jevitate": "dist/bin.js" },
   "main": "dist/index.js",
@@ -46,7 +46,7 @@
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "@typesafe-ai/sdk": "^0.6.0",
     "ai": "^7.0.107",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^13.0.3",
     "commander": "^12.0.0",
     "playwright": "^1.49.0"
   },
@@ -73,6 +73,8 @@
     "@jevitate/sources": "workspace:*",
     "@jevitate/storage-sqlite": "workspace:*",
     "@jevitate/ux": "workspace:*",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "esbuild": "^0.28.2"
   },
   "scripts": {

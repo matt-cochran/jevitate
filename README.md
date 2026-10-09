@@ -37,7 +37,7 @@ and hands each one back as a deterministic artifact.
 
 ## Quick start
 
-Needs Node.js 20+ and an app running locally (examples use `http://localhost:3000`).
+Needs Node.js 22+ and an app running locally (examples use `http://localhost:3000`).
 
 **1. Install**
 
