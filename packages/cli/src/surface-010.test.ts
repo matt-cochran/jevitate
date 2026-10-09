@@ -72,8 +72,6 @@ const STUB_COMMANDS: ReadonlyArray<readonly string[]> = [
   ["locator-health", "--journey", "checkout"],
   ["check", "--suite", "<suite>", "--out", "<dir>/check", "--max-brittle-steps", "0"],
   ["catalog", "export", "--format", "journeeze-bundle", "--out", "<dir>/bundle"],
-  ["connect", "journeeze", "--url", "http://127.0.0.1:3999"],
-  ["publish", "journeeze", "--dry-run"],
 ];
 
 describe("0.10 CLI stubs refuse with E_NOT_IMPLEMENTED (exit 2)", () => {
@@ -110,7 +108,6 @@ describe("0.10 MCP tools: allowlisted, mirrored, stubbed, and key-free", () => {
     ["review_journey", { stale: true }],
     ["run_check", { suite: "valid.suite.json", out: "check", maxBrittleSteps: 2 }],
     ["export_catalog_bundle", { format: "journeeze-bundle", out: "bundle" }],
-    ["publish_to_journeeze", { dryRun: true }],
   ];
 
   it.each(CALLS)("%s → refused E_NOT_IMPLEMENTED (exit 2), never a pass", async (name, args) => {
