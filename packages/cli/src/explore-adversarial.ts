@@ -331,7 +331,7 @@ export async function runAdversarialCliMission(
     journal.writeTranscript(transcript);
     // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
     // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
-    const host = await finishHostHealth(health, applyServerLogOutcome(outcome.outcome, serverLogRun));
+    const host = await finishHostHealth(health, applyServerLogOutcome(outcome.outcome, serverLogRun), outcome.failure === undefined ? {} : { failure: outcome.failure });
     const missionOutcome: MissionOutcome = host.outcome;
     const exitCode = missionExitCode(missionOutcome);
     const resultPath = resultPathFor(journal.recordingPath);
@@ -386,7 +386,7 @@ export async function runAdversarialCliMission(
       ...serverLogResult(serverLogRun),
       ...defectFields(unifiedDefects(outcome.defects, serverLogRun?.defects)),
       resultPath,
-      ...(host.failure === undefined || outcome.failure !== undefined ? {} : { failure: host.failure }),
+      ...(host.failure === undefined || (outcome.failure !== undefined && host.failure.kind !== "host-starved") ? {} : { failure: host.failure }),
       ...host.fields,
     };
     return await withRunEvidence({ ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) }, evidenceOf(opts, opts.secrets ?? []), triageOf(opts, serverLogRun, opts.secrets ?? []));

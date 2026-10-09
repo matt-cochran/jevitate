@@ -185,7 +185,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   // #293: a missing/unreadable spec, and a campaign with no model gateway.
   "campaign run": { cases: [[missing, "--fake-ai"], [missing]] },
   // #425: a missing/invalid targets file, and --resume without the sweep dir to resume.
-  sweep: { cases: [["--targets", missing], ["--targets", missing, "--resume"], ["--targets", missing, "--tag", "x"]] },
+  sweep: { cases: [["--targets", missing], ["--targets", missing, "--resume"], ["--targets", missing, "--tag", "x"], ["--targets", missing, "--no-host-starved-retry"]] },
   "journey annotate": {
     base: ["nope", "--fake-ai"],
     cases: [["nope", "--fake-ai"], ["nope", "--fake-ai", "--storage-state", missing], ["nope", "--approve"], ["nope", "--approve", "--fake-ai"]],

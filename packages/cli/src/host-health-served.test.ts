@@ -150,6 +150,30 @@ describe("a starved host is told apart from app findings (#203)", () => {
   );
 
   it(
+    "#452: a real run's hostHealth records the browser's CDP round-trip (the probe is attached once the browser is open)",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jev-host-cdp-"));
+      try {
+        const r = await runExploration({
+          url: `${origin}/moving`,
+          goal: "open Alpha",
+          allowlist: [origin],
+          judge: clickFirst,
+          gen: new FakeGenerationGateway({}),
+          successAssertion: { kind: "urlIncludes", text: "/never" },
+          bounds: { maxDecisions: 1, maxActions: 1 },
+          outDir,
+          hostHealth: fakeHost(CALM),
+        });
+        expect(typeof r.hostHealth.peakCdpLatencyMs).toBe("number");
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+
+  it(
     "coverage on a calm host: a frontier drained by timed-out actions is insufficient-coverage, never exhausted",
     async () => {
       const outDir = await mkdtemp(join(tmpdir(), "jev-host-drained-"));

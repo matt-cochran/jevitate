@@ -32,7 +32,7 @@ import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissio
 import { MISSION_RESULT_SCHEMA_VERSION, defectFields, unifiedDefects } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
-import { finishHostHealth } from "./host-health-run.js";
+import { failureWithHostStarved, finishHostHealth } from "./host-health-run.js";
 import {
   applyServerLogOutcome,
   openServerLogRuntime,
@@ -324,7 +324,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     ]);
     // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
     // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
-    const host = await finishHostHealth(health, applyServerLogOutcome(preLogOutcome, serverLogRun));
+    const host = await finishHostHealth(health, applyServerLogOutcome(preLogOutcome, serverLogRun), result.failure === undefined ? {} : { failure: result.failure });
     const missionOutcome: MissionOutcome = host.outcome;
     const exitCode = missionExitCode(missionOutcome);
     // #245: every context closed (videos finalized) before the result naming them is written.
@@ -339,7 +339,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       strategy: "feature" as const,
       scope: routeScope,
       transcript: (serverLogRun?.transcript ?? result.transcript) as TranscriptEntry[],
-      failure: result.failure ?? host.failure ?? coverageFailure,
+      failure: failureWithHostStarved(host, result.failure ?? host.failure ?? coverageFailure),
       missionOutcome,
       exitCode,
       recordingPaths,

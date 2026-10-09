@@ -15,7 +15,7 @@ import { summarizeRun, type RunEnvelope, type RunSummary } from "./multi-run.js"
 import { CLI_TOOL_SPECS, buildCliArgv, type CliParam, type CliToolSpec } from "./mcp-cli-tools.js";
 import { confineMcpPath, defaultMcpPathRoots } from "./mcp-paths.js";
 import { EXPLORE_STRATEGIES } from "./cli-shared.js";
-import { validateAllowControlPatterns, validateDenyPatterns } from "@jevitate/explore";
+import { STARVED_LOAD_PER_CORE, hostProbe, validateAllowControlPatterns, validateDenyPatterns } from "@jevitate/explore";
 import { parseAuthCheck } from "./persona-login.js";
 
 /**
@@ -511,6 +511,11 @@ export interface SweepPlan {
   readonly outDir: string;
   /** `--stop-on-env-failure K`: abort when the first K runs all failed for environment/setup reasons. */
   readonly stopOnEnvFailure?: number;
+  /**
+   * #452: retry a target that ended `host-starved` ONCE after the load drops (default: on).
+   * `--no-host-starved-retry` sets false: the first (starved) result is recorded.
+   */
+  readonly retryHostStarved?: boolean;
   /** The sweep's own `--tag`s, added to every run (a target's own tag of the same key wins). */
   readonly tags: Readonly<Record<string, string>>;
   /** Flags every run is invoked with (the sweep's forwarded operator flags, the AI mode). */
@@ -552,6 +557,8 @@ export interface SweepTargetResult {
   readonly failure?: { readonly kind: string; readonly message: string };
   /** Set when the run failed for an environment/setup reason (counted by --stop-on-env-failure). */
   readonly environmentFailure?: { readonly kind: string; readonly message: string };
+  /** #452: the target was retried once after a `host-starved` first attempt (this row is the retry); the first attempt's reason. */
+  readonly hostStarvedRetry?: { readonly firstAttempt: string };
   /** How many defects (and hangs) the run reported. */
   readonly defects: number;
   readonly resultPath?: string;
@@ -622,6 +629,8 @@ export interface SweepResult {
     readonly environmentFailures: number;
     /** #448: goal runs that executed zero actions (`goalOutcome: not-started`) — counted apart, never as exercised. */
     readonly notStarted: number;
+    /** #452: targets re-run once after a `host-starved` first attempt. */
+    readonly retried: number;
   };
   readonly targets: readonly SweepTargetResult[];
   readonly defects: readonly SweepDefect[];
@@ -640,6 +649,7 @@ const ENVIRONMENT_FAILURE_KINDS: ReadonlySet<string> = new Set([
   "target-unresponsive",
   "configuration",
   "degraded-environment",
+  "host-starved",
   "resource-limit",
   "browser-disconnected",
 ]);
@@ -894,6 +904,7 @@ export function aggregateSweep(args: {
       defects: defects.filter((d) => d.advisory !== true).length,
       environmentFailures: done.filter((r) => r.environmentFailure !== undefined).length,
       notStarted: done.filter((r) => r.goalOutcome === "not-started").length,
+      retried: done.filter((r) => r.hostStarvedRetry !== undefined).length,
     },
     targets: rows,
     defects,
@@ -904,12 +915,33 @@ export function aggregateSweep(args: {
 export interface RunSweepOptions {
   readonly plan: SweepPlan;
   readonly runOnce: SweepRunOnce;
+  /**
+   * #452: waits (bounded) for the host's load to drop before a `host-starved` target is retried.
+   * Default: polls the host's load per core until it is back under the starvation threshold, at most
+   * `HOST_STARVED_WAIT_MS`. A test seam; resolves either way (the retry then runs once regardless).
+   */
+  readonly awaitLowLoad?: () => Promise<void>;
   readonly nowIso?: () => string;
   /**
    * Armed for the whole sweep: `onKill` must be called SYNCHRONOUSLY on a kill signal; it rewrites
    * `sweep.result.json` (incomplete, `inconclusive`, the interrupting signal) and returns it.
    */
   readonly armKill?: (onKill: (signal: string, exitCode: number) => SweepResult) => () => void;
+}
+
+/** #452: the longest a sweep waits for load to drop before retrying a `host-starved` target. */
+export const HOST_STARVED_WAIT_MS = 120_000;
+const HOST_STARVED_POLL_MS = 5_000;
+
+/** Polls the host until its load per core is under the starvation threshold (or the bound elapses). */
+export async function awaitLowHostLoad(probe = hostProbe(), waitMs = HOST_STARVED_WAIT_MS): Promise<void> {
+  const deadline = clock.now() + waitMs;
+  for (;;) {
+    const p = await probe();
+    if (p.overThreshold === null && (p.loadPerCore ?? 0) <= STARVED_LOAD_PER_CORE) return;
+    if (clock.now() >= deadline) return;
+    await clock.sleep(HOST_STARVED_POLL_MS);
+  }
 }
 
 /** The default sweep directory: `.jevitate/logs/<date>/sweep-<stamp>`. */
@@ -960,14 +992,25 @@ export async function runSweep(opts: RunSweepOptions): Promise<SweepResult> {
     const runDir = join(plan.outDir, target.id);
     mkdirSync(runDir, { recursive: true });
     const envelopePath = join(runDir, "run.envelope.json");
-    let envelope: RunEnvelope;
-    try {
-      envelope = await opts.runOnce({ target, argv: targetArgv(plan, target, runDir), runDir });
-    } catch (err) {
-      envelope = { ok: false, error: { code: "E_SWEEP_RUN", message: err instanceof Error ? err.message : String(err) } };
+    const attempt = async (): Promise<RunEnvelope> => {
+      try {
+        return await opts.runOnce({ target, argv: targetArgv(plan, target, runDir), runDir });
+      } catch (err) {
+        return { ok: false, error: { code: "E_SWEEP_RUN", message: err instanceof Error ? err.message : String(err) } };
+      }
+    };
+    let envelope = await attempt();
+    let row = targetResultOf(target, envelope, "ran", envelopePath, runTagsFor(plan, target));
+    // #452: a target whose run stalled on a starved host is retried ONCE, after the load drops, instead of
+    // being recorded as a failure.
+    let retry: { firstAttempt: string } | undefined;
+    if (plan.retryHostStarved !== false && row.failure?.kind === "host-starved") {
+      retry = { firstAttempt: row.failure.message };
+      await (opts.awaitLowLoad ?? (() => awaitLowHostLoad()))();
+      envelope = await attempt();
+      row = { ...targetResultOf(target, envelope, "ran", envelopePath, runTagsFor(plan, target)), hostStarvedRetry: retry };
     }
     writeJson(envelopePath, envelope);
-    const row = targetResultOf(target, envelope, "ran", envelopePath, runTagsFor(plan, target));
     rows[i] = row;
     if (envelope.ok) finished.push({ target: target.id, envelope, ...(row.resultPath === undefined ? {} : { resultPath: row.resultPath }) });
     thisRun.push(row);

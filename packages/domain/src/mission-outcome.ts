@@ -175,6 +175,13 @@ export type MissionFailureKind =
   /** Most steps (or the finding that ended the run) ran on a starved host: it proved nothing (#203). */
   | "degraded-environment"
   /**
+   * #452: the run STALLED (a page load timed out, the browser stopped answering, the app did not respond)
+   * while host signals show starvation — event-loop lag, CDP command latency, page loads far past the
+   * run's own baseline. `inconclusive`, with the measurements in `failure.message` and `hostHealth`;
+   * never a finding about the app. `jevitate sweep` retries such a target once after load drops.
+   */
+  | "host-starved"
+  /**
    * #205: the run's browsers went over the memory ceiling (`--max-browser-memory`) and the resource
    * governor ended the session — the message names the measured value and the ceiling. `inconclusive`,
    * never a crash and never a finding about the app.

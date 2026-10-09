@@ -1,6 +1,6 @@
 import type { HostHealthSampler } from "@jevitate/explore";
 import type { HostHealthSummary } from "@jevitate/domain";
-import { startHostHealth } from "./host-health-run.js";
+import { attachCdpProbe, startHostHealth } from "./host-health-run.js";
 import { armMissionKillSwitch, type KillableMission } from "./kill-signal.js";
 import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
 
@@ -43,6 +43,9 @@ export async function launchArmed<S extends { captureStorageState?(): Promise<st
   try {
     started = await startHostHealth(opts.hostHealth);
     const session = await opts.open();
+    // #452: the sampler reads the browser's CDP round-trip once there is a browser to ask.
+    const page = (session as { page?: Parameters<typeof attachCdpProbe>[1] }).page;
+    if (page !== undefined && typeof page.context === "function") attachCdpProbe(started, page);
     // #159: refreshed after each settled step; the kill switch writes whatever this holds synchronously.
     const snap = new StorageStateSnapshotter(session, opts.saveStorageState);
     health = started;

@@ -506,7 +506,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description:
       "`jevitate sweep --targets <file>` (#425): many explore missions — one per target in a .tsv/.json targets file (id, url|route, persona storage state, strategy, goal, tags, and the value-typed explore options run_exploration takes) — " +
       "with bounded concurrency, resumable (resume + out), and ONE sweep.result.json: per-target outcome and depth, defects deduped by fingerprint across targets (one finding, N sightings), environment causes grouped. " +
-      "stopOnEnvFailure K stops starting runs when the first K all failed for environment/setup reasons. Every run is tagged target=<id> plus tags. A persona path in the file is confined like a storageState argument. Long-running: bound it with the file and concurrency.",
+      "stopOnEnvFailure K stops starting runs when the first K all failed for environment/setup reasons. A target that stalled on a starved host (host-starved) is retried once after load drops; hostStarvedRetry: false records the first result instead. Every run is tagged target=<id> plus tags. A persona path in the file is confined like a storageState argument. Long-running: bound it with the file and concurrency.",
     command: {
       path: "sweep",
       params: {
@@ -516,6 +516,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         resume: b("--resume"),
         out: path("--out"),
         stopOnEnvFailure: n("--stop-on-env-failure"),
+        hostStarvedRetry: b("--no-host-starved-retry"),
         ...ENVIRONMENT,
         // Forwarded to every run, exactly as run_exploration / run_campaign take them.
         allowDestructive: b("--allow-destructive"),

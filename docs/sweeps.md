@@ -105,6 +105,12 @@ file reaches no session an MCP call could not.
   resource-limit failure, a crash, or a run that could not start. The runs already in flight
   finish; the rest are `skipped`, the sweep is `inconclusive` (exit 2), and the message says to
   fix the environment and re-run with `--resume`.
+- A target that ends `inconclusive` with `failure.kind: "host-starved"` (#452: the run stalled
+  while the host was starved) is retried ONCE: the sweep waits for the load to drop (the host's
+  load per core back under 2, bounded at 2 minutes; if it has not dropped by then the retry runs
+  anyway), then runs the target again. The retried row carries `hostStarvedRetry` (the first
+  attempt's reason) and `summary.retried` counts them; a second `host-starved` is recorded as the
+  environment failure it is. `--no-host-starved-retry` records the first result instead.
 - A killed sweep (SIGINT/SIGTERM) writes its partial `sweep.result.json` (`complete: false`,
   `interrupted`) before it exits 130/143.
 

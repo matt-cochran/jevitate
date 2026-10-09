@@ -26,7 +26,7 @@ import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
 import { redactSecretValues } from "./journey-api.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
-import { finishHostHealth } from "./host-health-run.js";
+import { failureWithHostStarved, finishHostHealth } from "./host-health-run.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogEvidence, type ServerLogRuntimeResult, type ServerLogsSummary, type TranscriptEntryWithLogs } from "./log-correlation.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
 import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
@@ -596,12 +596,13 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const preHost: GoalBasedOutcome =
       defectOutcome.status === "defects" ? (goalMissionOutcome(goalSoFar, "defects") as Exclude<MissionOutcome, "clean">) : goalSoFar;
     const host = await finishHostHealth(health, preHost, {
+      ...((mission.run.failure ?? mission.failure) === undefined ? {} : { failure: (mission.run.failure ?? mission.failure)! }),
       ...(preHost === mission.outcome && (mission.failure?.message ?? mission.reason) !== undefined
         ? { wouldHaveBeen: mission.failure?.message ?? mission.reason }
         : {}),
     });
     // #448: ZERO executed actions → `not-started` (never an exercised ending); passive defects stay listed.
-    const failureNow = mission.run.failure ?? host.failure ?? mission.failure;
+    const failureNow = failureWithHostStarved(host, mission.run.failure ?? host.failure ?? mission.failure);
     // `--allow-vacuous-checks` is the operator's explicit acceptance of a goal that held before any action: that
     // `succeeded` stays (the flag's whole meaning), every other zero-action ending is `not-started`.
     const endedAs = host.outcome === preHost ? goalSoFar : host.outcome;
@@ -612,7 +613,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       goalOutcome,
       ...(mission.goalEnding === undefined ? {} : { overridden: mission.goalEnding }),
       stop: mission.run.stop,
-      ...((mission.run.failure ?? host.failure ?? mission.failure) === undefined ? {} : { failureKind: (mission.run.failure ?? host.failure ?? mission.failure)!.kind }),
+      ...(failureNow === undefined ? {} : { failureKind: failureNow.kind }),
       ...(mission.run.missCause === undefined ? {} : { missCause: mission.run.missCause }),
     });
     journal.writeRecording(recording);
@@ -708,7 +709,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       // #209: a goal-specific miss (`success-check-failed`, `vacuous-check`) is typed too — after an
       // engine failure or a starved host, which explain the run before the check does.
       ...((): { failure?: MissionFailure } => {
-        const f = mission.run.failure ?? host.failure ?? mission.failure;
+        const f = failureNow;
         return f === undefined ? {} : { failure: f };
       })(),
       ...(host.failure !== undefined
