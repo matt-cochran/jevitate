@@ -63,7 +63,7 @@ export async function handleSelectOption(ctx: RunContext, step: ActStep, op: Dec
   const option = named;
   if (option === null) {
     ctx.fillHelper.commit();
-    const reason = `no valid option chosen for ${control.name} (fail-closed)`;
+    const reason = `no valid option chosen for ${control.name} (fail-closed) — wanted ${text === null ? "nothing" : quote(text, 60)}; options: ${options.map((o) => quote(o, 60)).join(", ")}`;
     ctx.blockers.failClosed = `no valid option for field ${quote(control.name || control.summary, 80)} (fail-closed)`;
     ctx.history.push(`select failed: ${reason}`);
     record(false, reason, { origin: "engine" });
