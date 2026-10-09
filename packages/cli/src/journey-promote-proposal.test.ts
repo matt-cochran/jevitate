@@ -36,7 +36,8 @@ function strongJourney(): Journey {
           steps: [
             {
               step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status" }, text: "Published" } },
-              expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/publish", status: { class: 2 } }],
+              // A retargeted click expects only reads (the heal floor, #453 review).
+              expectRequests: [{ kind: "responseStatus", method: "GET", pathGlob: "/api/status", status: { class: 2 } }],
             },
           ],
         },

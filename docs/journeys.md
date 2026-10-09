@@ -324,7 +324,14 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
   service worker registered is never probed (its requests can bypass the guard).
 - Review a proposal with `jevitate journey review <id>`, accept it with
   `jevitate journey promote <id> --proposal <pid>` (every promote gate applies; a person confirms),
-  or reject it with `--reject-proposal <pid> --reason "<text>"`. A self-heal run also writes
+  or reject it with `--reject-proposal <pid> --reason "<text>"`. Proposals are committed with
+  the PR, so treat them as shared: they contain the control labels, test ids and routes of the
+  changed steps, the change evidence (`before`/`after` facts, file:line) and the attempt log, but
+  never a fill value; the run's secret parameter values, credential-shaped strings and sensitive URL
+  parameters are redacted from every string. Review and accept re-run the heal floor on every
+  changed step (never a proof, write or risky control; a retargeted click/fill expects only
+  GET/HEAD/OPTIONS requests; a navigate stays on the Journey's origin), and `.proposals/` is never
+  read or written through a symbolic link. A self-heal run also writes
   `journey-<id>-<stamp>.result.json` (heal attempts, proposal) under the logs dir, which
   `jevitate report` reads: heal-exhausted is a defect, a pending proposal is listed under
   "Proposed Journey revisions" and is not counted as a defect.
