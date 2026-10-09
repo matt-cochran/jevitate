@@ -14,6 +14,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 
 - [`ai`](#ai): check or configure the model gateway credentials jevitate's AI features need
 - [`baseline`](#baseline): named baselines for `diff`, `report --baseline` and `check --baseline`
+- [`browser-path`](#browser-path): print the pinned browser revision(s), the browsers dir in use and the executable path
 - [`campaign`](#campaign): journey-anchored test campaigns (#293): many anchored missions, one deduped report
 - [`catalog`](#catalog): #433: the human-vetted catalog of personas, jobs and the Journeys linked to them
 - [`check`](#check): CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
@@ -24,6 +25,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`explore-author-journey`](#explore-author-journey): Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 - [`inbox`](#inbox): the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
 - [`init`](#init): set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
+- [`install-browser`](#install-browser): install the Chromium revision jevitate pins into the shared browsers dir (never removes other revisions)
 - [`invariants`](#invariants): declared-invariant files (`explore --invariants`)
 - [`job`](#job): #433: catalog jobs — job stories in .jevitate/jobs.json ("When …, I want to …, so I can ….") — review a job's sheet, approve it (bound to its content hash)
 - [`journey`](#journey): manage and run promoted Journeys (regression-test replays)
@@ -172,6 +174,21 @@ snapshot runs (result files, run ids, check records or other tags) as a named ba
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--dir <dir>` | results dir to look run ids up in (repeatable) | `[]` |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+
+## browser-path
+
+```
+jevitate browser-path [options]
+```
+
+print the pinned browser revision(s), the browsers dir in use and the executable path
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--export` | print only the PLAYWRIGHT_BROWSERS_PATH export line for a project script |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
 ## campaign
@@ -840,6 +857,20 @@ set up jevitate: collect API keys, install skills/MCP wiring, create the repo's 
 | `--skip-skills` | skip skill installation |  |  |  |  |
 | `--targets <ids>` | comma-separated runtime ids to force-install to, overriding detection |  |  |  |  |
 | `--uninstall` | #431: remove the skill files and marked AGENTS.md/CLAUDE.md blocks jevitate installed (user-modified ones are skipped unless --force); keys, MCP registration and .jevitate/ are left alone |  |  |  |  |
+
+## install-browser
+
+```
+jevitate install-browser [options]
+```
+
+install the Chromium revision jevitate pins into the shared browsers dir (never removes other revisions)
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--with-deps` | also install OS packages the browser needs (may need privileges) |  |  |  |  |
 
 ## invariants
 

@@ -57,6 +57,12 @@
     - flags=--dir <dir> required=true mandatory=false negate=false variadic=false default=[] description=results dir to look run ids up in (repeatable)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
+# browser-path
+  description: print the pinned browser revision(s), the browsers dir in use and the executable path
+  options:
+    - flags=--export required=false mandatory=false negate=false variadic=false default=null description=print only the PLAYWRIGHT_BROWSERS_PATH export line for a project script
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
 # campaign
   description: journey-anchored test campaigns (#293): many anchored missions, one deduped report
 
@@ -343,6 +349,7 @@
     - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=[] description=independent success check (repeatable; every one must hold; --strategy goal and usability). Kinds: urlIncludes:<text> | visible:<d> | textIncludes:<d>|<text> (case-insensitive) | count:<d>|min=<n>,max=<n> | valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted) | visual state (#148, read and decided by code): style:<d>|<prop><op><value> (computed style of every match; <prop> an allowlisted CSS property or a channel of one, e.g. alpha(background-color)>0, color=rgb(255, 0, 0); op = != > >= < <=) | inViewport:<d>[|min=<ratio>] (visible fraction, default 0.5) | box:<d>|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n> | overlaps:<d>|<d2> | noOverlap:<d>|<d2> | attr:<d>|<name>=<value> (or <name> present, !<name> absent) | flashed:<d>|class=<cls> (or attr=<name>, animation)[|withinMs=<n>] (a transient state gained after the last user input) | requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>. <d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x]. <path-glob> must start with "/" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method. e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'. Omit it for a find-out goal (e.g. "find out how many contacts... report the answer"): the run must then end with the model's own `report` op, and the grounded answer (#101) is the verdict — no page/network check needed.
     - flags=--success-when <when> required=true mandatory=false negate=false variadic=false default=null description=when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast) | each (each went from not holding to holding at some settled step, in any order — checks on different pages; the run stops once all have). reloadThen is always final
     - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
+    - flags=--target <id> required=true mandatory=false negate=false variadic=false default=null description=the target this run was meant to cover, stamped as target.id in the result, its envelope and the run index (1-64 of [A-Za-z0-9_.-]; a sweep sets it per target); key on it to attribute a run
     - flags=--totp <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk
     - flags=--type-fixture <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal strategy: '<label|testId|type|id|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=target URL (must be an authorized origin)
@@ -499,6 +506,11 @@
     - flags=--skip-skills required=false mandatory=false negate=false variadic=false default=null description=skip skill installation
     - flags=--targets <ids> required=true mandatory=false negate=false variadic=false default=null description=comma-separated runtime ids to force-install to, overriding detection
     - flags=--uninstall required=false mandatory=false negate=false variadic=false default=null description=#431: remove the skill files and marked AGENTS.md/CLAUDE.md blocks jevitate installed (user-modified ones are skipped unless --force); keys, MCP registration and .jevitate/ are left alone
+
+# install-browser
+  description: install the Chromium revision jevitate pins into the shared browsers dir (never removes other revisions)
+  options:
+    - flags=--with-deps required=false mandatory=false negate=false variadic=false default=null description=also install OS packages the browser needs (may need privileges)
 
 # invariants
   description: declared-invariant files (`explore --invariants`)
