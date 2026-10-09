@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { clock } from "@jevitate/domain";
 import type { CatalogApproval, Finding, Journey, JourneyApprovalWaiver, AcceptedFindings } from "@jevitate/journey";
 import { CatalogLoader, catalogJourney, journeyLinks, requireJob, requirePersona, writeJobApproval, writePersonaApproval, type Catalog } from "./catalog.js";
+import { assertJobRefs } from "./catalog-refs.js";
 import { acknowledgeFindings, preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { findProjectDir } from "./project-dir.js";
 import type { JevSetup } from "./jev-advisor.js";
@@ -66,6 +67,9 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
   if (reviewed !== undefined && reviewed !== item.contentHash) {
     throw new StaleCatalogReviewError(`${kind} '${id}' changed after its review sheet was produced (reviewed ${reviewed}, now ${item.contentHash}) — review it again: jevitate ${kind} review ${id}`);
   }
+  // #465: a job whose own references are structurally broken is refused (E_JOB_BROKEN_REF, exit 64);
+  // gaps (an unmeasurable metric, a target unit) are the review sheet's warnings.
+  if (kind === "job") assertJobRefs(catalog, id);
   const action: ApprovalAction = kind === "persona" ? "persona approve" : "job approve";
   // #434: every approval runs the readiness checks (the Jev layer only with --real and a key).
   const findings = await preApprovalFindings({ kind, id }, catalog, { action, readiness: true, ...(opts.jev === undefined ? {} : { jev: opts.jev }) });

@@ -281,6 +281,28 @@ export const PersonaReviewSchema = z
   .strict();
 export type PersonaReview = z.infer<typeof PersonaReviewSchema>;
 
+/**
+ * #465: one catalog reference problem (catalog-refs.ts): a job's step / outcome / metric anchor /
+ * parent, or a Journey's `serves` / anchor `jobStep`. `code` is stable; `structural` problems are
+ * the ones a catalog bundle refuses (catalog-bundle-v1 §9.5), the rest are gaps. `severity`: every
+ * problem on data as it is loaded is a `warning` (0.10 never blocks a load or a run on one); an
+ * approval enforces the structural ones as `error`s.
+ */
+export const CatalogRefIssueSchema = z
+  .object({
+    jobId: z.string().optional(),
+    journeyId: z.string().optional(),
+    /** Where in the item: `steps[1].id`, `desiredOutcomes[0].metric.from`, `metadata.serves[0]`, … */
+    path: z.string(),
+    code: z.string(),
+    structural: z.boolean(),
+    severity: z.enum(["warning", "error"]),
+    message: z.string(),
+    fix: z.string().optional(),
+  })
+  .strict();
+export type CatalogRefIssue = z.infer<typeof CatalogRefIssueSchema>;
+
 /** #433: `jevitate job review <id> --json` (MCP `review_job`). */
 export const JobReviewSchema = z
   .object({
@@ -311,6 +333,19 @@ export const JobReviewSchema = z
     jev: JevLayerSchema.optional(),
     approval: CatalogApprovalSchema.optional(),
     contentHash: z.string().regex(/^[0-9a-f]{64}$/),
+    // #465: the job's jtbd fields, as written (each present only when the job has it).
+    kind: z.enum(JOB_KINDS).optional(),
+    parent: z.string().optional(),
+    context: z.array(z.string()).optional(),
+    steps: z.array(JobStepSchema).optional(),
+    desiredOutcomes: z.array(DesiredOutcomeSchema).optional(),
+    constraints: z.array(z.string()).optional(),
+    provenance: z.enum(JOB_PROVENANCES).optional(),
+    revision: z.number().int().optional(),
+    lastValidated: z.string().optional(),
+    extensions: ExtensionsSchema.optional(),
+    /** #465: reference problems of the job and of the Journeys linked to it. */
+    refIssues: z.array(CatalogRefIssueSchema).optional(),
   })
   .strict();
 export type JobReview = z.infer<typeof JobReviewSchema>;
@@ -358,6 +393,8 @@ export const CatalogStatusSchema = z
     files: z.object({ personas: z.string().nullable(), jobs: z.string().nullable() }).strict(),
     /** #437: every recorded approval and how it was made; with `--require-approvals`, the violations. */
     approvals: ApprovalsReportSchema.optional(),
+    /** #465: every catalog reference problem (warnings: nothing here blocks a load or a run). */
+    refIssues: z.array(CatalogRefIssueSchema).optional(),
   })
   .strict();
 export type CatalogStatusReport = z.infer<typeof CatalogStatusSchema>;

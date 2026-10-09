@@ -10,6 +10,7 @@ import {
   renderJobStory,
   type CatalogApproval,
   type CatalogItemStatus,
+  type CatalogRefIssue,
   type Job,
   type Journey,
   type JourneyApproval,
@@ -43,7 +44,21 @@ export const LEGACY_JOBS_FILE = join("campaign", "jobs.json");
 
 /** A catalog file that exists but is not a valid catalog — refused (exit 64), never skipped. */
 export class CatalogInputError extends Error {
-  readonly code = "E_CATALOG_INPUT";
+  readonly code: string = "E_CATALOG_INPUT";
+}
+
+/**
+ * #465: `job approve` of a job with a structural reference problem (catalog-refs.ts `assertJobRefs`) —
+ * refused, exit 64 (fix the jobs file). A `CatalogInputError`, so every catalog command reports it.
+ */
+export class BrokenJobRefsError extends CatalogInputError {
+  override readonly code: string = "E_JOB_BROKEN_REF";
+  constructor(
+    message: string,
+    readonly issues: readonly CatalogRefIssue[],
+  ) {
+    super(message);
+  }
 }
 
 /** `persona|job review|approve <id>`: no such item in the catalog. */
@@ -223,7 +238,15 @@ function catalogJob(entry: unknown, index: number, path: string): CatalogJob {
   if (!parsed.success) {
     throw new CatalogInputError(`${path}: ${where}: ${parsed.error.issues.map((i) => (i.path.length === 0 ? i.message : `${i.path.join(".")}: ${i.message}`)).join("; ")}`);
   }
-  const job = parsed.data;
+  return catalogJobOf(parsed.data);
+}
+
+/**
+ * #433/#465: a parsed job as the catalog holds it. Reference problems (catalog-refs.ts) never
+ * refuse a load: they are reported by `catalog status`/`analyze` and the review sheet, and an
+ * approval refuses only the structural ones of the job being approved.
+ */
+export function catalogJobOf(job: Job): CatalogJob {
   const hash = jobContentHash(job);
   return {
     id: job.id,
@@ -236,7 +259,10 @@ function catalogJob(entry: unknown, index: number, path: string): CatalogJob {
   };
 }
 
-/** #433: a job's content hash — the job without its approval. */
+/**
+ * #433: a job's content hash — the job without its approval. #465: every jtbd field counts
+ * (`extensions` included), so editing a step, an outcome, a target or an extension needs re-approval.
+ */
 export function jobContentHash(job: Job): string {
   const { approval: _a, ...rest } = job;
   return contentHash(rest);
