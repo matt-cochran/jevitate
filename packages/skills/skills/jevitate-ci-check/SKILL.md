@@ -59,6 +59,22 @@ Relative paths resolve against the suite file.
   with a proposal in `.proposals/` for a person to `journey review` / `journey promote --proposal`;
   commit `.proposals/` with the PR. Without a change context the flag is refused (64).
 
+- Locator health (which selector rung each recorded step resolves by, and whether it meets the
+  project's `testIdAttributes` convention in `.jevitate/config.json`) is advisory: fixes appear as
+  SARIF warnings and in `check.json`. `--max-brittle-steps <n>` (MCP `run_check` `maxBrittleSteps`)
+  opts into a gate: a Journey item with more than n brittle steps is a gating finding (exit 1).
+  `jevitate locator-health [--journey <id>] [--baseline <file>] --json` (MCP `locator_health`)
+  reports it on its own and never gates.
+- `--require-approvals [--allow-channels tty,pr-review]` fails a missing or stale approval, or one
+  made over a channel not allowed. `pr-review` (an approval jevitate verified through a merged,
+  approved GitHub pull request) is re-verified through the GitHub API on every check (it needs
+  `GITHUB_TOKEN` and `pull-requests: read`); one that cannot be re-verified is an `unverified`
+  violation. No flag or tool argument sets `pr-review`. See the jevitate repo's `docs/ci.md`.
+- Publishing the catalog to Journeeze from CI: set the `JOURNEEZE_UPLOAD_KEY` secret and run
+  `jevitate publish journeeze --json` (MCP `publish_to_journeeze`; `--dry-run` sends nothing).
+  Refusals carry an `E_JOURNEEZE_*` code (64 when the key or connection is the problem, 2 when
+  Journeeze could not take it).
+
 ## Exit codes: gate on 1, and treat 2 and 64 as broken
 
 `0` pass · `1` at least one gating finding (a Journey assertion, an invariant, a goal check, a

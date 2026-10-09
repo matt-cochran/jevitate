@@ -116,10 +116,12 @@
 # catalog export
   description: #464: write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings; no media) as a Journeeze catalog bundle (bundle.json) under --out. Never uploads (publish journeeze) and never approves
   options:
+    - flags=--check <file> required=true mandatory=false negate=false variadic=false default=[] description=a `jevitate check` record (check.json) to include; repeatable (default: <project>/jevitate-check/check.json when it exists)
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
     - flags=--format <format> required=true mandatory=true negate=false variadic=false default=null description=the bundle format (journeeze-bundle)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--out <dir> required=true mandatory=true negate=false variadic=false default=null description=the directory bundle.json is written to (created if missing)
+    - flags=--product-name <name> required=true mandatory=false negate=false variadic=false default=null description=the bundle's product.name (default: the project's package.json name, else its folder name)
 
 # catalog status
   description: the jobs × personas matrix (which have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links and stale approvals
@@ -572,7 +574,7 @@
   arguments:
     - name=jobId required=true variadic=false default=null
   options:
-    - flags=--count <n> required=true mandatory=false negate=false variadic=false default=null description=how many outcomes to draft (1-3, default 1)
+    - flags=--count <n> required=true mandatory=false negate=false variadic=false default=null description=how many outcomes to draft (1-3, default 3)
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=draft with the deterministic fake generator (pipeline smoke only)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
@@ -888,6 +890,7 @@
 # locator-health
   description: #470: read-only locator health — per step, the selector rung its target resolves by and whether it meets the project's test-id convention (testIdAttributes in project config; default data-testid, data-test; data-tflow-id never counts). Every promoted Journey, one Journey (--journey) or one run (--run). Advisory: never gates
   options:
+    - flags=--baseline <file> required=true mandatory=false negate=false variadic=false default=null description=a previous locator-health --json output (or a run result.json) to report the trend against: steps improved / regressed
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--journey <id> required=true mandatory=false negate=false variadic=false default=null description=only this Journey
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope

@@ -48,6 +48,58 @@ The file is a bare array or `{"jobs": [...]}`. `.jevitate/campaign/jobs.json`, w
 test-campaign skill used to keep jobs, is still read when `.jevitate/jobs.json` does not exist.
 If both exist, the catalog is refused until you merge them, so the two files can't quietly drift apart.
 
+### The job's outcome fields
+
+A job can also carry the shared jobs-to-be-done fields (the ones a
+[Journeeze catalog bundle](#publishing-to-journeeze) carries). All of them are optional:
+
+```json
+{
+  "id": "invite",
+  "trigger": "a colleague joins my team",
+  "motivation": "invite them by email",
+  "outcome": "work together from their first day",
+  "personas": ["admin"],
+  "kind": "core",
+  "context": ["team plan"],
+  "steps": [
+    { "id": "choose", "name": "Choose who to invite", "stage": "define" },
+    { "id": "send", "name": "Send the invitation", "stage": "execute" }
+  ],
+  "desiredOutcomes": [
+    { "id": "invite-fast", "step": "send", "direction": "minimize", "measure": "time",
+      "object": "the time it takes to get a teammate invited", "gulf": "execution",
+      "metric": { "kind": "duration", "from": "members-open", "to": "invite-sent", "stat": "p50" },
+      "target": { "op": "<=", "value": 60, "unit": "s" } },
+    { "id": "invite-right", "direction": "minimize", "measure": "likelihood",
+      "object": "the likelihood of inviting the wrong person",
+      "metric": { "kind": "error", "at": "invite-sent" }, "guardrail": true }
+  ],
+  "constraints": ["SSO-only workspaces cannot invite by email"],
+  "provenance": "team_hypothesis",
+  "revision": 3,
+  "lastValidated": "2026-10-09",
+  "extensions": { "journeeze": { "board": "growth" } }
+}
+```
+
+| Field | What |
+|---|---|
+| `kind` | `core` (the job itself), `setup` (lifecycle support) or `related` (an adjacent job). |
+| `parent` | the id of a declared job this one belongs to (no cycles). |
+| `context`, `constraints` | up to 20 one-line strings each. |
+| `steps` | up to 30 solution-free job steps `{ id, name, stage? }`. `stage` is one of the universal job map's `define`, `locate`, `prepare`, `confirm`, `execute`, `monitor`, `modify`, `resolve`, `conclude`. |
+| `desiredOutcomes` | up to 50 outcomes `{ id, step?, direction, measure, object, clarifier?, gulf?, metric?, target?, guardrail?, priority? }`: `direction` is `minimize` or `maximize`, `measure` is `time`, `likelihood`, `effort` or `count`, `gulf` is `execution` or `evaluation`, and `step` (a job step id) leaves the outcome on the whole job when absent. `guardrail: true` marks a counter-outcome that must never get worse. |
+| `metric` | where an outcome is measured, one of: `duration` (`from`, `to`, `stat` `p50`/`p75`/`share_under`; `threshold` in seconds with `share_under` and only with it), `completion` (`from`, `to`), `abandon`/`repeat`/`error`/`assisted` (`at`), `answer` (`question` `got_it_done`/`harder_than_expected`/`understood`, `value` `yes`/`no`, or `partly` for `got_it_done` only). `from`/`to`/`at` name an [anchor](#anchors-where-the-jobs-steps-start-and-end) or the reserved `job_start` / `job_end`. |
+| `target` | what good enough is: `{ op: "<" \| "<=" \| ">" \| ">=", value, unit: "s" \| "percent" \| "count" }` (a percent is at most 100). |
+| `provenance` | where the content came from, weakest first: `ai_draft`, `team_hypothesis`, `customer_evidenced`, `behaviour_validated`. |
+| `revision`, `lastValidated` | a whole-number revision; the date (`YYYY-MM-DD`) the job was last validated. |
+| `extensions` | up to 16 namespaces (lowercase slugs) of free-form data, e.g. `jevitate-draft` (see [drafting](#drafting-desired-outcomes)). |
+
+**Every one of these fields is part of the job's content hash**, `extensions` included. Editing
+any of them makes an approved job stale (needs re-review), like editing its story. The job review
+sheet (`job review`, MCP `review_job`) shows them as written.
+
 ## Personas
 
 `.jevitate/personas.json` is the [#427 personas file](./multi-run.md). Entries now also take
@@ -70,6 +122,72 @@ Set the Journey's `metadata.job` to a job id and `metadata.persona` to a persona
 `metadata.persona` that names a catalog persona links it. Otherwise it stays the free-text
 description it always was, except on a Journey with a `job`, where it is always read as a persona
 id (an unknown one is a dangling link).
+
+A Journey linked to a job can also say which of the job's desired outcomes it serves:
+`metadata.serves: ["invite-fast"]` (ids of the linked job's `desiredOutcomes`).
+
+## Anchors: where the job's steps start and end
+
+A Journey's named [anchors](./journeys.md) mark the states it reaches. On a job-linked Journey they
+are also the boundaries of the job's steps, and the points the job's outcome metrics measure from
+and to:
+
+```json
+"anchors": [
+  { "name": "members-open", "step": 2, "stepId": "s-3k9q1a", "jobStep": "choose", "boundary": "start" },
+  { "name": "invite-sent", "step": 5, "stepId": "s-8d2m4x", "jobStep": "send", "boundary": "end" }
+]
+```
+
+- `job_start` and `job_end` are the anchors of **every** job (the start and end of the job itself):
+  a metric can always use them, and no Journey declares them.
+- `jobStep` names a step of the linked job, and `boundary` (`start` | `end`, needs `jobStep`) says
+  which end of it the anchor marks.
+- `stepId` is the [stable id](./journeys.md) of the step the anchor follows. It is authoritative;
+  `step` (the 1-based number) is kept for the bundle contract. `journey promote` stamps it.
+
+The 0.10 anchor rules, each with its fix:
+
+| Rule | What it needs |
+|---|---|
+| `anchor-name` | a name of 1-64 lowercase `a-z`, `0-9`, `.`, `_`, `:`, `-` (the fix suggests the spelling) |
+| `anchor-step-id` | a `stepId` that is a step of the Journey |
+| `anchor-step-mismatch` | `step` and `stepId` naming the same step |
+| `anchor-unstamped` | on a Journey whose steps have ids, the anchor carries its step's id |
+| `job-anchors` | a Journey linked to a job names at least one anchor |
+
+plus the catalog references below (`serves` and `jobStep`). **Warn vs enforce:** existing Journeys
+still load and run, and `journey lint`, the review sheet and `catalog status` only warn. `journey
+promote` enforces the rules on a new promotion (no prior approval) and on a re-promotion whose
+content changed beyond step ids, refusing with `E_JOURNEY_ANCHOR_RULES` (exit 64) and every
+problem with its fix. Re-approving an unchanged Journey, or one whose only change is minted step
+ids (`journey migrate --step-ids`), warns and passes.
+
+## Reference checks
+
+The catalog checks the references inside a job and from a Journey to its job. Every problem has a
+stable code, a path into the item and a fix:
+
+| Code | Problem | Kind |
+|---|---|---|
+| `job.duplicate-step` | a job step id declared twice | structural |
+| `job.duplicate-outcome` | a desired outcome id declared twice | structural |
+| `job.unknown-outcome-step` | an outcome's `step` is not a step of the job | structural |
+| `job.unknown-parent` | `parent` is not a declared job | structural |
+| `job.parent-cycle` | `parent` leads back to the job | structural |
+| `journey.unknown-serves` | `serves` names an outcome the linked job does not have | structural |
+| `journey.serves-without-job` | `serves` on a Journey that links no job | structural |
+| `journey.unknown-job-step` | an anchor's `jobStep` is not a step of the linked job | structural |
+| `journey.job-step-without-job` | an anchor's `jobStep` on a Journey that links no job | structural |
+| `job.unmeasurable-metric` | a metric's `from`/`to`/`at` is neither `job_start`/`job_end` nor an anchor some Journey linked to the job declares | gap |
+| `job.target-unit-mismatch` | a target's unit does not fit its metric (a duration is `s`, a `share_under` duration is `percent`, an `error` is `count` or `percent`, the rest `percent`) | gap |
+
+**Severity.** On data as loaded, every problem is a `warning`: nothing here blocks a load, a run,
+`catalog status` (its `refIssues`) or a review sheet, and `catalog analyze` lists them as findings.
+An approval enforces: the structural problems (the ones a catalog bundle refuses) become `error`s.
+`job approve` refuses a job with one (`E_JOB_BROKEN_REF`, exit 64), and `journey promote` refuses
+a Journey's (`E_JOURNEY_ANCHOR_RULES`). Gaps stay warnings: an outcome is unmeasurable until a
+Journey declares its anchor, and that is not an error.
 
 ## Approval and staleness
 
@@ -312,6 +430,84 @@ section says the Jev classification was skipped.
 Answers are cached by the pairs' content (see [the cache](#readiness-review)), so re-approving an
 unchanged item asks nothing new.
 
+## Drafting desired outcomes
+
+A job with a story but no outcomes can get a first draft from the generation model:
+
+```bash
+jevitate job draft-outcomes invite --real          # 1-3 outcomes (--count, default 3), live gateway
+jevitate job draft-outcomes invite --fake-ai --json   # the deterministic fake generator (pipeline smoke)
+```
+
+It needs exactly one of `--real` / `--fake-ai` (`E_JOB_DRAFT_ARGS`, exit 64). It drafts outcomes
+(direction, measure, object, and a clarifier, a gulf and a job step when the model gives a valid
+one; never a metric or a target), skips any that repeat an existing outcome, checks the job's
+references as an approval would, and writes them into the job in `jobs.json`. The draft is marked
+twice:
+
+- the job's `provenance` becomes `ai_draft` when it had none (a stronger one is never downgraded);
+- `extensions["jevitate-draft"].outcomes` lists the ids of the drafted outcomes not yet reviewed by
+  the team. Delete an id as you review its outcome.
+
+**It never approves.** It leaves the job's approval as it was, so an approved job becomes `stale`
+(needs re-review) like any edit (the result says so in `approvalStatus`). Approving stays
+`job approve`, a person's act. MCP: `draft_job_outcomes` (`jobId`, `count`, `real` | `fakeAi`).
+
+## Publishing to Journeeze
+
+[Journeeze](https://app.journeeze.dev) can import the catalog as a catalog bundle (v1.0).
+
+```bash
+jevitate catalog export --format journeeze-bundle --out dist/catalog            # writes dist/catalog/bundle.json
+jevitate catalog export --format journeeze-bundle --out dist/catalog \
+  --check jevitate-check/check.json --check nightly/check.json --product-name "Ledgerly"
+jevitate connect journeeze                       # a person, once: where the upload key is kept
+jevitate publish journeeze --dry-run             # export, validate, resolve the connection; send nothing
+jevitate publish journeeze --json                # upload and wait until it is imported or refused
+```
+
+**What the bundle holds.** Personas (never their session settings), jobs as written (every field,
+so the hashes recompute), **promoted** Journeys only with their links (`job`, `persona`,
+`anchors`, `serves`), every approval reduced to `{contentHash, at, channel}`, the `jevitate check`
+results (with machine baselines from clean runs of the approved Journey) and the machine findings.
+**No media in 0.10:** no demos, no files. `--check <file>` (repeatable) names the check records to
+include; the default is `<project>/jevitate-check/check.json` (the `check --out` default) when it
+exists. `--product-name` sets `product.name` (default: the project's `package.json` name, else its
+folder name). The same catalog gives the same bytes, so a re-publish is deduplicated by the
+bundle's sha256. Personal data or a credential in clear, or a job with a structural reference
+problem, refuses the export (exit 64); a Journey or check the bundle cannot carry is left out with
+a warning. `catalog export` writes only `bundle.json` under `--out` (it refuses a directory holding
+anything else), never uploads and never approves. MCP: `export_catalog_bundle` (`format`, `out` —
+a directory inside the project —, `check`, `productName`).
+
+**The upload key.** `connect journeeze` is CLI only (there is no MCP tool; `connect_journeeze` is
+forbidden). A person at a terminal names where the key is kept (`env:<VAR>`, `cmd:<command>`,
+`op://…`, `bw:<item>` or `pass:<path>`), or types the key hidden to check it first; jevitate checks
+it with Journeeze (`whoami`), asks the person to confirm the product, and **saves only the
+reference**, bound to the Journeeze origin, in `~/.jevitate/journeeze.json` (owner-only). The key
+itself is never saved, never a flag, never in a result. In CI set `JOURNEEZE_UPLOAD_KEY` (and
+`JOURNEEZE_URL` for another pinned host) instead; it wins over the saved reference. The key is
+sent only to `https://app.journeeze.dev`, `https://app.staging.journeeze.dev` or a loopback host,
+only in the `Authorization` header, and never after a redirect to another origin.
+
+`publish journeeze` exports the bundle, uploads it, and polls until Journeeze reports it
+`imported` (exit 0) or `refused` (exit 1, with the server's errors). It never approves. MCP:
+`publish_to_journeeze` (`dryRun`), which never takes or returns the key. A refusal carries its
+specific code:
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `E_JOURNEEZE_NOT_CONNECTED` | 64 | no `JOURNEEZE_UPLOAD_KEY` and no saved connection: a person runs `connect journeeze` |
+| `E_JOURNEEZE_KEY_FORMAT`, `E_JOURNEEZE_KEY_UNRESOLVABLE` | 64 | the key is not a `jzu_…` upload key; the saved reference resolves to nothing |
+| `E_JOURNEEZE_KEY_REFUSED`, `E_JOURNEEZE_KEY_REVOKED`, `E_JOURNEEZE_FORBIDDEN` | 64 | Journeeze refused the key (401), revoked it (it appeared in a URL), or it lacks the upload scope |
+| `E_JOURNEEZE_URL`, `E_JOURNEEZE_ORIGIN` | 64 | not a pinned Journeeze host; a saved reference used for another origin |
+| `E_JOURNEEZE_REF`, `E_JOURNEEZE_CONFIG` | 64 | a bad key reference; an unreadable connections file |
+| `E_CONNECT_NEEDS_TTY`, `E_CONNECT_NEEDS_HUMAN`, `E_CONNECT_DECLINED` | 64 | `connect journeeze` without a terminal, inside an MCP call, or the person declined the product (nothing saved) |
+| `E_JOURNEEZE_BUNDLE` | 2 | the bundle cannot be sent (over 16 MiB, not a v1 bundle, it contains the key) |
+| `E_JOURNEEZE_CONFLICT`, `E_JOURNEEZE_UNAVAILABLE`, `E_JOURNEEZE_HTTP`, `E_JOURNEEZE_REDIRECT` | 2 | Journeeze refused (409), was busy (retry: the same bundle reuses its idempotency key), answered otherwise, or redirected |
+
+See [CI](./ci.md) for publishing from a pipeline.
+
 ## What "human approval" guarantees
 
 Approvals (`journey promote`, `demo approve`, `persona approve`, `job approve`, and the
@@ -329,6 +525,7 @@ or job's `approval`, and each waiver on them) carries
 | `non-interactive` | `--non-interactive-approval "<reason>"` (the reason is recorded). |
 | `ci` | The same escape hatch, with a CI marker set (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `BUILDKITE`, `CIRCLECI`, `JENKINS_URL`, `TF_BUILD`). |
 | `mcp` | An MCP tool call (`promote_journey`, `approve_demo`): an agent's approval, never a person's. |
+| `pr-review` | In CI, an approval jevitate itself verified through GitHub: the entry's last change came from a merged pull request into the default branch, approved by a person with write access who is not its author and wrote none of its commits. Recorded with the pull request and reviewer. |
 
 `agentSignals` lists the names of the markers found in the environment, never their values:
 `CLAUDECODE` and `CLAUDE_CODE_*` (Claude Code), `CODEX_*` (Codex CLI), `CURSOR_*` (Cursor),
@@ -370,6 +567,22 @@ later in the file override the block. `check --require-approvals` (and
 `catalog status --require-approvals`) then fails any approval that is missing, stale or made over
 a channel not in `--allow-channels` (default `tty`). With all three, an approval change merges
 only after a code owner reviews it, and CI flags any approval that a person did not type.
+
+**Approvals through pull-request review (`pr-review`).** With the CODEOWNERS review in place, the
+approval can be the review itself: a person reviews and approves the pull request that changes the
+Journey or catalog entry, and CI runs the approval (`journey promote`, `persona|job approve`) on a
+push to the default branch. With no terminal, in GitHub Actions, jevitate verifies through the
+GitHub API (with the job's `GITHUB_TOKEN`, never an argument) that the entry's content on the
+default branch was last changed by a merged pull request approved by someone other than its author
+(with `JEVITATE_PR_REVIEW_REQUIRE_CODEOWNER=1`, a CODEOWNER of the file), and records the approval
+as `pr-review`. It is never a channel a caller can claim: no flag or MCP argument sets it, it is
+never granted inside an MCP call, on a `pull_request` event, or for an approval with waivers or a
+self-heal proposal (no reviewer saw those), and `demo approve <aspect>` never gets it. When the
+verification fails, why is printed and the approval falls back to the usual paths
+(`E_APPROVAL_NEEDS_HUMAN`, or `ci` with `--non-interactive-approval`). `check` and `catalog
+status` with `--require-approvals --allow-channels tty,pr-review` re-verify every recorded
+`pr-review` approval through GitHub, so a hand-written `pr-review` record is a violation
+(`unverified`), never a pass. The [CI recipe](./ci.md) shows the workflow.
 
 **Not yet:** cryptographic signing of approvals (for example with the approver's SSH key on a
 hardware key, or one with a passphrase) would bind each approval to a person's key. It is the

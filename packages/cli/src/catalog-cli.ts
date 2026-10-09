@@ -5,10 +5,10 @@ import { MissingCredentialError } from "@jevitate/ai-core";
 import { GatewaySelectionError, JEV_PROVIDER_FLAG_HELP, emitJson, emitUsageLine, jevProviderArg, resolveJourneysDir, type CliDeps } from "./cli-shared.js";
 import { intArg, positiveIntArg } from "./cli-args.js";
 import { CATALOG_ID_RE } from "@jevitate/journey";
-import { NotImplementedError } from "./not-implemented.js";
 import { DRAFT_OUTCOMES_DEFAULT, DRAFT_OUTCOMES_MAX, DRAFT_OUTCOMES_MIN, draftJobOutcomes, renderDraftJobOutcomes } from "./job-draft-api.js";
-import { CATALOG_EXPORT_FORMATS, exportCatalogBundle, renderCatalogExport, type CatalogExportFormat } from "./catalog-bundle-api.js";
+import { CATALOG_EXPORT_FORMATS, exportCatalogBundle, isPlainProductName, renderCatalogExport, type CatalogExportFormat } from "./catalog-bundle-api.js";
 import { JOURNEEZE_DEFAULT_URL, connectJourneeze, publishToJourneeze, renderPublishJourneeze } from "./journeeze-api.js";
+import { JourneezeError } from "./journeeze-connect.js";
 import { buildJevSetup, jevCacheDir, type JevSetup } from "./jev-advisor.js";
 import { analyzeCatalog, renderCatalogAnalysis, ANALYZE_PAIR_CAP } from "./catalog-analysis.js";
 import { CatalogInputError, UnknownCatalogItemError } from "./catalog.js";
@@ -55,10 +55,16 @@ export function jevSetupFor(deps: CliDeps, catalogDir: string | null, o: { real?
   return buildJevSetup(deps, { ...(o.real === undefined ? {} : { real: o.real }), ...(o.jevProvider === undefined ? {} : { jevProvider: o.jevProvider }), cacheDir: jevCacheDir(catalogDir) });
 }
 
+/** A repeatable option's accumulator (`--check a --check b`). */
+function collectRepeatable(value: string, previous: readonly string[]): string[] {
+  return [...previous, value];
+}
+
 function refuse(program: Command, err: unknown, fallbackCode: string): void {
   const refusal = approvalRefusal(err);
-  if (err instanceof NotImplementedError) {
-    // 0.10 surface: a registered command whose feature has not landed — exit 2, never a pass.
+  if (err instanceof JourneezeError) {
+    // #464: the specific Journeeze refusal (E_JOURNEEZE_*, E_CONNECT_NEEDS_TTY) — its code, and the
+    // exit code that class carries (exit-codes.ts). The message is already scrubbed of the key.
     emitJson(program, fail(err.code, err.message));
   } else if (refusal !== null) {
     emitJson(program, fail(refusal.code, refusal.message));
@@ -321,10 +327,12 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
     )
     .requiredOption("--format <format>", `the bundle format (${CATALOG_EXPORT_FORMATS.join(" | ")})`)
     .requiredOption("--out <dir>", "the directory bundle.json is written to (created if missing)")
+    .option("--check <file>", "a `jevitate check` record (check.json) to include; repeatable (default: <project>/jevitate-check/check.json when it exists)", collectRepeatable, [])
+    .option("--product-name <name>", "the bundle's product.name (default: the project's package.json name, else its folder name)")
     .option("--dir <path>", DIR_HELP)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { dir, json, format, out } = this.opts<{ dir?: string; json?: boolean; format: string; out: string }>();
+      const { dir, json, format, out, check, productName } = this.opts<{ dir?: string; json?: boolean; format: string; out: string; check: string[]; productName?: string }>();
       if (!(CATALOG_EXPORT_FORMATS as readonly string[]).includes(format)) {
         emitJson(program, fail("E_CATALOG_EXPORT_ARGS", `--format must be one of ${CATALOG_EXPORT_FORMATS.join(" | ")} (got ${JSON.stringify(format)})`));
         return;
@@ -333,12 +341,22 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
         emitJson(program, fail("E_CATALOG_EXPORT_ARGS", "--out needs a directory path"));
         return;
       }
+      if (check.some((f) => f.trim() === "" || f.includes("\0"))) {
+        emitJson(program, fail("E_CATALOG_EXPORT_ARGS", "--check needs a check.json path"));
+        return;
+      }
+      if (productName !== undefined && !isPlainProductName(productName)) {
+        emitJson(program, fail("E_CATALOG_EXPORT_ARGS", "--product-name must be one plain line of 1-200 characters (no control characters, no e-mail address or other personal data)"));
+        return;
+      }
       try {
         const result = await exportCatalogBundle({
           format: format as CatalogExportFormat,
           catalogDir: resolveCatalogDir(deps.catalogDir, dir),
           journeysDir: catalogJourneysDir(dir, resolveJourneysDir(deps)),
           outDir: out,
+          ...(check.length === 0 ? {} : { checkFiles: check }),
+          ...(productName === undefined ? {} : { productName }),
         });
         if (json) emitJson(program, ok(result));
         else program.configureOutput().writeOut?.(renderCatalogExport(result));
@@ -377,7 +395,7 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
         return;
       }
       try {
-        const result = await connectJourneeze({ baseUrl: parsed.origin + parsed.pathname.replace(/\/+$/, ""), projectDir: resolveCatalogDir(deps.catalogDir) });
+        const result = await connectJourneeze({ baseUrl: parsed.origin + parsed.pathname.replace(/\/+$/, ""), projectDir: resolveCatalogDir(deps.catalogDir) }, deps.journeeze);
         if (json) emitJson(program, ok(result));
         else program.configureOutput().writeOut?.(`connected to Journeeze product '${result.product.name}' (key ${result.keyPrefix}…) at ${result.baseUrl}\n`);
         process.exitCode = 0;
@@ -400,7 +418,7 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
     .action(async function (this: Command) {
       const { dir, json, dryRun } = this.opts<{ dir?: string; json?: boolean; dryRun?: boolean }>();
       try {
-        const result = await publishToJourneeze({ catalogDir: resolveCatalogDir(deps.catalogDir, dir), journeysDir: catalogJourneysDir(dir, resolveJourneysDir(deps)), dryRun: dryRun === true });
+        const result = await publishToJourneeze({ catalogDir: resolveCatalogDir(deps.catalogDir, dir), journeysDir: catalogJourneysDir(dir, resolveJourneysDir(deps)), dryRun: dryRun === true }, deps.journeeze);
         if (json) emitJson(program, ok(result));
         else program.configureOutput().writeOut?.(renderPublishJourneeze(result));
         process.exitCode = result.status === "refused" ? EXIT_CODES.defects : 0;

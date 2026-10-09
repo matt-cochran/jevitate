@@ -59,10 +59,14 @@ Then pick the matching skill:
   `find_capabilities`/`run_journey` = `journey find`/`journey run`, `author_journey` =
   `explore-author-journey`, `create_demo`/`demo_journey` = `demo`/`journey demo`, `verify_fix` =
   `verify-fix`, `regressions` = `regression capture|run`, `ledger` = `ledger …`, `run_check` =
-  `check`, `get_report` = `report`, `ux_review` = `ux`. The full table is in the jevitate repo's
+  `check`, `get_report` = `report`, `ux_review` = `ux`, `locator_health` = `locator-health`,
+  `draft_job_outcomes` = `job draft-outcomes`, `export_catalog_bundle` = `catalog export`,
+  `publish_to_journeeze` = `publish journeeze`. The full table is in the jevitate repo's
   `docs/agents.md`.
 - These are never available over MCP: `record` (a person clicks), `init`, `ai setup` (secret entry),
-  `ui`, `source trust` and `source add --accept-tou`. Operator settings are never tool arguments
+  `ui`, `source trust`, `source add --accept-tou`, `connect journeeze` (a person enters where the
+  Journeeze upload key is kept; `publish_to_journeeze` never sees the key) and `journey migrate`
+  (a one-time rewrite the operator commits). Operator settings are never tool arguments
   either: shell hooks, browser binaries, which environment variable a secret comes from, and
   log-command sources. Tell the human the CLI command instead.
 - Raw browser tools (click, fill, evaluate, get DOM or cookies) don't exist on purpose. Never
@@ -79,6 +83,7 @@ you do, show them what they are approving:
 - promoting a mission target: `jevitate mission target promote <id>`
 - trusting a third-party Journey or accepting a source's Terms of Use (CLI only)
 - approving a catalog persona or job, waiving an unvetted link, acknowledging findings: `jevitate persona approve <id>`, `jevitate job approve <id>`, `journey promote --accept-unvetted`, `--accept-findings` (approve and acknowledge are CLI only; MCP reads `review_persona` / `review_job` / `catalog_status` / `analyze_catalog`)
+- connecting the project to Journeeze: `jevitate connect journeeze` (CLI only, a person at a terminal). Drafting a job's desired outcomes (`job draft-outcomes` / `draft_job_outcomes`) is not an approval: it marks them `provenance: ai_draft`, and a person still reviews and runs `job approve`
 - approving or cancelling an inbox item: only in `jevitate ui`. The MCP tools `approve_action` and `cancel_command` always refuse.
 
 Every CLI approval (`journey promote`, `demo approve`, `persona approve`, `job approve`, and the

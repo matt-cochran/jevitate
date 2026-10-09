@@ -231,7 +231,15 @@ jevitate journey review checkout --json                   # the schema-checked s
 | Inputs | parameters and secret references **by name only** — never a value (a literal typed into a credential-looking field shows as «redacted»; a secret reference shows its field and manager, never its key) |
 | Proof | end-state checks, per-step assertions (weak ones marked), the `journey lint` result, and the last `journey verify --mutate` verdict (`stale` when the Journey changed after it ran) — or "not verified" with the command to run |
 | Change since last approval | a diff of steps, assertions and side effects against the version last approved, or "first approval" |
+| Anchor rules (#466) | anchor-rule and catalog-reference warnings, each with its fix (see [anchors](#explore-from-a-journey-step-anchors-and-campaigns) and [the catalog](./catalog.md)) — only when there are any |
+| Locator health (advisory, #470) | the brittle steps — step number and step id, the locator, why it is brittle, and the fix for the app ([locator health](#locator-health)) |
 | Content hash | the hash an approval binds to |
+
+A Journey approved through a verified pull-request review shows the pull request on its approval
+line (`Pull-request approval: PR #… · reviewer … · merged …`, see
+[pr-review in CI](./ci.md#approvals-verified-from-pull-request-reviews-pr-review)). When the only
+change since the approval is minted step ids, the change section says
+`ids added only (warn path)`: re-approving it only warns about the anchor rules instead of enforcing them.
 
 The content hash is the Journey's content hash without its approval bookkeeping (`promoted`,
 `approval`, `acceptedWeak`), so promoting does not change what was approved. Bind an approval to
@@ -272,9 +280,19 @@ e.g. "approved non-interactively (likely an agent: CLAUDECODE)". A coding agent 
 a person and never uses the escape hatch on its own. What each layer guarantees, and how to
 enforce approvals in git review and CI: [the catalog](./catalog.md#what-human-approval-guarantees).
 
+### Stable step ids
+
+Since 0.10 every recorded step carries a stable `stepId` (`s-` and six characters, e.g. `s-7f3k2a`;
+any 1-64 of `[a-z0-9._:-]`). The Journey store gives each step that has none an id when the Journey
+is saved, and never renames an id a step already has, so a step keeps its id when steps around it
+are added, removed or retargeted. Anchors, locator-health reports and review sheets refer to a step
+by its id as well as its position. `journey promote` stamps each anchor
+with the id of the step it follows (`metadata.anchors[].stepId`; the id wins over `step` when the
+two disagree).
+
 ### Migrating to step ids (`journey migrate --step-ids`)
 
-Since 0.10 every recorded step carries a stable `stepId`, and anchors point at their step by it.
+Every Journey saved since 0.10 has step ids, and anchors point at their step by them.
 `jevitate journey migrate --step-ids [--dry-run] [--dir <path>] [--json]` is the one-time backfill
 for Journeys recorded earlier: it mints a deterministic id on every step that has none (ids already
 present are never renamed), stamps each anchor with its step's id, and writes through the Journey
@@ -368,6 +386,58 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
 
 Over MCP, agents find and run promoted Journeys with `find_capabilities` and `run_journey`
 ([agents.md](./agents.md)).
+
+## Locator health
+
+`jevitate locator-health` (#470, MCP `locator_health`) reports how each recorded step finds its
+target, and whether that survives a change to the app. It is read-only and advisory: it never
+changes a Journey and always exits 0 on a report.
+
+```bash
+jevitate locator-health                                   # every promoted Journey
+jevitate locator-health --journey checkout                # one Journey
+jevitate locator-health --run <result.json>               # the rungs one run actually matched
+jevitate locator-health --baseline last-week.json --json  # with the trend against an earlier --json output (or a result.json)
+```
+
+Per step it shows the **rung** of the selector ladder the target resolves by — `testId`, `anchor`
+(a non-generated `id`/`name` attribute), `role+name`, `role`, `label`, `text` or `css` — the
+ladder's grade for it (`high`, `medium`, `low`), and whether it is `stable` or `brittle`. A step is
+stable only when it resolves by a test id in the project's convention whose value does not look
+generated. Anything else is brittle, with its reasons:
+
+| Reason | Meaning |
+|---|---|
+| `no-test-id` | the target has no test id |
+| `test-id-not-in-convention` | it has a test id, but on an attribute not in `testIdAttributes` |
+| `tflow-id-not-a-test-id` | it is found by (or only has) `data-tflow-id`, which is tracking metadata |
+| `generated-value` | the id, name or css looks generated (it will change between builds) |
+| `no-accessible-name` | no visible text or `aria-label` to find it by |
+| `duplicate-name` | the name is shared, so it needs an ordinal (`nth`) |
+| `positional-css` | a deep or positional css path |
+| `text-copy` | a text locator on copy likely to change |
+
+Each brittle element gets one **fix** for the app, de-duplicated across steps and Journeys (route +
+role + name), e.g. `add data-testid="save-contact" to the "Save" button on /contacts/new`, or
+`use data-testid="save" instead of data-qa on …`. The list is a work list for the codebase, not a
+change to the Journey.
+
+**The convention.** The attributes that count as a test id are project config,
+`testIdAttributes` in the repo's `.jevitate/config.json`, in preference order (a fix suggests the
+first). Default: `data-testid`, `data-test`. Teams add their own:
+
+```json
+{ "testIdAttributes": ["data-testid", "data-test", "data-cy"] }
+```
+
+`data-tflow-id` is tracking metadata, never a test id: listing it is refused (`E_PROJECT_CONFIG`,
+like any malformed value), and a target found only by it is brittle. The file is meant to be
+committed with the app; note that the `.jevitate/.gitignore` `jevitate init` writes lists
+`/config.json`, so add it with `git add -f .jevitate/config.json`. There is no flag for it.
+
+Locator health also appears in a Journey run's `result.json`, on the
+[review sheet](#review-and-promotion-sign-off), and in `jevitate check` — as JUnit/SARIF warnings,
+or as a gate with `--max-brittle-steps <n>` ([CI](./ci.md#locator-health-in-ci---max-brittle-steps)).
 
 ## Journey format reference
 

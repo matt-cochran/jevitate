@@ -288,10 +288,12 @@ jevitate catalog export [options]
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--check <file>` | a `jevitate check` record (check.json) to include; repeatable (default: <project>/jevitate-check/check.json when it exists) | `[]` |  |  |  |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--format <format>` | the bundle format (journeeze-bundle) |  |  | yes |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--out <dir>` | the directory bundle.json is written to (created if missing) |  |  | yes |  |
+| `--product-name <name>` | the bundle's product.name (default: the project's package.json name, else its folder name) |  |  |  |  |
 
 ### catalog status
 
@@ -1007,7 +1009,7 @@ jevitate job draft-outcomes [options] <jobId>
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--count <n>` | how many outcomes to draft (1-3, default 1) |  |  |  |  |
+| `--count <n>` | how many outcomes to draft (1-3, default 3) |  |  |  |  |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--fake-ai` | draft with the deterministic fake generator (pipeline smoke only) | `false` |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -1546,6 +1548,7 @@ jevitate locator-health [options]
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--baseline <file>` | a previous locator-health --json output (or a run result.json) to report the trend against: steps improved / regressed |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--journey <id>` | only this Journey |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |

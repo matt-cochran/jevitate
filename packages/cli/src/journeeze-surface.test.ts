@@ -54,7 +54,7 @@ const publishTool = () =>
 describe("MCP publish_to_journeeze", () => {
   it("without a resolvable key: refused, telling a person to run `jevitate connect journeeze`", async () => {
     const res = await publishTool().handler({ dryRun: true });
-    expect(JSON.parse(res.content[0]!.text)).toMatchObject({ error: "refused", message: expect.stringMatching(/jevitate connect journeeze/) });
+    expect(JSON.parse(res.content[0]!.text)).toMatchObject({ code: "E_JOURNEEZE_NOT_CONNECTED", message: expect.stringMatching(/jevitate connect journeeze/) });
   });
 
   it("with the key in the environment, nothing it returns contains the key", async () => {
@@ -84,6 +84,6 @@ describe("CLI connect journeeze", () => {
     } catch (err) {
       if (!(err instanceof CommanderError)) throw err;
     }
-    expect(JSON.parse(out.join(""))).toMatchObject({ ok: false, error: { code: "E_CONNECT", message: expect.stringMatching(/terminal/) } });
+    expect(JSON.parse(out.join(""))).toMatchObject({ ok: false, error: { code: "E_CONNECT_NEEDS_TTY", message: expect.stringMatching(/terminal/) } });
   });
 });

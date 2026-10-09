@@ -14,7 +14,6 @@ import { resolveCatalogDir } from "./catalog-api.js";
 import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
 import { existsSync } from "node:fs";
 import { ALLOW_CHANNELS_HELP } from "./catalog-cli.js";
-import { NotImplementedError } from "./not-implemented.js";
 import { brittleStepGate, locatorHealth, renderLocatorHealth } from "./locator-health-api.js";
 import { ChangesArgsError, ChangesInputError } from "./change-context.js";
 import { CLI_HEAL_NAMES, JourneyHealArgsError, validateJourneyHeal, type JourneyHealRequest } from "./journey-heal.js";
@@ -229,8 +228,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           err instanceof ApprovalArgsError ||
           err instanceof CheckArgsError ||
           err instanceof ChangesArgsError ||
-          err instanceof ChangesInputError ||
-          err instanceof NotImplementedError
+          err instanceof ChangesInputError
         ) {
           emit(program, fail(err.code, err.message), o.json === true);
         } else if (err instanceof MissingCredentialError || (err instanceof Error && err.name === "GatewaySelectionError")) {
@@ -291,7 +289,7 @@ function registerLocatorHealthCommand(program: Command, deps: CheckCliDeps): voi
       } catch (err) {
         // #470: a typed refusal keeps its code (E_PROJECT_CONFIG, E_LOCATOR_HEALTH_INPUT).
         const own = (err as { code?: unknown }).code;
-        const code = err instanceof NotImplementedError ? err.code : typeof own === "string" && own.startsWith("E_") ? own : "E_LOCATOR_HEALTH";
+        const code = typeof own === "string" && own.startsWith("E_") ? own : "E_LOCATOR_HEALTH";
         emit(program, fail(code, err instanceof Error ? err.message : String(err)), json);
       }
     });
