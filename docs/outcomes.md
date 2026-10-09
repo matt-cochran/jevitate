@@ -82,6 +82,7 @@ whose success check did not hold is `missionOutcome: "defects-found"`, `goalOutc
 | `blocked` | `defects-found` | 1 | the loop stopped without the goal met and without claiming it: the model gave up (e.g. no matching control), or no progress was possible |
 | `defects-found` | `defects-found` | 1 | only when a violated declared invariant overrode an `inconclusive` budget or vacuous-check stop (#423: a defect no longer replaces `succeeded`/`failed`/`exhausted`/`blocked` — see the table below) |
 | `inconclusive` | `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) — or every failing success check was **vacuous** (#202: satisfied before the run's first action), so the run proved nothing either way: `failure.kind: "vacuous-check"`, naming the check |
+| `not-started` | `inconclusive` | 2 | #448: the run executed **zero actions** (no controls offered, the auth check failed, a preflight failed), so nothing was exercised — never `clean`, never `succeeded`, whatever else it saw; treated exactly like `inconclusive`. `goalReason` says why (`no-controls`, `auth-failed`, `preflight-failed`, `no-actions`). Defects found passively (console, server log) are still listed in `defects[]` but do not make the run "exercised". A zero-action hang, crash or environment ending (starved host, unreachable target, …) keeps its own outcome |
 | `crashed` | `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
 | `hang` | `hang` | 3 | the app under test hung, and it reproduced on replay |
 | `intermittent` | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
@@ -104,6 +105,7 @@ and so the exit code — is derived from both by ONE table (`goalMissionOutcome`
 | `hang` | `hang` (3) | `hang` (3) |
 | `intermittent` | `intermittent` (4) | `intermittent` (4) |
 | `inconclusive` / `crashed` | that outcome (2) | that outcome (2) |
+| `not-started` | `inconclusive` (2) | `inconclusive` (2) |
 
 Every exit code is the same as in 0.7.0. In particular a goal that was not achieved with no defect
 still exits 1 (the long-standing "the check failed" code): read `defectOutcome.status: "none"` and

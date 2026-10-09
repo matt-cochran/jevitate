@@ -13,7 +13,7 @@ import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantRep
 import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
-import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
+import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, startedOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -600,7 +600,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
         ? { wouldHaveBeen: mission.failure?.message ?? mission.reason }
         : {}),
     });
-    const goalOutcome: GoalBasedOutcome = host.outcome === preHost ? goalSoFar : host.outcome;
+    // #448: ZERO executed actions → `not-started` (never an exercised ending); passive defects stay listed.
+    const failureNow = mission.run.failure ?? host.failure ?? mission.failure;
+    // `--allow-vacuous-checks` is the operator's explicit acceptance of a goal that held before any action: that
+    // `succeeded` stays (the flag's whole meaning), every other zero-action ending is `not-started`.
+    const endedAs = host.outcome === preHost ? goalSoFar : host.outcome;
+    const goalOutcome = (opts.allowVacuousChecks === true && endedAs === "succeeded" ? endedAs : startedOutcome(endedAs, mission.run.actions, failureNow?.kind)) as GoalBasedOutcome;
     // #423: THE table (domain `goalMissionOutcome`) — the exit code is unchanged for every combination.
     const missionOutcome = goalMissionOutcome(goalOutcome, defectOutcome.status);
     const goalReason = goalReasonOf({

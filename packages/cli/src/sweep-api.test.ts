@@ -295,6 +295,17 @@ describe("runSweep", () => {
     ]);
   });
 
+  it("counts goal runs that executed zero actions as notStarted in the summary", async () => {
+    const r = await runSweep({
+      plan: plan(["a", "b"].map((id) => target(id, { strategy: "goal" }))),
+      runOnce: async ({ target: t }) =>
+        t.id === "a"
+          ? result({ strategy: "goal", missionOutcome: "inconclusive", exitCode: 2, goalOutcome: "not-started", goalReason: "no-controls" })
+          : result({ strategy: "goal", goalOutcome: "succeeded" }),
+    });
+    expect(r.summary.notStarted).toBe(1);
+  });
+
   it("does not stop when one of the first K runs reached the app", async () => {
     const r = await runSweep({
       plan: plan(["a", "b", "c"].map((id) => target(id)), { stopOnEnvFailure: 2 }),

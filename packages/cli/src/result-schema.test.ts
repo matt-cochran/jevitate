@@ -233,8 +233,9 @@ describe("#217 — a goal result's missionOutcome is canonical; its own ending i
   const endings: ReadonlyArray<[string, () => JudgmentPort, string, string, string, number?]> = [
     // [goalOutcome, judge, success check, missionOutcome, stop, maxActions]
     ["succeeded", clickThenDone, "textIncludes:[data-testid=status]|saved", "clean", "done"],
-    // The model keeps saying done; code rejects it each time: failed, and the loop's stop is `done`.
-    ["failed", () => always("done"), "textIncludes:[data-testid=status]|never", "defects-found", "done"],
+    // The model acts once, then keeps saying done; code rejects it each time: failed, and the loop's stop is `done`
+    // (#448: with zero actions it would be `not-started`).
+    ["failed", () => sequence("click:0", "done"), "textIncludes:[data-testid=status]|never", "defects-found", "done"],
     // #237: the model tries something first — a `blocked` before any action is refused as unexplored.
     ["blocked", () => sequence("click:0", "blocked"), "textIncludes:[data-testid=status]|never", "defects-found", "blocked"],
     ["exhausted", () => always("click:0"), "textIncludes:[data-testid=status]|never", "defects-found", "exhausted", 1],
@@ -250,7 +251,7 @@ describe("#217 — a goal result's missionOutcome is canonical; its own ending i
           judge: judge(),
           gen: new FakeGenerationGateway({}),
           successChecks: [parseSuccessSpec(check)],
-          bounds: { maxActions: maxActions ?? 2, maxDecisions: 3 },
+          bounds: { maxActions: maxActions ?? 2, maxDecisions: goalOutcome === "failed" ? 6 : 3 },
           outDir: await out(`goal-${goalOutcome}`),
         });
         const core = assertConforms(r, "goal");

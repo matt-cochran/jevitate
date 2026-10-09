@@ -620,6 +620,8 @@ export interface SweepResult {
     readonly byOutcome: Readonly<Record<string, number>>;
     readonly defects: number;
     readonly environmentFailures: number;
+    /** #448: goal runs that executed zero actions (`goalOutcome: not-started`) — counted apart, never as exercised. */
+    readonly notStarted: number;
   };
   readonly targets: readonly SweepTargetResult[];
   readonly defects: readonly SweepDefect[];
@@ -891,6 +893,7 @@ export function aggregateSweep(args: {
       byOutcome,
       defects: defects.filter((d) => d.advisory !== true).length,
       environmentFailures: done.filter((r) => r.environmentFailure !== undefined).length,
+      notStarted: done.filter((r) => r.goalOutcome === "not-started").length,
     },
     targets: rows,
     defects,

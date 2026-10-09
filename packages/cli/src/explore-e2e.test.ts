@@ -246,12 +246,13 @@ describe("jevitate explore — --fake-ai smoke answers the candidate-action ques
         // The fake judge only ever proposes done; the oracle (never Jev) refuses it each time, so the
         // run ends incomplete with the reason — not a silent early stop.
         // #217: the loop ended on the model's (rejected) `done` — the stop says so, never `blocked`;
-        // the goal failed, and missionOutcome is the canonical fold of it.
+        // #448: it never executed an action, so the goal is `not-started` (never `failed`/exercised), and
+        // missionOutcome is the canonical fold of it: inconclusive, exit 2.
         expect(parsed.data.stop).toBe("done");
-        expect(parsed.data.goalOutcome).toBe("failed");
-        expect(parsed.data.outcome).toBe("failed");
-        expect(parsed.data.missionOutcome).toBe("defects-found");
-        expect(parsed.data.exitCode).toBe(1);
+        expect(parsed.data.goalOutcome).toBe("not-started");
+        expect(parsed.data.outcome).toBe("not-started");
+        expect(parsed.data.missionOutcome).toBe("inconclusive");
+        expect(parsed.data.exitCode).toBe(2);
         expect(parsed.data.assertionPassed).toBe(false);
         expect(parsed.data.runOutcome.status).toBe("incomplete");
         expect(parsed.data.runOutcome.reason).toMatch(/proposed done 3 times, but the success condition is not met/);

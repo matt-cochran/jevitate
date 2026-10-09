@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GOAL_OUTCOMES, MISSION_EXIT_CODES, defectOutcomeOf, foldGoalOutcome, goalMissionOutcome, goalReasonOf, type MissionOutcome } from "./mission-outcome.js";
+import { GOAL_OUTCOMES, MISSION_EXIT_CODES, defectOutcomeOf, foldGoalOutcome, goalMissionOutcome, goalReasonOf, startedOutcome, type MissionOutcome } from "./mission-outcome.js";
 
 describe("defectOutcomeOf (#421/#423)", () => {
   it("no defects: status none, empty byKind, no advisoryByKind", () => {
@@ -21,7 +21,7 @@ describe("defectOutcomeOf (#421/#423)", () => {
 describe("goalMissionOutcome — THE goal × defect table (#423)", () => {
   // The 0.7.0 rule it replaces: a defect turned any goal ending but a broken run / hang into
   // `defects-found`, and the result folded that. The exit code must be the same for every combination.
-  const BROKEN = new Set(["inconclusive", "crashed", "hang", "intermittent"]);
+  const BROKEN = new Set(["inconclusive", "crashed", "hang", "intermittent", "not-started"]);
   const legacy = (goal: (typeof GOAL_OUTCOMES)[number], defects: boolean): MissionOutcome =>
     foldGoalOutcome(defects && !BROKEN.has(goal) ? "defects-found" : goal);
 
@@ -66,5 +66,47 @@ describe("goalReasonOf (#423): decided from the run's state, never from reason t
     // An invariant overrode a budget stop: the overridden ending explains the goal.
     expect(goalReasonOf({ goalOutcome: "defects-found", overridden: "inconclusive", stop: "budget" })).toBe("budget");
     expect(goalReasonOf({ goalOutcome: "defects-found" })).toBe("defects");
+  });
+});
+
+describe("not-started (#448): a run with zero executed actions was never exercised", () => {
+  it("folds to inconclusive with exit code 2, never clean", () => {
+    expect([foldGoalOutcome("not-started"), MISSION_EXIT_CODES[goalMissionOutcome("not-started", "none")]]).toEqual(["inconclusive", 2]);
+  });
+
+  it("stays inconclusive when defects were found passively", () => {
+    expect(goalMissionOutcome("not-started", "defects")).toBe("inconclusive");
+  });
+
+  it("demotes a succeeded goal with zero executed actions", () => {
+    expect(startedOutcome("succeeded", 0)).toBe("not-started");
+  });
+
+  it("keeps a succeeded goal that executed an action", () => {
+    expect(startedOutcome("succeeded", 1)).toBe("succeeded");
+  });
+
+  it("keeps a zero-action hang as a hang", () => {
+    expect(startedOutcome("hang", 0)).toBe("hang");
+  });
+
+  it("demotes a zero-action inconclusive only for an auth or configuration preflight failure", () => {
+    expect([startedOutcome("inconclusive", 0, "auth-expired"), startedOutcome("inconclusive", 0, "target-unreachable")]).toEqual(["not-started", "inconclusive"]);
+  });
+
+  it("names no-controls as the reason when the page offered none", () => {
+    expect(goalReasonOf({ goalOutcome: "not-started", missCause: "no-controls" })).toBe("no-controls");
+  });
+
+  it("names auth-failed as the reason for an expired session", () => {
+    expect(goalReasonOf({ goalOutcome: "not-started", failureKind: "auth-expired" })).toBe("auth-failed");
+  });
+
+  it("names preflight-failed as the reason for a failed configuration", () => {
+    expect(goalReasonOf({ goalOutcome: "not-started", failureKind: "configuration" })).toBe("preflight-failed");
+  });
+
+  it("falls back to no-actions when the cause is unknown", () => {
+    expect(goalReasonOf({ goalOutcome: "not-started" })).toBe("no-actions");
   });
 });
