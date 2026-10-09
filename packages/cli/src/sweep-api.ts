@@ -791,6 +791,8 @@ export function targetArgv(plan: Pick<SweepPlan, "tags" | "runArgs">, target: Sw
     "explore",
     "--url",
     target.url,
+    "--target",
+    target.id,
     ...(target.strategy === undefined ? [] : ["--strategy", target.strategy]),
     ...(target.goal === undefined ? [] : ["--goal", target.goal]),
     ...(target.persona === undefined ? [] : ["--storage-state", target.persona.storageState]),

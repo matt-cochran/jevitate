@@ -216,7 +216,7 @@ describe("runSweep", () => {
     expect(peak).toBe(2);
     expect(seen.map((s) => s.target.id).sort()).toEqual(["a", "b", "c", "d", "e"]);
     const argv = seen.find((s) => s.target.id === "c")!.argv;
-    expect(argv.slice(0, 5)).toEqual(["explore", "--url", "http://app.test/c", "--strategy", "adversarial"]);
+    expect(argv.slice(0, 7)).toEqual(["explore", "--url", "http://app.test/c", "--target", "c", "--strategy", "adversarial"]);
     expect(argv).toEqual(expect.arrayContaining(["--tag", "release=0.8.0", "--tag", "feature=c", "--tag", "target=c", "--fake-ai", "--out", join(dir, "out", "c"), "--json"]));
     expect(r).toMatchObject({ kind: "sweep", complete: true, missionOutcome: "clean", exitCode: 0, summary: { targets: 5, ran: 5, errors: 0, skipped: 0, pending: 0 } });
     expect(r.targets[0]).toMatchObject({ id: "a", status: "ran", depth: { distinctStates: 3 }, tags: { release: "0.8.0", feature: "a", target: "a" } });
@@ -328,9 +328,14 @@ describe("runSweep", () => {
   it("targetArgv: the sweep's operator flags come before the target's options; the target's tag of the same key wins", () => {
     const argv = targetArgv({ tags: { owner: "qa", feature: "x" }, runArgs: ["--deny", "Delete"] }, target("t", { goal: "g", tags: { feature: "y" }, optionArgv: ["--max-actions=3"] }), "/out/t");
     expect(argv).toEqual([
-      "explore", "--url", "http://app.test/t", "--strategy", "adversarial", "--goal", "g",
+      "explore", "--url", "http://app.test/t", "--target", "t", "--strategy", "adversarial", "--goal", "g",
       "--tag", "owner=qa", "--tag", "feature=y", "--tag", "target=t",
       "--deny", "Delete", "--max-actions=3", "--out", "/out/t", "--json",
     ]);
+  });
+
+  it("targetArgv passes the target's id as --target", () => {
+    const argv = targetArgv({ tags: {}, runArgs: [] }, target("checkout"), "/out/checkout");
+    expect(argv).toEqual(expect.arrayContaining(["--target", "checkout"]));
   });
 });

@@ -1,5 +1,5 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
-import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
+import { TAG_FLAG, TAG_HELP, TARGET_FLAG, TARGET_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { type InvariantSpec } from "@jevitate/recording";
@@ -173,6 +173,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     ),
   )))
     .option("--url <url>", "target URL (must be an authorized origin)")
+    .option(TARGET_FLAG, TARGET_HELP)
     .option(
       "--from-journey <id>",
       "journey-anchored exploration (#293): start from a PROMOTED Journey instead of --url — its first --at-step steps are replayed " +

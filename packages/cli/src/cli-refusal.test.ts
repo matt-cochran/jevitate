@@ -229,6 +229,9 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--from-journey", "nope", "--at-step", "2", "--url", URL0, "--fake-ai"],
       // #427: an unusable --auth-check is refused before any browser opens.
       ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--auth-check", "sometimes"],
+      // #451: a --target id that is not 1-64 of [A-Za-z0-9_.-] is refused before any browser opens.
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--target", "a b"],
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--target", ""],
     ],
   },
   // #427: missing flags, a value where a variable NAME belongs, an unset variable, a session file in .jevitate/.

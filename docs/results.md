@@ -39,7 +39,7 @@ fields the same way:
 | `resultPath` | string | The persisted `<stem>.result.json`. The stem starts with the strategy (`explore-` for goal, `coverage-`, `exploratory-`, `adversarial-`, `feature-`, `usability-`); readers find a result by its content, never by its prefix. |
 | `sessionLost` | object | Goal runs with `--storage-state`, only when it happened: `{reason}` — the session was not honoured (the first page was a sign-in page: a login-like URL or a password field), so the run did not start signed in as that session. A warning, printed as a `WARNING` line; it does not change the outcome. |
 | `scope` | object | Coverage, exploratory and feature runs: the route scope the run was contained to — `routeGlobs`, and `source` (`start-url` when derived from the start URL, `route` when `--route`/`--scope app` widened or set it). The human output prints it as a `SCOPE` line. |
-| `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. #426 adds structured fields: `startUrl` (where the run started), `strategy`, and `persona` (the persona name, for a `--persona` multi-run or a [sweep](./sweeps.md) target). Additive. |
+| `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. #426 adds structured fields: `startUrl` (where the run started), `strategy`, `persona` (the persona name, for a `--persona` multi-run or a [sweep](./sweeps.md) target), and `id` (`explore --target`, or a sweep target's `id`). **Consumers should key a run on `target.id`, not on `startUrl`.** Additive. |
 | `tags` | object | #426: the run's `--tag key=value` metadata (`{"feature": "checkout"}`), present only when the run was tagged. See [run tags](#run-tags). Additive. |
 | `engine` | object | The build that produced the result: `{version, commit, builtAt}`. |
 | `usage` | object | Model calls, tokens and cost. The CLI always sets it; a programmatic caller that does not track usage leaves it out. |
@@ -62,6 +62,12 @@ Every command that produces a run result takes `--tag key=value` (repeatable): `
 A tag says which feature, journey or release a run exercised, so a release dashboard or a coverage
 tracker can attribute the run without guessing from its output path or its final URL (a run that
 ends on a login page still says what it tested).
+
+`explore --target <id>` names the target a run was meant to cover (1-64 of `[A-Za-z0-9_.-]`,
+refused with exit 64 before anything runs); `sweep` passes each target's `id` this way. It is
+stamped as `target.id` in the persisted result, its envelope and the run index. This is stronger
+than the start URL (which a redirect, a login bounce or a sweep `route` can change): **key a run on
+`target.id`**, not on `target.startUrl`.
 
 ```bash
 jevitate explore --url https://app.example.test/checkout --strategy adversarial \
