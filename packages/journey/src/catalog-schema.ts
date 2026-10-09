@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AcceptedFindingsSchema } from "./journey.js";
+import { AcceptedFindingsSchema, ExtensionsSchema } from "./journey.js";
 import { ApprovalProvenanceSchema, ApprovalsReportSchema } from "./approval-schema.js";
 
 /**
@@ -46,9 +46,108 @@ const storyPart = (part: "trigger" | "motivation" | "outcome", words: string) =>
 
 export const JOB_PRIORITIES = ["high", "medium", "low"] as const;
 
+// ── #465: the jtbd shared-core job fields (journeeze catalog-bundle-v1 §5, jtbd-data-model §3) ──
+
+/** #465: `core` (the job itself), `setup` (lifecycle support), `related` (an adjacent job). */
+export const JOB_KINDS = ["core", "setup", "related"] as const;
+export type JobKind = (typeof JOB_KINDS)[number];
+
+/** #465: where a job's content came from, weakest first. */
+export const JOB_PROVENANCES = ["ai_draft", "team_hypothesis", "customer_evidenced", "behaviour_validated"] as const;
+export type JobProvenance = (typeof JOB_PROVENANCES)[number];
+
+/** #465: the universal job map's stages (a job step's optional `stage`). */
+export const JOB_STAGES = ["define", "locate", "prepare", "confirm", "execute", "monitor", "modify", "resolve", "conclude"] as const;
+export type JobStage = (typeof JOB_STAGES)[number];
+
+export const OUTCOME_DIRECTIONS = ["minimize", "maximize"] as const;
+export const OUTCOME_MEASURES = ["time", "likelihood", "effort", "count"] as const;
+/** #465: which gulf an outcome is about — `execution` (users don't know what to do) or `evaluation` (can't tell what happened). */
+export const OUTCOME_GULFS = ["execution", "evaluation"] as const;
+export const METRIC_KINDS = ["duration", "completion", "abandon", "repeat", "error", "assisted", "answer"] as const;
+export type MetricKind = (typeof METRIC_KINDS)[number];
+export const DURATION_STATS = ["p50", "p75", "share_under"] as const;
+export const ANSWER_QUESTIONS = ["got_it_done", "harder_than_expected", "understood"] as const;
+export const ANSWER_VALUES = ["yes", "partly", "no"] as const;
+export const TARGET_OPS = ["<", "<=", ">", ">="] as const;
+export const TARGET_UNITS = ["s", "percent", "count"] as const;
+
+/**
+ * #465: where a metric measures — an anchor name, or the reserved `job_start` / `job_end`. Whether
+ * the anchor exists on a Journey of the job is a catalog check (an unmeasurable metric is a gap).
+ */
+const AnchorRefSchema = CatalogIdSchema;
+
+/** #465: catalog text — one non-blank line of at most `max` characters. */
+const catalogText = (max: number) => z.string().min(1).max(max).refine((s) => s.trim() !== "" && !/[\r\n]/.test(s), { message: "one non-blank line" });
+
+/** #465: a solution-free job step. */
+export const JobStepSchema = z.object({ id: CatalogIdSchema, name: catalogText(200), stage: z.enum(JOB_STAGES).optional() }).strict();
+export type JobStep = z.infer<typeof JobStepSchema>;
+
+/**
+ * #465: a desired outcome's metric — a closed union over `kind`, each with exactly its fields
+ * (jtbd-data-model §3): `duration` (`from`, `to`, `stat`; `threshold` seconds iff `stat` is
+ * `share_under`), `completion` (`from`, `to`), `abandon` / `repeat` / `error` / `assisted` (`at`),
+ * `answer` (`question`, `value`; `partly` only for `got_it_done`).
+ */
+export const MetricSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("duration"),
+        from: AnchorRefSchema,
+        to: AnchorRefSchema,
+        stat: z.enum(DURATION_STATS),
+        threshold: z.number().int().min(1).max(86_400).optional(),
+      })
+      .strict(),
+    z.object({ kind: z.literal("completion"), from: AnchorRefSchema, to: AnchorRefSchema }).strict(),
+    z.object({ kind: z.enum(["abandon", "repeat", "error", "assisted"]), at: AnchorRefSchema }).strict(),
+    z.object({ kind: z.literal("answer"), question: z.enum(ANSWER_QUESTIONS), value: z.enum(ANSWER_VALUES) }).strict(),
+  ])
+  .superRefine((m, ctx) => {
+    if (m.kind === "duration" && (m.stat === "share_under") !== (m.threshold !== undefined)) {
+      ctx.addIssue({ code: "custom", path: ["threshold"], message: "metric: `threshold` (seconds) goes with `stat: share_under`, and only with it" });
+    }
+    if (m.kind === "answer" && m.value === "partly" && m.question !== "got_it_done") {
+      ctx.addIssue({ code: "custom", path: ["value"], message: "metric: `partly` is an answer only to `got_it_done`" });
+    }
+  });
+export type Metric = z.infer<typeof MetricSchema>;
+
+/** #465: what good enough is — `op` `value` `unit` (a percent is at most 100). */
+export const OutcomeTargetSchema = z
+  .object({ op: z.enum(TARGET_OPS), value: z.number().min(0), unit: z.enum(TARGET_UNITS) })
+  .strict()
+  .refine((t) => t.unit !== "percent" || t.value <= 100, { message: "target: a percent is at most 100", path: ["value"] });
+export type OutcomeTarget = z.infer<typeof OutcomeTargetSchema>;
+
+/**
+ * #465: a desired outcome — what to optimize. `step` (a job step id; absent = the whole job) and the
+ * metric's anchors are cross-checked by the catalog rules, not here. `guardrail: true` = must never
+ * get worse (a counter-outcome).
+ */
+export const DesiredOutcomeSchema = z
+  .object({
+    id: CatalogIdSchema,
+    step: CatalogIdSchema.optional(),
+    direction: z.enum(OUTCOME_DIRECTIONS),
+    measure: z.enum(OUTCOME_MEASURES),
+    object: catalogText(300),
+    clarifier: catalogText(500).optional(),
+    gulf: z.enum(OUTCOME_GULFS).optional(),
+    metric: MetricSchema.optional(),
+    target: OutcomeTargetSchema.optional(),
+    guardrail: z.boolean().optional(),
+    priority: z.enum(JOB_PRIORITIES).optional(),
+  })
+  .strict();
+export type DesiredOutcome = z.infer<typeof DesiredOutcomeSchema>;
+
 /**
  * #433: one job in `.jevitate/jobs.json` — a job story `{id, trigger, motivation, outcome}`, the
- * personas it serves, an optional priority. A job missing any of the three story parts is refused.
+ * personas it serves, an optional priority, and (#465) the optional jtbd fields above. A job missing any of the three story parts is refused.
  * The test-campaign planning fields (`goal`, `success`, `preconditions`, `mutates`, `order`,
  * `storageState`) and the legacy single `persona` (folded into `personas`) are still accepted.
  */
@@ -69,6 +168,18 @@ export const JobSchema = z
     preconditions: z.array(z.string().max(1000)).max(50).optional(),
     mutates: z.boolean().optional(),
     order: z.number().int().optional(),
+    // #465: the jtbd shared-core fields — all optional; every one counts toward the content hash
+    // (`extensions` included). Cross-references (step ids, metric anchors, parent) are catalog checks.
+    kind: z.enum(JOB_KINDS).optional(),
+    parent: CatalogIdSchema.optional(),
+    context: z.array(catalogText(300)).max(20).optional(),
+    steps: z.array(JobStepSchema).max(30).optional(),
+    desiredOutcomes: z.array(DesiredOutcomeSchema).max(50).optional(),
+    constraints: z.array(catalogText(300)).max(20).optional(),
+    provenance: z.enum(JOB_PROVENANCES).optional(),
+    revision: z.number().int().min(0).max(4_294_967_295).optional(),
+    lastValidated: z.string().regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/, "lastValidated: a calendar date, YYYY-MM-DD").optional(),
+    extensions: ExtensionsSchema.optional(),
   })
   .strict()
   .refine((j) => new Set(j.personas ?? []).size === (j.personas ?? []).length, { message: "personas: duplicate id", path: ["personas"] });
