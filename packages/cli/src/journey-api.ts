@@ -6,8 +6,8 @@ import { writeApprovedSnapshot } from "./journey-review-store.js";
 import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
 import type { JevSetup } from "./jev-advisor.js";
 import { redactText } from "@jevitate/ai-core";
-import { safeRunPolicy, type RunPolicy, clock } from "@jevitate/domain";
-import { join } from "node:path";
+import { safeRunPolicy, runTagsOf, type RunPolicy, clock } from "@jevitate/domain";
+import { dirname, join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type EmulationSpec } from "@jevitate/playwright";
 import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
@@ -22,6 +22,12 @@ import { SecretPixelMask, maskingPort } from "./demo-capture.js";
 import { RunScreenshots, composeObservers, screenshotObserver, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
 import { JourneyRunner, type BlockedWriteRef, type ChangeScope, type HealWriteGuard, type JourneyHealOptions, type JourneyRunResult, type SelfHealer, type SiteGateDeps } from "@jevitate/runtime";
 import { journeyStepRisk } from "./journey-heal.js";
+import { journeyResultRecord, type JourneyResultProposal } from "./journey-result-record.js";
+import { JourneyProposalProofError, writeJourneyProposal } from "./journey-proposal-store.js";
+import { stampRunMetadata } from "./run-metadata.js";
+import { recordRun } from "./run-index.js";
+import { captureStepScreenshot } from "./demo-capture.js";
+import { mkdir, writeFile } from "node:fs/promises";
 import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
@@ -190,6 +196,12 @@ export interface MutationReplayFields {
   outcomeFailures?: OutcomeCheckFailure[];
   /** The writes aborted in `blockWritesAtStep`'s window. */
   blockedWrites?: BlockedWrite[];
+}
+
+/** #453: what a self-heal run adds to its result — the proposal it wrote and the persisted result file. */
+export interface HealRunFields {
+  proposal?: JourneyResultProposal & { reviewCommand: string; acceptCommand: string };
+  resultPath?: string;
 }
 
 /**
@@ -411,7 +423,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
   mutation: MutationReplayOptions = {},
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary } & Partial<ScreenshotsResult> & MutationReplayFields> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -465,7 +477,10 @@ export async function runJourneyProgrammatically(
       const rawPort = (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
       return capturing ? maskingPort(rawPort, mask) : rawPort;
     };
-    const artifactName = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(clock.nowIso())}.json`;
+    const startedAt = clock.nowIso();
+    const stampBase = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(startedAt)}`;
+    const artifactName = `${stampBase}.json`;
+    const healDir = join(logsDirFor(), `${stampBase}.heal`);
     // #245: `--record-video` → `journey-<id>-<stamp>.videos/` under the given dir, else the logs dir.
     const videoDir =
       opts.browser?.recordVideo === undefined || opts.session !== undefined
@@ -528,7 +543,7 @@ export async function runJourneyProgrammatically(
       const heal: JourneyHealOptions | undefined =
         opts.heal === undefined || healGuard === undefined
           ? undefined
-          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins };
+          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, observe: healObserver(healDir, mask) };
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
       let result: JourneyRunResult;
       try {
@@ -542,6 +557,8 @@ export async function runJourneyProgrammatically(
         await blocker?.guard.disarm();
         await healGuard?.guard.disarm();
       }
+      // #453: a self-heal run persists its record (heal attempts, the proposal) and indexes it.
+      const healFields = policy.selfHeal.mode === "fail-closed" ? {} : await persistHealRun({ result, stored, journey, params, secrets, opts, stampBase, startedAt, replayedIsStored: journey === full && opts.environment === undefined && mutation.mutateJourney === undefined });
       const mutationFields: MutationReplayFields = {
         ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretParams([...outcomeChecks.lastFailures], journey, params) } : {}),
         ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
@@ -550,10 +567,10 @@ export async function runJourneyProgrammatically(
       const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretParams(replayDeltaSummary(replayDeltas), journey, params) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
-      if (fx === undefined) return { ...result, ...videos, ...shotFields, ...deltaFields, ...mutationFields };
+      if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...mutationFields };
       await fx.restore();
       // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
-      return { ...result, ...videos, ...shotFields, ...deltaFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
+      return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
     } finally {
       await closeSession();
     }
@@ -564,6 +581,73 @@ export async function runJourneyProgrammatically(
   } finally {
     await fx?.restore();
   }
+}
+
+/** The heal probe's evidence: a masked screenshot of the page after each candidate, under `<logs>/journey-<id>-<stamp>.heal/`. */
+function healObserver(dir: string, mask: SecretPixelMask): NonNullable<JourneyHealOptions["observe"]> {
+  return async (actor, at) => {
+    const page = actor.ability(BrowseTheWebToken).session.page;
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `step-${at.stepIndex + 1}-attempt-${at.attempt}.png`);
+    await captureStepScreenshot(page, path, { step: at.stepIndex }, [mask.layer()]);
+    return { screenshot: path };
+  };
+}
+
+/**
+ * #453: writes the proposal of a `healed-pending-review` run (the stored Journey is never written)
+ * and the run's `journey-<id>-<stamp>.result.json` (recorded in the run index). Returns the fields
+ * to put on the result: the `proposal` handle, the `resultPath`.
+ */
+async function persistHealRun(a: {
+  result: JourneyRunResult;
+  stored: Journey;
+  journey: Journey;
+  params: Record<string, string>;
+  secrets: readonly string[];
+  opts: RunJourneyProgrammaticallyOptions;
+  stampBase: string;
+  startedAt: string;
+  replayedIsStored: boolean;
+}): Promise<{ proposal?: JourneyResultProposal & { reviewCommand: string; acceptCommand: string }; resultPath: string }> {
+  const resultPath = join(logsDirFor(a.startedAt), `${a.stampBase}.result.json`);
+  const id = a.opts.id;
+  let proposal: (JourneyResultProposal & { reviewCommand: string; acceptCommand: string }) | undefined;
+  if (a.result.outcome === "healed-pending-review" && a.replayedIsStored && a.result.heal !== undefined) {
+    const scope = a.opts.heal?.scope;
+    try {
+      const written = await writeJourneyProposal(a.opts.dir, {
+        journeyId: id,
+        base: a.stored,
+        draft: a.result.revision,
+        attempts: a.result.heal.attempts,
+        changes: {
+          ...(scope?.range === undefined ? {} : { range: scope.range }),
+          ...(scope?.baseSha === undefined ? {} : { baseSha: scope.baseSha }),
+          ...(scope?.headSha === undefined ? {} : { headSha: scope.headSha }),
+          notes: (scope?.evidence ?? []).flatMap((e) => (e.kind === "note" && e.note !== undefined ? [e.note] : [])),
+        },
+        runResultPath: resultPath,
+        secrets: a.secrets,
+      });
+      proposal = {
+        id: written.proposalId,
+        path: written.path,
+        steps: a.result.revision.steps.map((c) => ({ number: c.index + 1, before: describeStep(c.before), after: describeStep(c.after) })),
+        reviewCommand: `jevitate journey review ${id}`,
+        acceptCommand: `jevitate journey promote ${id} --proposal ${written.proposalId}`,
+      };
+    } catch (err) {
+      // A revision that touches proof is never stored; the run still reports its outcome.
+      if (!(err instanceof JourneyProposalProofError)) throw err;
+    }
+  }
+  const record = journeyResultRecord(a.result, { journey: a.stored, params: a.params, startedAt: a.startedAt, ...(proposal === undefined ? {} : { proposal }) });
+  const stamped = { ...record, result: stampRunMetadata(record.result) };
+  await mkdir(dirname(resultPath), { recursive: true });
+  await writeFile(resultPath, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
+  recordRun(resultPath, { tags: runTagsOf(stamped.result) });
+  return { ...(proposal === undefined ? {} : { proposal }), resultPath };
 }
 
 /** How long one blocked step's window stays open for the writes its action triggers (network settle). */

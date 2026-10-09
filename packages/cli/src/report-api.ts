@@ -413,7 +413,7 @@ export interface ReportResult {
   readonly defects: readonly ConsolidatedDefect[];
   /** #422: the batch's environment/config faults, once each (summed over the runs) — never defects. */
   readonly environmentFaults: readonly EnvironmentCauseSummary[];
-  readonly summary: { readonly defects: number; readonly advisory: number; readonly runs: number; readonly environmentFaults: number };
+  readonly summary: { readonly defects: number; readonly advisory: number; readonly pendingRevisions?: number; readonly runs: number; readonly environmentFaults: number };
   /**
    * Model usage summed over the reported runs (#163). Runs whose result carries no `usage` (they made
    * no model call, or predate usage accounting) are counted in `unreportedRuns`, not priced.
@@ -510,6 +510,7 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
     summary: {
       defects: defects.filter((d) => d.severity === "hard").length,
       advisory: defects.filter((d) => d.severity === "advisory").length,
+      ...(defects.some((d) => d.severity === "pending") ? { pendingRevisions: defects.filter((d) => d.severity === "pending").length } : {}),
       runs: runs.length,
       environmentFaults: environmentFaults.length,
     },

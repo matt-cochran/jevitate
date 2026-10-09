@@ -33,8 +33,8 @@ sanity-check the judgment, not just the commands you ran.
   if the first returns nothing plausible — a Journey's `name`/`description`
   might not use the same words as the diff.
 - For each match, run it: `jevitate journey run <id> --param k=v ... --json` (or
-  MCP `run_journey`). Read the `outcome` field; treat only `"ok"`/`"healed"` as
-  a pass, never a non-success outcome.
+  MCP `run_journey`). Read the `outcome` field; treat only `"ok"` as
+  a pass; `"healed-pending-review"` (exit 5) is a proposed revision awaiting a person, never a pass.
 - If a promoted Journey exists for an at-risk area and it passes, that area has
   regression coverage — say so plainly; you do not need to additionally explore
   it from scratch.

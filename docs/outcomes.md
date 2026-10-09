@@ -52,6 +52,20 @@ clean.
 | `hang` | 3 | the app under test hung, and the hang reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
+### Journey run outcomes (#453)
+
+`jevitate journey run` (and MCP `run_journey`, whose result carries the same `exitCode`) ends in one of:
+
+| Journey outcome | Exit code | Mission outcome | Meaning |
+|---|---|---|---|
+| `ok` | 0 | `clean` | every step and the end state held as recorded |
+| `healed-pending-review` | 5 | `pending-review` | a self-heal completed the run only after retargeting steps the change explains; a proposed revision was written and nothing passes until a person accepts it |
+| `heal-exhausted` | 1 | `defects-found` | the break was explained but every candidate (or the budget) ran out; the attempts are in the result |
+| `quarantined` | 1 | `defects-found` | a step failed and no self-heal ran, or the change does not explain the break (`heal.verdict: "unexplained"`: a likely regression) |
+
+Exit `5` is not a failure and not a pass: review the proposal (`jevitate journey review <id>`), then
+`journey promote <id> --proposal <pid>`. Missions never end `pending-review`.
+
 The MCP tool `get_mission_result` returns the same status and code for a
 finished run; a broken run comes back as an error result. Its `id` is a result stem —
 `explore-<stamp>` (a goal run: `status` is its canonical `missionOutcome`, and its own

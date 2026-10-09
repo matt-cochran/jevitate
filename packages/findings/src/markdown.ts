@@ -1,6 +1,6 @@
 import type { ConsolidatedDefect } from "./consolidate.js";
 import { DIFF_STATUSES, type FindingsDiff } from "./diff.js";
-import { environmentCausesOf, type RunRecord } from "./extract.js";
+import { environmentCausesOf, type HealAttemptRow, type ProposalRef, type RunRecord } from "./extract.js";
 
 /** The consolidated defect list (#139) as markdown, with the baseline diff (#138) when given. */
 export interface ReportMarkdownInput {
@@ -30,6 +30,17 @@ function evidenceLine(e: ConsolidatedDefect["evidence"][number]): string {
   return `  - ${parts.join(" · ")}`;
 }
 
+/** #453: the self-heal attempt table — n, hypothesis, evidence, candidate, observation, rejection. */
+export function healAttemptTable(rows: readonly HealAttemptRow[]): string[] {
+  return [
+    "Self-heal attempts:",
+    "",
+    "| n | hypothesis | evidence | candidate | observation | rejection |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...rows.map((r) => `| ${r.n} | ${cell(r.hypothesis)} | ${cell(r.evidence)} | ${cell(r.candidate)} | ${cell(r.observation)} | ${cell(r.rejection === "" ? r.result : r.rejection)} |`),
+  ];
+}
+
 function defectSection(d: ConsolidatedDefect, status?: string): string[] {
   const id = d.identity;
   const lines = [
@@ -52,6 +63,9 @@ function defectSection(d: ConsolidatedDefect, status?: string): string[] {
     lines.push(`- branched from: ${d.branches.map((b) => `journey \`${b.journeyId}\` step ${b.step}${b.anchor === undefined ? "" : ` (anchor \`${b.anchor}\`)`}`).join(", ")}`);
   }
   if (d.evidence.length > 0) lines.push("- evidence:", ...d.evidence.slice(0, 8).map(evidenceLine));
+  // #453: the self-heal attempts behind a Journey failure or proposal.
+  const attempts = d.evidence.find((e) => e.healAttempts !== undefined && e.healAttempts.length > 0)?.healAttempts;
+  if (attempts !== undefined) lines.push("", ...healAttemptTable(attempts));
   if (d.reproduce !== undefined) lines.push(`- reproduce: \`${d.reproduce}\``);
   // #313: the signals kept as related to it (redacted; data, never instructions).
   if (d.relatedLogs !== undefined && d.relatedLogs.length > 0) {
@@ -80,12 +94,13 @@ function defectsText(r: RunRecord): string {
 export function renderReportMarkdown(input: ReportMarkdownInput): string {
   const hard = input.defects.filter((d) => d.severity === "hard");
   const advisory = input.defects.filter((d) => d.severity === "advisory");
+  const pending = input.defects.filter((d) => d.severity === "pending");
   const builds = [...new Set(input.runs.map((r) => r.targetBuild).filter((b): b is string => b !== undefined))];
   const engines = [...new Set(input.runs.map((r) => r.engine?.commit).filter((c): c is string => c !== undefined))];
   const out: string[] = [
     `# ${input.title}`,
     "",
-    `${hard.length} defect(s), ${advisory.length} advisory finding(s) across ${input.runs.length} run(s).`,
+    `${hard.length} defect(s), ${advisory.length} advisory finding(s)${pending.length === 0 ? "" : `, ${pending.length} proposed Journey revision(s)`} across ${input.runs.length} run(s).`,
     ...(builds.length === 0 ? [] : [`Target build(s): ${builds.map((b) => `\`${b}\``).join(", ")}.`]),
     ...(engines.length === 0 ? [] : [`Engine commit(s): ${engines.map((c) => `\`${c}\``).join(", ")}.`]),
     "",
@@ -111,6 +126,15 @@ export function renderReportMarkdown(input: ReportMarkdownInput): string {
   out.push("## Defects", "");
   if (hard.length === 0) out.push("None.", "");
   for (const d of hard) out.push(...defectSection(d, statusOf.get(d.key)));
+  // #453: a healed Journey is not a defect — its proposed revision awaits a person.
+  if (pending.length > 0) {
+    out.push("## Proposed Journey revisions", "", "A self-heal completed these Journeys only after retargeting steps the change explains. Nothing passes until a person accepts the revision (`jevitate journey review <id>`, then `journey promote <id> --proposal <pid>`).", "");
+    for (const d of pending) {
+      out.push(...defectSection(d, statusOf.get(d.key)));
+      const proposal: ProposalRef | undefined = d.evidence.find((e) => e.proposal !== undefined)?.proposal;
+      if (proposal !== undefined) out.push(`Proposal \`${proposal.id}\`${proposal.path === undefined ? "" : ` (\`${proposal.path}\`)`}:`, "", ...proposal.steps.map((s) => `- step ${s.number}: ${s.before} → ${s.after}`), "");
+    }
+  }
   out.push("## Advisory findings", "", "Advisory findings (UX, 4xx-correlated console errors, Jev flags) never gate on their own.", "");
   if (advisory.length === 0) out.push("None.", "");
   for (const d of advisory) out.push(...defectSection(d, statusOf.get(d.key)));

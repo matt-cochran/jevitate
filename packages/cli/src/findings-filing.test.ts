@@ -91,3 +91,15 @@ describe("processIssueDrafts — drafts always, filing only when enabled", () =>
     expect(out.filing[0]?.outcomes[0]).toMatchObject({ status: "filed", action: "created" });
   });
 });
+
+describe("withSelfHealSection (#453)", () => {
+  it("adds the Self-heal attempts table before the fingerprint marker", async () => {
+    const { withSelfHealSection } = await import("./findings-filing.js");
+    const draft = { fingerprint: "fp1", title: "t", body: "body\n\n<!-- jevitate-fingerprint: fp1 -->", labels: [], attribution: "system-under-test" as const, targets: ["system-under-test" as const] };
+    const row = { n: 1, hypothesis: "label 'A' → 'B'", evidence: "src/x.tsx:4", candidate: "click button B", observation: "", result: "rejected", rejection: "no-match: none" };
+    const body = withSelfHealSection(draft, [row]).body;
+    expect(body.indexOf("## Self-heal attempts")).toBeGreaterThan(body.indexOf("body"));
+    expect(body.indexOf("## Self-heal attempts")).toBeLessThan(body.indexOf("<!-- jevitate-fingerprint: fp1 -->"));
+    expect(body).toContain("| 1 | label 'A' → 'B' | src/x.tsx:4 |");
+  });
+});

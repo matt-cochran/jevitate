@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { execFileSync } from "node:child_process";
@@ -24,11 +24,11 @@ useSkippingTime({ per: "all" });
  * commit touches nothing related: the break is unexplained → quarantined (exit 1), naming the step.
  */
 
-type Version = "v1" | "v2" | "v3";
+type Version = "v1" | "v2" | "v3" | "v4";
 let version: Version = "v1";
 
 const page = (v: Version): string => {
-  const label = v === "v2" ? "Create" : "Create New";
+  const label = v === "v2" ? "Create" : v === "v4" ? "Make It" : "Create New";
   const handler = v === "v3" ? "" : `document.getElementById("b").addEventListener("click", () => { document.getElementById("out").textContent = "Created!"; });`;
   return `<!doctype html><html><head><title>Items</title></head><body><main>
   <h1>Items</h1>
@@ -131,6 +131,18 @@ interface RunData {
   reason?: string;
   revision?: { recording: Journey["recording"]; steps: { index: number; before: unknown; after: unknown; evidence: { file?: string; line?: number }[] }[] };
   heal?: { verdict: string; attempts: unknown[] };
+  proposal?: { id: string; path: string; steps: unknown[]; reviewCommand: string; acceptCommand: string };
+  resultPath?: string;
+}
+
+/** Runs `fn` with the working directory at `repo`, so the run's logs land in `<repo>/.jevitate/logs` (never ~/.jevitate). */
+async function inRepo<T>(repo: string, fn: () => Promise<T>): Promise<T> {
+  const spy = vi.spyOn(process, "cwd").mockReturnValue(repo);
+  try {
+    return await fn();
+  } finally {
+    spy.mockRestore();
+  }
 }
 
 describe("#453 journey run --self-heal hybrid --changes (served, real browser)", () => {
@@ -150,7 +162,7 @@ describe("#453 journey run --self-heal hybrid --changes (served, real browser)",
     const repo = await repoWith("v2", { "src/Toolbar.html": toolbar("Create New") }, { "src/Toolbar.html": toolbar("Create") });
     const { journeysDir, file } = await seed(repo);
     const storedBytes = await readFile(file);
-    const r = await cli(journeysDir, ["journey", "run", "create-item", "--dir", journeysDir, "--self-heal", "hybrid", "--changes", "HEAD~1..HEAD", "--fake-ai", "--json"]);
+    const r = await inRepo(repo, () => cli(journeysDir, ["journey", "run", "create-item", "--dir", journeysDir, "--self-heal", "hybrid", "--changes", "HEAD~1..HEAD", "--fake-ai", "--json"]));
     const data = (JSON.parse(r.out) as { data: RunData }).data;
     expect(data.reason).toBeUndefined();
     expect(data.outcome).toBe("healed-pending-review");
@@ -165,6 +177,55 @@ describe("#453 journey run --self-heal hybrid --changes (served, real browser)",
     expect(data.revision!.steps[0]!.evidence).toContainEqual(expect.objectContaining({ file: "src/Toolbar.html", line: 3 }));
     // Runs never write the stored Journey.
     expect((await readFile(file)).equals(storedBytes)).toBe(true);
+  }, 120_000);
+
+  it("v2: the proposal is written beside the Journey and the result carries its id and the review/accept commands", async () => {
+    version = "v2";
+    const repo = await repoWith("v2-proposal", { "src/Toolbar.html": toolbar("Create New") }, { "src/Toolbar.html": toolbar("Create") });
+    const { journeysDir, file } = await seed(repo);
+    const storedBytes = await readFile(file);
+    const r = await inRepo(repo, () => cli(journeysDir, ["journey", "run", "create-item", "--dir", journeysDir, "--self-heal", "hybrid", "--changes", "HEAD~1..HEAD", "--fake-ai"]));
+    const data = JSON.parse(r.out) as RunData;
+    const proposal = data.proposal!;
+    expect(proposal.id).toMatch(/^[0-9a-f]{12}$/);
+    expect(proposal.path).toBe(join(journeysDir, ".proposals", "create-item.json"));
+    expect(JSON.parse(await readFile(proposal.path, "utf8"))).toMatchObject({ proposalId: proposal.id, journeyId: "create-item" });
+    expect(proposal.acceptCommand).toBe(`jevitate journey promote create-item --proposal ${proposal.id}`);
+    expect(r.err).toContain(`next: jevitate journey promote create-item --proposal ${proposal.id}`);
+    // The stored Journey is byte-identical: only `journey promote --proposal` replaces it.
+    expect((await readFile(file)).equals(storedBytes)).toBe(true);
+  }, 120_000);
+
+  it("v2: a self-heal run persists journey-<id>-<stamp>.result.json with its heal attempts and proposal", async () => {
+    version = "v2";
+    const repo = await repoWith("v2-result", { "src/Toolbar.html": toolbar("Create New") }, { "src/Toolbar.html": toolbar("Create") });
+    const { journeysDir } = await seed(repo);
+    const r = await inRepo(repo, () => cli(journeysDir, ["journey", "run", "create-item", "--dir", journeysDir, "--self-heal", "hybrid", "--changes", "HEAD~1..HEAD", "--fake-ai", "--json"]));
+    const data = (JSON.parse(r.out) as { data: RunData }).data;
+    expect(data.resultPath).toMatch(/\.jevitate[\\/]logs[\\/].*journey-create-item-.*\.result\.json$/);
+    const saved = JSON.parse(await readFile(data.resultPath!, "utf8")) as { exitCode: number; result: RunData };
+    expect(saved.exitCode).toBe(5);
+    expect(saved.result.heal!.attempts).toHaveLength(1);
+    expect(saved.result.proposal!.id).toBe(data.proposal!.id);
+  }, 120_000);
+
+  it("v4: --heal-max-attempts 2 with a diff naming the old label but a page showing a third → heal-exhausted after exactly 2 attempts, in result.json and in the report", async () => {
+    version = "v4";
+    const repo = await repoWith("v4", { "src/Toolbar.html": toolbar("Create New") }, { "src/Toolbar.html": toolbar("Create") });
+    const { journeysDir } = await seed(repo);
+    const args = ["journey", "run", "create-item", "--dir", journeysDir, "--self-heal", "hybrid", "--changes", "HEAD~1..HEAD", "--change-note", 'renamed "Create New" to "Add"', "--heal-max-attempts", "2", "--fake-ai", "--json"];
+    const { r, report } = await inRepo(repo, async () => ({
+      r: await cli(journeysDir, args),
+      report: await cli(journeysDir, ["report", "--json"]),
+    }));
+    const data = (JSON.parse(r.out) as { data: RunData }).data;
+    expect(data.outcome).toBe("heal-exhausted");
+    expect(r.exitCode).toBe(1);
+    const saved = JSON.parse(await readFile(data.resultPath!, "utf8")) as { result: RunData };
+    expect(saved.result.heal!.attempts).toHaveLength(2);
+    const defects = (JSON.parse(report.out) as { data: { defects: { title: string; evidence: { healAttempts?: unknown[] }[] }[] } }).data.defects;
+    expect(defects[0]!.title).toMatch(/heal exhausted after 2 attempts$/);
+    expect(defects[0]!.evidence[0]!.healAttempts).toHaveLength(2);
   }, 120_000);
 
   it("v3: a break no change explains (the handler is gone, the diff is unrelated) stays quarantined (exit 1), naming the step", async () => {
