@@ -360,6 +360,9 @@ function readControlFacts(node: Node): ControlFacts {
     const ms = window.getComputedStyle(m as HTMLElement);
     const mr = (m as HTMLElement).getBoundingClientRect();
     if (ms.display === "none" || ms.visibility === "hidden" || mr.width <= 0 || mr.height <= 0) return false;
+    // #441: a drawer that is inert, aria-hidden, or wholly off-viewport is not an open modal.
+    if (m.closest("[inert]") !== null || m.closest('[aria-hidden="true"]') !== null) return false;
+    if (mr.right <= 0 || mr.bottom <= 0 || mr.left >= window.innerWidth || mr.top >= window.innerHeight) return false;
     if (m.tagName.toLowerCase() !== "dialog") return true;
     let modal = false;
     try {
