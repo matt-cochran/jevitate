@@ -360,6 +360,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       path: "explore",
       params: { tags: TAGS, ...EXTENSION,
         url: s("--url"),
+        targetId: s("--target"),
         // #293 journey-anchored exploration: replay a promoted Journey to a step/anchor, then the mission.
         fromJourney: s("--from-journey"),
         atStep: s("--at-step"),
