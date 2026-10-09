@@ -15,7 +15,7 @@ import { logsDirFor } from "./project-dir.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
 import { ReadOnlyGuard, ReplayDeltas, monitorFor, replayDeltaSummary, type BlockedWrite, type ReplayDeltaSummary } from "@jevitate/explore";
-import { writeClassifier } from "@jevitate/recording";
+import { ensureStepIds, writeClassifier } from "@jevitate/recording";
 import type { Page } from "playwright";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { SecretPixelMask, maskingPort } from "./demo-capture.js";
@@ -339,12 +339,18 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
     const problem = checkProposal(existing, proposal);
     if (problem !== null) throw problem;
   }
-  const subject: Journey = proposal === null ? existing : proposedJourney(existing, proposal);
-  // #432: approval binds to what the reviewer read — refused when the Journey changed since.
+  const reviewed: Journey = proposal === null ? existing : proposedJourney(existing, proposal);
+  // #467: promote mints a stable id for every step that lacks one — BEFORE hashing, so the approval
+  // binds to the Journey as stored (the store's own mint is then a no-op). Only ids are added.
+  const mintedRecording = ensureStepIds(reviewed.recording);
+  const subject: Journey = mintedRecording === reviewed.recording ? reviewed : { ...reviewed, recording: mintedRecording };
+  // #432: approval binds to what the reviewer read — refused when the Journey changed since. A review
+  // of the Journey before promote minted its missing step ids still matches (it differs only by them).
   const contentHash = journeyReviewHash(subject);
-  if (opts.reviewedHash !== undefined && opts.reviewedHash.trim().toLowerCase() !== contentHash) {
+  const reviewedNow = opts.reviewedHash?.trim().toLowerCase();
+  if (reviewedNow !== undefined && reviewedNow !== contentHash && (subject === reviewed || reviewedNow !== journeyReviewHash(reviewed))) {
     throw new StaleReviewError(
-      `journey '${id}' changed after its review sheet was produced (reviewed ${opts.reviewedHash.trim()}, now ${contentHash}) — review it again: jevitate journey review ${id}`,
+      `journey '${id}' changed after its review sheet was produced (reviewed ${reviewedNow}, now ${contentHash}) — review it again: jevitate journey review ${id}`,
     );
   }
   const errors = lintJourney(subject).filter((f) => f.level === "error");
@@ -704,6 +710,11 @@ export function draftOnStored(stored: Journey, draft: ProposedRevisionDraft, env
   const steps = draft.steps.map((c) => {
     const before = flat[c.index]?.step;
     if (before === undefined) throw new JourneyProposalProofError(`the revision changes step ${c.index + 1}, which the stored Journey does not have`);
+    // #467: the index must still name the step that was healed.
+    const storedId = flat[c.index]?.recorded.stepId;
+    if (c.stepId !== undefined && storedId !== c.stepId) {
+      throw new JourneyProposalProofError(`the revision changes step ${c.index + 1} (${c.stepId}), but the stored Journey's step ${c.index + 1} is ${storedId ?? "(no id)"}`);
+    }
     // A target is environment-independent; only an absolute navigate URL was moved (rebaseRecording).
     const after = c.after.kind === "navigate" ? { ...c.after, url: unbase(c.after.url) } : c.after;
     recording = retargetRecording(recording, c.index, after);
