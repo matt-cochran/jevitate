@@ -168,7 +168,16 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "journey list": { exempt: "a listing: an empty or missing dir lists nothing" },
   "journey find": { exempt: "a search: no match is an empty result" },
   "journey run": { base: ["nope"], cases: [["nope"], ["nope", "--storage-state", missing]] },
-  "journey promote": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"]] },
+  "journey promote": {
+    cases: [
+      ["nope"],
+      ["nope", "--reviewed-hash", "abc"],
+      // #453: a proposal id is 12 hex characters, never a path; accept and reject are exclusive; a rejection needs its reason.
+      ["nope", "--proposal", "../x"],
+      ["nope", "--proposal", "aaaaaaaaaaaa", "--reject-proposal", "aaaaaaaaaaaa"],
+      ["nope", "--reject-proposal", "aaaaaaaaaaaa"],
+    ],
+  },
   "journey lint": { cases: [["nope"], ["../x"]] },
   "journey review": { cases: [["nope"], ["../x"]] },
   // #433: an unknown persona/job, a malformed --reviewed-hash, an invalid catalog file.

@@ -165,10 +165,19 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description:
       "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey). " +
       "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`, with the agent markers detected) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is an allowed channel. " +
-      "A promotion that must count as human sign-off is a person's act at their own terminal: hand it to them (`jevitate journey promote <id>`, typed confirmation).",
+      "A promotion that must count as human sign-off is a person's act at their own terminal: hand it to them (`jevitate journey promote <id>`, typed confirmation). " +
+      "#453: proposal <pid> accepts a pending self-heal revision (review_journey shows it; bind with reviewedHash = its proposedHash) — the same gates, recorded as channel `mcp` (an agent's approval) with approval.proposal; rejectProposal <pid> + reason rejects it, leaving the stored Journey untouched.",
     command: {
       path: "journey promote",
-      params: { id: pos(), reviewedHash: s("--reviewed-hash"), acceptUnvetted: s("--accept-unvetted"), ...JEV_ADVICE },
+      params: {
+        id: pos(),
+        reviewedHash: s("--reviewed-hash"),
+        acceptUnvetted: s("--accept-unvetted"),
+        proposal: s("--proposal"),
+        rejectProposal: s("--reject-proposal"),
+        reason: s("--reason"),
+        ...JEV_ADVICE,
+      },
       omitted: {
         "--dir": OMIT.storeDir,
         "--accept-weak": OMIT.acceptWeak,
@@ -216,7 +225,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "review_journey",
     description:
-      "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, and its content hash. " +
+      "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, a pending self-heal proposal (#453: per-step before/after, hypothesis, evidence, staleness, proposedHash), and its content hash. " +
       "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
       "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed.",
     command: {

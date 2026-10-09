@@ -604,7 +604,7 @@ export const OutcomeWaitSchema: ZodType<OutcomeWait> = z
   .strict();
 
 // Forward declaration for recursive Step schema
-const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
+export const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("navigate"),

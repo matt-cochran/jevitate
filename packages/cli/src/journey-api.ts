@@ -1,5 +1,6 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { writeApprovedSnapshot } from "./journey-review-store.js";
 import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
@@ -46,6 +47,11 @@ export class JourneyRequiresAuthError extends Error {}
 /** #432: `journey promote --reviewed-hash`: the Journey changed after the reviewer's sheet was produced. */
 export class StaleReviewError extends Error {
   readonly code = "E_JOURNEY_REVIEW_STALE";
+}
+
+/** #453: a bad combination of proposal flags (`--proposal` with `--reject-proposal`; a rejection with no reason). Exit 64. */
+export class JourneyProposalArgsError extends Error {
+  readonly code = "E_JOURNEY_PROPOSAL_ARGS";
 }
 
 export class WeakJourneyError extends Error {
@@ -276,6 +282,18 @@ export interface PromoteJourneyOptions {
    * or the MCP channel). Omitted: recorded as `non-interactive` (`programmaticProvenance`).
    */
   confirm?: ApprovalConfirm;
+  /**
+   * #453: accept this pending self-heal proposal (its id) instead of promoting the stored Journey as
+   * is. The proposal is re-checked (stale / proof untouched), goes through every gate as the
+   * Journey it would make, is confirmed with the proposal shown, and `reviewedHash` is compared with
+   * ITS `proposedHash`. Only this writes the stored Journey.
+   */
+  proposal?: string;
+  /** #453: reject this pending proposal (its id) — needs `reason`; the stored Journey is untouched. */
+  rejectProposal?: string;
+  reason?: string;
+  /** #453: how the rejection was made (`rejectionProvenance`); omitted: the programmatic one. */
+  rejectProvenance?: ApprovalProvenance;
 }
 
 export async function promoteJourney(dir: string, id: string, opts: PromoteJourneyOptions = {}): Promise<Journey> {
@@ -286,14 +304,30 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
   if (!existing) {
     throw new UnknownJourneyError(`unknown journey '${id}'`);
   }
+  if (opts.proposal !== undefined && opts.rejectProposal !== undefined) {
+    throw new JourneyProposalArgsError("--proposal and --reject-proposal are exclusive: accept or reject, not both");
+  }
+  if (opts.rejectProposal !== undefined) {
+    const why = opts.reason?.trim() ?? "";
+    if (why === "") throw new JourneyProposalArgsError("--reject-proposal needs --reason <text> (it is recorded with the rejection)");
+    await rejectJourneyProposal(dir, id, opts.rejectProposal, { reason: why, provenance: opts.rejectProvenance ?? programmaticProvenance() });
+    return existing;
+  }
+  // #453: the proposal being accepted, re-checked against the stored Journey; the gates below judge the Journey it would make.
+  const proposal = opts.proposal === undefined ? null : await requireJourneyProposal(dir, id, opts.proposal);
+  if (proposal !== null) {
+    const problem = checkProposal(existing, proposal);
+    if (problem !== null) throw problem;
+  }
+  const subject: Journey = proposal === null ? existing : proposedJourney(existing, proposal);
   // #432: approval binds to what the reviewer read — refused when the Journey changed since.
-  const contentHash = journeyReviewHash(existing);
+  const contentHash = journeyReviewHash(subject);
   if (opts.reviewedHash !== undefined && opts.reviewedHash.trim().toLowerCase() !== contentHash) {
     throw new StaleReviewError(
       `journey '${id}' changed after its review sheet was produced (reviewed ${opts.reviewedHash.trim()}, now ${contentHash}) — review it again: jevitate journey review ${id}`,
     );
   }
-  const errors = lintJourney(existing).filter((f) => f.level === "error");
+  const errors = lintJourney(subject).filter((f) => f.level === "error");
   const reason = opts.acceptWeak?.trim() ?? "";
   if (errors.length > 0 && reason === "") {
     throw new WeakJourneyError(
@@ -306,7 +340,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
     );
   }
   const acceptedWeak = errors.length > 0 ? { reason, rules: [...new Set(errors.map((f) => f.rule))] } : undefined;
-  const gate = await journeyCatalogGate(existing, {
+  const gate = await journeyCatalogGate(subject, {
     catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir,
     journeysDir: dir,
     action: opts.action ?? "journey promote",
@@ -322,6 +356,15 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
           kind: opts.action === "demo approve" ? "demo" : "journey",
           id,
           contentHash,
+          ...(proposal === null
+            ? {}
+            : {
+                proposal: {
+                  id: proposal.proposalId,
+                  baseHash: proposal.baseHash,
+                  steps: proposal.steps.map((st) => ({ number: st.index + 1, before: describeStep(st.before), after: describeStep(st.after) })),
+                },
+              }),
           waivers: [
             ...(acceptedWeak === undefined ? [] : [{ flag: "--accept-weak", reason: acceptedWeak.reason, detail: acceptedWeak.rules.join(", ") }]),
             ...(gate.waivers ?? []).map((w) => ({ flag: "--accept-unvetted", reason: w.reason, detail: w.items.join(", ") })),
@@ -335,14 +378,17 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
     ...(acceptedWeak === undefined ? {} : { acceptedWeak: { ...acceptedWeak, provenance } }),
     ...(gate.waivers === undefined ? {} : { waivers: gate.waivers.map((w) => ({ ...w, provenance })) }),
     ...(gate.acceptedFindings === undefined ? {} : { acceptedFindings: { ...gate.acceptedFindings, provenance } }),
+    ...(proposal === null ? {} : { proposal: { id: proposal.proposalId, baseHash: proposal.baseHash, steps: proposal.steps.map((st) => st.index) } }),
   };
   const promoted: Journey = {
-    ...existing,
+    ...subject,
     metadata: { ...existing.metadata, promoted: true, ...(acceptedWeak === undefined ? {} : { acceptedWeak }), approval },
   };
   await store.put(promoted);
   // #432: the Journey as approved — the next review diffs against it ("change since last approval").
   await writeApprovedSnapshot(dir, promoted);
+  // #453: an accepted proposal is spent.
+  if (proposal !== null) await deleteJourneyProposal(dir, id);
   return (await registry.get(id)) ?? promoted;
 }
 

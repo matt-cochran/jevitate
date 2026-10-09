@@ -14,6 +14,9 @@ import { runJourneyProgrammatically, promoteJourney, lintJourneyById, WeakJourne
 import { ReviewSheetError, renderReviewMarkdown, renderReviewText, reviewSheetHash } from "./journey-review.js";
 import { reviewJourneyById } from "./journey-review-api.js";
 import { ReviewSidecarError } from "./journey-review-store.js";
+import { JourneyProposalArgsError } from "./journey-api.js";
+import { JourneyProposalInvalidError, JourneyProposalNotFoundError, JourneyProposalProofError, JourneyProposalStaleError, isProposalId } from "./journey-proposal-store.js";
+import { rejectionProvenance } from "./approval-provenance.js";
 import { UnvettedLinksError, resolveCatalogDir } from "./catalog-api.js";
 import { CatalogInputError } from "./catalog.js";
 import { ApprovalFindingsError } from "./pre-approval.js";
@@ -353,9 +356,15 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       "--non-interactive-approval <reason>",
       "#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person",
     )
+    .option("--proposal <pid>", "#453: accept this pending self-heal proposal (journey review shows it): the Journey is replaced by the proposed revision through every gate, bound to its proposedHash")
+    .option("--reject-proposal <pid>", "#453: reject this pending self-heal proposal (needs --reason); the stored Journey is untouched")
+    .option("--reason <text>", "#453: why the proposal is rejected (recorded with the rejection)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, real, jevProvider, nonInteractiveApproval } = this.opts<{
+      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, real, jevProvider, nonInteractiveApproval, proposal, rejectProposal, reason } = this.opts<{
+        proposal?: string;
+        rejectProposal?: string;
+        reason?: string;
         nonInteractiveApproval?: string;
         dir?: string;
         json?: boolean;
@@ -370,6 +379,42 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       try {
         checkNonInteractiveReason(nonInteractiveApproval);
         const journeysDir = resolveJourneysDir(deps, dir);
+        // #453: the proposal flags, validated before anything is read (an id is 12 hex characters — never a path).
+        for (const [flag, value] of [["--proposal", proposal], ["--reject-proposal", rejectProposal]] as const) {
+          if (value !== undefined && !isProposalId(value)) {
+            emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", `${flag} needs a proposal id (12 hex characters, shown by \`journey review\`), not '${value}'`));
+            return;
+          }
+        }
+        if (proposal !== undefined && rejectProposal !== undefined) {
+          emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", "--proposal and --reject-proposal are exclusive: accept or reject, not both"));
+          return;
+        }
+        if (rejectProposal !== undefined && (reason ?? "").trim() === "") {
+          emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", "--reject-proposal needs --reason <text> (it is recorded with the rejection)"));
+          return;
+        }
+        if (reason !== undefined && rejectProposal === undefined) {
+          emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", "--reason belongs to --reject-proposal"));
+          return;
+        }
+        if (proposal !== undefined && reviewSheet !== undefined) {
+          emitJson(program, fail("E_JOURNEY_PROPOSAL_ARGS", "--review-sheet binds the stored Journey's hash; with --proposal bind with --reviewed-hash <proposedHash>"));
+          return;
+        }
+        if (rejectProposal !== undefined) {
+          const rejected = await promoteJourney(journeysDir, id, {
+            rejectProposal,
+            reason: reason ?? "",
+            rejectProvenance: rejectionProvenance(deps.approval, reason ?? ""),
+          });
+          if (json) emitJson(program, ok({ ...rejected.metadata, rejectedProposal: rejectProposal }));
+          else {
+            program.configureOutput().writeOut?.(`rejected proposal ${rejectProposal} for journey '${rejected.metadata.id}'; the stored Journey is unchanged\n`);
+            process.exitCode = 0;
+          }
+          return;
+        }
         // #432: what the reviewer read — a hash, a sheet file, or (human mode) the sheet shown below.
         let reviewedHash = hashFlag?.trim().toLowerCase();
         if (reviewedHash !== undefined && !/^[0-9a-f]{64}$/.test(reviewedHash)) {
@@ -397,10 +442,11 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           // Human mode: the sheet is shown before promoting, and the approval binds to what was shown.
           const { review } = await reviewJourneyById(journeysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: true, jev, action: "journey promote" });
           program.configureOutput().writeOut?.(`${renderReviewText(review)}\n`);
-          reviewedHash ??= review.contentHash;
+          reviewedHash ??= proposal === undefined ? review.contentHash : review.proposal?.proposedHash;
         }
         const journeyResult = await promoteJourney(journeysDir, id, {
           jev,
+          ...(proposal === undefined ? {} : { proposal }),
           ...(acceptWeak === undefined ? {} : { acceptWeak }),
           ...(reviewedHash === undefined ? {} : { reviewedHash }),
           ...(acceptUnvetted === undefined ? {} : { acceptUnvetted }),
@@ -424,6 +470,14 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail(refusal.code, refusal.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (
+          err instanceof JourneyProposalArgsError ||
+          err instanceof JourneyProposalNotFoundError ||
+          err instanceof JourneyProposalStaleError ||
+          err instanceof JourneyProposalProofError ||
+          err instanceof JourneyProposalInvalidError
+        ) {
+          emitJson(program, fail(err.code, err.message));
         } else if (err instanceof StaleReviewError || err instanceof ReviewSheetError || err instanceof ReviewSidecarError || err instanceof TargetConfigError) {
           emitJson(program, fail(err instanceof TargetConfigError ? "E_TARGET_CONFIG" : err.code, err.message));
         } else if (err instanceof WeakJourneyError) {
