@@ -18,6 +18,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`campaign`](#campaign): journey-anchored test campaigns (#293): many anchored missions, one deduped report
 - [`catalog`](#catalog): #433: the human-vetted catalog of personas, jobs and the Journeys linked to them
 - [`check`](#check): CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
+- [`connect`](#connect): #464: connect this project to a service it publishes to (stores the service's key in jevitate's secret store; a person at a terminal)
 - [`demo`](#demo): demo one aspect of an app from a one-line request: explore → clean path → Journey → annotate → a DRAFT narrated demo; `demo approve <id>` promotes and renders the final one
 - [`diff`](#diff): classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline)
 - [`doctor`](#doctor): resource governance on this machine (#205): host load, machine-wide browser slots, jevitate browsers and orphans left by a killed run
@@ -31,12 +32,14 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`journey`](#journey): manage and run promoted Journeys (regression-test replays)
 - [`ledger`](#ledger): keep each finding's repro material by fingerprint, so verify-fix works long after the run's output is gone
 - [`load`](#load): run a promoted Journey as a load test
+- [`locator-health`](#locator-health): #470: read-only locator health — per step, the selector rung its target resolves by and whether it meets the project's test-id convention (testIdAttributes in project config; default data-testid, data-test; data-tflow-id never counts). Every promoted Journey, one Journey (--journey) or one run (--run). Advisory: never gates
 - [`login`](#login): #427: sign in as a persona with credentials from environment variables and save its Playwright storage state (mode 0600) — the session `explore --storage-state/--persona` starts from. Credentials are never accepted as values, never printed or recorded
 - [`logs`](#logs): run output under .jevitate/logs (dated; pruned by retention)
 - [`mcp`](#mcp): start an MCP stdio server exposing only the allowlisted Jevitate tools
 - [`mission`](#mission): manage exploration mission targets and drain the mission queue
 - [`persona`](#persona): #433: catalog personas (.jevitate/personas.json) — review a persona's sheet, approve it (a person's sign-off, bound to its content hash)
 - [`profile`](#profile): manage jevitate profiles (isolated credential/data sets)
+- [`publish`](#publish): #464: publish this project's catalog to a connected service
 - [`record`](#record): record a demonstrated flow into a Recording (authoring plane)
 - [`recording`](#recording): inspect and edit recorded takes (promote, edit steps, diff, postdoc)
 - [`regression`](#regression): capture, run and manage regression tests from discovered failures
@@ -273,6 +276,23 @@ jevitate catalog analyze [options]
 | `--max-pairs <n>` | the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped |  |  |  |  |
 | `--real` | #435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only |  |  |  |  |
 
+### catalog export
+
+```
+jevitate catalog export [options]
+```
+
+#464: write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings; no media) as a Journeeze catalog bundle (bundle.json) under --out. Never uploads (publish journeeze) and never approves
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--format <format>` | the bundle format (journeeze-bundle) |  |  | yes |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--out <dir>` | the directory bundle.json is written to (created if missing) |  |  | yes |  |
+
 ### catalog status
 
 ```
@@ -285,7 +305,7 @@ the jobs × personas matrix (which have a promoted Journey), approved jobs with 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty) |  |  |  |  |
+| `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci, pr-review; default tty). #469: pr-review is recorded only by jevitate after it verifies an approving review of the merged PR through the forge API — never set by a caller |  |  |  |  |
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
 | `--require-approvals` | #437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels) |  |  |  |  |
@@ -302,7 +322,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty) |  |  |  |  |
+| `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci, pr-review; default tty). #469: pr-review is recorded only by jevitate after it verifies an approving review of the merged PR through the forge API — never set by a caller |  |  |  |  |
 | `--baseline <run|tag|last>` | only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`) |  |  |  |  |
 | `--baseline-dir <dir>` | results dir holding baseline runs (repeatable; default: this check's results, then ~/.jevitate) | `[]` |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -323,6 +343,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--json` | emit the JSON envelope (default: a one-line summary per item, then the envelope path) |  |  |  |  |
 | `--json-out <path>` | JSON envelope path (default <out>/check.json) |  |  |  |  |
 | `--junit <path>` | JUnit XML path (default <out>/junit.xml) |  |  |  |  |
+| `--max-brittle-steps <n>` | #470: opt-in locator gate — a Journey item with more than n brittle steps (targets that miss the project's testIdAttributes convention) is a gating finding. Without it locator health is advisory only |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--out <dir>` | output dir: results/, junit.xml, jevitate.sarif, report.md, check.json | `jevitate-check` |  |  |  |
@@ -333,6 +354,29 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--suite <file>` | the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget) |  |  | yes |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--target-build <id>` | the target's build/commit id, stamped on every result |  |  |  |  |
+
+## connect
+
+```
+jevitate connect [command]
+```
+
+#464: connect this project to a service it publishes to (stores the service's key in jevitate's secret store; a person at a terminal)
+
+### connect journeeze
+
+```
+jevitate connect journeeze [options]
+```
+
+#464: connect this project to a Journeeze product: reads the product's upload key from stdin without echo (never a flag), checks it (whoami), asks you to confirm the product, and stores key + URL in jevitate's secret store. CLI only — never an MCP tool
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--json` | emit a JSON envelope (never contains the key) |  |  |  |  |
+| `--url <url>` | the Journeeze base URL (default https://app.journeeze.dev) |  |  |  |  |
 
 ## demo
 
@@ -945,6 +989,30 @@ approve a job (a person's sign-off; CLI only, never an MCP tool): shows its revi
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
 | `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the job changed since |  |  |  |  |
 
+### job draft-outcomes
+
+```
+jevitate job draft-outcomes [options] <jobId>
+```
+
+#465: draft 1–3 desired outcomes for a job with the generation model and write them into its jobs file marked provenance ai_draft, for the team to review. Never approves: an approved job becomes "needs re-review"
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `jobId` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--count <n>` | how many outcomes to draft (1-3, default 1) |  |  |  |  |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--fake-ai` | draft with the deterministic fake generator (pipeline smoke only) | `false` |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--real` | draft with the live OpenRouter generation gateway (requires keys) | `false` |  |  |  |
+
 ### job review
 
 ```
@@ -1148,6 +1216,23 @@ jevitate journey list [options]
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
+### journey migrate
+
+```
+jevitate journey migrate [options]
+```
+
+#467: one-time repo rewrite — --step-ids mints a stable step id on every recorded step that has none (every Journey and recording in the project) and points anchors at them. Changes every promoted Journey's hash: re-approve them (journey review --stale). Never approves. CLI only
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dry-run` | report what would change, write nothing |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--step-ids` | mint missing step ids (the only migration today; required) |  |  |  |  |
+
 ### journey promote
 
 ```
@@ -1205,16 +1290,16 @@ jevitate journey publish [options] <id>
 ### journey review
 
 ```
-jevitate journey review [options] <id>
+jevitate journey review [options] [id]
 ```
 
-a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash
+a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash. #467: --stale (no id) lists every promoted Journey whose approval is stale, labelling step-id-only changes
 
 **Arguments**
 
 | Argument | Description | Required | Default | Choices |
 | --- | --- | --- | --- | --- |
-| `id` |  | yes |  |  |
+| `id` |  | no |  |  |
 
 **Options**
 
@@ -1227,6 +1312,7 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 | `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
 | `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
+| `--stale` | #467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids |  |  |  |  |
 
 ### journey run
 
@@ -1447,6 +1533,23 @@ jevitate load run [options] <journeyId>
 | `--storage-state <file>` | Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+## locator-health
+
+```
+jevitate locator-health [options]
+```
+
+#470: read-only locator health — per step, the selector rung its target resolves by and whether it meets the project's test-id convention (testIdAttributes in project config; default data-testid, data-test; data-tflow-id never counts). Every promoted Journey, one Journey (--journey) or one run (--run). Advisory: never gates
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--journey <id>` | only this Journey |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--run <result.json>` | the steps of this run result instead of the stored Journeys |  |  |  |  |
 
 ## login
 
@@ -1840,6 +1943,30 @@ jevitate profile status [options] <name>
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--json` | emit a JSON envelope |  |  |  |  |
+
+## publish
+
+```
+jevitate publish [command]
+```
+
+#464: publish this project's catalog to a connected service
+
+### publish journeeze
+
+```
+jevitate publish journeeze [options]
+```
+
+#464: export the catalog bundle and upload it to the connected Journeeze product (key from jevitate's secret store, or JOURNEEZE_UPLOAD_KEY in CI — never an argument), then wait for it to be imported or refused. Never approves
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dry-run` | export and validate the bundle and resolve the connection, but send nothing |  |  |  |  |
+| `--json` | emit a JSON envelope (never contains the key) |  |  |  |  |
 
 ## record
 

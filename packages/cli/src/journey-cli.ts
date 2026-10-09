@@ -17,6 +17,9 @@ import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, lintJourneyById, WeakJourneyError, UnknownJourneyError, JourneyRequiresAuthError, StaleReviewError } from "./journey-api.js";
 import { ReviewSheetError, renderReviewMarkdown, renderReviewText, reviewSheetHash } from "./journey-review.js";
 import { reviewJourneyById } from "./journey-review-api.js";
+import { NotImplementedError } from "./not-implemented.js";
+import { listStaleJourneys, renderStaleJourneys } from "./journey-stale-api.js";
+import { migrateStepIds, renderMigrateStepIds } from "./journey-migrate-api.js";
 import { ReviewSidecarError } from "./journey-review-store.js";
 import { JourneyProposalArgsError } from "./journey-api.js";
 import { JourneyProposalInvalidError, JourneyProposalNotFoundError, JourneyProposalProofError, JourneyProposalStaleError, isProposalId } from "./journey-proposal-store.js";
@@ -568,19 +571,42 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   // #432 — the review sheet a reviewer reads before `journey promote`: what the Journey does, what it
   // changes, what it proves, what changed since its last approval, and the content hash to bind to.
   journey
-    .command("review <id>")
-    .description("a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash")
+    .command("review [id]")
+    .description(
+      "a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash. #467: --stale (no id) lists every promoted Journey whose approval is stale, labelling step-id-only changes",
+    )
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--markdown", "render the sheet as Markdown")
     .option("--out <file>", "write the sheet (JSON with --json, Markdown with --markdown, else text) to this file")
     .option("--readiness", READINESS_FLAG_HELP)
     .option("--real", REAL_JEV_FLAG_HELP)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
+    .option("--stale", "#467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids")
     .option("--json", "emit a JSON envelope (the schema-checked sheet)")
-    .action(async function (this: Command, id: string) {
-      const { dir, json, markdown, out: outFile, readiness, real, jevProvider } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string }>();
+    .action(async function (this: Command, id: string | undefined) {
+      const { dir, json, markdown, out: outFile, readiness, real, jevProvider, stale } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string; stale?: boolean }>();
       if (json === true && markdown === true) {
         emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--json and --markdown are exclusive: pick one rendering"));
+        return;
+      }
+      if (stale === true) {
+        // #467: the stale list — read-only; one sheet's flags do not apply to it.
+        if (id !== undefined || markdown === true || outFile !== undefined || readiness === true || real === true || jevProvider !== undefined) {
+          emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--stale lists every stale Journey: it takes no <id> and none of --markdown/--out/--readiness/--real/--jev-provider"));
+          return;
+        }
+        try {
+          const result = await listStaleJourneys({ journeysDir: resolveJourneysDir(deps, dir), catalogDir: resolveCatalogDir(deps.catalogDir) });
+          if (json) emitJson(program, ok(result));
+          else program.configureOutput().writeOut?.(renderStaleJourneys(result));
+          process.exitCode = 0;
+        } catch (err) {
+          emitJson(program, fail(err instanceof NotImplementedError ? err.code : "E_JOURNEY_REVIEW", String(err instanceof Error ? err.message : err)));
+        }
+        return;
+      }
+      if (id === undefined) {
+        emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "journey review needs a Journey <id> (or --stale for the list of Journeys needing re-approval)"));
         return;
       }
       try {
@@ -612,6 +638,32 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         } else {
           emitJson(program, fail("E_JOURNEY_REVIEW", String(err instanceof Error ? err.message : err)));
         }
+      }
+    });
+
+  // #467b — the one-time step-id backfill: CLI only (a repo rewrite the operator runs and commits; no MCP tool).
+  journey
+    .command("migrate")
+    .description(
+      "#467: one-time repo rewrite — --step-ids mints a stable step id on every recorded step that has none (every Journey and recording in the project) and points anchors at them. Changes every promoted Journey's hash: re-approve them (journey review --stale). Never approves. CLI only",
+    )
+    .option("--step-ids", "mint missing step ids (the only migration today; required)")
+    .option("--dry-run", "report what would change, write nothing")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const { stepIds, dryRun, dir, json } = this.opts<{ stepIds?: boolean; dryRun?: boolean; dir?: string; json?: boolean }>();
+      if (stepIds !== true) {
+        emitJson(program, fail("E_JOURNEY_MIGRATE_ARGS", "name the migration: --step-ids"));
+        return;
+      }
+      try {
+        const result = await migrateStepIds({ journeysDir: resolveJourneysDir(deps, dir), projectDir: resolveCatalogDir(deps.catalogDir), dryRun: dryRun === true });
+        if (json) emitJson(program, ok(result));
+        else program.configureOutput().writeOut?.(renderMigrateStepIds(result));
+        process.exitCode = 0;
+      } catch (err) {
+        emitJson(program, fail(err instanceof NotImplementedError ? err.code : "E_JOURNEY_MIGRATE", String(err instanceof Error ? err.message : err)));
       }
     });
 

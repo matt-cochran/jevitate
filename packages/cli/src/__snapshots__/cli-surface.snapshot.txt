@@ -113,10 +113,18 @@
     - flags=--max-pairs <n> required=true mandatory=false negate=false variadic=false default=null description=the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped
     - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only
 
+# catalog export
+  description: #464: write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings; no media) as a Journeeze catalog bundle (bundle.json) under --out. Never uploads (publish journeeze) and never approves
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--format <format> required=true mandatory=true negate=false variadic=false default=null description=the bundle format (journeeze-bundle)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--out <dir> required=true mandatory=true negate=false variadic=false default=null description=the directory bundle.json is written to (created if missing)
+
 # catalog status
   description: the jobs × personas matrix (which have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links and stale approvals
   options:
-    - flags=--allow-channels <list> required=true mandatory=false negate=false variadic=false default=null description=#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty)
+    - flags=--allow-channels <list> required=true mandatory=false negate=false variadic=false default=null description=#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci, pr-review; default tty). #469: pr-review is recorded only by jevitate after it verifies an approving review of the merged PR through the forge API — never set by a caller
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked report)
     - flags=--require-approvals required=false mandatory=false negate=false variadic=false default=null description=#437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels)
@@ -124,7 +132,7 @@
 # check
   description: CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
   options:
-    - flags=--allow-channels <list> required=true mandatory=false negate=false variadic=false default=null description=#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty)
+    - flags=--allow-channels <list> required=true mandatory=false negate=false variadic=false default=null description=#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci, pr-review; default tty). #469: pr-review is recorded only by jevitate after it verifies an approving review of the merged PR through the forge API — never set by a caller
     - flags=--baseline <run|tag|last> required=true mandatory=false negate=false variadic=false default=null description=only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`)
     - flags=--baseline-dir <dir> required=true mandatory=false negate=false variadic=false default=[] description=results dir holding baseline runs (repeatable; default: this check's results, then ~/.jevitate)
     - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
@@ -145,6 +153,7 @@
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope (default: a one-line summary per item, then the envelope path)
     - flags=--json-out <path> required=true mandatory=false negate=false variadic=false default=null description=JSON envelope path (default <out>/check.json)
     - flags=--junit <path> required=true mandatory=false negate=false variadic=false default=null description=JUnit XML path (default <out>/junit.xml)
+    - flags=--max-brittle-steps <n> required=true mandatory=false negate=false variadic=false default=null description=#470: opt-in locator gate — a Journey item with more than n brittle steps (targets that miss the project's testIdAttributes convention) is a gating finding. Without it locator health is advisory only
     - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
     - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
     - flags=--out <dir> required=true mandatory=false negate=false variadic=false default="jevitate-check" description=output dir: results/, junit.xml, jevitate.sarif, report.md, check.json
@@ -155,6 +164,15 @@
     - flags=--suite <file> required=true mandatory=true negate=false variadic=false default=null description=the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget)
     - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--target-build <id> required=true mandatory=false negate=false variadic=false default=null description=the target's build/commit id, stamped on every result
+
+# connect
+  description: #464: connect this project to a service it publishes to (stores the service's key in jevitate's secret store; a person at a terminal)
+
+# connect journeeze
+  description: #464: connect this project to a Journeeze product: reads the product's upload key from stdin without echo (never a flag), checks it (whoami), asks you to confirm the product, and stores key + URL in jevitate's secret store. CLI only — never an MCP tool
+  options:
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (never contains the key)
+    - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=the Journeeze base URL (default https://app.journeeze.dev)
 
 # demo
   description: demo one aspect of an app from a one-line request: explore → clean path → Journey → annotate → a DRAFT narrated demo; `demo approve <id>` promotes and renders the final one
@@ -549,6 +567,17 @@
     - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings
     - flags=--reviewed-hash <hash> required=true mandatory=false negate=false variadic=false default=null description=the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the job changed since
 
+# job draft-outcomes
+  description: #465: draft 1–3 desired outcomes for a job with the generation model and write them into its jobs file marked provenance ai_draft, for the team to review. Never approves: an approved job becomes "needs re-review"
+  arguments:
+    - name=jobId required=true variadic=false default=null
+  options:
+    - flags=--count <n> required=true mandatory=false negate=false variadic=false default=null description=how many outcomes to draft (1-3, default 1)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=draft with the deterministic fake generator (pipeline smoke only)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--real required=false mandatory=false negate=false variadic=false default=false description=draft with the live OpenRouter generation gateway (requires keys)
+
 # job review
   description: a job's review sheet: its story, its personas and which have a promoted Journey for it, the gaps, its Journeys, its approval state, the pre-approval findings, its content hash
   arguments:
@@ -664,6 +693,14 @@
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
+# journey migrate
+  description: #467: one-time repo rewrite — --step-ids mints a stable step id on every recorded step that has none (every Journey and recording in the project) and points anchors at them. Changes every promoted Journey's hash: re-approve them (journey review --stale). Never approves. CLI only
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=report what would change, write nothing
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--step-ids required=false mandatory=false negate=false variadic=false default=null description=mint missing step ids (the only migration today; required)
+
 # journey promote
   description: promote a local Journey (human-approval gate) so it becomes discoverable/runnable; shows its review sheet first and records the approval
   arguments:
@@ -695,9 +732,9 @@
     - flags=--to <source> required=true mandatory=true negate=false variadic=false default=null description=registered source name to publish into
 
 # journey review
-  description: a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash
+  description: a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash. #467: --stale (no id) lists every promoted Journey whose approval is stale, labelling step-id-only changes
   arguments:
-    - name=id required=true variadic=false default=null
+    - name=id required=false variadic=false default=null
   options:
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
@@ -706,6 +743,7 @@
     - flags=--out <file> required=true mandatory=false negate=false variadic=false default=null description=write the sheet (JSON with --json, Markdown with --markdown, else text) to this file
     - flags=--readiness required=false mandatory=false negate=false variadic=false default=null description=#434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities
     - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs
+    - flags=--stale required=false mandatory=false negate=false variadic=false default=null description=#467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids
 
 # journey run
   description: 
@@ -846,6 +884,14 @@
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist
     - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
+# locator-health
+  description: #470: read-only locator health — per step, the selector rung its target resolves by and whether it meets the project's test-id convention (testIdAttributes in project config; default data-testid, data-test; data-tflow-id never counts). Every promoted Journey, one Journey (--journey) or one run (--run). Advisory: never gates
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--journey <id> required=true mandatory=false negate=false variadic=false default=null description=only this Journey
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--run <result.json> required=true mandatory=false negate=false variadic=false default=null description=the steps of this run result instead of the stored Journeys
 
 # login
   description: #427: sign in as a persona with credentials from environment variables and save its Playwright storage state (mode 0600) — the session `explore --storage-state/--persona` starts from. Credentials are never accepted as values, never printed or recorded
@@ -1049,6 +1095,16 @@
     - name=name required=true variadic=false default=null
   options:
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# publish
+  description: #464: publish this project's catalog to a connected service
+
+# publish journeeze
+  description: #464: export the catalog bundle and upload it to the connected Journeeze product (key from jevitate's secret store, or JOURNEEZE_UPLOAD_KEY in CI — never an argument), then wait for it to be imported or refused. Never approves
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=export and validate the bundle and resolve the connection, but send nothing
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (never contains the key)
 
 # record
   description: record a demonstrated flow into a Recording (authoring plane)
