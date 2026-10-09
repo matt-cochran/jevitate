@@ -20,13 +20,18 @@ const HTML = `<!doctype html><html><body>
 <button id="open">Open Alpha</button> <button id="reveal">Reveal key</button></main>
 <section id="detail" hidden><h1>Alpha detail</h1><p>Updated on demand.</p><button id="refresh">Refresh</button></section>
 <section id="panel" hidden><h1>Your one-time key</h1><p>k-1234-5678</p><button id="done">Done</button></section>
+<section id="notice" hidden><h1>Heads up</h1><p>Exports moved to Settings.</p><button id="gotit">Got it</button></section>
 <script>
-  const show = (id) => { for (const s of ["list", "detail", "panel"]) document.getElementById(s).hidden = s !== id; };
+  const show = (id) => { for (const s of ["list", "detail", "panel", "notice"]) document.getElementById(s).hidden = s !== id; };
   document.getElementById("open").addEventListener("click", () => show("detail"));
   document.getElementById("reveal").addEventListener("click", () => show("panel"));
   const back = async () => { const r = await fetch("/api/items"); await r.json(); show("list"); };
   document.getElementById("refresh").addEventListener("click", back);
   document.getElementById("done").addEventListener("click", back);
+  document.getElementById("list").insertAdjacentHTML("beforeend", '<button id="news">Read notice</button>');
+  document.getElementById("news").addEventListener("click", () => show("notice"));
+  // no request at all: the panel just removes itself
+  document.getElementById("gotit").addEventListener("click", () => show("list"));
 </script>
 </body></html>`;
 
@@ -77,6 +82,11 @@ describe("#444 — a completed request that returns to an earlier stable state i
 
   it("a Done that removes a one-time reveal panel and returns to the list does not end as a hang", async () => {
     const result = await run("Reveal key", "Done");
+    expect(result.run.hang).toBeUndefined();
+  }, 90_000);
+
+  it("a Got it that closes a notice without any request and returns to the list does not end as a hang", async () => {
+    const result = await run("Read notice", "Got it");
     expect(result.run.hang).toBeUndefined();
   }, 90_000);
 });
