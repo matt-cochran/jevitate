@@ -24,6 +24,16 @@ export const ALLOWED_TOOLS = [
   "review_persona", "review_job", "catalog_status",
   // #435 — the read-only, advisory catalog analysis (conflicts, duplicates, gaps; GtWR set characteristics).
   "analyze_catalog",
+  // 0.10 (d-surface-0, reviewed once up front; each mirrors its CLI command — packages/cli/src/mcp-cli-tools.ts):
+  // #465 — draft 1-3 job outcomes as provenance ai_draft for the team to review. Never approves
+  // (approve_job stays FORBIDDEN).
+  "draft_job_outcomes",
+  // #470 — read-only, advisory locator health (check's opt-in gate is run_check maxBrittleSteps).
+  "locator_health",
+  // #464 — export the Journeeze catalog bundle (writes only inside the project; never uploads or approves),
+  // and publish it. publish_to_journeeze takes NO key argument: jevitate resolves the upload key itself
+  // (secret store / CI env) and never returns it. Connecting (entering the key) is CLI only: connect_journeeze is FORBIDDEN.
+  "export_catalog_bundle", "publish_to_journeeze",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [
@@ -31,6 +41,9 @@ export const FORBIDDEN_TOOLS = [
   "navigate_url", "get_dom", "get_cookies",
   // #433: catalog sign-off is human-only (`jevitate persona|job approve` on the CLI).
   "approve_persona", "approve_job",
+  // #464: entering a Journeeze upload key is a person's act at their terminal (`jevitate connect journeeze`):
+  // a key never passes through a model or an MCP argument.
+  "connect_journeeze",
 ] as const;
 
 export function listToolNames(): string[] {
