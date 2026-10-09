@@ -1,8 +1,9 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
 import { journeyReviewHash } from "./journey-review.js";
-import { writeApprovedSnapshot } from "./journey-review-store.js";
+import { readApprovedSnapshot, writeApprovedSnapshot } from "./journey-review-store.js";
+import { anchorRuleMode, assertAnchorRules, journeyAnchorIssues, refLintFindings } from "./journey-anchor-gate.js";
 import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
 import type { JevSetup } from "./jev-advisor.js";
 import { redactText } from "@jevitate/ai-core";
@@ -247,14 +248,16 @@ export function prefixParams(full: Journey, prefix: Journey, params: Record<stri
 export async function lintJourneyById(
   dir: string,
   id: string,
-  opts: { readRequests?: readonly string[] } = {},
+  opts: { readRequests?: readonly string[]; catalogDir?: string | null } = {},
 ): Promise<JourneyLintResult> {
   const registry = new JourneyRegistry(new FsJourneyStore(dir));
   const journey = await registry.get(id);
   if (!journey) {
     throw new UnknownJourneyError(`unknown journey '${id}'`);
   }
-  const findings = lintJourney(journey, opts.readRequests === undefined ? {} : { readRequests: opts.readRequests });
+  // #466: the 0.10 anchor rules are warnings here (lintJourney's own, plus the catalog's jobStep/serves references).
+  const { refIssues } = await journeyAnchorIssues(journey, { catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir, journeysDir: dir });
+  const findings = [...lintJourney(journey, opts.readRequests === undefined ? {} : { readRequests: opts.readRequests }), ...refLintFindings(refIssues)];
   return {
     id,
     findings,
@@ -343,7 +346,8 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
   // #467: promote mints a stable id for every step that lacks one — BEFORE hashing, so the approval
   // binds to the Journey as stored (the store's own mint is then a no-op). Only ids are added.
   const mintedRecording = ensureStepIds(reviewed.recording);
-  const subject: Journey = mintedRecording === reviewed.recording ? reviewed : { ...reviewed, recording: mintedRecording };
+  // #466: and stamps each anchor with the id of the step it follows (its integer `step` is kept for the bundle).
+  const subject: Journey = stampAnchorStepIds(mintedRecording === reviewed.recording ? reviewed : { ...reviewed, recording: mintedRecording });
   // #432: approval binds to what the reviewer read — refused when the Journey changed since. A review
   // of the Journey before promote minted its missing step ids still matches (it differs only by them).
   const contentHash = journeyReviewHash(subject);
@@ -366,14 +370,20 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
     );
   }
   const acceptedWeak = errors.length > 0 ? { reason, rules: [...new Set(errors.map((f) => f.rule))] } : undefined;
+  const catalogDir = opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir;
   const gate = await journeyCatalogGate(subject, {
-    catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir,
+    catalogDir,
     journeysDir: dir,
     action: opts.action ?? "journey promote",
     ...(opts.acceptUnvetted === undefined ? {} : { acceptUnvetted: opts.acceptUnvetted }),
     ...(opts.acceptFindings === undefined ? {} : { acceptFindings: opts.acceptFindings }),
     ...(opts.jev === undefined ? {} : { jev: opts.jev }),
   });
+  // #466: a new promotion, or a re-promotion that changed beyond step ids, must follow the anchor rules;
+  // an unchanged or step-id-only (#467 backfill) re-approval only warns (lint / the review sheet).
+  const priorHash = existing.metadata.approval?.contentHash;
+  const mode = anchorRuleMode(subject, priorHash === undefined ? {} : { approvedHash: priorHash, approvedSnapshot: (await readApprovedSnapshot(dir, id)) ?? existing });
+  if (mode === "enforce") assertAnchorRules(id, await journeyAnchorIssues(subject, { catalogDir, journeysDir: dir, enforce: true }));
   // #437: the person confirms the approval and each waiver given with it (or it is refused) — then it is recorded with how it was made.
   const provenance =
     opts.confirm === undefined
@@ -408,7 +418,8 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
   };
   const promoted: Journey = {
     ...subject,
-    metadata: { ...existing.metadata, promoted: true, ...(acceptedWeak === undefined ? {} : { acceptedWeak }), approval },
+    // #466: subject's metadata — the existing one plus the anchors' stamped step ids (what the approval hashed).
+    metadata: { ...subject.metadata, promoted: true, ...(acceptedWeak === undefined ? {} : { acceptedWeak }), approval },
   };
   await store.put(promoted);
   // #432: the Journey as approved — the next review diffs against it ("change since last approval").

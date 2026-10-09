@@ -70,7 +70,8 @@ beforeEach(async () => {
     [JOB],
   );
   const store = new FsJourneyStore(journeysDir);
-  await store.put(journey("publish", { job: "publish-post", persona: "editor" }));
+  // #466: a job-linked Journey names an anchor (promote enforces the anchor rules on a new Journey).
+  await store.put(journey("publish", { job: "publish-post", persona: "editor", anchors: [{ name: "published", step: 1 }] }));
   await store.put(journey("loose", { persona: "someone browsing" }));
   installClock(new FakeClock({ startMs: Date.parse("2026-10-08T12:00:00.000Z") }));
 });
@@ -294,7 +295,7 @@ describe("#433 the shared pre-approval pipeline", () => {
   it("…and --accept-findings records metadata.approval.acceptedFindings", async () => {
     await approveAll();
     await cli(["persona", "approve", "reader", "--json", "--non-interactive-approval", "test"]);
-    await new FsJourneyStore(journeysDir).put(journey("as-reader", { job: "publish-post", persona: "reader" }));
+    await new FsJourneyStore(journeysDir).put(journey("as-reader", { job: "publish-post", persona: "reader", anchors: [{ name: "published", step: 1 }] }));
     await cli(["journey", "promote", "as-reader", "--accept-findings", "readers may publish in beta", "--json", "--non-interactive-approval", "test"]);
     expect((await new FsJourneyStore(journeysDir).get("as-reader"))?.metadata.approval?.acceptedFindings?.findings).toEqual(["catalog-links/journey.persona-not-served"]);
   });
