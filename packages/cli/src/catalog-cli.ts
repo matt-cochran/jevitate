@@ -19,7 +19,7 @@ import { EXIT_CODES } from "./exit-codes.js";
 import {
   ApprovalArgsError,
   approvalRefusal,
-  approvalsReport,
+  approvalsReportVerified,
   checkNonInteractiveReason,
   describeProvenance,
   inMcpInvocation,
@@ -268,7 +268,8 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
         const allowed = requireApprovals === true ? parseAllowedChannels(allowChannels) : undefined;
         const catalog = await loadCatalog(resolveCatalogDir(deps.catalogDir, dir), catalogJourneysDir(dir, resolveJourneysDir(deps)));
         // #437: every recorded approval and how it was made; with --require-approvals, the violations.
-        const approvals = approvalsReport([catalog], allowed);
+        // #469: with pr-review allowed, each recorded pr-review approval is re-verified through the forge.
+        const approvals = await approvalsReportVerified([catalog], allowed, { ...(deps.approval ?? {}), catalogDir: catalog.dir });
         const report = { ...buildCatalogStatus(catalog), approvals };
         const failed = (approvals.requirement?.violations.length ?? 0) > 0;
         if (json) emitJson(program, ok(report));

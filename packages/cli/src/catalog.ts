@@ -462,3 +462,24 @@ export async function writeJobApproval(file: string, id: string, approval: Catal
   catalogJob(list[index], index, file);
   await writeJsonFile(file, Array.isArray(raw) ? list : { ...(raw as Record<string, unknown>), jobs: list });
 }
+
+/**
+ * #469: the content hash of persona/job `id` in one version of its catalog file (`text`, e.g. the
+ * file at a commit, read through the forge) — the hash its approval binds to — or null when that
+ * version does not hold the entry or is not a valid catalog file.
+ */
+export function catalogEntryHash(kind: "persona" | "job", text: string | null, id: string): string | null {
+  if (text === null) return null;
+  try {
+    const raw = JSON.parse(text) as unknown;
+    if (kind === "persona") {
+      const p = rawPersonas(raw, "(forge)").find((x) => x.id === id);
+      return p === undefined ? null : personaContentHash(p.id, p.fields);
+    }
+    const entry = jobList(raw, "(forge)").find((e) => isRecord(e) && e.id === id);
+    const parsed = JobSchema.safeParse(entry);
+    return parsed.success ? jobContentHash(parsed.data) : null;
+  } catch {
+    return null; // not JSON / not a catalog file at that version: it does not hold the entry
+  }
+}

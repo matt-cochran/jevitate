@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { aggregateOf, formatUsageLine, type UsageCounts } from "@jevitate/ai-core";
 import { consolidate, diffRuns, findingKey, renderJUnit, renderReportMarkdown, renderSarif, type ConsolidatedDefect, type DiffEntry, type FindingIdentity, type FindingsDiff, type GateCase, type RunRecord } from "@jevitate/findings";
-import { approvalsReport } from "./approval-provenance.js";
+import { approvalsReportVerified } from "./approval-provenance.js";
 import { loadCatalog } from "./catalog-api.js";
 import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
 import { runJourneyProgrammatically } from "./journey-api.js";
@@ -36,7 +36,8 @@ async function approvalDefects(opts: RunCheckOptions, req: NonNullable<RunCheckO
   const dirs = [...new Set([opts.journeysDir, ...opts.suite.targets.flatMap((t) => (t.journeysDir === undefined ? [] : [t.journeysDir]))].map((d) => resolve(d)))];
   const catalogs = [];
   for (const d of dirs) catalogs.push(await loadCatalog(req.catalogDir, d));
-  const report = approvalsReport(catalogs, req.allowedChannels);
+  // #469: a recorded pr-review approval counts only when the forge re-confirms it.
+  const report = await approvalsReportVerified(catalogs, req.allowedChannels, { catalogDir: req.catalogDir });
   const defects = (report.requirement?.violations ?? []).map((v): ConsolidatedDefect => {
     const identity: FindingIdentity = { category: "approval", signal: `approval-${v.problem}`, control: `${v.kind} ${v.id}` };
     const key = findingKey(identity);

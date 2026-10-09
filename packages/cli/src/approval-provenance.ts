@@ -9,6 +9,19 @@ import {
   type ApprovalsReport,
 } from "@jevitate/journey";
 import type { Catalog } from "./catalog.js";
+import {
+  catalogItemEntry,
+  githubForgeFactory,
+  journeyEntry,
+  PrReviewCache,
+  prReviewCacheDir,
+  reverifyPrReviewCached,
+  verifyPrReviewForApproval,
+  type ForgeFactory,
+  type GitTracked,
+  type PrReviewEntry,
+  type PrReviewVerdict,
+} from "./forge-verify.js";
 
 /**
  * #437 — approval provenance and the human confirmation on every approval path (`journey promote`,
@@ -101,6 +114,12 @@ export interface ApprovalDeps {
   /** Asks one question on the terminal and returns the typed line. */
   readonly prompt?: (question: string) => Promise<string>;
   readonly user?: () => string | undefined;
+  /** #469: the forge `pr-review` is verified through (default: GitHub over HTTPS). Tests inject a fake. */
+  readonly forge?: ForgeFactory;
+  /** #469: where a CI approval says why `pr-review` was not granted (default: stderr). */
+  readonly notice?: (line: string) => void;
+  /** #469: whether the re-verification cache dir holds git-tracked files (then it is not trusted). */
+  readonly gitTracked?: GitTracked;
 }
 
 /** What a person confirms: the item, the content hash its sheet shows, and the waivers given with it. */
@@ -111,6 +130,11 @@ export interface ApprovalRequest {
   readonly waivers: readonly { readonly flag: string; readonly reason: string; readonly detail?: string }[];
   /** #453: a self-heal proposal being accepted — shown to the person before they confirm. */
   readonly proposal?: { readonly id: string; readonly baseHash: string; readonly steps: readonly { readonly number: number; readonly before: string; readonly after: string }[] };
+  /**
+   * #469: where the entry lives (its file and how to find it in any version of that file). With it,
+   * an approval in CI is checked for a verified pull-request review (`pr-review`) first.
+   */
+  readonly entry?: PrReviewEntry;
 }
 
 /** Confirms an approval (or refuses it) and returns how it was made. */
@@ -198,8 +222,28 @@ export function checkNonInteractiveReason(reason: string | undefined): void {
 }
 
 /**
+ * #469: in CI with no terminal, the `pr-review` channel — granted ONLY when the forge verifies the
+ * entry's last change came from a merged pull request approved by someone other than its author
+ * (forge-verify.ts). Never with waivers or a self-heal proposal: those are this run's own choices,
+ * which no reviewer saw. Returns the verdict, or null when not attempted (no entry, not in CI).
+ */
+async function prReviewAttempt(r: ApprovalRequest, deps: ApprovalDeps | undefined): Promise<PrReviewVerdict | null> {
+  if (r.entry === undefined) return null;
+  const env = deps?.env ?? process.env;
+  if (!underCi(detectAgentSignals(env, { stdin: true, stdout: true }))) return null;
+  if (r.waivers.length > 0 || r.proposal !== undefined) {
+    return { ok: false, code: "has-waivers", reason: "an approval with waivers or a self-heal proposal needs a person: no pull-request reviewer saw them" };
+  }
+  return verifyPrReviewForApproval(r.entry, env, deps?.forge ?? githubForgeFactory);
+}
+
+/**
  * The confirmation every CLI approval path runs just before it writes:
- * - inside an MCP tool call: no prompt, recorded as `mcp` (an agent's approval);
+ * - inside an MCP tool call: no prompt, recorded as `mcp` (an agent's approval) — never `pr-review`;
+ * - #469: in CI with no terminal, for an entry the forge verifies (a merged, approved pull request
+ *   changed it last): recorded as `pr-review` with the pull request and its reviewer. When the
+ *   verification fails, why is printed and the paths below apply unchanged (`ci` with the escape
+ *   hatch, else `E_APPROVAL_NEEDS_HUMAN`);
  * - `--non-interactive-approval "<reason>"`: no prompt, recorded as `non-interactive` (or `ci` under a CI marker) with the reason;
  * - otherwise a real TTY is required (else `E_APPROVAL_NEEDS_HUMAN`), and the person types the id or
  *   the first 8 characters of the content hash — once for the approval, once per waiver
@@ -209,13 +253,22 @@ export function makeApprovalConfirm(deps: ApprovalDeps | undefined, opts: Approv
   return async (r) => {
     if (inMcpInvocation()) return provenanceOf("mcp", deps);
     const reason = opts.nonInteractiveReason?.trim();
+    if (reason !== undefined) checkNonInteractiveReason(reason);
+    const interactive = (deps?.stdinIsTTY?.() ?? process.stdin.isTTY === true) && (deps?.stdoutIsTTY?.() ?? process.stdout.isTTY === true);
+    let notGranted = "";
+    if (!interactive) {
+      const verdict = await prReviewAttempt(r, deps);
+      if (verdict?.ok === true) return { ...provenanceOf("pr-review", deps), pr: verdict.pr };
+      if (verdict !== null && !verdict.ok) {
+        notGranted = `pr-review not granted for ${r.kind} '${r.id}': ${verdict.reason}`;
+        (deps?.notice ?? ((line: string) => process.stderr.write(`${line}\n`)))(notGranted);
+      }
+    }
     if (reason !== undefined) {
-      checkNonInteractiveReason(reason);
       const p = provenanceOf("non-interactive", deps, reason);
       return underCi(p.agentSignals) ? { ...p, channel: "ci" } : p;
     }
-    const interactive = (deps?.stdinIsTTY?.() ?? process.stdin.isTTY === true) && (deps?.stdoutIsTTY?.() ?? process.stdout.isTTY === true);
-    if (!interactive) throw new ApprovalNeedsHumanError(needsHumanMessage(r));
+    if (!interactive) throw new ApprovalNeedsHumanError(`${needsHumanMessage(r)}${notGranted === "" ? "" : ` (${notGranted})`}`);
     const ask = deps?.prompt ?? terminalPrompt;
     const what = r.kind === "demo" ? `demo '${r.id}' (promotes Journey '${r.id}')` : `${r.kind} '${r.id}'`;
     const proposalText =
@@ -272,7 +325,8 @@ export function describeProvenance(p: ApprovalProvenance | undefined): string {
     case "ci":
       return `approved non-interactively in CI${markers.length === 0 ? "" : ` (${markers.join(", ")})`}${reason}`;
     case "non-interactive":
-      return `approved non-interactively${markers.length === 0 ? "" : ` (likely an agent: ${markers.join(", ")})`}${by}${reason}`;    case "pr-review":
+      return `approved non-interactively${markers.length === 0 ? "" : ` (likely an agent: ${markers.join(", ")})`}${by}${reason}`;
+    case "pr-review":
       return p.pr === undefined ? "approved by a pull-request review (unverified: no PR recorded)" : `approved by ${p.pr.reviewer}'s review of merged PR #${p.pr.number}`;
   }
 }
@@ -299,7 +353,7 @@ export function parseAllowedChannels(list: string | undefined): ApprovalChannel[
  * that is stale (the item changed since), one recorded before provenance existed, or one made over
  * a channel not allowed.
  */
-export function approvalsReport(catalogs: readonly Catalog[], allowed?: readonly ApprovalChannel[]): ApprovalsReport {
+export function approvalsReport(catalogs: readonly Catalog[], allowed?: readonly ApprovalChannel[], prVerdicts?: ReadonlyMap<string, PrReviewVerdict>): ApprovalsReport {
   const records: ApprovalsReport["records"] = [];
   const violations: ApprovalViolation[] = [];
   const seen = new Set<string>();
@@ -330,6 +384,17 @@ export function approvalsReport(catalogs: readonly Catalog[], allowed?: readonly
         problem: "channel",
         message: `${kind} '${id}': ${describeProvenance(provenance)} — channel '${provenance.channel}' is not allowed (allowed: ${allowed.join(", ")}); a person re-approves it at a terminal`,
       });
+    } else if (provenance.channel === "pr-review" && !stale) {
+      // #469: a recorded pr-review is honoured only when the forge re-confirms it — never on the record's word.
+      const v = prVerdicts?.get(key);
+      if (v?.ok !== true) {
+        violations.push({
+          kind,
+          id,
+          problem: "unverified",
+          message: `${kind} '${id}': ${describeProvenance(provenance)} — not confirmed by the forge (${v === undefined ? "it was not re-verified" : v.reason}); a pr-review approval counts only when GitHub confirms it`,
+        });
+      }
     }
   };
   for (const c of catalogs) {
@@ -342,6 +407,52 @@ export function approvalsReport(catalogs: readonly Catalog[], allowed?: readonly
     }
   }
   return { records, ...(allowed === undefined ? {} : { requirement: { allowedChannels: [...allowed], violations } }) };
+}
+
+/** The entry a recorded approval binds to (its file and hash), or null when it has no verifiable file. */
+function recordedEntry(c: Catalog, kind: ApprovalViolation["kind"], id: string, contentHash: string): PrReviewEntry | null {
+  if (kind === "journey") return c.journeysDir === undefined ? null : journeyEntry(c.journeysDir, id, contentHash);
+  const file = kind === "persona" ? c.personasFile : c.jobsFile;
+  return file === null ? null : catalogItemEntry(kind, file, id, contentHash);
+}
+
+export interface PrReviewCheckDeps {
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly forge?: ForgeFactory;
+  readonly gitTracked?: GitTracked;
+  /** The project data dir whose `cache/pr-review/` caches positive re-verifications (null: no cache). */
+  readonly catalogDir?: string | null;
+}
+
+/**
+ * #469: `approvalsReport` with every recorded `pr-review` approval RE-VERIFIED through the forge
+ * (when `pr-review` is among `allowed`; otherwise it is a channel violation anyway and the forge is
+ * not asked). A record the forge does not confirm — a hand-written one, or one that cannot be
+ * re-verified (no token, offline) — is an `unverified` violation, never a pass.
+ */
+export async function approvalsReportVerified(catalogs: readonly Catalog[], allowed: readonly ApprovalChannel[] | undefined, deps: PrReviewCheckDeps = {}): Promise<ApprovalsReport> {
+  if (allowed === undefined || !allowed.includes("pr-review")) return approvalsReport(catalogs, allowed);
+  const env = deps.env ?? process.env;
+  const cache = new PrReviewCache(prReviewCacheDir(deps.catalogDir ?? catalogs.find((c) => c.dir !== null)?.dir ?? null), deps.gitTracked);
+  const verdicts = new Map<string, PrReviewVerdict>();
+  const verify = async (c: Catalog, kind: ApprovalViolation["kind"], id: string, approval: { contentHash: string; provenance?: ApprovalProvenance } | undefined, stale: boolean): Promise<void> => {
+    const key = `${kind}:${id}`;
+    const pr = approval?.provenance?.pr;
+    if (approval?.provenance?.channel !== "pr-review" || pr === undefined || stale || verdicts.has(key)) return;
+    const entry = recordedEntry(c, kind, id, approval.contentHash);
+    verdicts.set(
+      key,
+      entry === null
+        ? { ok: false, code: "not-repo-file", reason: `${kind} '${id}' has no file of its own in this repository to verify` }
+        : await reverifyPrReviewCached(entry, pr, env, cache, deps.forge ?? githubForgeFactory),
+    );
+  };
+  for (const c of catalogs) {
+    for (const p of c.personas) await verify(c, "persona", p.id, p.approval, p.status === "stale");
+    for (const j of c.jobs) await verify(c, "job", j.id, j.approval, j.status === "stale");
+    for (const j of c.journeys) if (j.promoted) await verify(c, "journey", j.id, j.approval, j.approval !== undefined && j.approval.contentHash !== j.contentHash);
+  }
+  return approvalsReport(catalogs, allowed, verdicts);
 }
 
 /** The approvals section of `catalog status` (text). */
