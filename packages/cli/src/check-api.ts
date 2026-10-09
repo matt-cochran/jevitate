@@ -134,6 +134,8 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   }
   const entryOf = new Map(diff?.entries.map((e) => [e.key, e]) ?? []);
   const isGating = (d: ConsolidatedDefect): boolean => {
+    // #453: a proposed Journey revision (`pending`) is never a defect, whatever `gateAdvisory` says: it makes the check exit 5.
+    if (d.severity === "pending") return false;
     if (d.severity !== "hard" && !opts.suite.gateAdvisory) return false;
     if (diff === undefined) return true;
     // A finding is matched to its diff entry by any member key (merged cascades).
@@ -154,11 +156,9 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     if (ex === undefined) return { ...base, status: "skipped", actions: 0, verdict: "skipped", gating: [] };
     const run = ex.resultPath === undefined ? undefined : runOf.get(ex.resultPath);
     const own = run === undefined ? [] : gating.filter((d) => d.modes.some((m) => m.runs.some((r) => r.path === run.path)));
-    // #453: a self-healed Journey that only proposed a revision is pending a person (never a pass); one whose heal ran
-    // out is a failure even when the report extracted no finding of its own.
+    // #453: a self-healed Journey that only proposed a revision is pending a person (never a pass).
     const pending = ex.status === "ran" && ex.outcome === "healed-pending-review" && own.length === 0;
-    const exhausted = ex.status === "ran" && ex.outcome === "heal-exhausted" && own.length === 0;
-    const verdict = ex.status === "error" ? "error" : own.length > 0 || exhausted ? "failed" : pending ? "pending-review" : "passed";
+    const verdict = ex.status === "error" ? "error" : own.length > 0 ? "failed" : pending ? "pending-review" : "passed";
     return {
       ...base,
       ...(pending ? { proposal: { journeyId: item.name, ...(ex.proposal ?? {}) } } : {}),
@@ -182,8 +182,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const errors = itemReports.filter((i) => i.verdict === "error").length;
   const pendingItems = itemReports.filter((i) => i.verdict === "pending-review");
   const proposals = pendingItems.flatMap((i) => (i.proposal === undefined ? [] : [i.proposal]));
-  const exhaustedItems = itemReports.filter((i) => i.outcome === "heal-exhausted" && i.verdict === "failed" && i.gating.length === 0);
-  const gatingFindings = gating.length + exhaustedItems.length;
+  const gatingFindings = gating.length;
   // Precedence 1 > 2 > 5 > 0: a defect or exhausted heal, then an item error / budget overrun, then a proposal awaiting review.
   const exitCode: 0 | 1 | 2 | 5 = gatingFindings > 0 ? 1 : errors > 0 || exceeded !== undefined ? 2 : pendingItems.length > 0 ? 5 : 0;
   const junitPath = resolve(opts.junitPath ?? join(outDir, "junit.xml"));
@@ -191,8 +190,6 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const jsonPath = resolve(opts.jsonPath ?? join(outDir, "check.json"));
   const reportPath = join(outDir, "report.md");
 
-  const executedOf = new Map<CheckItemReport, Executed | undefined>();
-  itemReports.forEach((r, k) => executedOf.set(r, executed[k]?.ex));
   const cases: GateCase[] = itemReports.map((i) => {
     const own = gating.filter((d) => i.gating.includes(d.key));
     const first = own[0];
@@ -213,13 +210,6 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
             type: "healed-pending-review",
             message: `proposed revision${i.proposal?.proposalId === undefined ? "" : ` ${i.proposal.proposalId}`} awaiting review`,
             ...(i.proposal?.path === undefined ? {} : { detail: i.proposal.path }),
-          }
-        : {}),
-      ...(i.verdict === "failed" && first === undefined && i.outcome === "heal-exhausted"
-        ? {
-            type: "journey-assertion",
-            message: `Journey "${i.name}" heal exhausted after ${i.healAttempts ?? 0} attempt(s)`,
-            detail: executedOf.get(i)?.reason ?? "",
           }
         : {}),
       ...(i.verdict === "failed" && first !== undefined
@@ -288,10 +278,6 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     suiteUri: opts.suiteUri ?? opts.suite.path,
     automationId: `jevitate-check/${opts.suite.name}/`,
     findings: defects.map((d) => ({ defect: d, gating: gating.includes(d), ...(statusOf(d) === undefined ? {} : { status: statusOf(d) }) })),
-    healResults: [
-      ...pendingItems.map((i) => ({ kind: "pending-review" as const, journeyId: i.name, ...(i.proposal?.proposalId === undefined ? {} : { proposalId: i.proposal.proposalId }), ...(i.proposal?.path === undefined ? {} : { proposalPath: i.proposal.path }) })),
-      ...exhaustedItems.map((i) => ({ kind: "heal-exhausted" as const, journeyId: i.name, healAttempts: i.healAttempts ?? 0, ...(executedOf.get(i)?.reason === undefined ? {} : { reason: executedOf.get(i)?.reason }) })),
-    ],
   });
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
   await writeFile(

@@ -16,13 +16,14 @@ import { CLI_ADVERSARIAL_STRATEGIES, parseSuccessSpec } from "./explore-api.js";
 import { type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import { loadRunFile } from "./report-api.js";
-import { GOAL_ONLY_OUTCOMES, JOURNEY_MISSION_OUTCOME, clock, journeyExitCode, runTagsOf, safeRunPolicy } from "@jevitate/domain";
+import { GOAL_ONLY_OUTCOMES, clock, runTagsOf, safeRunPolicy } from "@jevitate/domain";
 import type { SelfHealer } from "@jevitate/runtime";
 import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { type Json, type Planned, type PreparedHeal, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { journeyResultRecord, type JourneyResultProposal } from "./journey-result-record.js";
 import { applyJourneyEnvironment } from "./environments.js";
 
 // ── execution ────────────────────────────────────────────────────────────────
@@ -193,31 +194,30 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({ ...(siteGate === undefined ? {} : { siteGate }), ...runOptions, ...extra }));
     const seq = ctx.seq();
     const stampName = artifactStamp(startedAt);
-    const writeRecord = async (r: JourneyRunResult, suffix: string, extra: Record<string, unknown>): Promise<{ path: string; actions: number }> => {
+    const writeRecord = async (
+      r: JourneyRunResult,
+      suffix: string,
+      extra: Record<string, unknown>,
+      // #453: a self-heal run already persisted + indexed its own record (`runJourneyProgrammatically`); the check's
+      // `.heal.result.json` is the same run stamped with the suite, so it is not indexed a second time.
+      indexed = false,
+    ): Promise<{ path: string; actions: number }> => {
       const at = r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? r.at : undefined;
-      const url = journeyStepUrl(j, at);
       const path = join(ctx.resultsDir, `journey-${stampName}-${seq}${suffix}.result.json`);
-      const record = {
-        missionOutcome: JOURNEY_MISSION_OUTCOME[r.outcome],
-        exitCode: journeyExitCode(r.outcome),
-        result: {
-          mode: "journey",
-          journeyId: item.journey!.id,
-          outcome: r.outcome,
-          ...(r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? { reason: r.reason, ...(r.at === undefined ? {} : { at: r.at }) } : {}),
-          ...(url === undefined ? {} : { url }),
-          startedAt,
-          target: { seedUrl: j.recording.site, allowlist: [new URL(j.recording.site).origin] },
-          engine: ctx.engine,
-          suite: stamp.suite,
-          ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
-          ...extra,
-        },
-      };
+      const proposal = (r as { proposal?: JourneyResultProposal }).proposal;
+      const record = journeyResultRecord(r, {
+        journey: j,
+        params: sj.params,
+        startedAt,
+        engine: ctx.engine,
+        suite: stamp.suite,
+        ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
+        ...(proposal === undefined ? {} : { proposal }),
+      });
       // #426: the check's --tag metadata and structured target ride on every item result.
-      const stamped = { ...record, result: stampRunMetadata(record.result) };
+      const stamped = { ...record, result: stampRunMetadata({ ...record.result, ...extra }) };
       await writeFile(path, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
-      recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
+      if (!indexed) recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
       return { path, actions: at !== undefined ? at + 1 : recordingSteps(j) };
     };
 
@@ -240,12 +240,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     const proposalId = typeof proposal?.id === "string" ? proposal.id : undefined;
     const proposalPath = typeof proposal?.path === "string" ? proposal.path : undefined;
     const healAttempts = r.heal?.attempts.length ?? 0;
-    const rerun = await writeRecord(r, ".heal", {
-      healOf: basename(firstRecord.path),
-      healAttempts,
-      ...(r.heal === undefined ? {} : { heal: { verdict: r.heal.verdict, attempts: healAttempts } }),
-      ...(proposal === undefined ? {} : { proposal }),
-    });
+    const rerun = await writeRecord(r, ".heal", { healOf: basename(firstRecord.path) }, (r as { resultPath?: string }).resultPath !== undefined);
     return {
       status: "ran",
       resultPath: rerun.path,

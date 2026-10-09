@@ -40,7 +40,7 @@ function runner(first: Scripted, second: Scripted): { runner: CheckRunners["jour
 }
 
 const QUARANTINED = { outcome: "quarantined", reason: "step 1: click 'Create New' not found", at: 1 };
-const PENDING = { outcome: "healed-pending-review", output: {}, revision: { steps: [] }, proposal: { id: "p-1", path: "/j/.proposals/p-1.json", steps: [1] }, heal: { verdict: "proposed", attempts: [{}] } };
+const PENDING = { outcome: "healed-pending-review", output: {}, revision: { steps: [] }, proposal: { id: "p-1", path: "/j/.proposals/p-1.json", steps: [{ number: 1, before: "click Create New", after: "click Create" }] }, heal: { verdict: "proposed", attempts: [{}] } };
 const EXHAUSTED = { outcome: "heal-exhausted", reason: "every candidate was refuted", at: 1, heal: { verdict: "exhausted", attempts: [{}, {}] } };
 
 async function seedJourney(id: string): Promise<void> {
@@ -169,6 +169,22 @@ describe("check --self-heal (#453)", () => {
     await seedJourney("j1");
     const r = await runCheck(base(journeySuite(["j1"]), { runners: { journey: runner(QUARANTINED, EXHAUSTED).runner } }));
     expect(readFileSync(r.junitPath, "utf8")).toContain('type="journey-assertion"');
+  });
+});
+
+describe("check --self-heal findings (#453)", () => {
+  it("a pending proposal exits 5 even when the suite gates advisory findings", async () => {
+    await seedJourney("j1");
+    const suite = parseSuite({ version: 1, name: "ci", gateAdvisory: true, targets: [{ name: "shop", url: URL0, journeys: [{ id: "j1" }] }] }, join(dir, "suite.json"));
+    const r = await runCheck(base(suite, { runners: { journey: runner(QUARANTINED, PENDING).runner } }));
+    expect([r.exitCode, r.summary.gatingFindings, r.findings.filter((f) => f.severity === "pending").map((f) => f.gating)]).toEqual([5, 0, [false]]);
+  });
+
+  it("a heal-exhausted Journey is counted exactly once: one finding, one gating count, one SARIF result", async () => {
+    await seedJourney("j1");
+    const r = await runCheck(base(journeySuite(["j1"]), { runners: { journey: runner(QUARANTINED, EXHAUSTED).runner } }));
+    const sarif = JSON.parse(readFileSync(r.sarifPath, "utf8")).runs[0].results;
+    expect([r.exitCode, r.summary.gatingFindings, r.findings.length, sarif.length]).toEqual([1, 1, 1, 1]);
   });
 });
 
