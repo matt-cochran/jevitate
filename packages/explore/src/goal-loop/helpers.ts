@@ -127,7 +127,7 @@ export function savedAndLeft(
  * Actions whose own name says "go back" (Back, Cancel, Close, Undo, …): returning to an earlier
  * state is exactly their target state, never a stall.
  */
-export const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset|discard|clear|exit|reload)\b/i;
+export const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset|discard|clear|exit|reload|refresh|done|got it)\b/i;
 
 /** Roles whose click changes an input's value (so a later repeat of a write sends something new). */
 export const TOGGLE_ROLES: ReadonlySet<string> = new Set(["checkbox", "radio", "switch", "option", "menuitemcheckbox", "menuitemradio"]);

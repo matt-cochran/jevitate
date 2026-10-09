@@ -124,7 +124,12 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
       ctx.timings.push(again.timing);
       const stuck =
         again.hang ??
-        (again.snapshot.signature === snap.signature && (await probeResponsive(ctx.page, cfg.hangProbeMs ?? HANG_PROBE_MS))
+        // #444: a request that completed (2xx) and a DOM that stayed put through the window is a
+        // settled return to an earlier state (a Refresh re-reading the same data, a Done closing a
+        // panel), not a hang. Pending requests, a changing page or no request at all stay as before.
+        (again.snapshot.signature === snap.signature &&
+        !(m.label.startsWith("click ") && ctx.sideEffects.lastClick()?.completedOk === true && ctx.sideEffects.inflight().length === 0) &&
+        (await probeResponsive(ctx.page, cfg.hangProbeMs ?? HANG_PROBE_MS))
           ? ({
               kind: "ui-no-progress",
               detail: `after "${m.label}" the page returned to an earlier state and made no progress for ${Math.round((ctx.now() - m.at) / 1000)}s`,
