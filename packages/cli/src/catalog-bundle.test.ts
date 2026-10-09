@@ -8,6 +8,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { buildCatalogBundle, CatalogBundleInputError, type CatalogBundleFinding, type CatalogBundleV1 } from "./catalog-bundle.js";
 import { exportCatalogBundle, type ExportCatalogBundleResult } from "./catalog-bundle-api.js";
 import type { Catalog } from "./catalog.js";
+import { anchorBaseline } from "./anchor-baselines.js";
 import type { GitExec } from "./change-context.js";
 
 /**
@@ -255,6 +256,30 @@ describe("what jevitate never exports", () => {
   it("drops a baseline measured on a Journey revision that is not the approved one", async () => {
     const b = await sampleBundle((root) => editJson(checkFile(root), (c) => (c.data.items[0].journeyHash = "0".repeat(64))));
     expect(b.checks.find((c) => c.runId === "journey-run-1")).not.toHaveProperty("baseline");
+  });
+
+  it("exports a baseline produced by anchorBaseline, its anchors keyed by name with atMs to step completion", async () => {
+    const b = await sampleBundle((root) =>
+      editJson(checkFile(root), (c) => {
+        const journey = readJson(journeyFile(root));
+        c.data.items[0].baseline = anchorBaseline(journey, {
+          outcome: "completed",
+          steps: [
+            { index: 0, stepId: "s-open", atMs: 10, durationMs: 1000 },
+            { index: 1, stepId: "s-verdict", atMs: 1010, durationMs: 2000 },
+          ],
+        });
+      }),
+    );
+    expect(b.checks.find((c) => c.runId === "journey-run-1")!.baseline).toEqual({
+      steps: 2,
+      totalMs: 3000,
+      anchors: [
+        { anchor: "job_start", step: 1, atMs: 0 },
+        { anchor: "verdict-recorded", step: 2, atMs: 3000 },
+        { anchor: "job_end", step: 2, atMs: 3000 },
+      ],
+    });
   });
 
   it("refuses a finding whose route carries a query string (route-with-query)", async () => {
