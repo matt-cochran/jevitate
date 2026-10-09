@@ -15,6 +15,7 @@ import { type TargetConfig } from "./target-config.js";
 import { type EngineInfo } from "./engine.js";
 import type { CheckSuite, SuiteBudget } from "./check-suite.js";
 import { type RunSummary } from "./report-api.js";
+import type { PrReviewCheckDeps } from "./approval-provenance.js";
 
 /**
  * `jevitate check --suite <file>` (#137): jevitate as a CI regression gate. Runs every suite item
@@ -134,6 +135,22 @@ export interface RunCheckOptions {
    * `allowedChannels` — else a gating `approval` finding (exit 1, JUnit + SARIF like any other).
    */
   readonly requireApprovals?: { readonly allowedChannels: readonly ApprovalChannel[]; readonly catalogDir: string | null };
+  /**
+   * #469 seam: how `--require-approvals` re-verifies a recorded `pr-review` approval — the forge
+   * (default: the real GitHub ForgePort), the CI environment (default `process.env`) and the git
+   * tracking probe for the positive-verification cache. Tests pass a fake forge.
+   */
+  readonly approvalVerification?: Pick<PrReviewCheckDeps, "env" | "forge" | "gitTracked">;
+  /**
+   * #470 `--max-brittle-steps <n>`: the opt-in locator gate — a Journey item with more than n brittle
+   * steps is a gating `locator-health` finding (exit 1). Absent: locator health is advisory only.
+   */
+  readonly maxBrittleSteps?: number;
+  /**
+   * #470: the project data dir whose config holds `testIdAttributes` (default: the project found from
+   * the cwd; null: none, the defaults apply).
+   */
+  readonly projectDir?: string | null;
 }
 
 export type ItemKind = "journey" | "goal" | "mission" | "verify-fix";
@@ -235,6 +252,19 @@ export interface LocatorHealthSummary {
   readonly maxBrittleSteps?: number;
   /** True when `maxBrittleSteps` was set and a Journey item exceeded it. */
   readonly exceeded?: boolean;
+  /** e.g. `7/9 steps on stable locators; 2 brittle (high 7 · medium 1 · low 1)`. */
+  readonly line?: string;
+  /** With `--baseline`: the steps improved / regressed against the baseline's Journey runs. */
+  readonly trend?: {
+    readonly improved: number;
+    readonly regressed: number;
+    readonly unchanged: number;
+    readonly added: number;
+    readonly removed: number;
+    readonly brittleDelta: number;
+    /** `trend vs baseline: 2 improved, 1 regressed (brittle -1)`. */
+    readonly line: string;
+  };
 }
 
 export interface BudgetReport {

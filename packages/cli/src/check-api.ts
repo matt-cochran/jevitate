@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { aggregateOf, formatUsageLine, type UsageCounts } from "@jevitate/ai-core";
@@ -10,7 +11,10 @@ import { runUsabilityMission } from "./ux-api.js";
 import { runVerifyFix } from "./verify-fix-api.js";
 import { currentEngineInfo } from "./engine.js";
 import { loadRunFile, resolveBaseline, scanRuns, summarizeRun } from "./report-api.js";
-import { CheckAiSetupError, type CheckFinding, type CheckGateways, type CheckItemReport, type CheckResult, type CheckRunners, type RunCheckOptions } from "./check-types.js";
+import { CheckAiSetupError, CheckArgsError, CheckPreflightError, type CheckFinding, type CheckGateways, type CheckItemReport, type CheckResult, type CheckRunners, type LocatorHealthSummary, type RunCheckOptions } from "./check-types.js";
+import { brittleStepGate, testIdAttributesOf, testIdAttributesOrDefault } from "./locator-health-api.js";
+import { combineHealth, compareLocatorHealth, exceedsBrittleSteps, trendLine, type LocatorHealthDetail, type LocatorHealthTrend, type LocatorSuggestion } from "./locator-health.js";
+import { findProjectDir } from "./project-dir.js";
 import { BudgetMeter } from "./check-budget.js";
 import { type Planned, type PreparedTarget, errorMessage, plan, prepareSelfHeal, prepareTarget } from "./check-plan.js";
 import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
@@ -37,13 +41,96 @@ async function approvalDefects(opts: RunCheckOptions, req: NonNullable<RunCheckO
   const catalogs = [];
   for (const d of dirs) catalogs.push(await loadCatalog(req.catalogDir, d));
   // #469: a recorded pr-review approval counts only when the forge re-confirms it.
-  const report = await approvalsReportVerified(catalogs, req.allowedChannels, { catalogDir: req.catalogDir });
+  const report = await approvalsReportVerified(catalogs, req.allowedChannels, { catalogDir: req.catalogDir, ...(opts.approvalVerification ?? {}) });
   const defects = (report.requirement?.violations ?? []).map((v): ConsolidatedDefect => {
     const identity: FindingIdentity = { category: "approval", signal: `approval-${v.problem}`, control: `${v.kind} ${v.id}` };
     const key = findingKey(identity);
     return { key, keys: [key], identity, category: "approval", severity: "hard", title: v.message, fingerprints: [], modes: [], occurrences: 1, runCount: 0, evidence: [], intermittent: false };
   });
   return { defects };
+}
+
+/**
+ * #470: the project's test-id convention for a check's Journey items. With the opt-in gate a malformed
+ * project config refuses the check (it would gate on a guessed convention); without it the defaults
+ * apply, as a run's result.json does.
+ */
+function checkTestIdAttributes(opts: RunCheckOptions): readonly string[] {
+  const projectDir = opts.projectDir === undefined ? findProjectDir() : opts.projectDir;
+  if (opts.maxBrittleSteps === undefined) return testIdAttributesOrDefault(projectDir);
+  try {
+    return testIdAttributesOf(projectDir);
+  } catch (e) {
+    throw new CheckPreflightError(`--max-brittle-steps needs the project's testIdAttributes convention: ${errorMessage(e)}`);
+  }
+}
+
+/** #470: the gate's finding for one Journey item past `--max-brittle-steps` (hard: it fails the check). */
+function brittleDefect(journeyId: string, health: { readonly brittle: number; readonly line?: string }, maxBrittleSteps: number): ConsolidatedDefect {
+  const identity: FindingIdentity = { category: "locator-health", signal: "brittle-steps", control: `journey ${journeyId}` };
+  const key = findingKey(identity);
+  const title = `Journey '${journeyId}': ${health.brittle} brittle locator step(s), more than --max-brittle-steps ${maxBrittleSteps}${health.line === undefined ? "" : ` (${health.line})`}`;
+  return { key, keys: [key], identity, category: "locator-health", severity: "hard", title, reproduce: `jevitate locator-health --journey ${journeyId}`, fingerprints: [], modes: [], occurrences: 1, runCount: 0, evidence: [], intermittent: false };
+}
+
+/** #470: the locator health a baseline run's result.json recorded, per Journey (the latest run of each wins). */
+function baselineLocatorHealths(runs: readonly RunRecord[]): Map<string, Parameters<typeof compareLocatorHealth>[1]> {
+  const out = new Map<string, Parameters<typeof compareLocatorHealth>[1]>();
+  for (const run of runs) {
+    if (run.mode !== "journey") continue;
+    try {
+      const json = JSON.parse(readFileSync(run.path, "utf8")) as { result?: { journeyId?: unknown; locatorHealth?: { brittle?: unknown; steps?: unknown } } };
+      const h = json.result?.locatorHealth;
+      if (typeof json.result?.journeyId === "string" && typeof h?.brittle === "number" && Array.isArray(h.steps)) out.set(json.result.journeyId, h as Parameters<typeof compareLocatorHealth>[1]);
+    } catch {
+      // An unreadable baseline run has no locator health to compare against.
+    }
+  }
+  return out;
+}
+
+/** #470: one trend over several Journeys (the counts summed). */
+function sumTrends(trends: readonly LocatorHealthTrend[]): LocatorHealthTrend {
+  const sum = (f: (t: LocatorHealthTrend) => number): number => trends.reduce((n, t) => n + f(t), 0);
+  return {
+    improved: sum((t) => t.improved),
+    regressed: sum((t) => t.regressed),
+    unchanged: sum((t) => t.unchanged),
+    added: sum((t) => t.added),
+    removed: sum((t) => t.removed),
+    brittleDelta: sum((t) => t.brittleDelta),
+    changes: trends.flatMap((t) => t.changes),
+  };
+}
+
+const LOCATOR_WARNING_RULE = "jevitate/locator-health/brittle-locator";
+
+/**
+ * #470: advisory locator fixes as SARIF WARNINGS (never errors, never gating) — one result per element
+ * to fix, located at the suite file with the route as its logical location.
+ */
+function withLocatorWarnings(sarif: ReturnType<typeof renderSarif>, suggestions: readonly LocatorSuggestion[], suiteUri: string): ReturnType<typeof renderSarif> {
+  if (suggestions.length === 0) return sarif;
+  const [run, ...rest] = sarif.runs as ReadonlyArray<{ tool: { driver: { rules: unknown[] } }; results: unknown[] }>;
+  if (run === undefined) return sarif;
+  const rule = { id: LOCATOR_WARNING_RULE, name: LOCATOR_WARNING_RULE.replace(/[^A-Za-z0-9]+/g, "_"), shortDescription: { text: "locator-health: a step's target misses the project's test-id convention" }, defaultConfiguration: { level: "warning" } };
+  const results = suggestions.map((s) => {
+    const journeys = [...new Set(s.occurrences.flatMap((o) => (o.journeyId === undefined ? [] : [o.journeyId])))];
+    return {
+      ruleId: LOCATOR_WARNING_RULE,
+      level: "warning",
+      message: { text: s.fix },
+      locations: [
+        {
+          physicalLocation: { artifactLocation: { uri: suiteUri }, region: { startLine: 1 } },
+          ...(s.route === undefined ? {} : { logicalLocations: [{ name: s.route, kind: "module" }] }),
+        },
+      ],
+      partialFingerprints: { jevitateFindingKey: `locator-health:${s.key}` },
+      properties: { category: "locator-health", severity: "advisory", gating: false, element: s.element, reasons: s.reasons, journeys, steps: s.occurrences.length },
+    };
+  });
+  return { ...sarif, runs: [{ ...run, tool: { ...run.tool, driver: { ...run.tool.driver, rules: [...run.tool.driver.rules, rule] } }, results: [...run.results, ...results] }, ...rest] };
 }
 
 export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
@@ -60,6 +147,15 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const items = plan(prepared, opts.changedRoutes, opts);
   // #453: refuse a bad self-heal request and read the change scope ONCE, before the first browser opens.
   const heal = await prepareSelfHeal(opts);
+  // #470: the opt-in locator gate and the convention it measures against, before anything runs.
+  if (opts.maxBrittleSteps !== undefined) {
+    try {
+      brittleStepGate(opts.maxBrittleSteps);
+    } catch (e) {
+      throw new CheckArgsError(errorMessage(e));
+    }
+  }
+  const testIdAttributes = items.some((i) => i.kind === "journey" && i.skipped === undefined) ? checkTestIdAttributes(opts) : undefined;
   let gw: Promise<CheckGateways> | undefined;
   const gateways = (): Promise<CheckGateways> => {
     if (opts.gateways === undefined) return Promise.reject(new CheckAiSetupError("this suite needs a model gateway: pass --real or --fake-ai (or set \"ai\" in the suite)"));
@@ -81,6 +177,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     gateways,
     engine,
     seq: () => String(++n),
+    ...(testIdAttributes === undefined ? {} : { testIdAttributes }),
     ...(heal === undefined ? {} : { heal, healer: () => (healer ??= gateways().then((g) => makeEvidenceSelfHealer(g.gen, { usage: g.usage }))) }),
   };
   const now = opts.now ?? clock.now;
@@ -121,7 +218,17 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   }
   // #437 --require-approvals: each violation is a hard `approval` finding on the `approvals` item.
   const approvals = opts.requireApprovals === undefined ? undefined : await approvalDefects(opts, opts.requireApprovals);
-  const defects = [...consolidate(runs), ...(approvals?.defects ?? [])];
+  // #470 --max-brittle-steps: a Journey item past the threshold is a hard `locator-health` finding on that item.
+  const brittleOf = new Map<number, ConsolidatedDefect>();
+  if (opts.maxBrittleSteps !== undefined) {
+    executed.forEach(({ item, ex }, idx) => {
+      const health = ex?.locatorHealth;
+      if (item.kind === "journey" && health !== undefined && exceedsBrittleSteps(health, opts.maxBrittleSteps)) {
+        brittleOf.set(idx, brittleDefect(item.name, { brittle: health.brittle, ...(ex?.locatorDetail === undefined ? {} : { line: ex.locatorDetail.line }) }, opts.maxBrittleSteps!));
+      }
+    });
+  }
+  const defects = [...consolidate(runs), ...(approvals?.defects ?? []), ...brittleOf.values()];
   let diff: FindingsDiff | undefined;
   let baselineRuns: RunRecord[] | undefined;
   if (opts.baseline !== undefined) {
@@ -146,7 +253,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const statusOf = (d: ConsolidatedDefect): DiffEntry["status"] | undefined => d.keys.map((k) => entryOf.get(k)?.status).find((s) => s !== undefined);
   const gating = defects.filter(isGating);
 
-  const itemReports: CheckItemReport[] = executed.map(({ item, ex, durationMs }) => {
+  const itemReports: CheckItemReport[] = executed.map(({ item, ex, durationMs }, idx) => {
     const base = {
       target: item.t.target.name,
       kind: item.kind,
@@ -156,7 +263,11 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     };
     if (ex === undefined) return { ...base, status: "skipped", actions: 0, verdict: "skipped", gating: [] };
     const run = ex.resultPath === undefined ? undefined : runOf.get(ex.resultPath);
-    const own = run === undefined ? [] : gating.filter((d) => d.modes.some((m) => m.runs.some((r) => r.path === run.path)));
+    const brittle = brittleOf.get(idx);
+    const own = [
+      ...(run === undefined ? [] : gating.filter((d) => d.modes.some((m) => m.runs.some((r) => r.path === run.path)))),
+      ...(brittle !== undefined && gating.includes(brittle) ? [brittle] : []),
+    ];
     // #453: a self-healed Journey that only proposed a revision is pending a person (never a pass).
     const pending = ex.status === "ran" && ex.outcome === "healed-pending-review" && own.length === 0;
     const verdict = ex.status === "error" ? "error" : own.length > 0 ? "failed" : pending ? "pending-review" : "passed";
@@ -173,8 +284,48 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       ...(run === undefined ? {} : { runId: run.runId }),
       ...(ex.outcome === undefined ? {} : { outcome: ex.outcome }),
       ...(ex.goalOutcome === undefined ? {} : { goalOutcome: ex.goalOutcome }),
+      ...(ex.journeyHash === undefined ? {} : { journeyHash: ex.journeyHash }),
+      // #469: a baseline only from a clean run — a completed replay with no gating finding.
+      ...(ex.baseline === undefined || verdict !== "passed" ? {} : { baseline: ex.baseline }),
+      ...(ex.locatorHealth === undefined ? {} : { locatorHealth: ex.locatorHealth }),
     };
   });
+
+  // #470: locator health over the Journey items (advisory unless the gate is set), and its trend against --baseline.
+  const details: Array<{ name: string; detail: LocatorHealthDetail }> = executed.flatMap(({ item, ex }) =>
+    item.kind === "journey" && ex?.locatorDetail !== undefined ? [{ name: item.name, detail: ex.locatorDetail }] : [],
+  );
+  const combined = combineHealth(details.map((d) => d.detail));
+  let locatorTrend: LocatorHealthSummary["trend"];
+  if (baselineRuns !== undefined && details.length > 0) {
+    const before = baselineLocatorHealths(baselineRuns);
+    const trends = executed.flatMap(({ item, ex }) => {
+      const b = item.kind === "journey" && ex?.locatorHealth !== undefined ? before.get(item.name) : undefined;
+      return b === undefined || ex?.locatorHealth === undefined ? [] : [compareLocatorHealth(ex.locatorHealth, b)];
+    });
+    if (trends.length > 0) {
+      const t = sumTrends(trends);
+      locatorTrend = { improved: t.improved, regressed: t.regressed, unchanged: t.unchanged, added: t.added, removed: t.removed, brittleDelta: t.brittleDelta, line: trendLine(t) };
+    }
+  }
+  const locatorHealth: LocatorHealthSummary | undefined =
+    details.length === 0 && opts.maxBrittleSteps === undefined
+      ? undefined
+      : {
+          journeys: details.length,
+          stable: combined.stable,
+          brittle: combined.brittle,
+          ...(testIdAttributes === undefined ? {} : { testIdAttributes }),
+          ...(opts.maxBrittleSteps === undefined ? {} : { maxBrittleSteps: opts.maxBrittleSteps, exceeded: brittleOf.size > 0 }),
+          ...(details.length === 0 ? {} : { line: combined.line }),
+          ...(locatorTrend === undefined ? {} : { trend: locatorTrend }),
+        };
+  // Without the gate, each Journey item's fixes are JUnit/SARIF warnings (never failures).
+  const warningsOf = (i: CheckItemReport, idx: number): string[] => {
+    if (opts.maxBrittleSteps !== undefined || i.kind !== "journey") return [];
+    const ex = executed[idx]?.ex;
+    return (ex?.locatorDetail?.suggestions ?? []).map((s) => s.fix);
+  };
 
   if (approvals !== undefined) {
     const own = gating.filter((d) => approvals.defects.includes(d)).map((d) => d.key);
@@ -191,7 +342,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const jsonPath = resolve(opts.jsonPath ?? join(outDir, "check.json"));
   const reportPath = join(outDir, "report.md");
 
-  const cases: GateCase[] = itemReports.map((i) => {
+  const cases: GateCase[] = itemReports.map((i, idx) => {
     const own = gating.filter((d) => i.gating.includes(d.key));
     const first = own[0];
     // #250: each gating finding's repro clip and screenshots, attached to the case CI shows.
@@ -206,6 +357,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       status: i.verdict,
       ...(i.resultPath === undefined ? {} : { resultPath: i.resultPath }),
       ...(attachments.length === 0 ? {} : { attachments }),
+      ...(warningsOf(i, idx).length === 0 ? {} : { warnings: warningsOf(i, idx) }),
       ...(i.verdict === "pending-review"
         ? {
             type: "healed-pending-review",
@@ -262,6 +414,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       gatingFindings,
       pendingReview: pendingItems.length,
     },
+    ...(locatorHealth === undefined ? {} : { locatorHealth }),
     proposals,
     ...(diff === undefined || baselineRuns === undefined ? {} : { diff: { baseline: baselineRuns.map(summarizeRun), summary: diff.summary } }),
     results: runs.map((r) => r.path),
@@ -272,14 +425,14 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   };
 
   await writeFile(junitPath, renderJUnit(`jevitate check: ${opts.suite.name}`, cases, startedAt), "utf8");
-  const sarif = renderSarif({
+  const sarif = withLocatorWarnings(renderSarif({
     toolVersion: engine.version,
     engineCommit: engine.commit,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
     suiteUri: opts.suiteUri ?? opts.suite.path,
     automationId: `jevitate-check/${opts.suite.name}/`,
     findings: defects.map((d) => ({ defect: d, gating: gating.includes(d), ...(statusOf(d) === undefined ? {} : { status: statusOf(d) }) })),
-  });
+  }), opts.maxBrittleSteps === undefined ? combined.suggestions : [], opts.suiteUri ?? opts.suite.path);
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
   await writeFile(
     reportPath,

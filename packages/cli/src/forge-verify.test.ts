@@ -456,4 +456,38 @@ describe("#469 the CLI", () => {
     const suite = { version: 1 as const, name: "approvals", budget: {}, gateAdvisory: false, targets: [], path: join(root, "suite.json") };
     expect((await runCheck({ suite, outDir: join(root, "out"), journeysDir: join(catalogDir, "journeys"), requireApprovals: { allowedChannels: ["pr-review"], catalogDir } })).exitCode).toBe(1);
   });
+
+  describe("check --require-approvals through an injected forge", () => {
+    const suite = () => ({ version: 1 as const, name: "approvals", budget: {}, gateAdvisory: false, targets: [], path: join(root, "suite.json") });
+    const check = () =>
+      runCheck({
+        suite: suite(),
+        outDir: join(root, "out"),
+        journeysDir: join(catalogDir, "journeys"),
+        requireApprovals: { allowedChannels: ["pr-review"], catalogDir },
+        approvalVerification: { env: CI_ENV, forge: () => forge, gitTracked: async () => false },
+      });
+
+    it("honours a pr-review the forge confirms (exit 0)", async () => {
+      await handWritten();
+      expect((await check()).exitCode).toBe(0);
+    });
+
+    it("a pr-review the forge does not confirm is an approval-unverified finding in check.json", async () => {
+      await handWritten({ ...RECORDED, reviewer: "carol" });
+      const json = JSON.parse(await readFile((await check()).jsonPath, "utf8"));
+      expect(json.data.findings.map((f: { identity: { signal: string }; gating: boolean }) => [f.identity.signal, f.gating])).toEqual([["approval-unverified", true]]);
+    });
+
+    it("…an approval-unverified SARIF error", async () => {
+      await handWritten({ ...RECORDED, reviewer: "carol" });
+      const sarif = JSON.parse(await readFile((await check()).sarifPath, "utf8"));
+      expect(sarif.runs[0].results.map((r: { ruleId: string; level: string }) => `${r.ruleId} ${r.level}`)).toEqual(["jevitate/approval/approval-unverified error"]);
+    });
+
+    it("…and a JUnit failure on the approvals item", async () => {
+      await handWritten({ ...RECORDED, reviewer: "carol" });
+      expect(await readFile((await check()).junitPath, "utf8")).toMatch(/<failure message="1 gating finding\(s\): job &apos;checkout&apos;[^"]*not confirmed by the forge[^"]*" type="approval">/);
+    });
+  });
 });

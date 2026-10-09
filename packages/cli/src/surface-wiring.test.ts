@@ -125,7 +125,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "regression-cli.ts runRegressionCapture": {},
   "regression-cli.ts runRegressionRun": {},
-  "check-cli.ts runCheck": { env: SEAM, now: SEAM, nowIso: SEAM, changeGitExec: SEAM },
+  "check-cli.ts runCheck": { env: SEAM, now: SEAM, nowIso: SEAM, changeGitExec: SEAM, approvalVerification: SEAM },
   "mcp-api.ts runVerifyFix": {
     evidencePaceMs: EVIDENCE_PACE,
     browserPortFactory: SEAM,
@@ -189,7 +189,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "check-execute.ts runJourneyProgrammatically": {
     actionDeltas: NO_DELTAS_HERE,
     mask: MASK_INTERNAL,
-    observer: OBSERVER_INTERNAL,
     screenshots: NO_SCREENSHOTS_HERE,
     account: SITE_ACCOUNT,
     interpreter: ANNOTATE_OBSERVER,
