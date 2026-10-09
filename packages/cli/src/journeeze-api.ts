@@ -24,6 +24,7 @@ import {
   runConnect,
   scrubError,
   sendPinned,
+  whoami,
   type ConnectDeps,
   type JourneezeHttp,
   type JourneezeHttpResponse,
@@ -75,11 +76,15 @@ export interface PublishJourneezeRequest {
   readonly journeysDir: string;
   /** `--dry-run`: export and validate the bundle, resolve the connection, send nothing. */
   readonly dryRun: boolean;
+  /** `--product-name`: overrides the connected product's name; must match what whoami reports. */
+  readonly productName?: string;
 }
 
 export interface PublishJourneezeResult {
   readonly dryRun: boolean;
   readonly baseUrl: string;
+  /** The product.name carried in the bundle (the connected product's, or `--product-name`). */
+  readonly productName: string;
   /** `sha256-<hex of bundle.json>`. */
   readonly idempotencyKey: string;
   readonly uploadId?: string;
@@ -115,6 +120,9 @@ const MAX_RETRY_AFTER_MS = 60_000;
 interface ResolvedKey {
   readonly key: string;
   readonly origin: string;
+  /** True when the key came from the saved connection (its product.name is authoritative). */
+  readonly fromSaved: boolean;
+  readonly savedProductName?: string;
 }
 
 /**
@@ -137,7 +145,7 @@ async function resolvePublishKey(req: PublishJourneezeRequest, deps: PublishDeps
     if (!JOURNEEZE_KEY_RE.test(fromEnv)) {
       throw new JourneezeError("E_JOURNEEZE_KEY_FORMAT", `${JOURNEEZE_KEY_ENV} is not a Journeeze upload key (jzu_ followed by 40 characters)`);
     }
-    return { key: fromEnv, origin: pinnedJourneezeOrigin(envUrl || saved?.baseUrl || JOURNEEZE_DEFAULT_URL) };
+    return { key: fromEnv, origin: pinnedJourneezeOrigin(envUrl || saved?.baseUrl || JOURNEEZE_DEFAULT_URL), fromSaved: false };
   }
   if (saved === undefined) {
     throw new JourneezeError(
@@ -151,7 +159,7 @@ async function resolvePublishKey(req: PublishJourneezeRequest, deps: PublishDeps
   }
   const sources: KeySources = deps.sources ?? defaultKeySources(env);
   try {
-    return { key: await resolveKeyRef(saved.keyRef, sources), origin };
+    return { key: await resolveKeyRef(saved.keyRef, sources), origin, fromSaved: true, savedProductName: saved.product.name };
   } catch (err) {
     if (err instanceof JourneezeError) {
       throw new JourneezeError(err.code, `${err.message} — fix ${describeRef(saved.keyRef)} or run \`jevitate connect journeeze\` again`);
@@ -165,11 +173,34 @@ interface BuiltBundle {
   readonly idempotencyKey: string;
 }
 
+/**
+ * The product.name the bundle carries (#477): `--product-name` when given, else the saved
+ * connection's product name, else whoami's (the CI key path). The key is verified with whoami on
+ * every dry run and whenever the key came from the environment; a verified name that contradicts the
+ * named one refuses before exporting.
+ */
+async function resolveProductName(req: PublishJourneezeRequest, resolved: ResolvedKey, deps: PublishDeps): Promise<string> {
+  const verify = req.dryRun || (!resolved.fromSaved && req.productName === undefined);
+  const verified = verify ? await whoami(deps.http ?? fetchJourneezeHttp, resolved.origin, resolved.key) : undefined;
+  if (verified !== undefined) {
+    const named = req.productName ?? (resolved.fromSaved ? resolved.savedProductName : undefined);
+    if (named !== undefined && named !== verified.product.name) {
+      throw new JourneezeError(
+        "E_JOURNEEZE_PRODUCT_MISMATCH",
+        `this key belongs to Journeeze product '${verified.product.name}' but this publish names '${named}' — pass the right --product-name '${verified.product.name}', or rerun \`jevitate connect journeeze\` if the saved connection is stale`,
+      );
+    }
+  }
+  if (req.productName !== undefined) return req.productName;
+  if (resolved.fromSaved) return resolved.savedProductName as string;
+  return (verified as NonNullable<typeof verified>).product.name;
+}
+
 /** Exports the bundle into a temp dir and checks what the contract checks before `202` (§4.2). */
-async function buildBundle(req: PublishJourneezeRequest, deps: PublishDeps, key: string): Promise<BuiltBundle> {
+async function buildBundle(req: PublishJourneezeRequest, deps: PublishDeps, key: string, productName: string): Promise<BuiltBundle> {
   const outDir = await mkdtemp(join(tmpdir(), "jev-journeeze-"));
   try {
-    const exported = await (deps.exportBundle ?? exportCatalogBundle)({ format: "journeeze-bundle", catalogDir: req.catalogDir, journeysDir: req.journeysDir, outDir });
+    const exported = await (deps.exportBundle ?? exportCatalogBundle)({ format: "journeeze-bundle", catalogDir: req.catalogDir, journeysDir: req.journeysDir, outDir, productName });
     const rel = relative(outDir, exported.bundlePath);
     if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw new JourneezeError("E_JOURNEEZE_BUNDLE", "the exported bundle is not where it was asked to be written");
     const body = new Uint8Array(await readFile(exported.bundlePath));
@@ -231,7 +262,7 @@ const TERMINAL = new Set(["imported", "refused"]);
  * Builds the result from a status body (contract §4.3). The nested summary is flattened to
  * `section.counter` numbers; findings become warnings; errors keep their code and path.
  */
-function fromStatus(base: Pick<PublishJourneezeResult, "baseUrl" | "idempotencyKey">, s: UploadStatus, statusUrl: string): PublishJourneezeResult {
+function fromStatus(base: Pick<PublishJourneezeResult, "baseUrl" | "productName" | "idempotencyKey">, s: UploadStatus, statusUrl: string): PublishJourneezeResult {
   const summary: Record<string, number> = {};
   const raw = s.body.summary;
   if (typeof raw === "object" && raw !== null) {
@@ -265,11 +296,11 @@ function parseStatus(body: Record<string, unknown>): UploadStatus {
   };
 }
 
-async function upload(origin: string, key: string, bundle: BuiltBundle, deps: PublishDeps): Promise<PublishJourneezeResult> {
+async function upload(origin: string, key: string, bundle: BuiltBundle, productName: string, deps: PublishDeps): Promise<PublishJourneezeResult> {
   const http: JourneezeHttp = deps.http ?? fetchJourneezeHttp;
   const sleep = deps.sleep ?? clockSleep;
   const auth = `Bearer ${key}`;
-  const base = { baseUrl: origin, idempotencyKey: bundle.idempotencyKey };
+  const base = { baseUrl: origin, productName, idempotencyKey: bundle.idempotencyKey };
   const digest = `sha-256=:${createHash("sha256").update(bundle.body).digest("base64")}:`;
 
   let accepted: UploadStatus | undefined;
@@ -350,10 +381,11 @@ export async function publishToJourneeze(req: PublishJourneezeRequest, deps: Pub
   try {
     const resolved = await resolvePublishKey(req, deps);
     key = resolved.key;
-    const bundle = await buildBundle(req, deps, key);
+    const productName = await resolveProductName(req, resolved, deps);
+    const bundle = await buildBundle(req, deps, key, productName);
     const result: PublishJourneezeResult = req.dryRun
-      ? { dryRun: true, baseUrl: resolved.origin, idempotencyKey: bundle.idempotencyKey, status: "dry-run", warnings: [], errors: [] }
-      : await upload(resolved.origin, key, bundle, deps);
+      ? { dryRun: true, baseUrl: resolved.origin, productName, idempotencyKey: bundle.idempotencyKey, status: "dry-run", warnings: [], errors: [] }
+      : await upload(resolved.origin, key, bundle, productName, deps);
     // Belt and braces: whatever Journeeze echoed, the key never leaves in a result.
     const text = JSON.stringify(result);
     return text.includes(key) ? (JSON.parse(redactText(text, [key])) as PublishJourneezeResult) : result;
@@ -365,5 +397,5 @@ export async function publishToJourneeze(req: PublishJourneezeRequest, deps: Pub
 /** The human rendering (no `--json`). */
 export function renderPublishJourneeze(r: PublishJourneezeResult): string {
   const summary = r.summary === undefined ? "" : `${Object.entries(r.summary).map(([k, v]) => `  ${k}: ${v}`).join("\n")}\n`;
-  return `${r.dryRun ? "dry run: nothing sent" : `upload ${r.uploadId ?? "?"}: ${r.status}`} (${r.idempotencyKey}) → ${r.baseUrl}\n${summary}${r.warnings.map((w) => `warning: ${w}\n`).join("")}${r.errors.map((e) => `error: ${e}\n`).join("")}`;
+  return `${r.dryRun ? "dry run: nothing sent" : `upload ${r.uploadId ?? "?"}: ${r.status}`} product '${r.productName}' (${r.idempotencyKey}) → ${r.baseUrl}\n${summary}${r.warnings.map((w) => `warning: ${w}\n`).join("")}${r.errors.map((e) => `error: ${e}\n`).join("")}`;
 }

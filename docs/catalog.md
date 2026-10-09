@@ -463,6 +463,7 @@ jevitate catalog export --format journeeze-bundle --out dist/catalog \
   --check jevitate-check/check.json --check nightly/check.json --product-name "Ledgerly"
 jevitate connect journeeze                       # a person, once: where the upload key is kept
 jevitate publish journeeze --dry-run             # export, validate, resolve the connection; send nothing
+jevitate publish journeeze --product-name "Ledgerly" --json  # override the connected product's name
 jevitate publish journeeze --json                # upload and wait until it is imported or refused
 ```
 
@@ -492,8 +493,15 @@ only in the `Authorization` header, and never after a redirect to another origin
 
 `publish journeeze` exports the bundle, uploads it, and polls until Journeeze reports it
 `imported` (exit 0) or `refused` (exit 1, with the server's errors). It never approves. MCP:
-`publish_to_journeeze` (`dryRun`), which never takes or returns the key. A refusal carries its
-specific code:
+`publish_to_journeeze` (`dryRun`, `productName`), which never takes or returns the key. A refusal
+carries its specific code.
+
+The bundle's `product.name` is the **connected product's** name — resolved from the saved
+connection, or from `whoami` when the key comes from `JOURNEEZE_UPLOAD_KEY` — not the project's
+`package.json` name. `--product-name` overrides it. Every `--dry-run` verifies the key with
+`whoami`; if its product differs from the name this publish would send (the saved one, or an
+explicit `--product-name`), nothing is exported and the run is refused with
+`E_JOURNEEZE_PRODUCT_MISMATCH` (pass the right `--product-name`, or rerun `connect journeeze`).
 
 | Code | Exit | Meaning |
 |---|---|---|
