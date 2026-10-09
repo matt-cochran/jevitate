@@ -564,3 +564,30 @@ describe("RecordingSchema — #409 per-step outcome wait (waitFor)", () => {
     expect(() => RecordingSchema.parse(rec({ kind: "handback", prompt: "p", resume: previews, waitFor: { maxMs: 1_000 } }))).toThrow();
   });
 });
+
+describe("RecordingSchema — editText into an empty editor (#443)", () => {
+  it("accepts an insertAfter step anchored at the end with no quote", () => {
+    const rec = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "editText",
+                target: { role: "textbox", name: "Signature" },
+                anchor: { at: "end" },
+                action: "insertAfter",
+                value: { redacted: false, value: "Hello" },
+                expect: { kind: "textIncludes", target: { css: "#ed" }, text: "Hello" },
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(RecordingSchema.safeParse(rec).success).toBe(true);
+  });
+});

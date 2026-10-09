@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { RecordingInterpreter } from "@jevitate/interpreter";
@@ -237,4 +239,58 @@ describe("visual-state invariant observables (#148)", () => {
     },
     120_000,
   );
+});
+
+const EMPTY_EDITOR_HTML =
+  '<!doctype html><html><body><label id="l">Signature</label>' +
+  '<div id="ed" contenteditable="true" role="textbox" aria-multiline="true" aria-labelledby="l"></div><button>Save</button></body></html>';
+
+describe("an empty rich-text editor (#443)", () => {
+  it(
+    "takes the typed text as a pure insert with no anchor quote",
+    async () => {
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(EMPTY_EDITOR_HTML);
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      try {
+        const text = await withSession(
+          "empty-editor-",
+          async (session) => {
+            const actor = CastActor.named("editor").whoCan(new BrowseTheWeb(session, [origin]));
+            await runGoalBasedMission({
+              actor,
+              judge: new ScriptedJudge([{ op: "edit_text", target: "0" }, { op: "done" }]),
+              gen: editGen({ action: "insertAfter", quote: null, text: "Hello" }),
+              goal: "Type 'Hello' into Signature and save.",
+              allowlist: [origin],
+              startUrl: origin,
+              successChecks: [{ kind: "page", assertion: { kind: "textIncludes", target: { css: "#ed" }, text: "Hello" } }],
+              oracleTimeoutMs: 500,
+            });
+            return session.page.locator("#ed").innerText();
+          },
+          origin,
+        );
+        expect(text).toBe("Hello");
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+    120_000,
+  );
+
+  it("validateTextEdit accepts a quote-less edit as an insert at the end when the editor is empty", () => {
+    expect(validateTextEdit({ action: "insertAfter", quote: null, text: "Hello", format: null }, "  ", [])).toEqual({
+      edit: { anchor: { at: "end" }, action: "insertAfter", value: "Hello" },
+    });
+  });
+
+  it("validateTextEdit still refuses a quote-less edit when the editor has text", () => {
+    expect(validateTextEdit({ action: "insertAfter", quote: null, text: "Hello", format: null }, "Hi", [])).toEqual({
+      refused: "the edit names no quote to anchor on (fail-closed)",
+    });
+  });
 });
