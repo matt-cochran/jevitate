@@ -219,6 +219,7 @@ export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = 
   jevitateRepo: "a check is a CI gate: findings are reported in JUnit/SARIF/report.md, never filed mid-run",
   repeat: "a check gates each item once by finding identity; track flakes across checks with --baseline",
   minAgreement: "a check gates each item once by finding identity; track flakes across checks with --baseline",
+  target: "#451: a check item is attributed by its suite item id (stamped on every item result); `explore --target` is for a standalone run",
   tag: "#426: tags are per check — `jevitate check --tag` stamps every item result; a suite item takes none of its own",
   authCheck: "#427: the pre-flight auth check runs before `explore` runs and queued missions; a check runs its items' missions directly, without it — mint the suite's sessions with `jevitate login` before `jevitate check`",
   typeFixture: "#281: a file typed verbatim into a field is an `explore --type-fixture` binding; a suite goal declares none",
