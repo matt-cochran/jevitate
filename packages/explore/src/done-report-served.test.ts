@@ -183,9 +183,9 @@ describe("report — a find-out goal ends with a grounded answer (#101)", () => 
           answer:
             "You are on the Pro plan with 1,200 credits left; to keep Design Partner pricing, book one customer interview per month.",
           claims: [
-            { claim: "You are on the Pro plan", quote: "Plan: Pro" },
-            { claim: "1,200 credits left", quote: "Credits left: 1,200" },
-            { claim: "Book one customer interview per month to keep Design Partner pricing", quote: "book one customer interview per month." },
+            { claim: "You are on the Pro plan", quote: "Plan: Pro", absent: null },
+            { claim: "1,200 credits left", quote: "Credits left: 1,200", absent: null },
+            { claim: "Book one customer interview per month to keep Design Partner pricing", quote: "book one customer interview per month.", absent: null },
           ],
         },
       });
@@ -230,8 +230,8 @@ describe("report — a find-out goal ends with a grounded answer (#101)", () => 
         "goal.answer": {
           answer: "You are on the Pro plan with 5,000 credits left.",
           claims: [
-            { claim: "You are on the Pro plan", quote: "Plan: Pro" },
-            { claim: "5,000 credits left", quote: "Credits left: 5,000" },
+            { claim: "You are on the Pro plan", quote: "Plan: Pro", absent: null },
+            { claim: "5,000 credits left", quote: "Credits left: 5,000", absent: null },
           ],
         },
       });

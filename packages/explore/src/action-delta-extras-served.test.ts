@@ -112,7 +112,7 @@ describe("#303 persistence re-check after a write (served)", () => {
 describe("#303 report grounding on a delta (served)", () => {
   const reportRun = (deltas: boolean) => {
     const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "report" }]);
-    const gen = new FakeGenerationGateway({ "goal.answer": { answer: "ZX4471Q", claims: [{ claim: "The generated code is ZX4471Q", quote: "Your code is ZX4471Q" }] } });
+    const gen = new FakeGenerationGateway({ "goal.answer": { answer: "ZX4471Q", claims: [{ claim: "The generated code is ZX4471Q", quote: "Your code is ZX4471Q", absent: null }] } });
     return withSession(
       "delta-ground-",
       async (session) =>

@@ -296,7 +296,7 @@ describe("#223 — on the page is not the same as answering", () => {
 
   it("Jev can veto a grounded answer, never approve an ungrounded one; an unusable judgment leaves code's verdict", async () => {
     const page = { url: "http://app.test/items/1", text: "Roadmap review\nOwner: tenant b", heading: "Roadmap review" };
-    const gen = new FakeGenerationGateway({ "goal.answer": { answer: "tenant b", claims: [{ claim: "The owner is tenant b", quote: "Owner: tenant b" }] } });
+    const gen = new FakeGenerationGateway({ "goal.answer": { answer: "tenant b", claims: [{ claim: "The owner is tenant b", quote: "Owner: tenant b", absent: null }] } });
     const input = { goal: "Find out who owns this item", url: page.url, pages: [page], history: [] };
     const no = new FakeJudgmentGateway({ [ANSWER_FITS_QUESTION]: { kind: "noul", value: false, probability: 0.05 } });
     const vetoed = await reportAnswer(gen, { ...input, judge: no });
@@ -304,7 +304,7 @@ describe("#223 — on the page is not the same as answering", () => {
     const yes = new FakeJudgmentGateway({ [ANSWER_FITS_QUESTION]: { kind: "noul", value: true, probability: 0.99 } });
     expect((await reportAnswer(gen, { ...input, judge: yes })).accept).toBe(true);
     expect((await reportAnswer(gen, { ...input, judge: new FakeJudgmentGateway({}) })).accept).toBe(true); // throws → no veto
-    const bad = new FakeGenerationGateway({ "goal.answer": { answer: "tenant c", claims: [{ claim: "The owner is tenant c", quote: "Owner: tenant c" }] } });
+    const bad = new FakeGenerationGateway({ "goal.answer": { answer: "tenant c", claims: [{ claim: "The owner is tenant c", quote: "Owner: tenant c", absent: null }] } });
     expect((await reportAnswer(bad, { ...input, judge: yes })).accept).toBe(false);
   });
 });
@@ -312,7 +312,7 @@ describe("#223 — on the page is not the same as answering", () => {
 describe("#229 — real-model find-out: vetoes stand, the heading hint is for one item only, the answer in its quote grounds", () => {
   it("H1: an answer Jev vetoed stays rejected when re-reported, even if a later judgment would say yes", async () => {
     const page = { url: "http://app.test/items", text: "Items\nNo items yet.", heading: "Items" };
-    const gen = new FakeGenerationGateway({ "goal.answer": { answer: "Items", claims: [{ claim: "The item is titled Items", quote: "Items" }] } });
+    const gen = new FakeGenerationGateway({ "goal.answer": { answer: "Items", claims: [{ claim: "The item is titled Items", quote: "Items", absent: null }] } });
     const input = { goal: "Find out the title of this item", url: page.url, pages: [page], history: [] };
     const vetoes = new VetoedAnswers();
     const no = new FakeJudgmentGateway({ [ANSWER_FITS_QUESTION]: { kind: "noul", value: false, probability: 0.23 } });
@@ -325,7 +325,7 @@ describe("#229 — real-model find-out: vetoes stand, the heading hint is for on
     expect(!again.accept && again.notAnswer).toBe(true);
     expect(!again.accept && again.reason).toMatch(/already vetoed/);
     // Same answer, quote with added quotation marks / full stop: the same pair.
-    const quoted = new FakeGenerationGateway({ "goal.answer": { answer: "Items.", claims: [{ claim: "Title", quote: "“Items.”" }] } });
+    const quoted = new FakeGenerationGateway({ "goal.answer": { answer: "Items.", claims: [{ claim: "Title", quote: "“Items.”", absent: null }] } });
     expect((await reportAnswer(quoted, { ...input, judge: yes, vetoes })).accept).toBe(false);
     // Another run (its own store) is judged afresh.
     expect((await reportAnswer(gen, { ...input, judge: yes, vetoes: new VetoedAnswers() })).accept).toBe(true);
@@ -458,7 +458,7 @@ describe("#234 — a list answer quotes its entries one per line", () => {
   });
 
   it("an identical rejected (answer, quotes) re-report is named as a repeat, not silently re-rejected", async () => {
-    const bad = { answer: "Team and Billing", claims: [{ claim: "The settings sections", quote: "Team\nBilling history" }] };
+    const bad = { answer: "Team and Billing", claims: [{ claim: "The settings sections", quote: "Team\nBilling history", absent: null }] };
     const gen = new FakeGenerationGateway({ "goal.answer": bad });
     const vetoes = new VetoedAnswers();
     const input = { goal, url: settings.url, pages: [settings], history: [], vetoes };
@@ -533,7 +533,7 @@ describe("#395 — a hint retry that finds nothing never hides why the first ans
   // "this text" reads as a goal about one item, so a rejected answer gets the heading-hint retry.
   const goal = "Import this text and analyze it. If you do not have enough credits, try to get more credits, then report what the app told you.";
   const banner = "Purchasing opens soon — You can use your included credits now. Buying credits and plans isn't open yet.";
-  const answered = new FakeGenerationGateway({ "goal.answer": { answer: banner, claims: [{ claim: "The app says purchasing opens soon", quote: banner }] } });
+  const answered = new FakeGenerationGateway({ "goal.answer": { answer: banner, claims: [{ claim: "The app says purchasing opens soon", quote: banner, absent: null }] } });
   const nothing = new FakeGenerationGateway({ "goal.answer": { answer: null, claims: [] } });
   // The first ask answers from the page; the hinted retry (about the page's heading) finds nothing.
   const gen: GenerationPort = {

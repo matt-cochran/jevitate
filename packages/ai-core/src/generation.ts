@@ -108,7 +108,8 @@ export const GOAL_ANSWER_INSTRUCTIONS =
   "also when the goal asks WHETHER something exists and no page shows it (code then reports it as not " +
   "present, from the pages seen). To state that the pages seen have NO such control, give that claim " +
   "`absent` = its shortest name (\"Launch\") and `quote` = \"\": code checks every observed control and " +
-  "text for it. Never claim an absence with a quote that does not show it.";
+  "text for it. An ordinary claim that is not an absence MUST set `absent: null`. Never claim an " +
+  "absence with a quote that does not show it.";
 
 /** The answer to a find-out / understand goal, from the observed page text (`report`). */
 export const GoalAnswerInput = z.object({
@@ -130,7 +131,7 @@ export const GoalAnswerOutput = z.object({
    * #447: `absent` — a claim that the pages seen have NO such control or thing, by its name; its
    * `quote` is empty, and code grounds it on the observed control inventory and page text.
    */
-  claims: z.array(z.object({ claim: z.string(), quote: z.string(), absent: z.string().max(200).nullable().optional() }).strict()).max(20),
+  claims: z.array(z.object({ claim: z.string(), quote: z.string(), absent: z.string().max(200).nullable() }).strict()).max(20),
 }).strict();
 
 /**
@@ -321,7 +322,7 @@ export const HealRankOutput = z.object({
 export const GEN_TASKS = {
   "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "5" },
   "chat.reply": { input: ChatReplyInput, output: ChatReplyOutput, promptVersion: "2" },
-  "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "6", temperature: 0 },
+  "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "7", temperature: 0 },
   "text.edit": { input: TextEditInput, output: TextEditOutput, promptVersion: "1", temperature: 0 },
   "triage.narrative": { input: TriageInput, output: TriageOutput, promptVersion: "1" },
   "ux.recommendation": { input: UxRecommendationInput, output: UxRecommendationOutput, promptVersion: "1" },
@@ -411,7 +412,7 @@ export class FakeGenerationGateway implements GenerationPort {
         .split("\n")
         .map((l) => l.trim())
         .find((l) => l.length >= 8 && !/^URL:/i.test(l));
-      return line === undefined ? { answer: null, claims: [] } : { answer: line, claims: [{ claim: line, quote: line }] };
+      return line === undefined ? { answer: null, claims: [] } : { answer: line, claims: [{ claim: line, quote: line, absent: null }] };
     }
     if (kind === "text.edit") {
       // No edit unless a test cans one: the fake never invents an anchor.

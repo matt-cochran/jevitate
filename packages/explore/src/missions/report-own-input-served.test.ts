@@ -67,7 +67,7 @@ const GOAL =
 /** The fake generator types `value:<label>`: a report quoting the field holding it. */
 const ON_OWN_INPUT = {
   answer: "The bet is value:The bet",
-  claims: [{ claim: "The bet is value:The bet", quote: "The bet: value:The bet" }],
+  claims: [{ claim: "The bet is value:The bet", quote: "The bet: value:The bet", absent: null }],
 };
 
 async function run(steps: ScriptedStep[], answer: unknown): Promise<GoalBasedResult> {
@@ -111,7 +111,7 @@ describe("#239 — a report never grounds on the run's own unsaved input", () =>
   it(
     "a write goal's report on page text, before anything was saved: rejected — no write of the run succeeded",
     async () => {
-      const onPage = { answer: "Decisions you record appear in your ledger.", claims: [{ claim: "Decisions appear in the ledger", quote: "Decisions you record appear in your ledger." }] };
+      const onPage = { answer: "Decisions you record appear in your ledger.", claims: [{ claim: "Decisions appear in the ledger", quote: "Decisions you record appear in your ledger.", absent: null }] };
       const r = await run([{ op: "type", target: "0" }, { op: "report" }], onPage);
       expect(r.outcome).not.toBe("succeeded");
       expect(reports(r)[0]).toContain(UNSAVED_WRITE_REASON);

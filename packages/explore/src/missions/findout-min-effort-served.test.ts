@@ -47,7 +47,7 @@ afterAll(async () => {
 });
 
 const OPEN_ENDED = "Use this tool's main features and report what works and every error you see.";
-const GROUNDED = { answer: "3 projects are active.", claims: [{ claim: "3 projects are active", quote: "Overview: 3 projects active" }] };
+const GROUNDED = { answer: "3 projects are active.", claims: [{ claim: "3 projects are active", quote: "Overview: 3 projects active", absent: null }] };
 const NONE = { answer: null, claims: [] };
 
 async function run(goal: string, steps: ScriptedStep[], answer: unknown, opts: { maxActions?: number; maxDecisions?: number; minEffort?: MinEffortRequest } = {}): Promise<GoalBasedResult> {
