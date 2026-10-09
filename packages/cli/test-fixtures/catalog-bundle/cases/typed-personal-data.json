@@ -1,0 +1,31 @@
+{
+  "description": "A typed value kept in clear in a verbatim journey must be synthetic: an email is refused.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/catalog/journeys/0/journey/recording/pages/0/steps/-",
+      "value": {
+        "step": {
+          "kind": "fill",
+          "target": {
+            "label": "Email"
+          },
+          "value": {
+            "redacted": false,
+            "value": "ana@example.com"
+          },
+          "expect": {
+            "kind": "urlIncludes",
+            "text": "/board"
+          }
+        }
+      }
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/catalog/journeys/0/journey/recording/pages/0/steps/2/step/value/value",
+    "keyword": "not"
+  }
+}

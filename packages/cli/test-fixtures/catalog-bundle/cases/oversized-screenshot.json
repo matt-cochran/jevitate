@@ -1,0 +1,16 @@
+{
+  "description": "A screenshot is at most 2 MiB.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/files/0/bytes",
+      "value": 2097153
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/files/0/bytes",
+    "keyword": "maximum"
+  }
+}

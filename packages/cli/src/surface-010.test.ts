@@ -68,7 +68,6 @@ async function run(argv: readonly string[]): Promise<{ code: number | undefined;
 const STUB_COMMANDS: ReadonlyArray<readonly string[]> = [
   ["journey", "migrate", "--step-ids", "--dry-run"],
   ["journey", "review", "--stale"],
-  ["catalog", "export", "--format", "journeeze-bundle", "--out", "<dir>/bundle"],
   ["connect", "journeeze", "--url", "http://127.0.0.1:3999"],
   ["publish", "journeeze", "--dry-run"],
 ];
@@ -104,7 +103,6 @@ describe("0.10 MCP tools: allowlisted, mirrored, stubbed, and key-free", () => {
 
   const CALLS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
     ["review_journey", { stale: true }],
-    ["export_catalog_bundle", { format: "journeeze-bundle", out: "bundle" }],
     ["publish_to_journeeze", { dryRun: true }],
   ];
 

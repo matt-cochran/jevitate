@@ -1,0 +1,26 @@
+{
+  "description": "A later minor (1.1) with fields this reader does not know: they are pruned, never read, and the rest validates.",
+  "base": "minimal",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/minor",
+      "value": 1
+    },
+    {
+      "op": "add",
+      "path": "/catalog/jobs/0/estimate",
+      "value": "three days"
+    },
+    {
+      "op": "add",
+      "path": "/telemetry",
+      "value": {
+        "enabled": true
+      }
+    }
+  ],
+  "expect": {
+    "valid": true
+  }
+}

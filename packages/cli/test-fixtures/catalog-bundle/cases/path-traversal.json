@@ -1,0 +1,16 @@
+{
+  "description": "Media paths are pinned to `media/<journey>/...` and `media/findings/...`.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/files/0/path",
+      "value": "media/../secrets.png"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/files/0/path",
+    "keyword": "anyOf"
+  }
+}
