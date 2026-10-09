@@ -25,6 +25,12 @@ import type { JourneyRunResult } from "@jevitate/runtime";
 import type { RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { journeyResultRecord, type JourneyResultProposal } from "./journey-result-record.js";
 import { applyJourneyEnvironment } from "./environments.js";
+import type { StepObserver } from "@jevitate/interpreter";
+import { journeyReviewHash } from "./journey-review.js";
+import { anchorBaseline, type BaselineRunStep } from "./anchor-baselines.js";
+import { journeyLocatorHealth, testIdAttributesOrDefault } from "./locator-health-api.js";
+import type { LocatorHealthDetail } from "./locator-health.js";
+import type { CheckBaseline, LocatorHealth } from "./check-types.js";
 
 // ── execution ────────────────────────────────────────────────────────────────
 
@@ -42,6 +48,14 @@ export interface Executed {
   /** #453: heal attempts the re-run made; the re-run's own reason when it ended `heal-exhausted`. */
   readonly healAttempts?: number;
   readonly reason?: string;
+  /** #469: the review hash (`journeyReviewHash`) of the Journey revision a Journey item replayed. */
+  readonly journeyHash?: string;
+  /** #469: the machine baseline of a Journey item's run — only when it completed. */
+  readonly baseline?: CheckBaseline;
+  /** #470: the run's locator health as its result.json carries it (`result.locatorHealth`). */
+  readonly locatorHealth?: LocatorHealth;
+  /** #470: the same health in detail (levels, the fixes), for the check's totals and warnings. */
+  readonly locatorDetail?: LocatorHealthDetail;
 }
 
 const BROKEN = new Set(["crashed", "inconclusive"]);
@@ -57,6 +71,34 @@ export interface ExecContext {
   readonly heal?: PreparedHeal;
   /** #453: the evidence-only healer, built from the check's gateways on first use. */
   readonly healer?: () => Promise<SelfHealer>;
+  /** #470: the project's test-id convention (resolved once at preflight); default: the project's, else the defaults. */
+  readonly testIdAttributes?: readonly string[];
+}
+
+/**
+ * #469: the per-step timing of one Journey replay, for its anchor baseline — measured around each
+ * step the interpreter completes (0-based flat `index`, `atMs` from the first step's start). A step
+ * that failed, handed back or never ran records nothing; a step re-run (a resume, a heal) keeps its
+ * last timing. It never changes the replay (an observer's errors are swallowed).
+ */
+function stepTimer(): { readonly observer: StepObserver; readonly steps: () => BaselineRunStep[] } {
+  let origin: number | undefined;
+  const started = new Map<number, number>();
+  const done = new Map<number, BaselineRunStep>();
+  const observer: StepObserver = {
+    beforeStep: async ({ index }) => {
+      const now = clock.monotonicMs();
+      origin ??= now;
+      started.set(index, now);
+    },
+    afterStep: async ({ index, recorded, outcome }) => {
+      const start = started.get(index);
+      if (outcome !== "done" || start === undefined || origin === undefined) return;
+      const stepId = recorded.stepId;
+      done.set(index, { index, ...(stepId === undefined ? {} : { stepId }), atMs: start - origin, durationMs: clock.monotonicMs() - start });
+    },
+  };
+  return { observer, steps: () => [...done.values()].sort((a, b) => a.index - b.index) };
 }
 
 function missionExecuted(resultPath: string, missionOutcome: string, result: Json): Executed {
@@ -191,8 +233,27 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       ...(environment === undefined ? {} : { environment }),
     };
     // Only what a self-heal re-run adds (named, so the surface-wiring check sees what is passed).
-    const runOnce = (extra: Partial<Pick<RunJourneyProgrammaticallyOptions, "policy" | "selfHealer" | "heal">>): Promise<JourneyRunResult> =>
-      withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({ ...(siteGate === undefined ? {} : { siteGate }), ...runOptions, ...extra }));
+    // #469: each replay is timed per step (an observer), so a completed run yields the anchor baseline.
+    let timer = stepTimer();
+    const runOnce = (extra: Partial<Pick<RunJourneyProgrammaticallyOptions, "policy" | "selfHealer" | "heal">>): Promise<JourneyRunResult> => {
+      timer = stepTimer();
+      const observer = timer.observer;
+      return withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({ ...(siteGate === undefined ? {} : { siteGate }), ...runOptions, observer, ...extra }));
+    };
+    // #469: the revision replayed, as the review/approval hashes it (the stored Journey, before any environment).
+    const journeyHash = journeyReviewHash(stored);
+    const testIdAttributes = ctx.testIdAttributes ?? testIdAttributesOrDefault();
+    /** What a Journey item reports beside its outcome: its hash, its baseline (completed runs) and its locator health. */
+    const measured = (r: JourneyRunResult, locatorHealth: LocatorHealth | undefined): Pick<Executed, "journeyHash" | "baseline" | "locatorHealth" | "locatorDetail"> => {
+      const baseline = anchorBaseline(stored, { outcome: r.outcome === "ok" ? "completed" : r.outcome, steps: timer.steps() });
+      const detail = journeyLocatorHealth(j, testIdAttributes, r.resolved);
+      return {
+        journeyHash,
+        ...(baseline === undefined ? {} : { baseline }),
+        ...(locatorHealth === undefined ? {} : { locatorHealth }),
+        ...(detail.steps.length === 0 ? {} : { locatorDetail: detail }),
+      };
+    };
     const seq = ctx.seq();
     const stampName = artifactStamp(startedAt);
     const writeRecord = async (
@@ -202,7 +263,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       // #453: a self-heal run already persisted + indexed its own record (`runJourneyProgrammatically`); the check's
       // `.heal.result.json` is the same run stamped with the suite, so it is not indexed a second time.
       indexed = false,
-    ): Promise<{ path: string; actions: number }> => {
+    ): Promise<{ path: string; actions: number; locatorHealth?: LocatorHealth }> => {
       const at = r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? r.at : undefined;
       const path = join(ctx.resultsDir, `journey-${stampName}-${seq}${suffix}.result.json`);
       const proposal = (r as { proposal?: JourneyResultProposal }).proposal;
@@ -214,12 +275,14 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         suite: stamp.suite,
         ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
         ...(proposal === undefined ? {} : { proposal }),
+        testIdAttributes,
       });
       // #426: the check's --tag metadata and structured target ride on every item result.
       const stamped = { ...record, result: stampRunMetadata({ ...record.result, ...extra }) };
       await writeFile(path, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
       if (!indexed) recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
-      return { path, actions: at !== undefined ? at + 1 : recordingSteps(j) };
+      const locatorHealth = stamped.result.locatorHealth as LocatorHealth | undefined;
+      return { path, actions: at !== undefined ? at + 1 : recordingSteps(j), ...(locatorHealth === undefined ? {} : { locatorHealth }) };
     };
 
     // Fail closed first (no healer, no change context): a plain pass or failure never involves a model.
@@ -227,7 +290,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     const firstRecord = await writeRecord(first, "", {});
     const heal = ctx.heal;
     if (heal === undefined || ctx.healer === undefined || first.outcome !== "quarantined") {
-      return { status: "ran", resultPath: firstRecord.path, outcome: first.outcome, actions: firstRecord.actions };
+      return { status: "ran", resultPath: firstRecord.path, outcome: first.outcome, actions: firstRecord.actions, ...measured(first, firstRecord.locatorHealth) };
     }
     // #453: quarantined + a change context → ONE re-run with the shared scope and per-run budget; its
     // usage lands on the check's gateways (and so its budget); the item's outcome is the re-run's.
@@ -249,6 +312,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       actions: firstRecord.actions + rerun.actions,
       supersedes: firstRecord.path,
       healAttempts,
+      ...measured(r, rerun.locatorHealth),
       ...(r.outcome === "heal-exhausted" ? { reason: r.reason } : {}),
       ...(r.outcome === "healed-pending-review" ? { proposal: { ...(proposalId === undefined ? {} : { proposalId }), ...(proposalPath === undefined ? {} : { path: proposalPath }) } } : {}),
     };

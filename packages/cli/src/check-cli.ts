@@ -145,8 +145,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         if (o.allowChannels !== undefined && o.requireApprovals !== true) throw new ApprovalArgsError("--allow-channels needs --require-approvals");
         const allowedChannels = o.requireApprovals === true ? parseAllowedChannels(o.allowChannels) : undefined;
         // #470: the opt-in brittle-step gate, resolved before the suite is read or anything runs.
-        // (The feature adds `maxBrittleSteps` to RunCheckOptions and passes gate.maxBrittleSteps below.)
-        if (o.maxBrittleSteps !== undefined) brittleStepGate(o.maxBrittleSteps);
+        const gate = o.maxBrittleSteps === undefined ? undefined : brittleStepGate(o.maxBrittleSteps);
         const suite = loadSuite(o.suite);
         const real = o.real === true || (o.fakeAi !== true && suite.ai === "real");
         const fakeAi = o.fakeAi === true || (o.real !== true && suite.ai === "fake");
@@ -175,6 +174,8 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           ...(deps.runners === undefined ? {} : { runners: deps.runners }),
           ...(healRequest.selfHeal === "fail-closed" ? {} : { selfHeal: healRequest }),
           ...(allowedChannels === undefined ? {} : { requireApprovals: { allowedChannels, catalogDir: resolveCatalogDir(deps.catalogDir) } }),
+          ...(gate === undefined ? {} : { maxBrittleSteps: gate.maxBrittleSteps }),
+          projectDir: resolveCatalogDir(deps.catalogDir),
         });
         if (o.json) emit(program, ok(result), true, result.exitCode);
         else {
@@ -194,6 +195,13 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
             out?.(`COST    ${formatUsageLine(result.usage)}\n`);
           }
           if (result.budget.exceeded !== undefined) out?.(`BUDGET  ${result.budget.exceeded}\n`);
+          // #470: locator health (advisory unless --max-brittle-steps), and its trend against --baseline.
+          const lh = result.locatorHealth;
+          if (lh?.line !== undefined) {
+            const gateNote = lh.maxBrittleSteps === undefined ? " (advisory)" : lh.exceeded === true ? ` — exceeds --max-brittle-steps ${lh.maxBrittleSteps}` : ` (within --max-brittle-steps ${lh.maxBrittleSteps})`;
+            out?.(`LOCATOR ${lh.line}${gateNote}\n`);
+          }
+          if (lh?.trend !== undefined) out?.(`LOCATOR ${lh.trend.line}\n`);
           // #213: exit 2 (an item errored, or the budget ran out, but no gating finding) is never
           // headed FAIL — that reads as a defect was found when the run simply proved nothing.
           const headline =
