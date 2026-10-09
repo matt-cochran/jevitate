@@ -41,6 +41,22 @@ export function occurrences(text: string, quote: string): number {
   return n;
 }
 
+/** An empty editor has nothing to anchor on: the only valid edit is typing text at its end (#443). */
+function validateEmptyEditorInsert(
+  action: TextEdit["action"],
+  proposedText: string | null,
+  secrets: readonly string[],
+): PlannedEdit {
+  if (action === "format") return { refused: "there is no text to format in an empty editor" };
+  const text = proposedText ?? "";
+  if (text === "") return { refused: "the edit has no text to insert into the empty editor" };
+  if (redactText(text, secrets) !== text) {
+    return { refused: "the edit contains a registered secret (never typed into rich text)" };
+  }
+  if (text.length > EDIT_TEXT_MAX_CHARS) return { refused: `the edit types more than ${EDIT_TEXT_MAX_CHARS} characters` };
+  return { edit: { anchor: { at: "end" }, action: "insertAfter", value: text } };
+}
+
 /**
  * Code's gate on a proposed edit (pure): the reason it is refused, or the edit to perform. Never
  * repairs a bad proposal into something else.
@@ -52,6 +68,7 @@ export function validateTextEdit(
 ): PlannedEdit {
   if (proposal.action === null) return { refused: "no edit proposed" };
   const quote = proposal.quote ?? "";
+  if (quote.trim() === "" && currentText.trim() === "") return validateEmptyEditorInsert(proposal.action, proposal.text, secrets);
   if (quote.trim() === "") return { refused: "the edit names no quote to anchor on (fail-closed)" };
   if (redactText(quote, secrets) !== quote || (proposal.text !== null && redactText(proposal.text, secrets) !== proposal.text)) {
     return { refused: "the edit contains a registered secret (never typed into rich text)" };
