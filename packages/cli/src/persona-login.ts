@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { randomUUID } from "node:crypto";
 import type { Locator, Page } from "playwright";
 import { redactText, redactUrl } from "@jevitate/ai-core";
+import { clock } from "@jevitate/domain";
 import { assertAuthorizedExploreTarget, isLoginLikeUrl, UnauthorizedExploreTargetError } from "@jevitate/explore";
 import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
 import { sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
@@ -285,11 +286,49 @@ function pathOf(url: string): string {
   }
 }
 
+/** How often {@link waitForNoSignInForm} re-checks the page for sign-in-form evidence (clock time). */
+const SIGN_IN_FORM_POLL_MS = 100;
+
+/** The submit controls whose accessible name marks a form as a sign-in form. */
+const SIGN_IN_BUTTON = /sign\s*in|log\s*in|login|continue/i;
+
+/**
+ * True when the page shows evidence of a sign-in form (#442): a login-like URL, OR a visible password
+ * field together with a visible username/email field ({@link userCandidates}) or a visible button whose
+ * accessible name matches {@link SIGN_IN_BUTTON}. A page with only a password field (an API-credentials
+ * or settings form) is NOT a sign-in form — it is not evidence of an expired session.
+ */
+async function showsSignInForm(page: Page): Promise<boolean> {
+  if (isLoginLikeUrl(page.url())) return true;
+  if ((await page.locator(VISIBLE_PASSWORD).filter({ visible: true }).count().catch(() => 0)) === 0) return false;
+  if ((await firstVisible(userCandidates(page))) !== undefined) return true;
+  return (await firstVisible([page.getByRole("button", { name: SIGN_IN_BUTTON })])) !== undefined;
+}
+
+/**
+ * Waits until {@link showsSignInForm} is false, bounded by `timeoutMs` of clock time (polled on the
+ * injectable clock, never a real-time sleep). Throws a Playwright-shaped `TimeoutError` at the bound,
+ * so the caller's existing timeout handling reports the login as failed.
+ */
+async function waitForNoSignInForm(page: Page, timeoutMs: number): Promise<void> {
+  const deadline = clock.now() + Math.max(0, timeoutMs);
+  for (;;) {
+    if (!(await showsSignInForm(page))) return;
+    const left = deadline - clock.now();
+    if (left <= 0) {
+      const err = new Error(`Timeout ${Math.round(timeoutMs)}ms exceeded waiting for the page to leave its sign-in form`);
+      err.name = "TimeoutError";
+      throw err;
+    }
+    await clock.sleep(Math.min(SIGN_IN_FORM_POLL_MS, left));
+  }
+}
+
 async function waitForSuccess(page: Page, success: LoginSuccess | undefined, timeoutMs: number): Promise<void> {
   if (success === undefined) {
-    // Default: the app moved off its sign-in page — no login-like URL and no visible password field.
+    // Default: the app moved off its sign-in page — no login-like URL, and no sign-in-form evidence.
     await page.waitForURL((u) => !isLoginLikeUrl(u.href), { timeout: timeoutMs, waitUntil: "load" });
-    await page.locator(VISIBLE_PASSWORD).filter({ visible: true }).first().waitFor({ state: "detached", timeout: timeoutMs });
+    await waitForNoSignInForm(page, timeoutMs);
     return;
   }
   if (success.kind === "urlIncludes") {
@@ -544,8 +583,9 @@ async function judgeLanding(page: Page, o: SessionCheckOptions): Promise<Session
       if (isLoginLikeUrl(landed)) {
         return { ok: false, landedUrl: where, reason: `the session in ${state} is not signed in: ${pathOf(o.url)} redirected to the sign-in page ${pathOf(landed)}` };
       }
-      const pw = await page.locator(VISIBLE_PASSWORD).filter({ visible: true }).count().catch(() => 0);
-      if (pw > 0) return { ok: false, landedUrl: where, reason: `the session in ${state} is not signed in: ${pathOf(landed)} shows a sign-in form (a password field)` };
+      if (await showsSignInForm(page)) {
+        return { ok: false, landedUrl: where, reason: `the session in ${state} is not signed in: ${pathOf(landed)} shows a sign-in form (a password field with a username field or a sign-in button)` };
+      }
       return { ok: true, landedUrl: where };
     }
     case "urlExcludes":

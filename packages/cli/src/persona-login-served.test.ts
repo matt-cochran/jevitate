@@ -111,6 +111,17 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(`<!doctype html><html><head><title>Dashboard</title></head><body><h1>Dashboard</h1><button type="button">New report</button></body></html>`);
       return;
     }
+    if (url.pathname === "/credentials") {
+      const sid = sidOf(req);
+      if (sid === undefined || !sessions.has(sid)) {
+        res.writeHead(302, { location: "/login?next=/credentials" }).end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(
+        `<!doctype html><html><head><title>API credentials</title></head><body><nav>Signed in as a@b.c</nav><h1>API credentials</h1><label>App secret <input type="password"></label><button type="button">Save</button></body></html>`,
+      );
+      return;
+    }
     res.writeHead(404).end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -196,6 +207,20 @@ describe("#427 persona login + pre-flight auth check (served, real browser)", ()
     expect(ok.envelope.ok, ok.out + ok.err).toBe(true);
     expect((ok.envelope.data?.failure as { kind?: string } | undefined)?.kind).not.toBe("auth-expired");
     expect(ok.envelope.data?.missionOutcome).toBe("clean");
+  }, 120_000);
+
+  it("an authenticated API-credentials page with only a password field is not judged signed out", async () => {
+    const save = join(dir, "states", "credentials.json");
+    const minted = await run(["login", "--url", `${origin}/login`, "--user-env", "JEV_T_USER", "--password-env", "JEV_T_PASSWORD", "--save", save, "--json"]);
+    record(minted);
+    expect(minted.envelope.ok, minted.out + minted.err).toBe(true);
+
+    const r = await run([
+      "explore", "--url", `${origin}/credentials`, "--goal", "read the API credentials", "--success", "textIncludes:css=h1|API credentials",
+      "--allow-vacuous-checks", "--storage-state", save, "--out", join(dir, "out-credentials"), "--json",
+    ]);
+    record(r);
+    expect(r.envelope.data?.failure as { kind?: string } | undefined, r.out + r.err).not.toMatchObject({ kind: "auth-expired" });
   }, 120_000);
 
   it("a two-step sign-in (email, then a password page) mints a working state too", async () => {
