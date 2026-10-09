@@ -167,7 +167,19 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "recording postdoc": { cases: [[missing]] },
   "journey list": { exempt: "a listing: an empty or missing dir lists nothing" },
   "journey find": { exempt: "a search: no match is an empty result" },
-  "journey run": { base: ["nope"], cases: [["nope"], ["nope", "--storage-state", missing]] },
+  "journey run": {
+    base: ["nope"],
+    cases: [
+      ["nope"],
+      ["nope", "--storage-state", missing],
+      // #453: the change range is validated before any Journey lookup; a self-heal needs a change context (Q1).
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "--output=/tmp/x"],
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "a;id"],
+      ["nope", "--changes", "HEAD~1..HEAD"],
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "a..b..c"],
+      ["nope", "--self-heal", "hybrid", "--fake-ai"],
+    ],
+  },
   "journey promote": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"]] },
   "journey lint": { cases: [["nope"], ["../x"]] },
   "journey review": { cases: [["nope"], ["../x"]] },

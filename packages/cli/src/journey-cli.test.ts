@@ -210,7 +210,7 @@ test("journey run --self-heal hybrid wires a SelfHealer into the JourneyRunner (
     const dir = await seedJourneysDir([makeJourney()]);
     const { program, lines } = newProgram();
     await expect(
-      program.parseAsync(["journey", "run", "login", "--dir", dir, "--self-heal", "hybrid", "--json"], { from: "user" }),
+      program.parseAsync(["journey", "run", "login", "--dir", dir, "--self-heal", "hybrid", "--change-note", "renamed Login to Sign in", "--json"], { from: "user" }),
     ).resolves.not.toThrow();
     const parsed = JSON.parse(lines.join(""));
     expect(parsed.ok).toBe(false);
@@ -246,6 +246,48 @@ test("journey promote with an unknown id fails fast with E_UNKNOWN_JOURNEY and a
     const parsed = JSON.parse(lines.join(""));
 
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
+    expect(process.exitCode).toBe(64);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+// #453 Q1: a self-heal needs a change context; the change and budget flags need a self-heal — refused
+// (64) before the Journey is looked up (the id here does not exist: a later check would say E_UNKNOWN_JOURNEY).
+for (const [what, argv, code, message] of [
+  ["--self-heal hybrid without --changes/--change-note", ["--self-heal", "hybrid", "--fake-ai"], "E_JOURNEY_RUN_ARGS", /needs a change context/],
+  ["--self-heal full without a change context", ["--self-heal", "full", "--fake-ai"], "E_JOURNEY_RUN_ARGS", /needs a change context/],
+  ["--changes without --self-heal", ["--changes", "HEAD~1..HEAD"], "E_JOURNEY_RUN_ARGS", /--changes needs --self-heal/],
+  ["--change-note without --self-heal", ["--change-note", "x"], "E_JOURNEY_RUN_ARGS", /--change-note needs --self-heal/],
+  ["a budget flag without --self-heal", ["--heal-max-attempts", "3"], "E_JOURNEY_RUN_ARGS", /--heal-max-\* needs --self-heal/],
+  ["an injection range", ["--self-heal", "hybrid", "--fake-ai", "--changes", "a;id"], "E_CHANGES_ARGS", /invalid change range/],
+  ["a flag-shaped range", ["--self-heal", "hybrid", "--fake-ai", "--changes", "--output=/tmp/x"], "E_CHANGES_ARGS", /invalid change range/],
+  ["a three-part range", ["--self-heal", "hybrid", "--fake-ai", "--changes", "a..b..c"], "E_CHANGES_ARGS", /(invalid|unsafe) change range/],
+] as const) {
+  test(`#453: journey run refuses ${what} (64) before any Journey lookup`, async () => {
+    const savedExitCode = process.exitCode;
+    try {
+      const dir = await seedJourneysDir([]);
+      const { program, lines } = newProgram();
+      await program.parseAsync(["journey", "run", "nope", "--dir", dir, ...argv, "--json"], { from: "user" });
+      const parsed = JSON.parse(lines.join(""));
+      expect(parsed).toMatchObject({ ok: false, error: { code } });
+      expect(parsed.error.message).toMatch(message);
+      expect(process.exitCode).toBe(64);
+    } finally {
+      process.exitCode = savedExitCode;
+    }
+  });
+}
+
+test("#453: journey run --changes outside a git repository is refused E_CHANGES_INPUT (64) before any Journey lookup", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const dir = await seedJourneysDir([]);
+    const { program, lines } = newProgram();
+    await program.parseAsync(["journey", "run", "nope", "--dir", dir, "--self-heal", "hybrid", "--fake-ai", "--changes", "HEAD~1..HEAD", "--json"], { from: "user" });
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_CHANGES_INPUT" } });
     expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;

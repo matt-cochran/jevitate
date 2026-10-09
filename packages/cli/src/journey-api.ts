@@ -19,7 +19,8 @@ import type { Page } from "playwright";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { SecretPixelMask, maskingPort } from "./demo-capture.js";
 import { RunScreenshots, composeObservers, screenshotObserver, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
-import { JourneyRunner, type JourneyRunResult, type SelfHealer, type SiteGateDeps } from "@jevitate/runtime";
+import { JourneyRunner, type BlockedWriteRef, type ChangeScope, type HealWriteGuard, type JourneyHealOptions, type JourneyRunResult, type SelfHealer, type SiteGateDeps } from "@jevitate/runtime";
+import { journeyStepRisk } from "./journey-heal.js";
 import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
@@ -79,6 +80,12 @@ export interface RunJourneyProgrammaticallyOptions {
    * this port (enforced by `JourneyRunner`'s write floor).
    */
   selfHealer?: SelfHealer;
+  /**
+   * #453: the change context a `hybrid`/`full` self-heal is explained by (`readJourneyChangeScope`).
+   * With it the runner gets the risky-control classification (`journeyStepRisk`) and a per-step write
+   * blocker, so a guarded click/fill may be retargeted. Absent: every break is unexplained (never healed).
+   */
+  heal?: { readonly scope: ChangeScope };
   /**
    * Mission fixtures (#140/#144), built for the journey's own site once it is known: set up before
    * the browser opens (a failure throws `FixtureSetupError` — the journey never runs on unknown
@@ -456,9 +463,12 @@ export async function runJourneyProgrammatically(
       // and each step's request expectations.
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, { secrets });
       const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins);
+      // #453 (Q2): a guarded click/fill heal probe runs under a per-step write blocker.
+      const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : healWriteGuard(session.page, allowedOrigins);
       const observer = composeObservers(
         outcomeChecks.observer(),
         blocker?.observer,
+        healGuard?.observer,
         replayDeltas?.observer(),
         opts.observer,
         shots === undefined ? undefined : screenshotObserver(shots, (a) => a.ability(BrowseTheWebToken).session.page, whatOf),
@@ -466,10 +476,14 @@ export async function runJourneyProgrammatically(
       const skipStep = mutation.skipStep;
       const interpreter =
         opts.interpreter ??
-        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && skipStep === undefined
+        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined
           ? new RecordingInterpreter()
           : new RecordingInterpreter({ observer, ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }) }));
-      const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer);
+      const heal: JourneyHealOptions | undefined =
+        opts.heal === undefined || healGuard === undefined
+          ? undefined
+          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins };
+      const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
       let result: JourneyRunResult;
       try {
         result = redactSecretParams(
@@ -480,6 +494,7 @@ export async function runJourneyProgrammatically(
       } finally {
         await gate.done();
         await blocker?.guard.disarm();
+        await healGuard?.guard.disarm();
       }
       const mutationFields: MutationReplayFields = {
         ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretParams([...outcomeChecks.lastFailures], journey, params) } : {}),
@@ -530,6 +545,51 @@ async function stepWriteBlocker(page: Page, index: number, allowedOrigins: reado
           await monitor.waitSettled({ ceilingMs: BLOCK_WINDOW_SETTLE_MS });
         } finally {
           guard.settled();
+        }
+      },
+    },
+  };
+}
+
+/**
+ * #453 (Q2): the heal probe's write blocker — an observer variant of `stepWriteBlocker`. `armAt(i)`
+ * arms a fresh `ReadOnlyGuard` whose action window is flat step `i` of the NEXT interpreter pass
+ * (opened as it begins, closed once the network settled after it); `disarm()` unroutes it and returns
+ * every mutating request it aborted (method + path, never the query). Outside an armed probe it
+ * routes nothing.
+ */
+function healWriteGuard(page: Page, allowedOrigins: readonly string[]): { guard: HealWriteGuard; observer: StepObserver } {
+  let armed: { index: number; ro: ReadOnlyGuard } | undefined;
+  const monitor = monitorFor(page);
+  return {
+    guard: {
+      armAt: async (index: number): Promise<void> => {
+        if (armed !== undefined) await armed.ro.disarm();
+        const ro = new ReadOnlyGuard(writeClassifier({}), { allowlist: [...allowedOrigins], navigationWrites: "abort" });
+        await ro.arm(page);
+        await monitor.instrument();
+        armed = { index, ro };
+      },
+      disarm: async (): Promise<readonly BlockedWriteRef[]> => {
+        const was = armed;
+        armed = undefined;
+        if (was === undefined) return [];
+        const blocked = was.ro.drain();
+        await was.ro.disarm();
+        return blocked.map((w) => ({ method: w.method, url: w.path }));
+      },
+    },
+    observer: {
+      beforeStep: async ({ index }) => {
+        if (armed !== undefined && index === armed.index) armed.ro.beginAction();
+      },
+      afterStep: async ({ index }) => {
+        const a = armed;
+        if (a === undefined || index !== a.index) return;
+        try {
+          await monitor.waitSettled({ ceilingMs: BLOCK_WINDOW_SETTLE_MS });
+        } finally {
+          a.ro.settled();
         }
       },
     },
