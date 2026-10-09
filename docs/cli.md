@@ -1209,6 +1209,8 @@ jevitate journey run [options] <id>
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--change-note <text>` | #453: a change note that explains a break (e.g. 'renamed "Create New" to "Create"'; repeatable) — needs --self-heal hybrid\|full | `[]` |  |  |  |
+| `--changes <range>` | #453: the git range that explains a break (e.g. HEAD~1..HEAD, main...HEAD; read-only, in the journeys dir's repo) — needs --self-heal hybrid\|full |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
@@ -1218,6 +1220,11 @@ jevitate journey run [options] <id>
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
+| `--heal-max-attempts <n>` | #453: candidates tried per broken step (default 2) |  |  |  |  |
+| `--heal-max-model-calls <n>` | #453: model calls per broken step (default 6) |  |  |  |  |
+| `--heal-max-ms <ms>` | #453: healing time per broken step in ms (default 60000) |  |  |  |  |
+| `--heal-max-run-attempts <n>` | #453: candidates tried in the whole run (default 4) |  |  |  |  |
+| `--heal-max-run-ms <ms>` | #453: healing time in the whole run in ms (default 180000) |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
@@ -1228,7 +1235,7 @@ jevitate journey run [options] <id>
 | `--real` | use live Jev + OpenRouter gateways for self-heal (requires keys) | `false` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
-| `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full | `fail-closed` |  |  |  |
+| `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass) | `fail-closed` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |

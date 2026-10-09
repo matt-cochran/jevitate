@@ -1,102 +1,255 @@
-import type { SelfHealer } from "@jevitate/runtime";
-import { runGoalBasedMission } from "@jevitate/explore";
-import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
+import type { HealerCandidate, HealerProposal, HealerRequest, SelfHealer, ChangeEvidenceRef } from "@jevitate/runtime";
+import { normalizeAnchor, sanitizeStep } from "@jevitate/runtime";
+import { snapshot, type Control } from "@jevitate/explore";
+import type { GenerationPort } from "@jevitate/ai-core";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
-import type { Assertion, Step } from "@jevitate/recording";
+import { clock } from "@jevitate/domain";
+import { describeStep } from "@jevitate/journey";
+import type { Step, TargetDescriptor } from "@jevitate/recording";
+import { redactSecretValues } from "./journey-api.js";
 
 /**
- * The real `@jevitate/runtime.SelfHealer`, backed by `@jevitate/explore`'s
- * `runGoalBasedMission`. This is the ONLY edge from the CLI to
- * `@jevitate/explore` used for self-healing — `@jevitate/runtime` itself
- * never depends on `@jevitate/explore` (it only knows the `SelfHealer`
- * port), preserving ticket #1's "nothing depends on explore except cli"
- * constraint.
+ * #453: the CLI's `SelfHealer` — EVIDENCE-ONLY. It never acts on the page (`actsOnPage: false`), so
+ * the runner may consult it for a guarded click/fill step too (whose probe runs under the write
+ * blocker). Its whole input is:
+ *  - the broken step (sanitised: `hideValue`),
+ *  - a read-only snapshot of the page's controls (the observed inventory: role, name, test id, label),
+ *  - the change evidence as `{kind, before, after}` facts only — never a raw hunk, never a credential
+ *    (every string is scrubbed of the run's secret params, `redactSecretValues`).
  *
- * DEVIATION (real-API vs plan): the plan assumed `runGoalBasedMission` took a
- * loose `{goal, successAssertion, allowlist, actor, judgment, generation}`
- * bag returning `{outcome, recording, transcript}`. The SHIPPED API
- * (`GoalBasedMissionConfig` = `Omit<ExploreConfig,"missionContext"> +
- * successAssertion`) takes a single config object with `judge`/`gen` (not
- * `judgment`/`generation`) and REQUIRES `startUrl` + `allowlist`, returning a
- * `GoalBasedResult` whose `outcome` is `"succeeded" | "exhausted" |
- * "blocked"`. Only `"succeeded"` (the independent oracle held) yields a
- * candidate; everything else yields none — and even a candidate is only a
- * proposal the JourneyRunner adjudicates (#453: proof untouched, change
- * evidence, the floor, the probe). The healer never certifies its own success.
- *
- * DEVIATION (start-from-live-state): the plan's `SelfHealer` contract says
- * the actor is already sitting in the live state right after the last-good
- * step, so no re-navigation is needed. The shipped `explore()` ALWAYS
- * navigates to `startUrl` first, so this adapter re-anchors by using the
- * actor's CURRENT live URL as `startUrl` (a reload of the page we are
- * already on) — the closest the shipped mission API allows. Flagged as a
- * follow-up: a future `runGoalBasedMission` variant could skip the initial
- * navigation to honor the pure resume-from-state design.
+ * It proposes single-step RETARGETS of the broken step: the step with only its `target` changed, its
+ * proof (`expect`, `value`, …) as recorded. Deterministic candidates come first: an inventory control
+ * whose name / test id / label equals some evidence `after`. The model (`GenerationPort`, task
+ * `heal.rank`) is only an advisory ranker of those candidates and may pick at most ONE more control
+ * from the inventory — within the request's `maxModelCalls` and `deadlineAtMs`; past the deadline its
+ * answer is dropped. The runner adjudicates every candidate (proof untouched, change evidence, the
+ * floor, the probe): nothing here decides that a heal holds.
  */
-export function makeExploreSelfHealer(judgment: JudgmentPort, generation: GenerationPort): SelfHealer {
+
+/** One observed control: what the healer and the model see of the page. */
+export interface InventoryControl {
+  readonly role: string;
+  readonly name: string;
+  readonly testId?: string;
+  readonly label?: string;
+  readonly enabled: boolean;
+  /** Model-facing one-liner (redacted page content). */
+  readonly summary: string;
+}
+
+/** Reads the live page's controls without acting on it. */
+export type ControlInventoryReader = (actor: Actor, secrets: readonly string[]) => Promise<readonly InventoryControl[]>;
+
+export interface EvidenceSelfHealerOptions {
+  /** Test seam; default: `snapshot()` of the actor's page (read-only). */
+  readonly inventory?: ControlInventoryReader;
+  /** The most inventory controls shown to the model. Default 80. */
+  readonly maxControls?: number;
+}
+
+/** Roles a fill step may target. */
+const FIELD_ROLES = new Set(["textbox", "searchbox", "combobox", "spinbutton"]);
+const DEFAULT_MAX_CONTROLS = 80;
+const MAX_CANDIDATES = 8;
+
+/** The default inventory: the explore snapshot's controls (read-only, already redacted). */
+export const snapshotInventory: ControlInventoryReader = async (actor, secrets) => {
+  let page;
+  try {
+    page = actor.ability(BrowseTheWebToken).session.page;
+  } catch {
+    return [];
+  }
+  const snap = await snapshot(page, { secrets, maxCandidates: 120 });
+  return snap.controls.map(inventoryOf);
+};
+
+function inventoryOf(c: Control): InventoryControl {
+  const d = c.descriptor;
   return {
-    // The goal mission clicks and types to reach the postcondition: it is never consulted for a
-    // guarded click/fill step (#453), whose probe must run under the write blocker.
-    actsOnPage: true,
-    async proposeCandidates({ actor, brokenStep, allowedOrigins, secrets }) {
-      const expectedPostcondition = postconditionOf(brokenStep);
-      if (expectedPostcondition === undefined) return { candidates: [], usage: { modelCalls: 0 }, reason: `a ${brokenStep.kind} step has no postcondition to re-learn` };
-      const allowlist = allowedOrigins ?? [];
-      const result = await runGoalBasedMission({
-        goal: describeBrokenStepGoal(brokenStep),
-        successAssertion: expectedPostcondition,
-        allowlist,
-        // Re-anchor to the live page we are already on (see DEVIATION above).
-        // Authorization is still enforced by explore's own
-        // `assertAuthorizedExploreTarget` against `allowlist` — an
-        // off-allowlist current URL fails closed there (it throws), never
-        // silently healed.
-        startUrl: currentUrl(actor, allowlist),
-        actor,
-        judge: judgment,
-        gen: generation,
-        // #399: the run's secret params (the live URL may carry one) are redacted from every prompt.
-        ...(secrets === undefined || secrets.length === 0 ? {} : { secrets }),
+    role: c.role,
+    name: c.name,
+    ...(d.testId === undefined ? {} : { testId: d.testId }),
+    ...(d.label === undefined ? {} : { label: d.label }),
+    enabled: c.enabled,
+    summary: c.summary,
+  };
+}
+
+export function makeEvidenceSelfHealer(generation?: GenerationPort, opts: EvidenceSelfHealerOptions = {}): SelfHealer {
+  const readInventory = opts.inventory ?? snapshotInventory;
+  const maxControls = opts.maxControls ?? DEFAULT_MAX_CONTROLS;
+  return {
+    actsOnPage: false,
+    async proposeCandidates(req: HealerRequest): Promise<HealerProposal> {
+      const secrets = req.secrets ?? [];
+      const broken = req.brokenStep;
+      if (!("target" in broken) || broken.target === undefined) {
+        return { candidates: [], usage: { modelCalls: 0 }, reason: `a ${broken.kind} step has no target to retarget onto a page control` };
+      }
+      // Only the change FACTS, scrubbed of the run's secrets.
+      const evidence = redactSecretValues(req.evidence.map(factOf), secrets);
+      let inventory: readonly InventoryControl[];
+      try {
+        inventory = redactSecretValues((await readInventory(req.actor, secrets)).filter((c) => c.enabled && fits(broken, c)), secrets);
+      } catch {
+        inventory = [];
+      }
+      const tried = new Set(req.tried.map((s) => JSON.stringify(s)));
+      const fresh = (s: Step): boolean => !tried.has(JSON.stringify(sanitizeStep(s))) && JSON.stringify(s) !== JSON.stringify(broken);
+
+      const deterministic = dedupe(evidenceRetargets(broken, inventory, evidence).filter((c) => fresh(c.step)));
+      const ask = generation !== undefined && req.maxModelCalls >= 1 && clock.now() < req.deadlineAtMs && (deterministic.length > 0 || inventory.length > 0);
+      if (!ask) {
+        return deterministic.length === 0
+          ? { candidates: [], usage: { modelCalls: 0 }, reason: "no observed control matches the change evidence" }
+          : { candidates: deterministic.slice(0, MAX_CANDIDATES), usage: { modelCalls: 0 } };
+      }
+
+      const shown = inventory.slice(0, maxControls);
+      const input = redactSecretValues(
+        {
+          step: describeStep(sanitizeStep(broken)).slice(0, 1000),
+          evidence: evidence.slice(0, 40).map((e) => ({ kind: e.kind.slice(0, 40), before: clip(e.before), after: clip(e.after) })),
+          candidates: deterministic.slice(0, 40).map((c, index) => ({ index, summary: c.hypothesis.slice(0, 300) })),
+          controls: shown.map((c, index) => ({ index, summary: c.summary.slice(0, 300) })),
+        },
+        secrets,
+      );
+      const usage = { modelCalls: 1 };
+      let ranked: { order: readonly number[]; control: number | null } | undefined;
+      try {
+        ranked = (await withDeadline(generation.generate("heal.rank", input), req.deadlineAtMs)).output;
+      } catch {
+        ranked = undefined;
+      }
+      if (ranked === undefined) {
+        return { candidates: deterministic.slice(0, MAX_CANDIDATES), usage, reason: "the model ranker gave no usable answer within the heal deadline" };
+      }
+      const seen = new Set<number>();
+      const ordered: HealerCandidate[] = [];
+      for (const i of ranked.order) {
+        const c = deterministic[i];
+        if (c === undefined || seen.has(i)) continue;
+        seen.add(i);
+        ordered.push(c);
+      }
+      // The ranker is advisory: an evidence candidate it left out is still tried, after its picks.
+      deterministic.forEach((c, i) => {
+        if (!seen.has(i)) ordered.push(c);
       });
-      const usage = { modelCalls: result.transcript.length };
-      if (result.outcome !== "succeeded") return { candidates: [], usage, reason: `re-learn mission ${result.outcome}` };
-      // #453: only a ONE-step re-learn of the same kind is a candidate, and only its locator is
-      // proposed — the broken step's proof stays as recorded (the runner re-checks it).
-      const learned = result.recording.pages.flatMap((p) => p.steps.map((s) => s.step));
-      const retarget = learned.length === 1 ? retargetOf(brokenStep, learned[0]!) : undefined;
-      return retarget === undefined
-        ? { candidates: [], usage, reason: `re-learn mission took ${learned.length} step(s), not one ${brokenStep.kind} step` }
-        : { candidates: [{ step: retarget, hypothesis: `re-learned the ${brokenStep.kind} step's locator from the live page` }], usage };
+      const picked = ranked.control === null ? undefined : shown[ranked.control];
+      const extra = picked === undefined ? undefined : controlRetarget(broken, picked, `the model picked the page's ${picked.role || "control"} ${quote(picked.name)}`);
+      const all = dedupe(extra === undefined || !fresh(extra.step) ? ordered : [...ordered, extra]);
+      return { candidates: all.slice(0, MAX_CANDIDATES), usage };
     },
   };
 }
 
-/** The broken step's own postcondition (what the re-learn must reach), if it has one. */
-function postconditionOf(step: Step): Assertion | undefined {
-  return "expect" in step ? step.expect : undefined;
+interface Fact {
+  readonly kind: string;
+  readonly before?: string;
+  readonly after?: string;
 }
 
-/** `broken` with `learned`'s locator, when both are the same kind of located step. */
-function retargetOf(broken: Step, learned: Step): Step | undefined {
-  if (broken.kind !== learned.kind) return undefined;
-  if (broken.kind === "navigate" && learned.kind === "navigate") return { ...broken, url: learned.url };
-  if ("target" in broken && "target" in learned) return { ...broken, target: learned.target } as Step;
-  return undefined;
+function factOf(e: ChangeEvidenceRef): Fact {
+  return { kind: e.kind, ...(e.before === undefined ? {} : { before: e.before }), ...(e.after === undefined ? {} : { after: e.after }) };
 }
 
-/** The actor's current live URL — the natural start for a scoped re-learn.
- * Falls back to the first authorized origin when the actor exposes no live
- * browsing ability (e.g. a test double); an empty allowlist then yields ""
- * and explore's authorization guard fails closed. */
-function currentUrl(actor: Actor, fallbackOrigins: readonly string[]): string {
-  try {
-    return actor.ability(BrowseTheWebToken).session.page.url();
-  } catch {
-    return fallbackOrigins[0] ?? "";
+function clip(s: string | undefined): string | null {
+  return s === undefined ? null : s.slice(0, 300);
+}
+
+/** Can `broken` (a click/fill/extract) target this control at all? */
+function fits(broken: Step, c: InventoryControl): boolean {
+  if (broken.kind === "fill") return FIELD_ROLES.has(c.role);
+  if (broken.kind === "click") return !FIELD_ROLES.has(c.role);
+  return true;
+}
+
+type Via = "testId" | "name" | "label";
+
+/** Inventory controls whose name / test id / label equals an evidence `after` → a retarget onto that anchor. */
+function evidenceRetargets(broken: Step, inventory: readonly InventoryControl[], evidence: readonly Fact[]): HealerCandidate[] {
+  const out: HealerCandidate[] = [];
+  for (const e of evidence) {
+    if (e.after === undefined || e.kind === "inserted-ui") continue;
+    const after = normalizeAnchor(e.after);
+    for (const c of inventory) {
+      const via: Via | undefined =
+        c.testId !== undefined && normalizeAnchor(c.testId) === after && (e.kind === "test-id" || e.kind === "note")
+          ? "testId"
+          : normalizeAnchor(c.name) === after
+            ? "name"
+            : c.label !== undefined && normalizeAnchor(c.label) === after
+              ? "label"
+              : undefined;
+      if (via === undefined) continue;
+      const cand = controlRetarget(broken, c, `${e.kind} ${quote(e.before)} → ${quote(e.after)} matches the page's ${c.role || "control"} ${quote(c.name)}`, via);
+      if (cand !== undefined) out.push(cand);
+    }
   }
+  return out;
 }
 
-function describeBrokenStepGoal(step: Step): string {
-  return `Perform the equivalent of a "${step.kind}" step to satisfy the expected postcondition — the site appears to have changed since this step was recorded.`;
+/** `broken` retargeted onto control `c` by one anchor (its frame and container kept, everything else as recorded). */
+function controlRetarget(broken: Step, c: InventoryControl, why: string, via?: Via): HealerCandidate | undefined {
+  if (!("target" in broken) || broken.target === undefined) return undefined;
+  const old: TargetDescriptor = broken.target;
+  const by: Via = via ?? (c.name.trim() === "" ? (c.testId !== undefined ? "testId" : "label") : "name");
+  const anchor: TargetDescriptor | undefined =
+    by === "testId"
+      ? c.testId === undefined
+        ? undefined
+        : { testId: c.testId }
+      : by === "label"
+        ? c.label === undefined
+          ? undefined
+          : { label: c.label }
+        : c.name.trim() === ""
+          ? undefined
+          : { ...(c.role === "" ? {} : { role: c.role }), name: c.name.trim() };
+  if (anchor === undefined) return undefined;
+  const target: TargetDescriptor = { ...anchor, ...(old.frameUrl === undefined ? {} : { frameUrl: old.frameUrl }), ...(old.container === undefined ? {} : { container: old.container }) };
+  return { step: { ...broken, target } as Step, hypothesis: `${why}: retarget to ${describeTarget(target)}` };
+}
+
+function describeTarget(t: TargetDescriptor): string {
+  if (t.testId !== undefined) return `test id ${quote(t.testId)}`;
+  if (t.label !== undefined) return `label ${quote(t.label)}`;
+  return `${t.role ?? "control"} ${quote(t.name)}`;
+}
+
+function quote(s: string | undefined): string {
+  return s === undefined ? "(none)" : JSON.stringify(s);
+}
+
+function dedupe(cs: readonly HealerCandidate[]): HealerCandidate[] {
+  const seen = new Set<string>();
+  return cs.filter((c) => {
+    const k = JSON.stringify(c.step);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/** `p`, or a rejection once the `clock.now()` instant `deadlineAtMs` passes. */
+function withDeadline<T>(p: Promise<T>, deadlineAtMs: number): Promise<T> {
+  const left = deadlineAtMs - clock.now();
+  if (left <= 0) return Promise.reject(new Error("heal deadline passed"));
+  return new Promise<T>((resolve, reject) => {
+    const timer = clock.setTimeout(() => reject(new Error("heal deadline passed")), left);
+    p.then(
+      (v) => {
+        clock.clearTimeout(timer);
+        resolve(v);
+      },
+      (e: unknown) => {
+        clock.clearTimeout(timer);
+        reject(e instanceof Error ? e : new Error(String(e)));
+      },
+    );
+  });
 }

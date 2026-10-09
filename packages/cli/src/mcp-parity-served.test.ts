@@ -136,7 +136,9 @@ describe("#255 run_journey — journey run's options over MCP", () => {
   });
 
   it("selfHeal hybrid needs the model gateways: setup_required without them; with them the healer is wired", async () => {
-    const without = await tool(deps(), "run_journey").handler({ id: "home", selfHeal: "hybrid", fakeAi: true });
+    // #453 Q1: a heal needs a change context first (refused before any gateway); then the gateways.
+    expect(body(await tool(deps(), "run_journey").handler({ id: "home", selfHeal: "hybrid", fakeAi: true }))).toMatchObject({ error: "invalid_args", code: "E_JOURNEY_RUN_ARGS" });
+    const without = await tool(deps(), "run_journey").handler({ id: "home", selfHeal: "hybrid", fakeAi: true, changeNote: ["renamed Home to Start"] });
     expect(body(without)).toMatchObject({ error: "setup_required" });
     const seen: Array<{ real: boolean; fakeAi: boolean }> = [];
     let options: unknown;
@@ -154,10 +156,10 @@ describe("#255 run_journey — journey run's options over MCP", () => {
       }),
       "run_journey",
     );
-    const res = await withGateways.handler({ id: "home", selfHeal: "full", fakeAi: true });
+    const res = await withGateways.handler({ id: "home", selfHeal: "full", fakeAi: true, changeNote: ["renamed Home to Start"] });
     expect(res.isError).toBeUndefined();
     expect(seen).toEqual([{ real: false, fakeAi: true }]);
-    expect(options).toMatchObject({ policy: { selfHeal: { mode: "full" } }, selfHealer: expect.anything() });
+    expect(options).toMatchObject({ policy: { selfHeal: { mode: "full" } }, selfHealer: expect.anything(), heal: { scope: expect.anything() } });
     expect(body(res)).toHaveProperty("usage");
   });
 
