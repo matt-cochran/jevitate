@@ -105,17 +105,22 @@ const renameScope = (evidence: Partial<ChangeEvidence> = {}): ChangeScope => ({
 });
 
 /**
- * A fake interpreter for a broken step 1: the first pass fails there (target not found); a probe
- * resumed from step 1 completes only when step 1's target is named `accepts`.
+ * A fake interpreter for a broken step 1: the first pass fails there (target not found); a probe of
+ * step 1 alone (`runRange`) completes only when step 1's target is named `accepts`; the remainder
+ * (`resumeFrom`) completes, after `rest()`.
  */
-function brokenAtStep1(accepts = "Create") {
+function brokenAtStep1(accepts = "Create", rest: () => Promise<void> = async () => undefined) {
   return {
     run: vi.fn().mockResolvedValue({ outcome: "failed", at: 1, error: "replay-target-not-found: button 'Create New'", reason: "replay-target-not-found" }),
-    resumeFrom: vi.fn(async (_actor: unknown, rec: Recording, from: number) => {
+    runRange: vi.fn(async (_actor: unknown, rec: Recording, from: number) => {
       const step = flattenRecording(rec)[from]!.step as { target?: { name?: string } };
       return step.target?.name === accepts
         ? { outcome: "completed", vars: {} }
         : { outcome: "failed", at: from, error: "replay-target-not-found", reason: "replay-target-not-found" };
+    }),
+    resumeFrom: vi.fn(async () => {
+      await rest();
+      return { outcome: "completed", vars: {} };
     }),
   } as any;
 }
@@ -186,7 +191,7 @@ describe("JourneyRunner change-aware self-heal (#453)", () => {
     const interpreter = brokenAtStep1();
     const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
     await run(runner, renamedButtonJourney({ expectRequests: [{ kind: "requestMade", method: "POST", pathGlob: "/api/items" }] }), hybrid());
-    expect(interpreter.resumeFrom).not.toHaveBeenCalled();
+    expect(interpreter.runRange).not.toHaveBeenCalled();
   });
 
   it("never heals a click the safety classification calls risky", async () => {
@@ -224,6 +229,51 @@ describe("JourneyRunner change-aware self-heal (#453)", () => {
     const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, healer, { scope: renameScope({ after: undefined }), riskOf: notRisky, writeGuard: writeGuard() });
     const result = await run(runner, renamedButtonJourney(), full());
     expect(result).toMatchObject({ outcome: "heal-exhausted", heal: { budget: { exhaustedBy: "wallClock" }, attempts: [] } });
+  });
+
+  it("charges only the candidate step's probe to the heal budget, not the replay of the rest of the Journey", async () => {
+    const fake = new FakeClock();
+    installClock(fake);
+    const interpreter = brokenAtStep1("Create", () => fake.advanceBy(10 * DEFAULT_HEAL_BUDGET.perRun.maxMs));
+    const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.budget.used.ms).toBe(0);
+  });
+
+  it("rejects a probe still running at the heal deadline as budget-exhausted", async () => {
+    const fake = new FakeClock();
+    installClock(fake);
+    const interpreter = brokenAtStep1();
+    interpreter.runRange = vi.fn(async () => {
+      await fake.advanceBy(DEFAULT_HEAL_BUDGET.perStep.maxMs + 1);
+      return { outcome: "completed", vars: {} };
+    });
+    const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.attempts[0]?.rejection?.code).toBe("budget-exhausted");
+  });
+
+  it("in hybrid, rejects a model candidate whose new anchor only an unrelated change's after names", async () => {
+    const scope: ChangeScope = {
+      evidence: [
+        { id: "e1", kind: "accessible-name", before: "Create New" },
+        { id: "e2", kind: "accessible-name", before: "Delete", after: "Make" },
+      ],
+      scanned: { files: 1, hunks: 2, skipped: [] },
+    };
+    const healer = modelHealer(async ({ brokenStep }) => ({ candidates: [{ step: { ...(brokenStep as Extract<Step, { kind: "click" }>), target: { role: "button", name: "Make" } }, hypothesis: "renamed to Make" }], usage: { modelCalls: 1 } }));
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1("Make"), undefined, undefined, healer, { scope, riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.attempts[0]?.rejection?.code).toBe("not-explained-by-change");
+  });
+
+  it("charges a model call when the healer throws", async () => {
+    const healer = modelHealer(async () => {
+      throw new Error("gateway down");
+    });
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, healer, { scope: renameScope({ after: undefined }), riskOf: notRisky, writeGuard: writeGuard() });
+    const result = await run(runner, renamedButtonJourney(), hybrid());
+    expect(result.heal?.budget.used.modelCalls).toBe(1);
   });
 
   it("#399: the healer is handed the run's secret parameter values (a token in a navigate URL) to redact", async () => {
