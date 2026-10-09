@@ -6,3 +6,4 @@ export * from "./change-scope.js";
 export * from "./change-scope-explain.js";
 export * from "./heal-budget.js";
 export * from "./heal-attempt.js";
+export * from "./change-extract.js";
