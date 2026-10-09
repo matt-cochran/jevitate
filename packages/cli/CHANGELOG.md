@@ -1,5 +1,11 @@
 # @jevitate/cli
 
+## 0.10.0
+
+### Minor Changes
+
+- 0.10.0: the Journeeze catalog bundle (export, connect, publish), job outcomes and steps with reference checks and AI-drafted outcomes, anchors as job-step boundaries, verified pull-request approvals, per-anchor machine baselines, stable step ids with `journey migrate --step-ids`, and locator health. Requires Node 22 (better-sqlite3 13). Fixes strict-mode providers (#460), goal quote pairing (#461), loose select matching (#462) and tab-return hangs (#463). See CHANGELOG.md.
+
 ## 0.9.0
 
 ### Minor Changes
