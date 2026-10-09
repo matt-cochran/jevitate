@@ -212,7 +212,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "draft_job_outcomes",
     description:
-      "`jevitate job draft-outcomes <jobId> --json` (#465): draft 1–3 desired outcomes (count, default 1) for a catalog job with the generation model (real: true live, or fakeAi: true deterministic — exactly one) and write them into its jobs file marked provenance ai_draft for the team to review. " +
+      "`jevitate job draft-outcomes <jobId> --json` (#465): draft 1–3 desired outcomes (count, default 3) for a catalog job with the generation model (real: true live, or fakeAi: true deterministic — exactly one) and write them into its jobs file marked provenance ai_draft for the team to review. " +
       "It NEVER approves: an approved job becomes stale (needs re-review), and approving stays a person's act on the CLI (`jevitate job approve`) — there is no MCP tool for it.",
     command: { path: "job draft-outcomes", params: { jobId: pos(), count: n("--count"), ...AI }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },

@@ -6,7 +6,7 @@ import { GatewaySelectionError, JEV_PROVIDER_FLAG_HELP, emitJson, emitUsageLine,
 import { intArg, positiveIntArg } from "./cli-args.js";
 import { CATALOG_ID_RE } from "@jevitate/journey";
 import { NotImplementedError } from "./not-implemented.js";
-import { DRAFT_OUTCOMES_MAX, DRAFT_OUTCOMES_MIN, draftJobOutcomes, renderDraftJobOutcomes } from "./job-draft-api.js";
+import { DRAFT_OUTCOMES_DEFAULT, DRAFT_OUTCOMES_MAX, DRAFT_OUTCOMES_MIN, draftJobOutcomes, renderDraftJobOutcomes } from "./job-draft-api.js";
 import { CATALOG_EXPORT_FORMATS, exportCatalogBundle, renderCatalogExport, type CatalogExportFormat } from "./catalog-bundle-api.js";
 import { JOURNEEZE_DEFAULT_URL, connectJourneeze, publishToJourneeze, renderPublishJourneeze } from "./journeeze-api.js";
 import { buildJevSetup, jevCacheDir, type JevSetup } from "./jev-advisor.js";
@@ -215,7 +215,7 @@ function registerJobDraftOutcomes(group: Command, program: Command, deps: CliDep
       `#465: draft ${DRAFT_OUTCOMES_MIN}–${DRAFT_OUTCOMES_MAX} desired outcomes for a job with the generation model and write them into its jobs file marked provenance ai_draft, for the team to review. Never approves: an approved job becomes "needs re-review"`,
     )
     .option("--dir <path>", DIR_HELP)
-    .option("--count <n>", `how many outcomes to draft (${DRAFT_OUTCOMES_MIN}-${DRAFT_OUTCOMES_MAX}, default ${DRAFT_OUTCOMES_MIN})`, intArg({ min: DRAFT_OUTCOMES_MIN, max: DRAFT_OUTCOMES_MAX }))
+    .option("--count <n>", `how many outcomes to draft (${DRAFT_OUTCOMES_MIN}-${DRAFT_OUTCOMES_MAX}, default ${DRAFT_OUTCOMES_DEFAULT})`, intArg({ min: DRAFT_OUTCOMES_MIN, max: DRAFT_OUTCOMES_MAX }))
     .option("--real", "draft with the live OpenRouter generation gateway (requires keys)", false)
     .option("--fake-ai", "draft with the deterministic fake generator (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
@@ -235,7 +235,7 @@ function registerJobDraftOutcomes(group: Command, program: Command, deps: CliDep
             catalogDir: resolveCatalogDir(deps.catalogDir, dir),
             journeysDir: catalogJourneysDir(dir, resolveJourneysDir(deps)),
             jobId,
-            count: count ?? DRAFT_OUTCOMES_MIN,
+            count: count ?? DRAFT_OUTCOMES_DEFAULT,
             ai: { real: real === true, fakeAi: fakeAi === true },
           },
           deps,
