@@ -1,4 +1,5 @@
-import { NotImplementedError } from "./not-implemented.js";
+import { FsJourneyStore, stampAnchorStepIds, type Journey } from "@jevitate/journey";
+import { ensureStepIds } from "@jevitate/recording";
 
 /**
  * #467b — `jevitate journey migrate --step-ids`: the one-time repo rewrite that mints a stable
@@ -11,7 +12,11 @@ import { NotImplementedError } from "./not-implemented.js";
  * It never approves. CLI only (a one-time rewrite of the repo the operator runs and commits; no MCP
  * tool — see EXCLUDED in mcp-cli-parity.test.ts).
  *
- * STUB (d-surface-0): the feature deliverable replaces the body of `migrateStepIds` and owns this file.
+ * Scope: every local Journey (promoted or draft, namespace folders included) via the journey store,
+ * so formatting and file mode match every other write. NOT migrated: the sources cache (remote
+ * Journeys are content-hash-trusted and never rewritten), `.jevitate/logs` recordings (TTL run
+ * output, regenerated), and regression captures (they replay by the ids they were captured with).
+ * Never mints on read; idempotent (a second run finds nothing to change).
  */
 
 export interface MigrateStepIdsRequest {
@@ -45,9 +50,34 @@ export interface MigrateStepIdsResult {
   readonly totals: { readonly files: number; readonly stepsMinted: number; readonly needsReapproval: number };
 }
 
-export async function migrateStepIds(_req: MigrateStepIdsRequest): Promise<MigrateStepIdsResult> {
-  throw new NotImplementedError("jevitate journey migrate --step-ids", "#467");
+export async function migrateStepIds(req: MigrateStepIdsRequest): Promise<MigrateStepIdsResult> {
+  const store = new FsJourneyStore(req.journeysDir);
+  const journeys: MigratedJourney[] = [];
+  for (const meta of await store.list()) {
+    const before = await store.get(meta.id);
+    if (before === null) continue;
+    const withIds: Journey = { ...before, recording: ensureStepIds(before.recording) };
+    const after = stampAnchorStepIds(withIds);
+    const stepsMinted = countIds(after) - countIds(before);
+    const anchorsLinked = countAnchorIds(after) - countAnchorIds(before);
+    if (stepsMinted === 0 && anchorsLinked === 0) continue;
+    if (!req.dryRun) await store.put(after);
+    journeys.push({ id: meta.id, stepsMinted, anchorsLinked, needsReapproval: before.metadata.promoted });
+  }
+  return {
+    dryRun: req.dryRun,
+    journeys,
+    recordings: [],
+    totals: {
+      files: journeys.length,
+      stepsMinted: journeys.reduce((n, j) => n + j.stepsMinted, 0),
+      needsReapproval: journeys.filter((j) => j.needsReapproval).length,
+    },
+  };
 }
+
+const countIds = (j: Journey): number => j.recording.pages.reduce((n, p) => n + p.steps.filter((s) => s.stepId !== undefined).length, 0);
+const countAnchorIds = (j: Journey): number => (j.metadata.anchors ?? []).filter((a) => a.stepId !== undefined).length;
 
 /** The human rendering (no `--json`). */
 export function renderMigrateStepIds(r: MigrateStepIdsResult): string {

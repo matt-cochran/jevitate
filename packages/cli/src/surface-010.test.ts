@@ -66,7 +66,6 @@ async function run(argv: readonly string[]): Promise<{ code: number | undefined;
 
 /** Evaluated lazily (paths exist only after beforeAll); `<dir>`/`<suite>` are placeholders. */
 const STUB_COMMANDS: ReadonlyArray<readonly string[]> = [
-  ["journey", "migrate", "--step-ids", "--dry-run"],
   ["journey", "review", "--stale"],
 ];
 
