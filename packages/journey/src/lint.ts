@@ -2,15 +2,23 @@ import type { RecordedStep, Step } from "@jevitate/recording";
 import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, isOwnTargetVisible, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
+import { anchorLintIssues, type AnchorRuleCode } from "./anchor-rules.js";
 
-/** #401: the assertion-strength rules this lint reports. */
+/**
+ * #401: the assertion-strength rules this lint reports; #466: the 0.10 anchor rules (`AnchorRuleCode`,
+ * always warnings here) and the catalog anchor/serves references the CLI adds (`anchor-job-step`,
+ * `serves-outcome`, from catalog-refs.ts).
+ */
 export type JourneyLintRule =
   | "own-target-visible"
   | "write-without-effect"
   | "visibility-only"
   | "nothing-after-last-write"
   | "no-persistence-check"
-  | "intent-uncovered";
+  | "intent-uncovered"
+  | AnchorRuleCode
+  | "anchor-job-step"
+  | "serves-outcome";
 
 /** #401: one weak assertion in a Journey, with the 1-based step it belongs to when it has one. */
 export interface JourneyLintFinding {
@@ -18,6 +26,8 @@ export interface JourneyLintFinding {
   level: "error" | "warning";
   step?: number;
   message: string;
+  /** #466: what to change so the rule holds (the anchor rules always name one). */
+  fix?: string;
 }
 
 export interface JourneyLintOptions {
@@ -197,6 +207,11 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
         message: `step ${n}: expectedResult is documented but no effect assertion checks it`,
       });
     }
+  }
+
+  // #466: the 0.10 anchor rules — warnings on a Journey as it is (promote enforces them on new content).
+  for (const issue of anchorLintIssues(journey)) {
+    findings.push({ rule: issue.code, level: "warning", ...(issue.step === undefined ? {} : { step: issue.step }), message: issue.message, fix: issue.fix });
   }
 
   return findings;

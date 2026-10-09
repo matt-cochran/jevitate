@@ -1,0 +1,16 @@
+{
+  "description": "A finding's route is a template: no query string.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/findings/0/route",
+      "value": "/board?item=7"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/findings/0/route",
+    "keyword": "pattern"
+  }
+}

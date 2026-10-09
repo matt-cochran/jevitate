@@ -2,10 +2,12 @@ import { join } from "node:path";
 import { clock } from "@jevitate/domain";
 import type { CatalogApproval, Finding, Journey, JourneyApprovalWaiver, AcceptedFindings } from "@jevitate/journey";
 import { CatalogLoader, catalogJourney, journeyLinks, requireJob, requirePersona, writeJobApproval, writePersonaApproval, type Catalog } from "./catalog.js";
+import { assertJobRefs } from "./catalog-refs.js";
 import { acknowledgeFindings, preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { findProjectDir } from "./project-dir.js";
 import type { JevSetup } from "./jev-advisor.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { catalogItemEntry } from "./forge-verify.js";
 
 /**
  * #433 — the approvals of the catalog (`persona approve`, `job approve`: a person's act, CLI only)
@@ -66,10 +68,16 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
   if (reviewed !== undefined && reviewed !== item.contentHash) {
     throw new StaleCatalogReviewError(`${kind} '${id}' changed after its review sheet was produced (reviewed ${reviewed}, now ${item.contentHash}) — review it again: jevitate ${kind} review ${id}`);
   }
+  // #465: a job whose own references are structurally broken is refused (E_JOB_BROKEN_REF, exit 64);
+  // gaps (an unmeasurable metric, a target unit) are the review sheet's warnings.
+  if (kind === "job") assertJobRefs(catalog, id);
   const action: ApprovalAction = kind === "persona" ? "persona approve" : "job approve";
   // #434: every approval runs the readiness checks (the Jev layer only with --real and a key).
   const findings = await preApprovalFindings({ kind, id }, catalog, { action, readiness: true, ...(opts.jev === undefined ? {} : { jev: opts.jev }) });
   const acceptedFindings = acknowledgeFindings(`${kind} '${id}'`, findings, opts.acceptFindings);
+  const file = kind === "persona" ? catalog.personasFile : catalog.jobsFile;
+  // requirePersona/requireJob found the item, so its file was read.
+  if (file === null) throw new Error(`${kind} '${id}' has no catalog file`);
   const provenance =
     opts.confirm === undefined
       ? programmaticProvenance()
@@ -77,6 +85,8 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
           kind,
           id,
           contentHash: item.contentHash,
+          // #469: in CI, the confirmation first asks the forge whether a merged, approved PR made this entry (`pr-review`).
+          entry: catalogItemEntry(kind, file, id, item.contentHash),
           waivers: acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: acceptedFindings.reason, detail: acceptedFindings.findings.join(", ") }],
         });
   const approval: CatalogApproval = {
@@ -85,9 +95,6 @@ export async function approveCatalogItem(kind: "persona" | "job", catalog: Catal
     provenance,
     ...(acceptedFindings === undefined ? {} : { acceptedFindings: { ...acceptedFindings, provenance } }),
   };
-  const file = kind === "persona" ? catalog.personasFile : catalog.jobsFile;
-  // requirePersona/requireJob found the item, so its file was read.
-  if (file === null) throw new Error(`${kind} '${id}' has no catalog file`);
   if (kind === "persona") await writePersonaApproval(file, id, approval);
   else await writeJobApproval(file, id, approval);
   return { kind, id, approval, previousStatus: item.status, findings, file };

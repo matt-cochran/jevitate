@@ -1,0 +1,15 @@
+{
+  "description": "A bundle must carry at least one of catalog, demos, checks or findings.",
+  "base": "minimal",
+  "patch": [
+    {
+      "op": "remove",
+      "path": "/catalog"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "",
+    "keyword": "anyOf"
+  }
+}

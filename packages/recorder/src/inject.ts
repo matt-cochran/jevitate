@@ -167,6 +167,8 @@ export function installRecorderListener(isSecret: SecretFieldPredicate): void {
       value: namedByValue ? String((el as HTMLInputElement).value ?? "") : null,
       labelText: labelText === "" ? null : labelText,
       testId: attr("data-testid") ?? attr("data-test"),
+      testIdAttr: attr("data-testid") !== null ? "data-testid" : attr("data-test") !== null ? "data-test" : null,
+      tflowId: attr("data-tflow-id"),
       css: cssPath(),
     };
   };

@@ -111,7 +111,10 @@ export function assertProofUntouched(before: Step, after: Step): ProofViolation 
   return null;
 }
 
-/** As `assertProofUntouched`, for a recorded step: every `RecordedStep` field but `step` must also be identical. */
+/**
+ * As `assertProofUntouched`, for a recorded step: every `RecordedStep` field but `step` must also be
+ * identical — #467: including its `stepId` (a retarget never renames, adds or drops a step id).
+ */
 export function assertRecordedProofUntouched(before: RecordedStep, after: RecordedStep): ProofViolation | null {
   const b = before as unknown as Record<string, unknown>;
   const a = after as unknown as Record<string, unknown>;
@@ -151,7 +154,10 @@ export function flattenRecording(rec: Recording): { step: Step; recorded: Record
   return rec.pages.flatMap((p) => p.steps.map((s) => ({ step: s.step, recorded: s })));
 }
 
-/** `base` with the step at `flatIndex` replaced one-for-one by `step` (its other RecordedStep fields kept). */
+/**
+ * `base` with the step at `flatIndex` replaced one-for-one by `step` (its other RecordedStep fields
+ * kept — #467: its `stepId` too, so a healed step keeps its id).
+ */
 export function retargetRecording(base: Recording, flatIndex: number, step: Step): Recording {
   let seen = 0;
   let hit = false;

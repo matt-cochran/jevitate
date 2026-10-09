@@ -1,12 +1,15 @@
 === RUNTIME (dist/index.js) ===
 
-# @jevitate/ai-core (116 exports)
+# @jevitate/ai-core (123 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
   BACKOFF_SCHEDULE_MS: array
+  CATALOG_OUTCOMES_INSTRUCTIONS: const (string)
   CHAT_REPLY_INSTRUCTIONS: const (string)
   CHAT_REPLY_STUCK_INSTRUCTIONS: const (string)
   CatalogModelSchema: object
+  CatalogOutcomesInput: object
+  CatalogOutcomesOutput: object
   ChatReplyInput: object
   ChatReplyOutput: object
   CredentialLeakError: class
@@ -46,10 +49,12 @@
   MIN_SUBSTRING_SECRET_LENGTH: const (number)
   MissingCredentialError: class
   ModelConstraintsSchema: object
+  NO_PLAINTEXT_CREDENTIAL_KEYS: array
   NoEligibleModelError: class
   OPENROUTER_JEV_BASE_URL: const (string)
   OPENROUTER_JEV_MODEL: const (string)
   OpenRouterGenerationGateway: class
+  PlaintextCredentialRefusedError: class
   REDACTION_MASK: const (string)
   REVEALED_SECRET_SELECTORS: array
   REVEALED_SECRET_SHAPES: array
@@ -71,9 +76,11 @@
   UxSpecificsItem: object
   UxSpecificsOutput: object
   aggregateOf: function
+  allowsPlaintextFallback: function
   apiKeyFromAuthHeader: function
   assertNoOutboundCredential: function
   assertNoSecretInPayload: function
+  assertPlaintextAllowed: function
   collectKeys: function
   collectMissingKeys: function
   containsSecret: function
@@ -213,7 +220,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (420 exports)
+# @jevitate/explore (422 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -544,6 +551,8 @@
   playwrightLivenessProbe: function
   probeResponsive: function
   quoteIsOnlyControlNames: function
+  quoteSpanAt: function
+  quoteSpans: function
   recordCoverageHang: function
   recordingStepCount: function
   redactAriaLine: function
@@ -684,12 +693,14 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (33 exports)
+# @jevitate/interpreter (36 exports)
   BufferingSink: class
   DEFAULT_IN_VIEWPORT_MIN: const (number)
+  PLAYWRIGHT_TEST_ID_ATTRIBUTE: const (string)
   PostconditionFailed: class
   RecordingInterpreter: class
   ReplayTargetError: class
+  TFLOW_ID_ATTRIBUTE: const (string)
   anchorLocator: function
   applyTextEdit: function
   attrOf: function
@@ -699,6 +710,7 @@
   compareStyle: function
   describeTextEdit: function
   descriptorLocator: function
+  descriptorRung: function
   descriptorToTarget: function
   evaluateVisual: function
   installFlashRecorder: function
@@ -719,9 +731,15 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (89 exports)
+# @jevitate/journey (120 exports)
   ANCHORED_STRATEGIES: array
+  ANCHOR_BOUNDARIES: array
+  ANCHOR_NAME_MAX: const (number)
   ANCHOR_NAME_RE: object
+  ANCHOR_NAME_RULE_RE: object
+  ANCHOR_RULE_CODES: array
+  ANSWER_QUESTIONS: array
+  ANSWER_VALUES: array
   APPROVAL_CHANNELS: array
   AcceptedFindingsSchema: object
   AnnotationDraftMismatchError: class
@@ -738,19 +756,28 @@
   CandidatePairSchema: object
   CatalogAnalysisSchema: object
   CatalogApprovalSchema: object
+  CatalogRefIssueSchema: object
   CatalogStatusSchema: object
   CatalogStatusValueSchema: object
   ChangeEvidenceRefSchema: object
+  DURATION_STATS: array
+  DesiredOutcomeSchema: object
+  EXTENSION_NAMESPACE_RE: object
+  ExtensionsSchema: object
   FindingSchema: object
   FsJourneyStore: class
   GTWR_RULES: array
   GTWR_SET_CHARACTERISTICS: array
   HEAL_REJECTION_CODES: array
   HealAttemptSchema: object
+  JOB_KINDS: array
   JOB_PRIORITIES: array
+  JOB_PROVENANCES: array
+  JOB_STAGES: array
   JevLayerSchema: object
   JobReviewSchema: object
   JobSchema: object
+  JobStepSchema: object
   JourneyCatalogLinksSchema: object
   JourneyProposalSchema: object
   JourneyRegistry: class
@@ -758,13 +785,22 @@
   JourneySchema: object
   JourneyStepError: class
   JudgmentUsageSchema: object
+  METRIC_KINDS: array
+  MetricSchema: object
+  OUTCOME_DIRECTIONS: array
+  OUTCOME_GULFS: array
+  OUTCOME_MEASURES: array
+  OutcomeTargetSchema: object
   PAIR_RELATIONS: array
   ParamValidationError: class
   PersonaReviewSchema: object
+  PrReviewSchema: object
   ProposalStepSchema: object
   RejectedProposalSchema: object
+  ReviewAnchorWarningSchema: object
   ReviewChangeSchema: object
   ReviewLintFindingSchema: object
+  ReviewLocatorHealthSchema: object
   ReviewProposalSchema: object
   ReviewRiskyControlSchema: object
   ReviewStepSchema: object
@@ -772,6 +808,10 @@
   ReviewWriteRequestSchema: object
   SECRET_PARAM_NAME_RE: object
   SWEEP_MODES: array
+  TARGET_OPS: array
+  TARGET_UNITS: array
+  anchorLintIssues: function
+  anchorRuleIssues: function
   applyAnnotationDraft: function
   assertionSiteKey: function
   checkJobStory: function
@@ -807,6 +847,9 @@
   secretParamNames: function
   secretParamValues: function
   splitBudget: function
+  stampAnchorStepIds: function
+  stripStepIds: function
+  suggestAnchorName: function
   sweepStops: function
   validateParams: function
 
@@ -989,7 +1032,7 @@
   rungLocator: function
   validateCandidates: function
 
-# @jevitate/recording (87 exports)
+# @jevitate/recording (92 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -1020,6 +1063,7 @@
   PostdocDecisionsSchema: object
   READ_RPC_VERB: object
   RecordingSchema: object
+  STEP_ID_RE: object
   STYLE_CHANNELS: array
   STYLE_PROPERTIES: array
   SecretMaterializationError: class
@@ -1041,6 +1085,7 @@
   diffRecordings: function
   diffTakes: function
   encodeUrlParamValue: function
+  ensureStepIds: function
   evaluateInvariantExpression: function
   expressionObservables: function
   fitInteractionPolicy: function
@@ -1056,6 +1101,7 @@
   matchesPattern: function
   matchesResponseStatus: function
   mergeInvariantSpecs: function
+  mintStepId: function
   navigateTemplateProblem: function
   navigateUrlParams: function
   parseInvariantExpression: function
@@ -1069,9 +1115,11 @@
   resolveNavigateUrl: function
   rpcMethodOf: function
   spliceRecording: function
+  stepIdsOf: function
   stepSignature: function
   strictSignature: function
   substituteCaptureRefs: function
+  takeValueFor: function
   textEditProblem: function
   urlTemplate: function
   validateInvariantSpec: function
@@ -1201,7 +1249,7 @@
   migrateToLatest: function
   openDatabase: function
 
-# @jevitate/ux (112 exports)
+# @jevitate/ux (114 exports)
   APPLIES_QUESTION_ID: const (string)
   CALIBRATED_QUALITY_POLICY: object
   CALIBRATION_KNOWN_APP_CLASSES: array
@@ -1260,6 +1308,7 @@
   claimsCaveat: function
   clamp01: function
   combineConfidence: function
+  contractRouteTemplate: function
   controlKey: function
   dedupeObjectiveFindings: function
   defaultQualityPolicy: function
@@ -1313,4 +1362,5 @@
   routeMatches: function
   routeOf: function
   summarizeLedger: function
+  uxFindingFingerprint: function
   withSignalFindings: function

@@ -3,6 +3,7 @@ import type { Journey } from "@jevitate/journey";
 import type { HealReport, JourneyRunResult } from "@jevitate/runtime";
 import { redactSecretParams } from "./journey-api.js";
 import { journeyStepUrl } from "./check-plan.js";
+import { runLocatorHealth } from "./locator-health-api.js";
 
 /**
  * #453: the `*.result.json` record of one Journey run — what `jevitate report`, the run index and a
@@ -32,6 +33,8 @@ export interface JourneyResultContext {
   readonly proposal?: JourneyResultProposal;
   /** The run's heal report when the result does not already carry it. */
   readonly heal?: HealReport;
+  /** #470: the test-id convention for `locatorHealth` (default: the project's config, else data-testid/data-test). */
+  readonly testIdAttributes?: readonly string[];
 }
 
 export interface JourneyResultRecord {
@@ -44,6 +47,8 @@ export function journeyResultRecord(r: JourneyRunResult, ctx: JourneyResultConte
   const at = r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? r.at : undefined;
   const url = journeyStepUrl(ctx.journey, at);
   const heal = r.heal ?? ctx.heal;
+  // #470: how each step's target resolved, and the run's locator health (advisory; never gates here).
+  const locatorHealth = runLocatorHealth(ctx.journey, r.resolved, ...(ctx.testIdAttributes === undefined ? [] : [ctx.testIdAttributes]));
   const record: JourneyResultRecord = {
     missionOutcome: JOURNEY_MISSION_OUTCOME[r.outcome],
     exitCode: journeyExitCode(r.outcome),
@@ -60,6 +65,8 @@ export function journeyResultRecord(r: JourneyRunResult, ctx: JourneyResultConte
       ...(ctx.engine === undefined ? {} : { engine: ctx.engine }),
       ...(ctx.suite === undefined ? {} : { suite: ctx.suite }),
       ...(ctx.targetBuild === undefined ? {} : { targetBuild: ctx.targetBuild }),
+      ...(r.resolved === undefined ? {} : { resolved: r.resolved }),
+      ...(locatorHealth === undefined ? {} : { locatorHealth }),
     },
   };
   return redactSecretParams(record, ctx.journey, ctx.params);

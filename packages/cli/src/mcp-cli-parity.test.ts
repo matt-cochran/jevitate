@@ -57,6 +57,10 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "install-browser":
     "#450: a host operation (downloads a browser into the machine's shared browsers dir): the operator's, like doctor; MCP tools report a missing browser with this command as the fix",
   "browser-path": "#450: host introspection for project scripts (browsers dir, pinned revision, executable path); no run capability to expose over MCP",
+  "journey migrate":
+    "#467: a one-time rewrite of the repo's Journeys and recordings (mints step ids; changes every promoted Journey's hash) that the operator runs once and commits — not an agent capability; review_journey stale: true lists what then needs re-approval",
+  "connect journeeze":
+    "#464: handles the Journeeze upload key (read from stdin without echo, stored in jevitate's secret store): a key never passes through a model or an MCP argument. publish_to_journeeze uses the stored key without ever seeing it",
   doctor:
     "#205: host maintenance for the operator (it signals processes on this machine and clears machine-wide browser slots); the same orphan sweep already runs automatically before every browser-driving MCP tool, and each result reports governance in hostHealth.resources",
 };

@@ -12,6 +12,7 @@ import {
 import type { Answer, JudgmentState, Question } from "@jevitate/ai-core";
 import { catalogJourney, findJob, findPersona, journeyLinks, personaLinkId, type Catalog, type CatalogJourney } from "./catalog.js";
 import { buildCatalogStatus, renderAnalysisGroups } from "./catalog-review.js";
+import { catalogRefIssues, journeyRefIssues, refIssueFindings } from "./catalog-refs.js";
 import { buildJourneyReview } from "./journey-review.js";
 import { readVerifyRecord } from "./journey-review-store.js";
 import { JEV_SKIPPED_PASS_REAL, jevLayerOf, type JevSetup } from "./jev-advisor.js";
@@ -462,6 +463,17 @@ function pairReason(pair: CandidatePair, a: Item, b: Item): string {
   return `${quote(a.text)} vs ${quote(b.text)} (paired: ${pair.reasons.join("; ")})`;
 }
 
+/**
+ * #465: the catalog's reference problems (warnings) — all of them for `catalog analyze`, a Journey's
+ * own when it is the subject. A job's are on its review sheet (`refIssues`) and gate `job approve`.
+ */
+function referenceFindings(catalog: Catalog, subject: ApprovalSubject | undefined): Finding[] {
+  if (subject === undefined) return refIssueFindings(catalogRefIssues(catalog), CATALOG_ANALYSIS);
+  if (subject.kind !== "journey") return [];
+  const j = catalog.journeys.find((x) => x.id === subject.id);
+  return j === undefined ? [] : refIssueFindings(journeyRefIssues(catalog, j), CATALOG_ANALYSIS);
+}
+
 function refOfSubject(s: ApprovalSubject): ItemRef {
   return `${s.kind}:${s.id}`;
 }
@@ -511,6 +523,7 @@ export async function analyzeCatalog(catalog: Catalog, opts: AnalyzeOptions = {}
   if (advisor === undefined && judged.length > 0) {
     findings.push(f("jev.skipped", "info", `Jev classification skipped: ${setup !== undefined && "skipped" in setup ? setup.skipped : JEV_SKIPPED_PASS_REAL} — the candidate pairs are listed unclassified`, "consistent"));
   }
+  findings.push(...referenceFindings(catalog, opts.subject));
   findings.push(...completeness(catalog, subjectRef));
   findings.push(...(await updateAdvice(catalog, subjectRef)));
   findings.push(...(await suggestMissingJobs(catalog, subjectRef, setup)));

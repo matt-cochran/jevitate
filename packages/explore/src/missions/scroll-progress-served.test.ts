@@ -58,7 +58,7 @@ async function run(steps: ScriptedStep[], goal: string, gen?: FakeGenerationGate
           new FakeGenerationGateway({
             "goal.answer": {
               answer: "Design Partner costs $300/month, and that price is locked for 24 months.",
-              claims: [{ claim: "Design Partner costs $300/month, locked for 24 months", quote: "Design Partner: $300/month, price locked for 24 months" }],
+              claims: [{ claim: "Design Partner costs $300/month, locked for 24 months", quote: "Design Partner: $300/month, price locked for 24 months", absent: null }],
             },
           }),
         goal,

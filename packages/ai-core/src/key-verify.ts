@@ -1,4 +1,4 @@
-import { envAliasesFor, type CredentialKey } from "./credentials.js";
+import { allowsPlaintextFallback, envAliasesFor, type CredentialKey } from "./credentials.js";
 import { clock } from "@jevitate/domain";
 
 /**
@@ -13,6 +13,7 @@ export const KEY_PROVIDERS: Readonly<Record<CredentialKey, string>> = {
   OPENROUTER_API_KEY: "OpenRouter",
   TYPESAFE_API_KEY: "TypeSafe/Jev",
   GITHUB_TOKEN: "GitHub",
+  JOURNEEZE_UPLOAD_KEY: "Journeeze",
 };
 
 /** Where a configured key's value comes from. Env wins over the stored file. */
@@ -38,7 +39,8 @@ export function credentialProvenance(
   localConfig: Partial<Record<CredentialKey, string>>,
 ): CredentialProvenance {
   const envVar = [key, ...envAliasesFor(key)].find((name) => nonBlank(env[name]));
-  const stored = nonBlank(localConfig[key]);
+  // #464: a no-plaintext key is never read from the file, so it never has a "file" source.
+  const stored = allowsPlaintextFallback(key) && nonBlank(localConfig[key]);
   const source: CredentialSource = envVar !== undefined ? { kind: "env", envVar } : stored ? { kind: "file" } : { kind: "missing" };
   return { key, provider: KEY_PROVIDERS[key], source, shadowsStored: envVar !== undefined && stored };
 }

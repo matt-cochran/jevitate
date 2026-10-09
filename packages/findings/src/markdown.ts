@@ -49,7 +49,7 @@ function defectSection(d: ConsolidatedDefect, status?: string): string[] {
     `- key: \`${d.key}\` · ${d.severity} · ${d.category}${d.intermittent ? " · intermittent" : ""}`,
     `- identity: signal \`${id.signal}\`${id.route === undefined ? "" : ` · route \`${id.route}\``}${
       id.control === undefined ? "" : ` · control \`${id.control}\``
-    }${id.request === undefined ? "" : ` · request \`${id.request}\``}`,
+    }${id.tflowId === undefined ? "" : ` · tflow-id \`${id.tflowId}\``}${id.request === undefined ? "" : ` · request \`${id.request}\``}`,
     `- seen: ${d.occurrences} occurrence(s) in ${d.runCount} run(s)${d.firstSeen === undefined ? "" : `, first ${d.firstSeen}`}${
       d.lastSeen === undefined ? "" : `, last ${d.lastSeen}`
     }`,

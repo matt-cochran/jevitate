@@ -277,3 +277,24 @@ test("each resolution failure cause gets its own handback wording", () => {
   // for the human who has to act.
   for (const prompt of prompts) expect(prompt).not.toContain("raw diagnostic");
 });
+
+// #467: every assembled step carries a stable step id, unique within the recording.
+const stepIdCapture = (): CaptureEvent[] => {
+  reset();
+  return [
+    nav("http://site.test/login"),
+    act("click", "1", { tag: "button", rawText: "Sign in", resolution: ok({ role: "button", name: "Sign in" }) }),
+    nav("http://site.test/inbox"),
+    act("click", "2", { tag: "a", rawText: "Thread", resolution: ok({ role: "link", name: "Thread" }) }),
+  ];
+};
+const stepIds = (r: ReturnType<typeof assembleRecording>): (string | undefined)[] => r.pages.flatMap((p) => p.steps.map((s) => s.stepId));
+
+test("every assembled step gets a step id", () => {
+  expect(stepIds(assembleRecording(stepIdCapture(), { site: "site" })).every((id) => id !== undefined)).toBe(true);
+});
+
+test("assembled step ids are unique within the recording", () => {
+  const ids = stepIds(assembleRecording(stepIdCapture(), { site: "site" }));
+  expect(new Set(ids).size).toBe(ids.length);
+});

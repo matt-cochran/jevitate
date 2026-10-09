@@ -1,0 +1,407 @@
+{
+  "$schema": "https://app.journeeze.dev/schemas/catalog-bundle.v1.json",
+  "kind": "journeeze.catalog-bundle",
+  "version": 1,
+  "minor": 0,
+  "producer": {
+    "tool": "jevitate",
+    "version": "0.9.0",
+    "commit": "592a7021c4f0be9d3a8e6b1f2c7d4e5a6b7c8d9e"
+  },
+  "product": {
+    "name": "Journeeze board",
+    "connection": {
+      "provider": "github",
+      "host": "github.com",
+      "namespace": "example-org",
+      "name": "journeeze-board",
+      "catalogPath": ".jevitate/"
+    }
+  },
+  "generatedAt": "2026-10-09T13:00:00.000Z",
+  "catalog": {
+    "personas": [
+      {
+        "id": "reviewer",
+        "description": "Someone who judges review items on the board",
+        "role": "reviewer",
+        "otherFields": {
+          "seniority": "any"
+        },
+        "approval": {
+          "contentHash": "f76279fa83b9b92e80e811525dcba7a02fef8e1f51a840f43eec1f1272ad2c8f",
+          "at": "2026-10-09T12:00:00.000Z",
+          "channel": "tty"
+        }
+      },
+      {
+        "id": "admin",
+        "description": "Someone who manages the team and its projects",
+        "role": "owner"
+      }
+    ],
+    "jobs": [
+      {
+        "id": "record-verdict",
+        "trigger": "a review item is waiting for my judgement",
+        "motivation": "record whether it works",
+        "outcome": "the team knows what to fix next",
+        "personas": [
+          "reviewer"
+        ],
+        "priority": "high",
+        "kind": "core",
+        "parent": "keep-quality-visible",
+        "context": [
+          "a release is being reviewed"
+        ],
+        "steps": [
+          {
+            "id": "find",
+            "name": "Find the item to judge",
+            "stage": "locate"
+          },
+          {
+            "id": "judge",
+            "name": "Record the verdict",
+            "stage": "execute"
+          },
+          {
+            "id": "confirm",
+            "name": "Confirm the verdict was saved",
+            "stage": "confirm"
+          }
+        ],
+        "desiredOutcomes": [
+          {
+            "id": "verdict-fast",
+            "step": "judge",
+            "direction": "minimize",
+            "measure": "time",
+            "object": "the time it takes to record a verdict",
+            "clarifier": "from opening the board to the verdict being recorded",
+            "gulf": "execution",
+            "metric": {
+              "kind": "duration",
+              "from": "job_start",
+              "to": "verdict-recorded",
+              "stat": "p50"
+            },
+            "target": {
+              "op": "<=",
+              "value": 30,
+              "unit": "s"
+            },
+            "priority": "high"
+          },
+          {
+            "id": "verdict-under-a-minute",
+            "direction": "maximize",
+            "measure": "likelihood",
+            "object": "the likelihood of finishing within a minute",
+            "metric": {
+              "kind": "duration",
+              "from": "job_start",
+              "to": "job_end",
+              "stat": "share_under",
+              "threshold": 60
+            },
+            "target": {
+              "op": ">=",
+              "value": 90,
+              "unit": "percent"
+            }
+          },
+          {
+            "id": "verdict-understood",
+            "step": "confirm",
+            "direction": "maximize",
+            "measure": "likelihood",
+            "object": "the likelihood of knowing the verdict was saved",
+            "gulf": "evaluation",
+            "metric": {
+              "kind": "answer",
+              "question": "understood",
+              "value": "yes"
+            },
+            "target": {
+              "op": ">=",
+              "value": 80,
+              "unit": "percent"
+            }
+          },
+          {
+            "id": "verdict-wrong-item",
+            "step": "judge",
+            "direction": "minimize",
+            "measure": "likelihood",
+            "object": "the likelihood of judging the wrong item",
+            "metric": {
+              "kind": "repeat",
+              "at": "verdict-recorded"
+            },
+            "target": {
+              "op": "<=",
+              "value": 5,
+              "unit": "percent"
+            },
+            "guardrail": true
+          }
+        ],
+        "constraints": [
+          "only reviewers of the project may record verdicts"
+        ],
+        "provenance": "team_hypothesis",
+        "revision": 2,
+        "lastValidated": "2026-10-09",
+        "approval": {
+          "contentHash": "838fee06a8489e902d44ee8757b618dc50bcbbe18fbb0892326199fb7d0d5266",
+          "at": "2026-10-09T12:00:00.000Z",
+          "channel": "tty"
+        }
+      },
+      {
+        "id": "keep-quality-visible",
+        "trigger": "we ship often",
+        "motivation": "see what works and what is broken",
+        "outcome": "decide what to fix first",
+        "personas": [
+          "reviewer",
+          "admin"
+        ],
+        "priority": "medium",
+        "kind": "related",
+        "provenance": "ai_draft"
+      }
+    ],
+    "journeys": [
+      {
+        "journey": {
+          "metadata": {
+            "id": "jz-guide-fixture",
+            "name": "Reviewer records a verdict",
+            "goal": "Judge one review item",
+            "promoted": true,
+            "params": [],
+            "authoredBy": "human-demonstration",
+            "createdAtIso": "2026-10-06T12:00:00.000Z",
+            "requiresAuth": true,
+            "anchors": [
+              {
+                "name": "verdict-recorded",
+                "step": 2,
+                "description": "The item carries the verdict"
+              }
+            ],
+            "approval": {
+              "contentHash": "31ce5d0e3861c17d76e281b22cf0979019d3363447c4aa7db11e690166b103e0",
+              "at": "2026-10-09T12:00:00.000Z",
+              "provenance": {
+                "channel": "tty",
+                "agentSignals": []
+              }
+            }
+          },
+          "recording": {
+            "version": 1,
+            "site": "http://localhost:28088",
+            "intent": "Record a verdict on a review item",
+            "pages": [
+              {
+                "url": "/board",
+                "steps": [
+                  {
+                    "step": {
+                      "kind": "navigate",
+                      "url": "/board?project=secret-query#frag",
+                      "expect": {
+                        "kind": "urlIncludes",
+                        "text": "/board"
+                      }
+                    }
+                  },
+                  {
+                    "step": {
+                      "kind": "click",
+                      "target": {
+                        "css": "[data-tflow-id=\"item.verdict.broken\"]",
+                        "testId": "item.verdict.broken",
+                        "role": "button",
+                        "name": "Broken"
+                      }
+                    },
+                    "objective": "Mark the item as broken"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "link": {
+          "job": "record-verdict",
+          "persona": "reviewer",
+          "anchors": [
+            {
+              "name": "verdict-recorded",
+              "step": 2,
+              "jobStep": "judge",
+              "boundary": "end"
+            }
+          ],
+          "serves": [
+            "verdict-fast",
+            "verdict-wrong-item"
+          ]
+        }
+      }
+    ]
+  },
+  "demos": [
+    {
+      "journey": "jz-guide-fixture",
+      "renderedFrom": "31ce5d0e3861c17d76e281b22cf0979019d3363447c4aa7db11e690166b103e0",
+      "status": "approved",
+      "title": "Record a verdict",
+      "steps": [
+        {
+          "number": 1,
+          "caption": "Open the review board",
+          "expected": "The item list is visible",
+          "screenshot": "media/jz-guide-fixture/step-01.png"
+        },
+        {
+          "number": 2,
+          "caption": "Mark the item as broken",
+          "expected": "The verdict reads Broken"
+        }
+      ],
+      "video": "media/jz-guide-fixture/demo.webm",
+      "subtitles": "media/jz-guide-fixture/demo.vtt",
+      "privacy": {
+        "mask": "jz-mask-v1",
+        "data": "synthetic",
+        "method": "dom-before-capture",
+        "regions": 0
+      }
+    }
+  ],
+  "checks": [
+    {
+      "target": {
+        "id": "jz-guide-fixture",
+        "kind": "journey"
+      },
+      "commit": "592a7021c4f0be9d3a8e6b1f2c7d4e5a6b7c8d9e",
+      "at": "2026-10-09T12:30:00.000Z",
+      "runId": "check-2026-10-09T12-30-00-000Z",
+      "journey": "jz-guide-fixture",
+      "journeyHash": "31ce5d0e3861c17d76e281b22cf0979019d3363447c4aa7db11e690166b103e0",
+      "outcome": "clean",
+      "exitCode": 0,
+      "journeyOutcome": "ok",
+      "durationMs": 4100,
+      "baseline": {
+        "steps": 2,
+        "totalMs": 4000,
+        "anchors": [
+          {
+            "anchor": "job_start",
+            "step": 1,
+            "atMs": 0
+          },
+          {
+            "anchor": "verdict-recorded",
+            "step": 2,
+            "atMs": 4000
+          },
+          {
+            "anchor": "job_end",
+            "step": 2,
+            "atMs": 4000
+          }
+        ]
+      }
+    },
+    {
+      "target": {
+        "id": "board-adversarial",
+        "kind": "mission"
+      },
+      "commit": "592a7021c4f0be9d3a8e6b1f2c7d4e5a6b7c8d9e",
+      "at": "2026-10-09T12:40:00.000Z",
+      "outcome": "inconclusive",
+      "exitCode": 2,
+      "failureKind": "insufficient-coverage"
+    }
+  ],
+  "findings": [
+    {
+      "fingerprint": "5b7e448babe54616",
+      "kind": "ux",
+      "claim": "no-feedback",
+      "severity": "minor",
+      "confidence": 0.72,
+      "commit": "592a7021c4f0be9d3a8e6b1f2c7d4e5a6b7c8d9e",
+      "at": "2026-10-09T12:35:00.000Z",
+      "target": "jz-guide-fixture",
+      "journey": "jz-guide-fixture",
+      "step": 2,
+      "anchor": "verdict-recorded",
+      "route": "/board",
+      "tflowId": "item.verdict.broken",
+      "controls": [
+        "button \"Broken\""
+      ],
+      "observation": "Nothing on the item changes after the Broken button is pressed",
+      "userImpact": "The reviewer cannot tell whether the verdict was saved",
+      "recommendation": "Show the recorded verdict on the item right after the click",
+      "citation": {
+        "source": "nielsen",
+        "ref": "nielsen-1"
+      },
+      "screenshot": "media/findings/5b7e448babe54616.png",
+      "box": {
+        "x": 120,
+        "y": 340,
+        "width": 96,
+        "height": 32
+      }
+    },
+    {
+      "fingerprint": "3fa2c1d09b7e4a55",
+      "kind": "defect",
+      "severity": "major",
+      "commit": "592a7021c4f0be9d3a8e6b1f2c7d4e5a6b7c8d9e",
+      "at": "2026-10-09T12:41:00.000Z",
+      "target": "board-adversarial",
+      "route": "/board",
+      "observation": "Saving a verdict twice in quick succession returns a server error"
+    }
+  ],
+  "files": [
+    {
+      "path": "media/jz-guide-fixture/step-01.png",
+      "sha256": "9430b1dfd76b9fc19dc6d8316e1381fc6ee67b332586e4f61b4c90662d9f8364",
+      "bytes": 105,
+      "type": "image/png"
+    },
+    {
+      "path": "media/jz-guide-fixture/demo.webm",
+      "sha256": "2e581ac36c236b3e7bb9d18b66c8a6f06f9cf7aab069ef2d56dd7808b8230c5b",
+      "bytes": 32,
+      "type": "video/webm"
+    },
+    {
+      "path": "media/jz-guide-fixture/demo.vtt",
+      "sha256": "5b3f531446384d59e6b7740378432c66aa9da4a35b8a401bc050861af5273018",
+      "bytes": 157,
+      "type": "text/vtt"
+    },
+    {
+      "path": "media/findings/5b7e448babe54616.png",
+      "sha256": "9430b1dfd76b9fc19dc6d8316e1381fc6ee67b332586e4f61b4c90662d9f8364",
+      "bytes": 105,
+      "type": "image/png"
+    }
+  ]
+}

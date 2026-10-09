@@ -1,5 +1,8 @@
 import { argErrorBody, McpArgError, optRecordVideo, optScreenshots, optViewport, type McpArgs } from "./mcp-args.js";
-import { confineMcpPath } from "./mcp-paths.js";
+import { confineMcpPath, McpPathError } from "./mcp-paths.js";
+import { resolve as resolvePath } from "node:path";
+import { homeDataRoot } from "./project-dir.js";
+import { CATALOG_EXPORT_FORMATS } from "./catalog-bundle-api.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
 
 /**
@@ -63,7 +66,9 @@ export type CliParamKind =
   /** `name=<storageState>` entries (`--persona`/`--actor`): each path confined as a session. */
   | "named-sessions"
   /** `<descriptor>=<file>` entries (`--type-fixture`): the file (after the LAST `=`) confined as a read path. */
-  | "bound-paths";
+  | "bound-paths"
+  /** #464: a path the command WRITES project output to — confined to the project roots only (never `~/.jevitate/`). */
+  | "project-path";
 
 export interface CliParam {
   readonly kind: CliParamKind;
@@ -205,10 +210,18 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: { path: "job review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
   },
   {
+    name: "draft_job_outcomes",
+    description:
+      "`jevitate job draft-outcomes <jobId> --json` (#465): draft 1–3 desired outcomes (count, default 3) for a catalog job with the generation model (real: true live, or fakeAi: true deterministic — exactly one) and write them into its jobs file marked provenance ai_draft for the team to review. " +
+      "It NEVER approves: an approved job becomes stale (needs re-review), and approving stays a person's act on the CLI (`jevitate job approve`) — there is no MCP tool for it.",
+    command: { path: "job draft-outcomes", params: { jobId: pos(), count: n("--count"), ...AI }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
     name: "catalog_status",
     description:
       "`jevitate catalog status --json` (#433): read-only. The catalog's coverage — the jobs × personas matrix (which pairs have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links, and stale approvals (edited personas/jobs and the Journeys linked to them: needs re-review). " +
-      "#437: `approvals` lists every recorded approval and how it was made (provenance channel tty / non-interactive / mcp / ci). requireApprovals (+ allowChannels, default tty): exit 1 when an approval is missing, stale or made over a channel not allowed.",
+      "#437: `approvals` lists every recorded approval and how it was made (provenance channel tty / non-interactive / mcp / ci / pr-review). requireApprovals (+ allowChannels: a comma list of tty, non-interactive, mcp, ci, pr-review; default tty): exit 1 when an approval is missing, stale or made over a channel not allowed. " +
+      "#469: pr-review is a channel you may ALLOW, never one a caller sets — jevitate records it only after verifying the merged PR's approving review through the forge API in CI.",
     command: {
       path: "catalog status",
       params: { requireApprovals: b("--require-approvals"), allowChannels: s("--allow-channels") },
@@ -223,14 +236,39 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: { path: "catalog analyze", params: { ...JEV_ADVICE, maxPairs: n("--max-pairs") }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, ...JSON_FLAG } },
   },
   {
+    name: "export_catalog_bundle",
+    description:
+      "`jevitate catalog export --format journeeze-bundle --out <dir> --json` (#464): write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings; no media) as a Journeeze catalog bundle (bundle.json) under out — a directory inside the project (never ~/.jevitate/). " +
+      "check: `jevitate check` records (check.json paths, confined like every read path) to include — default <project>/jevitate-check/check.json when it exists; productName: the bundle's product.name (default the project's package.json name, else its folder name). " +
+      "Returns the bundle path, its sha256 digest, counts and warnings. It never uploads (publish_to_journeeze) and never approves anything.",
+    command: {
+      path: "catalog export",
+      params: {
+        format: s("--format", { required: true, enum: CATALOG_EXPORT_FORMATS }),
+        out: { kind: "project-path", flag: "--out", required: true },
+        check: { kind: "path[]", flag: "--check" },
+        productName: s("--product-name"),
+      },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "publish_to_journeeze",
+    description:
+      "`jevitate publish journeeze --json` (#464): export the catalog bundle and upload it to the Journeeze product this project is connected to, then wait until it is imported or refused; returns the status, summary, warnings and errors. dryRun: true exports and validates but sends nothing. " +
+      "The upload key is resolved by jevitate itself (its secret store, or JOURNEEZE_UPLOAD_KEY in CI): it is never an argument and never in a result. A refusal carries its specific code (E_JOURNEEZE_NOT_CONNECTED, E_JOURNEEZE_KEY_REFUSED, E_JOURNEEZE_FORBIDDEN, E_JOURNEEZE_UNAVAILABLE, …). Connecting a project (entering the key) is a person's act on the CLI (`jevitate connect journeeze`) — there is no MCP tool for it. Publishing never approves anything.",
+    command: { path: "publish journeeze", params: { dryRun: b("--dry-run") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
     name: "review_journey",
     description:
       "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, a pending self-heal proposal (#453: per-step before/after, hypothesis, evidence, staleness, proposedHash), and its content hash. " +
       "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
-      "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed.",
+      "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed. " +
+      "#467: stale: true (and no id) instead lists every promoted Journey whose approval is stale — each with its approved and current hash and stepIdOnly: true when the only change is minted step ids — for a person to re-approve; it never approves.",
     command: {
       path: "journey review",
-      params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE },
+      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), ...JEV_ADVICE },
       omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
     },
   },
@@ -617,7 +655,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description:
       "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding; exit 5 = nothing failed but a self-heal proposed Journey revision(s) awaiting review. " +
       "#453 selfHeal hybrid|full (+ changes <git range> and/or changeNote[], and a gateway — real or fakeAi; healMax* budgets): a Journey that quarantines is re-run ONCE with a change-aware self-heal; a proposed revision is pending review (exit 5), never a pass. " +
-      "#437 requireApprovals (+ allowChannels, default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed.",
+      "#437 requireApprovals (+ allowChannels: a comma list of tty, non-interactive, mcp, ci, pr-review; default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed. " +
+      "#469: pr-review is a channel you may ALLOW, never one a caller sets — jevitate records it only after verifying the merged PR's approving review through the forge API in CI. " +
+      "#470 maxBrittleSteps n: opt-in locator gate — a Journey item with more than n brittle steps (missing the project's testIdAttributes convention) is a gating finding; without it locator health is advisory.",
     command: {
       path: "check",
       params: { tags: TAGS, ...EXTENSION,
@@ -631,6 +671,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         targetBuild: s("--target-build"),
         requireApprovals: b("--require-approvals"),
         allowChannels: s("--allow-channels"),
+        maxBrittleSteps: n("--max-brittle-steps"),
         selfHeal: s("--self-heal", { enum: ["fail-closed", "hybrid", "full"] }),
         changes: s("--changes"),
         changeNote: many("--change-note"),
@@ -643,6 +684,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       },
       omitted: { "--baseline-dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
+  },
+  {
+    name: "locator_health",
+    description:
+      "`jevitate locator-health --json` (#470): read-only and advisory. Per recorded step, the selector rung its target resolves by and whether it meets the project's test-id convention (testIdAttributes in project config; default data-testid, data-test; data-tflow-id never counts) — for every promoted Journey, one Journey (journey) or one run result (run). It never changes a Journey and never gates (run_check maxBrittleSteps is the opt-in gate).",
+    command: { path: "locator-health", params: { journey: s("--journey"), run: path("--run"), baseline: path("--baseline") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "get_report",
@@ -894,6 +941,7 @@ function paramSchema(p: CliParam): Record<string, unknown> {
       return { type: "object", additionalProperties: { type: "string" } };
     case "path":
     case "session":
+    case "project-path":
       return { type: "string" };
     case "optional-path":
     case "optional-session":
@@ -960,6 +1008,13 @@ function values(name: string, p: CliParam, v: unknown, roots: readonly string[])
       return asStrings(v, name);
     case "path":
       return [confineMcpPath(v, name, roots)];
+    case "project-path": {
+      // #464: project output (an exported bundle) is written inside the project, never under ~/.jevitate/.
+      const home = resolvePath(homeDataRoot());
+      const projectRoots = roots.filter((r) => resolvePath(r) !== home);
+      if (projectRoots.length === 0) throw new McpPathError(`'${name}' needs a project: this server has no project root to write into`);
+      return [confineMcpPath(v, name, projectRoots)];
+    }
     case "session":
       return [confineMcpPath(v, name, roots, { session: true })];
     case "path[]":

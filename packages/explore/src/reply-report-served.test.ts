@@ -135,7 +135,7 @@ describe("#200 — a report about a reply is grounded only on text that appeared
       const introGen = new FakeGenerationGateway({
         "goal.answer": {
           answer: "The assistant said: ask me anything about using the app.",
-          claims: [{ claim: "The assistant invites any question about using the app", quote: "Ask me anything about using the app" }],
+          claims: [{ claim: "The assistant invites any question about using the app", quote: "Ask me anything about using the app", absent: null }],
         },
       });
       const bad = await run("echo", new ScriptedJudge([{ op: "send", target: "0" }, { op: "report" }]), introGen);
@@ -145,7 +145,7 @@ describe("#200 — a report about a reply is grounded only on text that appeared
       const replyGen = new FakeGenerationGateway({
         "goal.answer": {
           answer: "Exports live under Settings > Data.",
-          claims: [{ claim: "Exports live under Settings > Data", quote: "exports live under Settings > Data" }],
+          claims: [{ claim: "Exports live under Settings > Data", quote: "exports live under Settings > Data", absent: null }],
         },
       });
       const good = await run("echo", new ScriptedJudge([{ op: "send", target: "0" }, { op: "report" }]), replyGen);

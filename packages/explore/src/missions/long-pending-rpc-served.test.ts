@@ -76,7 +76,7 @@ beforeEach(() => {
 
 const REPORT_GOAL = "Pressure-test the bet by running the simulation. Finish by reporting what happens after you start it.";
 /** The grounded answer a `report` gives, quoting the page's own state line. */
-const answer = (state: string) => ({ answer: state, claims: [{ claim: `The page says ${state}`, quote: state }] });
+const answer = (state: string) => ({ answer: state, claims: [{ claim: `The page says ${state}`, quote: state, absent: null }] });
 
 async function run(
   steps: ScriptedStep[],

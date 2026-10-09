@@ -1,0 +1,15 @@
+{
+  "description": "A UX finding names its claim type.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "remove",
+      "path": "/findings/0/claim"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/findings/0",
+    "keyword": "required"
+  }
+}

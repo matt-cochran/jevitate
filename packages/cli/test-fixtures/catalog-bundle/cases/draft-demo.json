@@ -1,0 +1,16 @@
+{
+  "description": "Only approved demos are exported.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/demos/0/status",
+      "value": "draft"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/demos/0/status",
+    "keyword": "const"
+  }
+}

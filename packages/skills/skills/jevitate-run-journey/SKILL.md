@@ -112,6 +112,17 @@ artifact; your job is to find the right one and run it with the right params.
   proof, change since the last approval, and the content hash. Pass that hash
   as `--reviewed-hash` (MCP `reviewedHash`) so the approval is refused
   (`E_JOURNEY_REVIEW_STALE`) if the Journey changed after they read it.
+- A new Journey, or one whose content changed beyond step ids, must follow the
+  anchor rules to promote (lowercase anchor names, anchors carrying their
+  step's `stepId`, a job-linked Journey naming at least one anchor, valid
+  `serves`/`jobStep` references); otherwise promote is refused with
+  `E_JOURNEY_ANCHOR_RULES` and the fix for each problem. The sheet and
+  `journey lint` show the same problems as warnings first.
+- `jevitate journey review --stale --json` (MCP `review_journey` with
+  `stale: true`) lists every promoted Journey whose approval is stale;
+  `stepIdOnly: true` marks one whose only change is minted step ids (after
+  `jevitate journey migrate --step-ids`, which the operator runs and
+  commits). Re-approving those is still the person's act.
 - `jevitate journey promote <id>` promotes a local Journey — a person's
   approval, never automatic. It needs an interactive terminal: after the
   sheet, the person types the Journey id (or the first 8 characters of its

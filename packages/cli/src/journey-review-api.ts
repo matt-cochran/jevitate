@@ -7,6 +7,10 @@ import { catalogJourney, journeyLinks } from "./catalog.js";
 import { preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { jevLayerOf, type JevSetup } from "./jev-advisor.js";
 import { checkProposal, readJourneyProposal } from "./journey-proposal-store.js";
+import { journeyAnchorIssues } from "./journey-anchor-gate.js";
+import { journeyLocatorHealth, testIdAttributesOrDefault } from "./locator-health-api.js";
+import { isStepIdOnlyStale } from "./journey-stale-api.js";
+import { findProjectDir } from "./project-dir.js";
 import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 
 /**
@@ -41,13 +45,17 @@ export async function reviewJourneyById(
   // #453: a pending self-heal proposal, re-checked against the stored Journey (stale, or its proof touched).
   const pending = await readJourneyProposal(journeysDir, id);
   const proposalProblem = pending === null ? null : checkProposal(journey, pending);
+  const approvedSnapshot = await readApprovedSnapshot(journeysDir, id);
   const review = buildJourneyReview(journey, {
+    anchorIssues: await journeyAnchorIssues(journey, { catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir, journeysDir, catalog }),
+    locatorHealth: journeyLocatorHealth(journey, testIdAttributesOrDefault(findProjectDir())),
+    stepIdOnly: isStepIdOnlyStale(journey, approvedSnapshot),
     ...(pending === null
       ? {}
       : { proposal: { proposal: pending, stale: proposalProblem?.code === "E_JOURNEY_PROPOSAL_STALE", ...(proposalProblem === null ? {} : { problem: proposalProblem.message }) } }),
     ...(safety === undefined ? {} : { safety }),
     catalog: { links, findings },
-    approvedSnapshot: await readApprovedSnapshot(journeysDir, id),
+    approvedSnapshot,
     lastVerify: await readVerifyRecord(journeysDir, id),
   });
   // Fail closed: what is emitted always matches the published schema.

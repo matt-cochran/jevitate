@@ -15,6 +15,7 @@ import { type TargetConfig } from "./target-config.js";
 import { type EngineInfo } from "./engine.js";
 import type { CheckSuite, SuiteBudget } from "./check-suite.js";
 import { type RunSummary } from "./report-api.js";
+import type { PrReviewCheckDeps } from "./approval-provenance.js";
 
 /**
  * `jevitate check --suite <file>` (#137): jevitate as a CI regression gate. Runs every suite item
@@ -134,6 +135,22 @@ export interface RunCheckOptions {
    * `allowedChannels` — else a gating `approval` finding (exit 1, JUnit + SARIF like any other).
    */
   readonly requireApprovals?: { readonly allowedChannels: readonly ApprovalChannel[]; readonly catalogDir: string | null };
+  /**
+   * #469 seam: how `--require-approvals` re-verifies a recorded `pr-review` approval — the forge
+   * (default: the real GitHub ForgePort), the CI environment (default `process.env`) and the git
+   * tracking probe for the positive-verification cache. Tests pass a fake forge.
+   */
+  readonly approvalVerification?: Pick<PrReviewCheckDeps, "env" | "forge" | "gitTracked">;
+  /**
+   * #470 `--max-brittle-steps <n>`: the opt-in locator gate — a Journey item with more than n brittle
+   * steps is a gating `locator-health` finding (exit 1). Absent: locator health is advisory only.
+   */
+  readonly maxBrittleSteps?: number;
+  /**
+   * #470: the project data dir whose config holds `testIdAttributes` (default: the project found from
+   * the cwd; null: none, the defaults apply).
+   */
+  readonly projectDir?: string | null;
 }
 
 export type ItemKind = "journey" | "goal" | "mission" | "verify-fix";
@@ -162,6 +179,92 @@ export interface CheckItemReport {
   readonly healAttempts?: number;
   /** Keys of the gating findings this item's run observed. */
   readonly gating: readonly string[];
+  /** #469: the Journey review hash (`journeyReviewHash`) a Journey item replayed — what its `baseline` is about. */
+  readonly journeyHash?: string;
+  /** #469: the machine baseline of a Journey item — present only when its run was clean. */
+  readonly baseline?: CheckBaseline;
+  /** #470: how stable a Journey item's locators are (advisory; gates only past `maxBrittleSteps`). */
+  readonly locatorHealth?: LocatorHealth;
+}
+
+/**
+ * #469 (contract §4.3): the machine baseline from ONE clean Journey run — the steps it took, the
+ * total time, and when each anchor was reached. `atMs` is milliseconds from the first step's start
+ * to the anchor's step completing. Keyed by anchor name (the bundle's `baseline.anchors[].anchor`).
+ */
+export interface CheckBaseline {
+  /** Steps the replay took. */
+  readonly steps: number;
+  /** Milliseconds from the first step's start to the last step's completion. */
+  readonly totalMs: number;
+  readonly anchors: readonly CheckBaselineAnchor[];
+}
+
+/** #469: one anchor of a `CheckBaseline`. */
+export interface CheckBaselineAnchor {
+  /** The anchor's name (or the reserved `job_start` / `job_end`). */
+  readonly name: string;
+  /** The 1-based step the anchor follows, when known. */
+  readonly step?: number;
+  /** The anchor step's stable id (`RecordedStep.stepId`), when it has one. */
+  readonly stepId?: string;
+  /** Milliseconds from the first step's start to the anchor's step completing. */
+  readonly atMs: number;
+}
+
+/**
+ * #470: the selector-ladder rung a recorded step's target resolves by. `anchor` is a recorded
+ * stable `id`/`name` attribute; `role+name` a role with an accessible name. A `data-tflow-id` is
+ * never a rung (#468).
+ */
+export type LocatorRung = "testId" | "anchor" | "role+name" | "role" | "label" | "text" | "css";
+
+/** #470: `stable` meets the team's locator convention; `brittle` does not. */
+export type LocatorStability = "stable" | "brittle";
+
+/** #470: one step's locator verdict. */
+export interface LocatorHealthStep {
+  readonly stepId?: string;
+  /** The flat 0-based step index in the Journey. */
+  readonly index: number;
+  readonly rung: LocatorRung;
+  readonly stability: LocatorStability;
+  /** Why it is brittle (`no test id`, `css selector`, `ordinal among 3`, …); empty when stable. */
+  readonly reasons: readonly string[];
+}
+
+/** #470: a Journey's locator health — counts and the per-step verdicts (steps with a target only). */
+export interface LocatorHealth {
+  readonly stable: number;
+  readonly brittle: number;
+  readonly steps: readonly LocatorHealthStep[];
+}
+
+/** #470: locator health over every Journey item of a check, and the opt-in gate's verdict. */
+export interface LocatorHealthSummary {
+  /** Journey items that reported locator health. */
+  readonly journeys: number;
+  readonly stable: number;
+  readonly brittle: number;
+  /** The test-id attributes counted as the convention (default `data-testid`, `data-test`). */
+  readonly testIdAttributes?: readonly string[];
+  /** The opt-in threshold (`--max-brittle-steps N`); absent = advisory only. */
+  readonly maxBrittleSteps?: number;
+  /** True when `maxBrittleSteps` was set and a Journey item exceeded it. */
+  readonly exceeded?: boolean;
+  /** e.g. `7/9 steps on stable locators; 2 brittle (high 7 · medium 1 · low 1)`. */
+  readonly line?: string;
+  /** With `--baseline`: the steps improved / regressed against the baseline's Journey runs. */
+  readonly trend?: {
+    readonly improved: number;
+    readonly regressed: number;
+    readonly unchanged: number;
+    readonly added: number;
+    readonly removed: number;
+    readonly brittleDelta: number;
+    /** `trend vs baseline: 2 improved, 1 regressed (brittle -1)`. */
+    readonly line: string;
+  };
 }
 
 export interface BudgetReport {
@@ -215,6 +318,8 @@ export interface CheckResult {
     /** #453: Journey items whose self-heal proposed a revision awaiting review. */
     readonly pendingReview: number;
   };
+  /** #470: locator health over the check's Journey items (advisory unless `maxBrittleSteps` is set). */
+  readonly locatorHealth?: LocatorHealthSummary;
   /** #453: the proposed Journey revisions awaiting review (`jevitate journey review <journeyId>`). */
   readonly proposals: ReadonlyArray<{ readonly journeyId: string; readonly proposalId?: string; readonly path?: string }>;
   readonly diff?: { readonly baseline: readonly RunSummary[]; readonly summary: FindingsDiff["summary"] };

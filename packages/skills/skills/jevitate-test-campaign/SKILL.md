@@ -44,6 +44,14 @@ never the click path; independent `--success` checks (page or network state); pr
 whether it mutates state; and a run order (jobs that create data run before jobs that use it).
 A job you can't write a checkable `--success` for is too vague. Split it or narrow it.
 
+Optionally give a job its steps and desired outcomes (`steps`, `desiredOutcomes` with a `metric`
+measured between anchors or the reserved `"job_start"` / `"job_end"`, a `target`, `guardrail: true`
+for what must never get worse; docs/catalog.md). `jevitate job draft-outcomes <id> --real --json`
+(MCP `draft_job_outcomes`) drafts 1-3 outcomes marked `provenance: ai_draft` for the human to
+review; it never approves, and an approved job becomes stale. On each job-linked Journey, mark
+where the job's steps start and end with anchors (`jobStep`, `boundary`), so its metrics are
+measurable; `catalog status` lists the reference problems (`refIssues`).
+
 ## 3. Discovery: one goal run per job
 
 For each job, as the right persona, with no scripted path:
@@ -166,6 +174,11 @@ probability ≥ its `threshold` (Jev only advises). Then `jevitate catalog statu
 `non-interactive`); in CI, `jevitate check --suite <file> --require-approvals`. Release only when: every job in the catalog has a promoted Journey that passes; every finding is
 `fixed` by verify-fix (with a ledger entry or regression); the final round ran on the release
 build; and no `inconclusive` run was counted as a pass. Anything short of that, report it as open.
+
+To share the vetted catalog, `jevitate catalog export --format journeeze-bundle --out <dir>
+[--check <check.json>] --json` (MCP `export_catalog_bundle`) writes a Journeeze catalog bundle, and
+`jevitate publish journeeze --json` (MCP `publish_to_journeeze`) uploads it once a person has run
+`jevitate connect journeeze` (or CI sets `JOURNEEZE_UPLOAD_KEY`). Neither approves anything.
 
 ## Templates
 

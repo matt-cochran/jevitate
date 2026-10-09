@@ -129,7 +129,7 @@ describe("replay finds the recorded element EXACTLY", () => {
 
   it("a test id is preferred over a duplicated name", async () => {
     const d = await record("/testid", "button", 1);
-    expect(d).toEqual({ testId: "save-main" });
+    expect(d).toEqual({ testId: "save-main", testIdAttr: "data-testid" });
     expect((await replay("/testid", d)).hit).toBe("testid");
   });
 

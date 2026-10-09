@@ -11,7 +11,10 @@ import { ReportInputError, defaultResultDirs } from "./report-api.js";
 import { TargetConfigError, loadTargetsFile } from "./target-config.js";
 import { ApprovalArgsError, parseAllowedChannels } from "./approval-provenance.js";
 import { resolveCatalogDir } from "./catalog-api.js";
-import { positiveIntArg } from "./cli-args.js";
+import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
+import { existsSync } from "node:fs";
+import { ALLOW_CHANNELS_HELP } from "./catalog-cli.js";
+import { brittleStepGate, locatorHealth, renderLocatorHealth } from "./locator-health-api.js";
 import { ChangesArgsError, ChangesInputError } from "./change-context.js";
 import { CLI_HEAL_NAMES, JourneyHealArgsError, validateJourneyHeal, type JourneyHealRequest } from "./journey-heal.js";
 import type { SelfHealMode } from "@jevitate/domain";
@@ -85,7 +88,12 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
       "--require-approvals",
       "#437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed",
     )
-    .option("--allow-channels <list>", "#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci; default tty)")
+    .option("--allow-channels <list>", ALLOW_CHANNELS_HELP)
+    .option(
+      "--max-brittle-steps <n>",
+      "#470: opt-in locator gate — a Journey item with more than n brittle steps (targets that miss the project's testIdAttributes convention) is a gating finding. Without it locator health is advisory only",
+      nonNegativeIntArg,
+    )
     .action(taggedAction(program, "check", async function (this: Command) {
       const o = this.opts<{
         suite: string;
@@ -111,6 +119,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         healMaxMs?: number;
         healMaxRunAttempts?: number;
         healMaxRunMs?: number;
+        maxBrittleSteps?: number;
       }>();
       try {
         // #453: refused (64) before the suite is read or anything runs.
@@ -134,6 +143,8 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         }
         if (o.allowChannels !== undefined && o.requireApprovals !== true) throw new ApprovalArgsError("--allow-channels needs --require-approvals");
         const allowedChannels = o.requireApprovals === true ? parseAllowedChannels(o.allowChannels) : undefined;
+        // #470: the opt-in brittle-step gate, resolved before the suite is read or anything runs.
+        const gate = o.maxBrittleSteps === undefined ? undefined : brittleStepGate(o.maxBrittleSteps);
         const suite = loadSuite(o.suite);
         const real = o.real === true || (o.fakeAi !== true && suite.ai === "real");
         const fakeAi = o.fakeAi === true || (o.real !== true && suite.ai === "fake");
@@ -162,6 +173,8 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           ...(deps.runners === undefined ? {} : { runners: deps.runners }),
           ...(healRequest.selfHeal === "fail-closed" ? {} : { selfHeal: healRequest }),
           ...(allowedChannels === undefined ? {} : { requireApprovals: { allowedChannels, catalogDir: resolveCatalogDir(deps.catalogDir) } }),
+          ...(gate === undefined ? {} : { maxBrittleSteps: gate.maxBrittleSteps }),
+          projectDir: resolveCatalogDir(deps.catalogDir),
         });
         if (o.json) emit(program, ok(result), true, result.exitCode);
         else {
@@ -181,6 +194,13 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
             out?.(`COST    ${formatUsageLine(result.usage)}\n`);
           }
           if (result.budget.exceeded !== undefined) out?.(`BUDGET  ${result.budget.exceeded}\n`);
+          // #470: locator health (advisory unless --max-brittle-steps), and its trend against --baseline.
+          const lh = result.locatorHealth;
+          if (lh?.line !== undefined) {
+            const gateNote = lh.maxBrittleSteps === undefined ? " (advisory)" : lh.exceeded === true ? ` — exceeds --max-brittle-steps ${lh.maxBrittleSteps}` : ` (within --max-brittle-steps ${lh.maxBrittleSteps})`;
+            out?.(`LOCATOR ${lh.line}${gateNote}\n`);
+          }
+          if (lh?.trend !== undefined) out?.(`LOCATOR ${lh.trend.line}\n`);
           // #213: exit 2 (an item errored, or the budget ran out, but no gating finding) is never
           // headed FAIL — that reads as a defect was found when the run simply proved nothing.
           const headline =
@@ -218,4 +238,59 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         }
       }
     }));
+
+  registerLocatorHealthCommand(program, deps);
+}
+
+/**
+ * #470: `jevitate locator-health` — read-only and advisory: how stable each recorded step's target is
+ * against the project's test-id convention (`testIdAttributes` in project config; never a flag). MCP
+ * `locator_health` mirrors it. It never gates (exit 0 on any report); `check --max-brittle-steps` is the gate.
+ */
+function registerLocatorHealthCommand(program: Command, deps: CheckCliDeps): void {
+  program
+    .command("locator-health")
+    .description(
+      "#470: read-only locator health — per step, the selector rung its target resolves by and whether it meets the project's test-id convention (testIdAttributes in project config; default data-testid, data-test; data-tflow-id never counts). Every promoted Journey, one Journey (--journey) or one run (--run). Advisory: never gates",
+    )
+    .option("--journey <id>", "only this Journey")
+    .option("--run <result.json>", "the steps of this run result instead of the stored Journeys")
+    .option("--baseline <file>", "a previous locator-health --json output (or a run result.json) to report the trend against: steps improved / regressed")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const o = this.opts<{ journey?: string; run?: string; baseline?: string; dir?: string; json?: boolean }>();
+      const json = o.json === true;
+      if (o.journey !== undefined && o.run !== undefined) {
+        emit(program, fail("E_LOCATOR_HEALTH_ARGS", "--journey and --run are exclusive: pick one source"), json);
+        return;
+      }
+      if (o.journey !== undefined && (o.journey.includes("..") || !/^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(o.journey))) {
+        emit(program, fail("E_LOCATOR_HEALTH_ARGS", `--journey must be a Journey id, got ${JSON.stringify(o.journey)}`), json);
+        return;
+      }
+      if (o.run !== undefined && !existsSync(o.run)) {
+        emit(program, fail("E_LOCATOR_HEALTH_INPUT", `--run: no such result file: ${o.run}`), json);
+        return;
+      }
+      try {
+        const report = await locatorHealth({
+          journeysDir: o.dir ?? deps.journeysDir,
+          projectDir: resolveCatalogDir(deps.catalogDir),
+          ...(o.journey === undefined ? {} : { journeyId: o.journey }),
+          ...(o.run === undefined ? {} : { runResult: o.run }),
+          ...(o.baseline === undefined ? {} : { baseline: o.baseline }),
+        });
+        if (json) emit(program, ok(report), true, 0);
+        else {
+          program.configureOutput().writeOut?.(renderLocatorHealth(report));
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        // #470: a typed refusal keeps its code (E_PROJECT_CONFIG, E_LOCATOR_HEALTH_INPUT).
+        const own = (err as { code?: unknown }).code;
+        const code = typeof own === "string" && own.startsWith("E_") ? own : "E_LOCATOR_HEALTH";
+        emit(program, fail(code, err instanceof Error ? err.message : String(err)), json);
+      }
+    });
 }
