@@ -80,7 +80,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     gateways,
     engine,
     seq: () => String(++n),
-    ...(heal === undefined ? {} : { heal, healer: () => (healer ??= gateways().then((g) => makeEvidenceSelfHealer(g.gen))) }),
+    ...(heal === undefined ? {} : { heal, healer: () => (healer ??= gateways().then((g) => makeEvidenceSelfHealer(g.gen, { usage: g.usage }))) }),
   };
   const now = opts.now ?? clock.now;
   let exceeded: string | undefined;

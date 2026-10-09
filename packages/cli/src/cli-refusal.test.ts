@@ -181,6 +181,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["nope", "--changes", "HEAD~1..HEAD"],
       ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "a..b..c"],
       ["nope", "--self-heal", "hybrid", "--fake-ai"],
+      // #453 review: a run limit below its step limit is refused, never clamped.
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--change-note", "renamed x", "--heal-max-run-attempts", "1"],
     ],
   },
   "journey promote": {

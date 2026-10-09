@@ -17,6 +17,12 @@ describe("#453 validateJourneyHeal (Q1)", () => {
     expect(() => validateJourneyHeal({ selfHeal: "fail-closed", changeNotes: ["x"] }, MCP_HEAL_NAMES)).toThrow(/'changeNote' needs 'selfHeal'/);
     expect(() => validateJourneyHeal({ selfHeal: "fail-closed", changeNotes: [] })).not.toThrow();
   });
+  it("refuses a per-run attempt limit below the per-step limit", () => {
+    expect(() => validateJourneyHeal({ selfHeal: "hybrid", changeNotes: ["x"], maxRunAttempts: 1 })).toThrow(/--heal-max-run-attempts 1 is below the per-step limit 2/);
+  });
+  it("refuses a per-run time limit below the per-step limit", () => {
+    expect(() => validateJourneyHeal({ selfHeal: "hybrid", changeNotes: ["x"], maxMs: 1_000, maxRunMs: 500 }, MCP_HEAL_NAMES)).toThrow(/'healMaxRunMs' 500 is below/);
+  });
   it("an unsafe range is refused by its syntax alone", () => {
     for (const r of ["a;id", "--output=/tmp/x", "a..b..c", "$(id)"]) expect(() => validateJourneyHeal({ selfHeal: "hybrid", changes: r, changeNotes: [] }), r).toThrow(ChangesArgsError);
   });
@@ -28,7 +34,7 @@ describe("#453 journeyHealBudget", () => {
     const b = journeyHealBudget({ selfHeal: "hybrid", changeNotes: [], maxAttempts: 7, maxModelCalls: 20, maxMs: 500, maxRunMs: 900 });
     expect(b.perStep).toEqual({ maxAttempts: 7, maxModelCalls: 20, maxMs: 500 });
     expect(b.perRun).toMatchObject({ maxAttempts: 7, maxModelCalls: 20, maxMs: 900, maxBrokenSteps: DEFAULT_HEAL_BUDGET.perRun.maxBrokenSteps });
-    expect(journeyHealBudget({ selfHeal: "hybrid", changeNotes: [], maxRunAttempts: 1 }).perRun.maxAttempts).toBe(1);
+    expect(journeyHealBudget({ selfHeal: "hybrid", changeNotes: [], maxAttempts: 1, maxRunAttempts: 1 }).perRun.maxAttempts).toBe(1);
   });
 });
 

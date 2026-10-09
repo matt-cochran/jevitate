@@ -317,7 +317,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           }
           return;
         }
-        selfHealer = makeEvidenceSelfHealer(gen);
+        selfHealer = makeEvidenceSelfHealer(gen, healUsage === undefined ? {} : { usage: healUsage });
         policy = { ...policy, selfHeal: { mode: selfHealMode, budget: journeyHealBudget(healRequest) } };
       }
 

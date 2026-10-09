@@ -762,7 +762,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       } catch (err) {
         throw new SetupRequired(redactCredentials(err instanceof Error ? err.message : String(err), credentialStore));
       }
-      selfHealer = makeEvidenceSelfHealer(gen);
+      selfHealer = makeEvidenceSelfHealer(gen, usage === undefined ? {} : { usage });
       policy = { ...policy, selfHeal: { mode: selfHeal, budget: journeyHealBudget(healRequest) } };
     }
     return {
