@@ -76,11 +76,13 @@ so that commit does not count as a change to the entry).
 **Enforcing it.** `jevitate check --require-approvals --allow-channels tty,pr-review` (or `catalog
 status --require-approvals --allow-channels …`) re-verifies every recorded `pr-review` approval
 through the forge, on any event. One the forge does not confirm — hand-written, re-verified without
-a token, offline — is an `unverified` violation, never a pass. Positive re-verifications are cached
-for 7 days under `<.jevitate>/cache/pr-review/`, keyed by the merged sha (`cache/` is in the
-`.gitignore` `jevitate init` writes). The cache is ignored entirely when any file in it is tracked
-by git — a committed "verified" entry would be a claim, not a verification — and it is never
-written on a pull-request event.
+a token, offline — is an `unverified` violation, never a pass. A verified approval also requires
+the content at the pull request's approved head to be exactly the approved content (`pr-mismatch`
+otherwise), so an intermediate or merge-resolved change no reviewer saw never passes. Positive
+re-verifications are cached for 24 hours under `<.jevitate>/cache/pr-review/`, keyed by the merged
+sha (`cache/` is in the `.gitignore` `jevitate init` writes). The cache is ignored entirely when any
+file in it is tracked by git — a committed "verified" entry would be a claim, not a verification —
+or when any part of its path is a symlink, and it is never read or written on a pull-request event.
 
 ```yaml
 name: jevitate approvals
