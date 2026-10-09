@@ -69,13 +69,66 @@ export function assertNoSecretInPayload(
 ): void {
   if (secrets.length === 0) return;
   const haystack = typeof payload === "string" ? payload : JSON.stringify(payload);
+  // A short secret is matched on token boundaries, which JSON escaping can hide (`"\nme"` reads
+  // `\nme`, the `n` glued to it). So a structured payload's string keys and values are also checked
+  // one by one, as decoded text — the same text the scrub upstream saw.
+  let leaves: string[] | undefined;
+  const stringLeaves = (): string[] => {
+    if (leaves !== undefined) return leaves;
+    const found: string[] = [];
+    if (typeof payload !== "string" && haystack !== undefined) {
+      JSON.parse(haystack, function (this: unknown, key: string, value: unknown) {
+        found.push(key);
+        if (typeof value === "string") found.push(value);
+        return value;
+      });
+    }
+    return (leaves = found);
+  };
   for (let i = 0; i < secrets.length; i++) {
     const s = secrets[i];
     if (!s || s.length === 0) continue;
-    for (const form of secretForms(s)) {
-      if (haystack.includes(form)) throw new SecretLeakError(i, where);
+    if (haystack !== undefined && containsSecret(haystack, s)) throw new SecretLeakError(i, where);
+    if (s.length < MIN_SUBSTRING_SECRET_LENGTH && stringLeaves().some((t) => containsSecret(t, s))) {
+      throw new SecretLeakError(i, where);
     }
   }
+}
+
+/**
+ * #454 — the length at which a secret is matched as a plain substring, everywhere. A secret this
+ * long is very unlikely to occur by chance inside an ordinary word, so every occurrence is the
+ * secret. A SHORTER secret (a username such as `me`) is matched only as a whole token — not
+ * adjacent to a letter or digit on either side — so it does not mangle "Timeout" or trip the
+ * payload guard on every word that happens to contain those letters. Shared by `redactText` and
+ * `assertNoSecretInPayload` (via `secretPattern`) so the scrub and its proof agree.
+ */
+export const MIN_SUBSTRING_SECRET_LENGTH = 6;
+
+/** True when `secret` is shorter than {@link MIN_SUBSTRING_SECRET_LENGTH} — matched as a token only. */
+export function isWeakSecret(secret: string): boolean {
+  return secret.length < MIN_SUBSTRING_SECRET_LENGTH;
+}
+
+const REGEX_SYNTAX = /[\\^$.*+?()[\]{}|/]/g;
+
+/**
+ * A global regex matching every form (`secretForms`) of a secret: as a plain substring when the
+ * secret is at least {@link MIN_SUBSTRING_SECRET_LENGTH} long, otherwise only where the occurrence
+ * is not adjacent to a Unicode letter or digit. Longer forms are tried first.
+ */
+export function secretPattern(secret: string): RegExp {
+  const alts = [...secretForms(secret)]
+    .sort((a, b) => b.length - a.length)
+    .map((f) => f.replace(REGEX_SYNTAX, "\\$&"))
+    .join("|");
+  return isWeakSecret(secret) ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${alts})(?![\\p{L}\\p{N}])`, "gu") : new RegExp(alts, "gu");
+}
+
+/** Whether `text` contains `secret` in any of its forms, by the {@link secretPattern} rule. */
+export function containsSecret(text: string, secret: string): boolean {
+  if (!isWeakSecret(secret)) return secretForms(secret).some((f) => text.includes(f));
+  return secretPattern(secret).test(text);
 }
 
 /**

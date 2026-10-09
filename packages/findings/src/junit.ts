@@ -5,7 +5,7 @@
  * pass; an item not run because `--changed-routes` excluded it is `<skipped>`.
  */
 
-export type CaseStatus = "passed" | "failed" | "error" | "skipped";
+export type CaseStatus = "passed" | "failed" | "error" | "skipped" | "pending-review";
 
 export interface GateCase {
   /** The `<testsuite>` it belongs to (the suite target's name). */
@@ -43,7 +43,8 @@ export function xmlEscape(s: string): string {
 function counts(cases: readonly GateCase[]): { tests: number; failures: number; errors: number; skipped: number; time: number } {
   return {
     tests: cases.length,
-    failures: cases.filter((c) => c.status === "failed").length,
+    // #453: a Journey whose self-heal proposed a revision is reported as a `<failure type="healed-pending-review">` — nothing passes until a person accepts it.
+    failures: cases.filter((c) => c.status === "failed" || c.status === "pending-review").length,
     errors: cases.filter((c) => c.status === "error").length,
     skipped: cases.filter((c) => c.status === "skipped").length,
     time: cases.reduce((t, c) => t + c.timeSec, 0),
@@ -66,7 +67,7 @@ function testcase(c: GateCase): string {
   const props = propList.length === 0 ? "" : `      <properties>\n${propList.join("\n")}\n      </properties>\n`;
   const out = attachments.length === 0 ? "" : `\n      <system-out>${attachments.map((a) => xmlEscape(`[[ATTACHMENT|${a}]]`)).join("\n")}</system-out>`;
   const body = c.detail === undefined ? "" : xmlEscape(c.detail);
-  const tag = c.status === "failed" ? "failure" : c.status === "error" ? "error" : c.status === "skipped" ? "skipped" : undefined;
+  const tag = c.status === "failed" || c.status === "pending-review" ? "failure" : c.status === "error" ? "error" : c.status === "skipped" ? "skipped" : undefined;
   if (tag === undefined) return props === "" && out === "" ? `${open}/>` : `${open}>\n${props}${out === "" ? "" : `${out.slice(1)}\n`}    </testcase>`;
   const detailAttrs = attrs({ message: c.message ?? c.status, ...(c.type === undefined ? {} : { type: c.type }) });
   const inner = body === "" ? `      <${tag} ${detailAttrs}/>` : `      <${tag} ${detailAttrs}>${body}</${tag}>`;

@@ -22,6 +22,7 @@ let validRecording: string;
 let validScript: string;
 let badProduct: string;
 let suiteOffAllowlist: string;
+let suiteValid: string;
 let suiteUnknownFingerprint: string;
 let badCatalog: string;
 
@@ -53,6 +54,8 @@ beforeAll(() => {
     suiteOffAllowlist,
     JSON.stringify({ version: 1, ai: "fake", targets: [{ name: "t", url: "http://127.0.0.1:3999/", allow: ["http://other.test"], missions: [{ strategy: "coverage" }] }] }),
   );
+  suiteValid = join(dir, "valid.suite.json");
+  writeFileSync(suiteValid, JSON.stringify({ version: 1, ai: "fake", targets: [{ name: "t", url: "http://127.0.0.1:3999/", missions: [{ strategy: "feature", feature: "f" }] }] }));
   const result = join(dir, "adversarial.result.json");
   writeFileSync(
     result,
@@ -167,8 +170,31 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "recording postdoc": { cases: [[missing]] },
   "journey list": { exempt: "a listing: an empty or missing dir lists nothing" },
   "journey find": { exempt: "a search: no match is an empty result" },
-  "journey run": { base: ["nope"], cases: [["nope"], ["nope", "--storage-state", missing]] },
-  "journey promote": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"]] },
+  "journey run": {
+    base: ["nope"],
+    cases: [
+      ["nope"],
+      ["nope", "--storage-state", missing],
+      // #453: the change range is validated before any Journey lookup; a self-heal needs a change context (Q1).
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "--output=/tmp/x"],
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "a;id"],
+      ["nope", "--changes", "HEAD~1..HEAD"],
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--changes", "a..b..c"],
+      ["nope", "--self-heal", "hybrid", "--fake-ai"],
+      // #453 review: a run limit below its step limit is refused, never clamped.
+      ["nope", "--self-heal", "hybrid", "--fake-ai", "--change-note", "renamed x", "--heal-max-run-attempts", "1"],
+    ],
+  },
+  "journey promote": {
+    cases: [
+      ["nope"],
+      ["nope", "--reviewed-hash", "abc"],
+      // #453: a proposal id is 12 hex characters, never a path; accept and reject are exclusive; a rejection needs its reason.
+      ["nope", "--proposal", "../x"],
+      ["nope", "--proposal", "aaaaaaaaaaaa", "--reject-proposal", "aaaaaaaaaaaa"],
+      ["nope", "--reject-proposal", "aaaaaaaaaaaa"],
+    ],
+  },
   "journey lint": { cases: [["nope"], ["../x"]] },
   "journey review": { cases: [["nope"], ["../x"]] },
   // #433: an unknown persona/job, a malformed --reviewed-hash, an invalid catalog file.
@@ -185,7 +211,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   // #293: a missing/unreadable spec, and a campaign with no model gateway.
   "campaign run": { cases: [[missing, "--fake-ai"], [missing]] },
   // #425: a missing/invalid targets file, and --resume without the sweep dir to resume.
-  sweep: { cases: [["--targets", missing], ["--targets", missing, "--resume"], ["--targets", missing, "--tag", "x"]] },
+  sweep: { cases: [["--targets", missing], ["--targets", missing, "--resume"], ["--targets", missing, "--tag", "x"], ["--targets", missing, "--no-host-starved-retry"]] },
   "journey annotate": {
     base: ["nope", "--fake-ai"],
     cases: [["nope", "--fake-ai"], ["nope", "--fake-ai", "--storage-state", missing], ["nope", "--approve"], ["nope", "--approve", "--fake-ai"]],
@@ -229,6 +255,9 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--from-journey", "nope", "--at-step", "2", "--url", URL0, "--fake-ai"],
       // #427: an unusable --auth-check is refused before any browser opens.
       ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--auth-check", "sometimes"],
+      // #451: a --target id that is not 1-64 of [A-Za-z0-9_.-] is refused before any browser opens.
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--target", "a b"],
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--target", ""],
     ],
   },
   // #427: missing flags, a value where a variable NAME belongs, an unset variable, a session file in .jevitate/.
@@ -239,6 +268,20 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--url", URL0, "--user-env", "JEV_REFUSAL_UNSET_USER", "--password-env", "JEV_REFUSAL_UNSET_PW", "--save", join(dir, "login", "s.json")],
       ["--url", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, ".jevitate", "s.json")],
       ["--url", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json"), "--success", "nonsense"],
+      // #449: --api — a non-http(s) endpoint, an unauthorized origin, a bad token path / storage key,
+      // sessionStorage, form-only flags beside it, API flags without it: all before any browser or network.
+      ["--api", "ftp://127.0.0.1/api/login", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", "http://unauthorized.test/api/login", "--allow", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", URL0, "--verify-url", "http://unauthorized.test/app", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", URL0, "--token-path", "a..b", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", URL0, "--token-path", "token", "--storage-key", "bad key", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", URL0, "--token-path", "token", "--storage", "session", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", URL0, "--user-field", "Email", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", URL0, "--password-field", "Password", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", URL0, "--submit", "Sign in", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", URL0, "--url", URL0, "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--url", URL0, "--token-path", "token", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
+      ["--api", URL0, "--auth-check", "sometimes", "--user-env", "U", "--password-env", "P", "--save", join(dir, "login", "s.json")],
     ],
   },
   "verify-fix": { base: ["--result", missing, "--fingerprint", FP], cases: [["--result", missing, "--fingerprint", FP], []] },
@@ -301,6 +344,10 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--suite", missing, "--out", join(dir, "check")],
       ["--suite", suiteOffAllowlist, "--out", join(dir, "check")],
       ["--suite", suiteUnknownFingerprint, "--out", join(dir, "check")],
+      // #453: a change context needs --self-heal; the range is validated; a heal needs a change context.
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--changes", "HEAD~1..HEAD"],
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--self-heal", "hybrid", "--changes", "a;id"],
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--self-heal", "hybrid"],
     ],
   },
   report: { cases: [["--since", "not-a-run-or-date"]] },
@@ -311,6 +358,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "logs prune": { exempt: "housekeeping: a missing logs dir has nothing to prune" },
   "logs triage": { cases: [["--result", missing]] },
   "invariants validate": { cases: [[missing]] },
+  "install-browser": { cases: [["--no-such-flag"]] },
+  "browser-path": { cases: [["--no-such-flag"]] },
   doctor: { exempt: "#205: a diagnostic with no file or id input (it reports and, with --cleanup, cleans; nothing to refuse)" },
 });
 

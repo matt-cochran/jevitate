@@ -109,6 +109,8 @@ export interface ApprovalRequest {
   readonly id: string;
   readonly contentHash: string;
   readonly waivers: readonly { readonly flag: string; readonly reason: string; readonly detail?: string }[];
+  /** #453: a self-heal proposal being accepted — shown to the person before they confirm. */
+  readonly proposal?: { readonly id: string; readonly baseHash: string; readonly steps: readonly { readonly number: number; readonly before: string; readonly after: string }[] };
 }
 
 /** Confirms an approval (or refuses it) and returns how it was made. */
@@ -216,8 +218,12 @@ export function makeApprovalConfirm(deps: ApprovalDeps | undefined, opts: Approv
     if (!interactive) throw new ApprovalNeedsHumanError(needsHumanMessage(r));
     const ask = deps?.prompt ?? terminalPrompt;
     const what = r.kind === "demo" ? `demo '${r.id}' (promotes Journey '${r.id}')` : `${r.kind} '${r.id}'`;
+    const proposalText =
+      r.proposal === undefined
+        ? ""
+        : `\nProposed revision ${r.proposal.id} (self-heal, against ${r.proposal.baseHash.slice(0, 8)}…):\n${r.proposal.steps.map((st) => `  step ${st.number}: ${st.before}\n       -> ${st.after}`).join("\n")}`;
     const first = await ask(
-      `\nApprove ${what}, content hash ${r.contentHash.slice(0, 8)}…?\nType its id (${r.id}) or the first 8 characters of its content hash to approve — anything else cancels: `,
+      `${proposalText}\nApprove ${what}, content hash ${r.contentHash.slice(0, 8)}…?\nType its id (${r.id}) or the first 8 characters of its content hash to approve — anything else cancels: `,
     );
     if (!confirmed(first, r)) throw new ApprovalNotConfirmedError(`the typed confirmation did not match ${r.kind} '${r.id}' or its content hash — nothing was approved`);
     for (const w of r.waivers) {
@@ -226,6 +232,19 @@ export function makeApprovalConfirm(deps: ApprovalDeps | undefined, opts: Approv
     }
     return provenanceOf("tty", deps);
   };
+}
+
+/**
+ * #453: how a REJECTION was made (`journey promote --reject-proposal`). Rejecting is fail-closed, so
+ * it needs no typed confirmation: inside an MCP call it is `mcp`, at a terminal `tty`, otherwise
+ * `non-interactive` (or `ci`) with the reason recorded.
+ */
+export function rejectionProvenance(deps: ApprovalDeps | undefined, rejectionReason: string): ApprovalProvenance {
+  if (inMcpInvocation()) return provenanceOf("mcp", deps);
+  const interactive = (deps?.stdinIsTTY?.() ?? process.stdin.isTTY === true) && (deps?.stdoutIsTTY?.() ?? process.stdout.isTTY === true);
+  if (interactive) return provenanceOf("tty", deps);
+  const p = provenanceOf("non-interactive", deps, `rejected without a terminal: ${rejectionReason}`.slice(0, 2000));
+  return underCi(p.agentSignals) ? { ...p, channel: "ci" } : p;
 }
 
 /**

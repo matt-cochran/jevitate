@@ -23,7 +23,10 @@ import { applyJourneyEnvironment, isEnvironmentError, resolveJourneyEnvironment,
 import { resolveJourneyPrefix, type JourneyPrefix } from "./journey-prefix.js";
 import { isSweepMode, splitBudget, sweepStops } from "@jevitate/journey";
 import type { SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
-import { CheckPreflightError, type ItemKind, type RunCheckOptions } from "./check-types.js";
+import { CheckAiSetupError, CheckArgsError, CheckPreflightError, type ItemKind, type RunCheckOptions } from "./check-types.js";
+import type { HealBudget, SelfHealMode } from "@jevitate/domain";
+import type { ChangeScope } from "@jevitate/runtime";
+import { JourneyHealArgsError, journeyHealBudget, readJourneyChangeScope, validateJourneyHeal } from "./journey-heal.js";
 import { parseScreenshotsArg } from "./run-screenshots.js";
 
 // ── changed routes ───────────────────────────────────────────────────────────
@@ -606,4 +609,31 @@ export function plan(prepared: readonly PreparedTarget[], changed: readonly stri
     for (const v of t.verifyFix) out.push({ t: p, kind: "verify-fix", name: v.name, verify: v, needsAi: false });
   });
   return out;
+}
+
+/** #453: the self-heal a check re-runs a quarantined Journey with — validated, and the change scope read, ONCE. */
+export interface PreparedHeal {
+  readonly mode: SelfHealMode;
+  readonly scope: ChangeScope;
+  readonly budget: HealBudget;
+}
+
+/**
+ * `check --self-heal`: refuses (before anything runs) a heal without a change context, a bad range,
+ * or no gateway; then reads the change scope once (git root of the default journeys dir). Absent
+ * `opts.selfHeal`: undefined — every Journey fails closed.
+ */
+export async function prepareSelfHeal(opts: RunCheckOptions): Promise<PreparedHeal | undefined> {
+  const req = opts.selfHeal;
+  if (req === undefined || req.selfHeal === "fail-closed") return undefined;
+  try {
+    validateJourneyHeal(req);
+  } catch (e) {
+    if (e instanceof JourneyHealArgsError) throw new CheckArgsError(e.message);
+    throw e;
+  }
+  if (opts.aiMode === undefined || opts.gateways === undefined) {
+    throw new CheckAiSetupError("--self-heal needs a model gateway for its candidate ranking: pass --real or --fake-ai (or set \"ai\" in the suite)");
+  }
+  return { mode: req.selfHeal, scope: await readJourneyChangeScope(req, opts.journeysDir, opts.changeGitExec), budget: journeyHealBudget(req) };
 }

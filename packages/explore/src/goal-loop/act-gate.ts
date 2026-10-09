@@ -4,7 +4,9 @@
  * Moved out of `explore.ts` unchanged (#232).
  */
 
+import { descriptorToLocator } from "@jevitate/recorder";
 import { hangRoute } from "../hang.js";
+import { readFormText } from "../status.js";
 import type { Control } from "../snapshot.js";
 import type { RunContext } from "./context.js";
 import { keyOf } from "./helpers.js";
@@ -26,6 +28,12 @@ export async function beginAction(ctx: RunContext, step: Step, control: Control)
   // #303: the page right before the action (and, with the perception's capture, the route's
   // volatility baseline) — the action's delta is read at the next perception.
   if (ctx.deltas !== null) await ctx.deltas.beforeAction(hangRoute(snap.url), decision.op, control).catch(() => ctx.deltas!.discard());
+  // #446: the target's form text right before the action — what newly shows there after it is the
+  // form's message (an inline validation error the page shows without role=alert).
+  {
+    const lines = await readFormText(descriptorToLocator(ctx.page, control.descriptor).first());
+    ctx.formBefore = lines === null ? null : { control, lines };
+  }
   const at = ctx.now();
   const risk = ctx.safety.riskOf(control);
   ctx.effectLog.mark(ctx.transcript.nextStep, control.name || control.summary, risk);

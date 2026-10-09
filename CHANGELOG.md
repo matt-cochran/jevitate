@@ -7,6 +7,87 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.9.0] – 2026-10-09
+
+0.9.0 makes self-heal safe to use in CI and fixes everything a pre-ship sweep of a React SPA turned up.
+`journey run --self-heal` and `jevitate check --self-heal` now take the code change as input
+(`--changes <git-range>`, `--change-note`). A broken step is healed only when the change explains it, and
+only by retargeting that step. The result is a proposed Journey revision that a person accepts through the
+normal approval path, and until then the run exits with the new code 5. `jevitate login --api` signs in
+through an HTTP endpoint. `jevitate install-browser` and `browser-path` give every install one shared,
+pinned Chromium. Runs that never acted report `not-started`, and a starved host is reported as
+`host-starved` instead of an app failure. Results also carry the target id they covered. The goal loop
+now reads inline validation text, types into empty rich-text editors, ignores closed off-canvas drawers,
+and no longer reports a hang when a Refresh or Done returns to an earlier page. Answers can state that
+something is absent when the observed controls back it.
+
+### Behaviour changes
+
+- **Self-heal needs change context and never passes silently (#453).**
+  - `--self-heal hybrid|full` without `--changes` or `--change-note` is refused with exit 64.
+  - A heal reports `healed-pending-review` and exits 5. It writes a proposed revision to
+    `.proposals/<journeyId>.json` (commit it with the PR) and leaves the stored Journey unchanged.
+  - The old `healed` outcome, which exited 0, is gone.
+  - A break the change does not explain is reported as a likely regression (exit 1).
+  - A heal that runs out of budget ends `heal-exhausted` (exit 1) with a full attempt log.
+  - Assertions, checks, invariants and write or irreversible steps are never rewritten. An `assert`
+    step could be healed before; it no longer can.
+  - The default stays fail-closed.
+- **A run with zero actions is `not-started` (#448).**
+  - It used to report `succeeded` or `defects-found` as if the journey had been exercised. It now maps
+    to `inconclusive` (exit 2) and carries a `goalReason`.
+  - A goal accepted with `--allow-vacuous-checks` keeps `succeeded`.
+  - `sweep` counts these runs in `summary.notStarted`.
+- **Host starvation is `host-starved` (#452).** A run that stalled while the host was starved ends
+  `inconclusive` with `failure.kind: "host-starved"` and the measurements. Sweep retries the target
+  once (`--no-host-starved-retry` turns this off).
+- **`--auth-check auto` needs sign-in-form evidence (#442).** A visible password field alone, such as an
+  API-secret form, no longer marks a session as expired.
+- **Short credentials are redacted as whole tokens (#454).** A secret shorter than 6 characters no longer
+  blanks parts of ordinary words, and no longer trips the model-payload guard on them. Longer secrets
+  are matched anywhere, as before.
+
+### Added
+
+- **Change-aware self-heal (#453).**
+  - **Change input:** `--changes <range>` (read-only git: only resolved commit SHAs reach `git diff`) and
+    `--change-note`.
+  - **Heal budgets:** `--heal-max-attempts`, `--heal-max-model-calls`, `--heal-max-ms`,
+    `--heal-max-run-attempts`, `--heal-max-run-ms`.
+  - **Healer:** proposes candidates from the observed controls and the change facts. It never acts on
+    the page, and raw diffs never reach a model.
+  - **Guarded click/fill heals:** only for steps whose recorded requests are reads and that match no
+    risky control. Mutating requests are blocked during the probe.
+  - **Review and accept:** `journey review` shows the proposal. `journey promote <id> --proposal <pid>`
+    accepts it and `--reject-proposal <pid> --reason` rejects it, on the CLI and MCP.
+  - **CI:** `check --self-heal --changes <base>..HEAD` re-runs a failed Journey once. JUnit and SARIF
+    report a pending revision.
+- **`jevitate login --api <url>` (#449).**
+  - POSTs credentials from the environment as JSON to an authorized endpoint.
+  - Keeps the response's cookies and/or writes a token from the body into localStorage
+    (`--token-path`, `--storage-key`).
+  - Verifies the session, then saves it. Also available as `login.api` in personas.json, which re-login
+    uses.
+- **One shared pinned browser (#450).**
+  - `jevitate install-browser` installs jevitate's Chromium revision without removing other revisions.
+  - `jevitate browser-path` prints it (`--json`, `--export`).
+  - `doctor` reports a missing pinned browser.
+- **`target.id` in results (#451):** set by `explore --target <id>` and by `sweep` for each target. Key
+  attribution on it.
+- **Absence claims (#447):** an answer can state that something is absent when no observed control, link,
+  field, heading or page text matches. It is refused when the page's control inventory was incomplete.
+
+### Fixed
+
+- **Closed off-canvas drawers no longer count as open modals (#441).** A dialog that is inert,
+  aria-hidden or off-viewport no longer hides the page's controls.
+- **Typing into an empty rich-text editor works (#443).**
+- **No false hang on a legitimate return to an earlier page (#444).** This covers a Refresh whose
+  requests completed, and Done or Got it.
+- **`jevitate login` waits for a sign-in form the page renders after load (#445).**
+- **Goal runs read inline validation text that appears in the form they acted on (#446).** If a run can't
+  get past it, the message is reported as the outcome reason.
+
 ## [0.8.0] – 2026-10-08
 
 0.8.0 makes jevitate easier to run at release scale and its results easier to aggregate. A new

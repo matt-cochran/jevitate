@@ -12,6 +12,7 @@ import {
   type StatusSpec,
 } from "@jevitate/recording";
 import { mutationPairIssues } from "./mutation-proof.js";
+import { ApprovalProposalSchema } from "./proposal-schema.js";
 import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
 
 export interface SecretRef { manager: string; key: string; origin: string; field: string }
@@ -120,6 +121,8 @@ export interface JourneyApproval {
   waivers?: JourneyApprovalWaiver[];
   /** #433: the pre-approval findings that needed an acknowledgment, and the reason (`--accept-findings`). */
   acceptedFindings?: AcceptedFindings;
+  /** #453: the self-heal proposal this approval accepted — its id, the hash it was made against, the flat 0-based steps it changed. */
+  proposal?: { id: string; baseHash: string; steps: number[] };
 }
 
 /** #433: one waiver recorded with an approval — see `JourneyApproval.waivers`. */
@@ -294,6 +297,7 @@ export const JourneySchema: ZodType<Journey> = z.object({
           .max(20)
           .optional(),
         acceptedFindings: AcceptedFindingsSchema.optional(),
+        proposal: ApprovalProposalSchema.optional(),
       })
       .strict()
       .optional(),

@@ -52,6 +52,11 @@ describe("run metadata scope and stamping", () => {
     expect(stampRunMetadata({ x: 1 }, { tags: {} })).toEqual({ x: 1 });
   });
 
+  it("stampRunMetadata sets target.id from the scope's targetId", () => {
+    const r = stampRunMetadata({ target: { startUrl: "/profile" } }, { tags: {}, targetId: "checkout" });
+    expect((r as { target: { id?: string } }).target.id).toBe("checkout");
+  });
+
   it("nested scopes merge (inner tags win, the persona is kept) and concurrent scopes stay apart", async () => {
     await withRunMetadata({ tags: { a: "1", b: "1" }, persona: "admin" }, async () => {
       await withRunMetadata({ tags: { b: "2" } }, async () => {

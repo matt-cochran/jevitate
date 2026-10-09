@@ -43,7 +43,7 @@ Needs Node.js 20+ and an app running locally (examples use `http://localhost:300
 
 ```bash
 npm install -g @jevitate/cli
-npx playwright install chromium          # the browser Jevitate drives
+jevitate install-browser                 # the pinned browser Jevitate drives (shared, never removes other revisions)
 ```
 
 **2. Set up the repo**. Run this from your app's repository:

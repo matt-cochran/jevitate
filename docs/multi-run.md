@@ -100,6 +100,43 @@ jevitate login --persona admin --url http://localhost:3000/login \
 - The state is written atomically with mode `0600` (parent directory created). A path inside a repo's
   `.jevitate/` is refused. A path inside a git repository that git does not ignore gets a warning.
 
+**Through an HTTP endpoint (`--api`, #449).** Many apps have a programmatic sign-in, such as a token
+endpoint or a development-only sign-in route. `--api <url>` POSTs the credentials there as JSON
+instead of driving a form, which is faster and does not wait for a client-rendered page:
+
+```bash
+jevitate login --persona admin --api http://localhost:3000/api/login \
+  --user-env ADMIN_USER --password-env ADMIN_PASSWORD \
+  --token-path token --verify-url http://localhost:3000/app --save ~/.jevitate/states/admin.json
+```
+
+| flag | meaning | default |
+| --- | --- | --- |
+| `--api <url>` | the endpoint the credentials are POSTed to, as `{"<user key>": …, "<password key>": …}` | |
+| `--api-user-key <key>` / `--api-password-key <key>` | the JSON body keys (letters, digits, `_`, `-`) | `username` / `password` |
+| `--token-path <path>` | a dotted path into the JSON response (`token`, `data.accessToken`, `items.0.jwt`) whose string or number value is the session token. Without it, the cookies the response set are the session | |
+| `--storage-key <key>` | the localStorage key the token is written under, on the `--verify-url` origin | the path's last segment |
+| `--storage local` | where the token goes. `local` is the only choice (see below) | `local` |
+| `--verify-url <url>` | the app page the new session is proven on | the endpoint's origin root |
+| `--auth-check <check>` | how that page proves it: `auto`, `urlExcludes:<text>`, `selector:<css>` or `off` (the table below) | `auto` |
+
+- The endpoint and the verify URL must be on authorized origins: the endpoint's own, or `--allow`.
+  Anything else is refused before any request. Redirects are never followed. A redirect to another
+  origin fails, and a same-origin redirect counts only for its cookies.
+- The response's `Set-Cookie` cookies are always kept. The token, when `--token-path` names one, is
+  added to the verify URL origin's localStorage. A response with neither fails.
+- A non-2xx status, a body that is not JSON, or a missing token path fails with `E_LOGIN_FAILED`
+  (exit 2), naming the status or the path, never the body. A session that does not pass
+  `--auth-check` on `--verify-url` fails the same way. In either case, nothing is saved.
+- The token is redacted from every result, error and log line, like both credentials. It is written
+  only into the storage state.
+- **No sessionStorage.** A Playwright storage state holds cookies and localStorage only, so a
+  sessionStorage token could not be saved, nor restored when a run starts from the state.
+  `--storage session` is refused with that reason. For an app that keeps its token only in
+  sessionStorage, use its cookie session, or drive its form (`--url`).
+- The form-only flags (`--url`, `--user-field`, `--password-field`, `--submit`, `--success`) are
+  refused beside `--api`, and the API flags are refused without it.
+
 Before a run that starts from a session (`--storage-state`, `--persona`/`--personas`, the primary
 `--actor`), `explore` checks that the session is still alive. It loads the state, opens `--url`, and
 ends the run at once if it landed on a sign-in page. The run is `inconclusive` (exit 2) with
@@ -149,7 +186,17 @@ once, saves the state over the old one, and checks again. If either step fails, 
 
 The map form takes `{"admin": {"storageState": "…", "login": {…}}}`, and a plain path still works.
 The `login` keys are `url`, `userEnv`, `passwordEnv`, `userField`, `passwordField`, `submit` and
-`success`. Any other key is refused, including a literal password. Pass the file as `--personas`, or
+`success`, or, for a sign-in through an HTTP endpoint (#449), `api` with `userEnv` and
+`passwordEnv`. `api` is the endpoint URL, or an object `{url, userKey?, passwordKey?, tokenPath?,
+storageKey?, storage?, verifyUrl?}` with the meanings of the `--api` flags above. A refresh then
+POSTs to the endpoint instead of driving a form:
+
+```json
+{ "name": "admin", "storageState": "../.auth/admin.json",
+  "login": { "api": { "url": "http://localhost:3000/api/login", "tokenPath": "token" }, "userEnv": "ADMIN_USER", "passwordEnv": "ADMIN_PASSWORD" } }
+```
+
+The form keys are refused beside `api`. Any other key is refused, including a literal password. Pass the file as `--personas`, or
 commit it as the project's `.jevitate/personas.json`. With that file:
 
 - `--persona admin` (a bare name) runs that persona.

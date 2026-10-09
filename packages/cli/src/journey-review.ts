@@ -1,4 +1,5 @@
 import { contentHash } from "@jevitate/domain";
+import type { JourneyProposal, JourneyReviewProposal } from "@jevitate/journey";
 import { describeProvenance } from "./approval-provenance.js";
 import {
   SECRET_PARAM_NAME_RE,
@@ -71,6 +72,8 @@ export interface JourneyReviewContext {
   readonly lastVerify?: JourneyVerifyRecord | null;
   /** #433: the Journey's catalog links and its pre-approval findings (the CLI loads the catalog). */
   readonly catalog?: { readonly links: JourneyCatalogLinks; readonly findings: readonly Finding[] };
+  /** #453: the pending self-heal proposal, with whether it is stale and why it cannot be accepted. */
+  readonly proposal?: { readonly proposal: JourneyProposal; readonly stale: boolean; readonly problem?: string };
 }
 
 function targetOf(step: Step): TargetDescriptor | undefined {
@@ -132,6 +135,35 @@ function ownAssertion(step: Step): string | undefined {
   if (step.kind === "assert") return describeCheck({ kind: "page", assertion: step.check });
   if (step.kind === "handback") return describeCheck({ kind: "page", assertion: step.resume });
   return "expect" in step ? describeCheck({ kind: "page", assertion: step.expect }) : undefined;
+}
+
+function evidenceLine(e: { kind: string; before?: string | undefined; after?: string | undefined; file?: string | undefined; line?: number | undefined }): string {
+  const change = e.before !== undefined || e.after !== undefined ? ` '${e.before ?? ""}' → '${e.after ?? ""}'` : "";
+  const where = e.file === undefined ? "" : ` (${e.file}${e.line === undefined ? "" : `:${e.line}`})`;
+  return `${e.kind}${change}${where}`;
+}
+
+function buildProposal(ctx: NonNullable<JourneyReviewContext["proposal"]>, journeyId: string): JourneyReviewProposal {
+  const p = ctx.proposal;
+  return {
+    proposalId: p.proposalId,
+    baseHash: p.baseHash,
+    proposedHash: p.proposedHash,
+    createdAt: p.createdAt,
+    stale: ctx.stale,
+    ...(ctx.problem === undefined ? {} : { problem: ctx.problem }),
+    changes: { ...(p.changes.range === undefined ? {} : { range: p.changes.range }), ...(p.changes.baseSha === undefined ? {} : { baseSha: p.changes.baseSha }), ...(p.changes.headSha === undefined ? {} : { headSha: p.changes.headSha }), notes: [...p.changes.notes] },
+    steps: p.steps.map((s) => ({
+      number: s.index + 1,
+      before: describeStep(s.before),
+      after: describeStep(s.after),
+      hypothesis: s.justification.hypothesis + (s.justification.anchorNotInChange === true ? " (the new anchor is not named by any change evidence)" : ""),
+      evidence: s.justification.evidence.map(evidenceLine),
+      screenshots: [...(s.screenshots ?? [])],
+    })),
+    attempts: { total: p.attempts.length, rejected: p.attempts.filter((a) => a.result === "rejected").length },
+    acceptCommand: `jevitate journey promote ${journeyId} --proposal ${p.proposalId} --reviewed-hash ${p.proposedHash}`,
+  };
 }
 
 function buildSteps(journey: Journey): JourneyReviewStep[] {
@@ -403,6 +435,7 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
           },
         }),
     ...(ctx.catalog === undefined ? {} : { catalog: ctx.catalog.links, findings: [...ctx.catalog.findings] }),
+    ...(ctx.proposal === undefined ? {} : { proposal: buildProposal(ctx.proposal, m.id) }),
     contentHash: hash,
   };
 }
@@ -569,6 +602,32 @@ function renderSheet(r: JourneyReview, style: Style): string {
       h3("Recorded with the last approval"),
       ...(r.approval.waivers ?? []).map((w) => li(`waived (${w.kind}): "${w.reason}" — ${w.items.join(", ")}`)),
       ...(r.approval.acceptedFindings === undefined ? [] : [li(`acknowledged findings: "${r.approval.acceptedFindings.reason}" — ${r.approval.acceptedFindings.findings.join(", ")}`)]),
+    );
+  }
+
+  if (r.proposal !== undefined) {
+    const pr = r.proposal;
+    const scope = pr.changes.range ?? (pr.changes.notes.length > 0 ? "change notes" : "no change context");
+    section(
+      h2("Proposed revision (self-heal)"),
+      "",
+      li(`Proposal ${code(pr.proposalId)} from ${pr.createdAt}, made against ${code(pr.baseHash)}; accepting it makes the content hash ${code(pr.proposedHash)}`),
+      li(`Change context: ${scope}${pr.changes.baseSha === undefined ? "" : ` (${pr.changes.baseSha.slice(0, 8)}..${(pr.changes.headSha ?? "").slice(0, 8)})`}`),
+      ...pr.changes.notes.map((n) => li(`note: ${n}`, 1)),
+      li(`Heal attempts: ${pr.attempts.total} (${pr.attempts.rejected} rejected)`),
+      ...(pr.stale ? [li(`STALE — the Journey changed after this proposal was made; it cannot be accepted. Re-run: jevitate journey run ${r.id} --self-heal`)] : []),
+      ...(pr.problem !== undefined && !pr.stale ? [li(`REFUSED — ${pr.problem}`)] : []),
+      "",
+      ...pr.steps.flatMap((st) => [
+        `${md ? "" : "  "}${st.number}. ${md ? `**${st.hypothesis}**` : st.hypothesis}`,
+        `${md ? "   " : "     "}- Before: ${code(st.before)}`,
+        `${md ? "   " : "     "}- After: ${code(st.after)}`,
+        ...st.evidence.map((e) => `${md ? "   " : "     "}- Evidence: ${e}`),
+        ...st.screenshots.map((sh) => `${md ? "   " : "     "}- Screenshot: ${sh}`),
+      ]),
+      "",
+      pr.stale || pr.problem !== undefined ? em("not acceptable as it stands") : `Accept exactly this revision: ${code(pr.acceptCommand)}`,
+      `Reject it: ${code(`jevitate journey promote ${r.id} --reject-proposal ${pr.proposalId} --reason "<why>"`)}`,
     );
   }
 

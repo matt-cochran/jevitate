@@ -184,6 +184,11 @@ export interface LastClick {
    * the time its window closed. Empty when it fired none.
    */
   readonly writes: readonly FiredWrite[];
+  /**
+   * #444: it sent at least one of the app's own requests (a read counts), every one of them was
+   * answered with a 2xx, and none is still pending when its window closed.
+   */
+  readonly completedOk: boolean;
 }
 
 /** What the guard says about a proposed click. */
@@ -344,7 +349,9 @@ export class SideEffectGuard {
       });
     const inflight = unfinished.filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r));
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
-    this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending] };
+    const own = requests.filter((r: CapturedRequest) => this.#ours(r));
+    const completedOk = own.length > 0 && !inflightAny && own.every((r) => r.status !== null && r.status >= 200 && r.status < 300);
+    this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending], completedOk };
     if (done.length + pending.length === 0) return;
     this.#fired.set(o.key, {
       label: o.label,

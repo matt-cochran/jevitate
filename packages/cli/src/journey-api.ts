@@ -1,12 +1,13 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { writeApprovedSnapshot } from "./journey-review-store.js";
 import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
 import type { JevSetup } from "./jev-advisor.js";
 import { redactText } from "@jevitate/ai-core";
-import { safeRunPolicy, type RunPolicy, clock } from "@jevitate/domain";
-import { join } from "node:path";
+import { safeRunPolicy, runTagsOf, type RunPolicy, clock } from "@jevitate/domain";
+import { dirname, join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type EmulationSpec } from "@jevitate/playwright";
 import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
@@ -19,7 +20,15 @@ import type { Page } from "playwright";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { SecretPixelMask, maskingPort } from "./demo-capture.js";
 import { RunScreenshots, composeObservers, screenshotObserver, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
-import { JourneyRunner, type JourneyRunResult, type SelfHealer, type SiteGateDeps } from "@jevitate/runtime";
+import { JourneyRunner, flattenRecording, retargetRecording, type ProposedRevisionDraft, type ChangeScope, type JourneyHealOptions, type JourneyRunResult, type SelfHealer, type SiteGateDeps } from "@jevitate/runtime";
+import { journeyStepRisk } from "./journey-heal.js";
+import { installHealProbeGuard } from "./heal-probe-guard.js";
+import { journeyResultRecord, type JourneyResultProposal } from "./journey-result-record.js";
+import { JourneyProposalProofError, writeJourneyProposal } from "./journey-proposal-store.js";
+import { stampRunMetadata } from "./run-metadata.js";
+import { recordRun } from "./run-index.js";
+import { captureStepScreenshot } from "./demo-capture.js";
+import { mkdir, writeFile } from "node:fs/promises";
 import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
@@ -46,6 +55,11 @@ export class JourneyRequiresAuthError extends Error {}
 /** #432: `journey promote --reviewed-hash`: the Journey changed after the reviewer's sheet was produced. */
 export class StaleReviewError extends Error {
   readonly code = "E_JOURNEY_REVIEW_STALE";
+}
+
+/** #453: a bad combination of proposal flags (`--proposal` with `--reject-proposal`; a rejection with no reason). Exit 64. */
+export class JourneyProposalArgsError extends Error {
+  readonly code = "E_JOURNEY_PROPOSAL_ARGS";
 }
 
 export class WeakJourneyError extends Error {
@@ -79,6 +93,12 @@ export interface RunJourneyProgrammaticallyOptions {
    * this port (enforced by `JourneyRunner`'s write floor).
    */
   selfHealer?: SelfHealer;
+  /**
+   * #453: the change context a `hybrid`/`full` self-heal is explained by (`readJourneyChangeScope`).
+   * With it the runner gets the risky-control classification (`journeyStepRisk`) and a per-step write
+   * blocker, so a guarded click/fill may be retargeted. Absent: every break is unexplained (never healed).
+   */
+  heal?: { readonly scope: ChangeScope };
   /**
    * Mission fixtures (#140/#144), built for the journey's own site once it is known: set up before
    * the browser opens (a failure throws `FixtureSetupError` — the journey never runs on unknown
@@ -179,6 +199,12 @@ export interface MutationReplayFields {
   blockedWrites?: BlockedWrite[];
 }
 
+/** #453: what a self-heal run adds to its result — the proposal it wrote and the persisted result file. */
+export interface HealRunFields {
+  proposal?: JourneyResultProposal & { reviewCommand: string; acceptCommand: string };
+  resultPath?: string;
+}
+
 /**
  * #246: a secret parameter's value (declared `secret: true`, or a credential-like name) never comes
  * back in a run's output — the interpreter's vars start as the params, so the value is masked there.
@@ -276,6 +302,18 @@ export interface PromoteJourneyOptions {
    * or the MCP channel). Omitted: recorded as `non-interactive` (`programmaticProvenance`).
    */
   confirm?: ApprovalConfirm;
+  /**
+   * #453: accept this pending self-heal proposal (its id) instead of promoting the stored Journey as
+   * is. The proposal is re-checked (stale / proof untouched), goes through every gate as the
+   * Journey it would make, is confirmed with the proposal shown, and `reviewedHash` is compared with
+   * ITS `proposedHash`. Only this writes the stored Journey.
+   */
+  proposal?: string;
+  /** #453: reject this pending proposal (its id) — needs `reason`; the stored Journey is untouched. */
+  rejectProposal?: string;
+  reason?: string;
+  /** #453: how the rejection was made (`rejectionProvenance`); omitted: the programmatic one. */
+  rejectProvenance?: ApprovalProvenance;
 }
 
 export async function promoteJourney(dir: string, id: string, opts: PromoteJourneyOptions = {}): Promise<Journey> {
@@ -286,14 +324,30 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
   if (!existing) {
     throw new UnknownJourneyError(`unknown journey '${id}'`);
   }
+  if (opts.proposal !== undefined && opts.rejectProposal !== undefined) {
+    throw new JourneyProposalArgsError("--proposal and --reject-proposal are exclusive: accept or reject, not both");
+  }
+  if (opts.rejectProposal !== undefined) {
+    const why = opts.reason?.trim() ?? "";
+    if (why === "") throw new JourneyProposalArgsError("--reject-proposal needs --reason <text> (it is recorded with the rejection)");
+    await rejectJourneyProposal(dir, id, opts.rejectProposal, { reason: why, provenance: opts.rejectProvenance ?? programmaticProvenance() });
+    return existing;
+  }
+  // #453: the proposal being accepted, re-checked against the stored Journey; the gates below judge the Journey it would make.
+  const proposal = opts.proposal === undefined ? null : await requireJourneyProposal(dir, id, opts.proposal);
+  if (proposal !== null) {
+    const problem = checkProposal(existing, proposal);
+    if (problem !== null) throw problem;
+  }
+  const subject: Journey = proposal === null ? existing : proposedJourney(existing, proposal);
   // #432: approval binds to what the reviewer read — refused when the Journey changed since.
-  const contentHash = journeyReviewHash(existing);
+  const contentHash = journeyReviewHash(subject);
   if (opts.reviewedHash !== undefined && opts.reviewedHash.trim().toLowerCase() !== contentHash) {
     throw new StaleReviewError(
       `journey '${id}' changed after its review sheet was produced (reviewed ${opts.reviewedHash.trim()}, now ${contentHash}) — review it again: jevitate journey review ${id}`,
     );
   }
-  const errors = lintJourney(existing).filter((f) => f.level === "error");
+  const errors = lintJourney(subject).filter((f) => f.level === "error");
   const reason = opts.acceptWeak?.trim() ?? "";
   if (errors.length > 0 && reason === "") {
     throw new WeakJourneyError(
@@ -306,7 +360,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
     );
   }
   const acceptedWeak = errors.length > 0 ? { reason, rules: [...new Set(errors.map((f) => f.rule))] } : undefined;
-  const gate = await journeyCatalogGate(existing, {
+  const gate = await journeyCatalogGate(subject, {
     catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir,
     journeysDir: dir,
     action: opts.action ?? "journey promote",
@@ -322,6 +376,15 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
           kind: opts.action === "demo approve" ? "demo" : "journey",
           id,
           contentHash,
+          ...(proposal === null
+            ? {}
+            : {
+                proposal: {
+                  id: proposal.proposalId,
+                  baseHash: proposal.baseHash,
+                  steps: proposal.steps.map((st) => ({ number: st.index + 1, before: describeStep(st.before), after: describeStep(st.after) })),
+                },
+              }),
           waivers: [
             ...(acceptedWeak === undefined ? [] : [{ flag: "--accept-weak", reason: acceptedWeak.reason, detail: acceptedWeak.rules.join(", ") }]),
             ...(gate.waivers ?? []).map((w) => ({ flag: "--accept-unvetted", reason: w.reason, detail: w.items.join(", ") })),
@@ -335,14 +398,17 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
     ...(acceptedWeak === undefined ? {} : { acceptedWeak: { ...acceptedWeak, provenance } }),
     ...(gate.waivers === undefined ? {} : { waivers: gate.waivers.map((w) => ({ ...w, provenance })) }),
     ...(gate.acceptedFindings === undefined ? {} : { acceptedFindings: { ...gate.acceptedFindings, provenance } }),
+    ...(proposal === null ? {} : { proposal: { id: proposal.proposalId, baseHash: proposal.baseHash, steps: proposal.steps.map((st) => st.index) } }),
   };
   const promoted: Journey = {
-    ...existing,
+    ...subject,
     metadata: { ...existing.metadata, promoted: true, ...(acceptedWeak === undefined ? {} : { acceptedWeak }), approval },
   };
   await store.put(promoted);
   // #432: the Journey as approved — the next review diffs against it ("change since last approval").
   await writeApprovedSnapshot(dir, promoted);
+  // #453: an accepted proposal is spent.
+  if (proposal !== null) await deleteJourneyProposal(dir, id);
   return (await registry.get(id)) ?? promoted;
 }
 
@@ -358,7 +424,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
   mutation: MutationReplayOptions = {},
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary } & Partial<ScreenshotsResult> & MutationReplayFields> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -412,7 +478,10 @@ export async function runJourneyProgrammatically(
       const rawPort = (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
       return capturing ? maskingPort(rawPort, mask) : rawPort;
     };
-    const artifactName = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(clock.nowIso())}.json`;
+    const startedAt = clock.nowIso();
+    const stampBase = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(startedAt)}`;
+    const artifactName = `${stampBase}.json`;
+    const healDir = join(logsDirFor(), `${stampBase}.heal`);
     // #245: `--record-video` → `journey-<id>-<stamp>.videos/` under the given dir, else the logs dir.
     const videoDir =
       opts.browser?.recordVideo === undefined || opts.session !== undefined
@@ -456,6 +525,9 @@ export async function runJourneyProgrammatically(
       // and each step's request expectations.
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, { secrets });
       const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins);
+      // #453 (Q2): a guarded click/fill heal probe runs under a per-step write blocker.
+      // Context-level (popups, WebSockets), no write exemptions; see heal-probe-guard.ts.
+      const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page);
       const observer = composeObservers(
         outcomeChecks.observer(),
         blocker?.observer,
@@ -466,10 +538,14 @@ export async function runJourneyProgrammatically(
       const skipStep = mutation.skipStep;
       const interpreter =
         opts.interpreter ??
-        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && skipStep === undefined
+        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined
           ? new RecordingInterpreter()
           : new RecordingInterpreter({ observer, ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }) }));
-      const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer);
+      const heal: JourneyHealOptions | undefined =
+        opts.heal === undefined || healGuard === undefined
+          ? undefined
+          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, observe: healObserver(healDir, mask) };
+      const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
       let result: JourneyRunResult;
       try {
         result = redactSecretParams(
@@ -480,6 +556,18 @@ export async function runJourneyProgrammatically(
       } finally {
         await gate.done();
         await blocker?.guard.disarm();
+        await healGuard?.guard.disarm();
+        await healGuard?.dispose();
+      }
+      // #453: a self-heal run persists its record (heal attempts, the proposal) and indexes it.
+      // #453 review: a run that cannot write its proposal (a prefix or mutated replay, a proof error)
+      // is never pending review — `persistHealRun` reports it quarantined, saying why.
+      let healFields: Partial<Awaited<ReturnType<typeof persistHealRun>>["fields"]> = {};
+      if (policy.selfHeal.mode !== "fail-closed") {
+        const unwritable = journey !== full ? "only a prefix of the Journey ran" : mutation.mutateJourney !== undefined ? "a mutated copy of the Journey ran" : undefined;
+        const persisted = await persistHealRun({ result, stored, params, secrets, opts, stampBase, startedAt, ...(unwritable === undefined ? {} : { unwritable }) });
+        result = persisted.result;
+        healFields = persisted.fields;
       }
       const mutationFields: MutationReplayFields = {
         ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretParams([...outcomeChecks.lastFailures], journey, params) } : {}),
@@ -489,10 +577,10 @@ export async function runJourneyProgrammatically(
       const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretParams(replayDeltaSummary(replayDeltas), journey, params) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
-      if (fx === undefined) return { ...result, ...videos, ...shotFields, ...deltaFields, ...mutationFields };
+      if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...mutationFields };
       await fx.restore();
       // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
-      return { ...result, ...videos, ...shotFields, ...deltaFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
+      return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
     } finally {
       await closeSession();
     }
@@ -503,6 +591,125 @@ export async function runJourneyProgrammatically(
   } finally {
     await fx?.restore();
   }
+}
+
+/** The heal probe's evidence: a masked screenshot of the page after each candidate, under `<logs>/journey-<id>-<stamp>.heal/`. */
+function healObserver(dir: string, mask: SecretPixelMask): NonNullable<JourneyHealOptions["observe"]> {
+  return async (actor, at) => {
+    const page = actor.ability(BrowseTheWebToken).session.page;
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `step-${at.stepIndex + 1}-attempt-${at.attempt}.png`);
+    await captureStepScreenshot(page, path, { step: at.stepIndex }, [mask.layer()]);
+    return { screenshot: path };
+  };
+}
+
+/**
+ * #453: writes the proposal of a `healed-pending-review` run (the stored Journey is never written)
+ * and the run's `journey-<id>-<stamp>.result.json` (recorded in the run index). Returns the result
+ * to report and the fields to put on it: the `proposal` handle, the `resultPath`.
+ *
+ * A run on an environment (`--env` / `--base-url`) proposes against the STORED Journey: a retarget
+ * changes a target or a navigate path, and a navigate URL moved onto the environment's base URL is
+ * moved back onto the recorded site. Where no proposal can be written (`unwritable`: a prefix or
+ * mutated replay; or a revision the proof check refuses) the run is NOT pending review — there is
+ * nothing to accept — it is reported `quarantined`, its reason saying why no proposal was written.
+ * A `healed-pending-review` result never leaves here without a proposal id.
+ */
+async function persistHealRun(a: {
+  result: JourneyRunResult;
+  stored: Journey;
+  params: Record<string, string>;
+  secrets: readonly string[];
+  opts: RunJourneyProgrammaticallyOptions;
+  stampBase: string;
+  startedAt: string;
+  unwritable?: string;
+}): Promise<{ result: JourneyRunResult; fields: { proposal?: JourneyResultProposal & { reviewCommand: string; acceptCommand: string }; resultPath: string } }> {
+  const resultPath = join(logsDirFor(a.startedAt), `${a.stampBase}.result.json`);
+  const id = a.opts.id;
+  let result = a.result;
+  let proposal: (JourneyResultProposal & { reviewCommand: string; acceptCommand: string }) | undefined;
+  if (result.outcome === "healed-pending-review") {
+    let why: string | undefined = a.unwritable ?? (result.heal === undefined ? "the run carries no heal record" : undefined);
+    if (why === undefined && result.heal !== undefined) {
+      const scope = a.opts.heal?.scope;
+      try {
+        const draft = draftOnStored(a.stored, result.revision, a.opts.environment);
+        const written = await writeJourneyProposal(a.opts.dir, {
+          journeyId: id,
+          base: a.stored,
+          draft,
+          attempts: result.heal.attempts,
+          changes: {
+            ...(scope?.range === undefined ? {} : { range: scope.range }),
+            ...(scope?.baseSha === undefined ? {} : { baseSha: scope.baseSha }),
+            ...(scope?.headSha === undefined ? {} : { headSha: scope.headSha }),
+            notes: (scope?.evidence ?? []).flatMap((e) => (e.kind === "note" && e.note !== undefined ? [e.note] : [])),
+          },
+          runResultPath: resultPath,
+          secrets: a.secrets,
+        });
+        proposal = {
+          id: written.proposalId,
+          path: written.path,
+          steps: draft.steps.map((c) => ({ number: c.index + 1, before: describeStep(c.before), after: describeStep(c.after) })),
+          reviewCommand: `jevitate journey review ${id}`,
+          acceptCommand: `jevitate journey promote ${id} --proposal ${written.proposalId}`,
+        };
+      } catch (err) {
+        // A revision that touches proof (or fails the heal floor) is never stored.
+        if (!(err instanceof JourneyProposalProofError)) throw err;
+        why = err.message;
+      }
+    }
+    if (proposal === undefined) {
+      result = {
+        outcome: "quarantined",
+        reason: `the run completed only after a heal, but no proposal was written (${why ?? "unknown"}) — there is nothing to accept; re-run on the recorded site without a prefix or mutation`,
+        ...(result.waits === undefined ? {} : { waits: result.waits }),
+        ...(result.heal === undefined ? {} : { heal: result.heal }),
+      };
+    }
+  }
+  const record = journeyResultRecord(result, { journey: a.stored, params: a.params, startedAt: a.startedAt, ...(proposal === undefined ? {} : { proposal }) });
+  const stamped = { ...record, result: stampRunMetadata(record.result) };
+  await mkdir(dirname(resultPath), { recursive: true });
+  await writeFile(resultPath, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
+  recordRun(resultPath, { tags: runTagsOf(stamped.result) });
+  return { result, fields: { ...(proposal === undefined ? {} : { proposal }), resultPath } };
+}
+
+/**
+ * The revision a run on an environment proposed, onto the STORED Journey: each changed step's
+ * `before` is the stored step, its `after` the retarget — a navigate URL on the environment's base
+ * URL moved back onto the recorded site. Without an environment the draft is the stored Journey's.
+ */
+export function draftOnStored(stored: Journey, draft: ProposedRevisionDraft, env: ResolvedJourneyEnvironment | undefined): ProposedRevisionDraft {
+  if (env === undefined) return draft;
+  let recordedOrigin: string | undefined;
+  try {
+    recordedOrigin = /^https?:\/\//i.test(stored.recording.site) ? new URL(stored.recording.site).origin : undefined;
+  } catch {
+    recordedOrigin = undefined;
+  }
+  const base = env.baseUrl.replace(/\/+$/, "");
+  const unbase = (url: string): string => {
+    if (recordedOrigin === undefined || !url.startsWith(base)) return url;
+    const rest = url.slice(base.length);
+    return rest === "" || /^[/?#]/.test(rest) ? `${recordedOrigin}${rest}` : url;
+  };
+  const flat = flattenRecording(stored.recording);
+  let recording = stored.recording;
+  const steps = draft.steps.map((c) => {
+    const before = flat[c.index]?.step;
+    if (before === undefined) throw new JourneyProposalProofError(`the revision changes step ${c.index + 1}, which the stored Journey does not have`);
+    // A target is environment-independent; only an absolute navigate URL was moved (rebaseRecording).
+    const after = c.after.kind === "navigate" ? { ...c.after, url: unbase(c.after.url) } : c.after;
+    recording = retargetRecording(recording, c.index, after);
+    return { ...c, before, after };
+  });
+  return { recording, steps };
 }
 
 /** How long one blocked step's window stays open for the writes its action triggers (network settle). */

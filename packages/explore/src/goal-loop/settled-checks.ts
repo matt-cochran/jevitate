@@ -125,6 +125,7 @@ export async function checkSettled(ctx: RunContext, step: Perceived): Promise<Fl
       snapshot: snap,
       timing: perception.timing,
     });
+    ctx.noControls = true;
     ctx.stop = "blocked";
     return "stop";
   }

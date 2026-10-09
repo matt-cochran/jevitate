@@ -27,8 +27,8 @@ fields the same way:
 | `schemaVersion` | `1` | Increases whenever any field in this table changes incompatibly. |
 | `strategy` | string | The strategy that produced the result. |
 | `missionOutcome` | string | The verdict: always one of the canonical [mission outcomes](./outcomes.md) (`clean`, `defects-found`, `hang`, `intermittent`, `inconclusive`, `crashed`), on every strategy — a goal run included. |
-| `goalOutcome` | string | Goal runs only (and on every goal run): the goal's own ending — `succeeded`, `failed`, `exhausted`, `blocked`, or a shared outcome it ended with directly (e.g. `crashed`, `hang`). Since 0.8.0 (#423) a defect never replaces it: `missionOutcome` is derived from `goalOutcome` and `defectOutcome` by one table (a `succeeded` goal with defects is `defects-found`; see [outcomes](./outcomes.md#goal-outcome--defect-outcome-423)). Additive in schema version 1. |
-| `goalReason` | string | #423, goal runs whose `goalOutcome` is not `succeeded`: why — `success-check-failed`, `not-found`, `ungrounded`, `blocked-by-policy`, `gave-up`, `no-progress`, `budget`, `hang`, `vacuous-check`, `broken-run` or `defects`. Additive. |
+| `goalOutcome` | string | Goal runs only (and on every goal run): the goal's own ending — `succeeded`, `failed`, `exhausted`, `blocked`, `not-started` (#448: zero executed actions; folds to `inconclusive`, exit 2), or a shared outcome it ended with directly (e.g. `crashed`, `hang`). Since 0.8.0 (#423) a defect never replaces it: `missionOutcome` is derived from `goalOutcome` and `defectOutcome` by one table (a `succeeded` goal with defects is `defects-found`; see [outcomes](./outcomes.md#goal-outcome--defect-outcome-423)). Additive in schema version 1. |
+| `goalReason` | string | #423, goal runs whose `goalOutcome` is not `succeeded`: why — `success-check-failed`, `not-found`, `ungrounded`, `blocked-by-policy`, `gave-up`, `no-progress`, `budget`, `hang`, `vacuous-check`, `broken-run`, `defects`, or (for `not-started`, #448) `no-controls`, `auth-failed`, `preflight-failed` or `no-actions`. Additive. |
 | `exitCode` | number | The process exit code for `missionOutcome`. This is the value to compare across strategies. |
 | `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects — and a coverage/exploratory run's frontier defects (`horizontal-overflow`, `vertical-clipping`, `judgment-flagged-state`), which are also listed with their repro Recording in `coverage.defects`. Each one has a `fingerprint` (16 hex characters) and a `kind`. Every strategy records an HTTP 5xx from the app's own origins as an `http-5xx` defect with the same fingerprint (endpoint pattern + status), whichever strategy found it; a 5xx from a third-party origin is not the app's defect. A defect the strategy reports without gating on it has `advisory: true`: a usability run's `server-log` or `http-5xx` defect, and every `judgment-flagged-state` (Jev's opinion alone, #214). An advisory defect never sets `missionOutcome`/`exitCode`, and `check` never gates on it (unless the suite sets `gateAdvisory`). |
 | `defects[]` (`server-log`) | object | #421: a backend log defect also carries `level`, `source` (the `--log-source` spec), `message` (redacted), `firstSeenStep` and `count` (= `occurrences`); see [backend logs](./backend-logs.md). |
@@ -39,7 +39,7 @@ fields the same way:
 | `resultPath` | string | The persisted `<stem>.result.json`. The stem starts with the strategy (`explore-` for goal, `coverage-`, `exploratory-`, `adversarial-`, `feature-`, `usability-`); readers find a result by its content, never by its prefix. |
 | `sessionLost` | object | Goal runs with `--storage-state`, only when it happened: `{reason}` — the session was not honoured (the first page was a sign-in page: a login-like URL or a password field), so the run did not start signed in as that session. A warning, printed as a `WARNING` line; it does not change the outcome. |
 | `scope` | object | Coverage, exploratory and feature runs: the route scope the run was contained to — `routeGlobs`, and `source` (`start-url` when derived from the start URL, `route` when `--route`/`--scope app` widened or set it). The human output prints it as a `SCOPE` line. |
-| `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. #426 adds structured fields: `startUrl` (where the run started), `strategy`, and `persona` (the persona name, for a `--persona` multi-run or a [sweep](./sweeps.md) target). Additive. |
+| `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. #426 adds structured fields: `startUrl` (where the run started), `strategy`, `persona` (the persona name, for a `--persona` multi-run or a [sweep](./sweeps.md) target), and `id` (`explore --target`, or a sweep target's `id`). **Consumers should key a run on `target.id`, not on `startUrl`.** Additive. |
 | `tags` | object | #426: the run's `--tag key=value` metadata (`{"feature": "checkout"}`), present only when the run was tagged. See [run tags](#run-tags). Additive. |
 | `engine` | object | The build that produced the result: `{version, commit, builtAt}`. |
 | `usage` | object | Model calls, tokens and cost. The CLI always sets it; a programmatic caller that does not track usage leaves it out. |
@@ -54,6 +54,26 @@ fields the same way:
 
 `verify-fix`, `ledger add`, `report`, `check` and `--repeat` voting all read defects from `defects`.
 
+## Journey results (`journey-<id>-<stamp>.result.json`)
+
+`journey run` with `--self-heal hybrid|full`, and `check`, persist `{missionOutcome, exitCode, result}`
+for a Journey run (a plain fail-closed `journey run` prints its result and writes no file). The
+`result` has:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `"journey"` |
+| `journeyId`, `startedAt`, `target` | which Journey, when, on what origin |
+| `outcome` | `ok`, `healed-pending-review`, `heal-exhausted` or `quarantined` (see [journey run outcomes](./outcomes.md#journey-run-outcomes-453)) |
+| `reason`, `at`, `url` | why and at which step (0-based) a failed run stopped |
+| `heal` | when a self-heal ran: `mode`, `verdict`, `changeScope` (range, SHAs, counts; never raw hunks), `budget` (limits, used, `exhaustedBy`) and `attempts` |
+| `heal.attempts[]` | `n`, `stepIndex`, `source`, `hypothesis`, `evidence` (kind, before/after, file:line), `candidate` (values hidden), `observation` (a masked screenshot under `journey-<id>-<stamp>.heal/`), `result`, `rejection {code, detail}`, `usage` |
+| `proposal` | `{id, path, steps, reviewCommand, acceptCommand}` of the revision a `healed-pending-review` run wrote |
+
+Every string is redacted of the run's secret params. `jevitate report` turns `heal-exhausted` and
+unexplained breaks into defects (with the attempt table) and a pending proposal into a
+`journey-heal-pending` finding that is not counted as a defect.
+
 ## Run tags
 
 Every command that produces a run result takes `--tag key=value` (repeatable): `explore`,
@@ -62,6 +82,12 @@ Every command that produces a run result takes `--tag key=value` (repeatable): `
 A tag says which feature, journey or release a run exercised, so a release dashboard or a coverage
 tracker can attribute the run without guessing from its output path or its final URL (a run that
 ends on a login page still says what it tested).
+
+`explore --target <id>` names the target a run was meant to cover (1-64 of `[A-Za-z0-9_.-]`,
+refused with exit 64 before anything runs); `sweep` passes each target's `id` this way. It is
+stamped as `target.id` in the persisted result, its envelope and the run index. This is stronger
+than the start URL (which a redirect, a login bounce or a sweep `route` can change): **key a run on
+`target.id`**, not on `target.startUrl`.
 
 ```bash
 jevitate explore --url https://app.example.test/checkout --strategy adversarial \

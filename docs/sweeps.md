@@ -105,6 +105,12 @@ file reaches no session an MCP call could not.
   resource-limit failure, a crash, or a run that could not start. The runs already in flight
   finish; the rest are `skipped`, the sweep is `inconclusive` (exit 2), and the message says to
   fix the environment and re-run with `--resume`.
+- A target that ends `inconclusive` with `failure.kind: "host-starved"` (#452: the run stalled
+  while the host was starved) is retried ONCE: the sweep waits for the load to drop (the host's
+  load per core back under 2, bounded at 2 minutes; if it has not dropped by then the retry runs
+  anyway), then runs the target again. The retried row carries `hostStarvedRetry` (the first
+  attempt's reason) and `summary.retried` counts them; a second `host-starved` is recorded as the
+  environment failure it is. `--no-host-starved-retry` records the first result instead.
 - A killed sweep (SIGINT/SIGTERM) writes its partial `sweep.result.json` (`complete: false`,
   `interrupted`) before it exits 130/143.
 
@@ -116,6 +122,7 @@ file reaches no session an MCP call could not.
 | `missionOutcome`, `exitCode` | The worst target outcome; `inconclusive` while incomplete or after a stop. |
 | `complete`, `reason`, `aborted`, `interrupted` | Whether every target finished, and why not. |
 | `summary` | Targets, `ran`, `resumed`, `errors`, `skipped`, `pending`, counts by outcome, deduped defects (advisory ones excluded) and environment failures. |
+| `summary.notStarted` | #448: goal targets that executed zero actions (`goalOutcome: not-started`), counted apart from `ran` runs that exercised the app. |
 | `targets[]` | Per target: `id`, `url`, `persona`, `strategy`, `tags` (the run's: the sweep's, the target's and `target=<id>`), `status` (`ran`, `resumed`, `error`, `skipped`, `pending`), `missionOutcome`, `goalOutcome`, `exitCode`, `defectOutcome`, `depth` (distinct states, actions, forms submitted) and `safetyOverrides` (each refusal an `allowControl` exemption waived) when the run's result carries them, `failure`, `environmentFailure`, the defect count, and the run's `resultPath` and `envelopePath`. |
 | `defects[]` | Every defect and hang, deduped by fingerprint ACROSS targets: one entry per fingerprint with its `kind`, `title` (and `level`/`source`/`message` for a `server-log` defect), `sightingCount`, the `targets` that saw it and one `sightings[]` entry per target (route, URL, count, result path). A defect seen on five pages is one finding with five sightings. It is `advisory` only when every sighting was. |
 | `environment.causes[]` | Every run's environment causes — its classified backend-log `environmentFaults` causes (`.jevitate/log-classes.json`, see [backend logs](./backend-logs.md)) and its starved-host `environmentDegraded` findings — grouped by rule, source and message, with their total count and the targets they hit. |

@@ -15,6 +15,8 @@ export interface RunMetadata {
   readonly tags: RunTags;
   /** The persona name (a sweep target's / multi-run persona's), never a storage-state's contents. */
   readonly persona?: string;
+  /** #451: the id of the target the run was meant to cover (a sweep target's id, or `explore --target`). */
+  readonly targetId?: string;
 }
 
 const scope = new AsyncLocalStorage<RunMetadata>();
@@ -28,7 +30,12 @@ export function currentRunMetadata(): RunMetadata | undefined {
 export function withRunMetadata<T>(meta: Partial<RunMetadata>, fn: () => T): T {
   const outer = scope.getStore();
   const persona = meta.persona ?? outer?.persona;
-  const merged: RunMetadata = { tags: { ...(outer?.tags ?? {}), ...(meta.tags ?? {}) }, ...(persona === undefined ? {} : { persona }) };
+  const targetId = meta.targetId ?? outer?.targetId;
+  const merged: RunMetadata = {
+    tags: { ...(outer?.tags ?? {}), ...(meta.tags ?? {}) },
+    ...(persona === undefined ? {} : { persona }),
+    ...(targetId === undefined ? {} : { targetId }),
+  };
   return scope.run(merged, fn);
 }
 
@@ -38,8 +45,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 /**
  * The result with the run metadata stamped on: `tags` (when any) and the structured target
- * (`target.startUrl` — the run's seed URL —, `target.persona`, `target.strategy`). Values the result
- * already carries win (a runner that knows better is never overwritten). Non-objects pass through.
+ * (`target.startUrl` — the run's seed URL —, `target.id`, `target.persona`, `target.strategy`).
+ * Values the result already carries win (a runner that knows better is never overwritten).
+ * Non-objects pass through.
  */
 export function stampRunMetadata<T>(result: T, meta: RunMetadata | undefined = currentRunMetadata()): T {
   if (!isRecord(result)) return result;
@@ -52,6 +60,7 @@ export function stampRunMetadata<T>(result: T, meta: RunMetadata | undefined = c
     out.target = {
       ...t,
       ...(t.startUrl === undefined && typeof t.seedUrl === "string" ? { startUrl: t.seedUrl } : {}),
+      ...(t.id === undefined && meta?.targetId !== undefined ? { id: meta.targetId } : {}),
       ...(t.persona === undefined && meta?.persona !== undefined ? { persona: meta.persona } : {}),
       ...(t.strategy === undefined && strategy !== undefined ? { strategy } : {}),
     };

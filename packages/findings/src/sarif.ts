@@ -37,9 +37,12 @@ export interface SarifLog {
 export const SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json";
 
 function ruleId(d: ConsolidatedDefect): string {
+  if (d.category === "journey-heal-pending") return PENDING_RULE;
   const signal = d.identity.signal.replace(/[^A-Za-z0-9_.:-]+/g, "-").slice(0, 80);
   return `jevitate/${d.category}/${signal}`;
 }
+
+const PENDING_RULE = "jevitate/journey-heal-pending-review";
 
 export function renderSarif(input: SarifInput): SarifLog {
   const rules = new Map<string, { id: string; name: string; shortDescription: { text: string }; defaultConfiguration: { level: string } }>();
@@ -50,7 +53,7 @@ export function renderSarif(input: SarifInput): SarifLog {
         id,
         name: id.replace(/[^A-Za-z0-9]+/g, "_"),
         shortDescription: { text: `${f.defect.category}: ${f.defect.identity.signal}` },
-        defaultConfiguration: { level: f.defect.severity === "hard" ? "error" : "note" },
+        defaultConfiguration: { level: f.defect.severity === "hard" ? "error" : f.defect.severity === "pending" ? "warning" : "note" },
       });
     }
   }
@@ -68,9 +71,11 @@ export function renderSarif(input: SarifInput): SarifLog {
     ]);
     const seen = new Set<string>();
     const files = media.filter((m) => (seen.has(m.uri) ? false : (seen.add(m.uri), true))).slice(0, 10);
+    const healAttempts = d.evidence.find((e) => e.healAttempts !== undefined)?.healAttempts;
+    const proposal = d.evidence.find((e) => e.proposal !== undefined)?.proposal;
     return {
       ruleId: ruleId(d),
-      level: f.gating ? "error" : d.severity === "hard" ? "warning" : "note",
+      level: f.gating ? "error" : d.severity === "hard" || d.severity === "pending" ? "warning" : "note",
       message: {
         text: `${d.title}${f.status === undefined ? "" : ` [${f.status}]`}${d.reproduce === undefined ? "" : ` — reproduce: ${d.reproduce}`}`,
       },
@@ -96,6 +101,9 @@ export function renderSarif(input: SarifInput): SarifLog {
         modes: d.modes.map((m) => ({ mode: m.mode, occurrences: m.occurrences, runs: m.runs.map((r) => r.runId) })),
         fingerprints: d.fingerprints,
         ...(d.identity.request === undefined ? {} : { request: d.identity.request }),
+        // #453: a heal-exhausted Journey's attempts, and a pending one's proposal.
+        ...(healAttempts === undefined ? {} : { healAttempts: healAttempts.length }),
+        ...(proposal === undefined ? {} : { proposal }),
       },
     };
   });

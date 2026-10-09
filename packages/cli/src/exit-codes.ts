@@ -14,14 +14,16 @@ import { MISSION_EXIT_CODES, type MissionOutcome } from "@jevitate/domain";
  *  |      |               | errored, budget exceeded, an unexpected error) — it proves nothing             |
  *  | 3    | hang          | the app under test hung, and the hang reproduced on replay                     |
  *  | 4    | intermittent  | a signal fired on some but not every replay                                    |
+ *  | 5    | pending-review| #453: a self-heal produced a proposed Journey revision; nothing passes until a |
+ *  |      |               | person accepts it (`journey promote <id> --proposal <pid>`)                    |
  *  | 64   | usage         | bad flags/arguments or unusable input (unknown id, invalid file, missing keys, |
  *  |      |               | refused target) — nothing ran. `EX_USAGE` from sysexits.h.                     |
  *  | 129/130/143 | killed | SIGHUP (or parent death) / SIGINT / SIGTERM (kill-signal.ts); partial result written |
  *
- * 0–4 are the pre-existing mission codes (`MISSION_EXIT_CODES`, @jevitate/domain) unchanged; the
+ * 0–5 are the mission codes (`MISSION_EXIT_CODES`, @jevitate/domain; 0–4 unchanged since #210); the
  * mission outcome → code mapping stays THERE (one place), and this table only names the classes.
- * Usage errors get 64 rather than the next small integer so a future outcome code (5, 6, …) never
- * collides with it.
+ * Usage errors get 64 rather than the next small integer so a future outcome code (6, 7, …) never
+ * collides with it. A Journey run's outcome folds onto these through `journeyExitCode` (@jevitate/domain).
  */
 export const EXIT_CODES = {
   ok: 0,
@@ -29,6 +31,7 @@ export const EXIT_CODES = {
   inconclusive: 2,
   hang: 3,
   intermittent: 4,
+  pendingReview: 5,
   usage: 64,
 } as const;
 
@@ -75,6 +78,9 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_REGRESSION_HARD_SIGNAL", // `regression capture --fingerprint` names a hard-signal defect; use the ledger instead
   "E_JOURNEY_ANNOTATIONS_STALE", // `journey annotate --approve`: the Journey changed since the draft; re-draft
   "E_JOURNEY_REVIEW_STALE",
+  "E_JOURNEY_PROPOSAL_STALE", // #453: `journey promote --proposal`: the Journey changed since the proposal was made; re-run the self-heal
+  "E_JOURNEY_PROPOSAL_PROOF", // #453: the proposal file touches the Journey's proof fields
+  "E_JOURNEY_PROPOSAL_INVALID", // #453: the proposal file is not valid
   "E_CATALOG_REVIEW_STALE", // #433: `persona|job approve --reviewed-hash`: the item changed since the sheet was read; review again // #432: `journey promote --reviewed-hash`: the Journey changed since the sheet was read; review again
   "E_DEMO_PRODUCTION_ENV", // #249: `demo` refuses an environment flagged production: true
   "E_DEMO_EXISTS", // #249: `demo` would overwrite an existing Journey / pending demo draft

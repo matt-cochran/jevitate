@@ -129,6 +129,10 @@ export async function viewPage(ctx: RunContext, step: Perceived): Promise<PageVi
     controlNames: snap.controls.filter((c) => isActionOrChromeName(c, ctx.chrome)).map((c) => c.name),
     // #229: the content links' text, in page order (a list's entries: "the first item").
     contentLinks: snap.controls.filter((c) => !isActionOrChromeName(c, ctx.chrome)).map((c) => c.name),
+    // #447: the snapshot left controls out — no absence claim may rest on this page's inventory.
+    ...(snap.truncated || (snap.dropped?.length ?? 0) > 0
+      ? { inventoryIncomplete: [...(snap.truncated ? ["the candidate limit cut it"] : []), ...(snap.dropped ?? [])].join("; ") }
+      : {}),
     // #238: where the page's navigation leads — the first page's is the absence-answer coverage floor.
     navLinks: snap.controls
       .filter((c) => c.role === "link" && (c.landmark === "navigation" || c.landmark === "banner"))

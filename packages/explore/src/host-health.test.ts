@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import type { HostPressure } from "./host-pressure.js";
 import {
   HostHealthSampler,
   STARVATION_WINDOW_MS,
+  CDP_PROBE_TIMEOUT_MS,
+  STARVED_CDP_LATENCY_MS,
   degradedEnvironmentOutcome,
+  hostStarvedFailure,
   starvationAttributionFromEnv,
 } from "./host-health.js";
 import type { TranscriptEntry } from "./transcript.js";
@@ -230,5 +234,72 @@ describe("degradedEnvironmentOutcome — a starved run proved nothing", () => {
       expect(degradedEnvironmentOutcome(o, health(true))).toEqual({ outcome: o });
     }
     expect(degradedEnvironmentOutcome("clean", health(false))).toEqual({ outcome: "clean" });
+  });
+});
+
+describe("host-starved (#452): a stalled run on a starved host is told apart from an app failure", () => {
+  const stalled = { kind: "stalled", message: "the page stopped responding (no step completed in 120s)" };
+
+  async function summaryWith(opts: { lag?: number; cdp?: number; attribute?: boolean }) {
+    const sampler = new HostHealthSampler({
+      probe: async () => calm,
+      eventLoopLagMs: () => opts.lag ?? 3,
+      cdpLatencyMs: async () => opts.cdp ?? 4,
+      now: () => 1_000_000,
+      intervalMs: 0,
+      attribute: opts.attribute ?? true,
+      cores: 8,
+    });
+    await sampler.sample();
+    return sampler.summary();
+  }
+
+  it("artificial CDP latency on a stalled run yields failure kind host-starved", async () => {
+    expect(hostStarvedFailure(stalled, await summaryWith({ cdp: 4_200 }))?.kind).toBe("host-starved");
+  });
+
+  it("a blocked event loop on a stalled run yields failure kind host-starved", async () => {
+    expect(hostStarvedFailure(stalled, await summaryWith({ lag: 2_500 }))?.kind).toBe("host-starved");
+  });
+
+  it("the failure message records the measured CDP latency", async () => {
+    expect(hostStarvedFailure(stalled, await summaryWith({ cdp: 4_200 }))?.message).toContain("CDP command round-trip peaked at 4200ms");
+  });
+
+  it("a stalled run on a calm host keeps its own failure", async () => {
+    expect(hostStarvedFailure(stalled, await summaryWith({}))).toBeUndefined();
+  });
+
+  it("a failure that is not a stall is never host-starved, whatever the host did", async () => {
+    expect(hostStarvedFailure({ kind: "page-crash", message: "Page crashed" }, await summaryWith({ cdp: 4_200 }))).toBeUndefined();
+  });
+
+  it("a page-load timeout exception counts as a stall", async () => {
+    expect(hostStarvedFailure({ kind: "exception", message: "page.goto: Timeout 30000ms exceeded." }, await summaryWith({ cdp: 4_200 }))?.kind).toBe("host-starved");
+  });
+
+  it("with starvation attribution off nothing is ever blamed on the host", async () => {
+    expect(hostStarvedFailure(stalled, await summaryWith({ cdp: 4_200, attribute: false }))).toBeUndefined();
+  });
+
+  it("a CDP probe that never answers reads as the probe timeout, not as a hang of the sampler", async () => {
+    const sampler = new HostHealthSampler({
+      probe: async () => calm,
+      eventLoopLagMs: () => 3,
+      cdpLatencyMs: () => new Promise<number>(() => undefined),
+      intervalMs: 0,
+      attribute: true,
+      cores: 8,
+    });
+    const fake = new FakeClock();
+    installClock(fake);
+    try {
+      const sampling = sampler.sample();
+      await fake.advanceBy(CDP_PROBE_TIMEOUT_MS);
+      await sampling;
+    } finally {
+      resetClock();
+    }
+    expect(sampler.summary().peakCdpLatencyMs).toBeGreaterThan(STARVED_CDP_LATENCY_MS);
   });
 });
