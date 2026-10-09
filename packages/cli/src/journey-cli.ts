@@ -76,7 +76,7 @@ function targetsOpts(deps: CliDeps): { targetsFile?: string } {
 
 function lintFindingLine(finding: JourneyLintFinding): string {
   const message = finding.message.replace(/^step \d+: /, "");
-  return `${finding.level}  ${finding.step === undefined ? "" : `step ${finding.step}  `}${finding.rule}  ${message}`;
+  return `${finding.level}  ${finding.step === undefined ? "" : `step ${finding.step}  `}${finding.rule}  ${message}${finding.fix === undefined ? "" : ` — fix: ${finding.fix}`}`;
 }
 
 /** Registers `jevitate journey`: `list|find|run|promote|lint|verify|anchors|annotate|demo|publish`. */
@@ -678,7 +678,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .action(async function (this: Command, id: string) {
       const { dir, json, sarif } = this.opts<{ dir?: string; json?: boolean; sarif?: string }>();
       try {
-        const result = await lintJourneyById(resolveJourneysDir(deps, dir), id);
+        const result = await lintJourneyById(resolveJourneysDir(deps, dir), id, { catalogDir: resolveCatalogDir(deps.catalogDir) });
         if (sarif !== undefined) {
           const log = renderJourneyLintSarif({ id: result.id, findings: result.findings, version: currentEngineInfo().version });
           await writeFile(sarif, `${JSON.stringify(log, null, 2)}\n`);

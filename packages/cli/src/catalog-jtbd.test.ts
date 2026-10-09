@@ -238,11 +238,11 @@ describe("#465 approval", () => {
     expect((await cli(["job", "review", "invite", "--json"])).json.data.status).toBe("approved");
   });
 
-  it("a Journey with a broken serves id still promotes (a warning in 0.10)", async () => {
+  it("a new Journey with a broken serves id is refused (#466: new Journeys follow the anchor rules)", async () => {
     await new FsJourneyStore(journeysDir).put(journey("invite-admin", { serves: ["nope"] }));
     await cli(["persona", "approve", "admin", "--json", "--non-interactive-approval", "test"]);
     await approveJob();
-    expect((await cli(["journey", "promote", "invite-admin", "--json", "--non-interactive-approval", "test"])).json.data.promoted).toBe(true);
+    expect((await cli(["journey", "promote", "invite-admin", "--json", "--non-interactive-approval", "test"])).json.error.code).toBe("E_JOURNEY_ANCHOR_RULES");
   });
 });
 
