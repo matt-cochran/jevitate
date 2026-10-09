@@ -19,7 +19,7 @@ import { redactUrl } from "../redact.js";
 import { describeStatus, isEmptyStatus, readFormText, readPageStatus, statusDelta } from "../status.js";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { RunContext } from "./context.js";
-import { EXPECTED_RETURN, savedAndLeft } from "./helpers.js";
+import { EXPECTED_RETURN, savedAndLeft, settledNavigation } from "./helpers.js";
 import { LAST_CHANCE_NOTE, MAX_MOVING_SCROLLS } from "./limits.js";
 import type { Flow, Perceived } from "./step.js";
 import { clock } from "@jevitate/domain";
@@ -146,8 +146,14 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
         // #444: a request that completed (2xx) and a DOM that stayed put through the window is a
         // settled return to an earlier state (a Refresh re-reading the same data, a Done closing a
         // panel), not a hang. Pending requests, a changing page or no request at all stay as before.
+        // #463: a navigation control (a tab, a nav item now current) whose requests settled — even
+        // none, a client-side tab — went where it was asked: returning to an earlier tab is navigation.
         (again.snapshot.signature === snap.signature &&
-        !(m.label.startsWith("click ") && ctx.sideEffects.lastClick()?.completedOk === true && ctx.sideEffects.inflight().length === 0) &&
+        !(
+          ctx.sideEffects.inflight().length === 0 &&
+          ((m.label.startsWith("click ") && ctx.sideEffects.lastClick()?.completedOk === true) ||
+            settledNavigation(m.label, again.snapshot.controls, ctx.sideEffects.lastClick()))
+        ) &&
         (await probeResponsive(ctx.page, cfg.hangProbeMs ?? HANG_PROBE_MS))
           ? ({
               kind: "ui-no-progress",
