@@ -137,6 +137,12 @@ export interface Snapshot {
   readonly controls: Control[];
   /** True when more interactive controls existed than `maxCandidates` allowed. */
   readonly truncated: boolean;
+  /**
+   * #447: why visible controls were left out of `controls` besides the candidate limit (`truncated`):
+   * behind an open modal (#272), out of reach off-screen (#294), covered by another element. Absent
+   * when none was — then `controls` (with `truncated` false) is the page's whole control inventory.
+   */
+  readonly dropped?: readonly string[];
   /** Semantic freshness signature (document url + viewport + safe control state). */
   readonly signature: string;
 }
@@ -747,6 +753,7 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
   const controls: Control[] = [];
   const keptFacts: DescribedFacts[] = [];
   let truncated = false;
+  const dropped = new Set<string>();
   const listOptionCap = opts?.listOptionCap ?? LIST_OPTION_CAP;
   // #192: one in-page pass over every candidate finds the items of ARIA lists (options, menu items,
   // tabs, radios…) that are invisible, or past their list's cap and not named by the goal — skipped
@@ -806,15 +813,24 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
       // Hidden file inputs are the sole exception (see the module doc).
       if (!raw.visible && raw.inputType !== "file") continue;
       // #272: behind an open modal — never offered (a click there is intercepted by the modal).
-      if (raw.outsideModal) continue;
+      if (raw.outsideModal) {
+        dropped.add("controls behind an open modal");
+        continue;
+      }
       // #294: a control no scroll can bring into view (a closed panel translated off-screen) is not
       // actionable — never offered (a hidden file input stays: `upload` needs no visible element).
-      if (raw.unreachable && raw.inputType !== "file") continue;
+      if (raw.unreachable && raw.inputType !== "file") {
+        dropped.add("controls out of reach off-screen");
+        continue;
+      }
       // Occlusion — the ONE shared predicate (./occlusion.ts), also used by act()'s gate: a control
       // a user cannot click (covered by an overlay, or by an ancestor at its own centre) is not
       // offered. Off-screen controls stay eligible (scroll ops reach them) unless a fixed layer (a
       // dialog's backdrop) would still cover them once scrolled into view (#397).
-      if (raw.inputType !== "file" && (await handle.evaluate(occluderOf)) !== null) continue;
+      if (raw.inputType !== "file" && (await handle.evaluate(occluderOf)) !== null) {
+        dropped.add("controls covered by another element");
+        continue;
+      }
       // The value leaves the page only for a control the shared predicate says
       // is NOT a secret (type=password, or a password/one-time-code
       // autocomplete — which catches a revealed "show password" field).
@@ -881,6 +897,7 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
     url,
     controls,
     truncated,
+    ...(dropped.size === 0 ? {} : { dropped: [...dropped] }),
     signature: computeSignature(url, viewport, keptFacts),
   };
 }

@@ -63,6 +63,12 @@ export interface ObservedPage {
    * first entry, not the form label beside it.
    */
   readonly contentLinks?: readonly string[];
+  /**
+   * #447: why `controls` + `contentLinks` are not the page's whole control inventory (the candidate
+   * limit, controls behind a modal, the kept-names cap); absent when they are. No absence claim is
+   * grounded on an incomplete inventory.
+   */
+  readonly inventoryIncomplete?: string;
 }
 
 /** #216: a page's main heading and document title, as read from the page. */
@@ -82,6 +88,8 @@ export interface PageFacts extends PageHeadings {
    * links) — the first page that has any sets the run's top-level navigation, its absence-answer floor.
    */
   readonly navLinks?: readonly string[];
+  /** #447: why the control names given are not the page's whole control inventory (absent: they are). */
+  readonly inventoryIncomplete?: string;
 }
 
 /** Control names kept per observed page (#223). */
@@ -160,6 +168,9 @@ export class ObservedPages {
         .filter((n) => n !== "");
     const names = keep(headings.controlNames);
     const links = keep(headings.contentLinks);
+    // #447: the inventory is incomplete when the snapshot left controls out, or the cap here cut it.
+    const capped = (headings.controlNames ?? []).length > MAX_OBSERVED_CONTROLS || (headings.contentLinks ?? []).length > MAX_OBSERVED_CONTROLS;
+    const incomplete = [headings.inventoryIncomplete ?? "", capped ? `more than ${MAX_OBSERVED_CONTROLS} controls were kept` : ""].filter((x) => x !== "").join("; ");
     const status = headings.status;
     const page: ObservedPage = {
       url: redactContext(redactUrl(url), this.secrets),
@@ -170,6 +181,7 @@ export class ObservedPages {
       ...(status === undefined || !Number.isInteger(status) ? {} : { status }),
       ...(names.length === 0 ? {} : { controls: names }),
       ...(links.length === 0 ? {} : { contentLinks: links }),
+      ...(incomplete === "" ? {} : { inventoryIncomplete: redactContext(incomplete, this.secrets) }),
     };
     if (this.#topNav === null) {
       const nav = navPaths(url, headings.navLinks ?? []).map((p) => redactContext(p, this.secrets));
@@ -182,7 +194,8 @@ export class ObservedPages {
       p.title === page.title &&
       p.status === page.status &&
       JSON.stringify(p.controls ?? []) === JSON.stringify(page.controls ?? []) &&
-      JSON.stringify(p.contentLinks ?? []) === JSON.stringify(page.contentLinks ?? []);
+      JSON.stringify(p.contentLinks ?? []) === JSON.stringify(page.contentLinks ?? []) &&
+      p.inventoryIncomplete === page.inventoryIncomplete;
     const i = this.#pages.findIndex((p) => p.url === page.url && p.text === page.text && same(p));
     if (i >= 0) this.#pages.splice(i, 1);
     this.#pages.push(page);
@@ -532,6 +545,11 @@ function groundAbsence(claim: string, absent: string, pages: readonly ObservedPa
   if (tokens.length === 0) return no(`the absent name "${absent}" names no particular thing to look for`);
   const content = pages.filter((p) => errorPageReason(p) === null);
   if (content.length === 0) return no(pages.length === 0 ? "no page was observed" : "every page observed is an error page");
+  // Fail-closed: a control left out of the inventory (the candidate limit, behind a modal) might be it.
+  const partial = pages.find((p) => p.inventoryIncomplete !== undefined);
+  if (partial !== undefined) {
+    return no(`the control inventory of ${partial.url} is incomplete (${partial.inventoryIncomplete}) — an absence cannot be established on it`);
+  }
   for (const p of pages) {
     for (const c of [...(p.controls ?? []), ...(p.contentLinks ?? []), ...(p.fields ?? []).flatMap((f) => [f.label, f.value])]) {
       if (saysToken(c, tokens) !== null) return no(`control "${c}" matches "${absent}" on ${p.url}`);

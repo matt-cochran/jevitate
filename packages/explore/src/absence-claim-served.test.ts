@@ -21,11 +21,23 @@ const OFF_HTML = `<!doctype html><html><body><main><h1>Calls</h1><p>Calling is o
 const ON_HTML = `<!doctype html><html><body><main><h1>Calls</h1><p>Calling is off</p>
 <button type="button">Settings</button><button type="button">Launch</button></main></body></html>`;
 
+/** An icon button named only by aria-label (its name is no visible text), past two other controls. */
+const MANY_HTML = `<!doctype html><html><body><main><h1>Calls</h1><p>Calling is off</p>
+<button type="button">Settings</button><button type="button">Help</button><button type="button" aria-label="Launch now">&#9654;</button></main></body></html>`;
+/** The same icon button behind an open modal dialog. */
+const MODAL_HTML = `<!doctype html><html><body><main><h1>Calls</h1><p>Calling is off</p>
+<button type="button" aria-label="Launch now">&#9654;</button></main>
+<dialog id="d"><p>Calls are paused</p><button type="button">Close</button></dialog>
+<script>document.getElementById("d").showModal();</script></body></html>`;
+
 let server: Server;
 let base: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end((req.url ?? "").startsWith("/on") ? ON_HTML : OFF_HTML);
+    const u = req.url ?? "";
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(
+      u.startsWith("/on") ? ON_HTML : u.startsWith("/many") ? MANY_HTML : u.startsWith("/modal") ? MODAL_HTML : OFF_HTML,
+    );
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -42,12 +54,12 @@ const ABSENCE = new FakeGenerationGateway({
   },
 });
 
-async function run(path: string): Promise<ExploreRun> {
+async function run(path: string, maxCandidates?: number): Promise<ExploreRun> {
   return withSession(
     "explore-absence-claim-",
     async (session) => {
       const actor = CastActor.named("absence").whoCan(new BrowseTheWeb(session, [base]));
-      return explore({ actor, judge: new ScriptedJudge([{ op: "report" }]), gen: ABSENCE, goal: GOAL, allowlist: [base], startUrl: `${base}${path}`, bounds: { maxDecisions: 4 } });
+      return explore({ actor, judge: new ScriptedJudge([{ op: "report" }]), gen: ABSENCE, goal: GOAL, allowlist: [base], startUrl: `${base}${path}`, bounds: { maxDecisions: 4, ...(maxCandidates === undefined ? {} : { maxCandidates }) } });
     },
     base,
   );
@@ -70,6 +82,24 @@ describe("#447 — an absence claim on the observed control inventory", () => {
     async () => {
       const r = await run("/on");
       expect(reports(r)[0]?.reason).toMatch(/report rejected \(1\/3\): .*control "Launch" matches "Launch"/);
+    },
+    60_000,
+  );
+
+  it(
+    "is rejected when the control inventory was cut at the candidate limit",
+    async () => {
+      const r = await run("/many", 2);
+      expect(reports(r)[0]?.reason).toMatch(/control inventory .*incomplete/);
+    },
+    60_000,
+  );
+
+  it(
+    "is rejected while an open modal hides the page's other controls",
+    async () => {
+      const r = await run("/modal");
+      expect(reports(r)[0]?.reason).toMatch(/control inventory .*incomplete/);
     },
     60_000,
   );
