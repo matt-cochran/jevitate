@@ -249,10 +249,11 @@ function registerLocatorHealthCommand(program: Command, deps: CheckCliDeps): voi
     )
     .option("--journey <id>", "only this Journey")
     .option("--run <result.json>", "the steps of this run result instead of the stored Journeys")
+    .option("--baseline <file>", "a previous locator-health --json output (or a run result.json) to report the trend against: steps improved / regressed")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const o = this.opts<{ journey?: string; run?: string; dir?: string; json?: boolean }>();
+      const o = this.opts<{ journey?: string; run?: string; baseline?: string; dir?: string; json?: boolean }>();
       const json = o.json === true;
       if (o.journey !== undefined && o.run !== undefined) {
         emit(program, fail("E_LOCATOR_HEALTH_ARGS", "--journey and --run are exclusive: pick one source"), json);
@@ -272,6 +273,7 @@ function registerLocatorHealthCommand(program: Command, deps: CheckCliDeps): voi
           projectDir: resolveCatalogDir(deps.catalogDir),
           ...(o.journey === undefined ? {} : { journeyId: o.journey }),
           ...(o.run === undefined ? {} : { runResult: o.run }),
+          ...(o.baseline === undefined ? {} : { baseline: o.baseline }),
         });
         if (json) emit(program, ok(report), true, 0);
         else {
@@ -279,7 +281,9 @@ function registerLocatorHealthCommand(program: Command, deps: CheckCliDeps): voi
           process.exitCode = 0;
         }
       } catch (err) {
-        const code = err instanceof NotImplementedError ? err.code : "E_LOCATOR_HEALTH";
+        // #470: a typed refusal keeps its code (E_PROJECT_CONFIG, E_LOCATOR_HEALTH_INPUT).
+        const own = (err as { code?: unknown }).code;
+        const code = err instanceof NotImplementedError ? err.code : typeof own === "string" && own.startsWith("E_") ? own : "E_LOCATOR_HEALTH";
         emit(program, fail(code, err instanceof Error ? err.message : String(err)), json);
       }
     });

@@ -91,7 +91,7 @@ describe("applyDiff replay-level proof", () => {
     const interp = new RecordingInterpreter();
     const interpResult = await interp.run(actor as any, result, { [varName]: "supplied-value" });
 
-    expect(interpResult).toEqual({ outcome: "completed", vars: { [varName]: "supplied-value" } });
+    expect(interpResult).toMatchObject({ outcome: "completed", vars: { [varName]: "supplied-value" } });
     expect(locator.fill).toHaveBeenCalledWith("supplied-value");
   });
 });

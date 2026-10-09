@@ -683,7 +683,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "locator_health",
     description:
       "`jevitate locator-health --json` (#470): read-only and advisory. Per recorded step, the selector rung its target resolves by and whether it meets the project's test-id convention (testIdAttributes in project config; default data-testid, data-test; data-tflow-id never counts) — for every promoted Journey, one Journey (journey) or one run result (run). It never changes a Journey and never gates (run_check maxBrittleSteps is the opt-in gate).",
-    command: { path: "locator-health", params: { journey: s("--journey"), run: path("--run") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "locator-health", params: { journey: s("--journey"), run: path("--run"), baseline: path("--baseline") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "get_report",

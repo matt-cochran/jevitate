@@ -201,20 +201,16 @@ test(
   120_000,
 );
 
-// === data-test is built as a candidate but cannot validate ===
+// === data-test validates by its own attribute (#470) ===
 
 test(
-  "a data-test attribute does not survive validation, because getByTestId reads data-testid",
+  "a data-test attribute wins the ladder: replay resolves it by [data-test=…], not getByTestId",
   async () => {
     await withPage(`<button data-test="legacy">Confirm</button>`, async (page) => {
       const handle = await handleFor(page, "button");
       const computed = await computeDescriptor(page, handle);
 
-      // The testId candidate IS built from `data-test`, but `page.getByTestId`
-      // queries `data-testid`, so it resolves nothing and is rejected.
-      expect(computed.descriptor).toEqual({ role: "button", name: "Confirm" });
-      expect(computed.stability).toBe("high");
-      expect(computed.alternates).not.toContainEqual({ testId: "legacy", testIdAttr: "data-testid" });
+      expect(computed.descriptor).toEqual({ testId: "legacy", testIdAttr: "data-test" });
     });
   },
   120_000,

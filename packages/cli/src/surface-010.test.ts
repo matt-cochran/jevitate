@@ -68,9 +68,6 @@ async function run(argv: readonly string[]): Promise<{ code: number | undefined;
 const STUB_COMMANDS: ReadonlyArray<readonly string[]> = [
   ["journey", "migrate", "--step-ids", "--dry-run"],
   ["journey", "review", "--stale"],
-  ["locator-health"],
-  ["locator-health", "--journey", "checkout"],
-  ["check", "--suite", "<suite>", "--out", "<dir>/check", "--max-brittle-steps", "0"],
   ["catalog", "export", "--format", "journeeze-bundle", "--out", "<dir>/bundle"],
   ["connect", "journeeze", "--url", "http://127.0.0.1:3999"],
   ["publish", "journeeze", "--dry-run"],
@@ -106,9 +103,7 @@ describe("0.10 MCP tools: allowlisted, mirrored, stubbed, and key-free", () => {
   const body = (r: { content: Array<{ text: string }> }): Record<string, unknown> => JSON.parse(r.content[0]!.text) as Record<string, unknown>;
 
   const CALLS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
-    ["locator_health", {}],
     ["review_journey", { stale: true }],
-    ["run_check", { suite: "valid.suite.json", out: "check", maxBrittleSteps: 2 }],
     ["export_catalog_bundle", { format: "journeeze-bundle", out: "bundle" }],
     ["publish_to_journeeze", { dryRun: true }],
   ];
@@ -148,7 +143,7 @@ describe("0.10 MCP tools: allowlisted, mirrored, stubbed, and key-free", () => {
   it("the new tools' arguments are exactly the mirrored flags (closed schemas)", () => {
     const props = (n: string) => Object.keys(tools().get(n)!.inputSchema.properties as Record<string, unknown>).sort();
     expect(props("draft_job_outcomes")).toEqual(["count", "fakeAi", "jobId", "real"]);
-    expect(props("locator_health")).toEqual(["journey", "run"]);
+    expect(props("locator_health")).toEqual(["baseline", "journey", "run"]);
     expect(props("export_catalog_bundle")).toEqual(["format", "out"]);
     expect(props("publish_to_journeeze")).toEqual(["dryRun"]);
     expect(props("review_journey")).toContain("stale");
