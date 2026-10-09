@@ -1,4 +1,9 @@
-import { NotImplementedError } from "./not-implemented.js";
+import { FsJourneyStore, type Journey } from "@jevitate/journey";
+import { isStepIdOnlyChange } from "./journey-anchor-gate.js";
+import { journeyReviewHash } from "./journey-review.js";
+import { readApprovedSnapshot } from "./journey-review-store.js";
+import { loadCatalog } from "./catalog-api.js";
+import { catalogJourney, journeyLinks } from "./catalog.js";
 
 /**
  * #467 (review sheet) — `jevitate journey review --stale` / MCP `review_journey {stale: true}`:
@@ -6,8 +11,6 @@ import { NotImplementedError } from "./not-implemented.js";
  * with what changed — `stepIdOnly: true` when the only difference from the approved content is the
  * minted step ids (`journey migrate --step-ids`), so a reviewer can re-approve those quickly. It
  * never approves (re-approval is `jevitate journey promote <id>`).
- *
- * STUB (d-surface-0): the feature deliverable replaces the body of `listStaleJourneys` and owns this file.
  */
 
 export interface StaleJourneysRequest {
@@ -28,6 +31,9 @@ export interface StaleJourney {
   readonly stepIdOnly: boolean;
   /** One line: what changed (steps, assertions, linked catalog items, step ids only, …). */
   readonly reason: string;
+  /** The commands to review and re-approve it. */
+  readonly reviewCommand: string;
+  readonly approveCommand: string;
 }
 
 export interface StaleJourneysResult {
@@ -37,13 +43,48 @@ export interface StaleJourneysResult {
   readonly stepIdOnly: number;
 }
 
-export async function listStaleJourneys(_req: StaleJourneysRequest): Promise<StaleJourneysResult> {
-  throw new NotImplementedError("jevitate journey review --stale", "#467");
+/** #467: true when the approval is stale and the only change since is minted step ids (against the snapshot, else the approved hash). */
+export function isStepIdOnlyStale(journey: Journey, snapshot: Journey | null): boolean {
+  const approval = journey.metadata.approval;
+  if (approval === undefined || approval.contentHash === journeyReviewHash(journey)) return false;
+  if (snapshot !== null && journeyReviewHash(snapshot) === approval.contentHash) return isStepIdOnlyChange(snapshot, journey);
+  return isStepIdOnlyChange(approval.contentHash, journey);
+}
+
+export async function listStaleJourneys(req: StaleJourneysRequest): Promise<StaleJourneysResult> {
+  const store = new FsJourneyStore(req.journeysDir);
+  const catalog = await loadCatalog(req.catalogDir, req.journeysDir);
+  const journeys: StaleJourney[] = [];
+  for (const meta of await store.list()) {
+    if (!meta.promoted) continue;
+    const journey = await store.get(meta.id);
+    if (journey === null) continue;
+    const approval = journey.metadata.approval;
+    if (approval === undefined) continue;
+    const contentHash = journeyReviewHash(journey);
+    const hashStale = approval.contentHash !== contentHash;
+    const links = journeyLinks(catalog, catalogJourney(journey));
+    const catalogStale = !hashStale && links.linked && [links.job?.status, links.persona?.status].includes("stale");
+    if (!hashStale && !catalogStale) continue;
+    const snapshot = await readApprovedSnapshot(req.journeysDir, meta.id);
+    const stepIdOnly = hashStale && isStepIdOnlyStale(journey, snapshot);
+    journeys.push({
+      id: meta.id,
+      name: journey.metadata.name,
+      approvedHash: approval.contentHash,
+      contentHash,
+      stepIdOnly,
+      reason: stepIdOnly ? "ids added only (warn path)" : hashStale ? "content changed since approval (steps, assertions or side effects)" : "a linked catalog job/persona changed since its approval",
+      reviewCommand: `jevitate journey review ${meta.id}`,
+      approveCommand: `jevitate journey promote ${meta.id} --reviewed-hash ${contentHash}`,
+    });
+  }
+  return { journeys, total: journeys.length, stepIdOnly: journeys.filter((j) => j.stepIdOnly).length };
 }
 
 /** The human rendering (no `--json`). */
 export function renderStaleJourneys(r: StaleJourneysResult): string {
   if (r.total === 0) return "no promoted Journey needs re-approval\n";
-  const lines = r.journeys.map((j) => `${j.stepIdOnly ? "STEP-IDS" : "CHANGED "} ${j.id} — ${j.reason}`);
-  return `${lines.join("\n")}\n${r.total} Journey(s) need re-approval (${r.stepIdOnly} step-id-only)\nnext: jevitate journey review <id> · jevitate journey promote <id>\n`;
+  const lines = r.journeys.map((j) => `${j.stepIdOnly ? "STEP-IDS" : "CHANGED "} ${j.id} — ${j.reason}\n           review: ${j.reviewCommand}\n           approve: ${j.approveCommand}`);
+  return `${lines.join("\n")}\n${r.total} Journey(s) need re-approval (${r.stepIdOnly} step-id-only)\n`;
 }
