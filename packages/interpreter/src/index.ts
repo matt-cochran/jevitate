@@ -18,7 +18,7 @@ export { runStep, type StepWaitHooks } from "./run-step.js";
 export { waitForOutcome, type StepWait } from "./outcome-wait.js";
 export type { StepOutcome } from "./outcome.js";
 export { RecordingInterpreter, type StepObserver } from "./interpreter.js";
-export type { InterpretResult } from "./interpret-result.js";
+export type { InterpretResult, StepResolution } from "./interpret-result.js";
 export { BufferingSink } from "./sink.js";
 export type { RecordingSink, ToRecordingOptions } from "./sink.js";
 export {
@@ -26,7 +26,12 @@ export {
   rungLocator,
   anchorLocator,
   descriptorLocator,
+  descriptorRung,
+  PLAYWRIGHT_TEST_ID_ATTRIBUTE,
+  TFLOW_ID_ATTRIBUTE,
   ReplayTargetError,
+  type ResolvedRung,
+  type ResolvedTarget,
   type ReplayTargetFailure,
   type ResolveTargetOptions,
 } from "./resolve-target.js";

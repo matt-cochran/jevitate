@@ -211,7 +211,7 @@ describe("#437 every CLI approval path refuses without a TTY", () => {
     const j = journey("demo-x");
     await new FsJourneyStore(journeysDir).put(j);
     await mkdir(join(journeysDir, ".drafts"), { recursive: true });
-    const hash = journeyContentHash(j);
+    const hash = journeyContentHash((await new FsJourneyStore(journeysDir).get("demo-x"))!); // #467: as stored (put mints step ids)
     await writeFile(
       join(journeysDir, ".drafts", "demo-x.annotations.json"),
       JSON.stringify({ kind: "jevitate.journey-annotations.draft", version: 1, journeyId: "demo-x", journeyHash: hash, createdAtIso: "2026-10-08T00:00:00Z", provenance: { adapter: "fake", model: "fake", promptVersion: "1" }, replay: { outcome: "completed", reachedSteps: 1, totalSteps: 1 }, steps: [] }),

@@ -189,6 +189,11 @@ export interface LastClick {
    * answered with a 2xx, and none is still pending when its window closed.
    */
   readonly completedOk: boolean;
+  /**
+   * #463: nothing it sent is still pending and none of the app's own requests failed (non-2xx or no
+   * response) — true for a click that sent none. Unlike `completedOk`, alone it proves no request.
+   */
+  readonly settled: boolean;
 }
 
 /** What the guard says about a proposed click. */
@@ -350,8 +355,9 @@ export class SideEffectGuard {
     const inflight = unfinished.filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r));
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
     const own = requests.filter((r: CapturedRequest) => this.#ours(r));
-    const completedOk = own.length > 0 && !inflightAny && own.every((r) => r.status !== null && r.status >= 200 && r.status < 300);
-    this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending], completedOk };
+    const settled = !inflightAny && own.every((r) => r.status !== null && r.status >= 200 && r.status < 300);
+    const completedOk = own.length > 0 && settled;
+    this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending], completedOk, settled };
     if (done.length + pending.length === 0) return;
     this.#fired.set(o.key, {
       label: o.label,

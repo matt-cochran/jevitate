@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { ensureStepIds } from "@jevitate/recording";
 import type { Journey, JourneyMetadata } from "./journey.js";
 import { JourneySchema } from "./journey.js";
 import { journeyRunParams } from "./param-schema.js";
@@ -60,12 +61,20 @@ export class FsJourneyStore {
     return ns === null ? join(this.dir, `${base}.json`) : join(this.dir, ns, `${base}.json`);
   }
 
+  /**
+   * Writes the Journey. #467: the one choke point where a Journey is written, so every step without
+   * a stable `stepId` gets one here (`ensureStepIds`: deterministic for the same recording, and a
+   * no-op when every step has an id — an id-complete Journey round-trips byte-identical). `get` and
+   * `list` never mint.
+   */
   async put(j: Journey): Promise<void> {
     // Fail-closed: validate BEFORE any I/O, so an invalid Journey is never
     // written to disk.
     const { ns, base } = parseId(j.metadata.id);
+    const recording = ensureStepIds(j.recording);
+    const minted = recording === j.recording ? j : { ...j, recording };
     // A namespaced Journey's file keeps its own plain id (portable across the repos that share it).
-    const validated = JourneySchema.parse(ns === null ? j : { ...j, metadata: { ...j.metadata, id: base } });
+    const validated = JourneySchema.parse(ns === null ? minted : { ...minted, metadata: { ...minted.metadata, id: base } });
 
     const serialized = JSON.stringify(validated);
     await mkdir(ns === null ? this.dir : join(this.dir, ns), { recursive: true, mode: 0o700 });

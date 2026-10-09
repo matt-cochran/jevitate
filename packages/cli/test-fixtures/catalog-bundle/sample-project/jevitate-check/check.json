@@ -1,0 +1,135 @@
+{
+  "v": 1,
+  "ok": true,
+  "data": {
+    "kind": "jevitate-check",
+    "suite": "ci",
+    "suitePath": "ci.suite.json",
+    "verdict": "fail",
+    "exitCode": 1,
+    "targetBuild": "592a7021c4f0be9d3a8e6b1f2c7d4e5a6b7c8d9e",
+    "startedAt": "2026-10-09T12:30:00.000Z",
+    "items": [
+      {
+        "target": "board",
+        "kind": "journey",
+        "name": "jz-guide-fixture",
+        "status": "ran",
+        "runId": "journey-run-1",
+        "outcome": "ok",
+        "actions": 2,
+        "durationMs": 4100.4,
+        "verdict": "passed",
+        "gating": [],
+        "journeyHash": "627218a7f4a6be3e3324115eb3e1488a6afe703acbaa778176e3ff8414d671f9",
+        "baseline": {
+          "steps": 2,
+          "totalMs": 4000,
+          "anchors": [
+            {
+              "name": "job_start",
+              "step": 1,
+              "atMs": 0
+            },
+            {
+              "name": "verdict-recorded",
+              "stepId": "s-verdict",
+              "atMs": 4000
+            },
+            {
+              "name": "job_end",
+              "step": 2,
+              "atMs": 4000
+            }
+          ]
+        }
+      },
+      {
+        "target": "board",
+        "kind": "journey",
+        "name": "jz-guide-fixture",
+        "status": "ran",
+        "runId": "journey-run-2",
+        "outcome": "quarantined",
+        "actions": 1,
+        "durationMs": 2000,
+        "verdict": "failed",
+        "gating": [
+          "k1"
+        ],
+        "journeyHash": "627218a7f4a6be3e3324115eb3e1488a6afe703acbaa778176e3ff8414d671f9",
+        "baseline": {
+          "steps": 2,
+          "totalMs": 4000,
+          "anchors": [
+            {
+              "name": "job_start",
+              "step": 1,
+              "atMs": 0
+            },
+            {
+              "name": "verdict-recorded",
+              "stepId": "s-verdict",
+              "atMs": 4000
+            },
+            {
+              "name": "job_end",
+              "step": 2,
+              "atMs": 4000
+            }
+          ]
+        }
+      },
+      {
+        "target": "board",
+        "kind": "mission",
+        "name": "board-adversarial",
+        "strategy": "adversarial",
+        "status": "error",
+        "outcome": "inconclusive",
+        "actions": 3,
+        "durationMs": 9000,
+        "verdict": "error",
+        "gating": [],
+        "error": {
+          "type": "insufficient-coverage",
+          "message": "too little coverage"
+        }
+      },
+      {
+        "target": "board",
+        "kind": "verify-fix",
+        "name": "fix-verdict-save",
+        "status": "ran",
+        "runId": "vf-1",
+        "outcome": "fixed",
+        "actions": 0,
+        "durationMs": 1500,
+        "verdict": "passed",
+        "gating": []
+      },
+      {
+        "target": "board",
+        "kind": "goal",
+        "name": "reach-settings",
+        "status": "skipped",
+        "actions": 0,
+        "durationMs": 0,
+        "verdict": "skipped",
+        "gating": []
+      },
+      {
+        "target": "approvals",
+        "kind": "approvals",
+        "name": "require-approvals",
+        "status": "ran",
+        "actions": 0,
+        "durationMs": 0,
+        "verdict": "passed",
+        "gating": []
+      }
+    ],
+    "findings": [],
+    "results": []
+  }
+}

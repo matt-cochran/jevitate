@@ -1,5 +1,6 @@
 import {
   RecordingSchema,
+  ensureStepIds,
   type Assertion,
   type PageSegment,
   type RecordedStep,
@@ -343,7 +344,8 @@ export function assembleWithValues(
     ...(opts.intent === undefined ? {} : { intent: opts.intent }),
     ...(opts.retro === undefined ? {} : { retro: opts.retro }),
   };
-  return { recording: RecordingSchema.parse(recording), values };
+  // #467: every step the recorder assembles gets a stable id (deterministic for the same capture).
+  return { recording: RecordingSchema.parse(ensureStepIds(recording)), values };
 }
 
 /**

@@ -327,6 +327,19 @@ function lastControl(repro: unknown): string | undefined {
   return undefined;
 }
 
+/** #468: the last acted-on step's `tflowId` (metadata; a step names it as `tflowId` or on its target object). */
+function lastTflowId(repro: unknown): string | undefined {
+  if (!isRecord(repro)) return undefined;
+  const steps = arr(repro.steps).filter(isRecord);
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const step = steps[i];
+    const id = str(step?.tflowId) ?? (isRecord(step?.target) ? str(step.target.tflowId) : undefined);
+    if (id !== undefined) return id;
+    if (str(step?.target) !== undefined) return undefined;
+  }
+  return undefined;
+}
+
 function requestOfSignals(signals: unknown): { id?: string; url?: string } {
   for (const s of arr(signals).filter(isRecord)) {
     const url = str(s.url);
@@ -353,6 +366,7 @@ function defectObservation(d: Json, ctx: Ctx): FindingObservation | null {
   const invId = str(inv?.id);
   const action = isRecord(inv?.action) ? inv.action : undefined;
   const control = str(action?.control) ?? lastControl(d.repro);
+  const tflowId = str(action?.tflowId) ?? lastTflowId(d.repro);
   const request = requestOfSignals(d.signals);
   const route = str(d.route) ?? routeTemplate(str(d.url));
   const steps = arr(d.occurrenceSteps).filter((n): n is number => typeof n === "number");
@@ -364,6 +378,7 @@ function defectObservation(d: Json, ctx: Ctx): FindingObservation | null {
     fingerprint,
     ...(route === undefined ? {} : { route }),
     ...(control === undefined ? {} : { control }),
+    ...(tflowId === undefined ? {} : { tflowId }),
     ...(request.id === undefined ? {} : { request: request.id }),
   };
   const base: EvidenceRef = {
@@ -613,6 +628,7 @@ function verifyObservations(result: Json): FindingObservation[] {
     fingerprint: str(id?.fingerprint) ?? fingerprint,
     ...(str(id?.route) === undefined ? {} : { route: str(id?.route) }),
     ...(str(id?.control) === undefined ? {} : { control: str(id?.control) }),
+    ...(str(id?.tflowId) === undefined ? {} : { tflowId: str(id?.tflowId) }),
     ...(str(id?.request) === undefined ? {} : { request: str(id?.request) }),
   };
   const source = str(result.source);

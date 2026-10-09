@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Recording, RecordedStep, PageSegment, Step, Assertion } from "./schema.js";
 import { RecordingSchema } from "./schema.js";
 import type { AuthoringRecording } from "./diff.js";
-import { flattenBaseFillSteps, CONFIDENT_VARIABLE_THRESHOLD } from "./diff.js";
+import { flattenBaseFillSteps, takeValueFor, CONFIDENT_VARIABLE_THRESHOLD } from "./diff.js";
 import type { DiffResult } from "./classify.js";
 import { promoteToVariable } from "./promote.js";
 import type { StepRef } from "./promote.js";
@@ -282,7 +282,8 @@ function materializeConstant(
   }
 
   const key = `${ref.page}:${ref.step}`;
-  const value = authoring.values.get(key);
+  // #467: the value keyed by the step's stable id wins over its position.
+  const value = takeValueFor(authoring.values, recordedStep, ref);
   if (value === undefined) {
     throw new SecretMaterializationError(
       `applyPostdoc: cannot materialize step ${key} as a constant — no local authoring value ` +
@@ -293,7 +294,7 @@ function materializeConstant(
   }
 
   if (!acknowledgeVaried) {
-    assertNotVariedAcrossTakes(authoring.recording, diff, ref, key);
+    assertNotVariedAcrossTakes(authoring.recording, diff, ref, key, recordedStep.stepId);
   }
 
   const newStep: Step = { ...step, value: { redacted: false, value } };
@@ -317,6 +318,7 @@ function assertNotVariedAcrossTakes(
   diff: DiffResult,
   ref: StepRef,
   key: string,
+  targetId: string | undefined,
 ): void {
   const baseFillSteps = flattenBaseFillSteps(base);
   const valueBearingColumns = diff.columns.filter((c) => c.values[0] !== null);
@@ -329,7 +331,10 @@ function assertNotVariedAcrossTakes(
     );
   }
 
-  const position = baseFillSteps.findIndex((s) => s.ref.page === ref.page && s.ref.step === ref.step);
+  // #467: located by the step's stable id when both sides have one, else by position.
+  const position = baseFillSteps.findIndex((s) =>
+    targetId !== undefined && s.stepId !== undefined ? s.stepId === targetId : s.ref.page === ref.page && s.ref.step === ref.step,
+  );
   // Defensive fail-closed invariant, not reachable through any public
   // `applyPostdoc` call today (`materializeConstant` already confirmed `ref`
   // addresses a fill/select step, so it must appear in `baseFillSteps`) —

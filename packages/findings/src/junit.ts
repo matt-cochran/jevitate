@@ -27,6 +27,11 @@ export interface GateCase {
    * and the `[[ATTACHMENT|path]]` lines in `<system-out>` that Jenkins/GitLab render as artifacts.
    */
   readonly attachments?: readonly string[];
+  /**
+   * #470: advisory warnings on the case (e.g. a locator fix for the app) — never a failure: one
+   * `warning` property each, and `WARNING:` lines in `<system-out>`.
+   */
+  readonly warnings?: readonly string[];
 }
 
 /** XML 1.0 text/attribute escape; strips characters XML 1.0 cannot carry at all. */
@@ -60,12 +65,15 @@ function attrs(a: Record<string, string | number>): string {
 function testcase(c: GateCase): string {
   const open = `    <testcase ${attrs({ classname: c.classname, name: c.name, time: c.timeSec })}`;
   const attachments = [...new Set(c.attachments ?? [])];
+  const warnings = [...new Set(c.warnings ?? [])];
   const propList = [
     ...(c.resultPath === undefined ? [] : [`        <property ${attrs({ name: "result", value: c.resultPath })}/>`]),
     ...attachments.map((a) => `        <property ${attrs({ name: "attachment", value: a })}/>`),
+    ...warnings.map((w) => `        <property ${attrs({ name: "warning", value: w })}/>`),
   ];
   const props = propList.length === 0 ? "" : `      <properties>\n${propList.join("\n")}\n      </properties>\n`;
-  const out = attachments.length === 0 ? "" : `\n      <system-out>${attachments.map((a) => xmlEscape(`[[ATTACHMENT|${a}]]`)).join("\n")}</system-out>`;
+  const outLines = [...attachments.map((a) => `[[ATTACHMENT|${a}]]`), ...warnings.map((w) => `WARNING: ${w}`)];
+  const out = outLines.length === 0 ? "" : `\n      <system-out>${outLines.map((l) => xmlEscape(l)).join("\n")}</system-out>`;
   const body = c.detail === undefined ? "" : xmlEscape(c.detail);
   const tag = c.status === "failed" || c.status === "pending-review" ? "failure" : c.status === "error" ? "error" : c.status === "skipped" ? "skipped" : undefined;
   if (tag === undefined) return props === "" && out === "" ? `${open}/>` : `${open}>\n${props}${out === "" ? "" : `${out.slice(1)}\n`}    </testcase>`;

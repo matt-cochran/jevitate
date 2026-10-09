@@ -1,0 +1,32 @@
+{
+  "metadata": {
+    "id": "draft-flow",
+    "name": "An exploration draft",
+    "promoted": false,
+    "params": [],
+    "createdAtIso": "2026-10-07T12:00:00.000Z"
+  },
+  "recording": {
+    "version": "1",
+    "site": "http://localhost:28088",
+    "intent": "Record a verdict on a review item",
+    "pages": [
+      {
+        "url": "/board",
+        "steps": [
+          {
+            "stepId": "d-open",
+            "step": {
+              "kind": "navigate",
+              "url": "/board",
+              "expect": {
+                "kind": "urlIncludes",
+                "text": "/board"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

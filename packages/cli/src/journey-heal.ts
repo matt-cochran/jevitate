@@ -182,7 +182,7 @@ export function journeyRunSummary(id: string, result: JourneyRunResult & { propo
       const n = result.revision.steps.length;
       lines.push(`journey ${id}: healed-pending-review — the run completed only after ${n} step retarget(s); nothing passes until a person accepts the proposed revision`);
       for (const c of result.revision.steps) {
-        lines.push(`  step ${c.index + 1}: ${describeStep(c.before)} → ${describeStep(c.after)}`);
+        lines.push(`  step ${c.index + 1}${c.stepId === undefined ? "" : ` (${c.stepId})`}: ${describeStep(c.before)} → ${describeStep(c.after)}`);
         lines.push(`    because ${c.hypothesis}${c.anchorNotInChange === true ? " (the new anchor appears in no change evidence)" : ""}`);
       }
       const pid = typeof result.proposal?.id === "string" ? result.proposal.id : undefined;

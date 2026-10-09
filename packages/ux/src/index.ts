@@ -24,5 +24,6 @@ export * from "./evidence-file.js";
 export * from "./product-facts.js";
 export * from "./claim-prompts.js";
 export * from "./claims.js";
+export * from "./fingerprint.js";
 export { loadRubric, RubricLoadError, RubricEntrySchema, JevQuestionSpecSchema } from "./rubric/schema.js";
 export { V1_RUBRIC, loadV1Rubric } from "./rubric/v1/index.js";

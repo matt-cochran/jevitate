@@ -188,6 +188,10 @@ export interface ElementFacts {
   /** Whitespace-normalized text of the associated `<label>`, if any. */
   readonly labelText: string | null;
   readonly testId: string | null;
+  /** The attribute `testId` was read from (`data-testid` or `data-test`); null when there is no testId. */
+  readonly testIdAttr?: string | null;
+  /** `data-tflow-id`: TFlow tracking metadata (#468). Never a locator: no ladder rung is built from it. */
+  readonly tflowId?: string | null;
   /** Shortest unique css path found, or `null` if none could be proven. */
   readonly css: string | null;
 }
@@ -326,6 +330,8 @@ export function readElementFacts(node: Node, options: ReadFactsOptions): Element
     value: namedByValue ? String((el as HTMLInputElement).value ?? "") : null,
     labelText: labelText === "" ? null : labelText,
     testId: attr("data-testid") ?? attr("data-test"),
+    testIdAttr: attr("data-testid") !== null ? "data-testid" : attr("data-test") !== null ? "data-test" : null,
+    tflowId: attr("data-tflow-id"),
     css: cssPath(),
   };
 }
@@ -392,7 +398,10 @@ export function buildCandidates(facts: ElementFacts): DescriptorCandidate[] {
   if (facts.testId !== null && facts.testId !== "") {
     candidates.push({
       rung: "testId",
-      descriptor: { testId: facts.testId },
+      descriptor: {
+        testId: facts.testId,
+        ...(facts.testIdAttr === undefined || facts.testIdAttr === null ? {} : { testIdAttr: facts.testIdAttr }),
+      },
       stability: looksGenerated(facts.testId) ? "low" : "high",
     });
   }
@@ -420,6 +429,13 @@ export function buildCandidates(facts: ElementFacts): DescriptorCandidate[] {
   // generated-looking id into it.
   if (facts.css !== null) {
     candidates.push({ rung: "css", descriptor: { css: facts.css }, stability: "low" });
+  }
+
+  // #468: `data-tflow-id` is tracking metadata, not an automation convention. It rides on every
+  // produced descriptor (so it is exported) but is never a rung and never a way to find the element.
+  if (facts.tflowId !== undefined && facts.tflowId !== null && facts.tflowId !== "") {
+    const tflowId = facts.tflowId;
+    return candidates.map((c) => ({ ...c, descriptor: { ...c.descriptor, tflowId } }));
   }
 
   return candidates;

@@ -68,12 +68,34 @@ const SELECT_HTML = `<!doctype html><html><body>
 <script>document.getElementById("size").addEventListener("change", (e) => { document.getElementById("out").textContent = "Stakes saved: " + e.target.selectedOptions[0].textContent; });</script>
 </body></html>`;
 
+/** #462: a select whose options are longer than the words a model would name ("own rules" for "Own rules only"). */
+const LOOSE_SELECT_HTML = `<!doctype html><html><body>
+<h1>Sharing</h1>
+<label>Visibility <select id="vis"><option value="">Choose…</option><option>Everyone</option><option>Own rules only</option><option>Team defaults</option></select></label>
+<p id="out">Nothing chosen</p>
+<script>document.getElementById("vis").addEventListener("change", (e) => { document.getElementById("out").textContent = "Visibility saved: " + e.target.selectedOptions[0].textContent; });</script>
+</body></html>`;
+
+/** #461: a button then a phone field; #462: a filter select with a longer option. */
+const PHONE_HTML = `<!doctype html><html><body>
+<button id="add" type="button">Add Phone Number</button>
+<input aria-label="Phone Number" id="ph" />
+<p id="out">Nothing yet</p>
+<script>document.getElementById("ph").addEventListener("change", (e) => { document.getElementById("out").textContent = "Phone saved: " + e.target.value; });</script>
+</body></html>`;
+const FILTER_HTML = `<!doctype html><html><body>
+<select aria-label="Filter" id="f"><option>All</option><option>Own rules only</option></select>
+<p id="out">Showing All</p>
+<script>document.getElementById("f").addEventListener("change", (e) => { document.getElementById("out").textContent = "Showing " + e.target.value; });</script>
+</body></html>`;
+
 let server: Server;
 let base: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end((req.url ?? "").startsWith("/select") ? SELECT_HTML : CHAT_HTML);
+    const url = req.url ?? "";
+    res.end(url.startsWith("/phone") ? PHONE_HTML : url.startsWith("/filter") ? FILTER_HTML : url.startsWith("/loose-select") ? LOOSE_SELECT_HTML : url.startsWith("/select") ? SELECT_HTML : CHAT_HTML);
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -232,7 +254,7 @@ describe("explore on a chat page — type→submit, awaited replies, multi-turn,
 });
 
 describe("explore on a select — options-aware (J-5)", () => {
-  async function selectRun(gen: FakeGenerationGateway): Promise<ExploreRun> {
+  async function selectRun(gen: FakeGenerationGateway, path = "/select", goal = "give the bet a stakes estimate"): Promise<ExploreRun> {
     return withSession(
       "explore-select-",
       async (session) => {
@@ -241,9 +263,9 @@ describe("explore on a select — options-aware (J-5)", () => {
           actor,
           judge: new PickingJudge([/^select:/, /^done$/]),
           gen,
-          goal: "give the bet a stakes estimate",
+          goal,
           allowlist: [base],
-          startUrl: `${base}/select`,
+          startUrl: `${base}${path}`,
           bounds: { maxDecisions: 2 },
           successCheck: async () => true,
         });
@@ -267,5 +289,44 @@ describe("explore on a select — options-aware (J-5)", () => {
     expect(sel?.actOk).toBe(false);
     expect(sel?.reason).toMatch(/no valid option chosen for Bet size/);
     expect(Date.now() - t0).toBeLessThan(20_000);
+  }, 60_000);
+
+  it("selects the one option that holds the words a model named loosely (#462)", async () => {
+    const r = await selectRun(new FakeGenerationGateway({ "form.value": { text: "own rules" } }), "/loose-select");
+    expect(r.transcript.find((e) => e.op === "select")?.actOk).toBe(true);
+  }, 60_000);
+
+  it("lists the observed options in the fail-closed refusal (#462)", async () => {
+    const r = await selectRun(new FakeGenerationGateway({ "form.value": { text: "About $50k" } }));
+    expect(r.transcript.find((e) => e.op === "select")?.reason).toMatch(/\(fail-closed\).*"Small \(under \$10k\)"/);
+  }, 60_000);
+
+  it("chooses the matching option for 'filter to own rules' through the goal loop (#462)", async () => {
+    const r = await selectRun(new FakeGenerationGateway({ "form.value": { text: "own rules" } }), "/filter", "filter to own rules");
+    expect(r.transcript.find((e) => e.op === "select")?.actOk).toBe(true);
+  }, 60_000);
+});
+
+describe("#461 — a quoted value after a quoted click target", () => {
+  it("types the value into the field the goal names, not the text between the quotes", async () => {
+    const r = await withSession(
+      "explore-phone-",
+      async (session) => {
+        const actor = CastActor.named("phone").whoCan(new BrowseTheWeb(session, [base]));
+        await explore({
+          actor,
+          judge: new PickingJudge([/^type:/, /^done$/]),
+          gen: new FakeGenerationGateway(),
+          goal: "Click 'Add Phone Number', enter '+14155550199', choose SMS",
+          allowlist: [base],
+          startUrl: `${base}/phone`,
+          bounds: { maxDecisions: 2 },
+          successCheck: async () => true,
+        });
+        return session.page.inputValue('[aria-label="Phone Number"]');
+      },
+      base,
+    );
+    expect(r).toBe("+14155550199");
   }, 60_000);
 });

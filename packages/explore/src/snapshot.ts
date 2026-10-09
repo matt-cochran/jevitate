@@ -42,6 +42,10 @@ export interface Control {
   /** Durable, replay-valid descriptor (recorder-computed). */
   readonly descriptor: TargetDescriptor;
   readonly stability: Stability;
+  /** `data-tflow-id` (#468): tracking metadata, copied off the descriptor; never used to find the control. */
+  readonly tflowId?: string;
+  /** The attribute the descriptor's testId came from (`data-testid`/`data-test`), when it has one. */
+  readonly testIdAttr?: string;
   readonly role: string;
   readonly name: string;
   readonly tag: string;
@@ -858,6 +862,8 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
         index: controls.length,
         descriptor: computed.descriptor,
         stability: computed.stability,
+        ...(computed.descriptor.tflowId === undefined ? {} : { tflowId: computed.descriptor.tflowId }),
+        ...(computed.descriptor.testIdAttr === undefined ? {} : { testIdAttr: computed.descriptor.testIdAttr }),
         role: facts.role,
         name: facts.name,
         tag: facts.tag,

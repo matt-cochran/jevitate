@@ -91,7 +91,7 @@ test(
       const runner = new JourneyRunner(actor, new RecordingInterpreter(), handbackHandler);
 
       const result = await runner.run({ journey, params: {}, policy });
-      expect(result).toEqual({ outcome: "ok", output: {} });
+      expect(result).toMatchObject({ outcome: "ok", output: {} });
 
       // Assert the AUTHENTICATED state was actually reached: resume only
       // happened after the handback's postcondition passed, and the run

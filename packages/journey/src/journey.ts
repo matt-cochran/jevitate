@@ -5,6 +5,7 @@ import {
   NetworkCheckSchema,
   OutcomeCheckSchema,
   RecordingSchema,
+  STEP_ID_RE,
   type Assertion,
   type NetworkCheck,
   type OutcomeCheck,
@@ -14,6 +15,9 @@ import {
 import { mutationPairIssues } from "./mutation-proof.js";
 import { ApprovalProposalSchema } from "./proposal-schema.js";
 import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
+import { anchorRuleIssues } from "./anchor-rules.js";
+
+export { ANCHOR_NAME_RE } from "./anchor-rules.js";
 
 export interface SecretRef { manager: string; key: string; origin: string; field: string }
 export interface JourneyMetadata {
@@ -102,14 +106,28 @@ export interface JourneyMetadata {
    * given at that approval. Additive: a Journey without it validates and runs exactly as before.
    */
   approval?: JourneyApproval;
+  /**
+   * #465 (optional, additive): the desired outcomes (ids from the linked job's `desiredOutcomes`)
+   * this path is meant to move. Unique. Whether each id is one of the job's is a catalog check, not
+   * a schema one.
+   */
+  serves?: string[];
+  /**
+   * #465 (optional, additive): an open object of tool-specific fields, keyed by a lowercase
+   * namespace (`journeeze`, …), carried verbatim. It counts toward the content hash.
+   */
+  extensions?: Extensions;
 }
+
+/** #465: namespaced tool-specific fields (`{ "<namespace>": … }`), carried verbatim and hashed. */
+export type Extensions = Record<string, unknown>;
 
 /** #432: one recorded approval — see `JourneyMetadata.approval`. */
 export interface JourneyApproval {
   contentHash: string;
   at: string;
   /**
-   * #437: how the approval was made — channel (`tty` | `non-interactive` | `mcp` | `ci`), the agent
+   * #437: how the approval was made — channel (`tty` | `non-interactive` | `mcp` | `ci` | #469 `pr-review`), the agent
    * marker NAMES detected, the OS user. Absent on approvals recorded before 0.8.0.
    */
   provenance?: ApprovalProvenance;
@@ -161,13 +179,27 @@ export type JourneyNetworkCheck = NetworkCheck;
 export interface JourneyAnchor {
   /** Its name (`--at-step <name>`): a safe word, never all digits (a number names a step). */
   name: string;
-  /** The state AFTER this many top-level steps — 1-based, counted the way `--at-step <n>` counts. */
+  /**
+   * The state AFTER this many top-level steps — 1-based, counted the way `--at-step <n>` counts.
+   * Kept for compatibility (the bundle contract keys `link.anchors[].step` by it); `stepId`, when
+   * present, is authoritative.
+   */
   step: number;
+  /** #467 (optional): the stable id of the step this anchor follows (`RecordedStep.stepId`). Authoritative going forward. */
+  stepId?: string;
+  /** #465 (optional): the linked job's step (`job.steps[].id`) this anchor marks. */
+  jobStep?: string;
+  /** #465 (optional): whether the anchor marks the `start` or the `end` of `jobStep` (needs `jobStep`). */
+  boundary?: AnchorBoundary;
   /** What this state is, in words. */
   description?: string;
   /** Suggested adversarial probes at this state (e.g. "double submit", "swap the tenant id"). */
   probes?: string[];
 }
+
+/** #465: which edge of a job step an anchor marks. */
+export const ANCHOR_BOUNDARIES = ["start", "end"] as const;
+export type AnchorBoundary = (typeof ANCHOR_BOUNDARIES)[number];
 
 /** A precondition (#246): what must hold before the Journey starts, linked to how it is set up. */
 export interface JourneyPrecondition {
@@ -219,15 +251,30 @@ const JourneyParameterSchema = z.object({
   secret: z.boolean().optional(),
 }).strict();
 
-/** An anchor name: a safe word that is never all digits (`--at-step 3` is a step number). */
-export const ANCHOR_NAME_RE = /^(?![0-9]+$)[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** #465: a catalog id (job, job step, desired outcome) — the catalog's id rule (`CATALOG_ID_RE`). */
+const CATALOG_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const CatalogRefSchema = z.string().regex(CATALOG_REF_RE, "a catalog id: 1-64 of [A-Za-z0-9._-], starting alphanumeric");
 
+/** #465: an `extensions` namespace — a lowercase slug (`journeeze`). */
+export const EXTENSION_NAMESPACE_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** #465: the open, namespaced `extensions` object on a job and on Journey metadata (at most 16 namespaces). */
+export const ExtensionsSchema = z
+  .record(z.string().regex(EXTENSION_NAMESPACE_RE, "extensions: a namespace is a lowercase slug (a-z, 0-9, -; at most 32)"), z.unknown())
+  .refine((e) => Object.keys(e).length <= 16, { message: "extensions: at most 16 namespaces" });
+
+// Name rules (pattern, length, uniqueness, step range) live in `anchorRuleIssues` (anchor-rules.ts),
+// run by the Journey's superRefine below.
 const JourneyAnchorSchema = z.object({
-  name: z.string().max(100).regex(ANCHOR_NAME_RE, "anchor name: letters, digits, . _ - (not all digits)"),
+  name: z.string(),
   step: z.number().int().min(1),
+  stepId: z.string().regex(STEP_ID_RE, "anchor stepId: 1-64 of [a-z0-9._:-]").optional(),
+  jobStep: CatalogRefSchema.optional(),
+  boundary: z.enum(ANCHOR_BOUNDARIES).optional(),
   description: z.string().max(2000).optional(),
   probes: z.array(z.string().min(1).max(500)).max(20).optional(),
-}).strict();
+}).strict()
+  .refine((a) => a.boundary === undefined || a.jobStep !== undefined, { message: "anchor boundary: needs a jobStep (the job step it bounds)", path: ["boundary"] });
 
 const JourneyNetworkCheckSchema = NetworkCheckSchema;
 
@@ -271,11 +318,7 @@ export const JourneySchema: ZodType<Journey> = z.object({
       .max(100)
       .refine((ps) => new Set(ps.map((p) => p.name)).size === ps.length, { message: "parameters: duplicate name" })
       .optional(),
-    anchors: z
-      .array(JourneyAnchorSchema)
-      .max(50)
-      .refine((as) => new Set(as.map((a) => a.name)).size === as.length, { message: "anchors: duplicate name" })
-      .optional(),
+    anchors: z.array(JourneyAnchorSchema).max(50).optional(),
     networkChecks: z.array(JourneyNetworkCheckSchema).max(20).optional(),
     endState: z.array(OutcomeCheckSchema).max(50).optional(),
     acceptedWeak: z
@@ -301,20 +344,17 @@ export const JourneySchema: ZodType<Journey> = z.object({
       })
       .strict()
       .optional(),
+    serves: z
+      .array(CatalogRefSchema)
+      .max(50)
+      .refine((ss) => new Set(ss).size === ss.length, { message: "serves: duplicate id" })
+      .optional(),
+    extensions: ExtensionsSchema.optional(),
   }).strict(),
   recording: RecordingSchema,
 }).superRefine((j, ctx) => {
-  // #293: an anchor names a state the Journey reaches — its step must be one of the Journey's own.
-  const steps = j.recording.pages.reduce((n, p) => n + p.steps.length, 0);
-  (j.metadata.anchors ?? []).forEach((a, i) => {
-    if (a.step > steps) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["metadata", "anchors", i, "step"],
-        message: `anchor ${JSON.stringify(a.name)}: step ${a.step} is past the Journey's last step (${steps})`,
-      });
-    }
-  });
+  // #293/#466: anchor names, uniqueness and step range (anchor-rules.ts).
+  for (const issue of anchorRuleIssues(j)) ctx.addIssue({ code: "custom", path: [...issue.path], message: issue.message });
   // #402: a declared mutation pair must name an assertion and a step (or anchor) the Journey has.
   for (const issue of mutationPairIssues(j)) {
     ctx.addIssue({ code: "custom", path: ["metadata", "mutationPairs", issue.index, issue.field], message: issue.message });

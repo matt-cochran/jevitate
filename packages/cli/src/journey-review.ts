@@ -23,7 +23,12 @@ import {
   type JourneyCatalogLinks,
   type Finding,
   type ApprovalProvenance,
+  type AnchorLintIssue,
+  type CatalogRefIssue,
+  type JourneyReviewAnchorWarning,
+  type JourneyReviewLocatorHealth,
 } from "@jevitate/journey";
+import type { LocatorHealthDetail } from "./locator-health.js";
 import { renderFindings } from "./catalog-review.js";
 import { SafetyPolicy, describeCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
@@ -37,6 +42,9 @@ import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, t
  * (values only arrive as `--param`). Defense in depth: a literal typed into a field whose name reads
  * as a credential is shown «redacted», and a secret reference is listed by field and manager only.
  */
+
+/** #467: the label of a change that only added step ids; re-approving it takes the warn path of the anchor rules. */
+const STEP_ID_ONLY_LABEL = "ids added only (warn path)";
 
 /** The approval bookkeeping a review hash leaves out: promoting writes them, so they cannot be part of what was reviewed. */
 const BOOKKEEPING = ["promoted", "approval", "acceptedWeak"] as const;
@@ -74,6 +82,12 @@ export interface JourneyReviewContext {
   readonly catalog?: { readonly links: JourneyCatalogLinks; readonly findings: readonly Finding[] };
   /** #453: the pending self-heal proposal, with whether it is stale and why it cannot be accepted. */
   readonly proposal?: { readonly proposal: JourneyProposal; readonly stale: boolean; readonly problem?: string };
+  /** #466: the anchor-rule problems (`journeyAnchorIssues`), computed by the caller (journey-anchor-gate imports this file). */
+  readonly anchorIssues?: { readonly anchorIssues: readonly AnchorLintIssue[]; readonly refIssues: readonly CatalogRefIssue[] };
+  /** #470: the Journey's locator health (`journeyLocatorHealth`), advisory. */
+  readonly locatorHealth?: LocatorHealthDetail;
+  /** #467: the approval is stale and the only change is minted step ids (`isStepIdOnlyChange`), computed by the caller. */
+  readonly stepIdOnly?: boolean;
 }
 
 function targetOf(step: Step): TargetDescriptor | undefined {
@@ -275,11 +289,12 @@ function buildOrigins(journey: Journey): string[] {
   return [...origins];
 }
 
-function buildChange(journey: Journey, hash: string, snapshot: Journey | null | undefined): JourneyReviewChange {
+function buildChange(journey: Journey, hash: string, snapshot: Journey | null | undefined, stepIdOnly: boolean): JourneyReviewChange {
   const approval = journey.metadata.approval;
+  const idOnly = stepIdOnly ? { stepIdOnly: true as const } : {};
   if (snapshot === null || snapshot === undefined) {
     if (approval !== undefined) {
-      return { kind: "snapshot-missing", approvedHash: approval.contentHash, approvedAt: approval.at, changed: approval.contentHash !== hash };
+      return { kind: "snapshot-missing", approvedHash: approval.contentHash, approvedAt: approval.at, changed: approval.contentHash !== hash, ...idOnly };
     }
     return journey.metadata.promoted ? { kind: "no-record" } : { kind: "first-approval" };
   }
@@ -290,6 +305,7 @@ function buildChange(journey: Journey, hash: string, snapshot: Journey | null | 
     approvedHash,
     ...(approvedAt === undefined ? {} : { approvedAt }),
     changed: approvedHash !== hash,
+    ...idOnly,
     steps: multisetDiff(stepLines(snapshot), stepLines(journey)),
     assertions: multisetDiff(assertionLines(snapshot), assertionLines(journey)),
     sideEffects: multisetDiff(sideEffectLines(snapshot), sideEffectLines(journey)),
@@ -417,7 +433,7 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
       ...(m.acceptedWeak === undefined ? {} : { acceptedWeak: { reason: m.acceptedWeak.reason, rules: [...m.acceptedWeak.rules] } }),
       verify: buildVerify(journey, hash, ctx.lastVerify),
     },
-    changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot),
+    changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot, ctx.stepIdOnly === true),
     ...(m.approval === undefined
       ? {}
       : {
@@ -435,6 +451,8 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
           },
         }),
     ...(ctx.catalog === undefined ? {} : { catalog: ctx.catalog.links, findings: [...ctx.catalog.findings] }),
+    ...(ctx.anchorIssues === undefined ? {} : { anchorWarnings: anchorWarningsOf(ctx.anchorIssues) }),
+    ...(ctx.locatorHealth === undefined ? {} : { locatorHealth: locatorHealthOf(ctx.locatorHealth) }),
     ...(ctx.proposal === undefined ? {} : { proposal: buildProposal(ctx.proposal, m.id) }),
     contentHash: hash,
   };
@@ -442,7 +460,47 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
 
 /** #437: a copy of an approval's provenance (the sheet never shares the Journey's objects). */
 function copyProvenance(p: ApprovalProvenance): ApprovalProvenance {
-  return { channel: p.channel, agentSignals: [...p.agentSignals], ...(p.user === undefined ? {} : { user: p.user }), ...(p.reason === undefined ? {} : { reason: p.reason }) };
+  return {
+    channel: p.channel,
+    agentSignals: [...p.agentSignals],
+    ...(p.user === undefined ? {} : { user: p.user }),
+    ...(p.reason === undefined ? {} : { reason: p.reason }),
+    ...(p.pr === undefined ? {} : { pr: { ...p.pr } }),
+  };
+}
+
+/** #466: the anchor-rule and catalog-reference problems as sheet warnings (each with its fix). */
+function anchorWarningsOf(i: NonNullable<JourneyReviewContext["anchorIssues"]>): JourneyReviewAnchorWarning[] {
+  return [...i.anchorIssues, ...i.refIssues].map((x) => ({
+    code: x.code,
+    severity: x.severity,
+    path: x.path,
+    ...("step" in x && x.step !== undefined ? { step: x.step } : {}),
+    message: x.message,
+    ...(x.fix === undefined ? {} : { fix: x.fix }),
+  }));
+}
+
+/** #470: the brittle steps of a Journey's locator health, with the fix for each. */
+function locatorHealthOf(h: LocatorHealthDetail): JourneyReviewLocatorHealth {
+  return {
+    line: h.line,
+    stable: h.stable,
+    brittle: h.brittle,
+    brittleSteps: h.steps
+      .filter((s) => s.stability === "brittle")
+      .map((s) => ({
+        ...(s.stepId === undefined ? {} : { stepId: s.stepId }),
+        index: s.index,
+        kind: s.kind,
+        rung: s.rung,
+        level: s.level,
+        ...(s.route === undefined ? {} : { route: s.route }),
+        locator: s.locator,
+        reasons: [...s.reasons],
+        fix: h.suggestions.find((x) => x.key === s.suggestion)?.fix ?? "add a stable test id to this control",
+      })),
+  };
 }
 
 function provenanceField(p: ApprovalProvenance | undefined): { provenance?: ApprovalProvenance } {
@@ -452,6 +510,20 @@ function provenanceField(p: ApprovalProvenance | undefined): { provenance?: Appr
 // ── Rendering ─────────────────────────────────────────────────────────────────────────────────
 
 type Style = "markdown" | "text";
+
+/** #469: the verified pull request behind a pr-review approval, one line (empty for any other channel). */
+function prLines(p: ApprovalProvenance | undefined): string[] {
+  const pr = p?.pr;
+  if (pr === undefined) return [];
+  const parts = [
+    `PR #${pr.number}${pr.url === undefined ? "" : ` (${pr.url})`}`,
+    `reviewer ${pr.reviewer}`,
+    ...(pr.author === undefined ? [] : [`author ${pr.author}`]),
+    `merged ${pr.mergedSha.slice(0, 12)}`,
+    ...(pr.codeOwner === undefined ? [] : [pr.codeOwner ? "reviewer is a code owner" : "reviewer is NOT a code owner"]),
+  ];
+  return [`Pull-request approval: ${parts.join(" · ")}`];
+}
 
 function renderSheet(r: JourneyReview, style: Style): string {
   const md = style === "markdown";
@@ -472,6 +544,7 @@ function renderSheet(r: JourneyReview, style: Style): string {
     "",
     `Content hash: ${code(r.contentHash)}`,
     `Status: ${r.promoted ? "promoted" : "not promoted"}${r.approval === undefined ? "" : ` · last approved ${r.approval.at} — ${describeProvenance(r.approval.provenance)}`}`,
+    ...prLines(r.approval?.provenance),
   );
 
   const s = r.summary;
@@ -566,8 +639,10 @@ function renderSheet(r: JourneyReview, style: Style): string {
   else if (c.kind === "no-record") change.push(em("promoted before approvals were recorded — no approved version to compare with"));
   else if (c.kind === "snapshot-missing") {
     change.push(`Approved${c.approvedAt === undefined ? "" : ` ${c.approvedAt}`} as ${code(c.approvedHash)}; its snapshot is missing — ${c.changed ? "the Journey CHANGED since" : "unchanged since"}`);
+    if (c.stepIdOnly === true) change.push(li(STEP_ID_ONLY_LABEL));
   } else {
     change.push(`Approved${c.approvedAt === undefined ? "" : ` ${c.approvedAt}`} as ${code(c.approvedHash)} — ${c.changed ? "CHANGED since" : "unchanged since"}`);
+    if (c.stepIdOnly === true) change.push(li(STEP_ID_ONLY_LABEL));
     for (const [label, d] of [
       ["Steps", c.steps],
       ["Assertions", c.assertions],
@@ -578,6 +653,23 @@ function renderSheet(r: JourneyReview, style: Style): string {
     }
   }
   section(h2("Change since last approval"), "", ...change);
+
+  // #466 / #470: anchor-rule warnings and brittle steps, each with its fix.
+  if (r.anchorWarnings !== undefined && r.anchorWarnings.length > 0) {
+    section(h2("Anchor rules (#466)"), "", ...r.anchorWarnings.map((w) => li(`${w.severity} ${w.path}${w.step === undefined ? "" : ` (step ${w.step})`}: ${w.message}${w.fix === undefined ? "" : ` — fix: ${w.fix}`}`)));
+  }
+  if (r.locatorHealth !== undefined) {
+    const lh = r.locatorHealth;
+    section(
+      h2("Locator health (advisory)"),
+      "",
+      lh.line,
+      "",
+      ...(lh.brittleSteps.length === 0
+        ? [li(em("no brittle steps"))]
+        : lh.brittleSteps.map((b) => li(`step ${b.index + 1}${b.stepId === undefined ? "" : ` [${b.stepId}]`} ${b.kind} ${code(b.locator)}${b.route === undefined ? "" : ` on ${b.route}`} — ${b.reasons.join("; ")} — fix: ${b.fix}`))),
+    );
+  }
 
   // #433: the catalog links (job, persona), then the pre-approval findings — before the approval line.
   if (r.catalog !== undefined) {

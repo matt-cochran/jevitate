@@ -229,3 +229,21 @@ describe("#401 lintJourney", () => {
     expect(lintJourney(journey, { readRequests: ["Estimate*"] }).some((f) => f.rule === "no-persistence-check")).toBe(false);
   });
 });
+
+describe("#466 lintJourney: the 0.10 anchor rules", () => {
+  const click: RecordedStep = { step: { kind: "click", target: { testId: "go" }, expect: { kind: "textIncludes", target: { role: "status" }, text: "Done" } }, stepId: "s-aaaaaa" };
+
+  it("reports a non-compliant anchor name as a warning", () => {
+    const finding = lintJourney(j([click], { anchors: [{ name: "Review", step: 1, stepId: "s-aaaaaa" }] })).find((f) => f.rule === "anchor-name");
+    expect(finding?.level).toBe("warning");
+  });
+
+  it("names the fix", () => {
+    const finding = lintJourney(j([click], { anchors: [{ name: "Review", step: 1, stepId: "s-aaaaaa" }] })).find((f) => f.rule === "anchor-name");
+    expect(finding?.fix).toContain("'review'");
+  });
+
+  it("reports a job-linked Journey without anchors", () => {
+    expect(lintJourney(j([click], { job: "checkout" })).some((f) => f.rule === "job-anchors" && f.level === "warning")).toBe(true);
+  });
+});

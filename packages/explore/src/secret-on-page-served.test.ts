@@ -155,7 +155,7 @@ describe("#219 — a secret shown on the page is redacted before any model paylo
         new FakeGenerationGateway({
           "goal.answer": {
             answer: `You are signed in as ${SECRET}.`,
-            claims: [{ claim: `signed in as ${SECRET}`, quote: `Signed in as ${SECRET}` }],
+            claims: [{ claim: `signed in as ${SECRET}`, quote: `Signed in as ${SECRET}`, absent: null }],
           },
         }),
       );
@@ -189,7 +189,7 @@ describe("#219 — a secret shown on the page is redacted before any model paylo
         new FakeGenerationGateway({
           "goal.answer": {
             answer: `The profile email is ${REDACTION_MASK}.`,
-            claims: [{ claim: `the email is ${REDACTION_MASK}`, quote: `Email: ${REDACTION_MASK}` }],
+            claims: [{ claim: `the email is ${REDACTION_MASK}`, quote: `Email: ${REDACTION_MASK}`, absent: null }],
           },
         }),
       );

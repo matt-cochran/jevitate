@@ -1,11 +1,41 @@
 /**
  * Every credential jevitate holds. `GITHUB_TOKEN` is used ONLY by the issue filer's REST fallback
  * (never by a model gateway); it is guarded by the same never-to-model check as the model keys.
+ * `JOURNEEZE_UPLOAD_KEY` (#464) is a Journeeze product upload key (`jzu_…`), used ONLY as the
+ * `Authorization` header of the Journeeze upload API; it is never read from the plaintext local
+ * config (see {@link allowsPlaintextFallback}) — only from the environment (CI) or, through
+ * `jevitate connect journeeze`, from a saved reference to an external secret source.
  */
-export type CredentialKey = "OPENROUTER_API_KEY" | "TYPESAFE_API_KEY" | "GITHUB_TOKEN";
+export type CredentialKey = "OPENROUTER_API_KEY" | "TYPESAFE_API_KEY" | "GITHUB_TOKEN" | "JOURNEEZE_UPLOAD_KEY";
 
 /** All credential keys, for the guards that must check every one. */
-export const ALL_CREDENTIAL_KEYS: readonly CredentialKey[] = ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "GITHUB_TOKEN"];
+export const ALL_CREDENTIAL_KEYS: readonly CredentialKey[] = ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "GITHUB_TOKEN", "JOURNEEZE_UPLOAD_KEY"];
+
+/**
+ * #464: keys that must never be held in plain text at rest. The local config
+ * (`~/.jevitate/credentials.json`) is a plaintext file, so for these keys it is IGNORED by
+ * `envCredentialStore` (a value found there is never used) and a writer must refuse to persist them.
+ */
+export const NO_PLAINTEXT_CREDENTIAL_KEYS: readonly CredentialKey[] = ["JOURNEEZE_UPLOAD_KEY"];
+
+/** Whether `key` may be read from (or written to) the plaintext local config. */
+export function allowsPlaintextFallback(key: CredentialKey): boolean {
+  return !NO_PLAINTEXT_CREDENTIAL_KEYS.includes(key);
+}
+
+/** #464: an attempt to hold a no-plaintext key in the plaintext local config. Never carries the value. */
+export class PlaintextCredentialRefusedError extends Error {
+  readonly code = "E_PLAINTEXT_CREDENTIAL" as const;
+  constructor(readonly key: CredentialKey) {
+    super(`${key} is never stored in plain text — set it in the environment or save a reference to your secret manager`);
+    this.name = "PlaintextCredentialRefusedError";
+  }
+}
+
+/** Throws `PlaintextCredentialRefusedError` for a key that must never be persisted in plain text. */
+export function assertPlaintextAllowed(key: CredentialKey): void {
+  if (!allowsPlaintextFallback(key)) throw new PlaintextCredentialRefusedError(key);
+}
 export type Feature = "generation" | "judgment";
 
 /**
@@ -162,7 +192,8 @@ export function envCredentialStore(
     }
     return undefined;
   };
-  const resolve = (k: CredentialKey) => fromEnv(k) ?? nonBlank(localConfig[k]);
+  // #464: a no-plaintext key never falls back to the (plaintext) local config.
+  const resolve = (k: CredentialKey) => fromEnv(k) ?? (allowsPlaintextFallback(k) ? nonBlank(localConfig[k]) : undefined);
   return { detect: (k) => resolve(k) !== undefined, read: (k) => resolve(k) };
 }
 

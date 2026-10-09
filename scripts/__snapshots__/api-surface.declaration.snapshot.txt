@@ -1,16 +1,21 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (170 exports)
+# @jevitate/ai-core (177 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
+  allowsPlaintextFallback: function
   Answer: type-alias
   apiKeyFromAuthHeader: function
   assertNoOutboundCredential: function
   assertNoSecretInPayload: function
+  assertPlaintextAllowed: function
   BACKOFF_SCHEDULE_MS: variable
+  CATALOG_OUTCOMES_INSTRUCTIONS: variable
   CatalogModel: type-alias
   CatalogModelSchema: variable
+  CatalogOutcomesInput: variable
+  CatalogOutcomesOutput: variable
   CHAT_REPLY_INSTRUCTIONS: variable
   CHAT_REPLY_STUCK_INSTRUCTIONS: variable
   ChatReplyInput: variable
@@ -96,6 +101,7 @@
   ModelConstraints: type-alias
   ModelConstraintsSchema: variable
   ModelPrice: interface
+  NO_PLAINTEXT_CREDENTIAL_KEYS: variable
   NoEligibleModelError: class
   NoulAnswer: interface
   NoulQuestion: interface
@@ -105,6 +111,7 @@
   OpenRouterConfig: interface
   OpenRouterGenerationGateway: class
   openRouterProviderSettings: function
+  PlaintextCredentialRefusedError: class
   priceCall: function
   PriceTable: interface
   Question: type-alias
@@ -329,7 +336,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (640 exports)
+# @jevitate/explore (642 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -763,6 +770,8 @@
   PROMPT_INJECTION_GUARD: variable
   PROMPT_PAGE_TEXT_CHARS: variable
   quoteIsOnlyControlNames: function
+  quoteSpanAt: function
+  quoteSpans: function
   RawChange: interface
   READ_ONLY_NOTE: variable
   ReadOnlyGuard: class
@@ -1060,7 +1069,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (50 exports)
+# @jevitate/interpreter (56 exports)
   anchorLocator: other
   applyTextEdit: other
   attrOf: other
@@ -1074,6 +1083,7 @@
   DEFAULT_IN_VIEWPORT_MIN: other
   describeTextEdit: other
   descriptorLocator: other
+  descriptorRung: other
   descriptorToTarget: other
   evaluateVisual: other
   FlashQuery: other
@@ -1085,6 +1095,7 @@
   isVisualAssertion: other
   parseColor: other
   parseNumber: other
+  PLAYWRIGHT_TEST_ID_ATTRIBUTE: other
   PostconditionFailed: other
   readAssertionEvidence: other
   readAssertionText: other
@@ -1093,6 +1104,8 @@
   RecordingSink: other
   ReplayTargetError: other
   ReplayTargetFailure: other
+  ResolvedRung: other
+  ResolvedTarget: other
   resolveTarget: other
   ResolveTargetOptions: other
   Rgba: other
@@ -1102,28 +1115,43 @@
   sizeViolation: other
   StepObserver: other
   StepOutcome: other
+  StepResolution: other
   StepWait: other
   StepWaitHooks: other
   styleChannel: other
   stylesOf: other
   textIncludesCI: other
+  TFLOW_ID_ATTRIBUTE: other
   ToRecordingOptions: other
   VisualAssertion: other
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (160 exports)
+# @jevitate/journey (209 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
-  ANCHOR_NAME_RE: variable
+  ANCHOR_BOUNDARIES: variable
+  ANCHOR_NAME_MAX: variable
+  ANCHOR_NAME_RE: other
+  ANCHOR_NAME_RULE_RE: variable
+  ANCHOR_RULE_CODES: variable
+  AnchorBoundary: type-alias
   ANCHORED_STRATEGIES: variable
   AnchoredStrategy: type-alias
+  AnchorLintIssue: interface
+  anchorLintIssues: function
+  AnchorLintOptions: interface
+  AnchorRuleCode: type-alias
+  AnchorRuleIssue: interface
+  anchorRuleIssues: function
   AnnotationChange: interface
   AnnotationDraft: type-alias
   AnnotationDraftMismatchError: class
   AnnotationDraftSchema: variable
   AnnotationDraftStep: type-alias
   AnnotationDraftStepSchema: variable
+  ANSWER_QUESTIONS: variable
+  ANSWER_VALUES: variable
   applyAnnotationDraft: function
   APPROVAL_CHANNELS: variable
   ApprovalChannel: type-alias
@@ -1149,6 +1177,8 @@
   CatalogApproval: type-alias
   CatalogApprovalSchema: variable
   CatalogItemStatus: type-alias
+  CatalogRefIssue: type-alias
+  CatalogRefIssueSchema: variable
   CatalogStatusReport: type-alias
   CatalogStatusSchema: variable
   CatalogStatusValueSchema: variable
@@ -1160,6 +1190,12 @@
   classifyMutation: function
   deriveParamSchema: function
   describeStep: function
+  DesiredOutcome: type-alias
+  DesiredOutcomeSchema: variable
+  DURATION_STATS: variable
+  EXTENSION_NAMESPACE_RE: variable
+  Extensions: type-alias
+  ExtensionsSchema: variable
   Finding: type-alias
   FindingSchema: variable
   FlatJourneyStep: interface
@@ -1181,10 +1217,18 @@
   JevLayer: type-alias
   JevLayerSchema: variable
   Job: type-alias
+  JOB_KINDS: variable
   JOB_PRIORITIES: variable
+  JOB_PROVENANCES: variable
+  JOB_STAGES: variable
+  JobKind: type-alias
+  JobProvenance: type-alias
   JobReview: type-alias
   JobReviewSchema: variable
   JobSchema: variable
+  JobStage: type-alias
+  JobStep: type-alias
+  JobStepSchema: variable
   Journey: interface
   JourneyAnchor: interface
   JourneyAnchorListing: interface
@@ -1211,7 +1255,9 @@
   JourneyProposalSchema: variable
   JourneyRegistry: class
   JourneyReview: type-alias
+  JourneyReviewAnchorWarning: type-alias
   JourneyReviewChange: type-alias
+  JourneyReviewLocatorHealth: type-alias
   JourneyReviewProposal: type-alias
   JourneyReviewRiskyControl: type-alias
   JourneyReviewSchema: variable
@@ -1231,6 +1277,10 @@
   JudgmentUsageSchema: variable
   lintJourney: function
   listJourneyAnchors: function
+  Metric: type-alias
+  METRIC_KINDS: variable
+  MetricKind: type-alias
+  MetricSchema: variable
   MutationFailedSite: type-alias
   MutationKind: type-alias
   MutationPair: interface
@@ -1242,6 +1292,11 @@
   MutationRunResult: interface
   MutationVerdict: type-alias
   mutationWait: function
+  OUTCOME_DIRECTIONS: variable
+  OUTCOME_GULFS: variable
+  OUTCOME_MEASURES: variable
+  OutcomeTarget: type-alias
+  OutcomeTargetSchema: variable
   PAIR_RELATIONS: variable
   PairRelation: type-alias
   ParamSchema: interface
@@ -1252,13 +1307,17 @@
   prefixLandingPath: function
   ProposalStep: type-alias
   ProposalStepSchema: variable
+  PrReview: type-alias
+  PrReviewSchema: variable
   QualityFinding: interface
   RejectedProposal: type-alias
   RejectedProposalSchema: variable
   renderJobStory: function
   resolveJourneyStep: function
+  ReviewAnchorWarningSchema: variable
   ReviewChangeSchema: variable
   ReviewLintFindingSchema: variable
+  ReviewLocatorHealthSchema: variable
   ReviewProposalSchema: variable
   ReviewRiskyControlSchema: variable
   ReviewStepSchema: variable
@@ -1269,9 +1328,14 @@
   secretParamValues: function
   SecretRef: interface
   splitBudget: function
+  stampAnchorStepIds: function
+  stripStepIds: function
+  suggestAnchorName: function
   SWEEP_MODES: variable
   SweepMode: type-alias
   sweepStops: function
+  TARGET_OPS: variable
+  TARGET_UNITS: variable
   validateParams: function
 
 # @jevitate/load (16 exports)
@@ -1561,7 +1625,7 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (153 exports)
+# @jevitate/recording (158 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1599,6 +1663,7 @@
   DomObservable: interface
   DomRead: type-alias
   encodeUrlParamValue: function
+  ensureStepIds: function
   evaluateInvariantExpression: function
   EvalValue: type-alias
   ExpressionEnv: interface
@@ -1636,6 +1701,7 @@
   MAX_SETTLE_WITHIN_MS: variable
   mergeInvariantSpecs: function
   MIN_SETTLE_POLL_MS: variable
+  mintStepId: function
   navigateTemplateProblem: function
   NavigateUrlParamError: class
   navigateUrlParams: function
@@ -1686,6 +1752,8 @@
   StatusSpec: type-alias
   StatusSpecSchema: variable
   Step: type-alias
+  STEP_ID_RE: variable
+  stepIdsOf: function
   StepRef: interface
   StepSchema: variable
   stepSignature: function
@@ -1696,6 +1764,7 @@
   StyleChannel: type-alias
   StyleProperty: type-alias
   substituteCaptureRefs: function
+  takeValueFor: function
   TargetDescriptor: interface
   TargetDescriptorSchema: variable
   TextAnchor: type-alias
@@ -1921,7 +1990,7 @@
   SqliteBudgetRepository: class
   SqliteSitePolicyRepository: class
 
-# @jevitate/ux (189 exports)
+# @jevitate/ux (192 exports)
   A11yChecker: interface
   a11yChecks: function
   A11yControlFact: interface
@@ -1963,6 +2032,7 @@
   clamp01: function
   combineConfidence: function
   ConfidenceBasis: interface
+  contractRouteTemplate: function
   ContributingFinding: interface
   Control: interface
   controlKey: function
@@ -2104,6 +2174,8 @@
   UxEvidenceKey: type-alias
   UxFinding: interface
   UxFindingError: class
+  uxFindingFingerprint: function
+  UxFingerprintInput: interface
   UxPrompts: type-alias
   UxPromptsSchema: variable
   UxReport: interface

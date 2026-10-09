@@ -38,6 +38,8 @@ export interface HealAttempt {
   readonly n: number;
   /** The broken step's 0-based flat index. */
   readonly stepIndex: number;
+  /** #467: the broken step's stable id (`RecordedStep.stepId`), when it has one — kept by the heal. */
+  readonly stepId?: string;
   readonly source: "change-evidence" | "model";
   /** e.g. `label 'Create New' → 'Create' (src/ui/Toolbar.tsx:42)`. */
   readonly hypothesis: string;
@@ -78,6 +80,8 @@ export interface HealReport {
 /** One step a proposed revision changes. */
 export interface ProposedStepChange {
   readonly index: number;
+  /** #467: the changed step's stable id, when it has one — a retarget keeps it. */
+  readonly stepId?: string;
   readonly before: Step;
   readonly after: Step;
   /** The accepted attempt's `n`. */

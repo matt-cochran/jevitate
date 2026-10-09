@@ -1,0 +1,101 @@
+[
+  {
+    "id": "record-verdict",
+    "trigger": "a review item is waiting for my judgement",
+    "motivation": "record whether it works",
+    "outcome": "the team knows what to fix next",
+    "personas": [
+      "reviewer"
+    ],
+    "priority": "high",
+    "kind": "core",
+    "parent": "keep-quality-visible",
+    "context": [
+      "a release is being reviewed"
+    ],
+    "steps": [
+      {
+        "id": "find",
+        "name": "Find the item to judge",
+        "stage": "locate"
+      },
+      {
+        "id": "judge",
+        "name": "Record the verdict",
+        "stage": "execute"
+      },
+      {
+        "id": "confirm",
+        "name": "Confirm the verdict was saved",
+        "stage": "confirm"
+      }
+    ],
+    "desiredOutcomes": [
+      {
+        "id": "verdict-fast",
+        "step": "judge",
+        "direction": "minimize",
+        "measure": "time",
+        "object": "the time it takes to record a verdict",
+        "gulf": "execution",
+        "metric": {
+          "kind": "duration",
+          "from": "job_start",
+          "to": "verdict-recorded",
+          "stat": "p50"
+        },
+        "target": {
+          "op": "<=",
+          "value": 30,
+          "unit": "s"
+        },
+        "priority": "high"
+      },
+      {
+        "id": "verdict-wrong-item",
+        "step": "judge",
+        "direction": "minimize",
+        "measure": "likelihood",
+        "object": "the likelihood of judging the wrong item",
+        "metric": {
+          "kind": "repeat",
+          "at": "verdict-recorded"
+        },
+        "target": {
+          "op": "<=",
+          "value": 5,
+          "unit": "percent"
+        },
+        "guardrail": true
+      }
+    ],
+    "constraints": [
+      "only reviewers of the project may record verdicts"
+    ],
+    "provenance": "team_hypothesis",
+    "revision": 2,
+    "lastValidated": "2026-10-09",
+    "storageState": "state/reviewer.json",
+    "goal": "Record a verdict on the first open item",
+    "mutates": true,
+    "order": 1,
+    "approval": {
+      "contentHash": "a93e334e395491221381be3365a82497c29b95261a6cae56c8ca2a5856d71229",
+      "at": "2026-10-09T12:00:00.000Z",
+      "provenance": {
+        "channel": "tty",
+        "agentSignals": [],
+        "user": "someone-local",
+        "reason": "reviewed at the desk"
+      }
+    }
+  },
+  {
+    "id": "keep-quality-visible",
+    "trigger": "a release is coming",
+    "motivation": "see what is broken",
+    "outcome": "ship with confidence",
+    "kind": "core",
+    "provenance": "ai_draft"
+  }
+]

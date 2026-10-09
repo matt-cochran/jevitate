@@ -1,0 +1,16 @@
+{
+  "description": "Finding text never carries personal data.",
+  "base": "full",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/findings/1/observation",
+      "value": "Saving fails for ana@example.com"
+    }
+  ],
+  "expect": {
+    "valid": false,
+    "instancePath": "/findings/1/observation",
+    "keyword": "not"
+  }
+}

@@ -69,6 +69,10 @@ describe("#453 journeyRunSummary", () => {
     expect(withProposal).toMatch(/^next: jevitate journey review j$/m);
     expect(withProposal).toMatch(/^next: jevitate journey promote j --proposal p1$/m);
   });
+  it("#467 a pending revision names the step's stable id beside its number", () => {
+    const named = { ...pending, revision: { ...pending.revision, steps: pending.revision.steps.map((c) => ({ ...c, stepId: "s-create" })) } } as JourneyRunResult;
+    expect(journeyRunSummary("j", named)).toMatch(/step 2 \(s-create\):/);
+  });
   it("an unexplained break names the step in its reason", () => {
     expect(journeyRunSummary("j", { outcome: "quarantined", reason: 'step 2 failed: x — step 2 "Create New" (click) is not explained by the change', at: 1 })).toMatch(/quarantined — step 2/);
   });

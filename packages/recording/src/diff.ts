@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Recording } from "./schema.js";
+import type { Recording, RecordedStep } from "./schema.js";
 import { RecordingSchema } from "./schema.js";
 import { alignTraces } from "./align.js";
 import type { AlignedColumn } from "./align.js";
@@ -84,8 +84,8 @@ function reKeyToFlatIndex(take: AuthoringRecording): Map<string, string> {
   const reKeyed = new Map<string, string>();
   let flatIndex = 0;
   take.recording.pages.forEach((page, pageIdx) => {
-    page.steps.forEach((_step, stepIdxInPage) => {
-      const original = take.values.get(`${pageIdx}:${stepIdxInPage}`);
+    page.steps.forEach((recorded, stepIdxInPage) => {
+      const original = takeValueFor(take.values, recorded, { page: pageIdx, step: stepIdxInPage });
       if (original !== undefined) {
         reKeyed.set(String(flatIndex), original);
       }
@@ -93,6 +93,16 @@ function reKeyToFlatIndex(take: AuthoringRecording): Map<string, string> {
     });
   });
   return reKeyed;
+}
+
+/**
+ * #467: a take's captured authoring value for one step — keyed by the step's `stepId` when the step
+ * has one and the take holds a value under it, else by its `` `${page}:${step}` `` position (the
+ * recorder's convention). A stable id survives an edit that shifts positions; a position does not.
+ */
+export function takeValueFor(values: ReadonlyMap<string, string>, recorded: RecordedStep, ref: StepRef): string | undefined {
+  if (recorded.stepId !== undefined && values.has(recorded.stepId)) return values.get(recorded.stepId);
+  return values.get(`${ref.page}:${ref.step}`);
 }
 
 /**
@@ -111,6 +121,8 @@ export const CONFIDENT_VARIABLE_THRESHOLD = 0.6;
 export interface BaseFillStep {
   ref: StepRef;
   variableName: string | undefined;
+  /** #467: the step's stable id, when it has one. */
+  stepId?: string;
 }
 
 interface DiffFillColumn {
@@ -234,6 +246,7 @@ export function flattenBaseFillSteps(base: Recording): BaseFillStep[] {
         result.push({
           ref: { page: pageIdx, step: stepIdxInPage },
           variableName: recordedStep.variableName,
+          ...(recordedStep.stepId === undefined ? {} : { stepId: recordedStep.stepId }),
         });
       }
     });
