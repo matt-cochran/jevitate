@@ -17,6 +17,7 @@ import {
   type FetchFn,
   type ForgePort,
   type ForgePull,
+  type ForgeCommitPeople,
   type ForgeReview,
   type PrReviewEntry,
 } from "./forge-verify.js";
@@ -64,6 +65,7 @@ class FakeForge implements ForgePort {
   main = [C3, C2, C1];
   pulls: Record<string, ForgePull[]> = { [C2]: [{ number: 7, url: "https://github.com/acme/shop/pull/7", mergedAt: "2026-10-01T00:00:00Z", baseRef: "main", headSha: HEAD7, author: "alice" }] };
   reviewList: Record<number, ForgeReview[]> = { 7: [{ login: "bob", isBot: false, state: "APPROVED", commitId: HEAD7, submittedAt: "2026-09-30T00:00:00Z" }] };
+  prCommits: Record<number, ForgeCommitPeople[]> = { 7: [{ authorLogin: "alice", authorId: 1, committerLogin: "web-flow", committerId: 19864447 }] };
   perms: Record<string, string> = { bob: "write", alice: "admin", carol: "write" };
   teams: Record<string, string[]> = {};
   async defaultBranch(): Promise<string> {
@@ -98,6 +100,10 @@ class FakeForge implements ForgePort {
   async reviews(n: number): Promise<ForgeReview[]> {
     this.calls++;
     return this.reviewList[n] ?? [];
+  }
+  async pullCommits(n: number): Promise<ForgeCommitPeople[]> {
+    this.calls++;
+    return this.prCommits[n] ?? [];
   }
   async permission(login: string): Promise<string> {
     this.calls++;
@@ -189,6 +195,22 @@ describe("#469 verifying an approval in CI", () => {
     expect(await approve()).toMatchObject({ code: "no-approving-review" });
   });
 
+  it("refuses a reviewer who committed to the PR", async () => {
+    forge.prCommits[7] = [...(forge.prCommits[7] ?? []), { authorLogin: "alice", committerLogin: "bob" }];
+    expect(await approve()).toMatchObject({ code: "reviewer-contributed" });
+  });
+
+  it("refuses a reviewer who authored a PR commit, matched by user id", async () => {
+    forge.reviewList[7] = [{ login: "bob", userId: 42, isBot: false, state: "APPROVED", commitId: HEAD7 }];
+    forge.prCommits[7] = [{ authorId: 42 }];
+    expect(await approve()).toMatchObject({ code: "reviewer-contributed" });
+  });
+
+  it("grants a reviewer who only reviewed, beside commits with no linked GitHub user", async () => {
+    forge.prCommits[7] = [{ authorLogin: "alice" }, {}];
+    expect((await approve()).ok).toBe(true);
+  });
+
   it("refuses a reviewer without write access", async () => {
     forge.perms.bob = "read";
     expect(await approve()).toMatchObject({ code: "no-approving-review" });
@@ -223,6 +245,11 @@ describe("#469 re-verifying a recorded pr-review", () => {
   it("refuses a recorded commit that did not change the entry", async () => {
     forge.pulls[C3] = forge.pulls[C2] ?? [];
     expect(await reverify({ ...RECORDED, mergedSha: C3 })).toMatchObject({ code: "not-changed-here" });
+  });
+
+  it("refuses a recorded reviewer who committed to the PR", async () => {
+    forge.prCommits[7] = [{ committerLogin: "Bob" }];
+    expect(await reverify()).toMatchObject({ code: "reviewer-contributed" });
   });
 
   it("refuses a PR number the commit did not come from", async () => {

@@ -28,8 +28,9 @@ import { findGitRoot } from "./project-dir.js";
  *     the default branch;
  *  4. that commit belongs to a MERGED pull request whose base is the default branch;
  *  5. the pull request has an APPROVED review (each reviewer's latest decisive review) on its head
- *     commit, by a person (not a bot) who is not the pull request's author and has write access
- *     (collaborator permission admin / maintain / write);
+ *     commit, by a person (not a bot) who is not the pull request's author, authored or committed
+ *     none of its commits (logins and user ids compared), and has write access (collaborator
+ *     permission admin / maintain / write);
  *  6. optionally (`JEVITATE_PR_REVIEW_REQUIRE_CODEOWNER=1`), that reviewer is a CODEOWNER of the
  *     entry's file (the default branch's CODEOWNERS; a team owner needs an active membership).
  *
@@ -62,9 +63,19 @@ export interface ForgePull {
   readonly author: string;
 }
 
+/** Who wrote and who committed one commit of a pull request (logins / user ids; absent: no linked GitHub user). */
+export interface ForgeCommitPeople {
+  readonly authorLogin?: string;
+  readonly authorId?: number;
+  readonly committerLogin?: string;
+  readonly committerId?: number;
+}
+
 export interface ForgeReview {
   readonly login: string;
   readonly isBot: boolean;
+  /** The reviewer's GitHub user id, when the forge gives it. */
+  readonly userId?: number;
   /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`, `PENDING`. */
   readonly state: string;
   readonly commitId: string;
@@ -83,6 +94,8 @@ export interface ForgePort {
   isAncestor(sha: string, ref: string): Promise<boolean>;
   pullsForCommit(sha: string): Promise<ForgePull[]>;
   reviews(number: number): Promise<ForgeReview[]>;
+  /** The authors and committers of every commit of the pull request. */
+  pullCommits(number: number): Promise<ForgeCommitPeople[]>;
   /** `admin` | `maintain` | `write` | `triage` | `read` | `none`. */
   permission(login: string): Promise<string>;
   teamMember(org: string, team: string, login: string): Promise<boolean>;
@@ -213,14 +226,36 @@ export class GitHubForge implements ForgePort {
       const list = (await this.#json(`${this.#r}/pulls/${number}/reviews?per_page=100&page=${page}`)) as Record<string, unknown>[];
       if (!Array.isArray(list) || list.length === 0) break;
       for (const r of list) {
-        const user = r.user as { login?: unknown; type?: unknown } | null | undefined;
+        const user = r.user as { login?: unknown; type?: unknown; id?: unknown } | null | undefined;
         if (typeof user?.login !== "string" || typeof r.state !== "string" || typeof r.commit_id !== "string") continue;
         out.push({
           login: user.login,
+          ...(typeof user.id === "number" ? { userId: user.id } : {}),
           isBot: user.type === "Bot" || user.login.endsWith("[bot]"),
           state: r.state,
           commitId: r.commit_id,
           ...(typeof r.submitted_at === "string" ? { submittedAt: r.submitted_at } : {}),
+        });
+      }
+      if (list.length < 100) break;
+    }
+    return out;
+  }
+
+  async pullCommits(number: number): Promise<ForgeCommitPeople[]> {
+    const out: ForgeCommitPeople[] = [];
+    // GitHub lists at most 250 commits of a pull request.
+    for (let page = 1; page <= 3; page++) {
+      const list = (await this.#json(`${this.#r}/pulls/${number}/commits?per_page=100&page=${page}`)) as Record<string, unknown>[];
+      if (!Array.isArray(list) || list.length === 0) break;
+      for (const c of list) {
+        const a = c.author as { login?: unknown; id?: unknown } | null | undefined;
+        const m = c.committer as { login?: unknown; id?: unknown } | null | undefined;
+        out.push({
+          ...(typeof a?.login === "string" ? { authorLogin: a.login } : {}),
+          ...(typeof a?.id === "number" ? { authorId: a.id } : {}),
+          ...(typeof m?.login === "string" ? { committerLogin: m.login } : {}),
+          ...(typeof m?.id === "number" ? { committerId: m.id } : {}),
         });
       }
       if (list.length < 100) break;
@@ -279,6 +314,7 @@ export type ForgeRefusalCode =
   | "pr-mismatch"
   | "no-approving-review"
   | "not-code-owner"
+  | "reviewer-contributed"
   | "has-waivers"
   | "forge-error";
 
@@ -423,8 +459,20 @@ async function approverOf(forge: ForgePort, pull: ForgePull, branch: string, pat
             : `${onlyReviewer ?? "the reviewer"} did not approve it`;
     return refuse("no-approving-review", `pull request #${pull.number}: ${why}`);
   }
+  // A reviewer who authored or committed any commit of the pull request is not independent of it.
+  const commits = await forge.pullCommits(pull.number);
+  const contributed = (r: ForgeReview): boolean =>
+    commits.some(
+      (c) =>
+        [c.authorLogin, c.committerLogin].some((l) => l !== undefined && l.toLowerCase() === r.login.toLowerCase()) ||
+        (r.userId !== undefined && (c.authorId === r.userId || c.committerId === r.userId)),
+    );
+  const independent = candidates.filter((r) => !contributed(r));
+  if (independent.length === 0) {
+    return refuse("reviewer-contributed", `pull request #${pull.number}: every approving reviewer (${candidates.map((r) => r.login).join(", ")}) also authored or committed commits of it — not an independent review`);
+  }
   let last: ForgeRefusal = refuse("no-approving-review", `pull request #${pull.number}: no approving reviewer has write access`);
-  for (const r of candidates) {
+  for (const r of independent) {
     if (!WRITE_ROLES.has(await forge.permission(r.login))) {
       last = refuse("no-approving-review", `pull request #${pull.number}: approving reviewer ${r.login} has no write access to the repository`);
       continue;
