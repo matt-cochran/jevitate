@@ -64,6 +64,13 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ctx.incomplete = answerNotFoundReason(ctx.observed.pages());
   }
 
+  // #446 — a run that stopped while the acted-on form still shows the message an action revealed (an
+  // inline validation error) ends naming it — not a bare "no progress" / "budget exhausted".
+  if (ctx.formMessage !== null && ctx.answer === undefined && ctx.failure === undefined && ctx.incomplete === null && (ctx.stop === "no-progress" || ctx.stop === "exhausted" || ctx.stop === "blocked")) {
+    const shown = ctx.formMessage.lines.map((l) => quote(l, 120)).join(" ");
+    ctx.incomplete = `the form shows ${shown} after ${ctx.formMessage.after} — a validation message the run could not get past (${incompleteReason(ctx.stop, null, ctx.failure, ctx.hang, ctx.tracker)})`;
+  }
+
   // #368 — the run ended still waiting on the reply to its last message: that missing reply is the
   // run's own finding (named with the wait it was given), never folded into a generic stop reason.
   if (ctx.awaitingReply && ctx.answer === undefined && ctx.failure === undefined && (ctx.stop === "no-progress" || ctx.stop === "blocked" || ctx.stop === "exhausted")) {

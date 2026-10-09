@@ -5,9 +5,8 @@
  */
 
 import { decide, type Decision } from "../decide.js";
-import { describeStatus, isEmptyStatus } from "../status.js";
 import type { RunContext } from "./context.js";
-import { TOO_MANY_CHOICES, TOO_MANY_CHOICES_RETRY, firstLine } from "./helpers.js";
+import { TOO_MANY_CHOICES, TOO_MANY_CHOICES_RETRY, firstLine, pageStatusOf } from "./helpers.js";
 import type { PageView } from "./page-view.js";
 import type { Perceived } from "./step.js";
 
@@ -38,7 +37,7 @@ export async function decideStep(ctx: RunContext, step: Perceived, view: PageVie
         ...(ctx.conversation.latestReply === null && ctx.conversation.sent.length === 0
           ? {}
           : { conversation: { latestReply: ctx.conversation.latestReply, sentMessages: ctx.conversation.sent } }),
-        ...(isEmptyStatus(ctx.status) ? {} : { pageStatus: describeStatus(ctx.status) }),
+        ...pageStatusOf(ctx),
         ...(maxChoices === undefined ? {} : { maxChoices }),
         ...(ctx.findOut ? { pageText: visibleText } : {}),
         ...(ctx.deltas === null ? {} : { actionDeltas: true }),

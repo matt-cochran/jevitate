@@ -21,14 +21,11 @@ import {
   type ReplyResult,
   type RunOutcome,
 } from "../conversation.js";
-import {
-  describeStatus,
-  isEmptyStatus,
-} from "../status.js";
 
 import {
   fieldValuesOf,
   keyOf,
+  pageStatusOf,
   quote,
 } from "./helpers.js";
 
@@ -184,7 +181,7 @@ export function newStep(ctx: RunContext, input: StepInput) {
           pageText,
           history: ctx.history,
           secrets: ctx.secrets,
-          ...(isEmptyStatus(ctx.status) ? {} : { pageStatus: describeStatus(ctx.status) }),
+          ...pageStatusOf(ctx),
           ...(signIn === null ? {} : { signInFacts: signIn.facts }),
           ...(saved === null ? {} : { saveFacts: saved.facts }),
           fieldValues: fieldValuesOf(snap.controls, ctx.isBound),

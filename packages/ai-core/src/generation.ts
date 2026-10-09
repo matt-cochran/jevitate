@@ -106,7 +106,9 @@ export const GOAL_ANSWER_INSTRUCTIONS =
   "page's heading / title. For a list (sections, options, items), give one claim per entry, each " +
   "quoting that entry. When the pages do not answer the goal, return `answer: null` and no claims — " +
   "also when the goal asks WHETHER something exists and no page shows it (code then reports it as not " +
-  "present, from the pages seen): never claim an absence with a quote that does not show it.";
+  "present, from the pages seen). To state that the pages seen have NO such control, give that claim " +
+  "`absent` = its shortest name (\"Launch\") and `quote` = \"\": code checks every observed control and " +
+  "text for it. Never claim an absence with a quote that does not show it.";
 
 /** The answer to a find-out / understand goal, from the observed page text (`report`). */
 export const GoalAnswerInput = z.object({
@@ -124,7 +126,11 @@ export const GoalAnswerInput = z.object({
 }).strict();
 export const GoalAnswerOutput = z.object({
   answer: z.string().nullable(),
-  claims: z.array(z.object({ claim: z.string(), quote: z.string() }).strict()).max(20),
+  /**
+   * #447: `absent` — a claim that the pages seen have NO such control or thing, by its name; its
+   * `quote` is empty, and code grounds it on the observed control inventory and page text.
+   */
+  claims: z.array(z.object({ claim: z.string(), quote: z.string(), absent: z.string().max(200).nullable().optional() }).strict()).max(20),
 }).strict();
 
 /**
@@ -287,7 +293,7 @@ export const JourneyGoalOutput = z.object({
 export const GEN_TASKS = {
   "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "5" },
   "chat.reply": { input: ChatReplyInput, output: ChatReplyOutput, promptVersion: "2" },
-  "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "5", temperature: 0 },
+  "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "6", temperature: 0 },
   "text.edit": { input: TextEditInput, output: TextEditOutput, promptVersion: "1", temperature: 0 },
   "triage.narrative": { input: TriageInput, output: TriageOutput, promptVersion: "1" },
   "ux.recommendation": { input: UxRecommendationInput, output: UxRecommendationOutput, promptVersion: "1" },
