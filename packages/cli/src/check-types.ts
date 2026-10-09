@@ -4,6 +4,8 @@ import { type GenerationPort, type JudgmentPort, type UsageAggregate, type Usage
 import type { BrowserPort } from "@jevitate/playwright";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import type { JourneyRunResult } from "@jevitate/runtime";
+import type { JourneyHealRequest } from "./journey-heal.js";
+import type { GitExec } from "./change-context.js";
 import { type ConsolidatedDefect, type DiffEntry, type FindingIdentity, type FindingsDiff } from "@jevitate/findings";
 import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
 import { type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
@@ -39,6 +41,15 @@ export class CheckPreflightError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CheckPreflightError";
+  }
+}
+
+/** `check --self-heal` arguments that are unusable (exit 64): a heal without a change context, a change/budget flag without a heal. */
+export class CheckArgsError extends Error {
+  readonly code = "E_CHECK_ARGS" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "CheckArgsError";
   }
 }
 
@@ -104,6 +115,14 @@ export interface RunCheckOptions {
   readonly browserPortFactory?: () => BrowserPort;
   readonly browser?: BrowserRunOptions;
   readonly runners?: Partial<CheckRunners>;
+  /**
+   * #453 `--self-heal hybrid|full`: a Journey item that quarantines is re-run ONCE with a change-aware
+   * self-heal (the change scope is read once at preflight; the re-run is charged to the check budget).
+   * Needs `--changes` and/or `--change-note`, and a gateway (`--real`/`--fake-ai`). Absent: fail closed.
+   */
+  readonly selfHeal?: JourneyHealRequest;
+  /** Test seam: the read-only git the change scope is read through. */
+  readonly changeGitExec?: GitExec;
   /** Clock seams. */
   readonly now?: () => number;
   readonly nowIso?: () => string;
@@ -135,8 +154,12 @@ export interface CheckItemReport {
   readonly goalOutcome?: string;
   readonly actions: number;
   readonly durationMs: number;
-  /** JUnit verdict after gating. */
-  readonly verdict: "passed" | "failed" | "error" | "skipped";
+  /** JUnit verdict after gating. `pending-review` (#453): a self-heal proposed a Journey revision a person must review. */
+  readonly verdict: "passed" | "failed" | "error" | "skipped" | "pending-review";
+  /** #453: the proposed revision a `pending-review` Journey item produced (absent fields: the run did not name them). */
+  readonly proposal?: { readonly journeyId: string; readonly proposalId?: string; readonly path?: string };
+  /** #453: heal attempts made on a Journey item that was re-run with self-heal. */
+  readonly healAttempts?: number;
   /** Keys of the gating findings this item's run observed. */
   readonly gating: readonly string[];
 }
@@ -164,9 +187,12 @@ export interface CheckResult {
   readonly kind: "jevitate-check";
   readonly suite: string;
   readonly suitePath: string;
-  readonly verdict: "pass" | "fail";
-  /** 0 pass · 1 a gating finding · 2 no gating finding, but an item errored or the budget was exceeded. */
-  readonly exitCode: 0 | 1 | 2;
+  readonly verdict: "pass" | "fail" | "pending-review";
+  /**
+   * 0 pass · 1 a gating finding · 2 no gating finding, but an item errored or the budget was exceeded ·
+   * 5 (#453) nothing failed but a self-heal proposed a Journey revision awaiting review. Precedence 1 > 2 > 5 > 0.
+   */
+  readonly exitCode: 0 | 1 | 2 | 5;
   readonly engine: EngineInfo;
   readonly targetBuild?: string;
   readonly startedAt: string;
@@ -186,7 +212,11 @@ export interface CheckResult {
     readonly errors: number;
     readonly skipped: number;
     readonly gatingFindings: number;
+    /** #453: Journey items whose self-heal proposed a revision awaiting review. */
+    readonly pendingReview: number;
   };
+  /** #453: the proposed Journey revisions awaiting review (`jevitate journey review <journeyId>`). */
+  readonly proposals: ReadonlyArray<{ readonly journeyId: string; readonly proposalId?: string; readonly path?: string }>;
   readonly diff?: { readonly baseline: readonly RunSummary[]; readonly summary: FindingsDiff["summary"] };
   /** Every result file this check wrote (what `report`/`diff`/`baseline tag` read back). */
   readonly results: readonly string[];

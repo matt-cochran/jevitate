@@ -22,6 +22,7 @@ let validRecording: string;
 let validScript: string;
 let badProduct: string;
 let suiteOffAllowlist: string;
+let suiteValid: string;
 let suiteUnknownFingerprint: string;
 let badCatalog: string;
 
@@ -53,6 +54,8 @@ beforeAll(() => {
     suiteOffAllowlist,
     JSON.stringify({ version: 1, ai: "fake", targets: [{ name: "t", url: "http://127.0.0.1:3999/", allow: ["http://other.test"], missions: [{ strategy: "coverage" }] }] }),
   );
+  suiteValid = join(dir, "valid.suite.json");
+  writeFileSync(suiteValid, JSON.stringify({ version: 1, ai: "fake", targets: [{ name: "t", url: "http://127.0.0.1:3999/", missions: [{ strategy: "feature", feature: "f" }] }] }));
   const result = join(dir, "adversarial.result.json");
   writeFileSync(
     result,
@@ -322,6 +325,10 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--suite", missing, "--out", join(dir, "check")],
       ["--suite", suiteOffAllowlist, "--out", join(dir, "check")],
       ["--suite", suiteUnknownFingerprint, "--out", join(dir, "check")],
+      // #453: a change context needs --self-heal; the range is validated; a heal needs a change context.
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--changes", "HEAD~1..HEAD"],
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--self-heal", "hybrid", "--changes", "a;id"],
+      ["--suite", suiteValid, "--out", join(dir, "check"), "--self-heal", "hybrid"],
     ],
   },
   report: { cases: [["--since", "not-a-run-or-date"]] },
