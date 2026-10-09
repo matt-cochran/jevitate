@@ -1,4 +1,7 @@
-import { NotImplementedError } from "./not-implemented.js";
+import { FsJourneyStore, stampAnchorStepIds, type Journey } from "@jevitate/journey";
+import { ensureStepIds, RecordingSchema, type Recording } from "@jevitate/recording";
+import { readdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 /**
  * #467b — `jevitate journey migrate --step-ids`: the one-time repo rewrite that mints a stable
@@ -11,7 +14,14 @@ import { NotImplementedError } from "./not-implemented.js";
  * It never approves. CLI only (a one-time rewrite of the repo the operator runs and commits; no MCP
  * tool — see EXCLUDED in mcp-cli-parity.test.ts).
  *
- * STUB (d-surface-0): the feature deliverable replaces the body of `migrateStepIds` and owns this file.
+ * Scope: every local Journey (promoted or draft, namespace folders included) via the journey store,
+ * so formatting and file mode match every other write. NOT migrated: the sources cache (remote
+ * Journeys are content-hash-trusted and never rewritten) and `.jevitate/logs` recordings (TTL run
+ * output). Also migrated: committed regression recordings (`<project>/regressions/*.recording.json`),
+ * written in `commitRegression`'s format. Only the recording file is rewritten, never `*.meta.json`:
+ * the regression fingerprint is `strictSignature(step, pageUrl)` (step content, not `stepId`) and the
+ * invariant oracle indexes by flat step position, so neither is invalidated by the ids.
+ * Never mints on read; idempotent (a second run finds nothing to change).
  */
 
 export interface MigrateStepIdsRequest {
@@ -45,9 +55,55 @@ export interface MigrateStepIdsResult {
   readonly totals: { readonly files: number; readonly stepsMinted: number; readonly needsReapproval: number };
 }
 
-export async function migrateStepIds(_req: MigrateStepIdsRequest): Promise<MigrateStepIdsResult> {
-  throw new NotImplementedError("jevitate journey migrate --step-ids", "#467");
+export async function migrateStepIds(req: MigrateStepIdsRequest): Promise<MigrateStepIdsResult> {
+  const store = new FsJourneyStore(req.journeysDir);
+  const journeys: MigratedJourney[] = [];
+  for (const meta of await store.list()) {
+    const before = await store.get(meta.id);
+    if (before === null) continue;
+    const withIds: Journey = { ...before, recording: ensureStepIds(before.recording) };
+    const after = stampAnchorStepIds(withIds);
+    const stepsMinted = countIds(after) - countIds(before);
+    const anchorsLinked = countAnchorIds(after) - countAnchorIds(before);
+    if (stepsMinted === 0 && anchorsLinked === 0) continue;
+    if (!req.dryRun) await store.put(after);
+    journeys.push({ id: meta.id, stepsMinted, anchorsLinked, needsReapproval: before.metadata.promoted });
+  }
+  const recordings = req.projectDir === null ? [] : await migrateRegressions(join(req.projectDir, "regressions"), req.dryRun);
+  return {
+    dryRun: req.dryRun,
+    journeys,
+    recordings,
+    totals: {
+      files: journeys.length + recordings.length,
+      stepsMinted: journeys.reduce((n, j) => n + j.stepsMinted, 0) + recordings.reduce((n, r) => n + r.stepsMinted, 0),
+      needsReapproval: journeys.filter((j) => j.needsReapproval).length,
+    },
+  };
 }
+
+async function migrateRegressions(dir: string, dryRun: boolean): Promise<MigratedRecording[]> {
+  let names: string[];
+  try {
+    names = (await readdir(dir)).filter((n) => n.endsWith(".recording.json")).sort();
+  } catch {
+    return [];
+  }
+  const out: MigratedRecording[] = [];
+  for (const name of names) {
+    const path = join(dir, name);
+    const rec = RecordingSchema.parse(JSON.parse(await readFile(path, "utf8")));
+    const next = ensureStepIds(rec);
+    if (next === rec) continue;
+    if (!dryRun) await writeFile(path, `${JSON.stringify(RecordingSchema.parse(next), null, 2)}\n`);
+    out.push({ path, stepsMinted: countRecIds(next) - countRecIds(rec) });
+  }
+  return out;
+}
+
+const countRecIds = (r: Recording): number => r.pages.reduce((n, p) => n + p.steps.filter((s) => s.stepId !== undefined).length, 0);
+const countIds = (j: Journey): number => j.recording.pages.reduce((n, p) => n + p.steps.filter((s) => s.stepId !== undefined).length, 0);
+const countAnchorIds = (j: Journey): number => (j.metadata.anchors ?? []).filter((a) => a.stepId !== undefined).length;
 
 /** The human rendering (no `--json`). */
 export function renderMigrateStepIds(r: MigrateStepIdsResult): string {

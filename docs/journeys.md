@@ -272,6 +272,23 @@ e.g. "approved non-interactively (likely an agent: CLAUDECODE)". A coding agent 
 a person and never uses the escape hatch on its own. What each layer guarantees, and how to
 enforce approvals in git review and CI: [the catalog](./catalog.md#what-human-approval-guarantees).
 
+### Migrating to step ids (`journey migrate --step-ids`)
+
+Since 0.10 every recorded step carries a stable `stepId`, and anchors point at their step by it.
+`jevitate journey migrate --step-ids [--dry-run] [--dir <path>] [--json]` is the one-time backfill
+for Journeys recorded earlier: it mints a deterministic id on every step that has none (ids already
+present are never renamed), stamps each anchor with its step's id, and writes through the Journey
+store. It covers every local Journey, drafts included, and the committed regression recordings
+(`.jevitate/regressions/*.recording.json`; their `*.meta.json` fingerprint hashes step content, not
+ids, so it stays valid). It does not touch the sources cache (remote Journeys stay content-hash-trusted)
+or `.jevitate/logs`. Nothing is minted on read, and
+a second run changes nothing. `--dry-run` writes nothing and lists what would change.
+
+Ids change a Journey's content hash, so **every promoted Journey needs re-approval** afterwards; the
+migration never approves. The result names them, and `jevitate journey review --stale` lists them
+later, marking those that changed only by step ids. Recommended: run the migration on one branch,
+commit the result as a single PR, and have a reviewer re-approve the step-id-only changes there.
+
 ## Record a flow by demonstration
 
 ```bash

@@ -64,25 +64,7 @@ async function run(argv: readonly string[]): Promise<{ code: number | undefined;
   return { code, out: stdout.join(""), err: stderr.join("") };
 }
 
-/** Evaluated lazily (paths exist only after beforeAll); `<dir>`/`<suite>` are placeholders. */
-const STUB_COMMANDS: ReadonlyArray<readonly string[]> = [
-  ["journey", "migrate", "--step-ids", "--dry-run"],
-];
-
-describe("0.10 CLI stubs refuse with E_NOT_IMPLEMENTED (exit 2)", () => {
-  it.each(STUB_COMMANDS.map((a) => [a.join(" "), a] as const))("%s", async (_label, raw) => {
-    const argv = raw.map((a) => a.replace("<suite>", suite).replace("<dir>", dir));
-    const json = await run([...argv, "--json"]);
-    expect(json.code, json.err).toBe(2);
-    const lines = json.out.trimEnd().split("\n");
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toMatchObject({ v: 1, ok: false, error: { code: "E_NOT_IMPLEMENTED" } });
-    const human = await run(argv);
-    expect(human.code).toBe(2);
-    expect(human.out).toBe("");
-    expect(human.err).toMatch(/E_NOT_IMPLEMENTED/);
-  });
-
+describe("0.10 CLI surface", () => {
   it("connect journeeze takes no key flag (the key is read from stdin, never argv)", () => {
     const program = buildProgram(cliDeps());
     const connect = program.commands.find((c) => c.name() === "connect")!.commands.find((c) => c.name() === "journeeze")!;
