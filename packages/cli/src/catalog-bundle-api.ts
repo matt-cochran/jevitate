@@ -4,6 +4,7 @@ import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/
 import { basename, dirname, join, resolve } from "node:path";
 import { CatalogInputError, CatalogLoader, PERSONAS_FILE } from "./catalog.js";
 import { buildCatalogBundle, BUNDLE_KIND, looksPersonal, type CatalogBundleFinding, type CheckRecordInput } from "./catalog-bundle.js";
+import { collectBundleFindings } from "./catalog-bundle-findings.js";
 import { execGitReadOnly, type GitExec } from "./change-context.js";
 import { readCliVersion } from "./version.js";
 
@@ -46,7 +47,7 @@ export interface ExportCatalogBundleRequest {
 export interface ExportCatalogBundleDeps {
   readonly git?: GitExec;
   readonly version?: () => string;
-  /** d464c HOOK: the machine findings to export (default none: `findings: []`). */
+  /** d464c: the machine findings to export (default: the project's runs, UX reports and ledger — `collectBundleFindings`). */
   readonly findings?: () => Promise<readonly CatalogBundleFinding[]>;
 }
 
@@ -189,13 +190,14 @@ export async function exportCatalogBundle(req: ExportCatalogBundleRequest, deps:
     }
   }
 
+  const found = deps.findings === undefined ? await collectBundleFindings({ root, dataDir: req.catalogDir }) : { findings: await deps.findings(), warnings: [] };
   const { bundle, warnings: buildWarnings } = buildCatalogBundle({
     producer: { version: (deps.version ?? readCliVersion)(), ...(head === null || head === "" ? {} : { commit: head }) },
     productName: await productNameOf(req, root),
     catalog,
     personaFields,
     checks,
-    findings: deps.findings === undefined ? [] : await deps.findings(),
+    findings: found.findings,
   });
 
   const text = `${JSON.stringify(bundle, null, 2)}\n`;
@@ -224,7 +226,7 @@ export async function exportCatalogBundle(req: ExportCatalogBundleRequest, deps:
       findings: bundle.findings.length,
       media: 0,
     },
-    warnings: [...warnings, ...buildWarnings],
+    warnings: [...warnings, ...found.warnings, ...buildWarnings],
   };
 }
 
