@@ -75,7 +75,7 @@ export function explainLaunchFailure(err: unknown, opts: Pick<OpenOptions, "exec
     );
   }
   return new BrowserNotInstalledError(
-    `Playwright's pinned Chromium is not installed (expected at ${where}); run: npx playwright install chromium`,
+    `Playwright's pinned Chromium is not installed (expected at ${where}); run: jevitate install-browser`,
     { cause: err },
   );
 }

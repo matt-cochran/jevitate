@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { registerDoctorCommand } from "./resource-preflight.js";
+import { registerBrowserCommands } from "./browser-cli.js";
 import { fail } from "./envelope.js";
 import { registerLedgerCommands } from "./ledger-cli.js";
 import { registerAiCommands } from "./ai-cli.js";
@@ -122,6 +123,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerReportCommands(program, { missionTargetsDir: resolveMissionTargetsDir(deps) });
   registerLogsCommands(program, deps);
   registerInvariantsCommands(program);
+  registerBrowserCommands(program); // #450: install-browser, browser-path
   registerDoctorCommand(program); // #205: resource governance — host load, machine browser slots, orphans
   useUsageExitCode(program);
 
