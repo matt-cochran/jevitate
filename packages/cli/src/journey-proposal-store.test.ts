@@ -1,17 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { JourneyProposalSchema, type Journey } from "@jevitate/journey";
 import type { Step } from "@jevitate/recording";
 import type { HealAttempt, ProposedRevisionDraft } from "@jevitate/runtime";
+import { journeyReviewHash } from "./journey-review.js";
 import {
+  JourneyProposalInvalidError,
   JourneyProposalNotFoundError,
   JourneyProposalProofError,
   checkProposal,
   proposalPath,
+  proposedJourney,
   readJourneyProposal,
   rejectJourneyProposal,
   rejectedProposalPath,
@@ -160,5 +163,72 @@ describe("#453 rejectJourneyProposal", () => {
     await rejectJourneyProposal(dir, "pub", w.proposalId, { reason: "wrong button", provenance });
     const rec = JSON.parse(await readFile(rejectedProposalPath(dir, "pub", w.proposalId), "utf8"));
     expect([rec.reason, rec.provenance.user, rec.rejectedAt]).toEqual(["wrong button", "mc", "2026-10-09T10:00:00.000Z"]);
+  });
+});
+
+describe("#453 review: the heal floor holds on write, read and accept", () => {
+  /** The pending proposal with its recording's step 2 replaced by `after`, its hash recomputed (a hand edit). */
+  async function editedTo(after: Step, base = baseJourney()) {
+    await write(base);
+    const p = (await readJourneyProposal(dir, "pub"))!;
+    const page = p.recording.pages[0]!;
+    const recording = { ...p.recording, pages: [{ ...page, steps: [page.steps[0]!, { ...page.steps[1]!, step: after }] }] };
+    return { ...p, recording, proposedHash: journeyReviewHash(proposedJourney(base, { recording })) };
+  }
+
+  it("refuses to accept a proposal edited to retarget a click onto a destructive control", async () => {
+    const edited = await editedTo({ ...CLICK_BEFORE, target: { role: "button", name: "Delete account" } } as Step);
+    expect(checkProposal(baseJourney(), edited)).toBeInstanceOf(JourneyProposalProofError);
+  });
+
+  it("refuses to store a retargeted click whose recorded expectRequests expect a POST", async () => {
+    const base = baseJourney();
+    const page = base.recording.pages[0]!;
+    base.recording = { ...base.recording, pages: [{ ...page, steps: [page.steps[0]!, { ...page.steps[1]!, expectRequests: [{ kind: "requestMade", method: "POST", pathGlob: "/api/publish" }] }] }] };
+    const draft = draftOf(base);
+    await expect(writeJourneyProposal(dir, { journeyId: "pub", base, draft, attempts: [ATTEMPT], changes: {} })).rejects.toBeInstanceOf(JourneyProposalProofError);
+  });
+
+  it("refuses to accept a proposal whose retargeted navigate leaves the Journey's origin", async () => {
+    const nav: Step = { kind: "navigate", url: "/editor", expect: { kind: "visible", target: { testId: "editor" } } };
+    const base = baseJourney();
+    const page = base.recording.pages[0]!;
+    base.recording = { ...base.recording, pages: [{ ...page, steps: [page.steps[0]!, { step: nav }] }] };
+    const draft: ProposedRevisionDraft = {
+      recording: { ...base.recording, pages: [{ ...page, steps: [page.steps[0]!, { step: { ...nav, url: "/editor-2" } as Step }] }] },
+      steps: [{ index: 1, before: nav, after: { ...nav, url: "/editor-2" } as Step, attempt: 1, hypothesis: "route renamed", evidence: [] }],
+    };
+    await writeJourneyProposal(dir, { journeyId: "pub", base, draft, attempts: [ATTEMPT], changes: {} });
+    const p = (await readJourneyProposal(dir, "pub"))!;
+    const recording = { ...p.recording, pages: [{ ...p.recording.pages[0]!, steps: [p.recording.pages[0]!.steps[0]!, { step: { ...nav, url: "https://evil.test/editor" } as Step }] }] };
+    const edited = { ...p, recording, proposedHash: journeyReviewHash(proposedJourney(base, { recording })) };
+    expect(checkProposal(base, edited)).toBeInstanceOf(JourneyProposalProofError);
+  });
+});
+
+describe("#453 review: proposals are never read or written through a symbolic link", () => {
+  it("refuses to write when .proposals is a symlink", async () => {
+    const elsewhere = await mkdtemp(join(tmpdir(), "jev-453-elsewhere-"));
+    await symlink(elsewhere, join(dir, ".proposals"), "dir");
+    await expect(write()).rejects.toBeInstanceOf(JourneyProposalInvalidError);
+  });
+
+  it("refuses to read a proposal file that is a symlink", async () => {
+    const w = await write();
+    const target = join(dir, "real.json");
+    await writeFile(target, await readFile(w.path, "utf8"));
+    await mkdir(join(dir, ".proposals", "x"), { recursive: true });
+    await symlink(target, join(dir, ".proposals", "x", "pub.json"));
+    await expect(readJourneyProposal(dir, "x/pub")).rejects.toBeInstanceOf(JourneyProposalInvalidError);
+  });
+});
+
+describe("#453 review: committed proposals hold no credential", () => {
+  it("scrubs a credential-shaped value from a change note and a hypothesis", async () => {
+    const base = baseJourney();
+    const key = "sk-live0123456789abcdefABCDEF";
+    const draft = draftOf(base);
+    const w = await writeJourneyProposal(dir, { journeyId: "pub", base, draft: { ...draft, steps: [{ ...draft.steps[0]!, hypothesis: `label pasted ${key}` }] }, attempts: [ATTEMPT], changes: { notes: [`rotated ${key}`] } });
+    expect((await readFile(w.path, "utf8")).includes(key)).toBe(false);
   });
 });

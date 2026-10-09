@@ -73,15 +73,21 @@ export class JourneyOutcomeChecks {
     return this.#lastFailures;
   }
 
-  /** Starts a step's request window as it begins (never changes the replay). */
+  /**
+   * Starts a step's request window as it begins (never changes the replay). #453: the window
+   * RESTARTS each time the step runs again — a failed original attempt or a rejected heal probe's
+   * requests never satisfy the expectations of the attempt that finally passed.
+   */
   observer(): StepObserver | undefined {
     if (this.#steps.length === 0) return undefined;
     return {
       beforeStep: async ({ index }) => {
         const w = this.#steps.find((s) => s.index === index);
-        if (w === undefined || w.capture !== undefined) return;
+        if (w === undefined) return;
+        const monitor = monitorFor(this.#page);
+        if (w.capture !== undefined) monitor.stopCapture(w.capture);
         w.startedAt = clock.now();
-        w.capture = monitorFor(this.#page).startCapture();
+        w.capture = monitor.startCapture();
       },
     };
   }

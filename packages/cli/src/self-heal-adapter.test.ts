@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import type { Step } from "@jevitate/recording";
-import { FakeGenerationGateway, type GenerationPort } from "@jevitate/ai-core";
+import { FakeGenerationGateway, UsageTracker, type GenerationPort } from "@jevitate/ai-core";
 import { FakeClock, clock, installClock, resetClock } from "@jevitate/domain";
 import { explainsBreak, type ChangeEvidenceRef, type ChangeScope, type HealerRequest } from "@jevitate/runtime";
 import { makeEvidenceSelfHealer, type InventoryControl } from "./self-heal-adapter.js";
@@ -94,4 +94,16 @@ test("already-tried candidates are not proposed again", async () => {
   const healer = makeEvidenceSelfHealer(undefined, { inventory: async () => [control("link", "Create")] });
   const tried = [{ ...brokenStep, target: { role: "link", name: "Create" } }] as Step[];
   expect((await healer.proposeCandidates(request({ tried }))).candidates).toEqual([]);
+});
+
+test("charges the tokens the gateway reported for the ranker call", async () => {
+  const usage = new UsageTracker();
+  const gen = {
+    generate: vi.fn(async () => {
+      usage.recordGeneration({ inputTokens: 120, outputTokens: 30 });
+      return { output: { order: [0], control: null }, provenance: {} as never };
+    }),
+  } as unknown as GenerationPort;
+  const healer = makeEvidenceSelfHealer(gen, { inventory: async () => [control("link", "Create")], usage });
+  expect((await healer.proposeCandidates(request())).usage.tokens).toBe(150);
 });

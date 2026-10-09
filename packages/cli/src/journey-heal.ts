@@ -39,10 +39,32 @@ export interface JourneyHealNames {
   readonly changes: string;
   readonly changeNote: string;
   readonly budget: string;
+  readonly maxAttempts: string;
+  readonly maxRunAttempts: string;
+  readonly maxMs: string;
+  readonly maxRunMs: string;
 }
 
-export const CLI_HEAL_NAMES: JourneyHealNames = { selfHeal: "--self-heal", changes: "--changes", changeNote: "--change-note", budget: "--heal-max-*" };
-export const MCP_HEAL_NAMES: JourneyHealNames = { selfHeal: "'selfHeal'", changes: "'changes'", changeNote: "'changeNote'", budget: "'healMax*'" };
+export const CLI_HEAL_NAMES: JourneyHealNames = {
+  selfHeal: "--self-heal",
+  changes: "--changes",
+  changeNote: "--change-note",
+  budget: "--heal-max-*",
+  maxAttempts: "--heal-max-attempts",
+  maxRunAttempts: "--heal-max-run-attempts",
+  maxMs: "--heal-max-ms",
+  maxRunMs: "--heal-max-run-ms",
+};
+export const MCP_HEAL_NAMES: JourneyHealNames = {
+  selfHeal: "'selfHeal'",
+  changes: "'changes'",
+  changeNote: "'changeNote'",
+  budget: "'healMax*'",
+  maxAttempts: "'healMaxAttempts'",
+  maxRunAttempts: "'healMaxRunAttempts'",
+  maxMs: "'healMaxMs'",
+  maxRunMs: "'healMaxRunMs'",
+};
 
 const hasBudget = (r: JourneyHealRequest): boolean =>
   r.maxAttempts !== undefined || r.maxModelCalls !== undefined || r.maxMs !== undefined || r.maxRunAttempts !== undefined || r.maxRunMs !== undefined;
@@ -66,9 +88,22 @@ export function validateJourneyHeal(r: JourneyHealRequest, names: JourneyHealNam
   }
   if (r.changes !== undefined) parseChangeRange(r.changes);
   validateChangeNotes(r.changeNotes);
+  // A run limit below its step limit is refused (fail loud), never silently clamped.
+  const stepAttempts = r.maxAttempts ?? DEFAULT_HEAL_BUDGET.perStep.maxAttempts;
+  if (r.maxRunAttempts !== undefined && r.maxRunAttempts < stepAttempts) {
+    throw new JourneyHealArgsError(`${names.maxRunAttempts} ${r.maxRunAttempts} is below the per-step limit ${stepAttempts} (${names.maxAttempts}) — a run limit is never below its step limit`);
+  }
+  const stepMs = r.maxMs ?? DEFAULT_HEAL_BUDGET.perStep.maxMs;
+  if (r.maxRunMs !== undefined && r.maxRunMs < stepMs) {
+    throw new JourneyHealArgsError(`${names.maxRunMs} ${r.maxRunMs} is below the per-step limit ${stepMs} (${names.maxMs}) — a run limit is never below its step limit`);
+  }
 }
 
-/** The run's `HealBudget`: the defaults, with the given per-step and per-run limits (a run limit is never below its step limit). */
+/**
+ * The run's `HealBudget`: the defaults, with the given per-step and per-run limits. A run limit is
+ * never below its step limit: a given one below it is refused by `validateJourneyHeal` (exit 64);
+ * an unset one defaults to at least the step limit.
+ */
 export function journeyHealBudget(r: JourneyHealRequest): HealBudget {
   const d = DEFAULT_HEAL_BUDGET;
   const perStep = {

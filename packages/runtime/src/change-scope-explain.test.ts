@@ -37,6 +37,21 @@ describe("explainsBreak (#453, deterministic)", () => {
     expect(explainsBreak(step, scopeOf({ id: "n1", kind: "note", note: "we reworded the Create New button" }))).toMatchObject({ explained: true, candidates: [] });
   });
 
+  it("does not explain an anchor a note only contains as part of a longer word", () => {
+    const step: Step = { kind: "click", target: { role: "button", name: "Save" }, expect: seen };
+    expect(explainsBreak(step, scopeOf({ id: "n1", kind: "note", note: "Saved searches moved to the sidebar" })).explained).toBe(false);
+  });
+
+  it("never explains a generic anchor by an unpaired note alone", () => {
+    const step: Step = { kind: "click", target: { role: "button", name: "OK" }, expect: seen };
+    expect(explainsBreak(step, scopeOf({ id: "n1", kind: "note", note: "the OK dialog was reworded" })).explained).toBe(false);
+  });
+
+  it("explains an anchor a note names as whole tokens across punctuation", () => {
+    const step: Step = { kind: "click", target: { testId: "create-new" }, expect: seen };
+    expect(explainsBreak(step, scopeOf({ id: "n1", kind: "note", note: "dropped the Create New test id" })).explained).toBe(true);
+  });
+
   it("never explains a break with inserted-ui evidence (report-only, Q3)", () => {
     const step: Step = { kind: "click", target: { role: "button", name: "Create New" }, expect: seen };
     expect(explainsBreak(step, scopeOf({ id: "e1", kind: "inserted-ui", before: "Create New", after: "Confirm" })).explained).toBe(false);
@@ -52,6 +67,6 @@ describe("newAnchorsInChange", () => {
   it("is true only when the candidate's new anchor is some evidence's after", () => {
     const broken: Step = { kind: "click", target: { role: "button", name: "Create New" }, expect: seen };
     const scope = scopeOf({ id: "e1", kind: "label", before: "Create New", after: "Create" });
-    expect([newAnchorsInChange(broken, { ...broken, target: { role: "button", name: "Create" } }, scope), newAnchorsInChange(broken, { ...broken, target: { role: "button", name: "Make" } }, scope)]).toEqual([true, false]);
+    expect([newAnchorsInChange(broken, { ...broken, target: { role: "button", name: "Create" } }, scope.evidence), newAnchorsInChange(broken, { ...broken, target: { role: "button", name: "Make" } }, scope.evidence)]).toEqual([true, false]);
   });
 });

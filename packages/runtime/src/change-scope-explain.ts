@@ -6,7 +6,8 @@ import type { ChangeEvidence, ChangeEvidenceKind, ChangeScope } from "./change-s
  * (Jev may only rank candidates, advisory). A break is explained when some anchor value on the step
  * (its target's testId / name / label / text, a css `#id`/`.class` token, the same on a `container`,
  * or a navigate URL's path) equals an evidence `before` — whole string, case-insensitive,
- * whitespace-normalised — of a compatible kind, or a free-text change note mentions it literally.
+ * whitespace-normalised — of a compatible kind, or a free-text change note mentions it as whole tokens
+ * (`noteMentions`; never a short or generic anchor).
  * Each matching evidence with an `after` yields a deterministic retarget candidate: the step with
  * that one field set to `after`, everything else (its proof) untouched. `inserted-ui` evidence is
  * reported, never healed (0.9.0), so it never explains a break.
@@ -123,6 +124,38 @@ function matches(a: Anchor, beforeValue: string): boolean {
   return a.kind === "url" ? normalizePath(a.value) === normalizePath(beforeValue) : normalizeAnchor(a.value) === normalizeAnchor(beforeValue);
 }
 
+/** Lower-cased word tokens (letters/digits), every other character a separator. */
+function tokens(s: string): string[] {
+  return s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t !== "");
+}
+
+/**
+ * Anchor values an UNPAIRED note never explains alone: too short to be specific, or a generic
+ * control word that any note about the UI would mention.
+ */
+const GENERIC_ANCHORS: ReadonlySet<string> = new Set([
+  "btn", "button", "ok", "link", "a", "go", "yes", "no", "next", "back", "close", "cancel", "submit", "menu", "icon", "item",
+  "input", "field", "form", "label", "text", "div", "span", "nav", "header", "footer", "main", "content", "container", "wrapper",
+  "here", "click", "click here", "more", "open", "toggle",
+]);
+
+/**
+ * #453: does a free-text note mention the anchor? A whole-token, normalised match: the anchor's
+ * tokens appear as a contiguous run of the note's tokens ("Create New" in "reworded the create-new
+ * button", never "Save" in "Saved searches"). An anchor shorter than 3 characters or generic
+ * (`GENERIC_ANCHORS`) is never explained by a note alone.
+ */
+export function noteMentions(note: string, anchor: string): boolean {
+  const want = tokens(anchor);
+  const joined = want.join(" ");
+  if (want.length === 0 || joined.replace(/ /g, "").length < 3 || GENERIC_ANCHORS.has(joined)) return false;
+  const have = tokens(note);
+  for (let i = 0; i + want.length <= have.length; i++) {
+    if (want.every((t, k) => have[i + k] === t)) return true;
+  }
+  return false;
+}
+
 /** The deterministic default `ExplainsBreak`. */
 export const explainsBreak: ExplainsBreak = (step, scope) => {
   const anchors = stepAnchors(step);
@@ -157,8 +190,8 @@ export const explainsBreak: ExplainsBreak = (step, scope) => {
           hypothesis: `${a.field} '${a.value}' → '${e.after.trim()}' (${cite(e)})`,
         });
       } else if (e.kind === "note" && e.before === undefined && e.note !== undefined) {
-        // An unparsable note explains by literal mention only — it implies no candidate.
-        if (normalizeAnchor(e.note).includes(normalizeAnchor(a.value))) explainedByThis = true;
+        // An unparsable note explains by a whole-token mention only — it implies no candidate.
+        if (noteMentions(e.note, a.value)) explainedByThis = true;
       }
     }
     if (explainedByThis) evidence.push(e);
@@ -179,13 +212,17 @@ export function anchorValues(step: Step): string[] {
   return stepAnchors(step).map((a) => (a.kind === "url" ? normalizePath(a.value) : normalizeAnchor(a.value)));
 }
 
-/** True when the candidate's anchors that differ from the broken step's all appear as some evidence `after`. */
-export function newAnchorsInChange(broken: Step, candidate: Step, scope: ChangeScope): boolean {
+/**
+ * True when the candidate's anchors that differ from the broken step's all appear as an `after` of
+ * the given evidence — the evidence that explained THIS break (`BreakExplanation.evidence`), never
+ * the whole change scope: an `after` of an unrelated rename does not vouch for a candidate here.
+ */
+export function newAnchorsInChange(broken: Step, candidate: Step, evidence: ReadonlyArray<Pick<ChangeEvidence, "kind" | "after">>): boolean {
   const old = new Set(anchorValues(broken));
   const fresh = anchorValues(candidate).filter((v) => !old.has(v));
   if (fresh.length === 0) return false;
   const afters = new Set(
-    scope.evidence.flatMap((e) => (e.after === undefined || e.kind === "inserted-ui" ? [] : [normalizeAnchor(e.after), normalizePath(e.after)])),
+    evidence.flatMap((e) => (e.after === undefined || e.kind === "inserted-ui" ? [] : [normalizeAnchor(e.after), normalizePath(e.after)])),
   );
   return fresh.every((v) => afters.has(v));
 }

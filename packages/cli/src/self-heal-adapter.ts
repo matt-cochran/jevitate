@@ -1,7 +1,7 @@
 import type { HealerCandidate, HealerProposal, HealerRequest, SelfHealer, ChangeEvidenceRef } from "@jevitate/runtime";
 import { normalizeAnchor, sanitizeStep } from "@jevitate/runtime";
 import { snapshot, type Control } from "@jevitate/explore";
-import type { GenerationPort } from "@jevitate/ai-core";
+import type { GenerationPort, UsageLedger } from "@jevitate/ai-core";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { clock } from "@jevitate/domain";
@@ -46,6 +46,12 @@ export interface EvidenceSelfHealerOptions {
   readonly inventory?: ControlInventoryReader;
   /** The most inventory controls shown to the model. Default 80. */
   readonly maxControls?: number;
+  /**
+   * #453 review: the run's usage ledger (the gateway's `UsageTracker`). When given, the tokens a
+   * ranker call reported (input + output) are charged to the heal budget (`usage.tokens`). A gateway
+   * that reports none (the fake) charges none.
+   */
+  readonly usage?: UsageLedger;
 }
 
 /** Roles a fill step may target. */
@@ -117,13 +123,20 @@ export function makeEvidenceSelfHealer(generation?: GenerationPort, opts: Eviden
         },
         secrets,
       );
-      const usage = { modelCalls: 1 };
+      const tokensSoFar = (): number => {
+        const c = opts.usage?.snapshot();
+        return c === undefined ? 0 : c.inputTokens + c.outputTokens;
+      };
+      const before = tokensSoFar();
+      const usage: { modelCalls: number; tokens?: number } = { modelCalls: 1 };
       let ranked: { order: readonly number[]; control: number | null } | undefined;
       try {
         ranked = (await withDeadline(generation.generate("heal.rank", input), req.deadlineAtMs)).output;
       } catch {
         ranked = undefined;
       }
+      const spent = tokensSoFar() - before;
+      if (spent > 0) usage.tokens = spent;
       if (ranked === undefined) {
         return { candidates: deterministic.slice(0, MAX_CANDIDATES), usage, reason: "the model ranker gave no usable answer within the heal deadline" };
       }

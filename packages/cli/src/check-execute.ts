@@ -190,7 +190,8 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(targetFixtures(item.t, journeySession), site) }),
       ...(environment === undefined ? {} : { environment }),
     };
-    const runOnce = (extra: Partial<RunJourneyProgrammaticallyOptions>): Promise<JourneyRunResult> =>
+    // Only what a self-heal re-run adds (named, so the surface-wiring check sees what is passed).
+    const runOnce = (extra: Partial<Pick<RunJourneyProgrammaticallyOptions, "policy" | "selfHealer" | "heal">>): Promise<JourneyRunResult> =>
       withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({ ...(siteGate === undefined ? {} : { siteGate }), ...runOptions, ...extra }));
     const seq = ctx.seq();
     const stampName = artifactStamp(startedAt);

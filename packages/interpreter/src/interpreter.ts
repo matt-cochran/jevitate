@@ -167,6 +167,19 @@ export class RecordingInterpreter {
     const flat = flatten(rec);
     return runFlat(actor, flat, new Map(Object.entries(vars)), flat.length - 1, this.#targetOpts(), sink, fromIndex);
   }
+
+  /**
+   * #453: runs ONLY the steps at global indices `fromIndex..toIndex` (inclusive), seeded with
+   * `vars` — a heal probe runs the candidate step alone (`fromIndex === toIndex`) and the runner
+   * continues the remainder with `resumeFrom(toIndex + 1, result.vars)`. Same early-stop rules and
+   * observer calls as `run`.
+   */
+  async runRange(actor: Actor, rec: Recording, fromIndex: number, toIndex: number, vars: Record<string, string> = {}): Promise<InterpretResult> {
+    if (fromIndex < 0 || toIndex < fromIndex) throw new Error(`runRange: invalid range ${fromIndex}..${toIndex}`);
+    validateRecording(rec);
+    const flat = flatten(rec);
+    return runFlat(actor, flat, new Map(Object.entries(vars)), Math.min(toIndex, flat.length - 1), this.#targetOpts(), undefined, fromIndex);
+  }
 }
 
 function flatten(rec: Recording): RecordedStep[] {

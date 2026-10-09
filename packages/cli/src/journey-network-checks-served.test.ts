@@ -170,6 +170,23 @@ describe("JourneyOutcomeChecks.lastFailures reports the failed assertion sites (
     });
   }, 120_000);
 
+  it("#453: a step that runs again (a heal probe) restarts its request window — the earlier attempt's request does not count", async () => {
+    await withPage(async (page, actor) => {
+      const checks = new JourneyOutcomeChecks(page, journeyWithStepRequests("window-restart", [{ kind: "requestMade", method: "POST", pathGlob: "/api/save" }]));
+      const observer = checks.observer()!;
+      const recorded = { step: { kind: "click", target: { role: "button", name: "Save" } } } as never;
+      await checks.run(actor, async () => {
+        await page.goto(origin);
+        await observer.beforeStep!({ actor, index: 1, recorded });
+        await page.evaluate(() => fetch("/api/save", { method: "POST" }));
+        await observer.beforeStep!({ actor, index: 1, recorded });
+        return { outcome: "ok", output: null };
+      });
+
+      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String) }]);
+    });
+  }, 120_000);
+
   it("all checks met leaves lastFailures empty", async () => {
     await withPage(async (page, actor) => {
       const checks = new JourneyOutcomeChecks(page, journeyWithStepRequests("last-failures-met", [{ kind: "requestMade", method: "POST", pathGlob: "/api/save" }]));

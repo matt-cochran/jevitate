@@ -80,14 +80,16 @@ export interface BlockedWriteRef {
 }
 
 /**
- * #453 (Q2): the write blocker a guarded click/fill probe runs under. `armAt(i)` makes the NEXT
- * interpreter pass abort every mutating request sent during flat step `i`'s action window (the CLI
- * composes its `ReadOnlyGuard` observer into the interpreter); `disarm()` stops and returns what
- * it blocked. Any blocked request rejects the candidate (`write-attempted`).
+ * #453 (Q2): the write blocker a guarded click/fill probe runs under. `armAt(i)` blocks every
+ * mutating request (and WebSocket send) from then until `disarm()`, which stops and returns what it
+ * blocked. Any blocked request rejects the candidate (`write-attempted`). `unguardable()`, asked
+ * before the probe, names why the page cannot be guarded (e.g. a service worker could send
+ * requests the blocker never sees) — the candidate is then rejected `write-attempted` unprobed.
  */
 export interface HealWriteGuard {
   armAt(flatIndex: number): Promise<void>;
   disarm(): Promise<readonly BlockedWriteRef[]>;
+  unguardable?(): Promise<string | null>;
 }
 
 /** #453: the change-aware self-heal wiring of a `JourneyRunner` (its 6th constructor argument). */
@@ -141,6 +143,10 @@ interface QueuedCandidate {
   usage: { modelCalls: number; tokens?: number; ms: number };
 }
 
+type ProbeOutcome =
+  | { kind: "accepted"; attempt: HealAttempt; recording: Recording; probe: InterpretResult }
+  | { kind: "rejected" | "write-attempted" | "budget-exhausted"; attempt: HealAttempt };
+
 type HealStepOutcome =
   | { readonly kind: "accepted"; readonly recording: Recording; readonly next: InterpretResult }
   | { readonly kind: "stop"; readonly result: JourneyRunResult; readonly verdict: HealVerdict; readonly reason: string };
@@ -179,6 +185,13 @@ export class JourneyRunner {
   ) {}
 
   /**
+   * #453: probes that outlived their heal deadline. The attempt was already rejected
+   * (`budget-exhausted`); the probe's write guard stays armed until the probe settles, and `run()`
+   * does not return before that — nothing it does after its deadline is ever unguarded.
+   */
+  #dangling: Promise<void>[] = [];
+
+  /**
    * Known limitation (Slice 1, documentation-only): when a `handback` step is
    * hit, resuming via `interpreter.resumeFrom` re-seeds only `req.params` —
    * NOT any vars the interpreter had accumulated (e.g. from `extract` steps)
@@ -196,7 +209,12 @@ export class JourneyRunner {
       waits.push(...(r.waits ?? []));
       return r;
     };
-    const out = await this.#run(req, collect);
+    let out: JourneyRunResult;
+    try {
+      out = await this.#run(req, collect);
+    } finally {
+      await Promise.all(this.#dangling.splice(0));
+    }
     return waits.length === 0 ? out : { ...out, waits };
   }
 
@@ -308,8 +326,10 @@ export class JourneyRunner {
    *     anchor some evidence `after` names;
    *  5. each candidate (budget checked before it): proof untouched (`assertProofUntouched`), the
    *     floor of its new control, then the probe — the candidate replaces the step one-for-one and
-   *     the run resumes from it; the step's own `expect` must hold. A guarded probe that sends a
-   *     mutating request is rejected `write-attempted` and ends the heal.
+   *     runs ALONE (`runRange`), within the heal deadline; the step's own `expect` must hold. A
+   *     guarded probe that sends a mutating request is rejected `write-attempted` and ends the heal;
+   *     a probe past the deadline is rejected `budget-exhausted`. Only an accepted probe's step is
+   *     charged: the rest of the Journey then replays (`resumeFrom`) outside the heal budget.
    * Every refuted candidate is logged; exhausting them (or the budget) is `heal-exhausted`.
    */
   async #healStep(
@@ -399,7 +419,9 @@ export class JourneyRunner {
             })
             .map((c, k) => ({ step: c.step, hypothesis: c.hypothesis, source: "model" as const, evidence, usage: k === 0 ? usage : { modelCalls: 0, ms: 0 } }));
         } catch {
-          // A healer failure only ends the model's proposals; the runner still adjudicates.
+          // A healer failure only ends the model's proposals; the runner still adjudicates. The
+          // call is charged anyway: a healer that throws may well have spent a model call.
+          s.meter.charge({ modelCalls: 1 });
           fresh = [];
         }
         if (fresh.length === 0) {
@@ -419,6 +441,8 @@ export class JourneyRunner {
       const tryResult = await this.#tryCandidate(s, req, recording, i, entry.recorded, cand, guarded);
       s.attempts.push(tryResult.attempt);
       if (tryResult.kind === "accepted") {
+        // Only the candidate step's probe is charged to the heal budget: the clock stops here,
+        // before the rest of the Journey replays.
         s.meter.endStep();
         s.changes.push({
           index: i,
@@ -429,12 +453,20 @@ export class JourneyRunner {
           evidence: cand.evidence,
           ...(tryResult.attempt.anchorNotInChange === true ? { anchorNotInChange: true as const } : {}),
         });
-        return { kind: "accepted", recording: tryResult.recording, next: tryResult.next };
+        const probe = tryResult.probe;
+        const next =
+          probe.outcome === "completed" ? await this.interpreter.resumeFrom(this.actor, tryResult.recording, i + 1, probe.vars) : probe;
+        const waits = [...(probe.outcome === "completed" ? (probe.waits ?? []) : []), ...(next.waits ?? [])];
+        return { kind: "accepted", recording: tryResult.recording, next: waits.length === 0 ? next : { ...next, waits } };
       }
       refuted++;
       if (tryResult.kind === "write-attempted") {
         s.meter.endStep();
         return quarantine("refused-write", `${named}: ${tryResult.attempt.rejection?.detail ?? "a candidate attempted a write"}`);
+      }
+      if (tryResult.kind === "budget-exhausted") {
+        budgetOut = { by: "wallClock", scope: "step", detail: tryResult.attempt.rejection?.detail ?? "the heal deadline passed during a probe" };
+        break;
       }
     }
     s.meter.endStep();
@@ -454,10 +486,7 @@ export class JourneyRunner {
     broken: RecordedStep,
     cand: QueuedCandidate,
     guarded: boolean,
-  ): Promise<
-    | { kind: "accepted"; attempt: HealAttempt; recording: Recording; next: InterpretResult }
-    | { kind: "rejected" | "write-attempted"; attempt: HealAttempt }
-  > {
+  ): Promise<ProbeOutcome> {
     const t0 = clock.monotonicMs();
     const n = s.attempts.length + 1;
     let flag: { anchorNotInChange?: true } = {};
@@ -479,7 +508,7 @@ export class JourneyRunner {
 
     const proof = assertProofUntouched(broken.step, cand.step);
     if (proof !== null) return reject(proof.code, proof.detail);
-    if (cand.source === "model" && !newAnchorsInChange(broken.step, cand.step, s.scope)) {
+    if (cand.source === "model" && !newAnchorsInChange(broken.step, cand.step, cand.evidence)) {
       if (s.mode === "hybrid") return reject("not-explained-by-change", "the candidate's new anchor appears in no change evidence");
       flag = { anchorNotInChange: true };
     }
@@ -491,15 +520,43 @@ export class JourneyRunner {
     const valid = RecordingSchema.safeParse(candRecording);
     if (!valid.success) return reject("shape-changed", `the candidate is not a valid step: ${valid.error.issues[0]?.message ?? "invalid"}`);
 
+    // The probe runs the candidate step ALONE (the remainder replays after the step's heal clock
+    // stopped), within the heal deadline: past it the attempt is rejected `budget-exhausted`.
     const guard = guarded ? this.heal?.writeGuard : undefined;
     let blocked: readonly BlockedWriteRef[] = [];
-    let next: InterpretResult;
-    if (guard !== undefined) await guard.armAt(i);
-    try {
-      next = await this.interpreter.resumeFrom(this.actor, candRecording, i, req.params);
-    } finally {
-      if (guard !== undefined) blocked = await guard.disarm();
+    const unguardable = guard?.unguardable === undefined ? null : await guard.unguardable().catch((e: unknown) => `the write guard could not inspect the page: ${e instanceof Error ? e.message : String(e)}`);
+    if (unguardable !== null) {
+      return { kind: "write-attempted", attempt: attempt("rejected", { code: "write-attempted", detail: `the probe cannot be guarded: ${unguardable}` }) };
     }
+    if (guard !== undefined) await guard.armAt(i);
+    const probe = this.interpreter.runRange(this.actor, candRecording, i, i, req.params);
+    let timer: ReturnType<typeof clock.setTimeout> | undefined;
+    const deadline = new Promise<"deadline">((resolve) => {
+      timer = clock.setTimeout(() => resolve("deadline"), Math.max(0, s.meter.deadlineAtMs() - clock.now()));
+    });
+    let raced: InterpretResult | "deadline";
+    try {
+      raced = await Promise.race([probe, deadline]);
+    } catch (err) {
+      if (guard !== undefined) await guard.disarm();
+      throw err;
+    } finally {
+      clock.clearTimeout(timer);
+    }
+    if (raced === "deadline") {
+      // The probe is still running: its guard stays armed until it settles (`#dangling`).
+      this.#dangling.push(
+        probe.then(
+          () => undefined,
+          () => undefined,
+        ).then(async () => {
+          if (guard !== undefined) await guard.disarm().catch(() => undefined);
+        }),
+      );
+      return { kind: "budget-exhausted", attempt: attempt("rejected", { code: "budget-exhausted", detail: "the heal deadline passed while the candidate was being probed" }) };
+    }
+    const next: InterpretResult = raced;
+    if (guard !== undefined) blocked = await guard.disarm();
     if (this.heal?.observe !== undefined) {
       try {
         const seen = await this.heal.observe(this.actor, { stepIndex: i, attempt: n });
@@ -515,7 +572,7 @@ export class JourneyRunner {
     if (next.outcome === "failed" && next.at === i) {
       return reject((next.reason === undefined ? undefined : REJECTION_OF_TARGET_FAILURE[next.reason]) ?? "postcondition-failed", next.error);
     }
-    return { kind: "accepted", attempt: attempt("accepted"), recording: candRecording, next };
+    return { kind: "accepted", attempt: attempt("accepted"), recording: candRecording, probe: next };
   }
 
 
