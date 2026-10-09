@@ -66,7 +66,6 @@ async function run(argv: readonly string[]): Promise<{ code: number | undefined;
 
 /** Evaluated lazily (paths exist only after beforeAll); `<dir>`/`<suite>` are placeholders. */
 const STUB_COMMANDS: ReadonlyArray<readonly string[]> = [
-  ["job", "draft-outcomes", "j", "--fake-ai", "--count", "3"],
   ["journey", "migrate", "--step-ids", "--dry-run"],
   ["journey", "review", "--stale"],
   ["locator-health"],
@@ -107,7 +106,6 @@ describe("0.10 MCP tools: allowlisted, mirrored, stubbed, and key-free", () => {
   const body = (r: { content: Array<{ text: string }> }): Record<string, unknown> => JSON.parse(r.content[0]!.text) as Record<string, unknown>;
 
   const CALLS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
-    ["draft_job_outcomes", { jobId: "j", fakeAi: true, count: 2 }],
     ["locator_health", {}],
     ["review_journey", { stale: true }],
     ["run_check", { suite: "valid.suite.json", out: "check", maxBrittleSteps: 2 }],
