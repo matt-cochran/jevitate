@@ -85,7 +85,7 @@ describe("0.10 CLI surface", () => {
   });
 
   it("connect journeeze without a terminal refuses with E_CONNECT_NEEDS_TTY, exit 64", async () => {
-    const res = await run(["connect", "journeeze", "--url", "http://127.0.0.1:3999", "--json"]);
+    const res = await run(["connect", "journeeze", "--url", "https://app.journeeze.dev", "--json"]);
     expect({ code: res.code, env: JSON.parse(res.out) }).toMatchObject({ code: 64, env: { error: { code: "E_CONNECT_NEEDS_TTY" } } });
   });
 
