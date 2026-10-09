@@ -325,7 +325,7 @@ function fixFor(d: TargetDescriptor, codes: readonly BrittleReasonCode[], attrib
   const on = route === undefined ? "" : ` on ${route}`;
   const named = codes.includes("no-accessible-name") ? " and give it an accessible name (visible text or aria-label)" : "";
   if (codes.includes("test-id-not-in-convention") && d.testId !== undefined && !looksGenerated(d.testId)) {
-    return `use ${attribute}=${JSON.stringify(d.testId)} instead of ${d.testIdAttr ?? "?"} on ${element}${on} (or add ${d.testIdAttr ?? "?"} to testIdAttributes in .jevitate/config.json)`;
+    return `use ${attribute}=${JSON.stringify(d.testId)} instead of ${d.testIdAttr ?? "?"} on ${element}${on} (or add ${d.testIdAttr ?? "?"} to testIdAttributes in .jevitate/project.json)`;
   }
   if (d.testId !== undefined && looksGenerated(d.testId)) {
     return `replace the generated ${d.testIdAttr ?? attribute}=${JSON.stringify(d.testId)} on ${element}${on} with a stable ${attribute}=${JSON.stringify(testId)}`;

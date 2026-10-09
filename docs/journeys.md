@@ -423,7 +423,7 @@ role + name), e.g. `add data-testid="save-contact" to the "Save" button on /cont
 change to the Journey.
 
 **The convention.** The attributes that count as a test id are project config,
-`testIdAttributes` in the repo's `.jevitate/config.json`, in preference order (a fix suggests the
+`testIdAttributes` in the repo's `.jevitate/project.json`, in preference order (a fix suggests the
 first). Default: `data-testid`, `data-test`. Teams add their own:
 
 ```json
@@ -431,9 +431,9 @@ first). Default: `data-testid`, `data-test`. Teams add their own:
 ```
 
 `data-tflow-id` is tracking metadata, never a test id: listing it is refused (`E_PROJECT_CONFIG`,
-like any malformed value), and a target found only by it is brittle. The file is meant to be
-committed with the app; note that the `.jevitate/.gitignore` `jevitate init` writes lists
-`/config.json`, so add it with `git add -f .jevitate/config.json`. There is no flag for it.
+like any malformed value), and a target found only by it is brittle. Commit `project.json` with
+the app. It holds only project settings, never secrets: machine-local and secret settings stay in
+`~/.jevitate/config.json`, which the repo's `.jevitate/.gitignore` keeps out. There is no flag for it.
 
 Locator health also appears in a Journey run's `result.json`, on the
 [review sheet](#review-and-promotion-sign-off), and in `jevitate check` — as JUnit/SARIF warnings,

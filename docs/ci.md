@@ -124,7 +124,7 @@ target resolved by and whether it meets the project's test-id convention
 `--max-brittle-steps <n>` is the opt-in gate: a Journey item with more than `n` brittle steps gets
 a hard `locator-health` finding (exit 1, with `jevitate locator-health --journey <id>` as its
 reproduction), and the per-step warnings are left out (the finding carries them). With the gate,
-a malformed `.jevitate/config.json` refuses the check before anything runs (`E_CHECK_SUITE`, exit
+a malformed `.jevitate/project.json` refuses the check before anything runs (`E_CHECK_SUITE`, exit
 64) instead of gating on a guessed convention; without it, the defaults apply.
 
 ### Machine baselines in `check.json`

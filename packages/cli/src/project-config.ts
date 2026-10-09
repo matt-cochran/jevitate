@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * The project's own settings: `<repo>/.jevitate/config.json`, committed with the app (unlike the
+ * The project's own settings: `<repo>/.jevitate/project.json`, committed with the app (unlike the
  * per-user `~/.jevitate/config.json`, which holds machine-local and secret settings). Read-only here;
  * a team edits it by hand. Unknown keys are ignored (later settings), a malformed known key is an
  * error naming the file — never a silent default.
@@ -14,7 +14,7 @@ import { join } from "node:path";
  *   `data-test`. `data-tflow-id` (#468) is tracking metadata and is refused.
  */
 
-export const PROJECT_CONFIG_FILE = "config.json";
+export const PROJECT_CONFIG_FILE = "project.json";
 
 /** The default test-id convention when the project config names none. */
 export const DEFAULT_TEST_ID_ATTRIBUTES: readonly string[] = ["data-testid", "data-test"];

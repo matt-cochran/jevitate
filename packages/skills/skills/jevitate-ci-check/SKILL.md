@@ -60,7 +60,7 @@ Relative paths resolve against the suite file.
   commit `.proposals/` with the PR. Without a change context the flag is refused (64).
 
 - Locator health (which selector rung each recorded step resolves by, and whether it meets the
-  project's `testIdAttributes` convention in `.jevitate/config.json`) is advisory: fixes appear as
+  project's `testIdAttributes` convention in `.jevitate/project.json`) is advisory: fixes appear as
   SARIF warnings and in `check.json`. `--max-brittle-steps <n>` (MCP `run_check` `maxBrittleSteps`)
   opts into a gate: a Journey item with more than n brittle steps is a gating finding (exit 1).
   `jevitate locator-health [--journey <id>] [--baseline <file>] --json` (MCP `locator_health`)
