@@ -122,7 +122,7 @@ describe("project config testIdAttributes", () => {
   const dir = mkdtempSync(join(tmpdir(), "jev-project-config-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const withConfig = (body: unknown): string => {
-    writeFileSync(join(dir, "config.json"), JSON.stringify(body));
+    writeFileSync(join(dir, "project.json"), JSON.stringify(body));
     return dir;
   };
 

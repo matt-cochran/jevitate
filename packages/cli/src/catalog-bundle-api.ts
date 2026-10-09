@@ -123,9 +123,16 @@ async function gitOut(git: GitExec, cwd: string, args: string[]): Promise<string
 }
 
 /** `product.name`: the request's, else the project's package.json name, else its folder name — whichever is one plain line. */
+export function isPlainProductName(s: unknown): s is string {
+  return typeof s === "string" && s.trim() !== "" && s.length <= 200 && !/[\u0000-\u001f\u007f]/u.test(s) && !looksPersonal(s);
+}
+
 async function productNameOf(req: ExportCatalogBundleRequest, root: string): Promise<string> {
-  const ok = (s: unknown): s is string => typeof s === "string" && s.trim() !== "" && s.length <= 200 && !/[\u0000-\u001f\u007f]/u.test(s) && !looksPersonal(s);
-  if (req.productName !== undefined) return req.productName;
+  const ok = isPlainProductName;
+  if (req.productName !== undefined) {
+    if (!ok(req.productName)) throw new CatalogExportOutError("productName must be one plain line of 1-200 characters (no control characters or personal data)");
+    return req.productName;
+  }
   const pkg = join(root, "package.json");
   if (existsSync(pkg)) {
     try {

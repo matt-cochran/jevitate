@@ -17,7 +17,6 @@ import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, lintJourneyById, WeakJourneyError, UnknownJourneyError, JourneyRequiresAuthError, StaleReviewError } from "./journey-api.js";
 import { ReviewSheetError, renderReviewMarkdown, renderReviewText, reviewSheetHash } from "./journey-review.js";
 import { reviewJourneyById } from "./journey-review-api.js";
-import { NotImplementedError } from "./not-implemented.js";
 import { listStaleJourneys, renderStaleJourneys } from "./journey-stale-api.js";
 import { migrateStepIds, renderMigrateStepIds } from "./journey-migrate-api.js";
 import { ReviewSidecarError } from "./journey-review-store.js";
@@ -601,7 +600,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           else program.configureOutput().writeOut?.(renderStaleJourneys(result));
           process.exitCode = 0;
         } catch (err) {
-          emitJson(program, fail(err instanceof NotImplementedError ? err.code : "E_JOURNEY_REVIEW", String(err instanceof Error ? err.message : err)));
+          emitJson(program, fail("E_JOURNEY_REVIEW", String(err instanceof Error ? err.message : err)));
         }
         return;
       }
@@ -663,7 +662,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         else program.configureOutput().writeOut?.(renderMigrateStepIds(result));
         process.exitCode = 0;
       } catch (err) {
-        emitJson(program, fail(err instanceof NotImplementedError ? err.code : "E_JOURNEY_MIGRATE", String(err instanceof Error ? err.message : err)));
+        emitJson(program, fail("E_JOURNEY_MIGRATE", String(err instanceof Error ? err.message : err)));
       }
     });
 

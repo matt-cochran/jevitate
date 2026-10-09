@@ -5,7 +5,6 @@ import { join, relative, isAbsolute } from "node:path";
 import { envCredentialStore, redactText } from "@jevitate/ai-core";
 import { exportCatalogBundle, type ExportCatalogBundleRequest, type ExportCatalogBundleResult } from "./catalog-bundle-api.js";
 import { loadLocalCredentials } from "./credentials-file.js";
-import { NotImplementedError } from "./not-implemented.js";
 import { readCliVersion } from "./version.js";
 import {
   JOURNEEZE_API_PREFIX,
@@ -359,7 +358,6 @@ export async function publishToJourneeze(req: PublishJourneezeRequest, deps: Pub
     const text = JSON.stringify(result);
     return text.includes(key) ? (JSON.parse(redactText(text, [key])) as PublishJourneezeResult) : result;
   } catch (err) {
-    if (err instanceof NotImplementedError) throw err; // the bundle builder not landed: carries no key
     throw scrubError(err, key === undefined ? [] : [key], "E_PUBLISH_JOURNEEZE");
   }
 }

@@ -2,6 +2,7 @@
  * Helpers shared by the per-command-group CLI modules (`*-cli.ts`) that `program.ts` wires together
  * (#231): deps and path resolution, JSON/human output, browser/emulation flags, AI gateway selection.
  */
+import type { PublishDeps } from "./journeeze-api.js";
 import { mkdir } from "node:fs/promises";
 import type { ApprovalDeps } from "./approval-provenance.js";
 import { dirname, resolve as resolvePath } from "node:path";
@@ -133,6 +134,11 @@ export interface CliDeps {
    * production means the real process (`process.env`, `isTTY`, a readline prompt on stderr).
    */
   approval?: ApprovalDeps;
+  /**
+   * Optional, additive (#464): the Journeeze seam — HTTP port, environment, HOME, terminal. Omitted in
+   * production means the real network (pinned origins only), `process.env` and the real HOME.
+   */
+  journeeze?: PublishDeps;
   /**
    * Optional, additive: distributed-Journey-sources wiring (see source-api.ts).
    * Every field is injectable so tests never touch the network, the real home

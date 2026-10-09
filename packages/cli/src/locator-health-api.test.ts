@@ -64,16 +64,16 @@ describe("locatorHealth", () => {
   });
 
   it("a data-cy test id is stable once the project config lists data-cy", async () => {
-    writeFileSync(join(projectDir, "config.json"), JSON.stringify({ testIdAttributes: ["data-testid", "data-cy"] }));
+    writeFileSync(join(projectDir, "project.json"), JSON.stringify({ testIdAttributes: ["data-testid", "data-cy"] }));
     const r = await locatorHealth({ journeysDir, projectDir, journeyId: "contacts" });
-    rmSync(join(projectDir, "config.json"));
+    rmSync(join(projectDir, "project.json"));
     expect(r.journeys[0]?.health.steps[0]?.stability).toBe("stable");
   });
 
   it("a project config naming data-tflow-id is refused", async () => {
-    writeFileSync(join(projectDir, "config.json"), JSON.stringify({ testIdAttributes: ["data-tflow-id"] }));
+    writeFileSync(join(projectDir, "project.json"), JSON.stringify({ testIdAttributes: ["data-tflow-id"] }));
     const outcome = await locatorHealth({ journeysDir, projectDir }).catch((err: unknown) => err);
-    rmSync(join(projectDir, "config.json"));
+    rmSync(join(projectDir, "project.json"));
     expect(outcome).toBeInstanceOf(ProjectConfigError);
   });
 
@@ -86,9 +86,9 @@ describe("locatorHealth", () => {
   it("reports the trend against a previous report", async () => {
     const before = await locatorHealth({ journeysDir, projectDir: null, journeyId: "contacts" });
     const baseline = writeJson("baseline.json", { v: 1, ok: true, data: before });
-    writeFileSync(join(projectDir, "config.json"), JSON.stringify({ testIdAttributes: ["data-testid", "data-cy"] }));
+    writeFileSync(join(projectDir, "project.json"), JSON.stringify({ testIdAttributes: ["data-testid", "data-cy"] }));
     const after = await locatorHealth({ journeysDir, projectDir, journeyId: "contacts", baseline });
-    rmSync(join(projectDir, "config.json"));
+    rmSync(join(projectDir, "project.json"));
     expect(after.trend).toMatchObject({ improved: 1, regressed: 0, brittleDelta: -1 });
   });
 

@@ -27,7 +27,7 @@ import { findProjectDir } from "./project-dir.js";
  * - `jevitate locator-health [--journey <id> | --run <result.json>] [--baseline <file>]` / MCP
  *   `locator_health` (read-only): every promoted Journey by default, one Journey, or the steps of one
  *   run result (the rung each step actually resolved by, when the run recorded it).
- * - The test-id attribute list is project config (`testIdAttributes` in `<repo>/.jevitate/config.json`;
+ * - The test-id attribute list is project config (`testIdAttributes` in `<repo>/.jevitate/project.json`;
  *   default `data-testid`, `data-test`; teams add e.g. `data-cy`, `data-qa`) — never a flag.
  */
 
