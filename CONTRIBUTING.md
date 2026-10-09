@@ -20,7 +20,7 @@ Jevitate is a pnpm workspace (Node 20 or later, pnpm 9).
 ```bash
 pnpm install
 pnpm -r build                                          # TypeScript project references
-pnpm --filter @jevitate/cli exec playwright install chromium
+pnpm --filter @jevitate/cli exec jevitate install-browser
 pnpm lint                                              # eslint
 pnpm check:no-fallback                                 # the no-permissive-fallback gate
 ```

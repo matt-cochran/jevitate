@@ -54,6 +54,9 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "persona approve":
     "#433: approving a catalog persona is a person's sign-off (bound to its content hash), like source trust: MCP reads the sheet (review_persona), never approves",
   "job approve": "#433: approving a catalog job is a person's sign-off (bound to its content hash), like source trust: MCP reads the sheet (review_job), never approves",
+  "install-browser":
+    "#450: a host operation (downloads a browser into the machine's shared browsers dir): the operator's, like doctor; MCP tools report a missing browser with this command as the fix",
+  "browser-path": "#450: host introspection for project scripts (browsers dir, pinned revision, executable path); no run capability to expose over MCP",
   doctor:
     "#205: host maintenance for the operator (it signals processes on this machine and clears machine-wide browser slots); the same orphan sweep already runs automatically before every browser-driving MCP tool, and each result reports governance in hostHealth.resources",
 };

@@ -251,7 +251,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - run: npm i -g @jevitate/cli && npx playwright install --with-deps chromium
+      - run: npm i -g @jevitate/cli && jevitate install-browser --with-deps
       - name: Changed routes
         id: routes
         run: echo "globs=$(git diff --name-only origin/${{ github.base_ref }}... | ./scripts/routes-for-files.sh)" >> "$GITHUB_OUTPUT"
@@ -354,3 +354,16 @@ that an adversarial-only defect is gone. New and resolved are decided before fla
 needs enough comparable reruns to rule out the baseline's own hit rate. `last` means the previous run on the same
 target, per mode. A tag is a snapshot stored under `.jevitate/baselines/<name>.json` (commit it
 with the repo), so it survives pruned result files.
+
+## Sharing the pinned browser with project scripts
+
+`jevitate install-browser` installs the exact Chromium (and headless shell) revision jevitate pins, using the Playwright CLI jevitate itself depends on. It sets `PLAYWRIGHT_SKIP_BROWSER_GC=1`, so it never removes other revisions that other projects still use, and it honours an inherited `PLAYWRIGHT_BROWSERS_PATH`. `--with-deps` also installs OS packages (needs privileges).
+
+`jevitate browser-path` prints the pinned revisions, the browsers directory in use and the executable path; `--json` is machine output. A project script that drives its own Playwright can reuse the same directory instead of downloading a second copy:
+
+```bash
+eval "$(jevitate browser-path --export)"   # export PLAYWRIGHT_BROWSERS_PATH=...
+node my-script.mjs
+```
+
+The script's Playwright must pin the same Chromium revision to find the browser there; `jevitate doctor` reports whether the pinned revision is installed, missing, or only other revisions are present, and the fix command.
