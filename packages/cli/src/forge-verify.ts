@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { redactText } from "@jevitate/ai-core";
 import { clock } from "@jevitate/domain";
 import { JourneySchema, type PrReview } from "@jevitate/journey";
@@ -27,11 +27,14 @@ import { findGitRoot } from "./project-dir.js";
  *     last changed it (walking the file's history; its first parent holds different content) is on
  *     the default branch;
  *  4. that commit belongs to a MERGED pull request whose base is the default branch;
- *  5. the pull request has an APPROVED review (each reviewer's latest decisive review) on its head
+ *  5. the pull request's APPROVED head (the commit its approving review is on) holds the same
+ *     content of the entry — the reviewer approved exactly what is honoured, never an intermediate
+ *     commit of the pull request or an "evil merge" resolution that differs from it;
+ *  6. the pull request has an APPROVED review (each reviewer's latest decisive review) on its head
  *     commit, by a person (not a bot) who is not the pull request's author, authored or committed
  *     none of its commits (logins and user ids compared), and has write access (collaborator
  *     permission admin / maintain / write);
- *  6. optionally (`JEVITATE_PR_REVIEW_REQUIRE_CODEOWNER=1`), that reviewer is a CODEOWNER of the
+ *  7. optionally (`JEVITATE_PR_REVIEW_REQUIRE_CODEOWNER=1`), that reviewer is a CODEOWNER of the
  *     entry's file (the default branch's CODEOWNERS; a team owner needs an active membership).
  *
  * Any failure is a typed refusal with its reason — never a silent fall back to another channel.
@@ -46,8 +49,8 @@ export const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_SERVER = "https://github.com";
 /** How far back the file's history is walked to find the commit that last changed the entry. */
 export const HISTORY_LIMIT = 30;
-/** How long a positive re-verification is trusted from the cache. */
-export const PR_REVIEW_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** How long a positive re-verification is trusted from the cache (short: a dismissed review or a revoked reviewer stops passing within a day). */
+export const PR_REVIEW_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 /** The env flag that requires the approving reviewer to be a CODEOWNER of the entry's file. */
 export const REQUIRE_CODEOWNER_ENV = "JEVITATE_PR_REVIEW_REQUIRE_CODEOWNER";
 
@@ -492,7 +495,7 @@ async function approverOf(forge: ForgePort, pull: ForgePull, branch: string, pat
 /**
  * The core of both verifications: `sha` is on the default branch, holds the entry's approved
  * content, CHANGED it (its first parent holds something else), and came from a merged pull request
- * into the default branch with a qualifying approval.
+ * into the default branch whose APPROVED head holds that same content, with a qualifying approval.
  */
 async function verifyChange(
   forge: ForgePort,
@@ -527,6 +530,17 @@ async function verifyChange(
     const a = await approverOf(forge, pull, branch, path, policy, recorded?.reviewer);
     if (!a.ok) {
       first ??= a;
+      continue;
+    }
+    // The reviewer approved the pull request's head (approverOf honours only reviews on it): that
+    // head must hold exactly the content being honoured. A merged commit's content that no reviewer
+    // saw (an intermediate commit later reverted, an "evil merge" resolution) is never approved.
+    const approvedHead = a.review.commitId;
+    if (!SHA_RE.test(approvedHead) || entry.hashIn(await forge.fileAt(path, approvedHead)) !== entry.contentHash) {
+      first ??= refuse(
+        "pr-mismatch",
+        `pull request #${pull.number}: its approved head ${approvedHead.slice(0, 12)} does not hold the content of the entry that commit ${sha.slice(0, 12)} holds in ${path} — the reviewer did not approve that content`,
+      );
       continue;
     }
     const pr: PrReview = {
@@ -612,18 +626,60 @@ export async function reverifyPrReview(entry: PrReviewEntry, pr: PrReview, env: 
 
 // ── The re-verification cache ────────────────────────────────────────────────────────────────
 
-/** Whether any file under `dir` is tracked by git (then the cache there is not trusted). */
+/**
+ * Whether the cache dir `dir` is untrusted by git: true when git tracks any file under it, and also
+ * when git cannot say (no repository, git missing or failing — fail closed). Runs `git ls-files`
+ * from the repository root with the dir as a pathspec (never with the cache dir as cwd: a committed
+ * symlink there would make git fail and read as "nothing tracked").
+ */
 export type GitTracked = (dir: string) => Promise<boolean>;
 
 export const gitTracksAnything: GitTracked = (dir) =>
   new Promise((resolveTracked) => {
-    const child = spawn("git", ["ls-files", "--", "."], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] });
+    const root = findGitRoot(dir);
+    const rel = root === null ? "" : relative(root, resolve(dir));
+    if (root === null || rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      resolveTracked(true);
+      return;
+    }
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn("git", ["ls-files", "--", rel.split(sep).join("/")], { cwd: root, stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      resolveTracked(true);
+      return;
+    }
     let out = "";
-    child.stdout.on("data", (d: Buffer) => (out += d.toString("utf8")));
-    // No git / not a repository / a missing dir: nothing is tracked there.
-    child.on("error", () => resolveTracked(false));
-    child.on("close", () => resolveTracked(out.trim() !== ""));
+    child.stdout?.on("data", (d: Buffer) => (out += d.toString("utf8")));
+    // No git / a git error: untrusted.
+    child.on("error", () => resolveTracked(true));
+    child.on("close", (code) => resolveTracked(code !== 0 || out.trim() !== ""));
   });
+
+/**
+ * True when every path component from the git repository root down to `target` is a real
+ * directory or file (no symlink), so `target` cannot resolve outside the repository. Components
+ * that do not exist yet are fine (they will be created as real directories). Outside a repository,
+ * or on any other error: false.
+ */
+export async function noSymlinkFromRepoRoot(target: string): Promise<boolean> {
+  const abs = resolve(target);
+  const root = findGitRoot(abs);
+  if (root === null) return false;
+  const rel = relative(root, abs);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
+  let cur = root;
+  for (const seg of rel.split(sep)) {
+    cur = join(cur, seg);
+    try {
+      if ((await lstat(cur)).isSymbolicLink()) return false;
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code === "ENOENT") return true;
+      return false;
+    }
+  }
+  return true;
+}
 
 export interface PrReviewCacheKey {
   readonly repo: string;
@@ -642,9 +698,11 @@ function cacheKey(k: PrReviewCacheKey): string {
 /**
  * Positive re-verifications, cached by merged sha in the project's gitignored cache dir
  * (`<.jevitate>/cache/pr-review/<mergedSha>-<key>.json`) so CI does not re-ask the forge every run.
- * Only a success is cached, for `PR_REVIEW_CACHE_TTL_MS`; the cache is ignored entirely when any
- * file in it is tracked by git (a committed "verified" entry is never trusted), and it is never
- * written on a pull-request event.
+ * Only a success is cached, for `PR_REVIEW_CACHE_TTL_MS`; the cache is ignored entirely (never read,
+ * never written) when any file in it is tracked by git or git cannot say (a committed "verified"
+ * entry is never trusted), or when any path component from the repository root down to a cache
+ * file is a symlink (a committed symlink could point it anywhere). It is never read nor written on
+ * a pull-request event.
  */
 export class PrReviewCache {
   #trusted: Promise<boolean> | undefined;
@@ -658,14 +716,23 @@ export class PrReviewCache {
   }
 
   #isTrusted(): Promise<boolean> {
-    this.#trusted ??= this.dir === null ? Promise.resolve(false) : this.gitTracked(this.dir).then((t) => !t);
+    const dir = this.dir;
+    this.#trusted ??= dir === null ? Promise.resolve(false) : noSymlinkFromRepoRoot(dir).then(async (safe) => safe && !(await this.gitTracked(dir)));
     return this.#trusted;
   }
 
+  /** The cache file for `k`, or null when the cache is untrusted or the file path is unsafe. */
+  async #safeFile(k: PrReviewCacheKey): Promise<string | null> {
+    if (this.dir === null || !(await this.#isTrusted())) return null;
+    const file = this.#file(k);
+    return (await noSymlinkFromRepoRoot(file)) ? file : null;
+  }
+
   async hit(k: PrReviewCacheKey): Promise<boolean> {
-    if (this.dir === null || !(await this.#isTrusted())) return false;
+    const file = await this.#safeFile(k);
+    if (file === null) return false;
     try {
-      const j = JSON.parse(await readFile(this.#file(k), "utf8")) as { key?: unknown; verifiedAtMs?: unknown };
+      const j = JSON.parse(await readFile(file, "utf8")) as { key?: unknown; verifiedAtMs?: unknown };
       if (j.key !== cacheKey(k) || typeof j.verifiedAtMs !== "number") return false;
       const age = clock.now() - j.verifiedAtMs;
       return age >= 0 && age < PR_REVIEW_CACHE_TTL_MS;
@@ -675,10 +742,11 @@ export class PrReviewCache {
   }
 
   async put(k: PrReviewCacheKey): Promise<void> {
-    if (this.dir === null || !(await this.#isTrusted())) return;
+    const file = await this.#safeFile(k);
+    if (file === null) return;
     try {
-      await mkdir(this.dir, { recursive: true, mode: 0o700 });
-      await writeFile(this.#file(k), `${JSON.stringify({ key: cacheKey(k), verifiedAtMs: clock.now(), number: k.pr.number, reviewer: k.pr.reviewer })}\n`, { mode: 0o600 });
+      await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+      await writeFile(file, `${JSON.stringify({ key: cacheKey(k), verifiedAtMs: clock.now(), number: k.pr.number, reviewer: k.pr.reviewer })}\n`, { mode: 0o600 });
     } catch {
       // a cache that cannot be written only costs a re-query next run
     }
@@ -690,7 +758,10 @@ export function prReviewCacheDir(catalogDir: string | null): string | null {
   return catalogDir === null ? null : join(catalogDir, "cache", "pr-review");
 }
 
-/** Re-verification through the cache: a cached success is honoured; a fresh success is cached (not on a pull-request event). */
+/**
+ * Re-verification through the cache: a cached success is honoured and a fresh success is cached —
+ * except on a pull-request event, where the cache is neither read nor written (always verified live).
+ */
 export async function reverifyPrReviewCached(entry: PrReviewEntry, pr: PrReview, env: Env, cache: PrReviewCache, factory: ForgeFactory = githubForgeFactory): Promise<PrReviewVerdict> {
   const c = forgeContextFromEnv(env);
   if (!c.ok) return c;
@@ -698,8 +769,9 @@ export async function reverifyPrReviewCached(entry: PrReviewEntry, pr: PrReview,
   if (path === null) return refuse("not-repo-file", `${entry.file} is not inside a git repository`);
   const policy: PrReviewPolicy = { requireCodeOwner: requireCodeOwnerFromEnv(env) };
   const key: PrReviewCacheKey = { repo: c.ctx.repo, path, contentHash: entry.contentHash, pr, requireCodeOwner: policy.requireCodeOwner === true };
-  if (await cache.hit(key)) return { ok: true, pr };
+  const prEvent = c.ctx.event.startsWith("pull_request");
+  if (!prEvent && (await cache.hit(key))) return { ok: true, pr };
   const v = await reverifyPrReview(entry, pr, env, factory, policy);
-  if (v.ok && !c.ctx.event.startsWith("pull_request")) await cache.put(key);
+  if (v.ok && !prEvent) await cache.put(key);
   return v;
 }

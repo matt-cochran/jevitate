@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve as resolvePath } from "node:path";
 import { redactText } from "@jevitate/ai-core";
 import { clock } from "@jevitate/domain";
+import { inMcpInvocation } from "./approval-provenance.js";
 import { resolveDataDir } from "./data-dir.js";
 import { readMaskedLine } from "./masked-input.js";
 import { secretCommandRunner } from "./secret-command.js";
@@ -28,8 +29,10 @@ export const JOURNEEZE_KEY_ENV = "JOURNEEZE_UPLOAD_KEY";
 export const JOURNEEZE_URL_ENV = "JOURNEEZE_URL";
 export const JOURNEEZE_API_PREFIX = "/api/upload/v1";
 
-/** Contract §2: the only hosts an upload key is ever sent to (plus loopback for local development). */
+/** Contract §2: the only hosts an upload key is ever sent to (plus loopback, only with `JEVITATE_JOURNEEZE_DEV=1`). */
 export const JOURNEEZE_PINNED_ORIGINS: readonly string[] = ["https://app.journeeze.dev", "https://app.staging.journeeze.dev"];
+/** `JEVITATE_JOURNEEZE_DEV=1` allows a loopback Journeeze (local development of Journeeze itself). */
+export const JOURNEEZE_DEV_ENV = "JEVITATE_JOURNEEZE_DEV";
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /** A Journeeze-specific refusal. `code` is stable; the message never carries a key. */
@@ -44,10 +47,12 @@ export class JourneezeError extends Error {
 }
 
 /**
- * The Journeeze origin for a base URL, or a `JourneezeError`: HTTPS on a pinned host, or http(s) on a
- * loopback host (local development, contract §2). No path, credentials, query or fragment.
+ * The Journeeze origin for a base URL, or a `JourneezeError`: HTTPS on a pinned host, or — only when
+ * `JEVITATE_JOURNEEZE_DEV=1` is set — http(s) on a loopback host (local development, contract §2;
+ * otherwise an upload key would go over plain HTTP to whatever listens on that port). No path,
+ * credentials, query or fragment.
  */
-export function pinnedJourneezeOrigin(baseUrl: string): string {
+export function pinnedJourneezeOrigin(baseUrl: string, env: Readonly<Record<string, string | undefined>> = process.env): string {
   let u: URL;
   try {
     u = new URL(baseUrl);
@@ -56,11 +61,14 @@ export function pinnedJourneezeOrigin(baseUrl: string): string {
   }
   const bare = u.username === "" && u.password === "" && u.search === "" && u.hash === "" && (u.pathname === "/" || u.pathname === "");
   if (!bare) throw new JourneezeError("E_JOURNEEZE_URL", `the Journeeze URL must be a bare origin (got ${JSON.stringify(baseUrl)})`);
-  if (LOOPBACK_HOSTS.has(u.hostname) && (u.protocol === "http:" || u.protocol === "https:")) return u.origin;
+  if (LOOPBACK_HOSTS.has(u.hostname) && (u.protocol === "http:" || u.protocol === "https:")) {
+    if (env[JOURNEEZE_DEV_ENV]?.trim() === "1") return u.origin;
+    throw new JourneezeError("E_JOURNEEZE_URL", `refusing ${u.origin}: a loopback Journeeze is for local development only — set ${JOURNEEZE_DEV_ENV}=1 to send an upload key there`);
+  }
   if (u.protocol === "https:" && JOURNEEZE_PINNED_ORIGINS.includes(u.origin)) return u.origin;
   throw new JourneezeError(
     "E_JOURNEEZE_URL",
-    `an upload key is only ever sent to ${JOURNEEZE_PINNED_ORIGINS.join(" or ")} (or http://localhost for local development) — refusing ${u.origin}`,
+    `an upload key is only ever sent to ${JOURNEEZE_PINNED_ORIGINS.join(" or ")} (or a loopback host with ${JOURNEEZE_DEV_ENV}=1) — refusing ${u.origin}`,
   );
 }
 
@@ -287,10 +295,17 @@ async function readConnections(deps: ConnectionStoreDeps): Promise<ConnectionsFi
   }
 }
 
-/** The saved connection for a project (falling back to the one made outside any project), if any. */
+/**
+ * The saved connection for a project: ONLY that project's own (a connection made in one project, or
+ * outside any, never uploads another project's catalog). The `*` connection (made outside any
+ * project) applies only outside a project, and never inside an MCP call. A project without its own
+ * connection is not connected: a person runs `jevitate connect journeeze` in that project.
+ */
 export async function loadConnection(projectDir: string | null, deps: ConnectionStoreDeps = {}): Promise<JourneezeConnection | undefined> {
+  if (projectDir === null && inMcpInvocation()) return undefined;
   const file = await readConnections(deps);
-  return file.connections[projectKey(projectDir)] ?? file.connections["*"];
+  const key = projectKey(projectDir);
+  return Object.prototype.hasOwnProperty.call(file.connections, key) ? file.connections[key] : undefined;
 }
 
 /** Saves a connection (a reference, never a key) — refuses anything that looks like a key. */
