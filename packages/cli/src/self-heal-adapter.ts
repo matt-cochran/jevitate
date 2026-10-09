@@ -3,7 +3,7 @@ import { runGoalBasedMission } from "@jevitate/explore";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
-import type { Step } from "@jevitate/recording";
+import type { Assertion, Step } from "@jevitate/recording";
 
 /**
  * The real `@jevitate/runtime.SelfHealer`, backed by `@jevitate/explore`'s
@@ -20,9 +20,10 @@ import type { Step } from "@jevitate/recording";
  * successAssertion`) takes a single config object with `judge`/`gen` (not
  * `judgment`/`generation`) and REQUIRES `startUrl` + `allowlist`, returning a
  * `GoalBasedResult` whose `outcome` is `"succeeded" | "exhausted" |
- * "blocked"`. Only `"succeeded"` (the independent oracle held) maps to
- * `"healed"`; everything else is `"not-healed"` — the healer never certifies
- * its own success (guardrail #4, mirrored from explore's oracle).
+ * "blocked"`. Only `"succeeded"` (the independent oracle held) yields a
+ * candidate; everything else yields none — and even a candidate is only a
+ * proposal the JourneyRunner adjudicates (#453: proof untouched, change
+ * evidence, the floor, the probe). The healer never certifies its own success.
  *
  * DEVIATION (start-from-live-state): the plan's `SelfHealer` contract says
  * the actor is already sitting in the live state right after the last-good
@@ -35,7 +36,12 @@ import type { Step } from "@jevitate/recording";
  */
 export function makeExploreSelfHealer(judgment: JudgmentPort, generation: GenerationPort): SelfHealer {
   return {
-    async reLearnStep({ actor, brokenStep, expectedPostcondition, allowedOrigins, secrets }) {
+    // The goal mission clicks and types to reach the postcondition: it is never consulted for a
+    // guarded click/fill step (#453), whose probe must run under the write blocker.
+    actsOnPage: true,
+    async proposeCandidates({ actor, brokenStep, allowedOrigins, secrets }) {
+      const expectedPostcondition = postconditionOf(brokenStep);
+      if (expectedPostcondition === undefined) return { candidates: [], usage: { modelCalls: 0 }, reason: `a ${brokenStep.kind} step has no postcondition to re-learn` };
       const allowlist = allowedOrigins ?? [];
       const result = await runGoalBasedMission({
         goal: describeBrokenStepGoal(brokenStep),
@@ -53,11 +59,30 @@ export function makeExploreSelfHealer(judgment: JudgmentPort, generation: Genera
         // #399: the run's secret params (the live URL may carry one) are redacted from every prompt.
         ...(secrets === undefined || secrets.length === 0 ? {} : { secrets }),
       });
-      return result.outcome === "succeeded"
-        ? { outcome: "healed", segment: result.recording }
-        : { outcome: "not-healed", reason: `re-learn mission ${result.outcome}` };
+      const usage = { modelCalls: result.transcript.length };
+      if (result.outcome !== "succeeded") return { candidates: [], usage, reason: `re-learn mission ${result.outcome}` };
+      // #453: only a ONE-step re-learn of the same kind is a candidate, and only its locator is
+      // proposed — the broken step's proof stays as recorded (the runner re-checks it).
+      const learned = result.recording.pages.flatMap((p) => p.steps.map((s) => s.step));
+      const retarget = learned.length === 1 ? retargetOf(brokenStep, learned[0]!) : undefined;
+      return retarget === undefined
+        ? { candidates: [], usage, reason: `re-learn mission took ${learned.length} step(s), not one ${brokenStep.kind} step` }
+        : { candidates: [{ step: retarget, hypothesis: `re-learned the ${brokenStep.kind} step's locator from the live page` }], usage };
     },
   };
+}
+
+/** The broken step's own postcondition (what the re-learn must reach), if it has one. */
+function postconditionOf(step: Step): Assertion | undefined {
+  return "expect" in step ? step.expect : undefined;
+}
+
+/** `broken` with `learned`'s locator, when both are the same kind of located step. */
+function retargetOf(broken: Step, learned: Step): Step | undefined {
+  if (broken.kind !== learned.kind) return undefined;
+  if (broken.kind === "navigate" && learned.kind === "navigate") return { ...broken, url: learned.url };
+  if ("target" in broken && "target" in learned) return { ...broken, target: learned.target } as Step;
+  return undefined;
 }
 
 /** The actor's current live URL — the natural start for a scoped re-learn.

@@ -6,7 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { Command } from "commander";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, journeyStepCount, listJourneyAnchors, type JourneyLintFinding } from "@jevitate/journey";
 import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
-import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { journeyExitCode, safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
@@ -300,12 +300,12 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         const envelope = ok(intent === undefined ? result : { ...result, intent });
         if (json) {
           emitJson(program, envelope);
-          // "ok" and "healed" (a recovered run) are both successes; only
-          // "quarantined" is a non-zero exit.
-          if (result.outcome === "quarantined") process.exitCode = 1;
+          // #453: ok → 0; healed-pending-review → 5 (a proposed revision, never a pass); else 1.
+          const code = journeyExitCode(result.outcome);
+          if (code !== 0) process.exitCode = code;
         } else {
           writeRawResult(program, envelope.data);
-          process.exitCode = result.outcome === "quarantined" ? 1 : 0;
+          process.exitCode = journeyExitCode(result.outcome);
         }
       } catch (err) {
         if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {

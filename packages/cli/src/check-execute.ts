@@ -16,7 +16,7 @@ import { CLI_ADVERSARIAL_STRATEGIES, parseSuccessSpec } from "./explore-api.js";
 import { type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import { loadRunFile } from "./report-api.js";
-import { GOAL_ONLY_OUTCOMES, clock, runTagsOf } from "@jevitate/domain";
+import { GOAL_ONLY_OUTCOMES, JOURNEY_MISSION_OUTCOME, clock, journeyExitCode, runTagsOf } from "@jevitate/domain";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { type Json, type Planned, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
 import { applyJourneyEnvironment } from "./environments.js";
@@ -175,18 +175,17 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(targetFixtures(item.t, journeySession), site) }),
       ...(environment === undefined ? {} : { environment }),
     }));
-    const at = r.outcome === "quarantined" ? r.at : undefined;
+    const at = r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? r.at : undefined;
     const url = journeyStepUrl(j, at);
     const path = join(ctx.resultsDir, `journey-${artifactStamp(startedAt)}-${ctx.seq()}.result.json`);
-    const failed = r.outcome === "quarantined";
     const record = {
-      missionOutcome: failed ? "defects-found" : "clean",
-      exitCode: failed ? 1 : 0,
+      missionOutcome: JOURNEY_MISSION_OUTCOME[r.outcome],
+      exitCode: journeyExitCode(r.outcome),
       result: {
         mode: "journey",
         journeyId: item.journey.id,
         outcome: r.outcome,
-        ...(r.outcome === "quarantined" ? { reason: r.reason, ...(r.at === undefined ? {} : { at: r.at }) } : {}),
+        ...(r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? { reason: r.reason, ...(r.at === undefined ? {} : { at: r.at }) } : {}),
         ...(url === undefined ? {} : { url }),
         startedAt,
         target: { seedUrl: j.recording.site, allowlist: [new URL(j.recording.site).origin] },
@@ -199,7 +198,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     const stamped = { ...record, result: stampRunMetadata(record.result) };
     await writeFile(path, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
     recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
-    const actions = failed && at !== undefined ? at + 1 : recordingSteps(j);
+    const actions = at !== undefined ? at + 1 : recordingSteps(j);
     return { status: "ran", resultPath: path, outcome: r.outcome, actions };
   }
 
