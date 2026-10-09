@@ -238,9 +238,13 @@ export interface AnswerEvidence {
    * What the quote was found in (#207): the page's visible text, or a form control's current value
    * (`control` names it). Absent when the quote was found nowhere.
    */
-  readonly source?: "page-text" | "control-value";
+  readonly source?: "page-text" | "control-value" | "control-inventory";
   /** For `source: "control-value"`: the control whose current value the quote is. */
   readonly control?: string;
+  /** #447: for an absence claim — the name of what the claim says the pages seen do not have. */
+  readonly absent?: string;
+  /** #447: for `source: "control-inventory"`: the observed controls the absence was checked against (bounded). */
+  readonly inventory?: readonly string[];
   /** Why the claim is not grounded. */
   readonly why?: string;
 }
@@ -462,9 +466,82 @@ function locateLines(quote: string, pages: readonly ObservedPage[]): Located | n
  * contiguous passage, or lines that each appear on ONE page in that order — so the model can repair it
  * instead of resubmitting the same stitched text.
  */
-function notFoundWhy(quote: string): string {
-  if (quoteLines(quote).length < 2) return "quote not found on any observed page";
-  return "quote not found on any observed page: its lines are not all on one page in that order — quote one contiguous passage, or give one claim per list entry, each quoting that entry";
+function notFoundWhy(quote: string, claim = ""): string {
+  // #447: a negative claim has no text to quote — the model is told how to state an absence instead.
+  const absence = NEGATIVE_CLAIM.test(claim)
+    ? " — to state that something is NOT there, set `absent` to its name and leave `quote` empty (code checks the observed controls and text)"
+    : "";
+  if (quoteLines(quote).length < 2) return `quote not found on any observed page${absence}`;
+  return `quote not found on any observed page: its lines are not all on one page in that order — quote one contiguous passage, or give one claim per list entry, each quoting that entry${absence}`;
+}
+
+/** #447: a claim that says something is not there ("No controls allow…", "there is no Launch button"). */
+const NEGATIVE_CLAIM = /\b(?:no|not|none|never|nothing|without|lacks?|absent|missing)\b|n't\b/i;
+
+/** #447: words that name a KIND of thing ("the Launch control"), not the thing an absence claim is about. */
+const KIND_WORDS = new Set([
+  "control", "controls", "button", "buttons", "link", "links", "option", "options", "action", "actions", "menu", "menus",
+  "item", "items", "field", "fields", "icon", "icons", "toggle", "toggles", "tab", "tabs", "entry", "entries", "element",
+  "elements", "the", "and", "any", "for", "all", "can", "not", "nor", "its",
+  "you", "are", "has", "was", "one", "none", "such",
+]);
+
+/** #447: a name's words in comparable form (folded; letters and digits). */
+function wordsOf(s: string): string[] {
+  return fold(s).match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+/** #447: the tokens of an absent name that name the thing itself (≥3 characters, no kind / filler words). */
+function absentTokens(name: string): string[] {
+  return [...new Set(wordsOf(name).filter((w) => w.length >= 3 && !STOPWORDS.has(w) && !KIND_WORDS.has(w)))];
+}
+
+/** #447: one word is (an inflection of) the other — equal, or one starts with the other's stem (≥4 characters). */
+function sameWord(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  const stem = stemOf(short);
+  return stem.length >= 4 && long.startsWith(stem);
+}
+
+/** #447: the first absent-name token that `text` says (a word of it is that token or an inflection), or null. */
+function saysToken(text: string, tokens: readonly string[]): string | null {
+  for (const w of wordsOf(text)) {
+    if (w.length < 3) continue;
+    const t = tokens.find((x) => sameWord(w, x));
+    if (t !== undefined) return t;
+  }
+  return null;
+}
+
+/** Bound on the observed controls an absence claim's evidence lists. */
+const INVENTORY_CITED = 30;
+
+/**
+ * #447 — an absence claim ("the pages seen have no Launch control"), grounded by code on what was
+ * observed instead of a quote: accepted only for a goal that asks whether something exists, with at
+ * least one observed page that is not an error page, and when NO observed control (action, label,
+ * content link, form field) and no page text, heading or title says any token of the absent name
+ * (normalized words, inflections included). Fail-closed: any match refuses it.
+ */
+function groundAbsence(claim: string, absent: string, pages: readonly ObservedPage[], goal: string): AnswerEvidence {
+  const base = { claim, quote: `nothing observed matches "${absent}"`, absent };
+  const no = (why: string): AnswerEvidence => ({ ...base, url: null, grounded: false, why });
+  if (!goalAdmitsAbsence(goal)) return no("an absence claim answers only a goal that asks whether something exists");
+  const tokens = absentTokens(absent);
+  if (tokens.length === 0) return no(`the absent name "${absent}" names no particular thing to look for`);
+  const content = pages.filter((p) => errorPageReason(p) === null);
+  if (content.length === 0) return no(pages.length === 0 ? "no page was observed" : "every page observed is an error page");
+  for (const p of pages) {
+    for (const c of [...(p.controls ?? []), ...(p.contentLinks ?? []), ...(p.fields ?? []).flatMap((f) => [f.label, f.value])]) {
+      if (saysToken(c, tokens) !== null) return no(`control "${c}" matches "${absent}" on ${p.url}`);
+    }
+    for (const [what, text] of [["page text", p.text], ["heading", p.heading ?? ""], ["title", p.title ?? ""]] as const) {
+      if (saysToken(text, tokens) !== null) return no(`${what} on ${p.url} matches "${absent}"`);
+    }
+  }
+  const inventory = [...new Set(content.flatMap((p) => [...(p.controls ?? []), ...(p.contentLinks ?? [])]))].slice(0, INVENTORY_CITED);
+  return { ...base, url: content[0]!.url, grounded: true, source: "control-inventory", inventory };
 }
 
 /** Occurrences of `needle` in `hay` (non-overlapping). */
@@ -531,7 +608,11 @@ function groundClaim(
   goal: string,
   answer: string,
   own: ReadonlySet<string>,
+  absent?: string | null,
 ): Grounded {
+  // #447: an absence claim rests on the observed controls and text, never on a quote.
+  const name = (absent ?? "").replace(/\s+/g, " ").trim();
+  if (name !== "") return { evidence: groundAbsence(claim, name, pages, goal), notAnswer: false };
   const r = groundClaimOn(claim, quote, pages, given, goal, answer, own);
   return "evidence" in r ? r : { evidence: r, notAnswer: false };
 }
@@ -551,7 +632,7 @@ function groundClaimOn(
   // #234: a list answer ("which sections are there") quotes the page's entries one per line — real
   // text, but not one contiguous passage (body text sits between the headings).
   const found = locateQuote(q, pages) ?? locateLines(quote, pages);
-  if (found === null) return { ...base, url: null, grounded: false, why: notFoundWhy(quote) };
+  if (found === null) return { ...base, url: null, grounded: false, why: notFoundWhy(quote, claim) };
   const page = { url: found.url };
   const where = found.control === undefined ? { source: found.source } : { source: found.source, control: found.control };
   // #223: on the page is not the same as answering. An error page (404 / not found) holds no answer
@@ -601,7 +682,10 @@ export const NO_ANSWER_REASON = "no answer was found on the pages seen";
  * (the operator supplied it: "a key named 'key-42'") needs no page to show it (#157).
  */
 export function groundAnswer(
-  proposed: { readonly answer: string | null; readonly claims: ReadonlyArray<{ readonly claim: string; readonly quote: string }> },
+  proposed: {
+    readonly answer: string | null;
+    readonly claims: ReadonlyArray<{ readonly claim: string; readonly quote: string; readonly absent?: string | null }>;
+  },
   pages: readonly ObservedPage[],
   opts: {
     readonly goal?: string;
@@ -613,7 +697,7 @@ export function groundAnswer(
   if (text === "" || (NO_ANSWER_TEXT.test(text) && proposed.claims.length === 0)) return { accept: false, reason: NO_ANSWER_REASON, answer: null };
   const given = new Set(numbersIn(opts.goal ?? ""));
   const own = opts.ownInputs ?? new Set<string>();
-  const grounded_ = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given, opts.goal ?? "", text, own));
+  const grounded_ = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given, opts.goal ?? "", text, own, c.absent));
   const evidence = grounded_.map((g) => g.evidence);
   const answer: RunAnswer = { text, evidence };
   if (evidence.length === 0) return { accept: false, reason: "the answer cites no page text", answer };
@@ -770,6 +854,7 @@ export async function judgeAnswerFits(
       PROMPT_INJECTION_GUARD,
       `PROPOSED ANSWER (untrusted): ${r(input.answer.text).slice(0, 500)}`,
       ...input.answer.evidence.slice(0, 8).map((e) => {
+        if (e.source === "control-inventory") return `ABSENCE (checked by code: no observed control or text matches it, untrusted): ${r(e.absent ?? "").slice(0, 200)}`;
         const from = e.source === "control-value" ? ` (the current value of the form field "${r(e.control ?? "")}")` : " (page text)";
         return `QUOTE (untrusted)${from}: ${r(e.quote).slice(0, 300)}`;
       }),
@@ -893,9 +978,9 @@ export async function reportAnswer(
   // #219: the generator's proposal is scrubbed like page content before grounding or keeping it — a
   // model may still state a secret-shaped value (a plausible email that IS the registered one).
   const r = (v: string): string => redactText(v, secrets);
-  const scrub = (out: { answer: string | null; claims: readonly { claim: string; quote: string }[] }) => ({
+  const scrub = (out: { answer: string | null; claims: readonly { claim: string; quote: string; absent?: string | null }[] }) => ({
     answer: out.answer === null ? null : r(out.answer),
-    claims: out.claims.map((c) => ({ claim: r(c.claim), quote: r(c.quote) })),
+    claims: out.claims.map((c) => ({ claim: r(c.claim), quote: r(c.quote), ...(c.absent == null ? {} : { absent: r(c.absent) }) })),
   });
   const grounding = { goal: input.goal, ...(input.ownInputs === undefined ? {} : { ownInputs: input.ownInputs }) };
   const res = await gen.generate("goal.answer", ask);
@@ -974,7 +1059,7 @@ export function answerNotFoundReason(pages: readonly ObservedPage[]): string {
  * narrow: any other find-out whose answer is not on the pages stays "answer not found".
  */
 const ABSENCE_GOAL =
-  /\bwhether\b|\b(?:is|are) there\b|\bif (?:there (?:is|are)|any)\b|\bif (?:it|they|you|the \w+) (?:has|have|shows?|offers?)\b|\bnone (?:exists?|is|are|at all)\b|\b(?:does ?n[o']t|do(?:es)? not) exist\b|\bno such\b/i;
+  /\bwhether\b|\b(?:is|are) there\b|\bthere (?:is|are) (?:no|not any)\b|\bif (?:there (?:is|are)|any)\b|\bif (?:it|they|you|the \w+) (?:has|have|shows?|offers?)\b|\bnone (?:exists?|is|are|at all)\b|\b(?:does ?n[o']t|do(?:es)? not) exist\b|\bno such\b/i;
 
 export function goalAdmitsAbsence(goal: string): boolean {
   return ABSENCE_GOAL.test(goal);

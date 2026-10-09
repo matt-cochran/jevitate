@@ -318,7 +318,10 @@ function answerLine(answer: unknown): string | undefined {
   const sources: string[] = [];
   for (const e of arr(answer.evidence).filter(isRecord)) {
     const control = str(e.control);
-    const where = e.source === "control-value" ? (control === undefined ? "a form field" : `form field "${control}"`) : "page text";
+    const where =
+      e.source === "control-value"
+        ? control === undefined ? "a form field" : `form field "${control}"`
+        : e.source === "control-inventory" ? "the observed controls" : "page text";
     const path = str(e.url)?.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, "");
     const source = path === undefined ? where : `${where} on ${path === "" ? "/" : path}`;
     if (!sources.includes(source)) sources.push(source);
