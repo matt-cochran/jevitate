@@ -31,8 +31,19 @@ const seed = async (j: Journey): Promise<void> => writeFile(file(j.metadata.id),
 const read = async (id: string): Promise<string> => readFile(file(id), "utf8");
 const run = (dryRun: boolean) => migrateStepIds({ journeysDir: dir, projectDir: null, dryRun });
 
+const REG = { version: "1", site: "https://example.test", pages: [{ url: "/", steps: [{ step: CLICK }, { step: ASSERT }] }] };
+let proj: string;
+const regFile = (): string => join(proj, "regressions", "bug.recording.json");
+const runProject = (dryRun: boolean) => migrateStepIds({ journeysDir: dir, projectDir: proj, dryRun });
+const seedRegression = async (): Promise<void> => {
+  await mkdir(join(proj, "regressions"), { recursive: true });
+  await writeFile(regFile(), `${JSON.stringify(REG, null, 2)}\n`);
+  await writeFile(join(proj, "regressions", "bug.meta.json"), "{}\n");
+};
+
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "jev-467-migrate-"));
+  proj = await mkdtemp(join(tmpdir(), "jev-467-proj-"));
 });
 
 describe("#467b migrateStepIds", () => {
@@ -109,5 +120,36 @@ describe("#467b migrateStepIds", () => {
     await seed(legacy("a"));
     await run(false);
     expect(await readFile(join(cache, "remote.json"), "utf8")).toBe(before);
+  });
+
+  it("--dry-run leaves a regression recording unwritten", async () => {
+    await seedRegression();
+    const before = await readFile(regFile(), "utf8");
+    await runProject(true);
+    expect(await readFile(regFile(), "utf8")).toBe(before);
+  });
+
+  it("lists the regression recording it would migrate", async () => {
+    await seedRegression();
+    expect((await runProject(true)).recordings.map((r) => r.stepsMinted)).toEqual([2]);
+  });
+
+  it("gives a regression recording's steps ids", async () => {
+    await seedRegression();
+    await runProject(false);
+    const rec = JSON.parse(await readFile(regFile(), "utf8")) as typeof REG & { pages: { steps: { stepId?: string }[] }[] };
+    expect(rec.pages[0]!.steps.every((s) => s.stepId !== undefined)).toBe(true);
+  });
+
+  it("leaves the regression meta file untouched", async () => {
+    await seedRegression();
+    await runProject(false);
+    expect(await readFile(join(proj, "regressions", "bug.meta.json"), "utf8")).toBe("{}\n");
+  });
+
+  it("migrates a regression recording only once", async () => {
+    await seedRegression();
+    await runProject(false);
+    expect((await runProject(false)).recordings).toEqual([]);
   });
 });

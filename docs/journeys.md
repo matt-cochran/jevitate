@@ -278,8 +278,10 @@ Since 0.10 every recorded step carries a stable `stepId`, and anchors point at t
 `jevitate journey migrate --step-ids [--dry-run] [--dir <path>] [--json]` is the one-time backfill
 for Journeys recorded earlier: it mints a deterministic id on every step that has none (ids already
 present are never renamed), stamps each anchor with its step's id, and writes through the Journey
-store. It covers every local Journey, drafts included. It does not touch the sources cache (remote
-Journeys stay content-hash-trusted), run logs or regression captures. Nothing is minted on read, and
+store. It covers every local Journey, drafts included, and the committed regression recordings
+(`.jevitate/regressions/*.recording.json`; their `*.meta.json` fingerprint hashes step content, not
+ids, so it stays valid). It does not touch the sources cache (remote Journeys stay content-hash-trusted)
+or `.jevitate/logs`. Nothing is minted on read, and
 a second run changes nothing. `--dry-run` writes nothing and lists what would change.
 
 Ids change a Journey's content hash, so **every promoted Journey needs re-approval** afterwards; the
