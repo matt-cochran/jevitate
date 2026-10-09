@@ -477,7 +477,7 @@ export interface CellResult {
 }
 
 /** #213: endings that say nothing about what the app shows a persona — the environment, not access. */
-const ENVIRONMENT_FAILURES: ReadonlySet<string> = new Set(["degraded-environment", "target-unreachable", "target-unresponsive"]);
+const ENVIRONMENT_FAILURES: ReadonlySet<string> = new Set(["degraded-environment", "host-starved", "target-unreachable", "target-unresponsive"]);
 
 /** Outcomes that mean the run itself broke — it proves nothing about the app, so it never makes a vote `intermittent`. */
 function isBrokenRunSummary(r: RunSummary): boolean {

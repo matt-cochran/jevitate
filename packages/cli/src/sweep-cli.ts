@@ -22,7 +22,7 @@ import {
 } from "./sweep-api.js";
 
 /** `sweep`'s own options: everything else it declares is forwarded to every run (as `campaign run`'s). */
-const SWEEP_OWNED: ReadonlySet<string> = new Set(["targets", "concurrency", "resume", "out", "stopOnEnvFailure", "baseUrl", "env", "json", "tag"]);
+const SWEEP_OWNED: ReadonlySet<string> = new Set(["targets", "concurrency", "resume", "out", "stopOnEnvFailure", "hostStarvedRetry", "baseUrl", "env", "json", "tag"]);
 
 /** The human summary: outcome, every target, the deduped defects and the grouped environment causes. */
 export function formatSweepHuman(data: unknown): string {
@@ -85,6 +85,7 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
     .option("--resume", "skip every target whose run already finished in --out (its run.envelope.json); re-run the rest", false)
     .option("--out <dir>", "the sweep directory: <id>/ per target and sweep.result.json (default .jevitate/logs/<date>/sweep-<stamp>; required with --resume)")
     .option("--stop-on-env-failure <k>", "stop starting runs when the first K runs ALL failed for environment/setup reasons (auth expired, target unreachable, crash, a run that could not start)", positiveIntArg)
+    .option("--no-host-starved-retry", "record a target whose run stalled on a starved host (failure.kind host-starved) as is; by default it is retried ONCE after the host's load drops (bounded wait, #452)")
     .option("--base-url <url>", "resolve each target's route against this origin (wins over --env and the file's baseUrl; else JEVITATE_BASE_URL)")
     .option("--env <name>", "resolve each target's route against this named environment's base URL (.jevitate/environments.json)")
     .option("--real", "use live Jev + OpenRouter gateways for every run (requires keys)")
@@ -94,7 +95,7 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(
       taggedAction(program, "sweep", async function (this: Command) {
-        const o = this.opts<{ targets: string; concurrency?: number; resume?: boolean; out?: string; stopOnEnvFailure?: number; baseUrl?: string; env?: string; json?: boolean }>();
+        const o = this.opts<{ targets: string; concurrency?: number; resume?: boolean; out?: string; stopOnEnvFailure?: number; hostStarvedRetry?: boolean; baseUrl?: string; env?: string; json?: boolean }>();
         const emit = (envelope: Parameters<typeof emitCommandResult>[1], exitCode?: number): void =>
           emitCommandResult(program, envelope, { json: o.json === true, command: "sweep", human: formatSweepHuman, ...(exitCode === undefined ? {} : { exitCode }) });
         try {
@@ -110,6 +111,7 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
               resume: o.resume === true,
               outDir: resolve(o.out ?? defaultSweepOutDir()),
               ...(o.stopOnEnvFailure === undefined ? {} : { stopOnEnvFailure: o.stopOnEnvFailure }),
+              ...(o.hostStarvedRetry === false ? { retryHostStarved: false } : {}),
               tags: currentRunMetadata()?.tags ?? {},
               runArgs: forwardedArgv(this, SWEEP_OWNED),
             },

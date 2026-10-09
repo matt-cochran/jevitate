@@ -77,11 +77,17 @@ export function combineOutcomes(outcomes: readonly MissionOutcome[]): MissionOut
  *  - `blocked`   → `defects-found` (1): the loop stopped without the goal met — the model gave up
  *                  (no matching control, repeated unverifiable `done`), or no progress was possible.
  *
+ *  - `not-started` → `inconclusive` (2): the run executed ZERO actions (#448) — no controls were offered,
+ *                  the auth check failed, a preflight failed — so nothing was exercised. NEVER clean and
+ *                  never a pass, whatever else it saw: it is treated exactly like `inconclusive`
+ *                  (exit 2), and `goalReason` says why. Defects found passively (console, server log)
+ *                  are still listed but do not make the run "exercised".
+ *
  * A vacuous check (#202) — satisfied before the run's first action — proves nothing either way: a
  * run whose only failing checks are vacuous is `inconclusive` (`failure.kind: "vacuous-check"`),
  * never one of these.
  */
-export const GOAL_ONLY_OUTCOMES = ["succeeded", "exhausted", "blocked", "failed"] as const;
+export const GOAL_ONLY_OUTCOMES = ["succeeded", "exhausted", "blocked", "failed", "not-started"] as const;
 export type GoalOnlyOutcome = (typeof GOAL_ONLY_OUTCOMES)[number];
 
 export const GOAL_OUTCOME_FOLD: Readonly<Record<GoalOnlyOutcome, MissionOutcome>> = {
@@ -89,6 +95,7 @@ export const GOAL_OUTCOME_FOLD: Readonly<Record<GoalOnlyOutcome, MissionOutcome>
   failed: "defects-found",
   exhausted: "defects-found",
   blocked: "defects-found",
+  "not-started": "inconclusive",
 };
 
 /**
@@ -111,6 +118,29 @@ export function foldGoalOutcome(outcome: GoalOnlyOutcome | MissionOutcome): Miss
 /** The process exit code of any mission ending — a shared `MissionOutcome` or a goal run's own. */
 export function outcomeExitCode(outcome: GoalOnlyOutcome | MissionOutcome): number {
   return MISSION_EXIT_CODES[foldGoalOutcome(outcome)];
+}
+
+/**
+ * #448: the goal outcome a run that executed ZERO actions reports. Only a goal ending that claims the
+ * goal was judged (`succeeded`, `failed`, `exhausted`, `blocked`, an invariant `defects-found`, or an
+ * inconclusive/`clean` pre-flight miss) is demoted to `not-started`; a hang, a crash, an environment
+ * ending (starved host, resource limit, unreachable target, ...) already says the run proved nothing.
+ */
+export function startedOutcome(goalOutcome: GoalOnlyOutcome | MissionOutcome, executedActions: number, failureKind?: string): GoalOnlyOutcome | MissionOutcome {
+  if (executedActions > 0) return goalOutcome;
+  switch (goalOutcome) {
+    case "succeeded":
+    case "failed":
+    case "exhausted":
+    case "blocked":
+    case "clean":
+    case "defects-found":
+      return "not-started";
+    case "inconclusive":
+      return failureKind === "auth-expired" || failureKind === "configuration" ? "not-started" : goalOutcome;
+    default:
+      return goalOutcome;
+  }
 }
 
 /** True for outcomes that mean the run itself broke (its silence proves nothing). */
@@ -144,6 +174,13 @@ export type MissionFailureKind =
   | "stalled"
   /** Most steps (or the finding that ended the run) ran on a starved host: it proved nothing (#203). */
   | "degraded-environment"
+  /**
+   * #452: the run STALLED (a page load timed out, the browser stopped answering, the app did not respond)
+   * while host signals show starvation — event-loop lag, CDP command latency, page loads far past the
+   * run's own baseline. `inconclusive`, with the measurements in `failure.message` and `hostHealth`;
+   * never a finding about the app. `jevitate sweep` retries such a target once after load drops.
+   */
+  | "host-starved"
   /**
    * #205: the run's browsers went over the memory ceiling (`--max-browser-memory`) and the resource
    * governor ended the session — the message names the measured value and the ceiling. `inconclusive`,
@@ -249,6 +286,10 @@ export function goalMissionOutcome(goalOutcome: GoalOnlyOutcome | MissionOutcome
  *  - `vacuous-check`    — every failing check was satisfied before the first action.
  *  - `broken-run`       — the run itself broke or proved nothing (crash, unreachable/unresponsive
  *                         target, starved host, unreadable `--log-defect` oracle, kill, …).
+ *  - `no-controls`      — (`not-started`, #448) the page offered no interactive control, so no action ran.
+ *  - `auth-failed`      — (`not-started`) the pre-flight auth check found the session expired.
+ *  - `preflight-failed` — (`not-started`) the operator's configuration/pre-flight failed before the app was exercised.
+ *  - `no-actions`       — (`not-started`) the run ended with zero executed actions for another reason.
  *  - `defects`          — only for `goalOutcome: "defects-found"` with no other known cause.
  */
 export const GOAL_REASONS = [
@@ -262,6 +303,10 @@ export const GOAL_REASONS = [
   "hang",
   "vacuous-check",
   "broken-run",
+  "no-controls",
+  "auth-failed",
+  "preflight-failed",
+  "no-actions",
   "defects",
 ] as const;
 export type GoalReason = (typeof GOAL_REASONS)[number];
@@ -302,6 +347,10 @@ export function goalReasonOf(i: GoalReasonInput): GoalReason | undefined {
       return "broken-run";
     case "crashed":
       return "broken-run";
+    case "not-started":
+      if (i.failureKind === "auth-expired") return "auth-failed";
+      if (i.failureKind === "configuration") return "preflight-failed";
+      return i.missCause === "no-controls" ? "no-controls" : "no-actions";
     case "defects-found":
       return "defects";
   }

@@ -28,7 +28,7 @@ describe("mission outcome → exit code (owner ruling 1: a distinct code per out
     expect(goalExitCode("failed")).toBe(1);
     expect(goalExitCode("defects-found")).toBe(1);
     for (const o of GOAL_ONLY_OUTCOMES) expect(goalExitCode(o)).toBe(missionExitCode(GOAL_OUTCOME_FOLD[o]));
-    expect(GOAL_OUTCOME_FOLD).toEqual({ succeeded: "clean", failed: "defects-found", exhausted: "defects-found", blocked: "defects-found" });
+    expect(GOAL_OUTCOME_FOLD).toEqual({ succeeded: "clean", failed: "defects-found", exhausted: "defects-found", blocked: "defects-found", "not-started": "inconclusive" });
   });
 
   it("a broken run dominates any finding and is never clean", () => {

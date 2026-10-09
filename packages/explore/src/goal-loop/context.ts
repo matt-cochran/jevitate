@@ -185,6 +185,8 @@ export interface RunContext {
   readonly blockedReported: Set<string>;
   /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
   lastReportNotFound: boolean;
+  /** #448: the run stopped fail-closed because the page offered no interactive control (the cause of a `blocked` miss). */
+  noControls: boolean;
   /** #238: the latest report's "none exists" was below the coverage floor (its reason), else null. */
   lastAbsenceUncovered: string | null;
   /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */
@@ -555,6 +557,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.blockedReported = new Set<string>();
   /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
   ctx.lastReportNotFound = false;
+  ctx.noControls = false;
   /** #238: the latest report's "none exists" was below the coverage floor (its reason), else null. */
   ctx.lastAbsenceUncovered = null;
   /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */

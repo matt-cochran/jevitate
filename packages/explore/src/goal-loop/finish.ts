@@ -98,6 +98,8 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
       ? undefined
       : ctx.lastReportNotFound
         ? "not-found"
+        : ctx.stop === "blocked" && ctx.noControls
+          ? "no-controls"
         : ctx.stop === "blocked" && ctx.reportRejections >= MAX_REPORT_REJECTIONS
           ? "ungrounded"
           : ctx.stop === "blocked" && ctx.lastRefusal !== null

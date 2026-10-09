@@ -195,6 +195,8 @@ export const HostHealthSummarySchema = z.looseObject({
   minFreeMemoryBytes: z.number().nonnegative().nullable(),
   /** Peak delay of the driver's (this process's) event loop (ms). */
   peakEventLoopLagMs: z.number().nonnegative().nullable(),
+  /** #452 — additive: peak round-trip (ms) of a cheap CDP command to the browser (absent when the run took no probe). */
+  peakCdpLatencyMs: z.number().nonnegative().nullable().optional(),
   /** Slowest page render seen (DOMContentLoaded for a navigation, settle time for an in-page transition; ms). */
   slowestRenderMs: z.number().nonnegative().nullable(),
   /** The run's own render baseline (median of its first renders; ms) the trend is judged against. */

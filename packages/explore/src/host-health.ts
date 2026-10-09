@@ -46,6 +46,15 @@ export const STARVED_LOAD_PER_CORE = 2;
 export const STARVED_EVENT_LOOP_LAG_MS = 500;
 
 /**
+ * #452: a cheap CDP round-trip (`Browser.getVersion`) is sub-millisecond-to-tens-of-ms on a healthy
+ * host; one that takes over a second means the browser process was not scheduled (or is wedged) —
+ * the same "late reply" evidence as event-loop lag, measured on the browser's side of the pipe.
+ */
+export const STARVED_CDP_LATENCY_MS = 1_000;
+/** A CDP probe with no reply in this long is recorded as this latency (the browser is unresponsive). */
+export const CDP_PROBE_TIMEOUT_MS = 5_000;
+
+/**
  * #213: the event-loop delay histogram also measures the driver's OWN synchronous work (a big
  * snapshot diff, a JSON write) — 506ms of lag at 0.70 load/core is self-inflicted, not the host.
  * Lag counts as starvation only when the CPU corroborates it: at least one runnable task per core
@@ -106,6 +115,11 @@ export interface HostHealthOptions {
   /** The driver's max event-loop delay (ms) since the previous call. Default: `perf_hooks` histogram. */
   readonly eventLoopLagMs?: () => number;
   readonly now?: () => number;
+  /**
+   * #452: the round-trip (ms) of a cheap CDP command to the run's browser; `undefined` = no reading.
+   * Default: none until `attachCdpProbe` (the CLI attaches the run's browser once it is open).
+   */
+  readonly cdpLatencyMs?: () => Promise<number | undefined>;
   /** Background sampling interval (`start()`); 0 disables it. Default `HOST_SAMPLE_INTERVAL_MS`. */
   readonly intervalMs?: number;
   /** Attribute findings to a starved host. Default: `starvationAttributionFromEnv()`. */
@@ -117,6 +131,7 @@ interface HealthSample {
   readonly at: number;
   readonly host: HostPressure;
   readonly lagMs: number;
+  readonly cdpMs: number | undefined;
   readonly starved: string | null;
 }
 
@@ -141,8 +156,9 @@ function renderMsOf(entry: TranscriptEntry): number | undefined {
 }
 
 /** Why one sample counts as starved, or null. */
-function starvationOf(host: HostPressure, lagMs: number): string | null {
+function starvationOf(host: HostPressure, lagMs: number, cdpMs?: number): string | null {
   if (host.overThreshold !== null) return `host over threshold: ${host.overThreshold}`;
+  if (cdpMs !== undefined && cdpMs > STARVED_CDP_LATENCY_MS) return `CDP round-trip ${Math.round(cdpMs)}ms > ${STARVED_CDP_LATENCY_MS}ms`;
   if (host.loadPerCore !== undefined && host.loadPerCore > STARVED_LOAD_PER_CORE) {
     return `load ${fmt(host.loadPerCore)}/core > ${STARVED_LOAD_PER_CORE}`;
   }
@@ -170,6 +186,8 @@ export class HostHealthSampler {
   #peakLoad: number | null = null;
   #minFree: number | null = null;
   #peakLag: number | null = null;
+  #peakCdp: number | null = null;
+  #cdp: (() => Promise<number | undefined>) | undefined;
   #steps = 0;
   #degradedSteps = 0;
 
@@ -188,10 +206,33 @@ export class HostHealthSampler {
       };
       this.#disposeLag = () => h.disable();
     }
+    this.#cdp = opts.cdpLatencyMs;
     this.#now = opts.now ?? clock.now;
     this.#intervalMs = opts.intervalMs ?? HOST_SAMPLE_INTERVAL_MS;
     this.#attribute = opts.attribute ?? starvationAttributionFromEnv();
     this.#cores = opts.cores ?? availableParallelism();
+  }
+
+  /** #452: takes the CDP round-trip probe of the run's browser (once it is open). */
+  attachCdpProbe(probe: () => Promise<number | undefined>): void {
+    this.#cdp = probe;
+  }
+
+  /** One bounded CDP reading: a probe with no reply in `CDP_PROBE_TIMEOUT_MS` reads as that timeout. */
+  async #measureCdp(): Promise<number | undefined> {
+    const probe = this.#cdp;
+    if (probe === undefined) return undefined;
+    let timer: ReturnType<typeof clock.setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        probe().catch(() => undefined),
+        new Promise<number>((resolve) => {
+          timer = clock.setTimeout(() => resolve(CDP_PROBE_TIMEOUT_MS), CDP_PROBE_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clock.clearTimeout(timer);
+    }
   }
 
   /** Starts background sampling (never keeps the process alive). Idempotent. */
@@ -214,8 +255,9 @@ export class HostHealthSampler {
   async sample(): Promise<HostJudgment> {
     const host = await this.#probe();
     const lagMs = this.#lag();
-    const starved = this.#attribute ? starvationOf(host, lagMs) : null;
-    this.#record({ at: this.#now(), host, lagMs, starved });
+    const cdpMs = await this.#measureCdp();
+    const starved = this.#attribute ? starvationOf(host, lagMs, cdpMs) : null;
+    this.#record({ at: this.#now(), host, lagMs, cdpMs, starved });
     return { host, starved };
   }
 
@@ -295,6 +337,7 @@ export class HostHealthSampler {
       peakLoadPerCore: this.#peakLoad,
       minFreeMemoryBytes: this.#minFree,
       peakEventLoopLagMs: this.#peakLag,
+      ...(this.#cdp === undefined ? {} : { peakCdpLatencyMs: this.#peakCdp }),
       slowestRenderMs: renders.length === 0 ? null : Math.max(...renders),
       baselineRenderMs: renders.length === 0 ? null : median(renders.slice(0, RENDER_BASELINE_RENDERS)),
       steps: this.#steps,
@@ -322,6 +365,7 @@ export class HostHealthSampler {
     const free = s.host.sample?.memAvailableBytes;
     if (free !== undefined) this.#minFree = Math.min(this.#minFree ?? Number.POSITIVE_INFINITY, free);
     this.#peakLag = Math.max(this.#peakLag ?? 0, s.lagMs);
+    if (s.cdpMs !== undefined) this.#peakCdp = Math.max(this.#peakCdp ?? 0, s.cdpMs);
   }
 
   #renderTrend(): string | null {
@@ -342,6 +386,9 @@ export function starvedHostSentence(health: HostHealthSummary): string {
   // Lag and renders only when they were a starvation-sized reading (a 2ms lag is noise, not evidence).
   if (health.peakEventLoopLagMs !== null && health.peakEventLoopLagMs > STARVED_EVENT_LOOP_LAG_MS) {
     peaks.push(`peak driver event-loop lag ${Math.round(health.peakEventLoopLagMs)}ms`);
+  }
+  if (health.peakCdpLatencyMs != null && health.peakCdpLatencyMs > STARVED_CDP_LATENCY_MS) {
+    peaks.push(`peak CDP round-trip ${Math.round(health.peakCdpLatencyMs)}ms`);
   }
   if (
     health.slowestRenderMs !== null &&
@@ -381,5 +428,55 @@ export function degradedEnvironmentOutcome<O extends string>(
       kind: "degraded-environment",
       message: `${starvedHostSentence(health)}, so the run proves nothing about the app${own}`,
     },
+  };
+}
+
+/** Failure kinds that mean the run STALLED (#452): nothing answered in time. */
+const STALL_FAILURE_KINDS: ReadonlySet<string> = new Set(["stalled", "target-unresponsive"]);
+
+/** True when a run's failure is a stall: a watchdog close, an unanswered navigation, or a bare timeout. */
+export function isStallFailure(failure: { readonly kind: string; readonly message: string } | undefined): boolean {
+  if (failure === undefined) return false;
+  return STALL_FAILURE_KINDS.has(failure.kind) || (failure.kind === "exception" && /timeout/i.test(failure.message.split("\n")[0] ?? ""));
+}
+
+/** The measurements in a run's host health that show starvation (#452); empty = the host looked healthy. */
+export function starvationMeasurements(health: HostHealthSummary): string[] {
+  const out: string[] = [];
+  if (health.peakCdpLatencyMs != null && health.peakCdpLatencyMs > STARVED_CDP_LATENCY_MS) {
+    out.push(`CDP command round-trip peaked at ${Math.round(health.peakCdpLatencyMs)}ms (> ${STARVED_CDP_LATENCY_MS}ms)`);
+  }
+  if (health.peakEventLoopLagMs !== null && health.peakEventLoopLagMs > STARVED_EVENT_LOOP_LAG_MS) {
+    out.push(`driver event-loop lag peaked at ${Math.round(health.peakEventLoopLagMs)}ms (> ${STARVED_EVENT_LOOP_LAG_MS}ms)`);
+  }
+  if (
+    health.slowestRenderMs !== null &&
+    health.baselineRenderMs !== null &&
+    health.slowestRenderMs >= RENDER_SLOWDOWN_FLOOR_MS &&
+    health.slowestRenderMs >= RENDER_SLOWDOWN_FACTOR * health.baselineRenderMs
+  ) {
+    out.push(`page load ${Math.round(health.slowestRenderMs)}ms vs the run's own ${Math.round(health.baselineRenderMs)}ms baseline (>=${RENDER_SLOWDOWN_FACTOR}x)`);
+  }
+  for (const cause of health.starvation) if (!out.some((o) => o.startsWith(cause))) out.push(cause);
+  return out;
+}
+
+/**
+ * #452 — the verdict rule for a STALLED run: when the run stalled (`isStallFailure`) and its host signals
+ * show starvation (event-loop lag, CDP latency, page loads far past the run's baseline, a starved
+ * sample), the stall is the host's, not the app's: failure kind `host-starved`, the measurements in
+ * the message. Anything else keeps its own failure.
+ */
+export function hostStarvedFailure(
+  failure: { readonly kind: string; readonly message: string } | undefined,
+  health: HostHealthSummary,
+): { readonly kind: "host-starved"; readonly message: string } | undefined {
+  if (failure === undefined || health.attribution === "off" || !isStallFailure(failure)) return undefined;
+  const measurements = starvationMeasurements(health);
+  if (measurements.length === 0) return undefined;
+  const what = failure.message.split("\n")[0]!.slice(0, 200);
+  return {
+    kind: "host-starved",
+    message: `the run stalled (${failure.kind}: ${what}) while the host was starved: ${measurements.join("; ")} — not an app finding`,
   };
 }
