@@ -10,6 +10,8 @@ import { ProfileManager } from "@jevitate/daemon";
 import type { Journey } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { runJourneyProgrammatically } from "./journey-api.js";
+import { safeRunPolicy } from "@jevitate/domain";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
 useSkippingTime({ per: "all" });
@@ -247,6 +249,31 @@ describe("#453 journey run --self-heal hybrid --changes (served, real browser)",
     const r = await inRepo(repo, () => cli(journeysDir, ["journey", "run", "create-item", "--dir", journeysDir, "--self-heal", "hybrid", "--changes", "HEAD~1..HEAD", "--fake-ai", "--json"]));
     const data = (JSON.parse(r.out) as { data: RunData & { heal?: { attempts: { rejection?: { code: string } }[] } } }).data;
     expect({ outcome: data.outcome, rejection: data.heal?.attempts[0]?.rejection?.code, writes: [...writes] }).toEqual({ outcome: "quarantined", rejection: "write-attempted", writes: [] });
+  }, 120_000);
+
+  it("v2 on --base-url: the proposal is written against the stored Journey (its recorded site), so the pending run has a proposal to accept", async () => {
+    version = "v2";
+    const repo = await repoWith("v2-env", { "src/Toolbar.html": toolbar("Create New") }, { "src/Toolbar.html": toolbar("Create") });
+    const { journeysDir } = await seed(repo);
+    const elsewhere = origin.replace("127.0.0.1", "localhost");
+    const r = await inRepo(repo, () => cli(journeysDir, ["journey", "run", "create-item", "--dir", journeysDir, "--base-url", elsewhere, "--self-heal", "hybrid", "--changes", "HEAD~1..HEAD", "--fake-ai", "--json"]));
+    const data = (JSON.parse(r.out) as { data: RunData }).data;
+    const stored = data.proposal === undefined ? undefined : (JSON.parse(await readFile(data.proposal.path, "utf8")) as { recording: { site: string } });
+    expect({ outcome: data.outcome, exitCode: r.exitCode, site: stored?.recording.site }).toEqual({ outcome: "healed-pending-review", exitCode: 5, site: origin });
+  }, 120_000);
+
+  it("v2 on a mutated replay: no proposal can be written, so the run is quarantined saying why — never pending review", async () => {
+    version = "v2";
+    const repo = await repoWith("v2-mutated", { "src/Toolbar.html": toolbar("Create New") }, { "src/Toolbar.html": toolbar("Create") });
+    const { journeysDir } = await seed(repo);
+    const scope = { evidence: [{ id: "e1", kind: "accessible-name" as const, before: "Create New", after: "Create" }], scanned: { files: 1, hunks: 1, skipped: [] } };
+    const result = await inRepo(repo, () =>
+      runJourneyProgrammatically(
+        { dir: journeysDir, id: "create-item", params: {}, policy: { ...safeRunPolicy(), selfHeal: { mode: "hybrid" } }, heal: { scope } },
+        { mutateJourney: (j) => j },
+      ),
+    );
+    expect({ outcome: result.outcome, reason: result.outcome === "quarantined" ? result.reason : undefined }).toEqual({ outcome: "quarantined", reason: expect.stringMatching(/no proposal was written \(a mutated copy of the Journey ran\)/) });
   }, 120_000);
 
   it("v3: a break no change explains (the handler is gone, the diff is unrelated) stays quarantined (exit 1), naming the step", async () => {
