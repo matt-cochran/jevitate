@@ -272,7 +272,8 @@ export function describeProvenance(p: ApprovalProvenance | undefined): string {
     case "ci":
       return `approved non-interactively in CI${markers.length === 0 ? "" : ` (${markers.join(", ")})`}${reason}`;
     case "non-interactive":
-      return `approved non-interactively${markers.length === 0 ? "" : ` (likely an agent: ${markers.join(", ")})`}${by}${reason}`;
+      return `approved non-interactively${markers.length === 0 ? "" : ` (likely an agent: ${markers.join(", ")})`}${by}${reason}`;    case "pr-review":
+      return p.pr === undefined ? "approved by a pull-request review (unverified: no PR recorded)" : `approved by ${p.pr.reviewer}'s review of merged PR #${p.pr.number}`;
   }
 }
 

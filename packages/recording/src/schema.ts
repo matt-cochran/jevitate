@@ -5,6 +5,18 @@ import { navigateTemplateProblem } from "./navigate-params.js";
 
 export interface TargetDescriptor {
   testId?: string;
+  /**
+   * #470 (optional, additive): the attribute `testId` was read from (`data-testid`, `data-test`, or a
+   * team's own, e.g. `data-cy`). Absent: the default test-id attribute. Metadata for locator health;
+   * it does not change how a step resolves.
+   */
+  testIdAttr?: string;
+  /**
+   * #468 (optional, additive): the element's `data-tflow-id` (TFlow tracking). METADATA ONLY: exported
+   * in findings and the bundle, never used to locate an element, and never counted as a selector (a
+   * descriptor with only a `tflowId` is refused). Tracking and automation conventions stay separate.
+   */
+  tflowId?: string;
   role?: string;
   name?: string;
   label?: string;
@@ -267,6 +279,12 @@ export interface StepTiming {
 
 export interface RecordedStep {
   step: Step;
+  /**
+   * #467 (optional, additive): the step's stable id (`s-` + 6 base36 chars from `mintStepId`; any
+   * `[a-z0-9._:-]{1,64}` is accepted), unique within a recording, minted by the recorder and promote
+   * and kept across heals and edits. Anchors reference steps by it.
+   */
+  stepId?: string;
   timing?: StepTiming;
   marker?: "narration" | "checkpoint";
   variableName?: string;
@@ -398,6 +416,27 @@ export interface RecordingEmulation {
   hasTouch?: boolean;
 }
 
+// === Step ids (#467) ===
+
+/** A step id: 1-64 of `[a-z0-9._:-]` (the anchor-name alphabet). `mintStepId` mints `s-` + 6 base36 chars. */
+export const STEP_ID_RE = /^[a-z0-9._:-]{1,64}$/;
+
+const STEP_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
+const MINT_ATTEMPTS = 1000;
+
+/**
+ * #467: a new step id (`s-7f3k2a`) not in `existing`. `random` (default `Math.random`, values in
+ * [0, 1)) is injectable for tests. Throws after 1000 colliding draws rather than looping forever.
+ */
+export function mintStepId(existing: ReadonlySet<string>, random: () => number = Math.random): string {
+  for (let attempt = 0; attempt < MINT_ATTEMPTS; attempt++) {
+    let id = "s-";
+    for (let i = 0; i < 6; i++) id += STEP_ID_ALPHABET[Math.min(35, Math.max(0, Math.floor(random() * 36)))];
+    if (!existing.has(id)) return id;
+  }
+  throw new Error(`mintStepId: could not mint a unique step id in ${MINT_ATTEMPTS} attempts`);
+}
+
 // === Zod Schemas ===
 
 /**
@@ -428,6 +467,9 @@ export interface RecordingEmulation {
 export const TargetDescriptorSchema: z.ZodType<TargetDescriptor> = z
   .object({
     testId: z.string().optional(),
+    testIdAttr: z.string().max(64).regex(/^[A-Za-z_:][-\w:.]*$/, "testIdAttr: an attribute name").optional(),
+    // #468: metadata only — deliberately NOT part of the refine below.
+    tflowId: z.string().min(1).max(256).optional(),
     role: z.string().optional(),
     name: z.string().optional(),
     label: z.string().optional(),
@@ -801,6 +843,7 @@ export const OutcomeCheckSchema: ZodType<OutcomeCheck> = z.discriminatedUnion("k
 const RecordedStepSchema = z
   .object({
     step: StepSchema,
+    stepId: z.string().regex(STEP_ID_RE, "stepId: 1-64 of [a-z0-9._:-]").optional(),
     timing: StepTimingSchema.optional(),
     marker: z.enum(["narration", "checkpoint"]).optional(),
     variableName: z.string().optional(),
@@ -845,4 +888,16 @@ export const RecordingSchema: ZodType<Recording> = z.object({
     .array(z.object({ id: z.string().regex(/^[a-p]{32}$/), name: z.string(), version: z.string() }).strict())
     .optional(),
   pages: z.array(PageSegmentSchema),
+}).superRefine((r, ctx) => {
+  // #467: a step id is unique within a recording.
+  const seen = new Set<string>();
+  r.pages.forEach((page, pi) =>
+    page.steps.forEach((rs, si) => {
+      if (rs.stepId === undefined) return;
+      if (seen.has(rs.stepId)) {
+        ctx.addIssue({ code: "custom", path: ["pages", pi, "steps", si, "stepId"], message: `duplicate stepId ${JSON.stringify(rs.stepId)}` });
+      }
+      seen.add(rs.stepId);
+    }),
+  );
 });
