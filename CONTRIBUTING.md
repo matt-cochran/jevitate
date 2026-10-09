@@ -15,7 +15,7 @@ the repository, and the few conventions that keep the project consistent.
 
 ## Development setup
 
-Jevitate is a pnpm workspace (Node 20 or later, pnpm 9).
+Jevitate is a pnpm workspace (Node 22 or later, pnpm 9).
 
 ```bash
 pnpm install

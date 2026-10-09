@@ -277,7 +277,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 22 }
       - run: npm i -g @jevitate/cli && jevitate install-browser --with-deps
       - name: Changed routes
         id: routes

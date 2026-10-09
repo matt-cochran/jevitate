@@ -14,7 +14,7 @@
   "author": "Matt Cochran",
   "keywords": ["jevitate", "browser-testing", "browser-automation", "regression-testing", "testing", "cli"],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "bin": { "jevitate": "bin/jevitate.js" },
   "files": ["bin"],
