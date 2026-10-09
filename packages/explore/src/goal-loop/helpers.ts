@@ -16,7 +16,8 @@ import { descriptorToLocator } from "@jevitate/recorder";
 import { redactPageText } from "../redact.js";
 import type { ChromeTracker } from "../feature/relevance.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { MAX_DOCUMENTED_WAIT_MS, readDocumentedWait, readInProgressStatus } from "../status.js";
+import { MAX_DOCUMENTED_WAIT_MS, describeStatus, isEmptyStatus, readDocumentedWait, readInProgressStatus } from "../status.js";
+import type { RunContext } from "./context.js";
 import type { ExploreRun } from "../explore.js";
 import { clock } from "@jevitate/domain";
 
@@ -318,4 +319,16 @@ export function safeUrl(page: { url(): string }): string {
   } catch {
     return "about:blank";
   }
+}
+
+/** #446: the form's message as the prompt's page status shows it, or null. */
+export function formMessageStatus(ctx: Pick<RunContext, "formMessage">): string | null {
+  const m = ctx.formMessage;
+  return m === null ? null : `${m.lines.map((l) => `form message "${l}"`).join("; ")} (after ${m.after})`;
+}
+
+/** The prompt's page status: the status text (#79) and the form's message (#446); absent when neither. */
+export function pageStatusOf(ctx: Pick<RunContext, "formMessage" | "status">): { pageStatus?: string } {
+  const parts = [...(isEmptyStatus(ctx.status) ? [] : [describeStatus(ctx.status)]), ...[formMessageStatus(ctx)].filter((x): x is string => x !== null)];
+  return parts.length === 0 ? {} : { pageStatus: parts.join("; ") };
 }

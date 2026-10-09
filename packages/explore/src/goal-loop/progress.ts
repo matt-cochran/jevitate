@@ -16,7 +16,8 @@ import { hangRoute, probeResponsive, type HangSignal } from "../hang.js";
 import { assertTargetAnswering } from "../mission-failure.js";
 import { HANG_PROBE_MS, perceive } from "../perceive.js";
 import { redactUrl } from "../redact.js";
-import { describeStatus, isEmptyStatus, readPageStatus, statusDelta } from "../status.js";
+import { describeStatus, isEmptyStatus, readFormText, readPageStatus, statusDelta } from "../status.js";
+import { descriptorToLocator } from "@jevitate/recorder";
 import type { RunContext } from "./context.js";
 import { EXPECTED_RETURN, savedAndLeft } from "./helpers.js";
 import { LAST_CHANCE_NOTE, MAX_MOVING_SCROLLS } from "./limits.js";
@@ -49,9 +50,27 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   ctx.replyTold = false;
   const acted = ctx.lastActedOp !== null && !["wait", "scroll_down", "scroll_up"].includes(ctx.lastActedOp);
   const added = acted && previous !== null && previous.url === snap.url ? appearedLines(previous.text, text) : [];
-  if (added.length > 0 && !replyTold && ctx.deltas === null) {
+  // #446: text that newly shows in the acted-on control's form (an inline validation message with no
+  // role=alert) is the form's message: told as such, kept in the prompt while it shows, an observed
+  // change, and the outcome when the run cannot get past it.
+  const formShown = acted ? await formAppeared(ctx) : [];
+  if (formShown.length > 0) {
+    const shown = await Promise.all(formShown.map((l) => redactRevealed(ctx.page, l, ctx.secrets)));
+    ctx.formMessage = { lines: shown, after: after ?? "the last step" };
+    const line =
+      `after ${after ?? "the last step"}: the form now shows ${shown.map((l) => `"${l}"`).join(" ")} — ` +
+      "a message about what was entered: fix the field it names and try again, or report it if the goal cannot get past it";
+    ctx.history.push(clipLine(await redactRevealed(ctx.page, line, ctx.secrets)));
+  } else if (ctx.formMessage !== null) {
+    // Kept only while the page still shows it.
+    const page = norm(text);
+    const still = ctx.formMessage.lines.filter((l) => page.includes(norm(l)));
+    ctx.formMessage = still.length === 0 ? null : { ...ctx.formMessage, lines: still };
+  }
+  const rest = added.filter((l) => !formShown.includes(l));
+  if (rest.length > 0 && !replyTold && ctx.deltas === null) {
     // Redacted whole, then clipped: a clip never leaves part of a secret unmatched.
-    const line = `after ${after ?? "the last step"}: new text appeared on the page: ${added.map((l) => `"${l}"`).join(" ")}`;
+    const line = `after ${after ?? "the last step"}: new text appeared on the page: ${rest.map((l) => `"${l}"`).join(" ")}`;
     ctx.history.push(clipLine(await redactRevealed(ctx.page, line, ctx.secrets)));
   }
 
@@ -82,7 +101,7 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   // #2 — no-progress: the last executed op left the page unchanged N times.
   // #303: the last action's delta decides when there is one — only `no-change` counts toward the
   // streak, `inconclusive` holds it; without one the page signature decides, as before.
-  const verdictNow = ctx.deltaVerdict ?? (added.length > 0 ? "relevant-change" : null);
+  const verdictNow = formShown.length > 0 ? "relevant-change" : (ctx.deltaVerdict ?? (added.length > 0 ? "relevant-change" : null));
   ctx.deltaVerdict = null;
   // #323: past the bound, a moving scroll is no progress even when the signature changed (a
   // virtualized list renders other rows at each position) — it only revisits what it has seen.
@@ -210,6 +229,18 @@ async function noteCycle(ctx: RunContext, snap: Perceived["snap"], text: string)
   const verdict = ctx.cycles.note({ ...step, state, progress: wrote });
   return verdict === null ? null : describeCycle(verdict);
 }
+
+/** #446: the lines that newly show in the acted-on control's form since right before the action. */
+async function formAppeared(ctx: RunContext): Promise<string[]> {
+  const before = ctx.formBefore;
+  ctx.formBefore = null;
+  if (before === null) return [];
+  const now = await readFormText(descriptorToLocator(ctx.page, before.control.descriptor).first());
+  if (now === null) return [];
+  return appearedLines(before.lines.join("\n"), now.join("\n"));
+}
+
+const norm = (s: string): string => s.replace(/\s+/g, " ").trim().toLowerCase();
 
 /** #390: the most text of new lines told after one action. */
 const APPEARED_CHARS = 400;

@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { visibleBusyIndicator } from "./hang.js";
 
 /**
@@ -115,6 +115,60 @@ export async function readPageStatus(page: Page): Promise<PageStatus> {
   return page
     .evaluate(readStatusInPage, { chars: STATUS_CHARS, items: STATUS_ITEMS })
     .catch(() => EMPTY_STATUS);
+}
+
+/**
+ * #446: the visible text of the form-like container an element sits in (`<form>`, `<fieldset>`,
+ * a dialog, `[role=form|group|region]`, `<section>`) — one line per block, controls' own text
+ * (buttons, options, text areas, rich text) left out. Compared before and after an action, the lines
+ * that newly show are the form's message (an inline validation error with no `role=alert`).
+ * BROWSER CODE — serialized by `locator.evaluate`: no imports, no closure over module scope.
+ */
+function readFormTextInPage(el: Element, limits: { chars: number; items: number }): string[] | null {
+  const container = el.closest(
+    "form,fieldset,dialog,section,[role=form],[role=dialog],[role=alertdialog],[role=group],[role=region]",
+  );
+  if (container === null) return null;
+  const SKIP = "button,select,option,textarea,script,style,template,noscript,[contenteditable],[role=button],[role=option],[role=listbox],[role=menu],[role=menuitem]";
+  const shown = (h: Element): boolean => {
+    if (h.closest("[hidden],[aria-hidden=true]") !== null) return false;
+    const st = window.getComputedStyle(h);
+    const r = h.getBoundingClientRect();
+    return st.display !== "none" && st.visibility !== "hidden" && r.width > 0 && r.height > 0;
+  };
+  const blockOf = (h: Element): Element => {
+    let b: Element = h;
+    while (b !== container && b.parentElement !== null && window.getComputedStyle(b).display.startsWith("inline")) b = b.parentElement;
+    return b;
+  };
+  const blocks = new Map<Element, string>();
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+    const parent = n.parentElement;
+    const t = (n.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (parent === null || t === "" || parent.closest(SKIP) !== null || !shown(parent)) continue;
+    const b = blockOf(parent);
+    blocks.set(b, `${blocks.get(b) ?? ""} ${t}`);
+  }
+  const out: string[] = [];
+  for (const v of blocks.values()) {
+    const t = v.replace(/\s+/g, " ").trim();
+    if (t !== "" && out.length < limits.items) out.push(t.length > limits.chars ? `${t.slice(0, limits.chars)}…` : t);
+  }
+  return out;
+}
+
+/** #446: Cap on the blocks of form text read (a section can be long). */
+const FORM_TEXT_ITEMS = 40;
+
+/**
+ * #446: the visible text blocks of the form-like container `target` sits in, or null (no such
+ * container, or the target is gone). Untrusted page text — the caller redacts before any prompt.
+ */
+export async function readFormText(target: Locator): Promise<string[] | null> {
+  return target
+    .evaluate(readFormTextInPage, { chars: STATUS_CHARS, items: FORM_TEXT_ITEMS }, { timeout: 500 })
+    .catch(() => null);
 }
 
 /** What appeared in `now` that `before` did not show: new alert texts, new / changed invalid fields. */

@@ -134,6 +134,10 @@ export interface RunContext {
   cycleMark: number;
   /** #390: the page's visible text (and its URL) at the last progress check — what an action added to it is told. */
   pageText: { readonly url: string; readonly text: string } | null;
+  /** #446: the acted-on control's form text right before the action (null: no form, or no action). */
+  formBefore: { readonly control: Control; readonly lines: readonly string[] } | null;
+  /** #446: text that newly showed in the acted-on form after an action (redacted), while it still shows. */
+  formMessage: { readonly lines: readonly string[]; readonly after: string } | null;
   /** #390: the last action was a conversation turn whose reply was already told (its text is not told again). */
   replyTold: boolean;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
@@ -486,6 +490,8 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   ctx.cycleAction = null;
   ctx.cycleMark = clock.now();
   ctx.pageText = null;
+  ctx.formBefore = null;
+  ctx.formMessage = null;
   ctx.replyTold = false;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
   ctx.lastChanceGiven = false;
