@@ -18,6 +18,20 @@ export interface SarifFinding {
   readonly status?: DiffStatus;
 }
 
+/**
+ * #453: a Journey item a `check --self-heal` re-run ended on. `pending-review`: a proposed revision
+ * awaits a person (rule `jevitate/journey-heal-pending-review`, warning). `heal-exhausted`: the break
+ * was explained but no candidate held (the Journey rule, error, with `healAttempts`).
+ */
+export interface SarifHealResult {
+  readonly kind: "pending-review" | "heal-exhausted";
+  readonly journeyId: string;
+  readonly proposalId?: string;
+  readonly proposalPath?: string;
+  readonly healAttempts?: number;
+  readonly reason?: string;
+}
+
 export interface SarifInput {
   readonly toolVersion: string;
   readonly engineCommit?: string;
@@ -26,6 +40,7 @@ export interface SarifInput {
   readonly suiteUri: string;
   readonly automationId: string;
   readonly findings: readonly SarifFinding[];
+  readonly healResults?: readonly SarifHealResult[];
 }
 
 export interface SarifLog {
@@ -41,6 +56,9 @@ function ruleId(d: ConsolidatedDefect): string {
   return `jevitate/${d.category}/${signal}`;
 }
 
+const PENDING_RULE = "jevitate/journey-heal-pending-review";
+const exhaustedRule = (journeyId: string): string => `jevitate/journey-assertion/${`journey:${journeyId}`.replace(/[^A-Za-z0-9_.:-]+/g, "-").slice(0, 80)}`;
+
 export function renderSarif(input: SarifInput): SarifLog {
   const rules = new Map<string, { id: string; name: string; shortDescription: { text: string }; defaultConfiguration: { level: string } }>();
   for (const f of input.findings) {
@@ -54,7 +72,7 @@ export function renderSarif(input: SarifInput): SarifLog {
       });
     }
   }
-  const results = input.findings.map((f) => {
+  const results: unknown[] = input.findings.map((f) => {
     const d = f.defect;
     const logical = [
       ...(d.identity.route === undefined ? [] : [{ name: d.identity.route, kind: "module" }]),
@@ -99,6 +117,37 @@ export function renderSarif(input: SarifInput): SarifLog {
       },
     };
   });
+  for (const h of input.healResults ?? []) {
+    const id = h.kind === "pending-review" ? PENDING_RULE : exhaustedRule(h.journeyId);
+    if (!rules.has(id)) {
+      rules.set(id, {
+        id,
+        name: id.replace(/[^A-Za-z0-9]+/g, "_"),
+        shortDescription: { text: h.kind === "pending-review" ? "A self-heal proposed a Journey revision awaiting review" : "journey-assertion: a self-heal ran out of candidates or budget" },
+        defaultConfiguration: { level: h.kind === "pending-review" ? "warning" : "error" },
+      });
+    }
+    const location = { physicalLocation: { artifactLocation: { uri: input.suiteUri }, region: { startLine: 1 } }, logicalLocations: [{ name: h.journeyId, kind: "module" }] };
+    results.push(
+      h.kind === "pending-review"
+        ? {
+            ruleId: id,
+            level: "warning",
+            message: { text: `Journey "${h.journeyId}": proposed revision${h.proposalId === undefined ? "" : ` ${h.proposalId}`} awaiting review — reproduce: jevitate journey review ${h.journeyId}` },
+            locations: [location],
+            partialFingerprints: { jevitateFindingKey: `heal-pending:${h.journeyId}:${h.proposalId ?? ""}` },
+            properties: { journeyId: h.journeyId, ...(h.proposalId === undefined && h.proposalPath === undefined ? {} : { proposal: { ...(h.proposalId === undefined ? {} : { id: h.proposalId }), ...(h.proposalPath === undefined ? {} : { path: h.proposalPath }) } }) },
+          }
+        : {
+            ruleId: id,
+            level: "error",
+            message: { text: `Journey "${h.journeyId}" heal exhausted after ${h.healAttempts ?? 0} attempt(s)${h.reason === undefined ? "" : `: ${h.reason}`}` },
+            locations: [location],
+            partialFingerprints: { jevitateFindingKey: `heal-exhausted:${h.journeyId}` },
+            properties: { journeyId: h.journeyId, gating: true, healAttempts: h.healAttempts ?? 0 },
+          },
+    );
+  }
   return {
     $schema: SARIF_SCHEMA,
     version: "2.1.0",

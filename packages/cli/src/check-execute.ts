@@ -5,7 +5,7 @@ import { stampRunMetadata } from "./run-metadata.js";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
 import { writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { parseScreenshotsArg } from "./run-screenshots.js";
 import { resolveRouteScope } from "@jevitate/explore";
 import { type SuiteExploreOptions } from "./suite-explore-options.js";
@@ -16,9 +16,13 @@ import { CLI_ADVERSARIAL_STRATEGIES, parseSuccessSpec } from "./explore-api.js";
 import { type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import { loadRunFile } from "./report-api.js";
-import { GOAL_ONLY_OUTCOMES, JOURNEY_MISSION_OUTCOME, clock, journeyExitCode, runTagsOf } from "@jevitate/domain";
+import { GOAL_ONLY_OUTCOMES, JOURNEY_MISSION_OUTCOME, clock, journeyExitCode, runTagsOf, safeRunPolicy } from "@jevitate/domain";
+import type { SelfHealer } from "@jevitate/runtime";
+import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
-import { type Json, type Planned, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
+import { type Json, type Planned, type PreparedHeal, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
+import type { JourneyRunResult } from "@jevitate/runtime";
+import type { RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { applyJourneyEnvironment } from "./environments.js";
 
 // ── execution ────────────────────────────────────────────────────────────────
@@ -30,6 +34,13 @@ export interface Executed {
   readonly goalOutcome?: string;
   readonly actions: number;
   readonly error?: { type: string; message: string };
+  /** #453: a Journey item re-run with self-heal — the quarantined first run's result (superseded by the re-run's). */
+  readonly supersedes?: string;
+  /** #453: the proposed revision a `healed-pending-review` re-run produced (the run result's `proposal`, when it names one). */
+  readonly proposal?: { readonly proposalId?: string; readonly path?: string };
+  /** #453: heal attempts the re-run made; the re-run's own reason when it ended `heal-exhausted`. */
+  readonly healAttempts?: number;
+  readonly reason?: string;
 }
 
 const BROKEN = new Set(["crashed", "inconclusive"]);
@@ -41,6 +52,10 @@ export interface ExecContext {
   readonly gateways: () => Promise<CheckGateways>;
   readonly engine: EngineInfo;
   readonly seq: () => string;
+  /** #453: the prepared self-heal (scope read once at preflight); absent: every Journey fails closed. */
+  readonly heal?: PreparedHeal;
+  /** #453: the evidence-only healer, built from the check's gateways on first use. */
+  readonly healer?: () => Promise<SelfHealer>;
 }
 
 function missionExecuted(resultPath: string, missionOutcome: string, result: Json): Executed {
@@ -162,8 +177,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     const environment = item.t.environments?.get(sj);
     const j = applyJourneyEnvironment(stored, environment);
     const journeySession = session ?? (sj.storageState === null ? undefined : environment?.storageState);
-    const r = await withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({
-      ...(siteGate === undefined ? {} : { siteGate }),
+    const runOptions = {
       dir: t.journeysDir ?? opts.journeysDir,
       id: sj.id,
       params: { ...sj.params },
@@ -174,32 +188,74 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       ...(journeySession === undefined ? {} : { storageState: journeySession }),
       ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(targetFixtures(item.t, journeySession), site) }),
       ...(environment === undefined ? {} : { environment }),
-    }));
-    const at = r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? r.at : undefined;
-    const url = journeyStepUrl(j, at);
-    const path = join(ctx.resultsDir, `journey-${artifactStamp(startedAt)}-${ctx.seq()}.result.json`);
-    const record = {
-      missionOutcome: JOURNEY_MISSION_OUTCOME[r.outcome],
-      exitCode: journeyExitCode(r.outcome),
-      result: {
-        mode: "journey",
-        journeyId: item.journey.id,
-        outcome: r.outcome,
-        ...(r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? { reason: r.reason, ...(r.at === undefined ? {} : { at: r.at }) } : {}),
-        ...(url === undefined ? {} : { url }),
-        startedAt,
-        target: { seedUrl: j.recording.site, allowlist: [new URL(j.recording.site).origin] },
-        engine: ctx.engine,
-        suite: stamp.suite,
-        ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
-      },
     };
-    // #426: the check's --tag metadata and structured target ride on every item result.
-    const stamped = { ...record, result: stampRunMetadata(record.result) };
-    await writeFile(path, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
-    recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
-    const actions = at !== undefined ? at + 1 : recordingSteps(j);
-    return { status: "ran", resultPath: path, outcome: r.outcome, actions };
+    const runOnce = (extra: Partial<RunJourneyProgrammaticallyOptions>): Promise<JourneyRunResult> =>
+      withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({ ...(siteGate === undefined ? {} : { siteGate }), ...runOptions, ...extra }));
+    const seq = ctx.seq();
+    const stampName = artifactStamp(startedAt);
+    const writeRecord = async (r: JourneyRunResult, suffix: string, extra: Record<string, unknown>): Promise<{ path: string; actions: number }> => {
+      const at = r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? r.at : undefined;
+      const url = journeyStepUrl(j, at);
+      const path = join(ctx.resultsDir, `journey-${stampName}-${seq}${suffix}.result.json`);
+      const record = {
+        missionOutcome: JOURNEY_MISSION_OUTCOME[r.outcome],
+        exitCode: journeyExitCode(r.outcome),
+        result: {
+          mode: "journey",
+          journeyId: item.journey!.id,
+          outcome: r.outcome,
+          ...(r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? { reason: r.reason, ...(r.at === undefined ? {} : { at: r.at }) } : {}),
+          ...(url === undefined ? {} : { url }),
+          startedAt,
+          target: { seedUrl: j.recording.site, allowlist: [new URL(j.recording.site).origin] },
+          engine: ctx.engine,
+          suite: stamp.suite,
+          ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
+          ...extra,
+        },
+      };
+      // #426: the check's --tag metadata and structured target ride on every item result.
+      const stamped = { ...record, result: stampRunMetadata(record.result) };
+      await writeFile(path, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");
+      recordRun(path, { tags: runTagsOf(stamped.result) }); // #213: a bare `report` in this project finds it
+      return { path, actions: at !== undefined ? at + 1 : recordingSteps(j) };
+    };
+
+    // Fail closed first (no healer, no change context): a plain pass or failure never involves a model.
+    const first = await runOnce({});
+    const firstRecord = await writeRecord(first, "", {});
+    const heal = ctx.heal;
+    if (heal === undefined || ctx.healer === undefined || first.outcome !== "quarantined") {
+      return { status: "ran", resultPath: firstRecord.path, outcome: first.outcome, actions: firstRecord.actions };
+    }
+    // #453: quarantined + a change context → ONE re-run with the shared scope and per-run budget; its
+    // usage lands on the check's gateways (and so its budget); the item's outcome is the re-run's.
+    const selfHealer = await ctx.healer();
+    const r = await runOnce({
+      policy: { ...safeRunPolicy(), selfHeal: { mode: heal.mode, budget: heal.budget } },
+      selfHealer,
+      heal: { scope: heal.scope },
+    });
+    const proposal = (r as { proposal?: { id?: unknown; path?: unknown } }).proposal;
+    const proposalId = typeof proposal?.id === "string" ? proposal.id : undefined;
+    const proposalPath = typeof proposal?.path === "string" ? proposal.path : undefined;
+    const healAttempts = r.heal?.attempts.length ?? 0;
+    const rerun = await writeRecord(r, ".heal", {
+      healOf: basename(firstRecord.path),
+      healAttempts,
+      ...(r.heal === undefined ? {} : { heal: { verdict: r.heal.verdict, attempts: healAttempts } }),
+      ...(proposal === undefined ? {} : { proposal }),
+    });
+    return {
+      status: "ran",
+      resultPath: rerun.path,
+      outcome: r.outcome,
+      actions: firstRecord.actions + rerun.actions,
+      supersedes: firstRecord.path,
+      healAttempts,
+      ...(r.outcome === "heal-exhausted" ? { reason: r.reason } : {}),
+      ...(r.outcome === "healed-pending-review" ? { proposal: { ...(proposalId === undefined ? {} : { proposalId }), ...(proposalPath === undefined ? {} : { path: proposalPath }) } } : {}),
+    };
   }
 
   if (item.kind === "goal" && item.goal !== undefined) {

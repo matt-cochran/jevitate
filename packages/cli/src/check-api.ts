@@ -12,12 +12,14 @@ import { currentEngineInfo } from "./engine.js";
 import { loadRunFile, resolveBaseline, scanRuns, summarizeRun } from "./report-api.js";
 import { CheckAiSetupError, type CheckFinding, type CheckGateways, type CheckItemReport, type CheckResult, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { BudgetMeter } from "./check-budget.js";
-import { type Planned, type PreparedTarget, errorMessage, plan, prepareTarget } from "./check-plan.js";
+import { type Planned, type PreparedTarget, errorMessage, plan, prepareSelfHeal, prepareTarget } from "./check-plan.js";
+import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
+import type { SelfHealer } from "@jevitate/runtime";
 import { type ExecContext, type Executed, caseDetail, execute } from "./check-execute.js";
 import { clock } from "@jevitate/domain";
 export { affectedBy } from "./check-plan.js";
 export { BudgetMeter } from "./check-budget.js";
-export { type BudgetReport, CheckAiSetupError, type CheckFinding, type CheckGateways, type CheckItemReport, CheckPreflightError, type CheckResult, type CheckRunners, type ItemKind, type RunCheckOptions } from "./check-types.js";
+export { type BudgetReport, CheckAiSetupError, CheckArgsError, type CheckFinding, type CheckGateways, type CheckItemReport, CheckPreflightError, type CheckResult, type CheckRunners, type ItemKind, type RunCheckOptions } from "./check-types.js";
 
 const REAL_RUNNERS: CheckRunners = {
   journey: runJourneyProgrammatically,
@@ -55,6 +57,8 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const prepared: PreparedTarget[] = [];
   for (const t of opts.suite.targets) prepared.push(await prepareTarget(t, opts));
   const items = plan(prepared, opts.changedRoutes, opts);
+  // #453: refuse a bad self-heal request and read the change scope ONCE, before the first browser opens.
+  const heal = await prepareSelfHeal(opts);
   let gw: Promise<CheckGateways> | undefined;
   const gateways = (): Promise<CheckGateways> => {
     if (opts.gateways === undefined) return Promise.reject(new CheckAiSetupError("this suite needs a model gateway: pass --real or --fake-ai (or set \"ai\" in the suite)"));
@@ -68,7 +72,16 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const meter = new BudgetMeter(opts.suite.budget, { ...(opts.now === undefined ? {} : { now: opts.now }), costKnownZero: opts.aiMode === "fake" });
   const usage = async (): Promise<UsageCounts | undefined> => (gw === undefined ? undefined : (await gw).usage.snapshot());
   let n = 0;
-  const ctx: ExecContext = { opts, runners, resultsDir, gateways, engine, seq: () => String(++n) };
+  let healer: Promise<SelfHealer> | undefined;
+  const ctx: ExecContext = {
+    opts,
+    runners,
+    resultsDir,
+    gateways,
+    engine,
+    seq: () => String(++n),
+    ...(heal === undefined ? {} : { heal, healer: () => (healer ??= gateways().then((g) => makeEvidenceSelfHealer(g.gen))) }),
+  };
   const now = opts.now ?? clock.now;
   let exceeded: string | undefined;
   const executed: Array<{ item: Planned; ex: Executed | undefined; durationMs: number }> = [];
@@ -141,9 +154,15 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     if (ex === undefined) return { ...base, status: "skipped", actions: 0, verdict: "skipped", gating: [] };
     const run = ex.resultPath === undefined ? undefined : runOf.get(ex.resultPath);
     const own = run === undefined ? [] : gating.filter((d) => d.modes.some((m) => m.runs.some((r) => r.path === run.path)));
-    const verdict = ex.status === "error" ? "error" : own.length > 0 ? "failed" : "passed";
+    // #453: a self-healed Journey that only proposed a revision is pending a person (never a pass); one whose heal ran
+    // out is a failure even when the report extracted no finding of its own.
+    const pending = ex.status === "ran" && ex.outcome === "healed-pending-review" && own.length === 0;
+    const exhausted = ex.status === "ran" && ex.outcome === "heal-exhausted" && own.length === 0;
+    const verdict = ex.status === "error" ? "error" : own.length > 0 || exhausted ? "failed" : pending ? "pending-review" : "passed";
     return {
       ...base,
+      ...(pending ? { proposal: { journeyId: item.name, ...(ex.proposal ?? {}) } } : {}),
+      ...(ex.healAttempts === undefined ? {} : { healAttempts: ex.healAttempts }),
       status: ex.status,
       actions: ex.actions,
       verdict,
@@ -161,12 +180,19 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     itemReports.push({ target: "approvals", kind: "approvals", name: "require-approvals", status: "ran", actions: 0, durationMs: 0, verdict: own.length > 0 ? "failed" : "passed", gating: own });
   }
   const errors = itemReports.filter((i) => i.verdict === "error").length;
-  const exitCode: 0 | 1 | 2 = gating.length > 0 ? 1 : errors > 0 || exceeded !== undefined ? 2 : 0;
+  const pendingItems = itemReports.filter((i) => i.verdict === "pending-review");
+  const proposals = pendingItems.flatMap((i) => (i.proposal === undefined ? [] : [i.proposal]));
+  const exhaustedItems = itemReports.filter((i) => i.outcome === "heal-exhausted" && i.verdict === "failed" && i.gating.length === 0);
+  const gatingFindings = gating.length + exhaustedItems.length;
+  // Precedence 1 > 2 > 5 > 0: a defect or exhausted heal, then an item error / budget overrun, then a proposal awaiting review.
+  const exitCode: 0 | 1 | 2 | 5 = gatingFindings > 0 ? 1 : errors > 0 || exceeded !== undefined ? 2 : pendingItems.length > 0 ? 5 : 0;
   const junitPath = resolve(opts.junitPath ?? join(outDir, "junit.xml"));
   const sarifPath = resolve(opts.sarifPath ?? join(outDir, "jevitate.sarif"));
   const jsonPath = resolve(opts.jsonPath ?? join(outDir, "check.json"));
   const reportPath = join(outDir, "report.md");
 
+  const executedOf = new Map<CheckItemReport, Executed | undefined>();
+  itemReports.forEach((r, k) => executedOf.set(r, executed[k]?.ex));
   const cases: GateCase[] = itemReports.map((i) => {
     const own = gating.filter((d) => i.gating.includes(d.key));
     const first = own[0];
@@ -182,6 +208,20 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       status: i.verdict,
       ...(i.resultPath === undefined ? {} : { resultPath: i.resultPath }),
       ...(attachments.length === 0 ? {} : { attachments }),
+      ...(i.verdict === "pending-review"
+        ? {
+            type: "healed-pending-review",
+            message: `proposed revision${i.proposal?.proposalId === undefined ? "" : ` ${i.proposal.proposalId}`} awaiting review`,
+            ...(i.proposal?.path === undefined ? {} : { detail: i.proposal.path }),
+          }
+        : {}),
+      ...(i.verdict === "failed" && first === undefined && i.outcome === "heal-exhausted"
+        ? {
+            type: "journey-assertion",
+            message: `Journey "${i.name}" heal exhausted after ${i.healAttempts ?? 0} attempt(s)`,
+            detail: executedOf.get(i)?.reason ?? "",
+          }
+        : {}),
       ...(i.verdict === "failed" && first !== undefined
         ? { type: first.category, message: `${own.length} gating finding(s): ${first.title}`, detail: caseDetail(own) }
         : {}),
@@ -213,7 +253,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     kind: "jevitate-check",
     suite: opts.suite.name,
     suitePath: opts.suite.path,
-    verdict: exitCode === 0 ? "pass" : "fail",
+    verdict: exitCode === 0 ? "pass" : exitCode === 5 ? "pending-review" : "fail",
     exitCode,
     engine,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
@@ -228,8 +268,10 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       failed: itemReports.filter((i) => i.verdict === "failed").length,
       errors,
       skipped: itemReports.filter((i) => i.verdict === "skipped").length,
-      gatingFindings: gating.length,
+      gatingFindings,
+      pendingReview: pendingItems.length,
     },
+    proposals,
     ...(diff === undefined || baselineRuns === undefined ? {} : { diff: { baseline: baselineRuns.map(summarizeRun), summary: diff.summary } }),
     results: runs.map((r) => r.path),
     junitPath,
@@ -246,11 +288,20 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     suiteUri: opts.suiteUri ?? opts.suite.path,
     automationId: `jevitate-check/${opts.suite.name}/`,
     findings: defects.map((d) => ({ defect: d, gating: gating.includes(d), ...(statusOf(d) === undefined ? {} : { status: statusOf(d) }) })),
+    healResults: [
+      ...pendingItems.map((i) => ({ kind: "pending-review" as const, journeyId: i.name, ...(i.proposal?.proposalId === undefined ? {} : { proposalId: i.proposal.proposalId }), ...(i.proposal?.path === undefined ? {} : { proposalPath: i.proposal.path }) })),
+      ...exhaustedItems.map((i) => ({ kind: "heal-exhausted" as const, journeyId: i.name, healAttempts: i.healAttempts ?? 0, ...(executedOf.get(i)?.reason === undefined ? {} : { reason: executedOf.get(i)?.reason }) })),
+    ],
   });
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
   await writeFile(
     reportPath,
     renderReportMarkdown({ title: `jevitate check: ${opts.suite.name} — ${result.verdict}`, runs, defects, ...(diff === undefined ? {} : { diff }) }) +
+      (proposals.length === 0
+        ? ""
+        : `\n## Proposed Journey revisions\n\nA self-heal re-ran these failed Journeys against the change and proposed a revision. Nothing passes until a person accepts it.\n\n${proposals
+            .map((p) => `- \`${p.journeyId}\`${p.proposalId === undefined ? "" : ` — proposal \`${p.proposalId}\``}${p.path === undefined ? "" : ` (${p.path})`}: \`jevitate journey review ${p.journeyId}\``)
+            .join("\n")}\n`) +
       (suiteUsage === undefined ? "" : `\n## Model cost\n\n${formatUsageLine(suiteUsage)}\n`),
     "utf8",
   );

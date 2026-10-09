@@ -291,9 +291,16 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--change-note <text>` | #453: a change note that explains a break (repeatable) — needs --self-heal hybrid\|full | `[]` |  |  |  |
 | `--changed-routes <globs>` | only run Journeys and goals touching these route globs (comma list, repeatable), e.g. '/settings/**' | `[]` |  |  |  |
+| `--changes <range>` | #453: the git range that explains a break (e.g. main...HEAD; read once, in the journeys dir's repo) — needs --self-heal hybrid\|full |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
+| `--heal-max-attempts <n>` | #453: candidates tried per broken step (default 2) |  |  |  |  |
+| `--heal-max-model-calls <n>` | #453: model calls per broken step (default 6) |  |  |  |  |
+| `--heal-max-ms <ms>` | #453: healing time per broken step in ms (default 60000) |  |  |  |  |
+| `--heal-max-run-attempts <n>` | #453: candidates tried per re-run (default 4) |  |  |  |  |
+| `--heal-max-run-ms <ms>` | #453: healing time per re-run in ms (default 180000) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a one-line summary per item, then the envelope path) |  |  |  |  |
@@ -305,6 +312,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--real` | use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys) | `false` |  |  |  |
 | `--require-approvals` | #437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed |  |  |  |  |
 | `--sarif <path>` | SARIF path (default <out>/jevitate.sarif) |  |  |  |  |
+| `--self-heal <mode>` | #453: fail-closed \| hybrid \| full — re-run a Journey that quarantined ONCE with a change-aware self-heal (needs --changes and/or --change-note, and --real/--fake-ai); a proposed revision is pending review (exit 5), never a pass | `fail-closed` |  |  |  |
 | `--suite <file>` | the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget) |  |  | yes |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--target-build <id>` | the target's build/commit id, stamped on every result |  |  |  |  |

@@ -613,7 +613,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_check",
     description:
-      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding. " +
+      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding; exit 5 = nothing failed but a self-heal proposed Journey revision(s) awaiting review. " +
+      "#453 selfHeal hybrid|full (+ changes <git range> and/or changeNote[], and a gateway — real or fakeAi; healMax* budgets): a Journey that quarantines is re-run ONCE with a change-aware self-heal; a proposed revision is pending review (exit 5), never a pass. " +
       "#437 requireApprovals (+ allowChannels, default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed.",
     command: {
       path: "check",
@@ -628,6 +629,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         targetBuild: s("--target-build"),
         requireApprovals: b("--require-approvals"),
         allowChannels: s("--allow-channels"),
+        selfHeal: s("--self-heal", { enum: ["fail-closed", "hybrid", "full"] }),
+        changes: s("--changes"),
+        changeNote: many("--change-note"),
+        healMaxAttempts: n("--heal-max-attempts"),
+        healMaxModelCalls: n("--heal-max-model-calls"),
+        healMaxMs: n("--heal-max-ms"),
+        healMaxRunAttempts: n("--heal-max-run-attempts"),
+        healMaxRunMs: n("--heal-max-run-ms"),
         ...JEV_AI,
       },
       omitted: { "--baseline-dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
