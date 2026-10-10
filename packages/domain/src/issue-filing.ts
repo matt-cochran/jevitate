@@ -63,6 +63,24 @@ export function fingerprintMarker(fingerprint: string): string {
   return `<!-- jevitate-fingerprint: ${fingerprint} -->`;
 }
 
+/** Journeeze's marker for the same fingerprint (spec §3), used for cross-tool dedup. */
+export function journeezeFingerprintMarker(fingerprint: string): string {
+  return `<!-- journeeze-fingerprint:${fingerprint} -->`;
+}
+
+/** A fingerprint that both tools name the same way: 16 lowercase hex is Journeeze's fingerprint. */
+const JOURNEEZE_FINGERPRINT = /^[0-9a-f]{16}$/;
+
+/**
+ * Every dedup marker a body for this fingerprint carries, Jevitate's first. The Journeeze marker
+ * is added only when the fingerprint is Journeeze-shaped, so unrelated fingerprints are untouched.
+ */
+export function fingerprintMarkers(fingerprint: string): string[] {
+  const markers = [fingerprintMarker(fingerprint)];
+  if (JOURNEEZE_FINGERPRINT.test(fingerprint)) markers.push(journeezeFingerprintMarker(fingerprint));
+  return markers;
+}
+
 /** Which destinations an attribution routes to. */
 export function targetsFor(attribution: Attribution): IssueTarget[] {
   switch (attribution) {
@@ -92,6 +110,18 @@ export function occurrenceComment(draft: IssueDraft, occurredAtIso: string): str
 }
 
 /**
+ * The first open issue in `repo` matching ANY of the markers, in order, or null. An issue filed by
+ * Journeeze carries only Journeeze's marker; one filed by Jevitate carries both.
+ */
+async function findOpenByAnyMarker(filer: IssueFilerPort, repo: string, markers: readonly string[]): Promise<IssueRef | null> {
+  for (const marker of markers) {
+    const issue = await filer.findOpenByMarker(repo, marker);
+    if (issue !== null) return issue;
+  }
+  return null;
+}
+
+/**
  * Files one draft to each of its targets. Never throws: a filer failure is a `failed` outcome
  * with its reason (the draft on disk is the durable record either way).
  */
@@ -113,7 +143,7 @@ export async function fileDraft(
       continue;
     }
     try {
-      const existing = await filer.findOpenByMarker(repo, fingerprintMarker(draft.fingerprint));
+      const existing = await findOpenByAnyMarker(filer, repo, fingerprintMarkers(draft.fingerprint));
       if (existing !== null) {
         const issue = await filer.comment(repo, existing.number, occurrenceComment(draft, occurredAtIso));
         out.push({ target, status: "filed", repo, action: "commented", issue });

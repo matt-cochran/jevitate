@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   DEFAULT_JEVITATE_REPO,
   fileDraft,
-  fingerprintMarker,
+  fingerprintMarkers,
   type FilingConfig,
   type FilingOutcome,
   type IssueDraft,
@@ -118,9 +118,12 @@ export function issuesDirFor(recordingPath: string): string {
  */
 export function withSelfHealSection(draft: IssueDraft, attempts: readonly HealAttemptRow[]): IssueDraft {
   if (attempts.length === 0) return draft;
-  const marker = fingerprintMarker(draft.fingerprint);
   const section = ["## Self-heal attempts", "", ...healAttemptTable(attempts).slice(2), ""].join("\n");
-  const at = draft.body.lastIndexOf(marker);
+  let at = -1;
+  for (const marker of fingerprintMarkers(draft.fingerprint)) {
+    at = draft.body.lastIndexOf(marker);
+    if (at >= 0) break;
+  }
   const body = at < 0 ? `${draft.body}\n\n${section}` : `${draft.body.slice(0, at)}${section}\n${draft.body.slice(at)}`;
   return { ...draft, body };
 }

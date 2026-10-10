@@ -4,7 +4,7 @@ import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { assertNoSecretInPayload, redactText, redactUrl } from "@jevitate/ai-core";
-import { fileDraft, fingerprintMarker, targetsFor, type FilingConfig, type FilingOutcome, type IssueDraft, type IssueFilerPort, clock } from "@jevitate/domain";
+import { fileDraft, fingerprintMarkers, targetsFor, type FilingConfig, type FilingOutcome, type IssueDraft, type IssueFilerPort, clock } from "@jevitate/domain";
 import {
   DemoOverlay,
   PageSignalCollector,
@@ -500,7 +500,7 @@ function appendEvidenceToDrafts(result: Record<string, unknown>, byFp: ReadonlyM
       `jevitate observed **${title}** on \`${redactText(str(d.route) ?? "?", secrets)}\`: ${e.signal ?? str(d.kind) ?? "a defect"}.`,
       `Fingerprint \`${fp}\`${typeof d.occurrences === "number" ? ` · ${d.occurrences} occurrence(s) in this run` : ""}.`,
       ...(recordingPath === undefined ? [] : [`## Artifacts\n- Recording: \`${recordingPath}\` (replay it up to step ${e.failingStep ?? "?"} to reach the failing step)`]),
-      fingerprintMarker(fp),
+      ...fingerprintMarkers(fp),
     ].join("\n\n");
     fresh.push({ fingerprint: fp, title: `[jevitate] ${title}`, body: redactText(body, secrets), labels: ["jevitate", "defect"], attribution: "system-under-test", targets: targetsFor("system-under-test") });
   }
@@ -514,9 +514,12 @@ function appendEvidenceToDrafts(result: Record<string, unknown>, byFp: ReadonlyM
     if (fp === undefined || path === undefined || e === undefined || !existsSync(path)) continue;
     const md = readFileSync(path, "utf8");
     if (md.includes(`\n${EVIDENCE_MEDIA_HEADING}\n`)) continue;
-    const marker = fingerprintMarker(fp);
     const section = evidenceSection(e, secrets);
-    const at = md.lastIndexOf(marker);
+    let at = -1;
+    for (const marker of fingerprintMarkers(fp)) {
+      at = md.lastIndexOf(marker);
+      if (at >= 0) break;
+    }
     writeFileSync(path, at < 0 ? `${md.trimEnd()}\n\n${section}\n` : `${md.slice(0, at)}${section}\n\n${md.slice(at)}`, "utf8");
   }
 }
