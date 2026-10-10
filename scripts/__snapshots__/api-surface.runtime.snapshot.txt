@@ -130,7 +130,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (88 exports)
+# @jevitate/domain (90 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEFECT_OUTCOME_STATUSES: array
@@ -185,6 +185,7 @@
   externalSchemeOf: function
   fileDraft: function
   fingerprintMarker: function
+  fingerprintMarkers: function
   foldGoalOutcome: function
   gatingDefects: function
   gaussian: function
@@ -197,6 +198,7 @@
   isGoalOutcome: function
   isUnboundedHeapGrowth: function
   isWithinQuietHours: function
+  journeezeFingerprintMarker: function
   journeyExitCode: function
   looksLikeRendererOom: function
   makeRng: function
