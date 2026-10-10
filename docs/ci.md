@@ -33,6 +33,10 @@ pass or fail:
   A Journey's routes are its Recording's pages, or the `routes` you give it. A goal's routes are
   its start URL's path, or its `routes`. Missions, invariant sweeps and verify-fix always run.
 - `--target-build <id>` stamps your build/commit on every result, next to `engine`.
+- `--app-version <label>` (#479) stamps the app's release/version label (1-64 of
+  `[A-Za-z0-9._+-]`, starting alphanumeric) on the result and the SARIF run properties, next to the
+  build id. Without the flag, a valid `JEVITATE_APP_VERSION` is used; an invalid one is ignored with
+  a warning on stderr, and an invalid flag is refused (exit 64) before anything runs.
 - `--require-approvals [--allow-channels tty,ci]` (#437): also an `approvals` item that fails
   (a hard `approval` finding per problem, in JUnit and SARIF like any other) when a promoted
   Journey (in the default and each target's journeys dir) has no approval, or a promoted Journey

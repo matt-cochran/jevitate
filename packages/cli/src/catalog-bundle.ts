@@ -100,6 +100,8 @@ export interface BundleBaseline {
 export interface BundleCheck {
   readonly target: { readonly id: string; readonly kind?: BundleCheckTargetKind };
   readonly commit: string;
+  /** #479 (spec minor 1 §2): the app's release/version label the check ran against; `commit` stays the build identity. */
+  readonly appVersion?: string;
   readonly at: string;
   readonly runId?: string;
   readonly journey?: string;
@@ -214,6 +216,7 @@ const COMMIT_RE = /^[0-9a-f]{7,40}$/;
 const SEMVER_RE = /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]{1,40})?$/;
 const DATE_TIME_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$/;
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const APP_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
 const FAILURE_KIND_RE = /^[a-z][a-z0-9-]{0,63}$/;
 const OTHER_FIELD_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const ONE_LINE_RE = /^(?=.*\S)[^\u0000-\u001f\u007f]+$/u;
@@ -576,6 +579,14 @@ function bundleChecks(input: CatalogBundleInput, journeys: readonly ExportedJour
       warn.push(`${source}: the check names no commit (run it with --target-build <commit sha>) — its items are left out`);
       continue;
     }
+    // #479 (spec minor 1 §2): the app's release label travels beside the commit; an invalid one is
+    // left out with a warning (the check itself still exports).
+    const rawAppVersion = typeof data.appVersion === "string" ? data.appVersion : undefined;
+    let appVersion: string | undefined;
+    if (rawAppVersion !== undefined) {
+      if (APP_VERSION_RE.test(rawAppVersion)) appVersion = rawAppVersion;
+      else warn.push(`${source}: the check's appVersion is not a release label (1-64 of [A-Za-z0-9._+-], starting alphanumeric) — left out`);
+    }
     const at = typeof data.startedAt === "string" ? data.startedAt : "";
     if (!DATE_TIME_RE.test(at)) {
       warn.push(`${source}: the check's start time is not an ISO date-time — its items are left out`);
@@ -615,6 +626,7 @@ function bundleChecks(input: CatalogBundleInput, journeys: readonly ExportedJour
       const check: BundleCheck = {
         target: { id, ...(kind === undefined ? {} : { kind }) },
         commit,
+        ...(appVersion === undefined ? {} : { appVersion }),
         at,
         runId,
         ...(journeyId === undefined ? {} : { journey: journeyId }),

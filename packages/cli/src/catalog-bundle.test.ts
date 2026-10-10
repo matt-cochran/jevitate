@@ -371,3 +371,44 @@ describe("check outcomes", () => {
     expect(c.exitCode).toBe(CONTRACT_EXIT[c.outcome]);
   });
 });
+
+// ── #479 check.appVersion (spec minor 1 §2) ─────────────────────────────────────────────────
+
+describe("#479 check.appVersion in the bundle", () => {
+  const EMPTY: Catalog = { dir: null, personasFile: null, jobsFile: null, personas: [], jobs: [], journeys: [] };
+  const build = (appVersion: unknown) =>
+    buildCatalogBundle({
+      producer: { version: "0.10.0" },
+      productName: "sample",
+      catalog: EMPTY,
+      personaFields: new Map(),
+      checks: [
+        {
+          source: "check.json",
+          record: {
+            kind: "jevitate-check",
+            targetBuild: HEAD,
+            appVersion,
+            startedAt: "2026-10-09T12:30:00.000Z",
+            items: [{ name: "t", kind: "journey", status: "ran", outcome: "ok", durationMs: 1 }],
+          },
+        },
+      ],
+    });
+
+  it("a check record with a valid appVersion exports it on the check", () => {
+    expect(build("1.4.0").bundle.checks[0]).toMatchObject({ appVersion: "1.4.0" });
+  });
+
+  it("a check record with an invalid appVersion leaves the field out", () => {
+    expect(build("has space").bundle.checks[0]).not.toHaveProperty("appVersion");
+  });
+
+  it("an invalid appVersion still exports the check", () => {
+    expect(build("has space").bundle.checks).toHaveLength(1);
+  });
+
+  it("an invalid appVersion is reported as a warning", () => {
+    expect(build("has space").warnings).toContainEqual(expect.stringMatching(/appVersion/));
+  });
+});

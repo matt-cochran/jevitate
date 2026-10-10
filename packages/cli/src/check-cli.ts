@@ -44,6 +44,8 @@ export interface CheckCliDeps {
   readonly baselinesDir?: string;
   /** #437: the catalog's directory `--require-approvals` reads (default: the project's `.jevitate/`). */
   readonly catalogDir?: string;
+  /** #479: the environment `JEVITATE_APP_VERSION` is read from (default `process.env`); tests inject it. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
   /** Test seam: replace the runners. */
   readonly runners?: Partial<CheckRunners>;
 }
@@ -56,6 +58,27 @@ function emit(program: Command, envelope: JsonEnvelope<unknown>, json: boolean, 
 const collect = (v: string, prev: string[]): string[] => [...prev, v];
 const collectList = (v: string, prev: string[]): string[] => [...prev, ...v.split(",").map((s) => s.trim()).filter((s) => s !== "")];
 
+/** #479: the app's release label — 1-64 of [A-Za-z0-9._+-], starting with a letter or digit. */
+const APP_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
+
+/**
+ * #479: `--app-version` (validated, refused before anything runs), else `JEVITATE_APP_VERSION`; an
+ * invalid env value is ignored with a warning on stderr. The flag wins over the environment.
+ */
+function resolveAppVersion(flag: string | undefined, env: Readonly<Record<string, string | undefined>>, warn: (line: string) => void): string | undefined {
+  if (flag !== undefined) {
+    if (!APP_VERSION_RE.test(flag)) throw new CheckArgsError(`--app-version must be 1-64 characters of [A-Za-z0-9._+-], starting with a letter or digit (got ${JSON.stringify(flag)})`);
+    return flag;
+  }
+  const fromEnv = env.JEVITATE_APP_VERSION;
+  if (fromEnv === undefined) return undefined;
+  if (!APP_VERSION_RE.test(fromEnv)) {
+    warn(`warning: ignoring JEVITATE_APP_VERSION: ${JSON.stringify(fromEnv)} is not a valid app version (1-64 of [A-Za-z0-9._+-], starting alphanumeric)\n`);
+    return undefined;
+  }
+  return fromEnv;
+}
+
 export function registerCheckCommand(program: Command, deps: CheckCliDeps, withLaunchFlags: (cmd: Command) => Command): void {
   withLaunchFlags(
     program
@@ -64,6 +87,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
   )
     .requiredOption("--suite <file>", "the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget)")
     .option("--target-build <id>", "the target's build/commit id, stamped on every result")
+    .option("--app-version <label>", "#479: the app's release/version label the check ran against, stamped next to the build id (1-64 of [A-Za-z0-9._+-]); also JEVITATE_APP_VERSION")
     .option("--baseline <run|tag|last>", "only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`)")
     .option("--baseline-dir <dir>", "results dir holding baseline runs (repeatable; default: this check's results, then ~/.jevitate)", collect, [] as string[])
     .option("--changed-routes <globs>", "only run Journeys and goals touching these route globs (comma list, repeatable), e.g. '/settings/**'", collectList, [] as string[])
@@ -98,6 +122,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
       const o = this.opts<{
         suite: string;
         targetBuild?: string;
+        appVersion?: string;
         baseline?: string;
         baselineDir: string[];
         changedRoutes: string[];
@@ -145,6 +170,8 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         const allowedChannels = o.requireApprovals === true ? parseAllowedChannels(o.allowChannels) : undefined;
         // #470: the opt-in brittle-step gate, resolved before the suite is read or anything runs.
         const gate = o.maxBrittleSteps === undefined ? undefined : brittleStepGate(o.maxBrittleSteps);
+        // #479: the app version is resolved (and an invalid one refused) before anything runs.
+        const appVersion = resolveAppVersion(o.appVersion, deps.env ?? process.env, (line) => this.configureOutput().writeErr?.(line));
         const suite = loadSuite(o.suite);
         const real = o.real === true || (o.fakeAi !== true && suite.ai === "real");
         const fakeAi = o.fakeAi === true || (o.real !== true && suite.ai === "fake");
@@ -160,6 +187,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           targetsConfig: loadTargetsFile(deps.targetsConfigPath),
           ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
           ...(o.targetBuild === undefined ? {} : { targetBuild: o.targetBuild }),
+          ...(appVersion === undefined ? {} : { appVersion }),
           ...(o.baseline === undefined ? {} : { baseline: o.baseline }),
           ...(o.baselineDir.length > 0 ? { baselineDirs: o.baselineDir } : o.baseline === undefined ? {} : { baselineDirs: [`${o.out}/results`, ...defaultResultDirs()] }),
           ...(deps.baselinesDir === undefined ? {} : { baselinesDir: deps.baselinesDir }),

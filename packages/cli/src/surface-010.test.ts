@@ -141,6 +141,7 @@ describe("0.10 MCP tools: allowlisted, mirrored and key-free", () => {
     expect(props("export_catalog_bundle")).toEqual(["check", "format", "out", "productName"]);
     expect(props("publish_to_journeeze")).toEqual(["dryRun"]);
     expect(props("review_journey")).toContain("stale");
+    expect(props("run_check")).toContain("appVersion");
     expect(props("run_check")).toContain("maxBrittleSteps");
   });
 
