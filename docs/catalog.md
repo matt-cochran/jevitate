@@ -150,7 +150,7 @@ The 0.10 anchor rules, each with its fix:
 
 | Rule | What it needs |
 |---|---|
-| `anchor-name` | a name of 1-64 lowercase `a-z`, `0-9`, `.`, `_`, `:`, `-` (the fix suggests the spelling) |
+| `anchor-name` | a name of 1-64 lowercase `a-z`, `0-9`, `.`, `_`, `-` that starts with a letter or digit (the fix suggests the spelling) |
 | `anchor-step-id` | a `stepId` that is a step of the Journey |
 | `anchor-step-mismatch` | `step` and `stepId` naming the same step |
 | `anchor-unstamped` | on a Journey whose steps have ids, the anchor carries its step's id |
