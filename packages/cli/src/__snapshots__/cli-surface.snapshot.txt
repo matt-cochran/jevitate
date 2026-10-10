@@ -1108,6 +1108,7 @@
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
     - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=export and validate the bundle and resolve the connection, but send nothing
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (never contains the key)
+    - flags=--product-name <name> required=true mandatory=false negate=false variadic=false default=null description=the bundle's product.name (default: the connected Journeeze product's name)
 
 # record
   description: record a demonstrated flow into a Recording (authoring plane)
