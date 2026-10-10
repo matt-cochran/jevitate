@@ -749,6 +749,82 @@ export class SecretPixelMask {
     this.#source = MASK_RUNTIME.replace("__CFG__", () => cfg);
   }
 
+  /**
+   * #471: every closed shadow root that appears in `page` while it is open — at load, attached
+   * later to a known node, or inside a subtree inserted with one — that is not one of jevitate's own
+   * layers is a video breach. Uses the DevTools DOM domain (Chromium); a watch that cannot start or
+   * that errors is a breach too (fail closed). Frames below the top document are included
+   * (conservative: they are placeholders, but the watch does not tell them apart).
+   */
+  async #watchClosedRoots(page: Page): Promise<void> {
+    const breach = (why: string): void => void this.#jzBreaches.add(why.slice(0, 200));
+    let session: Awaited<ReturnType<BrowserContext["newCDPSession"]>>;
+    try {
+      session = await within(page.context().newCDPSession(page), "watching shadow roots");
+    } catch (e) {
+      breach(`closed shadow roots cannot be watched: ${errText(e)}`);
+      return;
+    }
+    let closed = false;
+    page.once("close", () => {
+      closed = true;
+    });
+    /** Known nodes' attributes (by nodeId): what tells jevitate's own layer hosts apart. */
+    const attrs = new Map<number, readonly string[]>();
+    const ours = (a: readonly string[] | undefined): boolean => {
+      for (let i = 0; a !== undefined && i < a.length; i += 2) if (a[i] === PIXEL_MASK_ATTR || a[i] === DEMO_OVERLAY_ATTR) return true;
+      return false;
+    };
+    type N = CdpNode & { readonly nodeId?: number; readonly shadowRootType?: string };
+    const scan = (n: N): void => {
+      if (n.nodeId !== undefined && n.attributes !== undefined) attrs.set(n.nodeId, n.attributes);
+      for (const sr of (n.shadowRoots ?? []) as N[]) {
+        if (sr.shadowRootType === "closed" && !ours(n.attributes)) breach("a closed shadow root appeared that jz-mask-v1 cannot see into");
+        scan(sr);
+      }
+      for (const c of (n.children ?? []) as N[]) scan(c);
+      if (n.contentDocument !== undefined) scan(n.contentDocument as N);
+    };
+    const fail = (e: unknown): void => {
+      if (!closed) breach(`the shadow-root watch failed: ${errText(e)}`);
+    };
+    const load = async (): Promise<void> => {
+      const { root } = (await session.send("DOM.getDocument", { depth: -1, pierce: true })) as { root: N };
+      attrs.clear();
+      scan(root);
+    };
+    const s = session as unknown as { on(event: string, f: (p: Record<string, unknown>) => void): void };
+    s.on("DOM.documentUpdated", () => void load().catch(fail));
+    s.on("DOM.setChildNodes", (p) => {
+      for (const n of (p.nodes ?? []) as N[]) scan(n);
+    });
+    s.on("DOM.childNodeInserted", (p) => {
+      const n = p.node as N;
+      scan(n);
+      // Learn the inserted subtree whole (pierce), so a root deep inside it is reported too.
+      if (n.nodeId !== undefined) void session.send("DOM.requestChildNodes", { nodeId: n.nodeId, depth: -1, pierce: true }).catch(fail);
+    });
+    s.on("DOM.attributeModified", (p) => {
+      const id = p.nodeId as number;
+      const a = [...(attrs.get(id) ?? [])];
+      const at = a.findIndex((x, i) => i % 2 === 0 && x === p.name);
+      if (at >= 0) a[at + 1] = String(p.value);
+      else a.push(String(p.name), String(p.value));
+      attrs.set(id, a);
+    });
+    s.on("DOM.shadowRootPushed", (p) => {
+      const root = p.root as N;
+      if (root.shadowRootType === "closed" && !ours(attrs.get(p.hostId as number))) breach("a closed shadow root appeared that jz-mask-v1 cannot see into");
+      scan(root);
+    });
+    try {
+      await within(session.send("DOM.enable"), "watching shadow roots");
+      await within(load(), "watching shadow roots");
+    } catch (e) {
+      breach(`closed shadow roots cannot be watched: ${errText(e)}`);
+    }
+  }
+
   /** Installs the live mask in `page`'s context (every future document/frame) and every current frame. Throws when it cannot. */
   async install(page: Page): Promise<void> {
     const ctx = page.context();
@@ -767,6 +843,9 @@ export class SecretPixelMask {
         // #471: reduced motion, so a site's smooth scrolling and motion (which can move a region
         // on the compositor between two checked frames, voiding the video) mostly stays off.
         if (this.jzMaskV1) for (const p of ctx.pages()) await within(p.emulateMedia({ reducedMotion: "reduce" }), "emulating reduced motion");
+        // #471: a closed shadow root is content the page layer cannot see into — watched for the
+        // whole recording through the DevTools protocol, however briefly it exists.
+        if (this.jzMaskV1) for (const p of ctx.pages()) await this.#watchClosedRoots(p);
       } catch (e) {
         throw new MaskUnavailableError(`could not install the pixel mask: ${errText(e)}`);
       }

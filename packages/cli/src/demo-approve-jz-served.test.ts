@@ -27,7 +27,11 @@ const APP = `<!doctype html><html><head><title>Profile</title><style>body{margin
 <label>Display name <input id="name" value="Grace Hopper"></label>
 <button type="button" data-testid="save">Save</button>
 <p data-testid="status" role="status"></p>
-<script>document.querySelector("[data-testid=save]").onclick = () => { document.querySelector("[data-testid=status]").textContent = "Saved"; };</script>
+<script>document.querySelector("[data-testid=save]").onclick = () => {
+  document.querySelector("[data-testid=status]").textContent = "Saved";
+  // ?flash: a closed shadow root with a field exists for a moment, between two screenshots.
+  if (location.search === "?flash") { const h = document.createElement("div"); document.body.append(h); h.attachShadow({ mode: "closed" }).innerHTML = "<input value='x'>"; h.remove(); }
+};</script>
 </body></html>`;
 
 const ID = "jz-approve";
@@ -35,7 +39,7 @@ let server: Server;
 let origin: string;
 let root: string;
 
-function journey(site: string): Journey {
+function journey(site: string, path = "/"): Journey {
   return {
     metadata: { id: ID, name: "Save your display name", goal: "Save your display name", promoted: false, params: [], createdAtIso: "2026-10-09T12:00:00.000Z" },
     recording: {
@@ -46,7 +50,7 @@ function journey(site: string): Journey {
         {
           url: "/",
           steps: [
-            { stepId: "s-open", step: { kind: "navigate", url: "/", expect: { kind: "urlIncludes", text: "/" } } },
+            { stepId: "s-open", step: { kind: "navigate", url: path, expect: { kind: "urlIncludes", text: "/" } } },
             {
               stepId: "s-save",
               step: { kind: "click", target: { testId: "save", role: "button", name: "Save" }, expect: { kind: "textIncludes", target: { testId: "status" }, text: "Saved" } },
@@ -59,8 +63,8 @@ function journey(site: string): Journey {
 }
 
 /** A Journey with its demo and annotation drafts, as `jevitate demo "<aspect>"` leaves them. */
-function drafted(journeysDir: string, env: string): void {
-  const j = journey(origin);
+function drafted(journeysDir: string, env: string, path = "/"): void {
+  const j = journey(origin, path);
   mkdirSync(join(journeysDir, ".drafts"), { recursive: true });
   writeFileSync(join(journeysDir, `${ID}.json`), JSON.stringify(j, null, 2));
   const hash = journeyContentHash(j);
@@ -83,9 +87,9 @@ function drafted(journeysDir: string, env: string): void {
   );
 }
 
-async function approve(name: string, synthetic: boolean): Promise<{ result: ApproveDemoResult; journeysDir: string }> {
+async function approve(name: string, synthetic: boolean, path = "/"): Promise<{ result: ApproveDemoResult; journeysDir: string }> {
   const journeysDir = join(root, name, "journeys");
-  drafted(journeysDir, name);
+  drafted(journeysDir, name, path);
   const environment: ResolvedJourneyEnvironment = { name, baseUrl: origin, allowedOrigins: [origin], source: "test", ...(synthetic ? { synthetic: true as const } : {}) };
   const result = await approveDemo({
     journeysDir,
@@ -160,5 +164,25 @@ describe("demo approve on an environment that does not declare synthetic data (s
 
   it("says why no media goes to Journeeze", () => {
     expect(approved.result.journeeze?.reason).toMatch(/does not declare synthetic: true/);
+  });
+});
+
+describe("demo approve when a closed shadow root flashes up mid-recording (served, #471)", () => {
+  let record: ApprovedDemoRecord;
+  beforeAll(async () => {
+    const approved = await approve("flash", true, "/?flash");
+    record = JSON.parse(readFileSync(join(approvedDemoDir(approved.journeysDir, ID), "demo.json"), "utf8")) as ApprovedDemoRecord;
+  }, 300_000);
+
+  it("exports no video", () => {
+    expect(record.video).toBeUndefined();
+  });
+
+  it("exports no subtitles", () => {
+    expect(record.subtitles).toBeUndefined();
+  });
+
+  it("still keeps the screenshots their own proof allows", () => {
+    expect(record.steps.map((s) => s.screenshot)).toEqual(["step-01.png", "step-02.png"]);
   });
 });

@@ -43,6 +43,9 @@ const PAGES: Record<string, string> = {
 customElements.define("x-card", class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: "closed" }).innerHTML = "<input value='hidden'>"; } });</script>`,
   "/late-modal": `<input value="field"><dialog id="d"><p>later</p></dialog><script>setTimeout(() => document.getElementById("d").showModal(), 200);</script>`,
   "/plain": `<input value="field"><p>nothing else</p>`,
+  "/transient-closed": `<input value="field"><div id="host"></div><script>
+window.flash = () => { const r = document.getElementById("host").attachShadow({ mode: "closed" }); r.innerHTML = "<input value='hidden'>"; };
+window.gone = () => document.getElementById("host").remove();</script>`,
   "/pseudo": `<style>[data-jz-mask]::after{content:"outside";position:absolute;left:400px}</style><div data-jz-mask style="position:relative;width:100px">marked</div>`,
   "/colour": `<input id="f" value="field" style="transition:border-color 5s linear;border:2px solid #000"><script>requestAnimationFrame(() => requestAnimationFrame(() => { document.getElementById("f").style.borderColor = "#f00"; }));</script>`,
   "/slide": `<style>@keyframes slide{from{transform:translateX(0)}to{transform:translateX(200px)}}</style><div style="animation:slide 5s linear infinite"><input value="field"></div>`,
@@ -219,6 +222,23 @@ describe("jz-mask-v1 watches every frame of the top document (served, real Chrom
 
   it("a transform animation moving a field is a breach", async () => {
     expect(await breachesOn("/slide")).toContainEqual(expect.stringMatching(/animation moved/));
+  }, 60_000);
+
+  it("a closed shadow root that exists only between two screenshots is a breach (the video is void)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-jz-transient-"));
+    const { session, mask } = await open();
+    try {
+      const p = session.page;
+      await p.goto(`${origin}/transient-closed`);
+      await captureStepScreenshot(p, join(dir, "step-01.png"), { step: 1 }, [mask.layer(), mask.jzLayer()]);
+      await p.evaluate(() => (window as unknown as { flash(): void }).flash());
+      await p.evaluate(() => (window as unknown as { gone(): void }).gone());
+      await captureStepScreenshot(p, join(dir, "step-02.png"), { step: 2 }, [mask.layer(), mask.jzLayer()]);
+      expect(mask.jzBreaches()).toContainEqual(expect.stringMatching(/closed shadow root/));
+    } finally {
+      await session.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   }, 60_000);
 
   it("a page the layer covers throughout reports no breach", async () => {
