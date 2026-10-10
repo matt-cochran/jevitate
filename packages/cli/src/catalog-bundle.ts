@@ -39,8 +39,8 @@ import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } fr
 
 export const BUNDLE_KIND = "journeeze.catalog-bundle" as const;
 export const BUNDLE_VERSION = 1 as const;
-/** The schema minor this producer is built against (contract 61f8c92). */
-export const BUNDLE_MINOR = 0 as const;
+/** The schema minor this producer is built against (contract 61f8c92, minor 1: the optional `locator` finding object). */
+export const BUNDLE_MINOR = 1 as const;
 
 export interface BundleApproval {
   readonly contentHash: string;
@@ -112,6 +112,19 @@ export interface BundleCheck {
   readonly baseline?: BundleBaseline;
 }
 
+export interface BundleLocator {
+  /** The element in words, e.g. `the "Save" button`. One printable line, 1-200, no URL or personal data. */
+  readonly element: string;
+  /** The attribute the fix adds (the convention's first). */
+  readonly attribute: string;
+  /** The suggested test id. */
+  readonly testId: string;
+  /** The fix, e.g. `add data-testid="save-contact" to the "Save" button on /contacts/new`. One line, 1-300. */
+  readonly fix: string;
+  /** The steps (across Journeys) that use the element. */
+  readonly steps: number;
+}
+
 /**
  * d464c HOOK: one machine finding as the contract's `findings[]` carries it (§4.4) — UX claims with
  * the derived fingerprint, defects and hangs with jevitate's. 0.10 exports no media, so no
@@ -138,6 +151,8 @@ export interface CatalogBundleFinding {
   readonly observation: string;
   readonly userImpact?: string;
   readonly recommendation?: string;
+  /** Minor 1 (§1): the brittle-element fix; only on kind `ux` + claim `other` + producerClaim `locator-brittle`, required there. */
+  readonly locator?: BundleLocator;
   readonly citation?: { readonly source: string; readonly ref: string };
 }
 
@@ -212,6 +227,9 @@ const RECORD_ID_RES = [
 const ROUTE_TEMPLATE_RE = /^(\/(\{[A-Za-z][A-Za-z0-9_]{0,63}\}|[A-Za-z0-9._~-]+))*\/?$/u;
 const TFLOW_ID_RE = /^[a-z0-9._:-]{1,96}$/u;
 const FINGERPRINT_RE = /^[0-9a-f]{16}$/u;
+const LOCATOR_ATTRIBUTE_RE = /^[a-z][a-z0-9-]{0,39}$/u;
+const LOCATOR_TEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u;
+const LOCATOR_MAX_STEPS = 10_000;
 const APPROVAL_CHANNELS: ReadonlySet<string> = new Set(["tty", "mcp", "ci", "non-interactive", "pr-review", "other"]);
 const RESERVED: ReadonlySet<string> = new Set(RESERVED_ANCHORS);
 const SESSION_KEYS: ReadonlySet<string> = new Set(["storageState", "login"]);
@@ -616,6 +634,16 @@ function bundleChecks(input: CatalogBundleInput, journeys: readonly ExportedJour
 
 // ── Findings (the d464c hook's guard) ────────────────────────────────────────────────────────
 
+/** The contract's `machineText`, without the record-id rule: one line, no personal data and no URL. */
+function locatorTextProblem(s: unknown, max: number): string | null {
+  const p = catalogTextProblem(s);
+  if (p !== null) return p;
+  const t = s as string;
+  if (t.length > max) return `is longer than ${max} characters`;
+  if (URL_RES.some((re) => re.test(t))) return "carries a URL";
+  return null;
+}
+
 /** Why a finding handed in by the d464c source breaks the contract's privacy rules (§7), or []. */
 export function findingIssues(f: CatalogBundleFinding): string[] {
   const out: string[] = [];
@@ -632,6 +660,22 @@ export function findingIssues(f: CatalogBundleFinding): string[] {
   text("userImpact", f.userImpact, 600);
   text("recommendation", f.recommendation, 600);
   (f.controls ?? []).forEach((c, i) => text(`controls[${i}]`, c, 120));
+  // Minor 1 §1: `locator` belongs only to a locator claim, and a locator claim must carry it.
+  const locatorClaim = f.kind === "ux" && f.claim === "other" && f.producerClaim === "locator-brittle";
+  if (locatorClaim && f.locator === undefined) out.push(`${where}: a locator finding needs its locator`);
+  if (f.locator !== undefined) {
+    if (!locatorClaim) out.push(`${where}: locator is only for kind ux + claim other + producerClaim locator-brittle`);
+    const loc = f.locator;
+    const locText = (k: "element" | "fix", max: number): void => {
+      const p = locatorTextProblem(loc[k], max);
+      if (p !== null) out.push(`${where}: locator.${k} ${p}`);
+    };
+    locText("element", 200);
+    locText("fix", 300);
+    if (!LOCATOR_ATTRIBUTE_RE.test(loc.attribute)) out.push(`${where}: locator.attribute is not a test-id attribute name`);
+    if (!LOCATOR_TEST_ID_RE.test(loc.testId)) out.push(`${where}: locator.testId is not a test id`);
+    if (!Number.isInteger(loc.steps) || loc.steps < 1 || loc.steps > LOCATOR_MAX_STEPS) out.push(`${where}: locator.steps is not an integer 1-${LOCATOR_MAX_STEPS}`);
+  }
   return out;
 }
 

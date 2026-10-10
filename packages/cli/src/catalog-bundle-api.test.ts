@@ -38,6 +38,11 @@ describe("exportCatalogBundle", () => {
     expect({ path: r.bundlePath, counts: r.counts }).toEqual({ path: join(p.root, "out", "bundle.json"), counts: { personas: 2, jobs: 2, journeys: 1, checks: 4, findings: 0, media: 0 } });
   });
 
+  it("writes the bundle's minor as 1", async () => {
+    const r = await exportCatalogBundle(project().req(), deps);
+    expect((JSON.parse(readFileSync(r.bundlePath, "utf8")) as { minor: number }).minor).toBe(1);
+  });
+
   it("reports the digest of the bytes it wrote (the upload's Idempotency-Key)", async () => {
     const r = await exportCatalogBundle(project().req(), deps);
     expect(r.digest).toBe(`sha256-${createHash("sha256").update(readFileSync(r.bundlePath)).digest("hex")}`);

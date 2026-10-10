@@ -466,10 +466,15 @@ jevitate publish journeeze --dry-run             # export, validate, resolve the
 jevitate publish journeeze --json                # upload and wait until it is imported or refused
 ```
 
-**What the bundle holds.** Personas (never their session settings), jobs as written (every field,
+**The bundle holds.** Personas (never their session settings), jobs as written (every field,
 so the hashes recompute), **promoted** Journeys only with their links (`job`, `persona`,
 `anchors`, `serves`), every approval reduced to `{contentHash, at, channel}`, the `jevitate check`
 results (with machine baselines from clean runs of the approved Journey) and the machine findings.
+The bundle is catalog bundle **v1, minor 1**: the only addition over minor 0 is the optional
+`finding.locator` object, one per brittle element of an exported Journey (`kind: "ux"`, claim
+`other`, producerClaim `locator-brittle` — a fix for the app, de-duplicated across steps and
+Journeys, dated at the latest approval of the Journeys it occurs in). Minor 1 only ADDS this
+optional field; a Journey with no brittle element contributes no such finding.
 **No media in 0.10:** no demos, no files. `--check <file>` (repeatable) names the check records to
 include; the default is `<project>/jevitate-check/check.json` (the `check --out` default) when it
 exists. `--product-name` sets `product.name` (default: the project's `package.json` name, else its
