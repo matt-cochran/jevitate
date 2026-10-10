@@ -1970,6 +1970,7 @@ jevitate publish journeeze [options]
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--dry-run` | export and validate the bundle and resolve the connection, but send nothing |  |  |  |  |
 | `--json` | emit a JSON envelope (never contains the key) |  |  |  |  |
+| `--product-name <name>` | the bundle's product.name (default: the connected Journeeze product's name) |  |  |  |  |
 
 ## record
 

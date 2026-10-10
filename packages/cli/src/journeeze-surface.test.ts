@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command, CommanderError } from "commander";
@@ -7,6 +7,8 @@ import { ProfileManager } from "@jevitate/daemon";
 import { buildProgram, type CliDeps } from "./program.js";
 import { buildMcpTools } from "./mcp-api.js";
 import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
+import type { ExportCatalogBundleRequest, ExportCatalogBundleResult } from "./catalog-bundle-api.js";
+import type { JourneezeHttp } from "./journeeze-connect.js";
 
 /**
  * #464 — the registered surfaces end to end (no network: nothing here resolves a key to send):
@@ -66,6 +68,37 @@ describe("MCP publish_to_journeeze", () => {
   it("an extra key argument is rejected, never used", async () => {
     const res = await publishTool().handler({ dryRun: true, key: KEY });
     expect(JSON.parse(res.content[0]!.text)).toMatchObject({ error: "invalid_args" });
+  });
+});
+
+describe("CLI publish journeeze (#477)", () => {
+  const BUNDLE = JSON.stringify({ kind: "journeeze.catalog-bundle", version: 1, minor: 0, producer: { tool: "jevitate", version: "0.10.0" }, catalog: { personas: [], jobs: [], journeys: [] }, files: [] });
+
+  it("passes --product-name through to the exported bundle", async () => {
+    const seen: { productName?: string } = {};
+    const http: JourneezeHttp = async () => ({ status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ product: { id: "p1", name: "Expected" }, tenant: { name: "t" }, keyPrefix: "jzu_abcd" }) });
+    const exportBundle = async (req: ExportCatalogBundleRequest): Promise<ExportCatalogBundleResult> => {
+      seen.productName = req.productName;
+      mkdirSync(req.outDir, { recursive: true });
+      const bundlePath = join(req.outDir, "bundle.json");
+      writeFileSync(bundlePath, BUNDLE);
+      return { format: "journeeze-bundle", bundlePath, digest: "", counts: { personas: 0, jobs: 0, journeys: 0, checks: 0, findings: 0, media: 0 }, warnings: [] };
+    };
+    const deps = { ...cliDeps(), journeeze: { env: { JOURNEEZE_UPLOAD_KEY: KEY }, homedir: () => dir, http, exportBundle, sleep: async () => {} } } as CliDeps;
+    const program = buildProgram(deps);
+    const out: string[] = [];
+    const tree = (c: Command): void => {
+      c.exitOverride();
+      c.configureOutput({ writeOut: (s) => out.push(s), writeErr: () => undefined });
+      c.commands.forEach(tree);
+    };
+    tree(program);
+    try {
+      await program.parseAsync(["publish", "journeeze", "--product-name", "Expected", "--dry-run", "--json"], { from: "user" });
+    } catch (err) {
+      if (!(err instanceof CommanderError)) throw err;
+    }
+    expect(seen.productName).toBe("Expected");
   });
 });
 

@@ -157,14 +157,19 @@ argument) and, for a non-default host, `JOURNEEZE_URL` (a bare origin; the key i
         run: jevitate publish journeeze --json
 ```
 
-`--dry-run` exports and validates the bundle and resolves the key and URL, but sends nothing.
+`--dry-run` exports and validates the bundle, verifies the key with `whoami` and resolves the
+product name and URL, but sends nothing. The bundle's `product.name` is the product the key
+identifies (`whoami`), never the project's `package.json` name; `--product-name` overrides it and
+must match what `whoami` reports, or the run is refused with `E_JOURNEEZE_PRODUCT_MISMATCH` before
+anything is exported.
 Exit codes: `0` imported (or a dry run) · `1` Journeeze refused the bundle (its errors are in the
 result) · `64` a setup problem nothing was sent for — `E_JOURNEEZE_NOT_CONNECTED` (no key),
 `E_JOURNEEZE_KEY_FORMAT`, `E_JOURNEEZE_URL`/`E_JOURNEEZE_ORIGIN` (an unpinned host),
 `E_JOURNEEZE_KEY_REFUSED`/`E_JOURNEEZE_KEY_REVOKED`/`E_JOURNEEZE_FORBIDDEN` (the key is invalid,
 revoked or lacks the upload scope) · `2` the upload could not finish — `E_JOURNEEZE_UNAVAILABLE`
 (retry later; the same bundle reuses its Idempotency-Key), `E_JOURNEEZE_CONFLICT`,
-`E_JOURNEEZE_HTTP`, `E_JOURNEEZE_BUNDLE`. The key never appears in a result, an error or a file.
+`E_JOURNEEZE_HTTP`, `E_JOURNEEZE_BUNDLE`, `E_JOURNEEZE_PRODUCT_MISMATCH` (the key's product
+differs from `--product-name`). The key never appears in a result, an error or a file.
 Publishing never approves anything.
 
 ### Self-heal in CI (`--self-heal`)

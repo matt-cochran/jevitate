@@ -255,9 +255,10 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "publish_to_journeeze",
     description:
-      "`jevitate publish journeeze --json` (#464): export the catalog bundle and upload it to the Journeeze product this project is connected to, then wait until it is imported or refused; returns the status, summary, warnings and errors. dryRun: true exports and validates but sends nothing. " +
+      "`jevitate publish journeeze --json` (#464): export the catalog bundle and upload it to the Journeeze product this project is connected to, then wait until it is imported or refused; returns the status, productName, summary, warnings and errors. dryRun: true exports and validates but sends nothing. " +
+      "productName: the bundle's product.name — overrides the connected product's name (default: the saved connection's product name, or whoami's when the key comes from JOURNEEZE_UPLOAD_KEY). A dry run verifies the key with whoami and refuses with E_JOURNEEZE_PRODUCT_MISMATCH when its product.name differs from the one this publish names. " +
       "The upload key is resolved by jevitate itself (its secret store, or JOURNEEZE_UPLOAD_KEY in CI): it is never an argument and never in a result. A refusal carries its specific code (E_JOURNEEZE_NOT_CONNECTED, E_JOURNEEZE_KEY_REFUSED, E_JOURNEEZE_FORBIDDEN, E_JOURNEEZE_UNAVAILABLE, …). Connecting a project (entering the key) is a person's act on the CLI (`jevitate connect journeeze`) — there is no MCP tool for it. Publishing never approves anything.",
-    command: { path: "publish journeeze", params: { dryRun: b("--dry-run") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "publish journeeze", params: { dryRun: b("--dry-run"), productName: s("--product-name") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "review_journey",
