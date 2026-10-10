@@ -185,6 +185,11 @@ describe("locator findings (#470 into the bundle)", () => {
     expect(r.findings).toEqual([]);
   });
 
+  it("a locator finding is certain (confidence 1: a static classification)", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }])], CONVENTION);
+    expect(r.findings[0]?.confidence).toBe(1);
+  });
+
   it("leave out a locator finding whose page has no route", () => {
     const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }], "")], CONVENTION);
     expect(r.findings).toEqual([]);

@@ -271,6 +271,8 @@ export function locatorFindings(journeys: readonly CatalogJourney[], testIdAttri
       claim: "other",
       producerClaim: "locator-brittle",
       severity: "minor",
+      // Static classification of the recorded locator, not a model judgement: certain.
+      confidence: 1,
       at,
       ...(first.journeyId === undefined ? {} : { journey: first.journeyId }),
       ...(step < 1 || step > 200 ? {} : { step }),

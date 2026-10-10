@@ -39,7 +39,7 @@ import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } fr
 
 export const BUNDLE_KIND = "journeeze.catalog-bundle" as const;
 export const BUNDLE_VERSION = 1 as const;
-/** The schema minor this producer is built against (contract 61f8c92, minor 1: the optional `locator` finding object). */
+/** The schema minor this producer is built against (minor 1, journeeze-saas #173: optional `finding.locator` and `check.appVersion`). */
 export const BUNDLE_MINOR = 1 as const;
 
 export interface BundleApproval {
