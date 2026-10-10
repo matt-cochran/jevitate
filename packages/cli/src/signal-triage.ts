@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { fingerprintMarker, isExternalSchemeUrl } from "@jevitate/domain";
+import { fingerprintMarkers, isExternalSchemeUrl } from "@jevitate/domain";
 import { assertNoSecretInPayload, redactCredentialShapes, redactText, redactUrl, type JudgmentPort, type JudgmentState, type Question } from "@jevitate/ai-core";
 import { normalizeLogMessage } from "./log-lines.js";
 
@@ -379,8 +379,11 @@ function appendRelatedLogsToDrafts(result: Record<string, unknown>, byFingerprin
       ...shown,
       FENCE,
     ].join("\n");
-    const marker = fingerprintMarker(fp);
-    const at = md.lastIndexOf(marker);
+    let at = -1;
+    for (const marker of fingerprintMarkers(fp)) {
+      at = md.lastIndexOf(marker);
+      if (at >= 0) break;
+    }
     writeFileSync(path, at < 0 ? `${md.trimEnd()}\n\n${section}\n` : `${md.slice(0, at)}${section}\n\n${md.slice(at)}`, "utf8");
   }
 }

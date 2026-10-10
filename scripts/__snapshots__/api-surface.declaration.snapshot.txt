@@ -190,7 +190,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (144 exports)
+# @jevitate/domain (146 exports)
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
@@ -226,6 +226,7 @@
   FilingConfig: interface
   FilingOutcome: type-alias
   fingerprintMarker: function
+  fingerprintMarkers: function
   foldGoalOutcome: function
   GateDecision: type-alias
   gatingDefects: function
@@ -257,6 +258,7 @@
   IssueTarget: type-alias
   isUnboundedHeapGrowth: function
   isWithinQuietHours: function
+  journeezeFingerprintMarker: function
   JOURNEY_MISSION_OUTCOME: variable
   JOURNEY_RUN_OUTCOMES: variable
   journeyExitCode: function

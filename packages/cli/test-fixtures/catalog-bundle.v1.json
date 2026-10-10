@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://app.journeeze.dev/schemas/catalog-bundle.v1.json",
   "title": "Journeeze catalog bundle, version 1",
-  "description": "The one versioned, Journeeze-owned format a product sends Journeeze: its catalog (personas, jobs with steps and desired outcomes, Jevitate journeys verbatim with their links), demo media manifests, check results with machine baselines, and machine findings (docs/contract/catalog-bundle-v1.md). A bundle is `bundle.json` (this document) plus the media files it lists, as a directory or a ZIP with `bundle.json` at its root. The whole bundle is validated before anything is written. It never carries real typed values, query strings, credentials or personal data. This schema is v1.0: a reader prunes unknown fields only from a bundle whose `minor` is greater than its own (contract § Versioning).",
+  "description": "The one versioned, Journeeze-owned format a product sends Journeeze: its catalog (personas, jobs with steps and desired outcomes, Jevitate journeys verbatim with their links), demo media manifests, check results with machine baselines, and machine findings (docs/contract/catalog-bundle-v1.md). A bundle is `bundle.json` (this document) plus the media files it lists, as a directory or a ZIP with `bundle.json` at its root. The whole bundle is validated before anything is written. It never carries real typed values, query strings, credentials or personal data. This schema is v1.1 (minor 1 adds `finding.locator` and `check.appVersion`): a reader prunes unknown fields only from a bundle whose `minor` is greater than its own (contract § Versioning).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -28,7 +28,7 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 999,
-      "description": "The minor version. Minors only add optional fields; this schema is minor 0."
+      "description": "The minor version. Minors only add optional fields; this schema is minor 1 (minor 0 plus `finding.locator` and `check.appVersion`)."
     },
     "producer": {
       "$ref": "#/$defs/producer"
@@ -1869,6 +1869,11 @@
         "commit": {
           "$ref": "#/$defs/commit"
         },
+        "appVersion": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$",
+          "description": "Minor 1. The app's release/version label the check ran against (`commit` stays the build identity). Stored with the journey proof next to the commit, so machine and human time compare for the same release."
+        },
         "at": {
           "$ref": "#/$defs/dateTime"
         },
@@ -2249,6 +2254,9 @@
             }
           },
           "description": "The implicated element's box on the screenshot, in CSS pixels."
+        },
+        "locator": {
+          "$ref": "#/$defs/locator"
         }
       },
       "description": "A machine finding: machine evidence, never human feedback. No on-screen quotes are exported (they may hold personal data).",
@@ -2339,8 +2347,101 @@
             ]
           },
           "type": "object"
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": [
+              "kind",
+              "claim",
+              "producerClaim"
+            ],
+            "properties": {
+              "kind": {
+                "const": "ux"
+              },
+              "claim": {
+                "const": "other"
+              },
+              "producerClaim": {
+                "const": "locator-brittle"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "locator"
+            ],
+            "properties": {
+              "locator": true
+            }
+          },
+          "else": {
+            "type": "object",
+            "not": {
+              "required": [
+                "locator"
+              ],
+              "properties": {
+                "locator": true
+              }
+            }
+          }
         }
       ]
+    },
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "element",
+        "attribute",
+        "testId",
+        "fix",
+        "steps"
+      ],
+      "properties": {
+        "element": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "allOf": [
+            {
+              "$ref": "#/$defs/machineText"
+            }
+          ],
+          "description": "The element, named for a person (`the \"Save\" button`): one printable line, no URL, no personal data."
+        },
+        "attribute": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,39}$",
+          "description": "The attribute to add (`data-testid`)."
+        },
+        "testId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$",
+          "description": "The suggested attribute value."
+        },
+        "fix": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "allOf": [
+            {
+              "$ref": "#/$defs/machineText"
+            }
+          ],
+          "description": "The suggested fix, one line with no URL scheme or host (`add data-testid=\"save-contact\" to the \"Save\" button on /contacts/new`). The finding's `recommendation` repeats it."
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "How many steps (across journeys) use the element."
+        }
+      },
+      "description": "Minor 1. A brittle locator's suggested fix (Jevitate `LocatorSuggestion`): one finding per element (route + role + name), however many steps use it, so Journeeze files one issue per fix. Required iff the finding is `kind: ux`, `claim: other`, `producerClaim: locator-brittle`; refused on every other finding."
     }
   }
 }

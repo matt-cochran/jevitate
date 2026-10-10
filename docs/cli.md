@@ -325,6 +325,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci, pr-review; default tty). #469: pr-review is recorded only by jevitate after it verifies an approving review of the merged PR through the forge API — never set by a caller |  |  |  |  |
+| `--app-version <label>` | #479: the app's release/version label the check ran against, stamped next to the build id (1-64 of [A-Za-z0-9._+-]); also JEVITATE_APP_VERSION |  |  |  |  |
 | `--baseline <run|tag|last>` | only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`) |  |  |  |  |
 | `--baseline-dir <dir>` | results dir holding baseline runs (repeatable; default: this check's results, then ~/.jevitate) | `[]` |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -1970,6 +1971,7 @@ jevitate publish journeeze [options]
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--dry-run` | export and validate the bundle and resolve the connection, but send nothing |  |  |  |  |
 | `--json` | emit a JSON envelope (never contains the key) |  |  |  |  |
+| `--product-name <name>` | the bundle's product.name (default: the connected Journeeze product's name) |  |  |  |  |
 
 ## record
 

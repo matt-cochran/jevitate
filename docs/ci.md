@@ -33,6 +33,10 @@ pass or fail:
   A Journey's routes are its Recording's pages, or the `routes` you give it. A goal's routes are
   its start URL's path, or its `routes`. Missions, invariant sweeps and verify-fix always run.
 - `--target-build <id>` stamps your build/commit on every result, next to `engine`.
+- `--app-version <label>` (#479) stamps the app's release/version label (1-64 of
+  `[A-Za-z0-9._+-]`, starting alphanumeric) on the result and the SARIF run properties, next to the
+  build id. Without the flag, a valid `JEVITATE_APP_VERSION` is used; an invalid one is ignored with
+  a warning on stderr, and an invalid flag is refused (exit 64) before anything runs.
 - `--require-approvals [--allow-channels tty,ci]` (#437): also an `approvals` item that fails
   (a hard `approval` finding per problem, in JUnit and SARIF like any other) when a promoted
   Journey (in the default and each target's journeys dir) has no approval, or a promoted Journey
@@ -157,14 +161,19 @@ argument) and, for a non-default host, `JOURNEEZE_URL` (a bare origin; the key i
         run: jevitate publish journeeze --json
 ```
 
-`--dry-run` exports and validates the bundle and resolves the key and URL, but sends nothing.
+`--dry-run` exports and validates the bundle, verifies the key with `whoami` and resolves the
+product name and URL, but sends nothing. The bundle's `product.name` is the product the key
+identifies (`whoami`), never the project's `package.json` name; `--product-name` overrides it and
+must match what `whoami` reports, or the run is refused with `E_JOURNEEZE_PRODUCT_MISMATCH` before
+anything is exported.
 Exit codes: `0` imported (or a dry run) · `1` Journeeze refused the bundle (its errors are in the
 result) · `64` a setup problem nothing was sent for — `E_JOURNEEZE_NOT_CONNECTED` (no key),
 `E_JOURNEEZE_KEY_FORMAT`, `E_JOURNEEZE_URL`/`E_JOURNEEZE_ORIGIN` (an unpinned host),
 `E_JOURNEEZE_KEY_REFUSED`/`E_JOURNEEZE_KEY_REVOKED`/`E_JOURNEEZE_FORBIDDEN` (the key is invalid,
 revoked or lacks the upload scope) · `2` the upload could not finish — `E_JOURNEEZE_UNAVAILABLE`
 (retry later; the same bundle reuses its Idempotency-Key), `E_JOURNEEZE_CONFLICT`,
-`E_JOURNEEZE_HTTP`, `E_JOURNEEZE_BUNDLE`. The key never appears in a result, an error or a file.
+`E_JOURNEEZE_HTTP`, `E_JOURNEEZE_BUNDLE`, `E_JOURNEEZE_PRODUCT_MISMATCH` (the key's product
+differs from `--product-name`). The key never appears in a result, an error or a file.
 Publishing never approves anything.
 
 ### Self-heal in CI (`--self-heal`)

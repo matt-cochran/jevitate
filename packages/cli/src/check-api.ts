@@ -106,6 +106,17 @@ function sumTrends(trends: readonly LocatorHealthTrend[]): LocatorHealthTrend {
 const LOCATOR_WARNING_RULE = "jevitate/locator-health/brittle-locator";
 
 /**
+ * #479: stamps the app's release label into the SARIF run properties, next to `targetBuild`. The
+ * findings renderer owns `targetBuild`; this adds `appVersion` when the check was given one.
+ */
+function withAppVersion(sarif: ReturnType<typeof renderSarif>, appVersion: string | undefined): ReturnType<typeof renderSarif> {
+  if (appVersion === undefined) return sarif;
+  const [run, ...rest] = sarif.runs as ReadonlyArray<{ readonly properties?: Readonly<Record<string, unknown>> }>;
+  if (run === undefined) return sarif;
+  return { ...sarif, runs: [{ ...run, properties: { ...(run.properties ?? {}), appVersion } }, ...rest] };
+}
+
+/**
  * #470: advisory locator fixes as SARIF WARNINGS (never errors, never gating) — one result per element
  * to fix, located at the suite file with the route as its logical location.
  */
@@ -400,6 +411,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     exitCode,
     engine,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
+    ...(opts.appVersion === undefined ? {} : { appVersion: opts.appVersion }),
     startedAt,
     budget: meter.report(finalUsage, exceeded),
     ...(suiteUsage === undefined ? {} : { usage: suiteUsage }),
@@ -425,14 +437,14 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   };
 
   await writeFile(junitPath, renderJUnit(`jevitate check: ${opts.suite.name}`, cases, startedAt), "utf8");
-  const sarif = withLocatorWarnings(renderSarif({
+  const sarif = withAppVersion(withLocatorWarnings(renderSarif({
     toolVersion: engine.version,
     engineCommit: engine.commit,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
     suiteUri: opts.suiteUri ?? opts.suite.path,
     automationId: `jevitate-check/${opts.suite.name}/`,
     findings: defects.map((d) => ({ defect: d, gating: gating.includes(d), ...(statusOf(d) === undefined ? {} : { status: statusOf(d) }) })),
-  }), opts.maxBrittleSteps === undefined ? combined.suggestions : [], opts.suiteUri ?? opts.suite.path);
+  }), opts.maxBrittleSteps === undefined ? combined.suggestions : [], opts.suiteUri ?? opts.suite.path), opts.appVersion);
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
   await writeFile(
     reportPath,

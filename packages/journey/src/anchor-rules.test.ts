@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { JourneySchema, anchorLintIssues, stampAnchorStepIds, stripStepIds, suggestAnchorName, type Journey } from "./index.js";
+import { ANCHOR_NAME_RULE_RE, JourneySchema, anchorLintIssues, stampAnchorStepIds, stripStepIds, suggestAnchorName, type Journey } from "./index.js";
 
 /** #466: the 0.10 anchor rules — reported for lint/promote, never at parse time. */
 
@@ -21,8 +21,21 @@ describe("#466 anchor rules (lint, not parse)", () => {
     expect(JourneySchema.safeParse(journey({ anchors: [{ name: "Review_Step", step: 1 }] })).success).toBe(true);
   });
 
-  it("a name with a colon parses (the 0.10 name rule allows it)", () => {
+  it("a name with a colon parses (the structural name rule allows it)", () => {
     expect(JourneySchema.safeParse(journey({ anchors: [{ name: "cart:review", step: 1 }] })).success).toBe(true);
+  });
+
+  it("a colon in an anchor name is a 0.10 violation", () => {
+    expect(codes(journey({ anchors: [{ name: "cart:review", step: 1, stepId: "s-aaaaaa" }] }))).toEqual(["anchor-name"]);
+  });
+
+  it("an anchor name starting with punctuation is a 0.10 violation", () => {
+    expect(codes(journey({ anchors: [{ name: "-start", step: 1, stepId: "s-aaaaaa" }] }))).toEqual(["anchor-name"]);
+  });
+
+  it("the anchor-name message states the 0.10 name rule", () => {
+    const issue = anchorLintIssues(journey({ anchors: [{ name: "cart:review", step: 1, stepId: "s-aaaaaa" }] })).find((i) => i.code === "anchor-name");
+    expect(issue?.message).toContain("a name is 1-64 of lowercase a-z, 0-9, . _ - and starts with a letter or digit");
   });
 
   it("a mixed-case name is a warning", () => {
@@ -38,7 +51,7 @@ describe("#466 anchor rules (lint, not parse)", () => {
   });
 
   it("a compliant anchor has no issue", () => {
-    expect(codes(journey({ job: "order", anchors: [{ name: "cart:review", step: 1, stepId: "s-aaaaaa" }] }))).toEqual([]);
+    expect(codes(journey({ job: "order", anchors: [{ name: "cart.review", step: 1, stepId: "s-aaaaaa" }] }))).toEqual([]);
   });
 
   it("a stepId the Journey does not have is reported", () => {
@@ -63,6 +76,22 @@ describe("#466 anchor rules (lint, not parse)", () => {
 
   it("suggests a compliant name", () => {
     expect(suggestAnchorName("Review Step #2")).toBe("review-step-2");
+  });
+
+  it("suggests a name without the dropped colon", () => {
+    expect(suggestAnchorName("Invite:Sent")).toBe("invite-sent");
+  });
+
+  it("suggests a name that starts with a letter", () => {
+    expect(suggestAnchorName("-Start")).toBe("start");
+  });
+
+  it("a colon-derived suggestion matches the 0.10 name rule", () => {
+    expect(ANCHOR_NAME_RULE_RE.test(suggestAnchorName("Invite:Sent"))).toBe(true);
+  });
+
+  it("a punctuation-led suggestion matches the 0.10 name rule", () => {
+    expect(ANCHOR_NAME_RULE_RE.test(suggestAnchorName("-Start"))).toBe(true);
   });
 
   it("stamps the stepId of the step an anchor follows", () => {

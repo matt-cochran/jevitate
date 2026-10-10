@@ -135,6 +135,7 @@
   description: CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
   options:
     - flags=--allow-channels <list> required=true mandatory=false negate=false variadic=false default=null description=#437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci, pr-review; default tty). #469: pr-review is recorded only by jevitate after it verifies an approving review of the merged PR through the forge API — never set by a caller
+    - flags=--app-version <label> required=true mandatory=false negate=false variadic=false default=null description=#479: the app's release/version label the check ran against, stamped next to the build id (1-64 of [A-Za-z0-9._+-]); also JEVITATE_APP_VERSION
     - flags=--baseline <run|tag|last> required=true mandatory=false negate=false variadic=false default=null description=only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`)
     - flags=--baseline-dir <dir> required=true mandatory=false negate=false variadic=false default=[] description=results dir holding baseline runs (repeatable; default: this check's results, then ~/.jevitate)
     - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
@@ -1108,6 +1109,7 @@
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
     - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=export and validate the bundle and resolve the connection, but send nothing
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (never contains the key)
+    - flags=--product-name <name> required=true mandatory=false negate=false variadic=false default=null description=the bundle's product.name (default: the connected Journeeze product's name)
 
 # record
   description: record a demonstrated flow into a Recording (authoring plane)

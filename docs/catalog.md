@@ -150,7 +150,7 @@ The 0.10 anchor rules, each with its fix:
 
 | Rule | What it needs |
 |---|---|
-| `anchor-name` | a name of 1-64 lowercase `a-z`, `0-9`, `.`, `_`, `:`, `-` (the fix suggests the spelling) |
+| `anchor-name` | a name of 1-64 lowercase `a-z`, `0-9`, `.`, `_`, `-` that starts with a letter or digit (the fix suggests the spelling) |
 | `anchor-step-id` | a `stepId` that is a step of the Journey |
 | `anchor-step-mismatch` | `step` and `stepId` naming the same step |
 | `anchor-unstamped` | on a Journey whose steps have ids, the anchor carries its step's id |
@@ -463,14 +463,25 @@ jevitate catalog export --format journeeze-bundle --out dist/catalog \
   --check jevitate-check/check.json --check nightly/check.json --product-name "Ledgerly"
 jevitate connect journeeze                       # a person, once: where the upload key is kept
 jevitate publish journeeze --dry-run             # export, validate, resolve the connection; send nothing
+jevitate publish journeeze --product-name "Ledgerly" --json  # override the connected product's name
 jevitate publish journeeze --json                # upload and wait until it is imported or refused
 ```
 
-**What the bundle holds.** Personas (never their session settings), jobs as written (every field,
+**The bundle holds.** Personas (never their session settings), jobs as written (every field,
 so the hashes recompute), **promoted** Journeys only with their links (`job`, `persona`,
 `anchors`, `serves`), every approval reduced to `{contentHash, at, channel}`, the `jevitate check`
 results (with machine baselines from clean runs of the approved Journey), the machine findings, and
-the **approved demos with their masked media** (below). `--check <file> (repeatable) names the check records to
+the **approved demos with their masked media** (below).
+Each check also carries the app's release label (`check.appVersion`, #479) beside its commit when the
+run was given `--app-version` (or `JEVITATE_APP_VERSION`); an invalid label is left out with a warning
+and the check still exports.
+The bundle is catalog bundle **v1, minor 1**: the additions over minor 0 are the optional
+`finding.locator` object, one per brittle element of an exported Journey (`kind: "ux"`, claim
+`other`, producerClaim `locator-brittle` — a fix for the app, de-duplicated across steps and
+Journeys, dated at the latest approval of the Journeys it occurs in), and the optional
+`check.appVersion` release label. Minor 1 only ADDS these optional fields; a Journey with no brittle
+element contributes no such finding, and a check without a release label names none.
+`--check <file>` (repeatable) names the check records to
 include; the default is `<project>/jevitate-check/check.json` (the `check --out` default) when it
 exists. `--product-name` sets `product.name` (default: the project's `package.json` name, else its
 folder name). The same catalog gives the same bytes, so a re-publish is deduplicated by the
@@ -530,8 +541,15 @@ only in the `Authorization` header, and never after a redirect to another origin
 ZIP of `bundle.json` and every listed file, each re-checked against its sha256 first; at most 256
 MiB), and polls until Journeeze reports it
 `imported` (exit 0) or `refused` (exit 1, with the server's errors). It never approves. MCP:
-`publish_to_journeeze` (`dryRun`), which never takes or returns the key. A refusal carries its
-specific code:
+`publish_to_journeeze` (`dryRun`, `productName`), which never takes or returns the key. A refusal
+carries its specific code.
+
+The bundle's `product.name` is the **connected product's** name — resolved from the saved
+connection, or from `whoami` when the key comes from `JOURNEEZE_UPLOAD_KEY` — not the project's
+`package.json` name. `--product-name` overrides it. Every `--dry-run` verifies the key with
+`whoami`; if its product differs from the name this publish would send (the saved one, or an
+explicit `--product-name`), nothing is exported and the run is refused with
+`E_JOURNEEZE_PRODUCT_MISMATCH` (pass the right `--product-name`, or rerun `connect journeeze`).
 
 | Code | Exit | Meaning |
 |---|---|---|

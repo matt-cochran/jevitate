@@ -45,8 +45,8 @@ import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } fr
 
 export const BUNDLE_KIND = "journeeze.catalog-bundle" as const;
 export const BUNDLE_VERSION = 1 as const;
-/** The schema minor this producer is built against (contract 61f8c92). */
-export const BUNDLE_MINOR = 0 as const;
+/** The schema minor this producer is built against (minor 1, journeeze-saas #173: optional `finding.locator` and `check.appVersion`). */
+export const BUNDLE_MINOR = 1 as const;
 
 export interface BundleApproval {
   readonly contentHash: string;
@@ -106,6 +106,8 @@ export interface BundleBaseline {
 export interface BundleCheck {
   readonly target: { readonly id: string; readonly kind?: BundleCheckTargetKind };
   readonly commit: string;
+  /** #479 (spec minor 1 §2): the app's release/version label the check ran against; `commit` stays the build identity. */
+  readonly appVersion?: string;
   readonly at: string;
   readonly runId?: string;
   readonly journey?: string;
@@ -116,6 +118,19 @@ export interface BundleCheck {
   readonly failureKind?: string;
   readonly durationMs?: number;
   readonly baseline?: BundleBaseline;
+}
+
+export interface BundleLocator {
+  /** The element in words, e.g. `the "Save" button`. One printable line, 1-200, no URL or personal data. */
+  readonly element: string;
+  /** The attribute the fix adds (the convention's first). */
+  readonly attribute: string;
+  /** The suggested test id. */
+  readonly testId: string;
+  /** The fix, e.g. `add data-testid="save-contact" to the "Save" button on /contacts/new`. One line, 1-300. */
+  readonly fix: string;
+  /** The steps (across Journeys) that use the element. */
+  readonly steps: number;
 }
 
 /**
@@ -144,6 +159,8 @@ export interface CatalogBundleFinding {
   readonly observation: string;
   readonly userImpact?: string;
   readonly recommendation?: string;
+  /** Minor 1 (§1): the brittle-element fix; only on kind `ux` + claim `other` + producerClaim `locator-brittle`, required there. */
+  readonly locator?: BundleLocator;
   readonly citation?: { readonly source: string; readonly ref: string };
 }
 
@@ -273,6 +290,7 @@ const COMMIT_RE = /^[0-9a-f]{7,40}$/;
 const SEMVER_RE = /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]{1,40})?$/;
 const DATE_TIME_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$/;
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const APP_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
 const FAILURE_KIND_RE = /^[a-z][a-z0-9-]{0,63}$/;
 const OTHER_FIELD_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const ONE_LINE_RE = /^(?=.*\S)[^\u0000-\u001f\u007f]+$/u;
@@ -286,6 +304,9 @@ const RECORD_ID_RES = [
 const ROUTE_TEMPLATE_RE = /^(\/(\{[A-Za-z][A-Za-z0-9_]{0,63}\}|[A-Za-z0-9._~-]+))*\/?$/u;
 const TFLOW_ID_RE = /^[a-z0-9._:-]{1,96}$/u;
 const FINGERPRINT_RE = /^[0-9a-f]{16}$/u;
+const LOCATOR_ATTRIBUTE_RE = /^[a-z][a-z0-9-]{0,39}$/u;
+const LOCATOR_TEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u;
+const LOCATOR_MAX_STEPS = 10_000;
 const APPROVAL_CHANNELS: ReadonlySet<string> = new Set(["tty", "mcp", "ci", "non-interactive", "pr-review", "other"]);
 const RESERVED: ReadonlySet<string> = new Set(RESERVED_ANCHORS);
 const SESSION_KEYS: ReadonlySet<string> = new Set(["storageState", "login"]);
@@ -641,6 +662,14 @@ function bundleChecks(input: CatalogBundleInput, journeys: readonly ExportedJour
       warn.push(`${source}: the check names no commit (run it with --target-build <commit sha>) — its items are left out`);
       continue;
     }
+    // #479 (spec minor 1 §2): the app's release label travels beside the commit; an invalid one is
+    // left out with a warning (the check itself still exports).
+    const rawAppVersion = typeof data.appVersion === "string" ? data.appVersion : undefined;
+    let appVersion: string | undefined;
+    if (rawAppVersion !== undefined) {
+      if (APP_VERSION_RE.test(rawAppVersion)) appVersion = rawAppVersion;
+      else warn.push(`${source}: the check's appVersion is not a release label (1-64 of [A-Za-z0-9._+-], starting alphanumeric) — left out`);
+    }
     const at = typeof data.startedAt === "string" ? data.startedAt : "";
     if (!DATE_TIME_RE.test(at)) {
       warn.push(`${source}: the check's start time is not an ISO date-time — its items are left out`);
@@ -680,6 +709,7 @@ function bundleChecks(input: CatalogBundleInput, journeys: readonly ExportedJour
       const check: BundleCheck = {
         target: { id, ...(kind === undefined ? {} : { kind }) },
         commit,
+        ...(appVersion === undefined ? {} : { appVersion }),
         at,
         runId,
         ...(journeyId === undefined ? {} : { journey: journeyId }),
@@ -846,6 +876,22 @@ export function findingIssues(f: CatalogBundleFinding): string[] {
   text("userImpact", f.userImpact, 600);
   text("recommendation", f.recommendation, 600);
   (f.controls ?? []).forEach((c, i) => text(`controls[${i}]`, c, 120));
+  // Minor 1 §1: `locator` belongs only to a locator claim, and a locator claim must carry it.
+  const locatorClaim = f.kind === "ux" && f.claim === "other" && f.producerClaim === "locator-brittle";
+  if (locatorClaim && f.locator === undefined) out.push(`${where}: a locator finding needs its locator`);
+  if (f.locator !== undefined) {
+    if (!locatorClaim) out.push(`${where}: locator is only for kind ux + claim other + producerClaim locator-brittle`);
+    const loc = f.locator;
+    const locText = (k: "element" | "fix", max: number): void => {
+      const p = machineTextProblem(loc[k], max);
+      if (p !== null) out.push(`${where}: locator.${k} ${p}`);
+    };
+    locText("element", 200);
+    locText("fix", 300);
+    if (!LOCATOR_ATTRIBUTE_RE.test(loc.attribute)) out.push(`${where}: locator.attribute is not a test-id attribute name`);
+    if (!LOCATOR_TEST_ID_RE.test(loc.testId)) out.push(`${where}: locator.testId is not a test id`);
+    if (!Number.isInteger(loc.steps) || loc.steps < 1 || loc.steps > LOCATOR_MAX_STEPS) out.push(`${where}: locator.steps is not an integer 1-${LOCATOR_MAX_STEPS}`);
+  }
   return out;
 }
 
