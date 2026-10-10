@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, isAbsolute } from "node:path";
+import { join, relative, isAbsolute, sep } from "node:path";
+import { zipStore, type ZipEntry } from "./zip-store.js";
 import { envCredentialStore, redactText } from "@jevitate/ai-core";
 import { exportCatalogBundle, type ExportCatalogBundleRequest, type ExportCatalogBundleResult } from "./catalog-bundle-api.js";
 import { loadLocalCredentials } from "./credentials-file.js";
@@ -39,8 +40,10 @@ import {
  *   `GET /api/upload/v1/whoami`, the person confirms the product, and ONLY the reference is saved
  *   (`~/.jevitate/journeeze.json`, bound to the Journeeze origin). The key is never saved by jevitate.
  * - `jevitate publish journeeze [--dry-run]` / MCP `publish_to_journeeze`: exports the bundle
- *   (catalog-bundle-api.ts), `POST /api/upload/v1/bundles` (bundle.json as `application/json`: 0.10
- *   exports no media) with `Idempotency-Key = sha256-<hex of bundle.json>`, polls `statusUrl` to
+ *   (catalog-bundle-api.ts), `POST /api/upload/v1/bundles` — bundle.json as `application/json` when
+ *   it lists no media, else (#471) a ZIP (`application/zip`, contract §4.2) of bundle.json and every
+ *   listed media file, each re-checked against its listed sha256 and size before it is packed — with
+ *   `Idempotency-Key = sha256-<hex of bundle.json>`, polls `statusUrl` to
  *   `imported`/`refused`, and reports summary, warnings and errors. The key is resolved by jevitate
  *   itself: `JOURNEEZE_UPLOAD_KEY` (CI; never the plaintext credentials file), else the saved
  *   reference. It is never an argument, never in a result, never in an error — the model never sees
@@ -163,6 +166,63 @@ async function resolvePublishKey(req: PublishJourneezeRequest, deps: PublishDeps
 interface BuiltBundle {
   readonly body: Uint8Array;
   readonly idempotencyKey: string;
+  /** `application/json` (no media) or `application/zip` (#471: bundle.json + media). */
+  readonly contentType: "application/json" | "application/zip";
+}
+
+/** Contract §4.2: the upload body limit (`whoami.limits.maxUploadBytes`). */
+const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
+/** Contract §2: the media paths a bundle may list. */
+const MEDIA_PATH_RE = /^media\/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/(?:step-[0-9]{2,3}\.(?:png|webp)|demo\.webm|demo\.vtt)|findings\/[0-9a-f]{16}\.(?:png|webp))$/u;
+
+async function filesUnder(dir: string, base: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") return [];
+    throw err;
+  }
+  const out: string[] = [];
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...(await filesUnder(p, base)));
+    else out.push(relative(base, p).split(sep).join("/"));
+  }
+  return out;
+}
+
+/**
+ * #471: the ZIP body of a bundle that lists media — every listed file re-read from the export and
+ * checked against its listed size and sha256 (listed ⇔ present, nothing else in the folder), packed
+ * after bundle.json in listed order.
+ */
+async function zipBundle(outDir: string, bundleJson: Uint8Array, files: readonly unknown[], key: string): Promise<Uint8Array> {
+  const entries: ZipEntry[] = [{ name: "bundle.json", data: bundleJson }];
+  const listed = new Set<string>();
+  for (const f of files) {
+    const { path, sha256, bytes } = (f ?? {}) as { path?: unknown; sha256?: unknown; bytes?: unknown };
+    if (typeof path !== "string" || !MEDIA_PATH_RE.test(path) || listed.has(path)) throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the bundle lists an unsafe or duplicate media path ${JSON.stringify(path)}`);
+    listed.add(path);
+    let data: Buffer;
+    try {
+      data = await readFile(join(outDir, ...path.split("/")));
+    } catch {
+      throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the bundle lists ${path}, which the export did not write`);
+    }
+    if (data.byteLength !== bytes || createHash("sha256").update(data).digest("hex") !== sha256) {
+      throw new JourneezeError("E_JOURNEEZE_BUNDLE", `${path} does not match its listed size and sha256 — refusing to send it`);
+    }
+    if (data.includes(key)) throw new JourneezeError("E_JOURNEEZE_BUNDLE", `${path} contains the upload key — refusing to send it`);
+    entries.push({ name: path, data });
+  }
+  const unlisted = (await filesUnder(join(outDir, "media"), outDir)).filter((p) => !listed.has(p));
+  if (unlisted.length > 0) throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the export wrote media the bundle does not list (${unlisted.slice(0, 3).join(", ")}) — refusing to send it`);
+  const body = zipStore(entries);
+  if (body.byteLength > MAX_UPLOAD_BYTES) {
+    throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the bundle with its media is ${body.byteLength} bytes — over Journeeze's ${MAX_UPLOAD_BYTES}-byte upload limit`);
+  }
+  return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
 }
 
 /** Exports the bundle into a temp dir and checks what the contract checks before `202` (§4.2). */
@@ -187,11 +247,12 @@ async function buildBundle(req: PublishJourneezeRequest, deps: PublishDeps, key:
     if (bundle.kind !== "journeeze.catalog-bundle" || bundle.version !== 1) {
       throw new JourneezeError("E_JOURNEEZE_BUNDLE", 'the exported bundle is not a v1 catalog bundle (kind "journeeze.catalog-bundle", version 1)');
     }
-    if (Array.isArray(bundle.files) && bundle.files.length > 0) {
-      throw new JourneezeError("E_JOURNEEZE_BUNDLE", "the bundle lists media files; this version uploads only a media-free bundle (application/json)");
-    }
     const hex = createHash("sha256").update(body).digest("hex");
-    return { body, idempotencyKey: `sha256-${hex}` };
+    // Contract §4.2: bundle.json alone as JSON only with no media; with media, a ZIP.
+    if (Array.isArray(bundle.files) && bundle.files.length > 0) {
+      return { body: await zipBundle(outDir, body, bundle.files, key), idempotencyKey: `sha256-${hex}`, contentType: "application/zip" };
+    }
+    return { body, idempotencyKey: `sha256-${hex}`, contentType: "application/json" };
   } finally {
     await rm(outDir, { recursive: true, force: true });
   }
@@ -282,7 +343,7 @@ async function upload(origin: string, key: string, bundle: BuiltBundle, deps: Pu
         url: `${origin}${JOURNEEZE_API_PREFIX}/bundles`,
         headers: {
           Authorization: auth,
-          "Content-Type": "application/json",
+          "Content-Type": bundle.contentType,
           "Content-Length": String(bundle.body.byteLength),
           "Content-Digest": digest,
           "Idempotency-Key": bundle.idempotencyKey,

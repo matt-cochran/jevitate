@@ -469,16 +469,52 @@ jevitate publish journeeze --json                # upload and wait until it is i
 **What the bundle holds.** Personas (never their session settings), jobs as written (every field,
 so the hashes recompute), **promoted** Journeys only with their links (`job`, `persona`,
 `anchors`, `serves`), every approval reduced to `{contentHash, at, channel}`, the `jevitate check`
-results (with machine baselines from clean runs of the approved Journey) and the machine findings.
-**No media in 0.10:** no demos, no files. `--check <file>` (repeatable) names the check records to
+results (with machine baselines from clean runs of the approved Journey), the machine findings, and
+the **approved demos with their masked media** (below). `--check <file> (repeatable) names the check records to
 include; the default is `<project>/jevitate-check/check.json` (the `check --out` default) when it
 exists. `--product-name` sets `product.name` (default: the project's `package.json` name, else its
 folder name). The same catalog gives the same bytes, so a re-publish is deduplicated by the
 bundle's sha256. Personal data or a credential in clear, or a job with a structural reference
 problem, refuses the export (exit 64); a Journey or check the bundle cannot carry is left out with
-a warning. `catalog export` writes only `bundle.json` under `--out` (it refuses a directory holding
-anything else), never uploads and never approves. MCP: `export_catalog_bundle` (`format`, `out` —
+a warning. `catalog export` writes only `bundle.json` and its `media/` folder under `--out` (it
+refuses a directory holding anything else), never uploads and never approves. MCP: `export_catalog_bundle` (`format`, `out` —
 a directory inside the project —, `check`, `productName`).
+
+**Demo media (jz-mask-v1).** A promoted Journey whose demo was approved with `demo approve` on an
+environment that declares `"synthetic": true` in `.jevitate/environments.json` travels with its
+guide: `demos[]` (title, steps with caption and expected result, `renderedFrom` = the Journey's
+approved hash, and the privacy attestation `{mask: "jz-mask-v1", data: "synthetic", method:
+"dom-before-capture", regions}`) and its files under `media/<journey id>/` (`step-NN.png`,
+`demo.webm`, `demo.vtt`), each listed in `files[]` with its sha256, size and type.
+
+- **The mask.** The final render runs under Journeeze's `jz-mask-v1` policy, in the page before
+  each capture: `input`, `textarea`, `select`, every editable element (`contenteditable`, inherited,
+  or `designMode`) and `[data-jz-mask]` are painted over with their subtree (`#4B5563`); `iframe`,
+  `frame`, `object`, `embed`, `video`, `audio` and `canvas` become a placeholder (`#9CA3AF`);
+  `[data-jz-block]` is left out as an empty box (`#E5E7EB`). Content is never read, only geometry.
+- **Proof per screenshot, failing closed.** Before the capture every region must be under a box,
+  nothing may be in the browser's top layer (an open modal dialog, popover or fullscreen element),
+  and the page may hold no closed shadow root jevitate cannot see into. After it, the regions must
+  not have moved and every pixel inside them in the PNG must be a mask fill. A screenshot that
+  fails is **left out** (the guide step has no image) — and so is the video.
+- **Video.** Kept only if the mask covered every frame: the layer watches each frame of the page
+  and reports a modal or popover, an animation or smooth scroll moving a region, or a page it
+  reached late. Any such frame, or any left-out screenshot, leaves out the video and its subtitles.
+  The subtitles are captions only (one cue per step).
+- **Synthetic data.** `"synthetic": true` is your statement that the environment runs on a seeded,
+  synthetic tenant, never real customer data. It holds only for that environment's own `baseUrl`,
+  and cannot be combined with `"production": true`. Without it, `demo approve` records nothing for
+  Journeeze and the bundle carries no demo for that Journey.
+- **What never leaves.** A DRAFT demo; a demo rendered from an older version of its Journey (approve
+  it again); a file changed since it was proven masked; a caption that breaks the bundle's text rules
+  (the whole demo is left out); and anything over the contract's limits (a screenshot over 2 MiB, a
+  video over 50 MiB, subtitles over 256 KiB, more than 512 MiB or 4,000 files per bundle) — each
+  with a warning.
+
+`demo approve` keeps the proven media beside the Journeys in `<journeys>/.demos/<id>/` (`demo.json`
+records each file's sha256), and says whether the demo goes to Journeeze and what was left out.
+The folder holds screenshots and a video: keep it out of git (`.jevitate/journeys/.demos/` in
+`.gitignore`) unless you want the media in the repo; an export without it carries no demo media.
 
 **The upload key.** `connect journeeze` is CLI only (there is no MCP tool; `connect_journeeze` is
 forbidden). A person at a terminal names where the key is kept (`env:<VAR>`, `cmd:<command>`,
@@ -490,7 +526,9 @@ itself is never saved, never a flag, never in a result. In CI set `JOURNEEZE_UPL
 sent only to `https://app.journeeze.dev`, `https://app.staging.journeeze.dev` or a loopback host,
 only in the `Authorization` header, and never after a redirect to another origin.
 
-`publish journeeze` exports the bundle, uploads it, and polls until Journeeze reports it
+`publish journeeze` exports the bundle, uploads it (as `application/json` without media, else as a
+ZIP of `bundle.json` and every listed file, each re-checked against its sha256 first; at most 256
+MiB), and polls until Journeeze reports it
 `imported` (exit 0) or `refused` (exit 1, with the server's errors). It never approves. MCP:
 `publish_to_journeeze` (`dryRun`), which never takes or returns the key. A refusal carries its
 specific code:

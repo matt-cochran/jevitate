@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import type { BrowserContext, Frame, Locator, Page } from "playwright";
 import { REVEALED_SECRET_SELECTORS, REVEALED_SECRET_SHAPES, revealedSecretsIn, secretForms } from "@jevitate/ai-core";
-import { DEMO_OVERLAY_HIDE_STYLE, hideDemoOverlayForCapture } from "@jevitate/explore";
+import { DEMO_OVERLAY_ATTR, DEMO_OVERLAY_HIDE_STYLE, hideDemoOverlayForCapture } from "@jevitate/explore";
+import { decodePng } from "./png-pixels.js";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
 import type { BrowserPort } from "@jevitate/playwright";
@@ -49,7 +50,13 @@ export interface CaptureLayer {
    * #250: re-checked right AFTER the screenshot; a throw deletes the file just written (fail
    * closed: the page may have changed between `prepare` and the capture).
    */
-  confirm?(page: Page, ctx: CaptureContext): Promise<void>;
+  confirm?(page: Page, ctx: CaptureContext, shot?: CapturedShot): Promise<void>;
+}
+
+/** #471: the file a capture just wrote, for a layer that checks the pixels themselves. */
+export interface CapturedShot {
+  readonly path: string;
+  readonly clip?: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
 }
 
 /**
@@ -105,7 +112,7 @@ export async function captureStepScreenshot(
     await hideDemoOverlayForCapture(page, false);
   }
   try {
-    for (const layer of layers) await layer.confirm?.(page, ctx);
+    for (const layer of layers) await layer.confirm?.(page, ctx, { path, ...(clip === undefined ? {} : { clip }) });
   } catch (err) {
     await rm(path, { force: true });
     throw err;
@@ -156,6 +163,25 @@ export interface MaskCheck {
   readonly reason?: string;
   /** The covered occurrences' viewport rects (top frame only) — what a pixel check can sample. */
   readonly rects: ReadonlyArray<{ readonly x: number; readonly y: number; readonly width: number; readonly height: number }>;
+  /** #471: the jz-mask-v1 proof of the top document, when the mask enforces jz-mask-v1. */
+  readonly jz?: JzMaskCheck;
+}
+
+/** #471: a jz-mask-v1 region kind — masked, replaced by a placeholder, or left out (an empty box). */
+export type JzRegionKind = "mask" | "placeholder" | "block";
+
+/** #471: one proof of jz-mask-v1 over the top document, now. */
+export interface JzMaskCheck {
+  readonly ok: boolean;
+  /** Region boxes painted (masked + placeholders + left out), overflowing descendants included. */
+  readonly regions: number;
+  readonly rects: ReadonlyArray<{ readonly x: number; readonly y: number; readonly width: number; readonly height: number; readonly kind: JzRegionKind }>;
+  /** The CSS viewport the rects are in (a screenshot's pixels map onto it). */
+  readonly viewport: { readonly width: number; readonly height: number };
+  /** Why the proof failed. */
+  readonly reason?: string;
+  /** A frame of this document the layer could not prove (sticky; "" when none) — voids a video. */
+  readonly breach: string;
 }
 
 /**
@@ -195,8 +221,14 @@ const MASK_RUNTIME = String.raw`((cfg) => {
   };
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const PAD = 2;
+  // Captured at install (an init script runs before any page script), so a page that later replaces
+  // requestAnimationFrame cannot stop the mask from re-measuring before each paint.
+  const raf = window.requestAnimationFrame.bind(window);
   const CSS = ":host{all:initial}*{pointer-events:none !important;box-sizing:border-box}[hidden]{display:none !important}" +
     ".m{position:fixed;background:" + cfg.fill + ";border-radius:2px}" +
+    ".jm{position:fixed;background:" + cfg.jzFill.mask + "}" +
+    ".jp{position:fixed;background:" + cfg.jzFill.placeholder + "}" +
+    ".jb{position:fixed;background:" + cfg.jzFill.block + "}" +
     ".h{position:fixed;border:3px solid #f59e0b;border-radius:6px;box-shadow:0 0 0 4px rgba(245,158,11,.35)}";
   let host = null;
   let layer = null;
@@ -315,6 +347,178 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     }
     return out;
   };
+  // ── #471: jz-mask-v1 (journeeze-saas docs/contract/journey-import-v1.md "Recording references and
+  // masking"), top document only — every frame below it is an iframe/frame the policy replaces whole.
+  //  - masked: input, textarea, select, every editable element (contenteditable in any spelling, or
+  //    inherited; designMode) and [data-jz-mask], each with its subtree;
+  //  - placeholder: iframe, frame, object, embed, video, audio, canvas;
+  //  - left out: [data-jz-block] and its subtree (an empty box of its size).
+  // A region is its element's box; a descendant painting outside that box gets a box of its own, so
+  // "with its subtree" holds for overflowing content too. Content is never read: only geometry.
+  const JZ = cfg.jz === true && window === window.top;
+  const LATE = document.readyState !== "loading";
+  const JZ_FIELDS = new Set(["input", "textarea", "select"]);
+  const JZ_PLACEHOLDERS = new Set(["iframe", "frame", "object", "embed", "video", "audio", "canvas"]);
+  const JZ_SKIP = new Set(["script", "style", "noscript", "template", "head", "title", "meta", "link"]);
+  const JZ_MAX_NODES = 50000;
+  const JZ_CLASS = { mask: "jm", placeholder: "jp", block: "jb" };
+  let jzTargets = [];
+  let jzTopLayer = [];
+  let jzDrawn = [];
+  let jzTooBig = false;
+  let jzPseudo = false;
+  let jzFirst = true;
+  let breach = "";
+  const own = (el) => el === host || (el.hasAttribute && (el.hasAttribute(cfg.attr) || el.hasAttribute(cfg.overlayAttr)));
+  const jzCollect = () => {
+    const out = [];
+    const top = [];
+    let nodes = 0;
+    jzTooBig = false;
+    jzPseudo = false;
+    // A positioned ::before/::after can paint generated content outside every box measured here.
+    const escapes = (el) => {
+      for (const pseudo of ["::before", "::after"]) {
+        const cs = getComputedStyle(el, pseudo);
+        if (cs.content !== "none" && cs.content !== "normal" && (cs.position === "absolute" || cs.position === "fixed")) return true;
+      }
+      return false;
+    };
+    // Every descendant (elements, text, open shadow trees) of a region root, as overflow candidates.
+    const subtree = (rootEl, kind) => {
+      out.push({ kind, el: rootEl });
+      // A placeholder's fallback children are never rendered: only masked and left-out subtrees paint.
+      const painted = kind !== "placeholder";
+      if (painted && escapes(rootEl)) jzPseudo = true;
+      const stack = [rootEl];
+      if (rootEl.shadowRoot) stack.push(rootEl.shadowRoot);
+      while (stack.length > 0) {
+        const n = stack.pop();
+        for (let c = n.firstChild; c !== null; c = c.nextSibling) {
+          if (++nodes > JZ_MAX_NODES) { jzTooBig = true; return; }
+          if (c.nodeType === 3) { if (c.nodeValue && c.nodeValue.trim() !== "") out.push({ kind, node: c, within: rootEl }); continue; }
+          if (c.nodeType !== 1 || own(c)) continue;
+          out.push({ kind, el: c, within: rootEl });
+          // A modal dialog or popover inside a region leaves its box for the top layer.
+          if (c.localName === "dialog" || c.hasAttribute("popover")) top.push(c);
+          if (painted && escapes(c)) jzPseudo = true;
+          stack.push(c);
+          if (c.shadowRoot) stack.push(c.shadowRoot);
+        }
+      }
+    };
+    if (document.designMode === "on" && document.documentElement) subtree(document.documentElement, "mask");
+    else {
+      const stack = [document];
+      while (stack.length > 0 && !jzTooBig) {
+        const n = stack.pop();
+        for (let c = n.firstChild; c !== null && !jzTooBig; c = c.nextSibling) {
+          if (c.nodeType !== 1) continue;
+          if (++nodes > JZ_MAX_NODES) { jzTooBig = true; break; }
+          if (own(c)) continue;
+          const name = (c.localName || "").toLowerCase();
+          if (JZ_SKIP.has(name)) continue;
+          if (name === "dialog" || c.hasAttribute("popover")) top.push(c);
+          if (c.hasAttribute("data-jz-block")) { subtree(c, "block"); continue; }
+          if (c.hasAttribute("data-jz-mask") || JZ_FIELDS.has(name) || c.isContentEditable === true) { subtree(c, "mask"); continue; }
+          if (JZ_PLACEHOLDERS.has(name)) { subtree(c, "placeholder"); continue; }
+          stack.push(c);
+          if (c.shadowRoot) stack.push(c.shadowRoot);
+        }
+      }
+    }
+    jzTopLayer = top;
+    return out;
+  };
+  const covers = (b, r) => b.left <= r.left + 0.5 && b.top <= r.top + 0.5 && b.right >= r.right - 0.5 && b.bottom >= r.bottom - 0.5;
+  const nodeRects = (node) => {
+    if (!node.isConnected) return null;
+    const r = document.createRange();
+    try { r.selectNodeContents(node); } catch (e) { return null; }
+    return Array.from(r.getClientRects());
+  };
+  // This frame's jz regions: [{ r, kind }] (a target that left the document has no box).
+  const jzRegions = () => {
+    const out = [];
+    const rootBox = new Map();
+    for (const t of jzTargets) {
+      let rs;
+      if (t.node !== undefined) rs = nodeRects(t.node);
+      else rs = t.el.isConnected ? [t.el.getBoundingClientRect()] : null;
+      if (rs === null) continue;
+      let within = null;
+      if (t.within !== undefined) {
+        within = rootBox.get(t.within);
+        if (within === undefined) { within = t.within.isConnected ? t.within.getBoundingClientRect() : null; rootBox.set(t.within, within); }
+      }
+      for (const r of rs) {
+        if (!(r.width > 0 || r.height > 0)) continue;
+        if (within !== null && within !== undefined && covers(within, r)) continue;
+        out.push({ r, kind: t.kind });
+      }
+    }
+    return out;
+  };
+  const topLayerOpen = () => {
+    if (document.fullscreenElement) return true;
+    for (const el of jzTopLayer) {
+      try { if (el.isConnected && el.matches(":modal, :popover-open")) return true; } catch (e) { return true; }
+    }
+    return false;
+  };
+  // An animation on a region, an ancestor or a descendant may move it on the compositor between two
+  // main-thread frames: the video cannot be proven for that stretch. One that only changes paint
+  // (a colour, an outline, a shadow, opacity) moves nothing and is ignored.
+  const PAINT_ONLY = /^(color|background-color|border(-top|-right|-bottom|-left)?-color|outline(-color|-offset|-width|-style)?|box-shadow|opacity|text-decoration-color|fill|stroke|caret-color|accent-color|visibility)$/;
+  const kebab = (k) => k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
+  const movesGeometry = (a) => {
+    try {
+      if (typeof a.transitionProperty === "string") return !PAINT_ONLY.test(a.transitionProperty);
+      const frames = a.effect && typeof a.effect.getKeyframes === "function" ? a.effect.getKeyframes() : null;
+      if (frames === null) return true;
+      for (const f of frames) for (const k of Object.keys(f)) {
+        if (k === "offset" || k === "computedOffset" || k === "easing" || k === "composite") continue;
+        if (!PAINT_ONLY.test(kebab(k))) return true;
+      }
+      return false;
+    } catch (e) { return true; }
+  };
+  const animatedRegion = () => {
+    if (typeof document.getAnimations !== "function") return false;
+    const els = jzTargets.filter((t) => t.el !== undefined && t.within === undefined).map((t) => t.el);
+    if (els.length === 0) return false;
+    for (const a of document.getAnimations()) {
+      if (a.playState !== "running" || !movesGeometry(a)) continue;
+      const tg = a.effect && a.effect.target;
+      if (!tg) continue;
+      for (const el of els) if (tg === el || (tg.contains && tg.contains(el)) || (el.contains && el.contains(tg))) return true;
+    }
+    return false;
+  };
+  const report = (reason) => {
+    if (breach !== "") return;
+    breach = String(reason).slice(0, 200);
+    try { const f = window[cfg.report]; if (typeof f === "function") f(breach); } catch (e) { /* the sticky breach is read at the next verify */ }
+  };
+  const jzWatch = () => {
+    if (!JZ) return;
+    if (jzFirst) {
+      jzFirst = false;
+      if (LATE && jzDrawn.length > 0) report("the jz-mask-v1 layer was installed after the page had painted");
+    }
+    if (jzTooBig) report("the page is too large to prove jz-mask-v1");
+    if (jzPseudo) report("a positioned ::before/::after in a jz-mask-v1 region can paint outside it");
+    if (jzDrawn.length > 0 && topLayerOpen()) report("a top-layer element (modal dialog, popover or fullscreen) could paint over jz-mask-v1 regions");
+    if (jzDrawn.length > 0 && animatedRegion()) report("an animation moved a jz-mask-v1 region");
+    if (lastError !== "") report("the mask loop failed");
+  };
+  if (JZ) {
+    window.addEventListener("scroll", (e) => {
+      if (jzDrawn.length === 0) return;
+      const t = e.target === document || e.target === window ? document.scrollingElement : e.target;
+      try { if (t && getComputedStyle(t).scrollBehavior === "smooth") report("a smooth scroll can move jz-mask-v1 regions on the compositor"); } catch (e2) { report("a scroll could not be checked"); }
+    }, true);
+  }
   const rectsOf = (t) => {
     if (t.kind === "range") {
       if (!t.node.isConnected) return null;
@@ -350,7 +554,15 @@ const MASK_RUNTIME = String.raw`((cfg) => {
       if (rs === null) { dirty = true; continue; }
       for (const r of rs) if (r.width > 0 || r.height > 0) rects.push(r);
     }
-    while (boxes.length < rects.length) {
+    let jz = [];
+    if (JZ) {
+      // Re-collected on EVERY frame, not only on a mutation: a field can appear where no observer
+      // sees it (inside a shadow root attached later, an element upgraded by customElements.define).
+      jzTargets = jzCollect();
+      jz = jzRegions();
+    }
+    const all = rects.map((r) => ({ r, cls: "m" })).concat(jz.map((x) => ({ r: x.r, cls: JZ_CLASS[x.kind] })));
+    while (boxes.length < all.length) {
       const d = document.createElement("div");
       d.className = "m";
       layer.appendChild(d);
@@ -358,9 +570,14 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     }
     for (let i = 0; i < boxes.length; i++) {
       const d = boxes[i];
-      if (i < rects.length) { place(d, rects[i], PAD); d.hidden = false; } else d.hidden = true;
+      if (i < all.length) {
+        if (d.className !== all[i].cls) d.className = all[i].cls;
+        place(d, all[i].r, PAD);
+        d.hidden = false;
+      } else d.hidden = true;
     }
     drawn = rects;
+    jzDrawn = jz;
     if (highlightEl !== null && highlightEl.isConnected) {
       place(hiBox, highlightEl.getBoundingClientRect(), 5);
       hiBox.hidden = false;
@@ -368,7 +585,8 @@ const MASK_RUNTIME = String.raw`((cfg) => {
   };
   const tick = () => {
     try { update(); lastError = ""; } catch (e) { lastError = String((e && e.message) || e).slice(0, 200); }
-    requestAnimationFrame(tick);
+    try { jzWatch(); } catch (e) { report("the jz-mask-v1 watch failed"); }
+    raf(tick);
   };
   const mo = new MutationObserver((records) => {
     for (const r of records) {
@@ -383,12 +601,12 @@ const MASK_RUNTIME = String.raw`((cfg) => {
   const mark = () => { dirty = true; };
   window.addEventListener("input", mark, true);
   window.addEventListener("change", mark, true);
-  const covers = (b, r) => b.left <= r.left + 0.5 && b.top <= r.top + 0.5 && b.right >= r.right - 0.5 && b.bottom >= r.bottom - 0.5;
   const api = {
     verify() {
       dirty = true;
       try { update(); } catch (e) {
-        return { ok: false, occurrences: 0, masked: 0, reason: "the mask update failed: " + String((e && e.message) || e).slice(0, 200), rects: [] };
+        return { ok: false, occurrences: 0, masked: 0, reason: "the mask update failed: " + String((e && e.message) || e).slice(0, 200), rects: [],
+          ...(JZ ? { jz: { ok: false, regions: 0, rects: [], reason: "the mask update failed", breach: breach || "the mask update failed", viewport: { width: window.innerWidth, height: window.innerHeight } } } : {}) };
       }
       const problems = [];
       {
@@ -409,6 +627,24 @@ const MASK_RUNTIME = String.raw`((cfg) => {
       if (lastError !== "") problems.push("the mask loop failed: " + lastError);
       const out = { ok: problems.length === 0, occurrences: drawn.length, masked, rects: drawn.map((r) => ({ x: r.left, y: r.top, width: r.width, height: r.height })) };
       if (problems.length > 0) out.reason = problems.join("; ");
+      if (JZ) {
+        const jp = problems.filter((p) => p.indexOf("mask layer") >= 0);
+        if (jzTooBig) jp.push("the page is too large to prove jz-mask-v1");
+        if (jzPseudo) jp.push("a positioned ::before/::after in a jz-mask-v1 region can paint outside it");
+        if (jzDrawn.length > 0 && topLayerOpen()) jp.push("a top-layer element (modal dialog, popover or fullscreen) could paint over jz-mask-v1 regions");
+        let jzMasked = 0;
+        for (const x of jzDrawn) if (live.some((b) => covers(b, x.r))) jzMasked++;
+        if (jzMasked < jzDrawn.length) jp.push((jzDrawn.length - jzMasked) + " jz-mask-v1 region(s) not covered by a box");
+        if (lastError !== "") jp.push("the mask loop failed");
+        out.jz = {
+          ok: jp.length === 0,
+          regions: jzDrawn.length,
+          rects: jzDrawn.map((x) => ({ x: x.r.left, y: x.r.top, width: x.r.width, height: x.r.height, kind: x.kind })),
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          breach,
+        };
+        if (jp.length > 0) out.jz.reason = jp.join("; ");
+      }
       return out;
     },
     learn(values) { if (Array.isArray(values)) for (const v of values) learn(v); dirty = true; return true; },
@@ -419,9 +655,21 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     clearHighlight() { highlightEl = null; try { update(); } catch (e) { /* presentation only */ } return true; },
   };
   Object.defineProperty(window, cfg.name, { value: Object.freeze(api), enumerable: false, configurable: false, writable: false });
-  requestAnimationFrame(tick);
+  raf(tick);
   return true;
 })(__CFG__)`;
+
+/** #471: the jz-mask-v1 fills — masked, placeholder, left out (opaque, never a page colour by intent). */
+export const JZ_MASK_FILLS: Readonly<Record<JzRegionKind, string>> = { mask: "#4B5563", placeholder: "#9CA3AF", block: "#E5E7EB" };
+
+/** #471: a jz-mask-v1 capture could not be proven: that screenshot is left out (and the demo's video with it). */
+export class JzMaskUnprovenError extends Error {
+  readonly code = "E_JZ_MASK" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "JzMaskUnprovenError";
+  }
+}
 
 /** Bound on one mask round-trip (ms). */
 const MASK_CALL_MS = 5_000;
@@ -476,9 +724,15 @@ export class SecretPixelMask {
    */
   readonly active: boolean = true;
 
-  constructor(secrets: readonly string[]) {
+  /** #471: the mask also enforces jz-mask-v1 on the top document (fields, editables, embeds, marked regions). */
+  readonly jzMaskV1: boolean;
+  /** #471: frames of a top document the jz layer could not prove (reported live by the page). */
+  readonly #jzBreaches = new Set<string>();
+
+  constructor(secrets: readonly string[], opts: { readonly jzMaskV1?: boolean } = {}) {
     const forms = [...new Set(secrets.filter((s) => typeof s === "string" && s.trim() !== "").flatMap((s) => [...secretForms(s)]))];
     this.#name = `__jevitateMask_${randomBytes(8).toString("hex")}`;
+    this.jzMaskV1 = opts.jzMaskV1 === true;
     // JSON inside a JS expression (valid JS since ES2019); `<` escaped so no value can close a script context.
     const cfg = JSON.stringify({
       name: this.#name,
@@ -487,6 +741,10 @@ export class SecretPixelMask {
       markers: REVEALED_SECRET_SELECTORS,
       fill: PIXEL_MASK_COLOR,
       attr: PIXEL_MASK_ATTR,
+      overlayAttr: DEMO_OVERLAY_ATTR,
+      jz: this.jzMaskV1,
+      jzFill: JZ_MASK_FILLS,
+      report: `${this.#name}_jz`,
     }).replace(/</g, "\\u003c");
     this.#source = MASK_RUNTIME.replace("__CFG__", () => cfg);
   }
@@ -496,7 +754,19 @@ export class SecretPixelMask {
     const ctx = page.context();
     if (!this.#contexts.has(ctx)) {
       try {
+        // #471: a frame the jz layer cannot prove is reported as it happens (a document may be gone by the next check).
+        if (this.jzMaskV1) {
+          await within(
+            ctx.exposeBinding(`${this.#name}_jz`, ({ frame }: { frame: Frame }, reason: unknown) => {
+              if (frame === frame.page().mainFrame()) this.#jzBreaches.add(String(reason).slice(0, 200));
+            }),
+            "installing the jz-mask-v1 report",
+          );
+        }
         await within(ctx.addInitScript({ content: this.#source }), "installing the pixel mask");
+        // #471: reduced motion, so a site's smooth scrolling and motion (which can move a region
+        // on the compositor between two checked frames, voiding the video) mostly stays off.
+        if (this.jzMaskV1) for (const p of ctx.pages()) await within(p.emulateMedia({ reducedMotion: "reduce" }), "emulating reduced motion");
       } catch (e) {
         throw new MaskUnavailableError(`could not install the pixel mask: ${errText(e)}`);
       }
@@ -600,6 +870,7 @@ export class SecretPixelMask {
     let occurrences = 0;
     let masked = 0;
     let rects: MaskCheck["rects"] = [];
+    let jz: JzMaskCheck | undefined;
     const reasons: string[] = [];
     for (const frame of page.frames()) {
       if (frame.isDetached()) continue;
@@ -616,7 +887,13 @@ export class SecretPixelMask {
         }
         occurrences += r.occurrences;
         masked += r.masked;
-        if (frame === page.mainFrame()) rects = r.rects;
+        if (frame === page.mainFrame()) {
+          rects = r.rects;
+          if (r.jz !== undefined) {
+            jz = r.jz;
+            if (r.jz.breach !== "") this.#jzBreaches.add(r.jz.breach);
+          }
+        }
         if (!r.ok) reasons.push(r.reason ?? "the mask could not be proven");
         await this.#sync(frame);
       } catch (e) {
@@ -624,7 +901,10 @@ export class SecretPixelMask {
         reasons.push(errText(e));
       }
     }
-    return { ok: reasons.length === 0, occurrences, masked, rects, ...(reasons.length === 0 ? {} : { reason: reasons.join("; ") }) };
+    if (this.jzMaskV1 && jz === undefined) {
+      jz = { ok: false, regions: 0, rects: [], viewport: { width: 0, height: 0 }, reason: `the jz-mask-v1 layer is not running in the page${reasons.length === 0 ? "" : `: ${reasons.join("; ")}`}`, breach: "" };
+    }
+    return { ok: reasons.length === 0, occurrences, masked, rects, ...(reasons.length === 0 ? {} : { reason: reasons.join("; ") }), ...(jz === undefined ? {} : { jz }) };
   }
 
   /** Throws {@link MaskUnavailableError} unless {@link verify} proves the mask. */
@@ -643,6 +923,57 @@ export class SecretPixelMask {
       },
       confirm: async (page) => {
         await this.assertMasked(page);
+      },
+    };
+  }
+
+  /**
+   * #471: what the jz layer could not prove in a top document during the run, in order — a video
+   * recorded over such a frame is never exported. Empty when every frame was proven (or jz is off).
+   */
+  jzBreaches(): readonly string[] {
+    return [...this.#jzBreaches];
+  }
+
+  /**
+   * #471: the jz-mask-v1 capture layer (method `dom-before-capture`: the regions are painted over in
+   * the page, before the screenshot). Fails closed with {@link JzMaskUnprovenError}, which leaves out
+   * that screenshot — never the run. Proof per capture:
+   *  1. before: the live layer proves every region covered by a box, nothing in the top layer, no
+   *     closed shadow root it cannot see into (Chromium DevTools protocol, the page's own roots only);
+   *  2. after: the same regions at the same places (nothing moved in between), and every pixel of
+   *     every region in the written PNG is one of the jz-mask-v1 / secret fills.
+   * `regions(step)` is the proven region count of that step's capture.
+   */
+  jzLayer(): CaptureLayer & { regions(step: number): number | undefined } {
+    const before = new Map<number, JzMaskCheck>();
+    const proven = new Map<number, number>();
+    const fail = (step: number, why: string): never => {
+      throw new JzMaskUnprovenError(`step ${step}: jz-mask-v1 could not be proven: ${why}`);
+    };
+    return {
+      name: "jz-mask-v1",
+      regions: (step) => proven.get(step),
+      prepare: async (page, ctx) => {
+        proven.delete(ctx.step);
+        if (!this.jzMaskV1) fail(ctx.step, "the mask was made without jz-mask-v1");
+        const r = await this.verify(page);
+        if (r.jz === undefined || !r.jz.ok) fail(ctx.step, r.jz?.reason ?? "no proof");
+        const hidden = await closedShadowRoots(page);
+        if (hidden !== 0) fail(ctx.step, hidden < 0 ? "the page's shadow roots could not be inspected" : `${hidden} closed shadow root(s) it cannot see into`);
+        before.set(ctx.step, r.jz as JzMaskCheck);
+      },
+      confirm: async (page, ctx, shot) => {
+        const first = before.get(ctx.step);
+        before.delete(ctx.step);
+        if (first === undefined) return fail(ctx.step, "no proof before the capture");
+        if (shot === undefined || shot.clip !== undefined) return fail(ctx.step, "only a whole-viewport capture can be pixel-checked");
+        const r = await this.verify(page);
+        if (r.jz === undefined || !r.jz.ok) return fail(ctx.step, r.jz?.reason ?? "no proof after the capture");
+        if (!sameRegions(first, r.jz)) return fail(ctx.step, "a region moved or changed during the capture");
+        const problem = jzPixelProblem(await readFile(shot.path), first);
+        if (problem !== null) return fail(ctx.step, problem);
+        proven.set(ctx.step, first.regions);
       },
     };
   }
@@ -693,4 +1024,97 @@ export function maskingPort(port: BrowserPort, mask: SecretPixelMask): BrowserPo
       return session;
     },
   };
+}
+
+// ── #471: jz-mask-v1 proof helpers ──────────────────────────────────────────────────────────────
+
+/** Same regions, same kinds, same places (within half a CSS pixel). */
+function sameRegions(a: JzMaskCheck, b: JzMaskCheck): boolean {
+  if (a.rects.length !== b.rects.length) return false;
+  const close = (x: number, y: number): boolean => Math.abs(x - y) <= 0.5;
+  return a.rects.every((r, i) => {
+    const o = b.rects[i];
+    return o !== undefined && o.kind === r.kind && close(o.x, r.x) && close(o.y, r.y) && close(o.width, r.width) && close(o.height, r.height);
+  });
+}
+
+function hexRgb(hex: string): readonly [number, number, number] {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Every fill a mask box can have: the jz-mask-v1 kinds and the secret mask (boxes may overlap). */
+const MASK_FILLS_RGB = [...Object.values(JZ_MASK_FILLS), PIXEL_MASK_COLOR].map(hexRgb);
+
+/**
+ * Why `png` (a whole-viewport capture) does not show a mask fill on every pixel inside every region
+ * of `check`, or null. Regions are in CSS pixels; the image is the viewport at the device scale.
+ */
+export function jzPixelProblem(png: Buffer, check: Pick<JzMaskCheck, "rects" | "viewport">): string | null {
+  let img: ReturnType<typeof decodePng>;
+  try {
+    img = decodePng(png);
+  } catch (e) {
+    return `the capture could not be decoded: ${errText(e)}`;
+  }
+  if (check.rects.length === 0) return null;
+  if (!(check.viewport.width > 0)) return "the viewport size is unknown";
+  const scale = img.width / check.viewport.width;
+  let bad = 0;
+  for (const r of check.rects) {
+    const x0 = Math.max(0, Math.ceil(r.x * scale));
+    const y0 = Math.max(0, Math.ceil(r.y * scale));
+    const x1 = Math.min(img.width, Math.floor((r.x + r.width) * scale));
+    const y1 = Math.min(img.height, Math.floor((r.y + r.height) * scale));
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const i = (y * img.width + x) * 4;
+        const [pr, pg, pb, pa] = [img.rgba[i]!, img.rgba[i + 1]!, img.rgba[i + 2]!, img.rgba[i + 3]!];
+        if (pa !== 255 || !MASK_FILLS_RGB.some(([fr, fg, fb]) => fr === pr && fg === pg && fb === pb)) bad++;
+      }
+    }
+  }
+  return bad === 0 ? null : `${bad} pixel(s) inside jz-mask-v1 regions are not a mask fill`;
+}
+
+interface CdpNode {
+  readonly localName?: string;
+  readonly attributes?: readonly string[];
+  readonly children?: readonly CdpNode[];
+  readonly shadowRoots?: ReadonlyArray<CdpNode & { readonly shadowRootType?: string }>;
+  readonly contentDocument?: CdpNode;
+}
+
+/**
+ * #471: closed shadow roots in the top document that are not jevitate's own layers — content the
+ * jz layer cannot see into, so it cannot prove a field there masked. -1 when the page cannot be
+ * inspected (not Chromium, a protocol failure): unprovable. Frames below (contentDocument) are
+ * skipped: each is covered whole by a placeholder.
+ */
+export async function closedShadowRoots(page: Page): Promise<number> {
+  let session: Awaited<ReturnType<BrowserContext["newCDPSession"]>> | undefined;
+  try {
+    session = await within(page.context().newCDPSession(page), "inspecting shadow roots");
+    const { root } = (await within(session.send("DOM.getDocument", { depth: -1, pierce: true }), "inspecting shadow roots")) as { root: CdpNode };
+    let closed = 0;
+    const ours = (n: CdpNode): boolean => {
+      const a = n.attributes ?? [];
+      for (let i = 0; i < a.length; i += 2) if (a[i] === PIXEL_MASK_ATTR || a[i] === DEMO_OVERLAY_ATTR) return true;
+      return false;
+    };
+    const stack: CdpNode[] = [root];
+    while (stack.length > 0) {
+      const n = stack.pop()!;
+      for (const sr of n.shadowRoots ?? []) {
+        if (sr.shadowRootType === "closed" && !ours(n)) closed++;
+        stack.push(sr);
+      }
+      for (const c of n.children ?? []) stack.push(c);
+    }
+    return closed;
+  } catch {
+    return -1;
+  } finally {
+    await session?.detach().catch(() => undefined);
+  }
 }

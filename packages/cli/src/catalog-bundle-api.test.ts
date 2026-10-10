@@ -35,7 +35,7 @@ describe("exportCatalogBundle", () => {
   it("writes <out>/bundle.json and reports what it exported", async () => {
     const p = project();
     const r = await exportCatalogBundle(p.req(), deps);
-    expect({ path: r.bundlePath, counts: r.counts }).toEqual({ path: join(p.root, "out", "bundle.json"), counts: { personas: 2, jobs: 2, journeys: 1, checks: 4, findings: 0, media: 0 } });
+    expect({ path: r.bundlePath, counts: r.counts }).toEqual({ path: join(p.root, "out", "bundle.json"), counts: { personas: 2, jobs: 2, journeys: 1, checks: 4, findings: 0, demos: 0, media: 0 } });
   });
 
   it("reports the digest of the bytes it wrote (the upload's Idempotency-Key)", async () => {
@@ -89,7 +89,7 @@ describe("exportCatalogBundle", () => {
 
   it("renders a one-line summary plus one line per warning", async () => {
     const r = await exportCatalogBundle(project().req(), deps);
-    expect(renderCatalogExport(r).split("\n")[0]).toMatch(/^wrote .*bundle\.json \(sha256-[0-9a-f]{64}\): 2 persona\(s\), 2 job\(s\), 1 Journey\(s\), 4 check\(s\), 0 finding\(s\)$/);
+    expect(renderCatalogExport(r).split("\n")[0]).toMatch(/^wrote .*bundle\.json \(sha256-[0-9a-f]{64}\): 2 persona\(s\), 2 job\(s\), 1 Journey\(s\), 0 demo\(s\) with 0 media file\(s\), 4 check\(s\), 0 finding\(s\)$/);
   });
 });
 

@@ -709,9 +709,14 @@ never overwrites it):
     "allow": ["https://auth.example.com"],
     "fixtures": "fixtures/staging.json",
     "hooks": { "before": "./scripts/seed-staging.sh" }
-  }
+  },
+  "demo": { "baseUrl": "https://demo.example.com", "synthetic": true }
 }
 ```
+
+`"production": true` marks a live environment (`jevitate demo` refuses it). `"synthetic": true`
+states that the environment runs on a seeded, synthetic tenant (never real customer data): a demo
+approved there can ship its masked media to Journeeze (#471). The two cannot be combined.
 
 ```bash
 jevitate journey run checkout --env staging
@@ -838,6 +843,13 @@ in `.jevitate/environments.json` is refused before anything runs (`E_DEMO_PRODUC
 session-ending controls are refused unless that origin's `safety` in `~/.jevitate/targets.json`
 allows them. Every replay uses `journey run`'s fail-closed policy, and every output is redacted.
 Nothing is promoted without `demo approve`.
+
+**Demo media for Journeeze.** When the environment declares `"synthetic": true` (a seeded,
+synthetic tenant), `demo approve` renders the final demo under Journeeze's `jz-mask-v1` policy —
+form fields, editable text and `[data-jz-mask]` masked, embeds replaced by placeholders,
+`[data-jz-block]` left out — and keeps the media it could prove masked in
+`<journeys>/.demos/<id>/` for `catalog export --format journeeze-bundle`. A screenshot it cannot
+prove is left out, and the video with it. See [Publishing to Journeeze](catalog.md#publishing-to-journeeze).
 
 | Exit | When |
 |---|---|
