@@ -461,6 +461,9 @@ function zipEntries(body: Uint8Array): Map<string, Buffer> {
   return out;
 }
 
+/** The upload POST (a key from the environment is first checked with whoami, #477). */
+const upload = (requests: readonly JourneezeHttpRequest[]): JourneezeHttpRequest => requests.find((r) => r.method === "POST")!;
+
 describe("publish journeeze with demo media (#471)", () => {
   const publish = (http: JourneezeHttp, exportBundle = mediaExport()): Promise<PublishJourneezeResult> =>
     publishToJourneeze(
@@ -471,31 +474,31 @@ describe("publish journeeze with demo media (#471)", () => {
   it("sends a bundle that lists media as application/zip", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await publish(http);
-    expect(requests[0]!.headers["Content-Type"]).toBe("application/zip");
+    expect(upload(requests).headers["Content-Type"]).toBe("application/zip");
   });
 
   it("the ZIP holds bundle.json and every listed media file, nothing else", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await publish(http);
-    expect([...zipEntries(requests[0]!.body!).keys()]).toEqual(["bundle.json", SHOT]);
+    expect([...zipEntries(upload(requests).body!).keys()]).toEqual(["bundle.json", SHOT]);
   });
 
   it("the media in the ZIP is byte-identical to the export", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await publish(http);
-    expect(zipEntries(requests[0]!.body!).get(SHOT)!.equals(PNG)).toBe(true);
+    expect(zipEntries(upload(requests).body!).get(SHOT)!.equals(PNG)).toBe(true);
   });
 
   it("the Idempotency-Key stays the sha256 of bundle.json", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await publish(http);
-    expect(requests[0]!.headers["Idempotency-Key"]).toBe(`sha256-${sha(MEDIA_BUNDLE)}`);
+    expect(upload(requests).headers["Idempotency-Key"]).toBe(`sha256-${sha(MEDIA_BUNDLE)}`);
   });
 
   it("the Content-Digest covers the ZIP body", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await publish(http);
-    expect(requests[0]!.headers["Content-Digest"]).toBe(`sha-256=:${createHash("sha256").update(requests[0]!.body!).digest("base64")}:`);
+    expect(upload(requests).headers["Content-Digest"]).toBe(`sha-256=:${createHash("sha256").update(upload(requests).body!).digest("base64")}:`);
   });
 
   it("the same bundle gives the same ZIP bytes (a re-publish dedupes)", async () => {
@@ -503,19 +506,19 @@ describe("publish journeeze with demo media (#471)", () => {
     const b = fakeJourneeze(OK_ROUTES());
     await publish(a.http);
     await publish(b.http);
-    expect(sha(a.requests[0]!.body!)).toBe(sha(b.requests[0]!.body!));
+    expect(sha(upload(a.requests).body!)).toBe(sha(upload(b.requests).body!));
   });
 
   it("a media file that differs from its listed sha256 is never sent", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await errorOf(publish(http, mediaExport((out) => writeFileSync(join(out, "media", "demo-x", "step-01.png"), Buffer.concat([PNG, Buffer.from([1])])))));
-    expect(requests).toEqual([]);
+    expect(requests.some((r) => r.method === "POST")).toBe(false);
   });
 
   it("a media file the bundle does not list is never sent", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await errorOf(publish(http, mediaExport((out) => writeFileSync(join(out, "media", "demo-x", "step-02.png"), PNG))));
-    expect(requests).toEqual([]);
+    expect(requests.some((r) => r.method === "POST")).toBe(false);
   });
 });
 
