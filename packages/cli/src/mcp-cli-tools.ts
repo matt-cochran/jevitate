@@ -670,6 +670,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         baseline: s("--baseline"),
         changedRoutes: many("--changed-routes"),
         targetBuild: s("--target-build"),
+        appVersion: s("--app-version"),
         requireApprovals: b("--require-approvals"),
         allowChannels: s("--allow-channels"),
         maxBrittleSteps: n("--max-brittle-steps"),

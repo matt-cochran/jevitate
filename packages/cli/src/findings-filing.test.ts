@@ -102,4 +102,12 @@ describe("withSelfHealSection (#453)", () => {
     expect(body.indexOf("## Self-heal attempts")).toBeLessThan(body.indexOf("<!-- jevitate-fingerprint: fp1 -->"));
     expect(body).toContain("| 1 | label 'A' → 'B' | src/x.tsx:4 |");
   });
+
+  it("inserts before a Journeeze-only fingerprint marker", async () => {
+    const { withSelfHealSection } = await import("./findings-filing.js");
+    const d = { fingerprint: "abcdef0123456789", title: "t", body: "body\n\n<!-- journeeze-fingerprint:abcdef0123456789 -->", labels: [], attribution: "system-under-test" as const, targets: ["system-under-test" as const] };
+    const row = { n: 1, hypothesis: "label 'A' → 'B'", evidence: "src/x.tsx:4", candidate: "click button B", observation: "", result: "rejected", rejection: "no-match: none" };
+    const body = withSelfHealSection(d, [row]).body;
+    expect(body.indexOf("## Self-heal attempts")).toBeLessThan(body.indexOf("<!-- journeeze-fingerprint:abcdef0123456789 -->"));
+  });
 });

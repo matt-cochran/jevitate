@@ -86,6 +86,8 @@ export interface RunCheckOptions {
   readonly outDir: string;
   /** The caller's target build/commit id, stamped on every result. */
   readonly targetBuild?: string;
+  /** #479: the app's release/version label the check ran against, stamped on the result. */
+  readonly appVersion?: string;
   /** `--baseline <run|tag|last>`: only findings not in it gate. */
   readonly baseline?: string;
   /** Dirs searched for run ids and `last` (default: this check's results dir). */
@@ -298,6 +300,8 @@ export interface CheckResult {
   readonly exitCode: 0 | 1 | 2 | 5;
   readonly engine: EngineInfo;
   readonly targetBuild?: string;
+  /** #479: the app's release/version label the check ran against (stamped next to `targetBuild`). */
+  readonly appVersion?: string;
   readonly startedAt: string;
   readonly budget: BudgetReport;
   /**

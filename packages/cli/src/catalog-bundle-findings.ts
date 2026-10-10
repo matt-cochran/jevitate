@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { consolidate, runFromMissionResult, runFromUxReport, type ConsolidatedDefect, type RunBranch, type RunRecord } from "@jevitate/findings";
 import { contractRouteTemplate, uxFindingFingerprint } from "@jevitate/ux";
 import { findingIssues, isRouteTemplate, type CatalogBundleFinding } from "./catalog-bundle.js";
+import type { CatalogJourney } from "./catalog.js";
+import { dedupeSuggestions } from "./locator-health.js";
+import { journeyLocatorHealth } from "./locator-health-api.js";
 import { defaultReportSources, loadRunFile, scanRuns } from "./report-api.js";
 import type { RunIndexDeps } from "./run-index.js";
 
@@ -183,6 +187,11 @@ function uxFinding(f: Record<string, unknown>, run: RunRecord): Mapped {
   };
 }
 
+/** The warning for a finding the builder's guard drops: the fingerprint and rule, never the offending text. */
+function findingDropWarning(fingerprint: string, kind: string, issues: readonly string[]): string {
+  return `finding ${fingerprint} (${kind}): ${issues.map((i) => i.replace(/^finding [0-9a-f]+: /u, "").replace(/ "[^"]*"/gu, "")).join("; ")} — left out of the bundle`;
+}
+
 /** The bundle's findings from what the runs persisted (pure): one per fingerprint, latest sighting first-class. */
 export function bundleFindings(src: FindingSources): BundleFindings {
   const warnings: string[] = [];
@@ -196,7 +205,7 @@ export function bundleFindings(src: FindingSources): BundleFindings {
     const issues = findingIssues(m.finding);
     if (issues.length > 0) {
       // Name the fingerprint and the rule only: the offending text never reaches a warning.
-      warnings.push(`finding ${m.finding.fingerprint} (${m.finding.kind}): ${issues.map((i) => i.replace(/^finding [0-9a-f]+: /u, "").replace(/ "[^"]*"/gu, "")).join("; ")} — left out of the bundle`);
+      warnings.push(findingDropWarning(m.finding.fingerprint, m.finding.kind, issues));
       return;
     }
     const prev = latest.get(m.finding.fingerprint);
@@ -212,6 +221,72 @@ export function bundleFindings(src: FindingSources): BundleFindings {
   if (findings.length > MAX_FINDINGS) {
     warnings.push(`${findings.length} findings: only the latest ${MAX_FINDINGS} are exported`);
     findings = findings.slice(-MAX_FINDINGS);
+  }
+  return { findings, warnings };
+}
+
+/**
+ * #479 (minor 1) — the locator findings: one per brittle ELEMENT (§4.4, spec bundle-minor1 §1). Each
+ * promoted Journey's locator health (`journeyLocatorHealth`) becomes suggestions, de-duplicated by
+ * element across Journeys; each suggestion is a `kind: "ux"` / claim `other` / producerClaim
+ * `locator-brittle` finding, dated at the latest approval of the Journeys it occurs in. A suggestion
+ * whose route cannot be a template, that has no approval time, or that fails the builder's privacy
+ * guard is LEFT OUT with a warning. Pure: no clock, no I/O.
+ */
+export function locatorFindings(journeys: readonly CatalogJourney[], testIdAttributes: readonly string[]): BundleFindings {
+  const warnings: string[] = [];
+  const suggestions = dedupeSuggestions(journeys.map((cj) => journeyLocatorHealth(cj.journey, testIdAttributes).suggestions));
+  const approvalAt = new Map<string, string>();
+  for (const cj of journeys) {
+    const at = cj.approval?.at;
+    if (at !== undefined && DATE_TIME_RE.test(at)) approvalAt.set(cj.id, at);
+  }
+  const findings: CatalogBundleFinding[] = [];
+  for (const s of suggestions) {
+    const route = bundleRoute(s.route);
+    if (route === undefined) {
+      // Journeeze requires a route template on every UX finding (catalog bundle v1 §4.4).
+      warnings.push(`locator ${s.key}: ${s.route === undefined ? "its page has no route" : "its route is not a route template"} — left out of the bundle`);
+      continue;
+    }
+    const first = s.occurrences[0];
+    if (first === undefined) continue;
+    const at = s.occurrences
+      .map((o) => (o.journeyId === undefined ? undefined : approvalAt.get(o.journeyId)))
+      .filter((v): v is string => v !== undefined)
+      .sort()
+      .at(-1);
+    if (at === undefined) {
+      warnings.push(`locator ${s.key}: no approval time to date it — left out of the bundle`);
+      continue;
+    }
+    const key = s.key.slice(s.key.indexOf("|") + 1);
+    const fingerprint = createHash("sha256").update(`ux\nlocator-brittle\n${route ?? ""}\n${key}`, "utf8").digest("hex").slice(0, 16);
+    const step = first.index + 1;
+    // The fix names the page by its raw path; the bundle only ever carries the route template.
+    const fix = s.route !== undefined && route !== undefined && s.route !== route ? s.fix.split(s.route).join(route) : s.fix;
+    const finding: CatalogBundleFinding = {
+      fingerprint,
+      kind: "ux",
+      claim: "other",
+      producerClaim: "locator-brittle",
+      severity: "minor",
+      // Static classification of the recorded locator, not a model judgement: certain.
+      confidence: 1,
+      at,
+      ...(first.journeyId === undefined ? {} : { journey: first.journeyId }),
+      ...(step < 1 || step > 200 ? {} : { step }),
+      route,
+      observation: `${s.element} on ${route} is found by a brittle locator (${s.reasons.join(", ")})`,
+      recommendation: fix,
+      locator: { element: s.element, attribute: s.attribute, testId: s.testId, fix, steps: s.occurrences.length },
+    };
+    const issues = findingIssues(finding);
+    if (issues.length > 0) {
+      warnings.push(findingDropWarning(fingerprint, finding.kind, issues));
+      continue;
+    }
+    findings.push(finding);
   }
   return { findings, warnings };
 }

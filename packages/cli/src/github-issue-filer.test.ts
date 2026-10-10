@@ -220,4 +220,13 @@ describe("GitHubIssueFiler — a create is never blindly retried (it is not idem
     await expect(filer.create("o/a", { title: "T", body: "no marker", labels: [] })).rejects.toThrow(/502/);
     expect(gh.issues).toHaveLength(0);
   });
+
+  it("REST: the create-retry re-checks the Journeeze marker before retrying", async () => {
+    const gh = new FakeGitHub();
+    gh.failCreates = ["persist-then-502"];
+    const filer = new GitHubIssueFiler({ store: withToken, exec: async () => ({ code: -1, stdout: "", stderr: "ENOENT" }), fetch: gh.fetch, retry: clock().retry });
+    const body = `the draft\n\n<!-- journeeze-fingerprint:abcdef0123456789 -->`;
+    const ref = await filer.create("o/a", { title: "T", body, labels: [] });
+    expect(ref).toEqual({ number: 1, url: "https://github.com/o/a/issues/1" });
+  });
 });

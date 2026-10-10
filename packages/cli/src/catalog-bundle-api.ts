@@ -4,8 +4,9 @@ import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/
 import { basename, dirname, join, resolve } from "node:path";
 import { CatalogInputError, CatalogLoader, PERSONAS_FILE } from "./catalog.js";
 import { buildCatalogBundle, BUNDLE_KIND, looksPersonal, type CatalogBundleFinding, type CheckRecordInput } from "./catalog-bundle.js";
-import { collectBundleFindings } from "./catalog-bundle-findings.js";
+import { collectBundleFindings, locatorFindings } from "./catalog-bundle-findings.js";
 import { execGitReadOnly, type GitExec } from "./change-context.js";
+import { testIdAttributesOrDefault } from "./locator-health-api.js";
 import { readCliVersion } from "./version.js";
 
 /**
@@ -198,13 +199,15 @@ export async function exportCatalogBundle(req: ExportCatalogBundleRequest, deps:
   }
 
   const found = deps.findings === undefined ? await collectBundleFindings({ root, dataDir: req.catalogDir }) : { findings: await deps.findings(), warnings: [] };
+  const locators = locatorFindings(catalog.journeys.filter((j) => j.promoted), testIdAttributesOrDefault(req.catalogDir));
+  const collected = new Set(found.findings.map((f) => f.fingerprint));
   const { bundle, warnings: buildWarnings } = buildCatalogBundle({
     producer: { version: (deps.version ?? readCliVersion)(), ...(head === null || head === "" ? {} : { commit: head }) },
     productName: await productNameOf(req, root),
     catalog,
     personaFields,
     checks,
-    findings: found.findings,
+    findings: [...found.findings, ...locators.findings.filter((f) => !collected.has(f.fingerprint))],
   });
 
   const text = `${JSON.stringify(bundle, null, 2)}\n`;
@@ -233,7 +236,7 @@ export async function exportCatalogBundle(req: ExportCatalogBundleRequest, deps:
       findings: bundle.findings.length,
       media: 0,
     },
-    warnings: [...warnings, ...found.warnings, ...buildWarnings],
+    warnings: [...warnings, ...found.warnings, ...locators.warnings, ...buildWarnings],
   };
 }
 

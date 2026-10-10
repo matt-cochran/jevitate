@@ -292,6 +292,38 @@ describe("what jevitate never exports", () => {
     expect(err).toBeInstanceOf(CatalogBundleInputError);
   });
 
+  const locatorFinding: CatalogBundleFinding = {
+    fingerprint: "19a32c2bd2f73f51",
+    kind: "ux",
+    claim: "other",
+    producerClaim: "locator-brittle",
+    severity: "minor",
+    at: "2026-10-09T14:00:00.000Z",
+    route: "/contacts/new",
+    observation: 'the "Save" button on /contacts/new is found by a brittle locator (no test id)',
+    recommendation: 'add data-testid="save-contact" to the "Save" button on /contacts/new',
+    locator: { element: 'the "Save" button', attribute: "data-testid", testId: "save-contact", fix: 'add data-testid="save-contact" to the "Save" button on /contacts/new', steps: 1 },
+  };
+
+  it("refuses a locator object on a non-locator finding", async () => {
+    const err = await refusal(() => {}, [{ ...locatorFinding, kind: "defect", claim: undefined, producerClaim: undefined }]);
+    expect(err).toBeInstanceOf(CatalogBundleInputError);
+  });
+
+  it("keeps the locator object of a locator finding", async () => {
+    expect((await sampleBundle(() => {}, [locatorFinding])).findings[0]?.locator).toEqual(locatorFinding.locator);
+  });
+
+  it("refuses a directly-supplied locator finding whose element carries personal data", async () => {
+    const err = await refusal(() => {}, [{ ...locatorFinding, locator: { ...locatorFinding.locator!, element: 'the "ana@example.com" button' } }]);
+    expect(err).toBeInstanceOf(CatalogBundleInputError);
+  });
+
+  it("a promoted Journey with a brittle Save button step yields one locator finding", async () => {
+    const b = await sampleBundle((root) => editJson(journeyFile(root), (j) => (j.recording.pages[0].steps[1].step.target = { role: "button", name: "Save" })));
+    expect(b.findings.map((f) => f.producerClaim)).toEqual(["locator-brittle"]);
+  });
+
   const variants: ReadonlyArray<readonly [string, (root: string) => void, readonly CatalogBundleFinding[]?]> = [
     ["a degraded persona", (root) => editJson(join(root, ".jevitate", "personas.json"), (ps) => (ps[0].description = "two\nlines"))],
     ["an omitted Journey", (root) => editJson(journeyFile(root), (j) => (j.metadata.anchors[0].name = "job_start"))],
@@ -337,5 +369,46 @@ describe("check outcomes", () => {
   ])("a %s item ending %s carries the contract's exit code for its outcome", (kind, outcome) => {
     const c = one({ kind, outcome });
     expect(c.exitCode).toBe(CONTRACT_EXIT[c.outcome]);
+  });
+});
+
+// ── #479 check.appVersion (spec minor 1 §2) ─────────────────────────────────────────────────
+
+describe("#479 check.appVersion in the bundle", () => {
+  const EMPTY: Catalog = { dir: null, personasFile: null, jobsFile: null, personas: [], jobs: [], journeys: [] };
+  const build = (appVersion: unknown) =>
+    buildCatalogBundle({
+      producer: { version: "0.10.0" },
+      productName: "sample",
+      catalog: EMPTY,
+      personaFields: new Map(),
+      checks: [
+        {
+          source: "check.json",
+          record: {
+            kind: "jevitate-check",
+            targetBuild: HEAD,
+            appVersion,
+            startedAt: "2026-10-09T12:30:00.000Z",
+            items: [{ name: "t", kind: "journey", status: "ran", outcome: "ok", durationMs: 1 }],
+          },
+        },
+      ],
+    });
+
+  it("a check record with a valid appVersion exports it on the check", () => {
+    expect(build("1.4.0").bundle.checks[0]).toMatchObject({ appVersion: "1.4.0" });
+  });
+
+  it("a check record with an invalid appVersion leaves the field out", () => {
+    expect(build("has space").bundle.checks[0]).not.toHaveProperty("appVersion");
+  });
+
+  it("an invalid appVersion still exports the check", () => {
+    expect(build("has space").bundle.checks).toHaveLength(1);
+  });
+
+  it("an invalid appVersion is reported as a warning", () => {
+    expect(build("has space").warnings).toContainEqual(expect.stringMatching(/appVersion/));
   });
 });
