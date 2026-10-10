@@ -13,7 +13,10 @@ something the app didn't do.
 - Demos and Journey replays run against a named environment from the committed
   `.jevitate/environments.json` (`jevitate init` writes an example with a `local` entry). Each
   entry has `baseUrl` (an origin), an optional `allow` list, `fixtures` and `hooks`. Mark a live
-  site with `"production": true`. `demo` refuses one (`E_DEMO_PRODUCTION_ENV`, exit 64).
+  site with `"production": true`. `demo` refuses one (`E_DEMO_PRODUCTION_ENV`, exit 64). Mark a
+  seeded, synthetic tenant with `"synthetic": true`: only a demo approved there ships masked media
+  (jz-mask-v1) to Journeeze with `catalog export` / `publish journeeze`. Set it only when the human
+  says the environment holds no real customer data.
 - The file never holds a secret or a session. Sessions and secret fields live in
   `~/.jevitate/targets.json`, keyed by the environment's origin, with `personas` for named
   sessions. Never write a session or password into the repo.

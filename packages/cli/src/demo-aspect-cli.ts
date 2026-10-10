@@ -327,6 +327,11 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
         out?.(`approved: journey '${id}' promoted\n`);
         if (result.final?.video !== undefined) out?.(`video: ${result.final.video}\nsubtitles: ${result.final.subtitles ?? ""}\n`);
         if (result.final?.guide !== undefined) out?.(`guide: ${result.final.guide}\n`);
+        // #471: whether this demo's media goes to Journeeze with the catalog bundle.
+        if (result.journeeze !== undefined) {
+          const j = result.journeeze;
+          out?.(j.media ? `journeeze media (jz-mask-v1, synthetic): ${j.record ?? ""}\n${(j.leftOut ?? []).map((l) => `  left out: ${l}\n`).join("")}` : `journeeze media: none — ${j.reason ?? ""}\n`);
+        }
       } catch (err) {
         const refusal = approvalRefusal(err);
         if (refusal !== null) {

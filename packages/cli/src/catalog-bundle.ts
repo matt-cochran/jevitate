@@ -21,9 +21,15 @@ import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } fr
  *  - checks: one per check item that ran, keyed (target.id, commit, runId); a baseline only from a
  *    clean run whose `journeyHash` is the exported Journey's approved hash.
  *  - findings: whatever the d464c source hands in (`CatalogBundleFinding`), guarded; none by default.
- *  - demos and media: NONE in 0.10 — a demo must carry the jz-mask-v1 + synthetic-data attestation,
- *    which jevitate cannot make yet, and the contract says a producer that cannot meet it exports no
- *    media. So no `demos`, no `files`.
+ *  - demos and media (#471): one `demos[]` entry per exported, APPROVED Journey that has an
+ *    approved-demo record (approved-demo.ts: written by `demo approve` only on a `synthetic: true`
+ *    environment, from a jz-mask-v1 render), whose `renderedFrom` is the Journey's current approved
+ *    hash. Its `privacy` is the record's attestation. Media is only what the record proved masked
+ *    and the API re-verified (present, same sha256, the right file type): `media/<id>/step-NN.png`,
+ *    `media/<id>/demo.webm` and `demo.vtt` (subtitles only with the video), each listed in `files[]`.
+ *    Over a §10 limit (2 MiB / 50 MiB / 256 KiB per file, 512 MiB and 4,000 files per bundle), a
+ *    file is left out with a warning, never sent. A demo whose caption breaks §7's text rules is
+ *    left out whole (its subtitles carry the same text). A draft demo has no record: never exported.
  *  - `generatedAt` is left out on purpose: the same catalog gives the same bytes, so the upload's
  *    `Idempotency-Key` (sha256 of bundle.json) dedupes a re-publish.
  *
@@ -158,6 +164,45 @@ export interface CatalogBundleFinding {
   readonly citation?: { readonly source: string; readonly ref: string };
 }
 
+/** #471: one guide step of a demo (contract §4.2). */
+export interface BundleDemoStep {
+  readonly number: number;
+  readonly caption: string;
+  readonly expected?: string;
+  /** `media/<journey>/step-NN.png`. */
+  readonly screenshot?: string;
+}
+
+/** #471: the jz-mask-v1 + synthetic-data attestation every demo carries (contract §7). */
+export interface BundlePrivacy {
+  readonly mask: "jz-mask-v1";
+  readonly data: "synthetic";
+  readonly method: "dom-before-capture" | "pixels-after-capture";
+  readonly regions: number;
+}
+
+/** #471: one approved demo's media manifest (contract §4.2). */
+export interface BundleDemo {
+  readonly journey: string;
+  readonly renderedFrom: string;
+  readonly status: "approved";
+  readonly title?: string;
+  readonly steps: readonly BundleDemoStep[];
+  readonly video?: string;
+  readonly subtitles?: string;
+  readonly privacy: BundlePrivacy;
+}
+
+export type BundleFileType = "image/png" | "image/webp" | "video/webm" | "text/vtt";
+
+/** #471: one media file of the bundle (contract §2): listed ⇔ present ⇔ referenced. */
+export interface BundleFile {
+  readonly path: string;
+  readonly sha256: string;
+  readonly bytes: number;
+  readonly type: BundleFileType;
+}
+
 export interface CatalogBundleV1 {
   readonly kind: typeof BUNDLE_KIND;
   readonly version: typeof BUNDLE_VERSION;
@@ -169,8 +214,33 @@ export interface CatalogBundleV1 {
     readonly jobs: readonly BundleJob[];
     readonly journeys: readonly BundleJourneyEntry[];
   };
+  /** #471: present (with `files`) only when at least one approved demo is exported. */
+  readonly demos?: readonly BundleDemo[];
   readonly checks: readonly BundleCheck[];
   readonly findings: readonly CatalogBundleFinding[];
+  readonly files?: readonly BundleFile[];
+}
+
+/**
+ * #471: an approved demo as the API hands it in: the record's manifest, and the media files the API
+ * re-verified on disk (present, sha256 and size as recorded, the right file type), by record name.
+ */
+export interface CatalogBundleDemoInput {
+  readonly journey: string;
+  readonly renderedFrom: string;
+  readonly title?: string;
+  readonly steps: ReadonlyArray<{ readonly number: number; readonly caption: string; readonly expected?: string; readonly screenshot?: string }>;
+  readonly video?: string;
+  readonly subtitles?: string;
+  readonly privacy: BundlePrivacy;
+  /** Verified media by record file name (`step-01.png`, `demo.webm`, `demo.vtt`): `source` is the file on disk. */
+  readonly media: Readonly<Record<string, { readonly source: string; readonly sha256: string; readonly bytes: number }>>;
+}
+
+/** #471: a media file to place in the bundle: `source` on disk → `path` under the bundle root. */
+export interface BundleMediaCopy {
+  readonly path: string;
+  readonly source: string;
 }
 
 // ── Input ────────────────────────────────────────────────────────────────────────────────────
@@ -191,10 +261,14 @@ export interface CatalogBundleInput {
   readonly checks: readonly CheckRecordInput[];
   /** d464c: the machine findings to export (default none). */
   readonly findings?: readonly CatalogBundleFinding[];
+  /** #471: approved demos with their verified media (default none). */
+  readonly demos?: readonly CatalogBundleDemoInput[];
 }
 
 export interface CatalogBundleBuild {
   readonly bundle: CatalogBundleV1;
+  /** #471: the media files to place beside bundle.json (exactly `bundle.files`, with their sources). */
+  readonly media: readonly BundleMediaCopy[];
   /** Items left out or degraded, each with why. */
   readonly warnings: readonly string[];
 }
@@ -239,7 +313,16 @@ const SESSION_KEYS: ReadonlySet<string> = new Set(["storageState", "login"]);
 const PERSONA_NAMED_KEYS: ReadonlySet<string> = new Set(["id", "name", "description", "role", "approval", "storageState", "login"]);
 const MAX_MS = 86_400_000;
 const MAX_STEP = 200;
-const LIMITS = { personas: 200, jobs: 500, journeys: 1000, checks: 5000, findings: 5000 } as const;
+const LIMITS = { personas: 200, jobs: 500, journeys: 1000, checks: 5000, findings: 5000, demos: 1000 } as const;
+/** #471: contract §10's media limits. */
+export const MEDIA_LIMITS = {
+  screenshotBytes: 2 * 1024 * 1024,
+  videoBytes: 50 * 1024 * 1024,
+  subtitlesBytes: 256 * 1024,
+  totalBytes: 512 * 1024 * 1024,
+  files: 4000,
+  demoSteps: 200,
+} as const;
 
 /** Looks like personal data (an email, or 9+ digits) — the contract's `noPersonalData`. */
 export function looksPersonal(s: string): boolean {
@@ -644,6 +727,137 @@ function bundleChecks(input: CatalogBundleInput, journeys: readonly ExportedJour
   return [...out.values()].sort((a, b) => a.at.localeCompare(b.at) || a.target.id.localeCompare(b.target.id) || (a.runId ?? "").localeCompare(b.runId ?? ""));
 }
 
+// ── Demos and media (#471) ─────────────────────────────────────────────────────────────────
+
+/** Why a subtitles file's text breaks §7 (a cue line that is not machine text, a DRAFT note), or null. */
+export function subtitlesTextProblem(vtt: string): string | null {
+  const lines = vtt.split(/\r?\n/u);
+  if (lines[0]?.trim() !== "WEBVTT") return "it does not start with WEBVTT";
+  for (const [i, raw] of lines.entries()) {
+    const line = raw.trim();
+    if (i === 0 || line === "" || /^step-[0-9]{1,3}$/u.test(line) || /^[0-9:.]+ --> [0-9:.]+$/u.test(line)) continue;
+    if (/^NOTE\b/u.test(line)) return "it carries a NOTE block";
+    const p = machineTextProblem(line, 600);
+    if (p !== null) return `a cue ${p}`;
+  }
+  return null;
+}
+
+function bundleDemos(input: CatalogBundleInput, journeys: readonly ExportedJourney[], warn: string[]): { demos: BundleDemo[]; files: BundleFile[]; media: BundleMediaCopy[] } {
+  const demos: BundleDemo[] = [];
+  const files: BundleFile[] = [];
+  const media: BundleMediaCopy[] = [];
+  let total = 0;
+  const byId = new Map(journeys.map((j) => [j.cj.id, j]));
+  const sorted = [...(input.demos ?? [])].sort((a, b) => (a.journey < b.journey ? -1 : a.journey > b.journey ? 1 : 0));
+  for (const d of sorted) {
+    const where = `demo ${d.journey}`;
+    const ex = byId.get(d.journey);
+    if (ex === undefined) {
+      warn.push(`${where}: its Journey is not in the bundle (not promoted, or left out) — the demo is left out`);
+      continue;
+    }
+    const approved = ex.cj.approval !== undefined && ex.cj.approval.contentHash === ex.cj.contentHash;
+    if (!approved) {
+      warn.push(`${where}: its Journey changed since it was approved — the demo is left out (approve the Journey and its demo again)`);
+      continue;
+    }
+    if (d.renderedFrom !== ex.cj.contentHash) {
+      warn.push(`${where}: rendered from another version of its Journey (${d.renderedFrom.slice(0, 12)}, approved ${ex.cj.contentHash.slice(0, 12)}) — the demo is left out (run \`jevitate demo approve\` again)`);
+      continue;
+    }
+    if (d.steps.length === 0 || d.steps.length > MEDIA_LIMITS.demoSteps) {
+      warn.push(`${where}: ${d.steps.length} steps (a demo has 1-${MEDIA_LIMITS.demoSteps}) — the demo is left out`);
+      continue;
+    }
+    const captionIssues = d.steps.flatMap((s) => {
+      const p = machineTextProblem(s.caption, 200);
+      return p === null ? [] : [`step ${s.number} caption ${p}`];
+    });
+    if (captionIssues.length > 0) {
+      warn.push(`${where}: ${captionIssues.join("; ")} — the demo is left out (captions are producer text: one line, no personal data, URL or record id)`);
+      continue;
+    }
+    let title: string | undefined;
+    if (d.title !== undefined) {
+      const p = machineTextProblem(d.title, 200);
+      if (p !== null) warn.push(`${where}: title ${p} — sent without a title`);
+      else if (/^DRAFT/u.test(d.title)) warn.push(`${where}: title starts with DRAFT — sent without a title`);
+      else title = d.title;
+    }
+    // Media, each within its per-file and the bundle's limits; a left-out file is never referenced.
+    const dir = `media/${d.journey}`;
+    const take = (name: string | undefined, type: BundleFileType, max: number, what: string): string | undefined => {
+      if (name === undefined) return undefined;
+      const f = d.media[name];
+      if (f === undefined) return undefined; // the API already warned why
+      if (f.bytes > max) {
+        warn.push(`${where}: ${what} ${name} is ${f.bytes} bytes, over the contract's ${max} — left out`);
+        return undefined;
+      }
+      if (files.length + 1 > MEDIA_LIMITS.files || total + f.bytes > MEDIA_LIMITS.totalBytes) {
+        warn.push(`${where}: ${what} ${name} would take the bundle over ${MEDIA_LIMITS.files} files or ${MEDIA_LIMITS.totalBytes} bytes of media — left out`);
+        return undefined;
+      }
+      const path = `${dir}/${name}`;
+      files.push({ path, sha256: f.sha256, bytes: f.bytes, type });
+      media.push({ path, source: f.source });
+      total += f.bytes;
+      return path;
+    };
+    const steps: BundleDemoStep[] = d.steps.map((s) => {
+      let expected: string | undefined;
+      if (s.expected !== undefined) {
+        const p = machineTextProblem(s.expected, 500);
+        if (p !== null) warn.push(`${where}: step ${s.number} expected result ${p} — sent without it`);
+        else expected = s.expected;
+      }
+      const shot = s.screenshot !== undefined && /^step-[0-9]{2,3}\.png$/u.test(s.screenshot) ? take(s.screenshot, "image/png", MEDIA_LIMITS.screenshotBytes, "screenshot") : undefined;
+      return { number: s.number, caption: s.caption, ...(expected === undefined ? {} : { expected }), ...(shot === undefined ? {} : { screenshot: shot }) };
+    });
+    // Subtitles only with their video: reserve both or neither.
+    let video: string | undefined;
+    let subtitles: string | undefined;
+    const v = d.video === undefined ? undefined : d.media[d.video];
+    const t = d.subtitles === undefined ? undefined : d.media[d.subtitles];
+    if (v !== undefined) {
+      if (d.subtitles !== undefined && t === undefined) warn.push(`${where}: its subtitles could not be verified — the video is left out with them`);
+      else if (t !== undefined && t.bytes > MEDIA_LIMITS.subtitlesBytes) warn.push(`${where}: subtitles ${d.subtitles} are ${t.bytes} bytes, over the contract's ${MEDIA_LIMITS.subtitlesBytes} — the video is left out with them`);
+      else {
+        video = take(d.video, "video/webm", MEDIA_LIMITS.videoBytes, "video");
+        if (video !== undefined && t !== undefined) {
+          subtitles = take(d.subtitles, "text/vtt", MEDIA_LIMITS.subtitlesBytes, "subtitles");
+          if (subtitles === undefined) {
+            // Never a video without its captions file: un-take the video.
+            const at = files.findIndex((f) => f.path === video);
+            total -= files[at]!.bytes;
+            files.splice(at, 1);
+            media.splice(media.findIndex((m) => m.path === video), 1);
+            video = undefined;
+          }
+        }
+      }
+    }
+    demos.push({
+      journey: d.journey,
+      renderedFrom: d.renderedFrom,
+      status: "approved",
+      ...(title === undefined ? {} : { title }),
+      steps,
+      ...(video === undefined ? {} : { video }),
+      ...(subtitles === undefined ? {} : { subtitles }),
+      privacy: { mask: d.privacy.mask, data: d.privacy.data, method: d.privacy.method, regions: d.privacy.regions },
+    });
+  }
+  if (demos.length > LIMITS.demos) {
+    warn.push(`${demos.length} demos: only the first ${LIMITS.demos} are exported`);
+    const kept = new Set(demos.slice(0, LIMITS.demos).map((d) => `media/${d.journey}/`));
+    const keep = (p: string): boolean => [...kept].some((k) => p.startsWith(k));
+    return { demos: demos.slice(0, LIMITS.demos), files: files.filter((f) => keep(f.path)), media: media.filter((m) => keep(m.path)) };
+  }
+  return { demos, files, media };
+}
+
 // ── Findings (the d464c hook's guard) ────────────────────────────────────────────────────────
 
 /** Why a finding handed in by the d464c source breaks the contract's privacy rules (§7), or []. */
@@ -705,7 +919,9 @@ export function buildCatalogBundle(input: CatalogBundleInput): CatalogBundleBuil
     checks = checks.slice(-LIMITS.checks);
   }
   const commit = input.producer.commit !== undefined && COMMIT_RE.test(input.producer.commit) ? input.producer.commit : undefined;
+  const shown = bundleDemos(input, journeys, warn);
   return {
+    media: shown.media,
     bundle: {
       kind: BUNDLE_KIND,
       version: BUNDLE_VERSION,
@@ -713,8 +929,10 @@ export function buildCatalogBundle(input: CatalogBundleInput): CatalogBundleBuil
       producer: { tool: "jevitate", version: input.producer.version, ...(commit === undefined ? {} : { commit }) },
       product: { name: input.productName },
       catalog: { personas, jobs, journeys: journeys.map((j) => j.entry) },
+      ...(shown.demos.length === 0 ? {} : { demos: shown.demos }),
       checks,
       findings: [...findings],
+      ...(shown.demos.length === 0 ? {} : { files: shown.files }),
     },
     warnings: warn,
   };

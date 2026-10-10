@@ -238,7 +238,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "export_catalog_bundle",
     description:
-      "`jevitate catalog export --format journeeze-bundle --out <dir> --json` (#464): write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings; no media) as a Journeeze catalog bundle (bundle.json) under out — a directory inside the project (never ~/.jevitate/). " +
+      "`jevitate catalog export --format journeeze-bundle --out <dir> --json` (#464): write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings) and, #471, each approved demo's jz-mask-v1-masked media (media/<id>/…, only for demos approved on a synthetic: true environment) as a Journeeze catalog bundle (bundle.json) under out — a directory inside the project (never ~/.jevitate/). " +
       "check: `jevitate check` records (check.json paths, confined like every read path) to include — default <project>/jevitate-check/check.json when it exists; productName: the bundle's product.name (default the project's package.json name, else its folder name). " +
       "Returns the bundle path, its sha256 digest, counts and warnings. It never uploads (publish_to_journeeze) and never approves anything.",
     command: {
@@ -255,7 +255,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "publish_to_journeeze",
     description:
-      "`jevitate publish journeeze --json` (#464): export the catalog bundle and upload it to the Journeeze product this project is connected to, then wait until it is imported or refused; returns the status, productName, summary, warnings and errors. dryRun: true exports and validates but sends nothing. " +
+      "`jevitate publish journeeze --json` (#464): export the catalog bundle and upload it to the Journeeze product this project is connected to (a ZIP with the masked demo media when there is any, else bundle.json), then wait until it is imported or refused; returns the status, productName, summary, warnings and errors. dryRun: true exports and validates but sends nothing. " +
       "productName: the bundle's product.name — overrides the connected product's name (default: the saved connection's product name, or whoami's when the key comes from JOURNEEZE_UPLOAD_KEY). A dry run verifies the key with whoami and refuses with E_JOURNEEZE_PRODUCT_MISMATCH when its product.name differs from the one this publish names. " +
       "The upload key is resolved by jevitate itself (its secret store, or JOURNEEZE_UPLOAD_KEY in CI): it is never an argument and never in a result. A refusal carries its specific code (E_JOURNEEZE_NOT_CONNECTED, E_JOURNEEZE_KEY_REFUSED, E_JOURNEEZE_FORBIDDEN, E_JOURNEEZE_UNAVAILABLE, …). Connecting a project (entering the key) is a person's act on the CLI (`jevitate connect journeeze`) — there is no MCP tool for it. Publishing never approves anything.",
     command: { path: "publish journeeze", params: { dryRun: b("--dry-run"), productName: s("--product-name") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },

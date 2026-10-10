@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { copyFile, lstat, mkdir, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { CatalogInputError, CatalogLoader, PERSONAS_FILE } from "./catalog.js";
-import { buildCatalogBundle, BUNDLE_KIND, looksPersonal, type CatalogBundleFinding, type CheckRecordInput } from "./catalog-bundle.js";
+import { buildCatalogBundle, BUNDLE_KIND, looksPersonal, subtitlesTextProblem, type CatalogBundleDemoInput, type CatalogBundleFinding, type CheckRecordInput } from "./catalog-bundle.js";
+import { currentDigest, readApprovedDemo } from "./approved-demo.js";
 import { collectBundleFindings, locatorFindings } from "./catalog-bundle-findings.js";
 import { execGitReadOnly, type GitExec } from "./change-context.js";
 import { testIdAttributesOrDefault } from "./locator-health-api.js";
@@ -17,10 +18,16 @@ import { readCliVersion } from "./version.js";
  * pure `buildCatalogBundle` (catalog-bundle.ts — what goes out and what never does is documented
  * there); this module does the I/O around it.
  *
- * It only writes `bundle.json` under `outDir` (atomically: a temp file renamed into place; over MCP
- * `outDir` is a confined path inside the project), refuses an `outDir` holding anything but a
- * previous bundle, never uploads (that is `publish journeeze`) and never approves anything.
- * 0.10 exports no media files (no demos: see catalog-bundle.ts).
+ * It writes `bundle.json` under `outDir` (atomically: a temp file renamed into place; over MCP
+ * `outDir` is a confined path inside the project) and, #471, the approved demos' media under
+ * `outDir/media/<journey id>/` (contract §2), refuses an `outDir` holding anything but a previous
+ * bundle, never uploads (that is `publish journeeze`) and never approves anything.
+ *
+ * #471 media: a Journey's approved-demo record (approved-demo.ts, `<journeys>/.demos/<id>/`) is
+ * read only for a promoted Journey; every file it lists is re-verified here — present, the sha256
+ * and size recorded when it was proven masked, and the right kind of file (PNG / WebM signature,
+ * WebVTT whose every cue is §7 machine text) — or it is left out with a warning. The pure builder
+ * then applies the contract's text rules and limits.
  *
  * Inputs it reads: `<catalogDir>/personas.json` + `jobs.json`, the Journeys dir, and the
  * `jevitate check` records — `req.checkFiles`, else `<project>/jevitate-check/check.json` (the
@@ -64,7 +71,9 @@ export interface ExportCatalogBundleResult {
     readonly journeys: number;
     readonly checks: number;
     readonly findings: number;
-    /** Always 0 in 0.10 (no media exported). */
+    /** #471: approved demos exported (with their verified media). */
+    readonly demos: number;
+    /** #471: media files written beside bundle.json (listed in `files[]`). */
     readonly media: number;
   };
   /** Items left out or degraded, each with why (e.g. an unpromoted Journey, a check without a commit). */
@@ -79,6 +88,8 @@ export class CatalogExportOutError extends CatalogInputError {
 /** The contract's `bundle.json` cap (§10). */
 export const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 export const BUNDLE_FILE = "bundle.json";
+/** #471: the bundle's media folder (contract §2). */
+export const MEDIA_DIR = "media";
 export const DEFAULT_CHECK_FILE = join("jevitate-check", "check.json");
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -157,7 +168,8 @@ async function assertBundleDir(outDir: string): Promise<void> {
   }
   if (!st.isDirectory()) throw new CatalogExportOutError(`--out ${outDir} exists and is not a directory`);
   const entries = await readdir(outDir);
-  const other = entries.filter((e) => e !== BUNDLE_FILE);
+  // A previous bundle's media folder is replaced with the bundle (never without its bundle.json).
+  const other = entries.filter((e) => e !== BUNDLE_FILE && !(e === MEDIA_DIR && entries.includes(BUNDLE_FILE)));
   if (other.length > 0) {
     throw new CatalogExportOutError(`--out ${outDir} holds other content (${other.slice(0, 5).join(", ")}${other.length > 5 ? ", …" : ""}) — export into an empty directory or a previous bundle's`);
   }
@@ -172,6 +184,77 @@ async function assertBundleDir(outDir: string): Promise<void> {
     }
     if (kind !== BUNDLE_KIND) throw new CatalogExportOutError(`--out ${outDir}: ${BUNDLE_FILE} there is not a Journeeze catalog bundle — not overwritten`);
   }
+  if (entries.includes(MEDIA_DIR) && !(await lstat(join(outDir, MEDIA_DIR))).isDirectory()) throw new CatalogExportOutError(`--out ${outDir}: ${MEDIA_DIR} there is not a directory — not overwritten`);
+}
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const WEBM_MAGIC = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
+
+async function head(path: string, n: number): Promise<Buffer> {
+  const fh = await open(path, "r");
+  try {
+    const buf = Buffer.alloc(n);
+    const { bytesRead } = await fh.read(buf, 0, n, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
+}
+
+/**
+ * #471: the approved demos of the catalog's promoted Journeys, with each media file re-verified on
+ * disk (else left out with a warning). A Journey without a record has no exportable demo (a draft,
+ * or one approved on an environment that does not declare synthetic data): nothing is said.
+ */
+async function approvedDemos(journeysDir: string, ids: readonly string[], warnings: string[]): Promise<CatalogBundleDemoInput[]> {
+  const out: CatalogBundleDemoInput[] = [];
+  for (const id of ids) {
+    let found: Awaited<ReturnType<typeof readApprovedDemo>>;
+    try {
+      found = await readApprovedDemo(journeysDir, id);
+    } catch (err) {
+      warnings.push(`demo ${id}: its approved-demo record is unreadable (${err instanceof Error ? err.message : String(err)}) — the demo is left out`);
+      continue;
+    }
+    if (found === null) continue;
+    const { record, dir } = found;
+    const media: Record<string, { source: string; sha256: string; bytes: number }> = {};
+    for (const [name, want] of Object.entries(record.files)) {
+      const source = join(dir, name);
+      const got = await currentDigest(source);
+      if (got === null) {
+        warnings.push(`demo ${id}: ${name} is missing — left out`);
+        continue;
+      }
+      if (got.sha256 !== want.sha256 || got.bytes !== want.bytes) {
+        warnings.push(`demo ${id}: ${name} changed since it was proven masked — left out`);
+        continue;
+      }
+      let kindProblem: string | null = null;
+      if (name.endsWith(".png")) kindProblem = (await head(source, 8)).equals(PNG_MAGIC) ? null : "is not a PNG";
+      else if (name.endsWith(".webm")) kindProblem = (await head(source, 4)).equals(WEBM_MAGIC) ? null : "is not a WebM";
+      else if (name.endsWith(".vtt")) {
+        const p = subtitlesTextProblem(await readFile(source, "utf8"));
+        kindProblem = p === null ? null : `breaks the text rules (${p})`;
+      } else kindProblem = "is not a demo media file";
+      if (kindProblem !== null) {
+        warnings.push(`demo ${id}: ${name} ${kindProblem} — left out`);
+        continue;
+      }
+      media[name] = { source, ...got };
+    }
+    out.push({
+      journey: record.journey,
+      renderedFrom: record.renderedFrom,
+      ...(record.title === undefined ? {} : { title: record.title }),
+      steps: record.steps,
+      ...(record.video === undefined ? {} : { video: record.video }),
+      ...(record.subtitles === undefined ? {} : { subtitles: record.subtitles }),
+      privacy: record.privacy,
+      media,
+    });
+  }
+  return out;
 }
 
 export async function exportCatalogBundle(req: ExportCatalogBundleRequest, deps: ExportCatalogBundleDeps = {}): Promise<ExportCatalogBundleResult> {
@@ -199,21 +282,33 @@ export async function exportCatalogBundle(req: ExportCatalogBundleRequest, deps:
   }
 
   const found = deps.findings === undefined ? await collectBundleFindings({ root, dataDir: req.catalogDir }) : { findings: await deps.findings(), warnings: [] };
+  const demoWarnings: string[] = [];
+  const demos = await approvedDemos(req.journeysDir, catalog.journeys.filter((j) => j.promoted).map((j) => j.id), demoWarnings);
   const locators = locatorFindings(catalog.journeys.filter((j) => j.promoted), testIdAttributesOrDefault(req.catalogDir));
   const collected = new Set(found.findings.map((f) => f.fingerprint));
-  const { bundle, warnings: buildWarnings } = buildCatalogBundle({
+  const { bundle, media, warnings: buildWarnings } = buildCatalogBundle({
     producer: { version: (deps.version ?? readCliVersion)(), ...(head === null || head === "" ? {} : { commit: head }) },
     productName: await productNameOf(req, root),
     catalog,
     personaFields,
     checks,
     findings: [...found.findings, ...locators.findings.filter((f) => !collected.has(f.fingerprint))],
+    demos,
   });
 
   const text = `${JSON.stringify(bundle, null, 2)}\n`;
   const bytes = Buffer.byteLength(text, "utf8");
   if (bytes > MAX_BUNDLE_BYTES) throw new CatalogInputError(`the bundle is ${bytes} bytes; the contract's limit is ${MAX_BUNDLE_BYTES} (16 MiB)`);
   await mkdir(outDir, { recursive: true });
+  // #471: the media first (a fresh folder), then bundle.json — a bundle never names a file it lacks.
+  const mediaDir = join(outDir, MEDIA_DIR);
+  await rm(mediaDir, { recursive: true, force: true });
+  for (const m of media) {
+    const to = join(outDir, ...m.path.split("/"));
+    if (!resolve(to).startsWith(`${mediaDir}${sep}`)) throw new CatalogInputError(`media path ${m.path} leaves the bundle's media folder`);
+    await mkdir(dirname(to), { recursive: true });
+    await copyFile(m.source, to);
+  }
   const bundlePath = join(outDir, BUNDLE_FILE);
   const tmp = join(outDir, `.${BUNDLE_FILE}.${randomBytes(6).toString("hex")}.tmp`);
   try {
@@ -234,14 +329,15 @@ export async function exportCatalogBundle(req: ExportCatalogBundleRequest, deps:
       journeys: bundle.catalog.journeys.length,
       checks: bundle.checks.length,
       findings: bundle.findings.length,
-      media: 0,
+      demos: bundle.demos?.length ?? 0,
+      media: bundle.files?.length ?? 0,
     },
-    warnings: [...warnings, ...found.warnings, ...locators.warnings, ...buildWarnings],
+    warnings: [...warnings, ...found.warnings, ...locators.warnings, ...demoWarnings, ...buildWarnings],
   };
 }
 
 /** The human rendering (no `--json`). */
 export function renderCatalogExport(r: ExportCatalogBundleResult): string {
   const c = r.counts;
-  return `wrote ${r.bundlePath} (${r.digest}): ${c.personas} persona(s), ${c.jobs} job(s), ${c.journeys} Journey(s), ${c.checks} check(s), ${c.findings} finding(s)\n${r.warnings.map((w) => `warning: ${w}\n`).join("")}`;
+  return `wrote ${r.bundlePath} (${r.digest}): ${c.personas} persona(s), ${c.jobs} job(s), ${c.journeys} Journey(s), ${c.demos} demo(s) with ${c.media} media file(s), ${c.checks} check(s), ${c.findings} finding(s)\n${r.warnings.map((w) => `warning: ${w}\n`).join("")}`;
 }

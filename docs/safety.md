@@ -33,6 +33,10 @@ security bug, and how to report one.
 - `jevitate demo` explores and writes, so it needs a named environment (`--env`) and refuses one
   flagged `production: true` in `.jevitate/environments.json`, before anything runs. `demo approve`
   re-checks it.
+- Demo media leaves for Journeeze only from an environment declaring `synthetic: true`, rendered
+  under `jz-mask-v1` (fields, editables, embeds and marked regions painted over, proven per
+  screenshot and per video frame; anything unproven is left out). See
+  [Publishing to Journeeze](catalog.md#publishing-to-journeeze).
 
 **Bounded.**
 
