@@ -180,9 +180,14 @@ describe("locator findings (#470 into the bundle)", () => {
     expect([f.observation, f.recommendation]).toEqual(['the "Save" button on /contacts/new is found by a brittle locator (no test id)', 'add data-testid="save-contact" to the "Save" button on /contacts/new']);
   });
 
-  it("omit the route when the page has none", () => {
+  it("leave out a locator finding whose element names a record id", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "link", name: "Order 48213377" }])], CONVENTION);
+    expect(r.findings).toEqual([]);
+  });
+
+  it("leave out a locator finding whose page has no route", () => {
     const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }], "")], CONVENTION);
-    expect(r.findings[0]).not.toHaveProperty("route");
+    expect(r.findings).toEqual([]);
   });
 
   it("drop a locator finding whose route cannot be templated", () => {

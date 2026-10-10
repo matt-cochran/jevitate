@@ -646,16 +646,6 @@ function bundleChecks(input: CatalogBundleInput, journeys: readonly ExportedJour
 
 // ── Findings (the d464c hook's guard) ────────────────────────────────────────────────────────
 
-/** The contract's `machineText`, without the record-id rule: one line, no personal data and no URL. */
-function locatorTextProblem(s: unknown, max: number): string | null {
-  const p = catalogTextProblem(s);
-  if (p !== null) return p;
-  const t = s as string;
-  if (t.length > max) return `is longer than ${max} characters`;
-  if (URL_RES.some((re) => re.test(t))) return "carries a URL";
-  return null;
-}
-
 /** Why a finding handed in by the d464c source breaks the contract's privacy rules (§7), or []. */
 export function findingIssues(f: CatalogBundleFinding): string[] {
   const out: string[] = [];
@@ -679,7 +669,7 @@ export function findingIssues(f: CatalogBundleFinding): string[] {
     if (!locatorClaim) out.push(`${where}: locator is only for kind ux + claim other + producerClaim locator-brittle`);
     const loc = f.locator;
     const locText = (k: "element" | "fix", max: number): void => {
-      const p = locatorTextProblem(loc[k], max);
+      const p = machineTextProblem(loc[k], max);
       if (p !== null) out.push(`${where}: locator.${k} ${p}`);
     };
     locText("element", 200);

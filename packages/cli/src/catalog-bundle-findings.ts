@@ -244,8 +244,9 @@ export function locatorFindings(journeys: readonly CatalogJourney[], testIdAttri
   const findings: CatalogBundleFinding[] = [];
   for (const s of suggestions) {
     const route = bundleRoute(s.route);
-    if (s.route !== undefined && route === undefined) {
-      warnings.push(`locator ${s.key}: its route is not a route template — left out of the bundle`);
+    if (route === undefined) {
+      // Journeeze requires a route template on every UX finding (catalog bundle v1 §4.4).
+      warnings.push(`locator ${s.key}: ${s.route === undefined ? "its page has no route" : "its route is not a route template"} — left out of the bundle`);
       continue;
     }
     const first = s.occurrences[0];
@@ -273,8 +274,8 @@ export function locatorFindings(journeys: readonly CatalogJourney[], testIdAttri
       at,
       ...(first.journeyId === undefined ? {} : { journey: first.journeyId }),
       ...(step < 1 || step > 200 ? {} : { step }),
-      ...(route === undefined ? {} : { route }),
-      observation: `${s.element} on ${route ?? "an unknown page"} is found by a brittle locator (${s.reasons.join(", ")})`,
+      route,
+      observation: `${s.element} on ${route} is found by a brittle locator (${s.reasons.join(", ")})`,
       recommendation: fix,
       locator: { element: s.element, attribute: s.attribute, testId: s.testId, fix, steps: s.occurrences.length },
     };
