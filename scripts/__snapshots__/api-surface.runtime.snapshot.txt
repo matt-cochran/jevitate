@@ -222,7 +222,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (422 exports)
+# @jevitate/explore (432 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -231,6 +231,7 @@
   ANSWER_VETO_BELOW: const (number)
   API_CREDENTIAL_HEADERS: array
   ActionDeltas: class
+  BLOCKED_FETCH_ERROR: object
   BoundsTracker: class
   BudgetMonitor: class
   CANARY_ATTRIBUTE: const (string)
@@ -251,6 +252,7 @@
   DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: const (number)
   DEFAULT_SECRET_COMMAND_ATTEMPTS: const (number)
   DEFAULT_STALL_MS: const (number)
+  DEFAULT_STEP_RESPONSE_TIMEOUT_MS: const (number)
   DEFAULT_VERIFY_REPLAYS: const (number)
   DEFERRED_EFFECT_MAX_MS: const (number)
   DEGRADED_STEP_MAJORITY: const (number)
@@ -396,6 +398,8 @@
   authorJourney: function
   autoDecidePostdoc: function
   awaitWrites: function
+  blockedCauseOf: function
+  blockedWriteCauses: function
   boundSecretField: function
   boundTypeFixture: function
   boundaryValueCandidates: function
@@ -441,7 +445,9 @@
   describeStatus: function
   describeStatusWithRpc: function
   describeUnreachable: function
+  detectAllowOriginMismatch: function
   detectClipping: function
+  detectColdStart: function
   detectForms: function
   detectOverflow: function
   diffAria: function
@@ -456,6 +462,7 @@
   endpointOf: function
   errorPageReason: function
   evaluateNetworkCheck: function
+  evaluateNetworkCheckAwaiting: function
   evaluateOutcomeChecks: function
   exactLiterals: function
   expandBraces: function
@@ -465,6 +472,7 @@
   failureLine: function
   fieldKind: function
   fieldMatches: function
+  findAllowOriginMismatches: function
   finishDeclaredRun: function
   goalAdmitsAbsence: function
   goalAsksFor: function
@@ -501,6 +509,7 @@
   isExercisable: function
   isInScope: function
   isLoginLikeUrl: function
+  isLoopbackHost: function
   isNavControl: function
   isNavigationInterruption: function
   isNavigationTimeout: function
@@ -645,6 +654,7 @@
   visibleBusyIndicatorContainer: function
   waivableRule: function
   withheldReason: function
+  writeOf: function
 
 # @jevitate/findings (22 exports)
   DIFF_STATUSES: array
@@ -733,7 +743,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (120 exports)
+# @jevitate/journey (127 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -744,6 +754,7 @@
   ANSWER_VALUES: array
   APPROVAL_CHANNELS: array
   AcceptedFindingsSchema: object
+  AnchorEditError: class
   AnnotationDraftMismatchError: class
   AnnotationDraftSchema: object
   AnnotationDraftStepSchema: object
@@ -812,6 +823,8 @@
   SWEEP_MODES: array
   TARGET_OPS: array
   TARGET_UNITS: array
+  addAnchor: function
+  anchorAddCommand: function
   anchorLintIssues: function
   anchorRuleIssues: function
   applyAnnotationDraft: function
@@ -844,14 +857,18 @@
   mutationWait: function
   planJourneyMutations: function
   prefixLandingPath: function
+  removeAnchor: function
   renderJobStory: function
+  resolveAnchorStep: function
   resolveJourneyStep: function
   secretParamNames: function
   secretParamValues: function
   splitBudget: function
   stampAnchorStepIds: function
+  stampUnstampedAnchors: function
   stripStepIds: function
   suggestAnchorName: function
+  suggestAnchors: function
   sweepStops: function
   validateParams: function
 
