@@ -243,6 +243,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       "--browser-executable": OMIT.browserBin,
       "--browser-channel": OMIT.browserBin,
       "--browser-arg": OMIT.browserBin,
+      "--step-response-timeout": OMIT.stepResponseTimeout,
     },
   },
   verify_fix: {

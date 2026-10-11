@@ -122,6 +122,7 @@ export const OMIT = {
     "#437: the scripted-setup escape hatch for a CLI approval is the operator's choice, never a request's: an MCP approval needs no hatch — it is always recorded with provenance channel `mcp` (an agent's approval), which `check --require-approvals` fails unless the operator allows `mcp`",
   anchorEdit: "#487: writing a Journey (journey lint --fix) gets its MCP argument with the d-surface deliverable of 0.11.0, alongside the anchor add/remove tools",
   anchorSuggest: "#487: journey anchors --suggest (advisory anchor proposals) lands with the d-surface deliverable of 0.11.0",
+  stepResponseTimeout: "#486: journey run --step-response-timeout gets its run_journey argument with the d-surface deliverable of 0.11.0",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
