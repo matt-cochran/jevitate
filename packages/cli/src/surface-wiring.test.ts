@@ -164,6 +164,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "#293: a prefix never self-heals: a healed prefix is no branch point — it is a stale Journey (journey-stale)",
     heal: "#293 × #453: a prefix never self-heals, so it has no change context",
   },
+  "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: "#497: the label backfill replays with the standard interpreter; it only observes each step (observer), never changes how one runs" },
   "journey-annotate-api.ts runJourneyProgrammatically": {
     interpreter: OBSERVER_NOT_INTERPRETER,
     policy: "annotate replays with the fail-closed safeRunPolicy() — it documents a Journey, never heals one",

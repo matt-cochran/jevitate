@@ -1283,16 +1283,29 @@ jevitate journey list [options]
 jevitate journey migrate [options]
 ```
 
-#467: one-time repo rewrite — --step-ids mints a stable step id on every recorded step that has none (every Journey and recording in the project) and points anchors at them. Changes every promoted Journey's hash: re-approve them (journey review --stale). Never approves. CLI only
+one-time repo rewrite, CLI only. #467: --step-ids mints a stable step id on every recorded step that has none (every Journey and recording in the project) and points anchors at them. #497: --labels REPLAYS the Journeys (the app must be running; side effects happen) and stores each step's visible label for the review sheet. Both change every promoted Journey's hash: re-approve them (journey review --stale). Never approves
 
 **Options**
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
+| `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
+| `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
+| `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
-| `--dry-run` | report what would change, write nothing |  |  |  |  |
+| `--dry-run` | report what would change, write nothing (with --labels the replay still runs) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
+| `--id <id...>` | #497: with --labels, only these Journeys (default: every local Journey) |  |  |  |  |
+| `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
-| `--step-ids` | mint missing step ids (the only migration today; required) |  |  |  |  |
+| `--labels` | #497: replay the Journeys and store each step's visible label (exclusive with --step-ids; needs the app running) |  |  |  |  |
+| `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
+| `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--param <kv>` | #497: with --labels, a replay param as key=value (repeatable; each Journey gets only the ones it declares) | `{}` |  |  |  |
+| `--step-ids` | mint missing step ids |  |  |  |  |
+| `--storage-state <file>` | #497: with --labels, Playwright storageState JSON to start the replays authenticated; must exist |  |  |  |  |
 
 ### journey promote
 
@@ -1316,6 +1329,7 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 | `--accept-unvetted <reason>` | #433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers |  |  |  |  |
 | `--accept-weak <reason>` | #401: promote a Journey whose assertions cannot prove its outcome, recording the reason |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--full` | #496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person |  |  |  |  |
@@ -1367,6 +1381,7 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--full` | #496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
 | `--markdown` | render the sheet as Markdown |  |  |  |  |

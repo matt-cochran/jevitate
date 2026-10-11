@@ -16,10 +16,13 @@ import type { ChangeScope } from "@jevitate/runtime";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, lintJourneyById, WeakJourneyError, UnknownJourneyError, JourneyRequiresAuthError, StaleReviewError } from "./journey-api.js";
+import { reviewRenderOptions } from "./review-render-options.js";
+import type { JourneyReviewAttention } from "@jevitate/journey";
 import { ReviewSheetError, renderReviewMarkdown, renderReviewText, reviewSheetHash } from "./journey-review.js";
 import { reviewJourneyById } from "./journey-review-api.js";
 import { listStaleJourneys, renderStaleJourneys } from "./journey-stale-api.js";
 import { migrateStepIds, renderMigrateStepIds } from "./journey-migrate-api.js";
+import { migrateLabels, renderMigrateLabels } from "./journey-labels-migrate-api.js";
 import { ReviewSidecarError } from "./journey-review-store.js";
 import { JourneyProposalArgsError } from "./journey-api.js";
 import { JourneyProposalInvalidError, JourneyProposalNotFoundError, JourneyProposalProofError, JourneyProposalStaleError, isProposalId } from "./journey-proposal-store.js";
@@ -82,6 +85,8 @@ function lintFindingLine(finding: JourneyLintFinding): string {
 }
 
 /** Registers `jevitate journey`: `list|find|run|promote|lint|verify|anchors|annotate|demo|publish`. */
+const FULL_FLAG_HELP = "#496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff";
+
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
@@ -418,6 +423,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .description("promote a local Journey (human-approval gate) so it becomes discoverable/runnable; shows its review sheet first and records the approval")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--accept-weak <reason>", "#401: promote a Journey whose assertions cannot prove its outcome, recording the reason")
+    .option("--full", FULL_FLAG_HELP)
     .option("--reviewed-hash <hash>", "#432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since")
     .option("--review-sheet <file>", "#432: the review sheet file you read (journey review --out); its content hash binds the approval like --reviewed-hash")
     .option("--accept-unvetted <reason>", "#433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers")
@@ -433,13 +439,14 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--reason <text>", "#453: why the proposal is rejected (recorded with the rejection)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, real, jevProvider, nonInteractiveApproval, proposal, rejectProposal, reason } = this.opts<{
+      const { dir, json, full, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, real, jevProvider, nonInteractiveApproval, proposal, rejectProposal, reason } = this.opts<{
         proposal?: string;
         rejectProposal?: string;
         reason?: string;
         nonInteractiveApproval?: string;
         dir?: string;
         json?: boolean;
+        full?: boolean;
         acceptWeak?: string;
         reviewedHash?: string;
         reviewSheet?: string;
@@ -510,10 +517,12 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         }
         // #434/#435: the readiness checks and the catalog analysis run before every approval; Jev only with --real.
         const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { real, jevProvider });
+        let attention: readonly JourneyReviewAttention[] | undefined;
         if (!json) {
           // Human mode: the sheet is shown before promoting, and the approval binds to what was shown.
           const { review } = await reviewJourneyById(journeysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: true, jev, action: "journey promote" });
-          program.configureOutput().writeOut?.(`${renderReviewText(review)}\n`);
+          program.configureOutput().writeOut?.(`${renderReviewText(review, reviewRenderOptions({ full: full === true }))}\n`);
+          attention = review.attention;
           reviewedHash ??= proposal === undefined ? review.contentHash : review.proposal?.proposedHash;
         }
         const journeyResult = await promoteJourney(journeysDir, id, {
@@ -525,7 +534,9 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           ...(acceptFindings === undefined ? {} : { acceptFindings }),
           catalogDir: resolveCatalogDir(deps.catalogDir),
           // #437: a typed confirmation on a TTY (or the escape hatch, or the MCP channel), recorded as provenance.
-          confirm: makeApprovalConfirm(deps.approval, nonInteractiveApproval === undefined ? {} : { nonInteractiveReason: nonInteractiveApproval }),
+          confirm: ((confirm) => (request: Parameters<typeof confirm>[0]) => confirm(attention === undefined ? request : { ...request, attention }))(
+            makeApprovalConfirm(deps.approval, nonInteractiveApproval === undefined ? {} : { nonInteractiveReason: nonInteractiveApproval }),
+          ),
         });
         const envelope = ok(journeyResult.metadata);
         if (json) {
@@ -583,6 +594,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     )
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--markdown", "render the sheet as Markdown")
+    .option("--full", FULL_FLAG_HELP)
     .option("--out <file>", "write the sheet (JSON with --json, Markdown with --markdown, else text) to this file")
     .option("--readiness", READINESS_FLAG_HELP)
     .option("--real", REAL_JEV_FLAG_HELP)
@@ -590,15 +602,15 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--stale", "#467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids")
     .option("--json", "emit a JSON envelope (the schema-checked sheet)")
     .action(async function (this: Command, id: string | undefined) {
-      const { dir, json, markdown, out: outFile, readiness, real, jevProvider, stale } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string; stale?: boolean }>();
+      const { dir, json, markdown, full, out: outFile, readiness, real, jevProvider, stale } = this.opts<{ dir?: string; json?: boolean; full?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string; stale?: boolean }>();
       if (json === true && markdown === true) {
         emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--json and --markdown are exclusive: pick one rendering"));
         return;
       }
       if (stale === true) {
         // #467: the stale list — read-only; one sheet's flags do not apply to it.
-        if (id !== undefined || markdown === true || outFile !== undefined || readiness === true || real === true || jevProvider !== undefined) {
-          emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--stale lists every stale Journey: it takes no <id> and none of --markdown/--out/--readiness/--real/--jev-provider"));
+        if (id !== undefined || markdown === true || full === true || outFile !== undefined || readiness === true || real === true || jevProvider !== undefined) {
+          emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--stale lists every stale Journey: it takes no <id> and none of --markdown/--full/--out/--readiness/--real/--jev-provider"));
           return;
         }
         try {
@@ -618,7 +630,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       try {
         const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { real, jevProvider });
         const { review } = await reviewJourneyById(resolveJourneysDir(deps, dir), id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: readiness === true, jev });
-        const rendered = json ? `${JSON.stringify(review, null, 2)}\n` : markdown ? renderReviewMarkdown(review) : renderReviewText(review);
+        const renderOpts = reviewRenderOptions({ full: full === true, toFile: outFile !== undefined });
+        const rendered = json ? `${JSON.stringify(review, null, 2)}\n` : markdown ? renderReviewMarkdown(review, renderOpts) : renderReviewText(review, renderOpts);
         if (outFile !== undefined) await writeFile(outFile, rendered, { mode: 0o600 });
         if (json) {
           emitJson(program, ok(review));
@@ -648,25 +661,93 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     });
 
   // #467b — the one-time step-id backfill: CLI only (a repo rewrite the operator runs and commits; no MCP tool).
-  journey
-    .command("migrate")
+  // #497 — `--labels`: the opt-in label backfill; a real replay of each Journey (the app must be running). CLI only.
+  withEnvironmentFlags(withBrowserLaunchFlags(journey.command("migrate")))
     .description(
-      "#467: one-time repo rewrite — --step-ids mints a stable step id on every recorded step that has none (every Journey and recording in the project) and points anchors at them. Changes every promoted Journey's hash: re-approve them (journey review --stale). Never approves. CLI only",
+      "one-time repo rewrite, CLI only. #467: --step-ids mints a stable step id on every recorded step that has none (every Journey and recording in the project) and points anchors at them. #497: --labels REPLAYS the Journeys (the app must be running; side effects happen) and stores each step's visible label for the review sheet. Both change every promoted Journey's hash: re-approve them (journey review --stale). Never approves",
     )
-    .option("--step-ids", "mint missing step ids (the only migration today; required)")
-    .option("--dry-run", "report what would change, write nothing")
+    .option("--step-ids", "mint missing step ids")
+    .option("--labels", "#497: replay the Journeys and store each step's visible label (exclusive with --step-ids; needs the app running)")
+    .option("--id <id...>", "#497: with --labels, only these Journeys (default: every local Journey)")
+    .option("--param <kv>", "#497: with --labels, a replay param as key=value (repeatable; each Journey gets only the ones it declares)", collectParam, {} as Record<string, string>)
+    .option("--storage-state <file>", "#497: with --labels, Playwright storageState JSON to start the replays authenticated; must exist")
+    .option("--dry-run", "report what would change, write nothing (with --labels the replay still runs)")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { stepIds, dryRun, dir, json } = this.opts<{ stepIds?: boolean; dryRun?: boolean; dir?: string; json?: boolean }>();
-      if (stepIds !== true) {
-        emitJson(program, fail("E_JOURNEY_MIGRATE_ARGS", "name the migration: --step-ids"));
+      const { stepIds, labels, id: ids, param, storageState: storageStateFlag, dryRun, dir, json } = this.opts<{
+        stepIds?: boolean;
+        labels?: boolean;
+        id?: string[];
+        param: Record<string, string>;
+        storageState?: string;
+        dryRun?: boolean;
+        dir?: string;
+        json?: boolean;
+      }>();
+      if (labels === true && stepIds === true) {
+        emitJson(program, fail("E_JOURNEY_MIGRATE_ARGS", "--labels and --step-ids are exclusive: run one migration at a time"));
+        return;
+      }
+      if (stepIds !== true && labels !== true) {
+        emitJson(program, fail("E_JOURNEY_MIGRATE_ARGS", "name the migration: --step-ids or --labels"));
+        return;
+      }
+      if (labels !== true) {
+        const labelOnly = [ids !== undefined ? "--id" : "", Object.keys(param).length > 0 ? "--param" : "", storageStateFlag !== undefined ? "--storage-state" : "", this.opts<EnvironmentFlags>().env !== undefined ? "--env" : "", this.opts<EnvironmentFlags>().baseUrl !== undefined ? "--base-url" : ""].filter((f) => f !== "");
+        if (labelOnly.length > 0) {
+          emitJson(program, fail("E_JOURNEY_MIGRATE_ARGS", `${labelOnly.join(", ")} only apply to --labels (the replay); --step-ids does not run the app`));
+          return;
+        }
+        try {
+          const result = await migrateStepIds({ journeysDir: resolveJourneysDir(deps, dir), projectDir: resolveCatalogDir(deps.catalogDir), dryRun: dryRun === true });
+          if (json) emitJson(program, ok(result));
+          else program.configureOutput().writeOut?.(renderMigrateStepIds(result));
+          process.exitCode = 0;
+        } catch (err) {
+          emitJson(program, fail("E_JOURNEY_MIGRATE", String(err instanceof Error ? err.message : err)));
+        }
+        return;
+      }
+      const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
+      let environment: ResolvedJourneyEnvironment | undefined;
+      try {
+        environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+      } catch (err) {
+        if (!isEnvironmentError(err)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      const storageState = storageStateFlag ?? environment?.storageState;
+      if (storageState !== undefined && !existsSync(storageState)) {
+        emitJson(program, fail("E_JOURNEY_MIGRATE_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_MIGRATE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       try {
-        const result = await migrateStepIds({ journeysDir: resolveJourneysDir(deps, dir), projectDir: resolveCatalogDir(deps.catalogDir), dryRun: dryRun === true });
+        const result = await withSiteGate(resolveDbPath(deps), (siteGate) =>
+          migrateLabels({
+            journeysDir: resolveJourneysDir(deps, dir),
+            ...(ids === undefined ? {} : { ids }),
+            dryRun: dryRun === true,
+            params: param,
+            run: {
+              ...(siteGate === undefined ? {} : { siteGate }),
+              ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
+              ...(browser === undefined ? {} : { browser }),
+              ...(storageState === undefined ? {} : { storageState }),
+              ...(environment === undefined ? {} : { environment }),
+            },
+          }),
+        );
         if (json) emitJson(program, ok(result));
-        else program.configureOutput().writeOut?.(renderMigrateStepIds(result));
+        else program.configureOutput().writeOut?.(renderMigrateLabels(result));
         process.exitCode = 0;
       } catch (err) {
         emitJson(program, fail("E_JOURNEY_MIGRATE", String(err instanceof Error ? err.message : err)));

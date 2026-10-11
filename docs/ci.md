@@ -348,7 +348,7 @@ boolean, and a number is a JSON number.
 | Multi-actor (#147) | `actor` (`<name>=<storageState>`; the first is the primary) | goals |
 | Fixtures (#144) | `fixtures`, `before`, `after`, `allowShellHooks`, `hookTimeoutMs` | goals (the target's `fixtures` also wraps Journeys) |
 | Secrets | `secretFields`, `totp` (`<descriptor>=env:<VAR>`), `secret` (`env:<VAR>`) | goals and usability (`secret`: also adversarial) |
-| Upload | `fixture` (the file the upload op attaches) | goals and usability |
+| Upload | `fixture` (the file the upload op attaches; it must lie inside the project root, #498) | goals and usability |
 | Success checks (#202) | `allowVacuousChecks` (a check satisfied before the run's first action is a warning, not a failure — see [success checks](success-checks.md)) | goals |
 | Minimum effort (#424) | `minActions`, `minDistinctStates` (the model's report / blocked / answerless done is deferred until they are met; capped by the budget — see [find-out goals](success-checks.md#open-ended-find-outs-minimum-effort-depth-and-partial-reports)) | goals |
 | Conversation | `replyWaitMs`, `replyCeilingMs`, `replyMaxChars`, `jobWaitMs` | goals and usability |

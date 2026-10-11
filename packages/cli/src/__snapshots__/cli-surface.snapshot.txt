@@ -724,12 +724,25 @@
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey migrate
-  description: #467: one-time repo rewrite — --step-ids mints a stable step id on every recorded step that has none (every Journey and recording in the project) and points anchors at them. Changes every promoted Journey's hash: re-approve them (journey review --stale). Never approves. CLI only
+  description: one-time repo rewrite, CLI only. #467: --step-ids mints a stable step id on every recorded step that has none (every Journey and recording in the project) and points anchors at them. #497: --labels REPLAYS the Journeys (the app must be running; side effects happen) and stores each step's visible label for the review sheet. Both change every promoted Journey's hash: re-approve them (journey review --stale). Never approves
   options:
+    - flags=--base-url <origin> required=true mandatory=false negate=false variadic=false default=null description=run against this origin (an ad-hoc environment; with --env, replaces its baseUrl)
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
-    - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=report what would change, write nothing
+    - flags=--dry-run required=false mandatory=false negate=false variadic=false default=null description=report what would change, write nothing (with --labels the replay still runs)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
+    - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
+    - flags=--id <id...> required=true mandatory=false negate=false variadic=true default=null description=#497: with --labels, only these Journeys (default: every local Journey)
+    - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
-    - flags=--step-ids required=false mandatory=false negate=false variadic=false default=null description=mint missing step ids (the only migration today; required)
+    - flags=--labels required=false mandatory=false negate=false variadic=false default=null description=#497: replay the Journeys and store each step's visible label (exclusive with --step-ids; needs the app running)
+    - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
+    - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
+    - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=#497: with --labels, a replay param as key=value (repeatable; each Journey gets only the ones it declares)
+    - flags=--step-ids required=false mandatory=false negate=false variadic=false default=null description=mint missing step ids
+    - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=#497: with --labels, Playwright storageState JSON to start the replays authenticated; must exist
 
 # journey promote
   description: promote a local Journey (human-approval gate) so it becomes discoverable/runnable; shows its review sheet first and records the approval
@@ -740,6 +753,7 @@
     - flags=--accept-unvetted <reason> required=true mandatory=false negate=false variadic=false default=null description=#433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers
     - flags=--accept-weak <reason> required=true mandatory=false negate=false variadic=false default=null description=#401: promote a Journey whose assertions cannot prove its outcome, recording the reason
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--full required=false mandatory=false negate=false variadic=false default=null description=#496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff
     - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--non-interactive-approval <reason> required=true mandatory=false negate=false variadic=false default=null description=#437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person
@@ -767,6 +781,7 @@
     - name=id required=false variadic=false default=null
   options:
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--full required=false mandatory=false negate=false variadic=false default=null description=#496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff
     - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked sheet)
     - flags=--markdown required=false mandatory=false negate=false variadic=false default=null description=render the sheet as Markdown
