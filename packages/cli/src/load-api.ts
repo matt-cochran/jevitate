@@ -8,7 +8,7 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner } from "@jevitate/runtime";
 import { runLoadTest, type CapacityReport, type LoadActorRunner } from "@jevitate/load";
-import { JourneyRequiresAuthError } from "./journey-api.js";
+import { JourneyRequiresAuthError, journeyFixtureBaseDir } from "./journey-api.js";
 import { JourneyOutcomeChecks } from "./journey-network-checks.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
 
@@ -96,6 +96,8 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
 
   const policy = opts.policy ?? safeRunPolicy();
   const browserPortFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  // #488: a relative `upload` fixture resolves against the project root, never the process cwd.
+  const fixtureBaseDir = journeyFixtureBaseDir();
 
   return runLoadTest({
     targetOrigin: journey.recording.site,
@@ -121,7 +123,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       // each step's `expectRequests` are judged, so a replay whose checks fail is not an ok run.
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey, { secrets: secretParamValues(journey, opts.params) });
       const observer = outcomeChecks.observer();
-      const interpreter = observer === undefined ? new RecordingInterpreter() : new RecordingInterpreter({ observer });
+      const interpreter = observer === undefined ? new RecordingInterpreter({ fixtureBaseDir }) : new RecordingInterpreter({ observer, fixtureBaseDir });
       const runner = new JourneyRunner(actor, interpreter);
 
       // `runLoadTest` calls `run()` exactly `iterationsPerActor` times for

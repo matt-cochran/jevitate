@@ -7,6 +7,7 @@ import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { RecordingSchema, type Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
+import { journeyFixtureBaseDir } from "./journey-api.js";
 import {
   reproduceFailure,
   reproduceFailureAt,
@@ -332,7 +333,7 @@ async function replayAndCheckNetwork(makeActor: () => Promise<Actor>, recording:
   await monitor.instrument().catch(() => undefined);
   const capture = monitor.startCapture();
   try {
-    await new RecordingInterpreter().run(actor, recording);
+    await new RecordingInterpreter({ fixtureBaseDir: journeyFixtureBaseDir() }).run(actor, recording);
   } catch {
     // A replay that throws (browser/automation error) still leaves whatever the app sent captured;
     // the network check is evaluated over that, same as a replay that merely fails a later step.
