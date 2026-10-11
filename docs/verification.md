@@ -128,8 +128,8 @@ A finding replays under the allow list stored with its result. To prove a fix to
 (e.g. the app's backend moved from `localhost` to `127.0.0.1`), pass `--allow <origin...>` or
 `--env <name>` (that environment's current `baseUrl` + `allow`) — explicit only, never both. The
 report then carries `allowlistOverride` (`source`, `origins`, `recorded`, `added`, `removed`). Over
-MCP these are `verify_fix`'s `allow` / `env` arguments, with the same refusal and the same
-`allowlistOverride` in the result; `ledger verify` and `check` suites always replay the stored list.
+MCP only `env` is accepted (`verify_fix`'s `env` argument, the same `allowlistOverride` in the
+result): an MCP caller never names origins, so `--allow` is CLI-only; `ledger verify` and `check` suites always replay the stored list.
 
 ## Replay finds the recorded element exactly
 

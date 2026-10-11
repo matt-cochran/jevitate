@@ -583,11 +583,10 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const governance = governanceArgs(args);
     const actionDeltas = optBool(args, "actionDeltas");
     // #484: replaying under another allow list widens what the replay may reach — explicit only (never
-    // defaulted), one source (as `verify-fix --allow`/`--env`), and the report carries allowlistOverride.
-    const allow = optStringArray(args, "allow");
+    // defaulted), and the report carries allowlistOverride. An MCP caller never names origins: only
+    // `env` (an operator-configured environment) can override the stored list; `--allow` is CLI-only.
+    if (args["allow"] !== undefined) throw new McpArgError("'allow' is not an MCP argument: a replay reaches only operator-configured origins — pass 'env' (an environment in environments.json), or run `jevitate verify-fix --allow` yourself");
     const env = optString(args, "env");
-    if (allow !== undefined && allow.length === 0) throw new McpArgError("'allow' names no origin to replay against (omit it to replay under the stored allow list)");
-    if (allow !== undefined && env !== undefined) throw new McpArgError("pass 'allow' or 'env' to override the stored allow list, not both");
     try {
       const browser = browserRunFromFlags({ browserArg: [], ...governance, ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
       const screenshots = parseScreenshotsArg(shots);
@@ -604,7 +603,6 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         ...(screenshots === undefined ? {} : { screenshots }),
         ...(emulation === undefined ? {} : { emulation }),
         ...(actionDeltas === true ? { actionDeltas: true } : {}),
-        ...(allow === undefined ? {} : { allow }),
         ...(env === undefined ? {} : { env, ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }) }),
       };
     } catch (err) {
@@ -829,7 +827,6 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           maxBrowsers: { type: "integer", minimum: 1 },
           maxBrowserMemory: { type: "integer", minimum: 1 },
           tags: { type: "object", additionalProperties: { type: "string" } },
-          allow: { type: "array", items: { type: "string" }, minItems: 1 },
           env: { type: "string" },
         },
         required: ["id", "fingerprint"],

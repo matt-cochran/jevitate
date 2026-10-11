@@ -13,7 +13,7 @@ import { CLI_TOOL_SPECS, buildCliArgv } from "./mcp-cli-tools.js";
 /**
  * 0.11.0 — the MCP side of the 0.11 CLI capabilities (MCP/CLI parity):
  * #487 journey_anchor_add / journey_anchor_remove, lint_journey fix, journey_anchors suggest;
- * #486 run_journey stepResponseTimeoutMs; #484 verify_fix allow/env; #485 run_campaign skipPreflight.
+ * #486 run_journey stepResponseTimeoutMs; #484 verify_fix env; #485 run_campaign skipPreflight.
  */
 
 const CLICK: Step = { kind: "click", target: { testId: "go" }, expect: { kind: "textIncludes", target: { testId: "ok" }, text: "OK" } };
@@ -121,7 +121,7 @@ describe("#486 run_journey stepResponseTimeoutMs", () => {
   });
 });
 
-describe("#484 verify_fix allow/env", () => {
+describe("#484 verify_fix env (allow is CLI-only)", () => {
   const RESULT = "explore-2026-09-24T00-00-02-000Z";
   const FP = "1ad9521b771f3bd4";
   const verifyWith = async (args: Record<string, unknown>, report: Record<string, unknown> = {}): Promise<{ seen: McpVerifyFixArgs | undefined; isError: boolean; body: Record<string, unknown> }> => {
@@ -139,28 +139,20 @@ describe("#484 verify_fix allow/env", () => {
     return { seen, isError: r.isError === true, body: JSON.parse(r.content[0]!.text) as Record<string, unknown> };
   };
 
-  it("threads an explicit allow list to the replay", async () => {
-    expect((await verifyWith({ allow: ["http://127.0.0.1:3000"] })).seen?.allow).toEqual(["http://127.0.0.1:3000"]);
+  it("refuses an allow list: an MCP caller never names origins", async () => {
+    expect(await verifyWith({ allow: ["http://127.0.0.1:3000"] })).toMatchObject({ isError: true, body: { error: "invalid_args" } });
   });
 
   it("threads env with the server's environments file", async () => {
     expect((await verifyWith({ env: "staging" })).seen).toMatchObject({ env: "staging", environmentsFile: join(dir, "environments.json") });
   });
 
-  it("never overrides the allow list when neither is given", async () => {
-    expect((await verifyWith({})).seen).not.toHaveProperty("allow");
-  });
-
-  it("refuses allow and env together", async () => {
-    expect(await verifyWith({ allow: ["http://127.0.0.1:3000"], env: "staging" })).toMatchObject({ isError: true, body: { error: "invalid_args" } });
-  });
-
-  it("refuses an empty allow list", async () => {
-    expect((await verifyWith({ allow: [] })).isError).toBe(true);
+  it("never overrides the allow list when env is not given", async () => {
+    expect((await verifyWith({})).seen).not.toHaveProperty("env");
   });
 
   it("returns the report's allowlistOverride", async () => {
-    const override = { source: "--allow", origins: ["http://127.0.0.1:3000"], recorded: ["http://localhost:3000"], added: ["http://127.0.0.1:3000"], removed: ["http://localhost:3000"] };
-    expect((await verifyWith({ allow: ["http://127.0.0.1:3000"] }, { allowlistOverride: override })).body.allowlistOverride).toEqual(override);
+    const override = { source: "--env staging", origins: ["http://127.0.0.1:3000"], recorded: ["http://localhost:3000"], added: ["http://127.0.0.1:3000"], removed: ["http://localhost:3000"] };
+    expect((await verifyWith({ env: "staging" }, { allowlistOverride: override })).body.allowlistOverride).toEqual(override);
   });
 });
