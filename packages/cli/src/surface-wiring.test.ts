@@ -70,8 +70,9 @@ const NO_ANCHORED_HERE = "#293: a journey-anchored mission is an `explore --from
 /** `<file> <api>` → option → why that surface does not pass it. */
 /** #488: a testing seam — every Journey run defaults it to the project root (journeyFixtureBaseDir). */
 const FIXTURE_BASE_DIR = "#488: testing seam; defaults to the project root (the folder holding .jevitate/)";
-/** #486: the in-flight response bound defaults to 15 s; its per-surface flag/argument lands with the d-surface step. */
-const STEP_RESPONSE_DEFAULT = "#486: defaults to the 15 s in-flight bound (or the step's responseTimeoutMs); surface flags land with d-surface";
+/** #486: the in-flight response bound is a per-run override of `journey run` / MCP run_journey only. */
+const STEP_RESPONSE_DEFAULT =
+  "#486: the 15 s in-flight bound (or each step's own responseTimeoutMs) applies; the per-run override is `journey run --step-response-timeout` / run_journey stepResponseTimeoutMs — this surface has no such flag (a cold-start-prone step declares responseTimeoutMs itself)";
 /** #484: replaying under another allow list is an explicit, per-finding `verify-fix --allow/--env` decision. */
 const STORED_ALLOWLIST = { allow: "#484: replays with the result's stored allow list; overriding it is an explicit verify-fix --allow/--env", env: "#484: replays with the result's stored allow list; overriding it is an explicit verify-fix --allow/--env", environmentsFile: "#484: only read for an explicit verify-fix --env" };
 
@@ -142,9 +143,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     hangReplayWrites: MCP_NARROW,
     secrets: MCP_NARROW,
     journeyPrefix: BRANCH_RECORDED,
-    allow: "#484: the MCP verify_fix allow/env args land with the d-surface step",
-    env: "#484: the MCP verify_fix allow/env args land with the d-surface step",
-    environmentsFile: "#484: only read for an explicit --env (MCP args land with the d-surface step)",
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
@@ -194,7 +192,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
     fixtureBaseDir: FIXTURE_BASE_DIR,
-    stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
     mask: MASK_INTERNAL,
     observer: OBSERVER_INTERNAL,
     account: SITE_ACCOUNT,
