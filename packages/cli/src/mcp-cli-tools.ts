@@ -120,10 +120,6 @@ export const OMIT = {
   reviewRendering: "#432: review_journey returns the schema-checked JSON sheet; the Markdown/text renderings and writing them to a file are for people at the CLI",
   nonInteractiveApproval:
     "#437: the scripted-setup escape hatch for a CLI approval is the operator's choice, never a request's: an MCP approval needs no hatch — it is always recorded with provenance channel `mcp` (an agent's approval), which `check --require-approvals` fails unless the operator allows `mcp`",
-  anchorEdit: "#487: writing a Journey (journey lint --fix) gets its MCP argument with the d-surface deliverable of 0.11.0, alongside the anchor add/remove tools",
-  anchorSuggest: "#487: journey anchors --suggest (advisory anchor proposals) lands with the d-surface deliverable of 0.11.0",
-  stepResponseTimeout: "#486: journey run --step-response-timeout gets its run_journey argument with the d-surface deliverable of 0.11.0",
-  skipPreflight: "#485: campaign run --skip-preflight gets its run_campaign argument with the d-surface deliverable of 0.11.0",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
@@ -280,14 +276,33 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "lint_journey",
     description:
-      "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding.",
-    command: { path: "journey lint", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, "--fix": OMIT.anchorEdit, ...JSON_FLAG } },
+      "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding. " +
+      "#487: fix: true stamps the step id of each anchor that references a step by number only and writes the Journey (a draft; a promoted Journey is refused — its approval binds to the content hash), reporting what was stamped.",
+    command: { path: "journey lint", params: { id: pos(), fix: b("--fix") }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "journey_anchors",
     description:
-      "`jevitate journey anchors <id>` (#293): a Journey's named anchors — states worth exploring from, each with the step it follows and its suggested adversarial probes. Branch a mission off one with run_exploration fromJourney + atStep.",
-    command: { path: "journey anchors", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--suggest": OMIT.anchorSuggest, ...JSON_FLAG } },
+      "`jevitate journey anchors <id>` (#293): a Journey's named anchors — states worth exploring from, each with the step it follows and its suggested adversarial probes. Branch a mission off one with run_exploration fromJourney + atStep. " +
+      "#487: suggest: true instead proposes anchors where the recorded flow changes state (a new page, a form that became valid, a completed write) — advisory, writes nothing; accept one with journey_anchor_add.",
+    command: { path: "journey anchors", params: { id: pos(), suggest: b("--suggest") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "journey_anchor_add",
+    description:
+      "`jevitate journey anchor add <journeyId>` (#487): add a named anchor to a DRAFT Journey — step is a 1-based step number or a step id; the step's stable id is written at once. Returns the anchor lint issues that remain. " +
+      "A promoted Journey is refused (E_JOURNEY_ANCHOR_ARGS): its approval binds to the content hash — edit a draft and re-promote, a person re-approves.",
+    command: {
+      path: "journey anchor add",
+      params: { journeyId: pos(), name: s("--name", { required: true }), step: s("--step", { required: true }), description: s("--description"), probe: many("--probe") },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "journey_anchor_remove",
+    description:
+      "`jevitate journey anchor remove <journeyId>` (#487): remove the named anchor from a DRAFT Journey; returns the anchor lint issues that remain. A promoted Journey is refused (E_JOURNEY_ANCHOR_ARGS), as on the CLI.",
+    command: { path: "journey anchor remove", params: { journeyId: pos(), name: s("--name", { required: true }) }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "annotate_journey",
@@ -517,7 +532,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_campaign",
     description:
-      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. Needs real or fakeAi.",
+      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. #485: before any mission it runs a preflight (every start URL reachable, every session signed in, no allow-list origin slip) and refuses with the problems listed; skipPreflight: true runs without it (recorded on the report as preflight.skipped). allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. Needs real or fakeAi.",
     command: {
       path: "campaign run",
       params: {
@@ -534,13 +549,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         recordVideo: { kind: "optional-path", flag: "--record-video" },
         screenshots: { kind: "screenshots", flag: "--screenshots" },
         evidenceVideo: b("--evidence-video"),
+        // #485: like run_exploration authCheck "off" — an explicit opt-out, recorded on the report (preflight.skipped).
+        skipPreflight: b("--skip-preflight"),
         ...JEV_AI,
       },
       omitted: {
         "--journeys-dir": OMIT.storeDir,
         "--allow-shell-hooks": OMIT.hooks,
         "--hook-timeout-ms": OMIT.hooks,
-        "--skip-preflight": OMIT.skipPreflight,
         "--allow-log-cmd": OMIT.logCmd,
         "--log-source": OMIT.logCmd,
         "--log-defect": OMIT.logCmd,

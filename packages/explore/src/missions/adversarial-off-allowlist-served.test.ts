@@ -64,6 +64,22 @@ const UPLOAD_FORM = (): string => `<!doctype html><html><body><h1>Upload</h1>
   </script>
 </body></html>`;
 
+/** #484: a page that reports the (blocked) send in its own words, naming the path — a consequence, not a defect. */
+const NOTIFY_FORM = (): string => `<!doctype html><html><body><h1>Notify</h1>
+  <form id="notify">
+    <label>Message <input name="message" aria-label="Message" value="hello"></label>
+    <button type="submit">Notify</button>
+  </form>
+  <script>
+    document.getElementById("notify").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      await fetch("${other}/collect", { method: "POST", headers: { "content-type": "text/plain" }, body: "x" }).catch(() => {
+        console.error("message never delivered to /collect");
+      });
+    });
+  </script>
+</body></html>`;
+
 beforeAll(async () => {
   elsewhere = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
@@ -82,6 +98,10 @@ beforeAll(async () => {
     const path = (req.url ?? "").split("?")[0] ?? "";
     if (path === "/contact") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(FETCH_FORM());
+      return;
+    }
+    if (path === "/notify") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(NOTIFY_FORM());
       return;
     }
     if (path === "/upload") {
@@ -192,6 +212,16 @@ describe("adversarial: a write jevitate blocked is an environment fault, never a
         hangs: 0,
         causedBy: [`hang:ui-no-progress POST ${other}/upload`],
       });
+    },
+    180_000,
+  );
+
+  it(
+    "the transcript reads a finding the blocked write caused as an environment fault, never a defect",
+    async () => {
+      const r = await run("/notify");
+      const step = r.transcript.find((e) => /never delivered to \/collect/.test(e.reason ?? ""));
+      expect(step?.reason).toMatch(/environment fault \(caused by a blocked write, never sent\): [^;]*never delivered to \/collect/);
     },
     180_000,
   );

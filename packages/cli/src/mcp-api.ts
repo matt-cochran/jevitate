@@ -114,6 +114,8 @@ export interface McpJourneyRunOptions {
   readonly fixtures?: (site: string) => MissionFixtures | undefined;
   /** #303: record and compare each replayed step's action delta (`--action-deltas`). */
   readonly actionDeltas?: boolean;
+  /** #486: the in-flight response bound of a step's responseStatus check (`--step-response-timeout`). */
+  readonly stepResponseTimeoutMs?: number;
 }
 
 /**
@@ -122,7 +124,7 @@ export interface McpJourneyRunOptions {
  * paid/destructive hang writes, redaction literals) are never MCP arguments: targets.json decides.
  */
 export type McpVerifyFixArgs = Pick<RunVerifyFixOptions, "resultPath" | "fingerprint"> &
-  Partial<Pick<RunVerifyFixOptions, "storageState" | "browser" | "replays" | "invariantFiles" | "fixtureFlags" | "emulation" | "allowEmulationOverride" | "screenshots" | "actionDeltas">>;
+  Partial<Pick<RunVerifyFixOptions, "storageState" | "browser" | "replays" | "invariantFiles" | "fixtureFlags" | "emulation" | "allowEmulationOverride" | "screenshots" | "actionDeltas" | "allow" | "env" | "environmentsFile">>;
 
 export interface McpApiDeps {
   /** Journeys store directory (`~/.jevitate/journeys` in production). */
@@ -340,6 +342,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           ...(o?.screenshots === undefined ? {} : { screenshots: o.screenshots }),
           ...(o?.fixtures === undefined ? {} : { fixtures: o.fixtures }),
           ...(o?.actionDeltas === true ? { actionDeltas: true } : {}),
+          ...(o?.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: o.stepResponseTimeoutMs }),
         }),
       ));
   const pathRoots = deps.pathRoots ?? defaultMcpPathRoots();
@@ -556,6 +559,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         ...(a.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: a.allowEmulationOverride }),
         ...(a.screenshots === undefined ? {} : { screenshots: a.screenshots }),
         ...(a.actionDeltas === true ? { actionDeltas: true } : {}),
+        ...(a.allow === undefined ? {} : { allow: a.allow }),
+        ...(a.env === undefined ? {} : { env: a.env }),
+        ...(a.environmentsFile === undefined ? {} : { environmentsFile: a.environmentsFile }),
       }));
   /** #255: verify_fix's CLI-parity replay options, validated like `verify-fix`'s flags (typed, before any browser). */
   const verifyFixOptions = (args: Record<string, unknown>): Omit<McpVerifyFixArgs, "resultPath" | "fingerprint"> => {
@@ -576,6 +582,12 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const extension = optExtensions(args, pathRoots);
     const governance = governanceArgs(args);
     const actionDeltas = optBool(args, "actionDeltas");
+    // #484: replaying under another allow list widens what the replay may reach — explicit only (never
+    // defaulted), one source (as `verify-fix --allow`/`--env`), and the report carries allowlistOverride.
+    const allow = optStringArray(args, "allow");
+    const env = optString(args, "env");
+    if (allow !== undefined && allow.length === 0) throw new McpArgError("'allow' names no origin to replay against (omit it to replay under the stored allow list)");
+    if (allow !== undefined && env !== undefined) throw new McpArgError("pass 'allow' or 'env' to override the stored allow list, not both");
     try {
       const browser = browserRunFromFlags({ browserArg: [], ...governance, ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
       const screenshots = parseScreenshotsArg(shots);
@@ -592,6 +604,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         ...(screenshots === undefined ? {} : { screenshots }),
         ...(emulation === undefined ? {} : { emulation }),
         ...(actionDeltas === true ? { actionDeltas: true } : {}),
+        ...(allow === undefined ? {} : { allow }),
+        ...(env === undefined ? {} : { env, ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }) }),
       };
     } catch (err) {
       throw new McpArgError(err instanceof Error ? err.message : String(err));
@@ -738,6 +752,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const healMaxMs = optInt(args, "healMaxMs", 1);
     const healMaxRunAttempts = optInt(args, "healMaxRunAttempts", 1);
     const healMaxRunMs = optInt(args, "healMaxRunMs", 1);
+    const stepResponseTimeoutMs = optInt(args, "stepResponseTimeoutMs", 1);
     const healRequest: JourneyHealRequest = {
       selfHeal,
       ...(changes === undefined ? {} : { changes }),
@@ -778,6 +793,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         ...(emulation === undefined ? {} : { emulation }),
         ...(screenshots === undefined ? {} : { screenshots }),
         ...(optBool(args, "actionDeltas") === true ? { actionDeltas: true } : {}),
+        ...(stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs }),
       },
       ...(usage === undefined ? {} : { usage }),
     };
@@ -789,7 +805,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "Replay a finding's reproduction (by mission result id — or a finished queue_exploration missionId — + fingerprint) N times in fresh browsers (default 3) — `jevitate verify-fix`. status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass). " +
         "#255 (same as the CLI flags): 'replays' (>= 1); 'recordVideo' (true or a directory: the before/after evidence pair — `evidence.before` is the run's own clip, `evidence.after` a captioned replay — plus videoPaths); 'screenshots'; 'headed'/'slowMo'; " +
         "'storageState' (a path inside the project or ~/.jevitate, never a repo's .jevitate/; overrides the mission's session); 'viewport' {width,height} or 'device' (refused when it differs from the finding's recorded emulation unless 'allowEmulationOverride'); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); " +
-        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'fixtureIdentity' (#243: 'name=<storageState path>' entries re-binding a fixture step's auth.identity; default: the identities the mission recorded); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with); 'actionDeltas' (#303, opt-in: the defect step's replayed delta vs the recorded one, as evidence on each attempt); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
+        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'fixtureIdentity' (#243: 'name=<storageState path>' entries re-binding a fixture step's auth.identity; default: the identities the mission recorded); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with); 'actionDeltas' (#303, opt-in: the defect step's replayed delta vs the recorded one, as evidence on each attempt); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret); #484 'allow' (origins) OR 'env' (a named environment's CURRENT allow list) — explicit only, never both, never defaulted: replay under that allow list instead of the one stored with the result (e.g. to prove a localhost → 127.0.0.1 config fix); the result then carries allowlistOverride (source, origins, recorded, added, removed). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
       inputSchema: {
         type: "object",
         properties: {
@@ -813,6 +829,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           maxBrowsers: { type: "integer", minimum: 1 },
           maxBrowserMemory: { type: "integer", minimum: 1 },
           tags: { type: "object", additionalProperties: { type: "string" } },
+          allow: { type: "array", items: { type: "string" }, minItems: 1 },
+          env: { type: "string" },
         },
         required: ["id", "fingerprint"],
       },
@@ -838,7 +856,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
         "'viewport' {width,height} or 'device' (mutually exclusive); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
-        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals; 'jevProvider' typesafe | openrouter picks the Jev key with real, #429) — #453: a heal mode needs a change context, 'changes' (a git range such as HEAD~1..HEAD, read-only) and/or 'changeNote' (strings), else it is refused; only a break that change explains is retargeted, one-for-one, and the run ends healed-pending-review (exitCode 5: a proposed revision a person accepts, never a pass); budgets 'healMaxAttempts'/'healMaxModelCalls'/'healMaxMs' (per broken step) and 'healMaxRunAttempts'/'healMaxRunMs' (per run), each >= 1; the result's 'exitCode' is the CLI's (0 ok, 5 pending review, 1 failed); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret). A site-policy refusal is {error: throttled, retryAfter}.",
+        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals; 'jevProvider' typesafe | openrouter picks the Jev key with real, #429) — #453: a heal mode needs a change context, 'changes' (a git range such as HEAD~1..HEAD, read-only) and/or 'changeNote' (strings), else it is refused; only a break that change explains is retargeted, one-for-one, and the run ends healed-pending-review (exitCode 5: a proposed revision a person accepts, never a pass); budgets 'healMaxAttempts'/'healMaxModelCalls'/'healMaxMs' (per broken step) and 'healMaxRunAttempts'/'healMaxRunMs' (per run), each >= 1; the result's 'exitCode' is the CLI's (0 ok, 5 pending review, 1 failed); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'stepResponseTimeoutMs' (#486, >= 1, default 15000: how long a step's responseStatus check waits for a request sent but not yet answered, e.g. a cold start — a late 2xx is an advisory slowSteps finding; a step's own responseTimeoutMs overrides it); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret). A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
         properties: {
@@ -871,6 +889,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           maxBrowsers: { type: "integer", minimum: 1 },
           maxBrowserMemory: { type: "integer", minimum: 1 },
           actionDeltas: { type: "boolean" },
+          stepResponseTimeoutMs: { type: "integer", minimum: 1 },
           tags: { type: "object", additionalProperties: { type: "string" } },
         },
         required: ["id"],

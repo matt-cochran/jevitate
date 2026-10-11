@@ -40,8 +40,8 @@ ends on: a state-changing job checks its write and what persisted, for example
   the replay sent from the moment that step began, so it pairs the check with the step that
   causes it (`step request check not met: step 3 (click …): …`).
   A request sent but not yet answered (a cold start after a deploy) is waited for, up to
-  `journey run --step-response-timeout <ms>` (default 15000; a step's own `responseTimeoutMs`
-  overrides it). A 2xx within the bound passes and is reported as an advisory `slowSteps` finding
+  `journey run --step-response-timeout <ms>` (MCP `run_journey` `stepResponseTimeoutMs`; default
+  15000; a step's own `responseTimeoutMs` overrides it). A 2xx within the bound passes and is reported as an advisory `slowSteps` finding
   with its latency; a non-2xx, or no response within the bound, fails. `jevitate check` and
   `campaign run` report a step slow only on a Journey's first replay as a `cold-start` note.
 - **A step's `expect`** comes from what the step changed: the navigation it caused
@@ -585,6 +585,9 @@ jevitate journey lint checkout --fix        # stamps each number-only anchor wit
 jevitate journey anchors checkout --suggest # advisory; writes nothing
 ```
 
+Over MCP the same edits are `journey_anchor_add` / `journey_anchor_remove`, `lint_journey` with
+`fix: true` and `journey_anchors` with `suggest: true`; a promoted Journey is refused there too.
+
 `anchor add` writes the step's stable id at once and prints the anchor issues that remain (name
 rule `[a-z0-9][a-z0-9._-]{0,63}`, duplicates, unknown steps are refused, exit 64).
 
@@ -677,7 +680,8 @@ origin to add, e.g. `add http://127.0.0.1:3000 to the environment's allow list`.
 URL is down or whose session is signed out is not replayed. The verdict is `preflight: { ok,
 problems[] }` in `campaign.json` (written even on a refusal) and a `preflight` line in the human
 summary. An expired session is not refreshed automatically (a campaign names no persona login):
-re-save it with `jevitate login`. `--skip-preflight` runs the campaign without these checks.
+re-save it with `jevitate login`. `--skip-preflight` (MCP `run_campaign` `skipPreflight: true`) runs
+the campaign without these checks; the report records `preflight.skipped`.
 
 **Mission options (#311).** Every `campaign run` flag beyond its own (`--journeys-dir`, `--out`,
 `--allow-shell-hooks`, `--hook-timeout-ms`, `--skip-preflight`, `--real`/`--fake-ai`, `--json`) is forwarded to every

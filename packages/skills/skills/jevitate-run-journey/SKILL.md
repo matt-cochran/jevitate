@@ -46,6 +46,10 @@ artifact; your job is to find the right one and run it with the right params.
 - Evidence: `--record-video` (listed as `videoPaths`), `--screenshots
   [screens|steps]` (`screenshotPaths` + an `index.md`), `--headed`/`--slow-mo <ms>`
   to watch it. `--viewport 375x812` / `--device "iPhone 13"` for mobile.
+- A step's `responseStatus` check waits up to 15 s for a request that was sent
+  but not yet answered (a cold start after a deploy); `--step-response-timeout
+  <ms>` (MCP `run_journey`'s `stepResponseTimeoutMs`) raises it for one run. A
+  late 2xx is an advisory `slowSteps` finding, not a failure.
 - For a narrated demo video or a step-by-step guide of a Journey, use
   `jevitate-demo` (`journey demo`, `journey annotate`).
 
