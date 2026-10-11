@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PageSegment, Recording, RecordedStep } from "@jevitate/recording";
@@ -433,7 +433,7 @@ test("run: a schema-invalid recording rejects with a zod error before any step e
 });
 
 test("run: an upload step's relative file resolves against the interpreter's fixtureBaseDir", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "interp-fixture-"));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "interp-fixture-")));
   await writeFile(join(dir, "receipt.pdf"), "pdf");
   const setInputFiles = vi.fn(async () => {});
   const actor = actorWithPage(fakePage(fakeLocator({ setInputFiles })));

@@ -10,7 +10,9 @@ import {
   type DescriptorCandidate,
   type ElementFacts,
   type Stability,
+  roleOf,
 } from "./descriptor.js";
+import { displayFromFacts } from "./display.js";
 import { installRecorderListener } from "./inject.js";
 import { isSecretField } from "./secret-field.js";
 import { clock } from "@jevitate/domain";
@@ -484,10 +486,15 @@ export class Recorder {
       );
     }
 
+    // #497: what the person saw on the element (role + visible label) rides on the chosen descriptor
+    // as display metadata — never a rung, never a locator; refused for a credential field or a secret.
+    const display = displayFromFacts(facts, roleOf(facts));
+    const shown = (d: TargetDescriptor): TargetDescriptor => (display === undefined ? d : { ...d, display });
+
     /** The facts are trusted as they stand: unproven, so one notch less stable. */
     const unproven = (): DescriptorResolution => ({
       ok: true,
-      descriptor: top.descriptor,
+      descriptor: shown(top.descriptor),
       stability: CAPPED_STABILITY[top.stability],
       alternates: [],
     });
@@ -551,7 +558,7 @@ export class Recorder {
 
     return {
       ok: true,
-      descriptor: primary.descriptor,
+      descriptor: shown(primary.descriptor),
       stability: primary.stability,
       alternates: passing.slice(1).map((c) => c.descriptor),
     };
@@ -651,6 +658,9 @@ function toFacts(raw: unknown): ElementFacts | undefined {
     testId: str(f.testId),
     testIdAttr: str(f.testIdAttr),
     tflowId: str(f.tflowId),
+    autocomplete: str(f.autocomplete),
+    placeholder: str(f.placeholder),
+    editable: f.editable === true,
     css: str(f.css),
   };
 }

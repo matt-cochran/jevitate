@@ -1,5 +1,42 @@
 # jevitate
 
+## 0.12.0
+
+### Minor Changes
+
+- f6d4dfe: The Journey review sheet (`journey review`, and the sheet `journey promote` shows first) is now built for a person signing off (#496).
+  - **Layout:** it opens with NEEDS YOUR ATTENTION (weak steps, missing intent, lint, risky controls, findings, change since approval, no mutation proof, brittle locators). Then come:
+    - WHAT IT DOES (the recording's intent, sign-in, origins, uploaded files);
+    - STEPS, each with its checks inline in plain English, its writes and its anchors;
+    - PROVES AT THE END;
+    - one WRITES line per endpoint;
+    - a one-line CLEAR summary;
+    - APPROVE with the promote command.
+  - **Formatting:**
+    - empty sections are left out;
+    - lines wrap to the terminal width;
+    - colour on a terminal only (`NO_COLOR` turns it off);
+    - one `Content hash:` line, so `--review-sheet` binding is unchanged;
+    - `--full` (review and promote) brings back every detail section.
+  - **JSON** is additive: `attention`, per-step `checks`/`file`/`anchors`, `summary.intent`, `proof.endStateText`.
+  - **Typed confirmation:** `journey promote` repeats the attention items right above it.
+  - **Self-heal proposals** show each step's exact locator.
+- ecd7a60: Steps now record what a person saw on their target (#497). Both the recorder and Jev-authored recordings store each step target's role and visible label as `display` (`{ role?, name }`), which is display metadata only and never used to find an element. A credential field's label, one that holds a secret, and the typed text of an editable field (a textarea, a contenteditable, a textbox) are never stored. Step descriptions read `click "Import"`. A step with only a test id reads `click [action import] (no recorded label)`. `journey migrate --labels` (CLI only) backfills labels on existing Journeys by replaying them (the app must be running; `--dry-run` writes nothing). Promoted Journeys it changes need re-approval. The review sheet shows a labelled step with its exact locator beside the label.
+- f6d4dfe: **Security (#498): upload fixtures must stay inside the project root.** A Journey's or mission's upload file must resolve, after following symlinks, to a file inside the folder that holds `.jevitate/`.
+  - **Refused:** an absolute path outside it, a `../` escape, or a symlink pointing out.
+  - **Where:** everywhere a Journey or mission runs (`fixture-outside-project`).
+  - **The project root** is only a folder holding `.jevitate/`: never the working directory, the git root, your home folder or `/`. With none, an upload is refused (`fixture-no-root`).
+  - **Sensitive files inside the project are refused too** (`fixture-sensitive`): any dot-file or dot-folder (`.env`, `.git`, `.jevitate`), keys and certificates (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`…), HAR files and traces, and storage-state files.
+  - **Lint and promote:** `journey lint` reports `upload-outside-project` and `upload-sensitive-file`, and promote refuses both. `--accept-weak` does not waive it.
+  - There is no override; move the fixture into the project.
+
+### Patch Changes
+
+- Updated dependencies [f6d4dfe]
+- Updated dependencies [ecd7a60]
+- Updated dependencies [f6d4dfe]
+  - @jevitate/cli@0.12.0
+
 ## 0.11.0
 
 ### Minor Changes

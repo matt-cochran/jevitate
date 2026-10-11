@@ -7,6 +7,44 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.12.0] – 2026-10-11
+
+0.12.0 makes Journey sign-off readable and closes an upload exfiltration path.
+- **A review sheet built for sign-off:** what needs your decision comes first. Every check is in plain English, steps read by what a person saw (`click "Import"`), and the noise is gone.
+- **Step labels:** recordings keep each step's visible label.
+- **Upload fixtures stay inside the project.**
+
+### Behaviour changes
+
+- **The review sheet has a new layout (#496).** `journey review`, and the sheet `journey promote` shows first, read top to bottom as:
+  - NEEDS YOUR ATTENTION;
+  - WHAT IT DOES (the recording's intent, sign-in, origins, uploaded files);
+  - STEPS, each with its checks in plain English, its writes, its anchors, and the exact locator beside a recorded label;
+  - PROVES AT THE END;
+  - WRITES;
+  - a one-line CLEAR summary;
+  - APPROVE.
+
+  Empty sections are left out, lines wrap to the terminal width, and colour appears only on a terminal (`NO_COLOR` turns it off). `--full` brings back every detail section. The sheet still carries one `Content hash:` line, so `--review-sheet` binding is unchanged. The JSON only gains fields.
+- **Upload fixtures must stay inside the project root (#498, security).**
+  - **The rule:** after following symlinks, a Journey's or mission's upload file must be inside the folder holding `.jevitate/`. That folder is never the working directory, the git root, your home folder or `/`.
+  - **Refused:** a dot-file or dot-folder (`.env`, `.git`, `.jevitate`), a key or certificate, a HAR or trace, a storage-state file.
+  - **Where:** everywhere a Journey or mission runs (`fixture-outside-project`, `fixture-sensitive`, `fixture-no-root`). `journey lint` reports `upload-outside-project` / `upload-sensitive-file`, and promote refuses them; `--accept-weak` does not waive it.
+  - There is no override.
+- **Step descriptions use the recorded label (#497):** `click "Import"`. A step recorded before 0.12 reads `click [action import] (no recorded label)` until its labels are backfilled.
+
+### Added
+
+- Recordings store each step target's visible label and role as `display` (#497). This is display metadata only, never used to find an element. Credential fields, labels holding a secret, and the typed text of an editable field are never stored.
+- `journey migrate --labels [--id …] [--dry-run]`: backfills labels by replaying the Journey (the app must be running). Promoted Journeys it changes need re-approval (#497).
+- `journey review --full` / `journey promote --full` (#496).
+- The typed promote confirmation repeats the sheet's attention items (#496).
+- Review JSON: `attention`, per-step `checks`, `file`, `anchors` and `locator`, `summary.intent`, `proof.endStateText` (#496).
+
+### Fixed
+
+- A self-heal proposal's steps show their exact locator, so a retarget is visible even when the label is unchanged.
+
 ## [0.11.0] – 2026-10-11
 
 0.11.0 makes campaigns trustworthy on a misconfigured environment, finishes the Journeeze catalog integration, and makes anchors easy to author.

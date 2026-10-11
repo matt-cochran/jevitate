@@ -111,6 +111,13 @@ export interface VerifyFixParams {
   readonly actionDeltas?: boolean;
   /** Secret values the replay's deltas are redacted of (`--secret`). */
   readonly secrets?: readonly string[];
+  /** #498: the project root a replayed `upload` fixture must lie inside (absent ⇒ an upload step is refused). */
+  readonly fixtureBaseDir?: string;
+}
+
+/** #498: the replay's fixture root, when the caller gave one. */
+function fixtureBaseOf(params: { readonly fixtureBaseDir?: string }): { fixtureBaseDir?: string } {
+  return params.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: params.fixtureBaseDir };
 }
 
 export interface VerifyInvariant {
@@ -367,7 +374,7 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
     await monitorFor(session.page).instrument();
     const index = params.recordingStepIndex;
     const upTo = truncateAt(observeAfterStep(params.recording, index), index);
-    const interpreter = new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params) });
+    const interpreter = new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params), ...fixtureBaseOf(params) });
     const settle = (): Promise<unknown> =>
       perceive(session.page, { ...(params.settleCeilingMs === undefined ? {} : { renderWaitMs: params.settleCeilingMs }) }).catch(() => undefined);
     const failedAt = (r: Awaited<ReturnType<RecordingInterpreter["run"]>>): SingleReplayAttempt | null => {
@@ -466,7 +473,7 @@ async function runOneReplay(params: VerifyFixParams): Promise<SingleReplayAttemp
     const rd = params.actionDeltas === true ? new ReplayDeltas({ secrets: params.secrets ?? [], recorded: params.recording.pages.flatMap((p) => p.steps) }) : null;
     // The defect's step is replayed to OBSERVE what the app does next — its own postcondition is not
     // the verdict (a fixed app may legitimately behave differently after it); the signal check is.
-    const result = await new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params), ...(rd === null ? {} : { observer: rd.observer() }) }).runToCheckpoint(
+    const result = await new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params), ...fixtureBaseOf(params), ...(rd === null ? {} : { observer: rd.observer() }) }).runToCheckpoint(
       session.actor,
       observeAfterStep(params.recording, params.recordingStepIndex),
       params.recordingStepIndex,
