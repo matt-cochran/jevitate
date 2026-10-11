@@ -1,5 +1,5 @@
 // ux-usability.ts — the live usability mission runner (`explore --strategy usability`) (#231).
-import { journeyFixtureBaseDir } from "./journey-api.js";
+import { journeyFixtureBaseDir, resolveProjectMissionFixture } from "./journey-api.js";
 import { logsDirFor } from "./project-dir.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
@@ -10,7 +10,7 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { InvariantSpec } from "@jevitate/recording";
-import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type SecretCommandRunner, type HangFinding, type VerifySession, type SideEffect, type SafetyOverride, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
+import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type SecretCommandRunner, type HangFinding, type VerifySession, type SideEffect, type SafetyOverride, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
 import { a11yChecks, analyzeClaims, buildReport, calibrationCaveat, claimsCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AnalysisOutcome, type AppContext, type GuardProbe, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
 import { captureFindingShots, planGuardProbes, runGuardProbes, skippedProbes, withProbePage } from "./ux-claim-probe.js";
 import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
@@ -328,7 +328,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
   const maxFindingsPerRoute = resolveMaxFindingsPerRoute(opts.maxFindingsPerRoute, opts.env ?? process.env, loadUxMaxFindingsPerPage(opts.configPath));
-  const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture, journeyFixtureBaseDir());
+  const fixture = opts.fixture === undefined ? undefined : await resolveProjectMissionFixture(opts.fixture);
   // #198: the product facts are validated before a browser opens (a bad file is a usage error).
   const product = await loadProductFacts(opts.product);
   // #250/#251: a recorded or screenshotted run's sessions carry the live pixel mask from their first

@@ -70,6 +70,19 @@ describe("displayNameOf: the human recorder's visible label (#497)", () => {
     expect(displayNameOf(facts({ tag: "textarea", text: "my private note", placeholder: "Note" }))).toBe("Note");
   });
 
+  // 0.12.0 review M3: a rich-text editor or a textbox-role element holds typed text — never its label.
+  it("never uses a contenteditable element's text", () => {
+    expect(displayNameOf(facts({ tag: "div", editable: true, text: "typed secret note" }))).toBeUndefined();
+  });
+
+  it.each([["textbox"], ["searchbox"], ["combobox"]])("never uses the text of an element with role %s", (roleAttr) => {
+    expect(displayNameOf(facts({ tag: "div", roleAttr, text: "typed secret note" }))).toBeUndefined();
+  });
+
+  it("still uses a contenteditable element's aria-label", () => {
+    expect(displayNameOf(facts({ tag: "div", editable: true, ariaLabel: "Message", text: "typed secret note" }))).toBe("Message");
+  });
+
   it("refuses the label of a password field", () => {
     expect(displayFromFacts(facts({ tag: "input", inputType: "password", labelText: "Password" }), "textbox")).toBeUndefined();
   });

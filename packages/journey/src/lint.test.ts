@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Recording, RecordedStep } from "@jevitate/recording";
-import { lintJourney, type Journey } from "./index.js";
+import { lintJourney, lintUploadFixtures, type Journey } from "./index.js";
 
 // #401 Part A — the pure assertion-strength lint. Fixtures are small inline Journeys (see
 // assertions.test.ts / journey.test.ts for the shape).
@@ -348,5 +348,38 @@ describe("#498 lintJourney: upload fixtures outside the project root", () => {
     const { root } = await project();
     const findings = lintJourney(j([uploadOf("../nope.txt")]), { baseDir: root });
     expect(findings.some((f) => f.rule === "upload-file-missing")).toBe(false);
+  });
+
+  // 0.12.0 review M2: a sensitive file inside the root is its own error.
+  it("flags a .env inside the root as an upload-sensitive-file error", async () => {
+    const { root } = await project();
+    await writeFile(join(root, ".env"), "TOKEN=x");
+    const findings = lintJourney(j([uploadOf(".env")]), { baseDir: root });
+    expect(findings.some((f) => f.rule === "upload-sensitive-file" && f.level === "error")).toBe(true);
+  });
+
+  it("names the reason and a dedicated fixture as the fix", async () => {
+    const { root } = await project();
+    await writeFile(join(root, "server.pem"), "pem");
+    const finding = lintJourney(j([uploadOf("server.pem")]), { baseDir: root }).find((f) => f.rule === "upload-sensitive-file");
+    expect(finding?.message).toContain("looks sensitive (private key or certificate (.pem))");
+  });
+
+  it("does not flag an ordinary csv fixture as sensitive", async () => {
+    const { root } = await project();
+    await writeFile(join(root, "crm-import-journey-happy.csv"), "a,b");
+    const findings = lintJourney(j([uploadOf("crm-import-journey-happy.csv")]), { baseDir: root });
+    expect(findings.some((f) => f.rule.startsWith("upload-"))).toBe(false);
+  });
+
+  // 0.12.0 review H1: no project root, or one that confines nothing, refuses every literal fixture.
+  it("flags a literal fixture as outside when there is no project root", () => {
+    const findings = lintUploadFixtures(j([uploadOf("receipt.pdf")]), undefined);
+    expect(findings.some((f) => f.rule === "upload-outside-project")).toBe(true);
+  });
+
+  it("flags a literal fixture as outside when the root is the home directory", () => {
+    const findings = lintUploadFixtures(j([uploadOf(".ssh/id_ed25519")]), homedir());
+    expect(findings.some((f) => f.rule === "upload-outside-project")).toBe(true);
   });
 });

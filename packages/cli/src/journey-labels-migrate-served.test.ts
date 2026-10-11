@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -144,6 +144,38 @@ describe("migrateLabels backfills step labels by replay (#497, real Chromium)", 
     const dir = await seeded(journey("s", { steps: [STEPS[0]!, STEPS[1]!, STEPS[2]!, broken, STEPS[3]!] }));
     const r = await migrate(dir);
     expect(r.journeys[0]?.unlabelled.map((u) => u.reason)).toEqual(["credential-field", "target-not-found", "not-reached"]);
+  });
+
+  // 0.12.0 review L6: a label holding a login credential of the run (not a parameter) is refused too.
+  it("leaves a label holding an environment secret-field value unlabelled as a secret", async () => {
+    vi.stubEnv("JEV_L6_LOGIN", "Import");
+    try {
+      const dir = await seeded(journey("e"));
+      const r = await migrateLabels({
+        journeysDir: dir,
+        params: { email: "ada@example.com", password: SECRET },
+        targetTimeoutMs: 2_000,
+        run: {
+          browserPortFactory: () => new PlaywrightBrowserPort(),
+          environment: { baseUrl: origin, allowedOrigins: [origin], source: "test", secretFields: ["label=Login=env:JEV_L6_LOGIN"] },
+        },
+      });
+      expect(r.journeys[0]?.unlabelled.find((u) => u.step === 4)?.reason).toBe("secret");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("leaves a label holding a caller-supplied run secret unlabelled as a secret", async () => {
+    const dir = await seeded(journey("v"));
+    const r = await migrateLabels({
+      journeysDir: dir,
+      params: { email: "ada@example.com", password: SECRET },
+      secrets: ["Import"],
+      targetTimeoutMs: 2_000,
+      run: { browserPortFactory: () => new PlaywrightBrowserPort() },
+    });
+    expect(r.journeys[0]?.unlabelled.find((u) => u.step === 4)?.reason).toBe("secret");
   });
 
   it("never puts a secret parameter's value in the report", async () => {

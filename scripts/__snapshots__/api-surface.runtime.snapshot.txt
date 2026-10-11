@@ -1063,7 +1063,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (102 exports)
+# @jevitate/recording (106 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -1129,6 +1129,10 @@
   fixtureNoRoot: function
   fixtureNotFound: function
   fixtureOutsideProject: function
+  fixtureRootRefusal: function
+  fixtureSensitive: function
+  fixtureSensitiveReason: function
+  fixtureUnsafeRoot: function
   flattenBaseFillSteps: function
   formatSpecPath: function
   globRegex: function

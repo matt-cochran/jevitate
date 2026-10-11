@@ -23,6 +23,9 @@ const APP = `
     <label for="pw">Password</label><input id="pw" type="password" data-testid="contact-pw">
     <button type="button" data-testid="action-import"><span>Import</span></button>
     <button type="button" data-testid="close" aria-label="Close dialog">×</button>
+    <div id="rich" contenteditable="true" data-testid="rich"></div>
+    <div id="labelled-rich" contenteditable="true" aria-label="Message" data-testid="labelled-rich"></div>
+    <div id="faux" role="textbox" data-testid="faux">draft typed earlier</div>
   </form>`;
 
 /** Records `act` on the served page (served via `page.route`: `setContent` would unhook the listener). */
@@ -70,6 +73,22 @@ describe("the human recorder records a step's visible label (#497, real Chromium
   it("a fill records the field's <label> text", async () => {
     const rec = await record((page) => page.locator("#email").fill("ada@example.com"));
     expect(targets(rec)[0]?.display).toEqual({ role: "textbox", name: "Email" });
+  });
+
+  // 0.12.0 review M3: typed text never becomes the label.
+  it("a fill into a contenteditable element never records the typed text as its label", async () => {
+    const rec = await record((page) => page.locator("#rich").fill("typed secret note"));
+    expect(JSON.stringify(rec)).not.toContain("typed secret note");
+  });
+
+  it("a contenteditable element's aria-label is still its label", async () => {
+    const rec = await record((page) => page.locator("#labelled-rich").fill("typed secret note"));
+    expect(targets(rec)[0]?.display?.name).toBe("Message");
+  });
+
+  it("a role=textbox element's text is never its label", async () => {
+    const rec = await record((page) => page.locator("#faux").click());
+    expect(targets(rec)[0]?.display).toBeUndefined();
   });
 
   it("a password field's label is never stored", async () => {

@@ -181,3 +181,40 @@ describe("#496 attention items", () => {
     expect(renderReviewText(clean)).toContain("NEEDS YOUR ATTENTION  nothing — every gate is clear");
   });
 });
+
+// 0.12.0 review M4: a recorded display label can be spoofed, so a labelled step also shows its exact locator.
+describe("a labelled step shows its exact locator on the sheet", () => {
+  type Target = Record<string, unknown>;
+  function labelled(target: Target): Journey {
+    const j = crm();
+    const page = j.recording.pages[0]!;
+    const click = { step: { kind: "click" as const, target } };
+    return { ...j, recording: { ...j.recording, pages: [{ ...page, steps: [click, ...page.steps] } as typeof page, ...j.recording.pages.slice(1)] } };
+  }
+  const spoofed = labelled({ testId: "delete-account", display: { role: "button", name: "Cancel" } });
+
+  it("the review model carries the step's test id as its locator", () => {
+    expect(buildJourneyReview(spoofed).steps[0]?.locator).toBe("data-testid=delete-account");
+  });
+
+  it("a display label that differs from its test id still shows the test id on the text sheet", () => {
+    expect(renderReviewText(buildJourneyReview(spoofed)).split("\n").find((l) => l.includes('"Cancel"'))).toContain("‹data-testid=delete-account›");
+  });
+
+  it("the Markdown sheet shows the test id too", () => {
+    expect(renderReviewMarkdown(buildJourneyReview(spoofed))).toContain("‹`data-testid=delete-account`›");
+  });
+
+  it("without a test id the locator is the role and name", () => {
+    const j = labelled({ role: "button", name: "Delete account", display: { role: "button", name: "Cancel" } });
+    expect(buildJourneyReview(j).steps[0]?.locator).toBe('role=button name="Delete account"');
+  });
+
+  it("a step with no display label carries no locator", () => {
+    expect(buildJourneyReview(crm()).steps.some((st) => st.locator !== undefined)).toBe(false);
+  });
+
+  it("the model with a locator still validates", () => {
+    expect(JourneyReviewSchema.safeParse(buildJourneyReview(spoofed)).success).toBe(true);
+  });
+});

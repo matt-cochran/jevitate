@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { FixturePathError, confineFixture, fixtureEscapesRoot } from "./fixture-path.js";
+import { FixturePathError, confineFixture, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason } from "./fixture-path.js";
 
 // #498: an upload fixture must resolve (after realpath) to a file inside the project root.
 let base: string;
@@ -102,5 +102,90 @@ describe("#498 fixtureEscapesRoot (lint, sync)", () => {
   it("flags an inside symlink that points outside", async () => {
     await symlink(outside, join(root, "fixtures", "link.txt"));
     expect(fixtureEscapesRoot("fixtures/link.txt", root).escapes).toBe(true);
+  });
+});
+
+// 0.12.0 review H1: a root that is the filesystem root, the home folder or ~/.jevitate confines nothing.
+describe("#498 confineFixture refuses a root that confines nothing", () => {
+  it("refuses the filesystem root", async () => {
+    expect(await codeOf(confineFixture("etc/hostname", "/"))).toBe("fixture-no-root");
+  });
+
+  it("refuses the home directory", async () => {
+    expect(await codeOf(confineFixture(".ssh/id_ed25519", homedir()))).toBe("fixture-no-root");
+  });
+
+  it("refuses jevitate's home data folder", async () => {
+    expect(await codeOf(confineFixture("credentials.json", join(homedir(), ".jevitate")))).toBe("fixture-no-root");
+  });
+
+  it("names the refused root in the message", async () => {
+    await expect(confineFixture("etc/hostname", "/")).rejects.toThrow("/ is not a project root (the filesystem root)");
+  });
+});
+
+describe("#498 fixtureRootRefusal", () => {
+  it("allows an ordinary project folder", () => {
+    expect(fixtureRootRefusal(root)).toBeNull();
+  });
+
+  it("refuses the home directory", () => {
+    expect(fixtureRootRefusal(homedir())).toBe("your home directory");
+  });
+});
+
+// 0.12.0 review M2: a sensitive file inside the root is refused (fixture-sensitive).
+describe("#498 confineFixture refuses a sensitive file inside the root", () => {
+  async function put(rel: string): Promise<void> {
+    const file = join(root, rel);
+    await mkdir(join(file, ".."), { recursive: true });
+    await writeFile(file, "x");
+  }
+
+  it.each([
+    [".env"],
+    [".env.local"],
+    [".git/config"],
+    [".jevitate/credentials.json"],
+    ["certs/server.pem"],
+    ["certs/server.key"],
+    ["certs/client.p12"],
+    ["certs/client.pfx"],
+    ["captures/run.har"],
+    ["logs/2026-10-11/trace.zip"],
+    ["auth/storage-state.json"],
+    ["auth/admin.storageState.json"],
+    ["keys/id_rsa"],
+    ["keys/id_ed25519.pub"],
+    ["keys/id_ecdsa"],
+  ])("refuses %s", async (rel) => {
+    await put(rel);
+    expect(await codeOf(confineFixture(rel, root))).toBe("fixture-sensitive");
+  });
+
+  it("refuses an innocent-looking symlink whose target is sensitive", async () => {
+    await put(".env");
+    await symlink(join(root, ".env"), join(root, "fixtures", "data.csv"));
+    expect(await codeOf(confineFixture("fixtures/data.csv", root))).toBe("fixture-sensitive");
+  });
+
+  it.each([["fixtures/receipt.pdf"], ["fixtures/crm-import-journey-happy.csv"], ["fixtures/avatar.png"], ["fixtures/payload.json"]])("accepts ordinary fixture %s", async (rel) => {
+    await put(rel);
+    expect(await confineFixture(rel, root)).toBe(join(root, rel));
+  });
+
+  it("names the path, the reason and the fix in the message", async () => {
+    await put(".env");
+    await expect(confineFixture(".env", root)).rejects.toThrow(`upload fixture ${join(root, ".env")} looks sensitive (hidden path segment ".env") — use a dedicated test fixture file`);
+  });
+});
+
+describe("#498 fixtureSensitiveReason (lint, sync)", () => {
+  it("is null for an ordinary fixture", () => {
+    expect(fixtureSensitiveReason(join(root, "fixtures", "receipt.pdf"), root)).toBeNull();
+  });
+
+  it("names a private key", () => {
+    expect(fixtureSensitiveReason(join(root, "server.key"), root)).toBe("private key or certificate (.key)");
   });
 });

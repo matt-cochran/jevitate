@@ -46,14 +46,17 @@ export function targetDisplay(input: DisplayInput, guard: DisplayGuard = {}): Ta
   return "display" in r ? r.display : undefined;
 }
 
+/** 0.12.0 review: roles whose element holds typed or chosen text — that text is never a label. */
+const FIELD_ROLES: ReadonlySet<string> = new Set(["textbox", "searchbox", "combobox"]);
+
 /**
  * The visible label of a recorded element, from the facts the human recorder captured, in
  * accessible-name order: `aria-label` → its `<label>` → its text (never a text field's own content:
- * a `<textarea>`'s text is its value, a `<select>`'s text is every option) → a button-input's value
- * → `alt` → `title` → `placeholder`.
+ * a `<textarea>`'s or a rich-text editor's text is typed content, a `<select>`'s text is every
+ * option) → a button-input's value → `alt` → `title` → `placeholder`.
  */
 export function displayNameOf(facts: ElementFacts): string | undefined {
-  const field = facts.tag === "input" || facts.tag === "textarea" || facts.tag === "select";
+  const field = facts.tag === "input" || facts.tag === "textarea" || facts.tag === "select" || facts.editable === true || FIELD_ROLES.has(facts.roleAttr ?? "");
   const candidates: (string | null | undefined)[] = [facts.ariaLabel, facts.labelText, field ? null : facts.text, facts.value, facts.alt, facts.title, facts.placeholder];
   for (const c of candidates) {
     const name = (c ?? "").replace(/\s+/g, " ").trim();

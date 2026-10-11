@@ -204,15 +204,35 @@ function buildProposal(ctx: NonNullable<JourneyReviewContext["proposal"]>, journ
   };
 }
 
+/**
+ * 0.12.0 review M4: the short exact locator shown beside a step's recorded display label — the
+ * test id when there is one, else role and name (else the full `locatorSpec`). A display label is
+ * free text a shared Journey can set (`{testId: "delete-account", display: {name: "Cancel"}}`), so
+ * the approver sees what the step really acts on. Undefined when the target has no display label.
+ */
+function displayedLocator(t: TargetDescriptor | undefined): string | undefined {
+  if (t === undefined || t.display === undefined) return undefined;
+  const short: TargetDescriptor =
+    t.testId !== undefined
+      ? { testId: t.testId, ...(t.testIdAttr === undefined ? {} : { testIdAttr: t.testIdAttr }) }
+      : t.role !== undefined || t.name !== undefined
+        ? { ...(t.role === undefined ? {} : { role: t.role }), ...(t.name === undefined ? {} : { name: t.name }) }
+        : t;
+  const spec = locatorSpec(short);
+  return spec === "" ? undefined : spec;
+}
+
 function buildSteps(journey: Journey): JourneyReviewStep[] {
   return flatJourneySteps(journey).map(({ index, recorded }) => {
     const step = recorded.step;
     const target = reviewTarget(targetOf(step));
     const assertion = ownAssertion(step);
+    const locator = displayedLocator(targetOf(step));
     return {
       number: index + 1,
       kind: step.kind,
       action: describeStep(sanitized(step)),
+      ...(locator === undefined ? {} : { locator }),
       ...(target === undefined ? {} : { target }),
       ...(recorded.objective === undefined || recorded.objective.trim() === "" ? {} : { objective: recorded.objective }),
       ...(recorded.expectedResult === undefined || recorded.expectedResult.trim() === "" ? {} : { expectedResult: recorded.expectedResult }),
@@ -795,7 +815,9 @@ function renderSheet(r: JourneyReview, style: Style, opts: RenderOptions = {}): 
       const target = full && st.target !== undefined ? ` — target: ${[st.target.role, st.target.name === undefined ? undefined : `"${st.target.name}"`].filter((x) => x !== undefined).join(" ")}` : "";
       const lead = md ? `${st.number}. ` : `  ${String(st.number).padStart(numW)}  `;
       const prefixLen = lead.length;
-      put(lead, `${md ? `**${st.action}**` : st.action}${target}${anchors === "" ? "" : `  ${anchors}`}`, md ? 0 : prefixLen);
+      // M4: a labelled step's exact locator follows its label, so a spoofed label cannot hide it.
+      const locator = st.locator === undefined ? "" : `${md ? " " : "  "}‹${code(st.locator)}›`;
+      put(lead, `${md ? `**${st.action}**` : st.action}${locator}${target}${anchors === "" ? "" : `  ${anchors}`}`, md ? 0 : prefixLen);
       const sub = md ? "   - " : " ".repeat(prefixLen);
       const subHang = sub.length + 2;
       if (st.checks !== undefined) {

@@ -568,6 +568,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       const bad = await fileInputGate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
       const descriptor = args.control.descriptor;
+      // Residual risk (accepted): the file could be swapped between confineFixture and setInputFiles (TOCTOU).
       return dispatch(() => descriptorToLocator(page, descriptor).setInputFiles(file));
     }
     case "scroll_up":
