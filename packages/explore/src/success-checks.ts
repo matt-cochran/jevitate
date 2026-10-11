@@ -1,3 +1,4 @@
+import { clock } from "@jevitate/domain";
 import type { Assertion, OutcomeCheck, StatusSpec as RecordingStatusSpec, TargetDescriptor } from "@jevitate/recording";
 import { matchGlob } from "./feature/capability-scope.js";
 import type { CapturedRequest } from "./page-monitor.js";
@@ -234,4 +235,66 @@ export function evaluateNetworkCheck(
         passed: false,
         detail: `expected ${describeStatus(check.status)}, got ${seen.join(", ")} for ${answered.length} matching request(s)${waiting}${note}`,
       };
+}
+
+/** #486: the default bound (ms) a step's `responseStatus` check waits for an in-flight request. */
+export const DEFAULT_STEP_RESPONSE_TIMEOUT_MS = 15_000;
+const RESPONSE_POLL_MS = 100;
+
+/** #486: an advisory finding — the check passed, but the response came late. Never a quarantine. */
+export interface SlowStepFinding {
+  readonly kind: "slow-step";
+  readonly check: string;
+  /** The measured latency (ms) of the slowest matching request that was still in flight at first read. */
+  readonly latencyMs: number;
+}
+
+export interface AwaitedNetworkCheck {
+  readonly result: SuccessCheckResult;
+  readonly slowStep?: SlowStepFinding;
+}
+
+/**
+ * #486: judges a network check, first waiting (up to `responseTimeoutMs`, on the installed clock)
+ * for matching requests that were SENT but have no response yet — a cold start after a deploy.
+ * Passes on a 2xx that arrives in time (reporting a `slow-step` advisory with the measured latency);
+ * fails on a non-2xx, or — with the unchanged "still awaiting a response" detail — when the bound
+ * is exceeded. `read` returns the current capture (re-read on every poll).
+ */
+export async function evaluateNetworkCheckAwaiting(
+  check: Extract<SuccessCheck, { kind: "requestMade" | "responseStatus" }>,
+  read: () => { readonly requests: readonly CapturedRequest[]; readonly truncated: boolean },
+  responseTimeoutMs: number = DEFAULT_STEP_RESPONSE_TIMEOUT_MS,
+): Promise<AwaitedNetworkCheck> {
+  const pendingNow = (): CapturedRequest[] => matching(read().requests, check.method, check.pathGlob).filter((r) => r.pending === true);
+  const first = pendingNow();
+  if (check.kind === "requestMade" || first.length === 0 || responseTimeoutMs <= 0) {
+    const { requests, truncated } = read();
+    return { result: evaluateNetworkCheck(check, requests, truncated) };
+  }
+  const startedAts = first.map((r) => r.startedAt).filter((t): t is number => t !== undefined);
+  const waitStart = clock.now();
+  while (pendingNow().length > 0 && clock.now() - waitStart < responseTimeoutMs) {
+    await clock.sleep(Math.min(RESPONSE_POLL_MS, responseTimeoutMs - (clock.now() - waitStart)));
+  }
+  const { requests, truncated } = read();
+  const result = evaluateNetworkCheck(check, requests, truncated);
+  if (!result.passed) return { result };
+  const slowest = matching(requests, check.method, check.pathGlob)
+    .filter((r) => r.pending !== true && r.durationMs !== undefined && r.startedAt !== undefined && startedAts.includes(r.startedAt))
+    .reduce((max, r) => Math.max(max, r.durationMs ?? 0), 0);
+  return { result, slowStep: { kind: "slow-step", check: result.check, latencyMs: slowest } };
+}
+
+/** One replay's slow steps, for {@link detectColdStart}: the checks that came in late (empty = fast). */
+export type ReplaySlowness = readonly SlowStepFinding[];
+
+/**
+ * #486: a cold-start pattern — a check slow on the FIRST replay of a set but fast (not slow) on every
+ * later one. Needs at least two replays; returns the checks that show it, with their first-replay latency.
+ */
+export function detectColdStart(replays: readonly ReplaySlowness[]): SlowStepFinding[] {
+  const [first, ...rest] = replays;
+  if (first === undefined || rest.length === 0) return [];
+  return first.filter((f) => rest.every((later) => !later.some((l) => l.check === f.check)));
 }

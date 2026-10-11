@@ -39,6 +39,11 @@ ends on: a state-changing job checks its write and what persisted, for example
   `responseStatus:<METHOD> <path>=2xx`, with id segments as `*`. It is judged over the requests
   the replay sent from the moment that step began, so it pairs the check with the step that
   causes it (`step request check not met: step 3 (click …): …`).
+  A request sent but not yet answered (a cold start after a deploy) is waited for, up to
+  `journey run --step-response-timeout <ms>` (default 15000; a step's own `responseTimeoutMs`
+  overrides it). A 2xx within the bound passes and is reported as an advisory `slowSteps` finding
+  with its latency; a non-2xx, or no response within the bound, fails. `jevitate check` and
+  `campaign run` report a step slow only on a Journey's first replay as a `cold-start` note.
 - **A step's `expect`** comes from what the step changed: the navigation it caused
   (`urlIncludes`), the value a fill typed (`valueEquals`, for a constant value), or, with
   `--action-deltas`, the element or text a `relevant-change` step added. A step with nothing to

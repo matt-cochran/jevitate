@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { reportSlowness } from "./cold-start-report.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { aggregateOf, formatUsageLine, type UsageCounts } from "@jevitate/ai-core";
@@ -331,6 +332,11 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
           ...(details.length === 0 ? {} : { line: combined.line }),
           ...(locatorTrend === undefined ? {} : { trend: locatorTrend }),
         };
+  // #486: advisory slowness across the Journey items (a cold start = slow first replay only).
+  const slowReport = reportSlowness(
+    executed.flatMap(({ item, ex }) => (item.kind === "journey" && item.journey !== undefined && ex?.slowSteps !== undefined ? [{ journey: item.journey.id, slowSteps: ex.slowSteps }] : [])),
+  );
+  const slowness = slowReport.coldStarts.length + slowReport.slowSteps.length === 0 ? undefined : slowReport;
   // Without the gate, each Journey item's fixes are JUnit/SARIF warnings (never failures).
   const warningsOf = (i: CheckItemReport, idx: number): string[] => {
     if (opts.maxBrittleSteps !== undefined || i.kind !== "journey") return [];
@@ -427,6 +433,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       pendingReview: pendingItems.length,
     },
     ...(locatorHealth === undefined ? {} : { locatorHealth }),
+    ...(slowness === undefined ? {} : { slowness }),
     proposals,
     ...(diff === undefined || baselineRuns === undefined ? {} : { diff: { baseline: baselineRuns.map(summarizeRun), summary: diff.summary } }),
     results: runs.map((r) => r.path),

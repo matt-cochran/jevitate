@@ -254,6 +254,8 @@ export interface CapturedRequest {
   readonly contentType?: string | null;
   /** When it started (the monitor's clock) — attributes a write to the action that fired it. */
   readonly startedAt?: number;
+  /** #486: how long the response took (start to end, the monitor's clock); absent while pending. */
+  readonly durationMs?: number;
   /** The REQUEST's `content-type` header, when it sent one (#110). */
   readonly requestContentType?: string;
   /**
@@ -488,6 +490,7 @@ export class PageMonitor {
             resourceType: started.resourceType,
             contentType,
             startedAt: started.startedAt,
+            durationMs: Math.max(0, endedAt - started.startedAt),
             ...(started.requestContentType === undefined ? {} : { requestContentType: started.requestContentType }),
             ...(rpcStatus === undefined ? {} : { rpcStatus }),
           });
