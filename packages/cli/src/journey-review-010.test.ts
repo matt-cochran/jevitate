@@ -39,7 +39,7 @@ describe("anchor-rule warnings", () => {
     expect(r.anchorWarnings).toEqual([{ code: "anchor-name-style", severity: "warning", path: "metadata.anchors[0].name", message: "anchor names are lower-case", fix: "rename it to 'review'" }]);
   });
   it("render with their fix", () => {
-    expect(renderReviewText(buildJourneyReview(journey(), { anchorIssues: withIssue }))).toContain("fix: rename it to 'review'");
+    expect(renderReviewText(buildJourneyReview(journey(), { anchorIssues: withIssue }), { full: true })).toContain("fix: rename it to 'review'");
   });
   it("are absent from the sheet when the caller computed none", () => {
     expect(buildJourneyReview(journey(), {}).anchorWarnings).toBeUndefined();
@@ -52,7 +52,7 @@ describe("the step-id-only label", () => {
     expect(buildJourneyReview(stale(), { stepIdOnly: true }).changeSinceApproval).toMatchObject({ kind: "snapshot-missing", stepIdOnly: true });
   });
   it("renders as 'ids added only (warn path)'", () => {
-    expect(renderReviewText(buildJourneyReview(stale(), { stepIdOnly: true }))).toContain("ids added only (warn path)");
+    expect(renderReviewText(buildJourneyReview(stale(), { stepIdOnly: true }), { full: true })).toContain("ids added only (warn path)");
   });
   it("is absent for an ordinary change", () => {
     expect(renderReviewText(buildJourneyReview(stale(), {}))).not.toContain("ids added only");
@@ -65,7 +65,7 @@ describe("brittle steps", () => {
     expect(buildJourneyReview(journey(), { locatorHealth: health() }).locatorHealth?.brittleSteps[0]?.fix).toMatch(/data-testid/);
   });
   it("show the summary line in the text", () => {
-    expect(renderReviewText(buildJourneyReview(journey(), { locatorHealth: health() }))).toContain(health().line);
+    expect(renderReviewText(buildJourneyReview(journey(), { locatorHealth: health() }), { full: true })).toContain(health().line);
   });
   it("the sheet still matches the published schema", () => {
     expect(JourneyReviewSchema.safeParse(buildJourneyReview(journey(), { locatorHealth: health(), anchorIssues: withIssue, stepIdOnly: true })).success).toBe(true);
@@ -77,6 +77,6 @@ describe("pr-review provenance", () => {
     expect(buildJourneyReview(prApproved(), {}).approval?.provenance?.pr).toMatchObject({ number: 7, reviewer: "rita", author: "alex", mergedSha: SHA, codeOwner: true });
   });
   it("renders the PR number, reviewer and code-owner status", () => {
-    expect(renderReviewText(buildJourneyReview(prApproved(), {}))).toContain("PR #7 (https://github.com/o/r/pull/7) · reviewer rita · author alex · merged aaaaaaaaaaaa · reviewer is a code owner");
+    expect(renderReviewText(buildJourneyReview(prApproved(), {}), { width: 400 })).toContain("PR #7 (https://github.com/o/r/pull/7) · reviewer rita · author alex · merged aaaaaaaaaaaa · reviewer is a code owner");
   });
 });

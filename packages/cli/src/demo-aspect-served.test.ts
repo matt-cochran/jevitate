@@ -208,7 +208,7 @@ describe("jevitate demo — served (#249)", () => {
       const approved = await new FsJourneyStore(journeysDir).get(d.id);
       expect(approved?.metadata.promoted).toBe(true);
       // #432: the approval shows the review sheet and is recorded, bound to the content hash.
-      expect(human.out).toContain("CONTENT HASH");
+      expect(human.out).toContain("Content hash:");
       expect(approved?.metadata.approval?.contentHash).toMatch(/^[0-9a-f]{64}$/);
       expect(flatJourneySteps(approved!).every((s) => (s.recorded.objective ?? "") !== "")).toBe(true);
       expect(approved?.metadata.successCriteria?.[0]?.check).toBeDefined(); // the code check survives approval

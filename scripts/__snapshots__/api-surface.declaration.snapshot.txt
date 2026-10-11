@@ -338,7 +338,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (664 exports)
+# @jevitate/explore (666 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -557,6 +557,8 @@
   expectedChange: function
   ExpectedChange: interface
   expectedResultFromDelta: function
+  explainCheck: function
+  explainTarget: function
   explore: function
   EXPLORE: variable
   ExploreConfig: interface
@@ -1152,7 +1154,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (221 exports)
+# @jevitate/journey (223 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1288,6 +1290,7 @@
   JourneyRegistry: class
   JourneyReview: type-alias
   JourneyReviewAnchorWarning: type-alias
+  JourneyReviewAttention: type-alias
   JourneyReviewChange: type-alias
   JourneyReviewLocatorHealth: type-alias
   JourneyReviewProposal: type-alias
@@ -1349,6 +1352,7 @@
   resolveAnchorStep: function
   resolveJourneyStep: function
   ReviewAnchorWarningSchema: variable
+  ReviewAttentionSchema: variable
   ReviewChangeSchema: variable
   ReviewLintFindingSchema: variable
   ReviewLocatorHealthSchema: variable

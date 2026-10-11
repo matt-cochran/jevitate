@@ -222,7 +222,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (433 exports)
+# @jevitate/explore (435 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -469,6 +469,8 @@
   expandBraces: function
   expectedChange: function
   expectedResultFromDelta: function
+  explainCheck: function
+  explainTarget: function
   explore: function
   failureLine: function
   fieldKind: function
@@ -744,7 +746,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (127 exports)
+# @jevitate/journey (128 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -812,6 +814,7 @@
   ProposalStepSchema: object
   RejectedProposalSchema: object
   ReviewAnchorWarningSchema: object
+  ReviewAttentionSchema: object
   ReviewChangeSchema: object
   ReviewLintFindingSchema: object
   ReviewLocatorHealthSchema: object
