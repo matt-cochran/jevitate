@@ -168,6 +168,28 @@ export interface ClassifiedLogCause {
   readonly source: string;
   readonly message: string;
   readonly count: number;
+  /** #484: findings this cause (a write jevitate blocked) set off — each `causedBy` it, never a defect. */
+  readonly consequences?: readonly CausedFinding[];
+}
+
+/** #484: a finding a blocked write caused (`causedBy` its root) — listed under the environment fault. */
+export interface CausedFinding {
+  readonly kind: string;
+  readonly title: string;
+  readonly fingerprint: string;
+  readonly step: number;
+}
+
+function causedFindings(v: unknown): CausedFinding[] {
+  return arr(v)
+    .filter(isRecord)
+    .flatMap((c): CausedFinding[] => {
+      const kind = str(c.kind);
+      const title = str(c.title);
+      const fingerprint = str(c.fingerprint);
+      const step = num(c.firstSeenStep);
+      return kind === undefined || title === undefined || fingerprint === undefined || step === undefined ? [] : [{ kind, title, fingerprint, step }];
+    });
 }
 
 /** A result's classified causes (`environmentFaults.causes`, `expectedValidation`), skipping malformed entries. */
@@ -179,7 +201,9 @@ function classifiedCauses(v: unknown): ClassifiedLogCause[] {
       const source = typeof c.source === "string" ? c.source : undefined;
       const message = typeof c.message === "string" ? c.message : undefined;
       const count = num(c.count);
-      return ruleId === undefined || source === undefined || message === undefined || count === undefined ? [] : [{ ruleId, source, message, count }];
+      if (ruleId === undefined || source === undefined || message === undefined || count === undefined) return [];
+      const consequences = causedFindings(c.consequences);
+      return [{ ruleId, source, message, count, ...(consequences.length === 0 ? {} : { consequences }) }];
     });
 }
 
@@ -197,18 +221,22 @@ export interface EnvironmentCauseSummary extends ClassifiedLogCause {
 }
 
 export function environmentCausesOf(runs: readonly RunRecord[]): EnvironmentCauseSummary[] {
-  const byKey = new Map<string, { cause: ClassifiedLogCause; count: number; runs: Set<string> }>();
+  const byKey = new Map<string, { cause: ClassifiedLogCause; count: number; runs: Set<string>; consequences: Map<string, CausedFinding> }>();
   for (const r of runs) {
     for (const c of r.environmentFaults ?? []) {
       const key = `${c.ruleId}\u0000${c.source}\u0000${c.message}`;
-      const seen = byKey.get(key) ?? { cause: c, count: 0, runs: new Set<string>() };
+      const seen = byKey.get(key) ?? { cause: c, count: 0, runs: new Set<string>(), consequences: new Map<string, CausedFinding>() };
       seen.count += c.count;
       seen.runs.add(r.runId);
+      for (const k of c.consequences ?? []) if (!seen.consequences.has(k.fingerprint)) seen.consequences.set(k.fingerprint, k);
       byKey.set(key, seen);
     }
   }
   return [...byKey.values()]
-    .map(({ cause, count, runs: hit }) => ({ ...cause, count, runs: hit.size }))
+    .map(({ cause, count, runs: hit, consequences }) => {
+      const { consequences: _own, ...rest } = cause;
+      return { ...rest, count, runs: hit.size, ...(consequences.size === 0 ? {} : { consequences: [...consequences.values()] }) };
+    })
     .sort((a, b) => b.runs - a.runs || b.count - a.count);
 }
 

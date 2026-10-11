@@ -85,6 +85,11 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
       collectParam,
       {} as Record<string, string>,
     )
+    .option(
+      "--allow <origin...>",
+      "#484: replay with these origins instead of the allow list stored with the result (explicit only; recorded on the report)",
+    )
+    .option("--env <name>", "#484: replay with this environment's CURRENT allow list (.jevitate/environments.json) instead of the stored one")
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed and compare the defect step's delta with the one the Recording stored — a mismatch is evidence on each attempt (never the verdict)")
     .option("--json", "emit the JSON envelope (default: a human summary)")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
@@ -101,6 +106,8 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           allowLogCmd?: boolean;
           hangReplayWrites?: boolean;
           actionDeltas?: boolean;
+          allow?: string[];
+          env?: string;
           secret: string[];
           param: Record<string, string>;
           json?: boolean;
@@ -165,6 +172,8 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           browser,
           ...(screenshots === undefined ? {} : { screenshots }),
           ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
+          ...(o.allow === undefined ? {} : { allow: o.allow }),
+          ...(o.env === undefined ? {} : { env: o.env, ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }) }),
           ...(verifyFixEmulation === undefined ? {} : { emulation: verifyFixEmulation }),
           ...(o.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: o.allowEmulationOverride }),
         });

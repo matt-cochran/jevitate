@@ -62,12 +62,13 @@ export async function settleMisuseStep(ctx: HuntState, ep: EpisodeState, turn: T
   // #403: the step's window closes; the writes it fired off the --allow origins were blocked.
   ctx.offAllowlist.settled();
   const blockedNow = ctx.offAllowlist.drain();
-  ctx.blockedWrites.push(...blockedNow);
+  // #484: each block is a root later findings link to; the first loopback --allow mismatch is warned about, first.
+  const mismatchWarning = ctx.noteBlocked(blockedNow, step);
   const blocked = [...new Set(blockedNow.map((b) => `${b.method} ${b.path}`))];
   const blockedNote =
     blocked.length === 0
       ? undefined
-      : `blocked write(s) ${redactText(blocked.join(", "), ctx.secrets)}: not an --allow origin, never sent (${redactText([...new Set(blockedNow.flatMap((b) => (b.hint === undefined ? [] : [b.hint])))].join("; "), ctx.secrets)})`;
+      : `${mismatchWarning === undefined ? "" : `${redactText(mismatchWarning, ctx.secrets)} — `}blocked write(s) ${redactText(blocked.join(", "), ctx.secrets)}: not an --allow origin, never sent (${redactText([...new Set(blockedNow.flatMap((b) => (b.hint === undefined ? [] : [b.hint])))].join("; "), ctx.secrets)})`;
   // #303 (opt-in): what this settled action changed — on its transcript step, and kept as
   // evidence for a defect first seen at this step.
   if (ctx.deltaArmed !== null) {

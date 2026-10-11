@@ -3,6 +3,8 @@ export const EXPLORE = "explore" as const;
 
 export * from "./bounds.js";
 export * from "./authorized-targets.js";
+export * from "./allow-origin-mismatch.js";
+export * from "./blocked-cause.js";
 export * from "./redact.js";
 export * from "./snapshot.js";
 export * from "./page-monitor.js";

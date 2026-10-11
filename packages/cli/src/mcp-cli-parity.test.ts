@@ -286,6 +286,8 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       "--browser-executable": OMIT.browserBin,
       "--browser-channel": OMIT.browserBin,
       "--browser-arg": OMIT.browserBin,
+      "--allow": "#484: the verify_fix allow/env args land with the d-surface step",
+      "--env": "#484: the verify_fix allow/env args land with the d-surface step",
     },
   },
   queue_exploration: {

@@ -68,6 +68,9 @@ const BRANCH_RECORDED = "#293: a branch-point finding still replays through its 
 const NO_ANCHORED_HERE = "#293: a journey-anchored mission is an `explore --from-journey` run, a suite mission item or a campaign job — never this surface";
 
 /** `<file> <api>` → option → why that surface does not pass it. */
+/** #484: replaying under another allow list is an explicit, per-finding `verify-fix --allow/--env` decision. */
+const STORED_ALLOWLIST = { allow: "#484: replays with the result's stored allow list; overriding it is an explicit verify-fix --allow/--env", env: "#484: replays with the result's stored allow list; overriding it is an explicit verify-fix --allow/--env", environmentsFile: "#484: only read for an explicit verify-fix --env" };
+
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
   "explore-cli.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
@@ -122,6 +125,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     emulation: "replays under each finding's own recorded emulation",
     allowEmulationOverride: "replays under each finding's own recorded emulation",
     journeyPrefix: BRANCH_RECORDED,
+    ...STORED_ALLOWLIST,
   },
   "regression-cli.ts runRegressionCapture": {},
   "regression-cli.ts runRegressionRun": {},
@@ -134,6 +138,9 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     hangReplayWrites: MCP_NARROW,
     secrets: MCP_NARROW,
     journeyPrefix: BRANCH_RECORDED,
+    allow: "#484: the MCP verify_fix allow/env args land with the d-surface step",
+    env: "#484: the MCP verify_fix allow/env args land with the d-surface step",
+    environmentsFile: "#484: only read for an explicit --env (MCP args land with the d-surface step)",
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
@@ -286,6 +293,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariantAuthTokens: "usability refuses declared invariants (#150)",
   },
   "check-execute.ts runVerifyFix": {
+    ...STORED_ALLOWLIST,
     actionDeltas: NO_DELTAS_HERE,
     evidencePaceMs: EVIDENCE_PACE,
     screenshots: NO_SCREENSHOTS_HERE,
