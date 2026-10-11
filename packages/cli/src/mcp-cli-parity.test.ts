@@ -57,6 +57,8 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "install-browser":
     "#450: a host operation (downloads a browser into the machine's shared browsers dir): the operator's, like doctor; MCP tools report a missing browser with this command as the fix",
   "browser-path": "#450: host introspection for project scripts (browsers dir, pinned revision, executable path); no run capability to expose over MCP",
+  "journey anchor add": "#487: MCP parity (the API is journey-anchor-api.ts) lands with the d-surface deliverable of 0.11.0",
+  "journey anchor remove": "#487: MCP parity (the API is journey-anchor-api.ts) lands with the d-surface deliverable of 0.11.0",
   "journey migrate":
     "#467: a one-time rewrite of the repo's Journeys and recordings (mints step ids; changes every promoted Journey's hash) that the operator runs once and commits — not an agent capability; review_journey stale: true lists what then needs re-approval",
   "connect journeeze":

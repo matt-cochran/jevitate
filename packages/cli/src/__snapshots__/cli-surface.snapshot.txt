@@ -597,6 +597,30 @@
 # journey
   description: manage and run promoted Journeys (regression-test replays)
 
+# journey anchor
+  description: add or remove a draft Journey's anchors (#487): named steps to branch missions off, written with the step's stable id
+
+# journey anchor add
+  description: add an anchor to a draft Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues
+  arguments:
+    - name=journeyId required=true variadic=false default=null
+  options:
+    - flags=--description <text> required=true mandatory=false negate=false variadic=false default=null description=what this state is, in words
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--name <name> required=true mandatory=true negate=false variadic=false default=null description=the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit
+    - flags=--probe <text> required=true mandatory=false negate=false variadic=false default=[] description=a suggested adversarial probe at this state (repeatable)
+    - flags=--step <n|stepId> required=true mandatory=true negate=false variadic=false default=null description=the step the anchor follows: a 1-based step number or a step id
+
+# journey anchor remove
+  description: remove an anchor from a draft Journey; re-lints and prints the anchor issues
+  arguments:
+    - name=journeyId required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--name <name> required=true mandatory=true negate=false variadic=false default=null description=the anchor to remove
+
 # journey anchors
   description: list a Journey's anchors (#293): named steps to branch a mission off with `explore --from-journey <id> --at-step <name>`, and their suggested probes
   arguments:
@@ -687,6 +711,7 @@
     - name=id required=true variadic=false default=null
   options:
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--fix required=false mandatory=false negate=false variadic=false default=null description=#487: stamp the step id of each anchor that references a step by number only, write the Journey (a draft; a promoted one is refused), and report what was fixed
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--sarif <file> required=true mandatory=false negate=false variadic=false default=null description=also write a SARIF 2.1.0 log here
 

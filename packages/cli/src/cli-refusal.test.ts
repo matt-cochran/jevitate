@@ -219,6 +219,12 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "journey verify": { cases: [["nope", "--mutate"], ["nope"], ["nope", "--mutate", "--storage-state", missing]] },
   // #293: an unknown Journey (or an id that tries to leave the store) is refused.
   "journey anchors": { cases: [["nope"], ["../x"]] },
+  // #487: an unknown Journey (or traversal id), a bad or unknown step, a bad name; removing an unknown anchor.
+  "journey anchor add": {
+    base: ["nope", "--name", "a", "--step", "1"],
+    cases: [["nope", "--name", "a", "--step", "1"], ["../x", "--name", "a", "--step", "1"], ["nope", "--name", "Bad Name", "--step", "1"], ["nope", "--name", "a", "--step", "zzz"]],
+  },
+  "journey anchor remove": { base: ["nope", "--name", "a"], cases: [["nope", "--name", "a"], ["../x", "--name", "a"]] },
   // #293: a missing/unreadable spec, and a campaign with no model gateway.
   "campaign run": { cases: [[missing, "--fake-ai"], [missing]] },
   // #425: a missing/invalid targets file, and --resume without the sweep dir to resume.
