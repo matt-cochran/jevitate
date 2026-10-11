@@ -120,6 +120,7 @@ export const OMIT = {
   reviewRendering: "#432: review_journey returns the schema-checked JSON sheet; the Markdown/text renderings and writing them to a file are for people at the CLI",
   nonInteractiveApproval:
     "#437: the scripted-setup escape hatch for a CLI approval is the operator's choice, never a request's: an MCP approval needs no hatch — it is always recorded with provenance channel `mcp` (an agent's approval), which `check --require-approvals` fails unless the operator allows `mcp`",
+  anchorEdit: "#487: writing a Journey (journey lint --fix) gets its MCP argument with the d-surface deliverable of 0.11.0, alongside the anchor add/remove tools",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
@@ -277,7 +278,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "lint_journey",
     description:
       "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding.",
-    command: { path: "journey lint", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "journey lint", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, "--fix": OMIT.anchorEdit, ...JSON_FLAG } },
   },
   {
     name: "journey_anchors",

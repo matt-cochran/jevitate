@@ -33,6 +33,8 @@ import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js"
 import { withSiteGate } from "./site-gate-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
 import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
+import { registerJourneyAnchorCommands, anchorEditFailure } from "./journey-anchor-cli.js";
+import { fixJourneyAnchors } from "./journey-anchor-api.js";
 import { journeyIntentCoverage } from "./journey-annotate-api.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
@@ -673,19 +675,34 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .description("report a Journey's weak assertions (writes without an asserted effect, visibility-only claims, nothing after the last write, …)")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--sarif <file>", "also write a SARIF 2.1.0 log here")
+    .option("--fix", "#487: stamp the step id of each anchor that references a step by number only, write the Journey (a draft; a promoted one is refused), and report what was fixed")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, sarif } = this.opts<{ dir?: string; json?: boolean; sarif?: string }>();
+      const { dir, json, sarif, fix } = this.opts<{ dir?: string; json?: boolean; sarif?: string; fix?: boolean }>();
       try {
+        let fixed: Awaited<ReturnType<typeof fixJourneyAnchors>>["stamped"] = [];
+        if (fix === true) {
+          try {
+            fixed = (await fixJourneyAnchors(resolveJourneysDir(deps, dir), id)).stamped;
+          } catch (err) {
+            if (err instanceof UnknownJourneyError) throw err;
+            anchorEditFailure(program, err);
+            return;
+          }
+        }
         const result = await lintJourneyById(resolveJourneysDir(deps, dir), id, { catalogDir: resolveCatalogDir(deps.catalogDir) });
         if (sarif !== undefined) {
           const log = renderJourneyLintSarif({ id: result.id, findings: result.findings, version: currentEngineInfo().version });
           await writeFile(sarif, `${JSON.stringify(log, null, 2)}\n`);
         }
         if (json) {
-          emitJson(program, ok({ id: result.id, findings: result.findings, errors: result.errors, warnings: result.warnings }));
+          emitJson(program, ok({ id: result.id, findings: result.findings, errors: result.errors, warnings: result.warnings, ...(fix === true ? { fixed } : {}) }));
         } else {
           const out = program.configureOutput().writeOut;
+          if (fix === true) {
+            for (const a of fixed) out?.(`fixed: anchor '${a.name}' now carries stepId '${a.stepId}' (step ${a.step})\n`);
+            if (fixed.length === 0) out?.("fixed: nothing — no anchor references a step by number only\n");
+          }
           for (const finding of result.findings) out?.(`${lintFindingLine(finding)}\n`);
           out?.(`${result.errors} error(s), ${result.warnings} warning(s) — journey '${result.id}'\n`);
         }
@@ -833,6 +850,9 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         emitJson(program, fail("E_JOURNEY_ANCHORS_ARGS", String(err instanceof Error ? err.message : err)));
       }
     });
+
+  // #487 — add/remove a draft Journey's anchors with the step id written at once.
+  registerJourneyAnchorCommands(journey, program, deps);
 
   // #246 — draft a Journey's intent on playback; `--approve` is the human gate that writes it.
   registerJourneyAnnotateCommand(journey, program, deps);
