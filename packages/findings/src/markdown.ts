@@ -144,13 +144,22 @@ export function renderReportMarkdown(input: ReportMarkdownInput): string {
     out.push(
       "## Environment faults",
       "",
-      "Backend log lines classed `environment` (`.jevitate/log-classes.json` or a built-in rule): fix these in the test environment's setup. They are not defects and never gate.",
+      "Backend log lines classed `environment` (`.jevitate/log-classes.json` or a built-in rule) and writes jevitate blocked (`jevitate:blocked-write`, not an --allow origin, never sent): fix these in the test environment's setup. They are not defects and never gate.",
       "",
       "| rule | source | message | lines | runs |",
       "| --- | --- | --- | --- | --- |",
       ...environment.map((c) => `| \`${c.ruleId}\` | ${cell(c.source)} | ${cell(c.message.slice(0, 200))} | ${c.count} | ${c.runs}/${input.runs.length} |`),
       "",
     );
+    // #484: what a write jevitate refused to send set off, grouped under that root event — never defects.
+    for (const c of environment.filter((e) => (e.consequences ?? []).length > 0)) {
+      out.push(
+        `Caused by \`${c.message.slice(0, 200)}\` (not defects):`,
+        "",
+        ...(c.consequences ?? []).map((k) => `- ${k.kind}: ${k.title} (step ${k.step}, \`${k.fingerprint}\`)`),
+        "",
+      );
+    }
   }
   out.push(
     "## Runs",
