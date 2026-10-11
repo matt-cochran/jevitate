@@ -7,9 +7,10 @@ import { CampaignSpecError, runCampaign, validateCampaign, type CampaignResult }
 import { type CliDeps, emitCommandResult, environmentSeams, resolveJourneysDir, resolveMissionTargetsDir, withScreenshotsFlag } from "./cli-shared.js";
 import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
 import { forwardedArgv } from "./multi-run-cli.js";
+import { CampaignPreflightError, defaultPreflightDeps } from "./campaign-preflight.js";
 
 /** `campaign run`'s own options: everything else it declares is forwarded to every mission (#311). */
-const CAMPAIGN_OWNED: ReadonlySet<string> = new Set(["journeysDir", "out", "allowShellHooks", "hookTimeoutMs", "real", "fakeAi", "json"]);
+const CAMPAIGN_OWNED: ReadonlySet<string> = new Set(["journeysDir", "out", "allowShellHooks", "hookTimeoutMs", "real", "fakeAi", "json", "skipPreflight"]);
 
 const collect = (v: string, prev: string[]): string[] => [...prev, v];
 
@@ -55,6 +56,7 @@ export function formatCampaignHuman(data: unknown): string {
   const r = data as CampaignResult;
   const lines = [
     `CAMPAIGN ${r.name ?? ""}`.trimEnd(),
+    ...(r.preflight === undefined ? [] : [`preflight ${r.preflight.skipped === true ? "skipped (--skip-preflight)" : r.preflight.ok ? "ok" : `${r.preflight.problems.length} problem(s)`}`]),
     `outcome  ${r.missionOutcome} (exit ${r.exitCode}) · ${r.missions.length} mission(s) · ${r.report.summary.defects} deduped defect(s), ${r.report.summary.advisory} advisory`,
     ...r.discovery.filter((d) => d.outcome !== "ok").map((d) => `STALE    job ${d.job}: journey ${d.journeyId} — ${d.reason ?? d.outcome} (its missions were skipped)`),
     ...r.missions.map(
@@ -83,13 +85,18 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
     .option("--out <dir>", "the campaign's directory: every mission's results, campaign.json and campaign.md (default .jevitate/logs/<date>/campaign-<stamp>)")
     .option("--allow-shell-hooks", "opt in to running the spec's before/after operator hooks around every run (never model-chosen)", false)
     .option("--hook-timeout-ms <ms>", "timeout for each of the spec's before/after hooks (default 60000; the process group is killed)", positiveIntArg)
+    .option(
+      "--skip-preflight",
+      "do not check the campaign's preconditions first (start URLs reachable, sessions signed in, no allow-list origin mismatch in discovery) — by default a failed check refuses the campaign (exit 64) before any mission",
+      false,
+    )
     .option("--real", "use live Jev + OpenRouter gateways for the missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit the JSON envelope (default: a human summary)")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "campaign run", async function (this: Command, spec: string) {
-      const o = this.opts<{ journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; jevProvider?: string; json?: boolean }>();
+      const o = this.opts<{ journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; jevProvider?: string; json?: boolean; skipPreflight?: boolean }>();
       const emit = (envelope: Parameters<typeof emitCommandResult>[1], exitCode?: number): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "campaign run", human: formatCampaignHuman, ...(exitCode === undefined ? {} : { exitCode }) });
       if (o.real !== true && o.fakeAi !== true) {
@@ -112,10 +119,12 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
           ...(o.real === true ? { real: true } : {}),
           ...(o.fakeAi === true ? { fakeAi: true } : {}),
           missionArgs: campaignMissionArgv(this),
+          // #485: the preflight's checks open the same browser port the missions use.
+          preflight: o.skipPreflight === true ? "skip" : defaultPreflightDeps(deps.explore?.browserPortFactory),
         });
         emit(ok(withEngine(result)), result.exitCode);
       } catch (err) {
-        if (err instanceof CampaignSpecError) emit(fail(err.code, err.message));
+        if (err instanceof CampaignSpecError || err instanceof CampaignPreflightError) emit(fail(err.code, err.message));
         else emit(fail("E_CAMPAIGN_RUN", String(err instanceof Error ? err.message : err)));
       }
     }));

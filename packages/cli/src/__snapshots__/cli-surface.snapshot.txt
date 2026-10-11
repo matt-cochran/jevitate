@@ -98,6 +98,7 @@
     - flags=--record-video [dir] required=false mandatory=false negate=false variadic=false default=null description=record a video of each mission's browser context (forwarded to every mission, as explore's)
     - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
     - flags=--server-log-drain-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's)
+    - flags=--skip-preflight required=false mandatory=false negate=false variadic=false default=false description=do not check the campaign's preconditions first (start URLs reachable, sessions signed in, no allow-list origin mismatch in discovery) — by default a failed check refuses the campaign (exit 64) before any mission
     - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
 
 # catalog

@@ -472,7 +472,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
   mutation: MutationReplayOptions = {},
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[] } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[]; offAllowlistWrites?: string[] } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -563,6 +563,9 @@ export async function runJourneyProgrammatically(
         ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
       }));
     const closeSession = opts.session === undefined ? closeOnce(() => session.close()) : async (): Promise<void> => undefined;
+    // #485: the origins outside the run's allow list that the page sent a write to (origins only —
+    // never a path, query or body). The campaign preflight reads them for an allow-list slip.
+    const offAllowlist = watchOffAllowlistWrites(session, allowedOrigins);
     try {
       const actor = CastActor.named("cli-runner").whoCan(
         new BrowseTheWeb(session, allowedOrigins),
@@ -626,15 +629,18 @@ export async function runJourneyProgrammatically(
         ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
       };
       const slowFields = outcomeChecks.slowSteps.length === 0 ? {} : { slowSteps: [...outcomeChecks.slowSteps] };
+      const writeOrigins = offAllowlist.stop();
+      const originFields = writeOrigins.length === 0 ? {} : { offAllowlistWrites: redactSecretValues(writeOrigins, secrets) };
       const shotFields = shots === undefined ? {} : await shots.finish();
       const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretParams(replayDeltaSummary(replayDeltas), journey, params) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
-      if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...mutationFields };
+      if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields };
       await fx.restore();
       // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
-      return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
+      return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
     } finally {
+      offAllowlist.stop();
       await closeSession();
     }
   } catch (err) {
@@ -644,6 +650,50 @@ export async function runJourneyProgrammatically(
   } finally {
     await fx?.restore();
   }
+}
+
+const READ_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * #485: records each distinct origin outside `allowedOrigins` that the session's context sent a
+ * write (any method but GET/HEAD/OPTIONS) to. A replay never blocks them; this only observes.
+ * A session whose page has no context events (a test double) observes nothing.
+ */
+export function watchOffAllowlistWrites(session: BrowserSession, allowedOrigins: readonly string[]): { stop(): string[] } {
+  const allowed = new Set(allowedOrigins.flatMap((o) => {
+    try {
+      return [new URL(o).origin];
+    } catch {
+      return [];
+    }
+  }));
+  const seen: string[] = [];
+  const onRequest = (request: { method(): string; url(): string }): void => {
+    if (READ_METHODS.has(request.method().toUpperCase())) return;
+    let origin: string;
+    try {
+      const u = new URL(request.url());
+      if (u.protocol !== "http:" && u.protocol !== "https:") return;
+      origin = u.origin;
+    } catch {
+      return;
+    }
+    if (!allowed.has(origin) && !seen.includes(origin)) seen.push(origin);
+  };
+  const page = session.page as Partial<Page> | undefined;
+  const context = typeof page?.context === "function" ? page.context() : undefined;
+  if (context === undefined || typeof context.on !== "function") return { stop: () => [...seen] };
+  context.on("request", onRequest);
+  let stopped = false;
+  return {
+    stop: () => {
+      if (!stopped) {
+        stopped = true;
+        context.off("request", onRequest);
+      }
+      return [...seen];
+    },
+  };
 }
 
 /** The heal probe's evidence: a masked screenshot of the page after each candidate, under `<logs>/journey-<id>-<stamp>.heal/`. */

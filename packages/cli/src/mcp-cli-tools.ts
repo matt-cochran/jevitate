@@ -123,6 +123,7 @@ export const OMIT = {
   anchorEdit: "#487: writing a Journey (journey lint --fix) gets its MCP argument with the d-surface deliverable of 0.11.0, alongside the anchor add/remove tools",
   anchorSuggest: "#487: journey anchors --suggest (advisory anchor proposals) lands with the d-surface deliverable of 0.11.0",
   stepResponseTimeout: "#486: journey run --step-response-timeout gets its run_journey argument with the d-surface deliverable of 0.11.0",
+  skipPreflight: "#485: campaign run --skip-preflight gets its run_campaign argument with the d-surface deliverable of 0.11.0",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
@@ -539,6 +540,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         "--journeys-dir": OMIT.storeDir,
         "--allow-shell-hooks": OMIT.hooks,
         "--hook-timeout-ms": OMIT.hooks,
+        "--skip-preflight": OMIT.skipPreflight,
         "--allow-log-cmd": OMIT.logCmd,
         "--log-source": OMIT.logCmd,
         "--log-defect": OMIT.logCmd,

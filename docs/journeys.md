@@ -665,8 +665,22 @@ Declare anchors in the Journey's `metadata` (validated: names unique, each step 
 | `discovery` | `false` skips the discovery replay |
 | `maxRuns` | The mission cap (default 50, at most 200); `maxActions` (default 40) and `maxDecisions` are per-mission defaults |
 
+**Preflight (#485).** Before any mission, `campaign run` checks the campaign's own preconditions
+and refuses (`E_CAMPAIGN_PREFLIGHT`, exit 64) listing EVERY problem, not just the first: each job's
+start URL must be reachable (a connect probe — no environment declares a health check); each job's
+`storageState` must still be signed in (its Journey's start page must not land on a sign-in route
+or form — the same check as `explore`'s auth pre-flight; only the file's name is ever reported,
+never its contents); and the discovery replay of each job's Journey must not write to a loopback
+origin the environment's `allow` list misspells or leaves out (`localhost` vs `127.0.0.1`, or a
+backend port), which would block every mission's write there. Such a problem names the exact
+origin to add, e.g. `add http://127.0.0.1:3000 to the environment's allow list`. A job whose start
+URL is down or whose session is signed out is not replayed. The verdict is `preflight: { ok,
+problems[] }` in `campaign.json` (written even on a refusal) and a `preflight` line in the human
+summary. An expired session is not refreshed automatically (a campaign names no persona login):
+re-save it with `jevitate login`. `--skip-preflight` runs the campaign without these checks.
+
 **Mission options (#311).** Every `campaign run` flag beyond its own (`--journeys-dir`, `--out`,
-`--allow-shell-hooks`, `--hook-timeout-ms`, `--real`/`--fake-ai`, `--json`) is forwarded to every
+`--allow-shell-hooks`, `--hook-timeout-ms`, `--skip-preflight`, `--real`/`--fake-ai`, `--json`) is forwarded to every
 anchored mission as given: `--allow-destructive`, `--allow-writes`, `--deny`, `--paid`,
 `--invariants`, the backend-log flags (`--log-source`, `--log-defect`, `--log-scope`, …,
 `--server-log-drain-ms`), `--evidence-video`, `--record-video` and `--screenshots`. They are operator

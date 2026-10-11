@@ -32,6 +32,15 @@ import { exitCodeForOutcome } from "./exit-codes.js";
 import { artifactStamp } from "./mission-journal.js";
 import { logsDirFor } from "./project-dir.js";
 import type { RunRecord } from "@jevitate/findings";
+import {
+  allowOriginProblems,
+  checkCampaignTargets,
+  CampaignPreflightError,
+  preflightOf,
+  type CampaignPreflight,
+  type CampaignPreflightDeps,
+  type PreflightProblem,
+} from "./campaign-preflight.js";
 
 /**
  * #293 — `jevitate campaign run <spec.json>`: many journey-anchored missions, run in order, read as
@@ -79,6 +88,10 @@ export interface CampaignJobPlan {
   readonly journey: string;
   readonly params: Readonly<Record<string, string>>;
   readonly storageState?: string;
+  /** #485: the Journey's first page on the campaign's environment (the preflight's reachability and signed-in checks). */
+  readonly startUrl?: string;
+  /** #485: the origins this job's runs may reach (the environment's allow list, else the Journey's site). */
+  readonly allowlist?: readonly string[];
   readonly anchors: readonly CampaignAnchor[];
   readonly strategies: readonly AnchoredStrategy[];
   readonly goal?: string;
@@ -263,6 +276,8 @@ export async function validateCampaignSpec(raw: unknown, specPath: string, opts:
       journey: job.journey,
       params: job.params ?? {},
       ...(session === undefined ? {} : { storageState: session }),
+      startUrl: journeyStartUrl(full.recording),
+      allowlist: environment === undefined ? [new URL(full.recording.site).origin] : [...environment.allowedOrigins],
       anchors,
       strategies: job.strategies,
       ...(job.goal === undefined ? {} : { goal: job.goal }),
@@ -286,6 +301,15 @@ export async function validateCampaignSpec(raw: unknown, specPath: string, opts:
     totalRuns,
     jobs,
   };
+}
+
+/** A Journey's first page, resolved against its site (#485 preflight). */
+function journeyStartUrl(recording: { readonly site: string; readonly pages: ReadonlyArray<{ readonly url: string }> }): string {
+  try {
+    return new URL(recording.pages[0]?.url ?? "/", recording.site).href;
+  } catch {
+    return recording.site;
+  }
 }
 
 // ── Running ───────────────────────────────────────────────────────────────────────────────────
@@ -318,6 +342,8 @@ export interface CampaignResult {
   readonly outDir: string;
   readonly startedAt: string;
   readonly finishedAt: string;
+  /** #485: the campaign's preflight (`campaign run`; absent for an `explore --at-step` sweep). */
+  readonly preflight?: CampaignPreflight;
   readonly discovery: readonly CampaignDiscovery[];
   /** #486: advisory slowness of the discovery replays (a Journey shared by several jobs is replayed once per job). */
   readonly slowness?: SlownessReport;
@@ -348,6 +374,11 @@ export interface RunCampaignOptions {
   readonly nowIso?: () => string;
   /** More `explore` flags every mission is run with (an `explore --at-step all` sweep forwards its own). */
   readonly missionArgs?: readonly string[];
+  /**
+   * #485: run the preflight with these seams before any mission (`campaign run`), or `"skip"`
+   * (`--skip-preflight`: recorded as skipped). Absent: no preflight (an `explore --at-step` sweep).
+   */
+  readonly preflight?: CampaignPreflightDeps | "skip";
 }
 
 interface ChildRun {
@@ -426,16 +457,36 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
     }
   };
 
-  for (const job of plan.jobs) {
+  // #485: the preflight's reachability and signed-in checks, before any browser run.
+  const preflightProblems: PreflightProblem[] = [];
+  /** Jobs whose start URL is down or whose session is signed out: their discovery would only mislead. */
+  let blocked: ReadonlySet<string> = new Set();
+  const preflightJobs = plan.jobs.map((job) => ({
+    id: job.id,
+    journey: job.journey,
+    startUrl: job.startUrl ?? "",
+    allowlist: job.allowlist ?? [],
+    ...(job.storageState === undefined ? {} : { storageState: job.storageState }),
+  }));
+  if (opts.preflight !== undefined && opts.preflight !== "skip") {
+    const targets = await checkCampaignTargets(preflightJobs.filter((j) => j.startUrl !== ""), opts.preflight);
+    preflightProblems.push(...targets.problems);
+    blocked = new Set(targets.problems.map((p) => p.job));
+  }
+
+  // Discovery first, for every job (#485: its writes are the preflight's allow-list evidence).
+  const staleOf = new Map<string, string>();
+  for (const [index, job] of plan.jobs.entries()) {
     const shared = commonArgs(plan, job);
-    let stale: string | undefined;
-    if (plan.discovery) {
+    if (plan.discovery && !blocked.has(job.id)) {
       const d = await restored(
         job,
         async (): Promise<CampaignDiscovery> => {
           const r = await runChild(opts.newProgram, ["journey", "run", job.journey, "--dir", opts.journeysDir, ...shared, "--json"]);
           if (!r.ok) return { job: job.id, journeyId: job.journey, outcome: "error", reason: `${r.error?.code}: ${r.error?.message}` };
           const outcome = r.data?.outcome;
+          const writes = Array.isArray(r.data?.offAllowlistWrites) ? r.data.offAllowlistWrites.filter((o): o is string => typeof o === "string") : [];
+          if (opts.preflight !== undefined && opts.preflight !== "skip") preflightProblems.push(...allowOriginProblems(preflightJobs[index]!, writes));
           replaySlowness.push({ journey: job.journey, slowSteps: Array.isArray(r.data?.slowSteps) ? (r.data.slowSteps as JourneyReplaySlowness["slowSteps"]) : [] });
           if (outcome === "ok") return { job: job.id, journeyId: job.journey, outcome: "ok" };
           return { job: job.id, journeyId: job.journey, outcome: "stale", reason: typeof r.data?.reason === "string" ? r.data.reason : `the replay ended ${String(outcome)}` };
@@ -443,8 +494,33 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
         (message): CampaignDiscovery => ({ job: job.id, journeyId: job.journey, outcome: "error", reason: `fixture setup failed: ${message}` }),
       );
       discovery.push(d);
-      if (d.outcome !== "ok") stale = d.reason ?? d.outcome;
+      if (d.outcome !== "ok") staleOf.set(job.id, d.reason ?? d.outcome);
     }
+  }
+
+  const preflight = opts.preflight === undefined ? undefined : opts.preflight === "skip" ? { ok: true, problems: [], skipped: true as const } : preflightOf(preflightProblems);
+  const resultPath = join(outDir, "campaign.json");
+  const reportPath = join(outDir, "campaign.md");
+  if (preflight !== undefined && !preflight.ok) {
+    // Refused before any mission: the result names every problem (and what discovery saw).
+    const refused = {
+      ...(plan.name === undefined ? {} : { name: plan.name }),
+      specPath: plan.specPath,
+      outDir,
+      startedAt,
+      finishedAt: now(),
+      preflight,
+      discovery,
+      missions: [],
+      resultPath,
+    };
+    await writeFile(resultPath, `${JSON.stringify(refused, null, 2)}\n`, "utf8");
+    throw new CampaignPreflightError(preflight.problems, resultPath);
+  }
+
+  for (const job of plan.jobs) {
+    const shared = commonArgs(plan, job);
+    const stale = staleOf.get(job.id);
     for (const anchor of job.anchors) {
       for (const strategy of job.strategies) {
         if (stale !== undefined) {
@@ -531,14 +607,13 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
   const slowReport = reportSlowness(replaySlowness);
   const slowness = slowReport.coldStarts.length + slowReport.slowSteps.length === 0 ? undefined : slowReport;
   const finishedAt = now();
-  const resultPath = join(outDir, "campaign.json");
-  const reportPath = join(outDir, "campaign.md");
   const result: CampaignResult = {
     ...(plan.name === undefined ? {} : { name: plan.name }),
     specPath: plan.specPath,
     outDir,
     startedAt,
     finishedAt,
+    ...(preflight === undefined ? {} : { preflight }),
     discovery,
     ...(slowness === undefined ? {} : { slowness }),
     missions,
@@ -560,6 +635,7 @@ function campaignMarkdown(r: CampaignResult, reportMarkdown: string): string {
     "",
     `${r.missions.length} anchored mission(s) · outcome ${r.missionOutcome} (exit ${r.exitCode}) · ${r.report.summary.defects} deduped defect(s), ${r.report.summary.advisory} advisory.`,
     "",
+    ...(r.preflight === undefined ? [] : ["## Preflight", "", r.preflight.skipped === true ? "Skipped (--skip-preflight)." : "Passed: every start URL reachable, every session signed in, no allow-list mismatch.", ""]),
     "## Discovery",
     "",
     ...(r.discovery.length === 0 ? ["Skipped (discovery: false)."] : ["| job | journey | outcome | reason |", "| --- | --- | --- | --- |", ...r.discovery.map((d) => `| ${d.job} | ${d.journeyId} | ${d.outcome} | ${(d.reason ?? "").replace(/\|/g, "\\|")} |`)]),
