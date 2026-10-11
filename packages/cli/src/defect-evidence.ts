@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { withRunTriage, type RunTriage } from "./explore-shared.js";
+import { journeyFixtureBaseDir } from "./journey-api.js";
 import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -306,7 +307,7 @@ export async function replayWithEvidence(input: EvidenceReplayInput): Promise<De
     collector = new PageSignalCollector(page, clock.now, input.allowlist);
     await monitorFor(page).instrument();
     const actor = CastActor.named("evidence").whoCan(new BrowseTheWeb(session, [...input.allowlist]));
-    const r = await new RecordingInterpreter({ observer }).runToCheckpoint(actor, observeAfterStep(input.recording, idx), idx);
+    const r = await new RecordingInterpreter({ observer, fixtureBaseDir: journeyFixtureBaseDir() }).runToCheckpoint(actor, observeAfterStep(input.recording, idx), idx);
     replay =
       r.outcome === "completed"
         ? { outcome: "completed" }

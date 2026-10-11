@@ -135,6 +135,7 @@ jevitate journey lint checkout --sarif lint.sarif
 | `nothing-after-last-write` | error | No effect assertion follows the last state-changing step |
 | `no-persistence-check` | warning | A write has no `reloadThen` end-state check, so persistence is unverified |
 | `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion |
+| `upload-file-missing` | error | An `upload` step's literal fixture path does not exist. Relative paths resolve against the project root (the folder holding `.jevitate/`), never the working directory; the message shows the resolved path |
 
 Warnings never block promotion. `--accept-weak "<reason>"` records the reason and the waived error
 rules in the Journey's `metadata.acceptedWeak`.

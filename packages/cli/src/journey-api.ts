@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type EmulationSpec } from "@jevitate/playwright";
 import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
-import { logsDirFor } from "./project-dir.js";
+import { findGitRoot, findProjectDir, logsDirFor, type LayoutDeps } from "./project-dir.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
 import { ReadOnlyGuard, ReplayDeltas, monitorFor, replayDeltaSummary, type BlockedWrite, type ReplayDeltaSummary } from "@jevitate/explore";
@@ -133,6 +133,11 @@ export interface RunJourneyProgrammaticallyOptions {
    */
   interpreter?: RecordingInterpreter;
   /**
+   * #488: the project root a relative `upload` fixture path resolves against (default: the parent
+   * of the nearest `.jevitate/`, else the git root, else cwd). Testing seam.
+   */
+  fixtureBaseDir?: string;
+  /**
    * The environment to run against (#247, `--env`/`--base-url`, from `resolveJourneyEnvironment`):
    * the Journey's recorded same-origin URLs move onto its `baseUrl` and the run's allowlist is its
    * `allowedOrigins`; a step on any other origin is refused before any fixture or browser.
@@ -243,13 +248,24 @@ export function prefixParams(full: Journey, prefix: Journey, params: Record<stri
 }
 
 /**
+ * #488: the project root relative `upload` fixture paths resolve against — the directory holding
+ * `.jevitate/`, else the git root, else the working directory. Never the process cwd by default.
+ */
+export function journeyFixtureBaseDir(deps: LayoutDeps = {}): string {
+  const project = findProjectDir(deps);
+  if (project !== null) return dirname(project);
+  const cwd = (deps.cwd ?? (() => process.cwd()))();
+  return findGitRoot(cwd) ?? cwd;
+}
+
+/**
  * #401: the assertion-strength lint (#401) for one Journey by id — an unknown id is refused,
  * exactly as `journey run`/`promote` refuse one (`UnknownJourneyError`). Pure read; no browser.
  */
 export async function lintJourneyById(
   dir: string,
   id: string,
-  opts: { readRequests?: readonly string[]; catalogDir?: string | null } = {},
+  opts: { readRequests?: readonly string[]; catalogDir?: string | null; baseDir?: string } = {},
 ): Promise<JourneyLintResult> {
   const registry = new JourneyRegistry(new FsJourneyStore(dir));
   const journey = await registry.get(id);
@@ -258,7 +274,12 @@ export async function lintJourneyById(
   }
   // #466: the 0.10 anchor rules are warnings here (lintJourney's own, plus the catalog's jobStep/serves references).
   const { refIssues } = await journeyAnchorIssues(journey, { catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir, journeysDir: dir });
-  const findings = [...lintJourney(journey, opts.readRequests === undefined ? {} : { readRequests: opts.readRequests }), ...refLintFindings(refIssues)];
+  // #488: resolve relative upload fixture paths against the project root (the `.jevitate` parent).
+  const lintOpts = {
+    baseDir: opts.baseDir ?? journeyFixtureBaseDir(),
+    ...(opts.readRequests === undefined ? {} : { readRequests: opts.readRequests }),
+  };
+  const findings = [...lintJourney(journey, lintOpts), ...refLintFindings(refIssues)];
   return {
     id,
     findings,
@@ -557,11 +578,12 @@ export async function runJourneyProgrammatically(
         shots === undefined ? undefined : screenshotObserver(shots, (a) => a.ability(BrowseTheWebToken).session.page, whatOf),
       );
       const skipStep = mutation.skipStep;
+      const fixtureBaseDir = opts.fixtureBaseDir ?? journeyFixtureBaseDir();
       const interpreter =
         opts.interpreter ??
         (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined
-          ? new RecordingInterpreter()
-          : new RecordingInterpreter({ observer, ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }) }));
+          ? new RecordingInterpreter({ fixtureBaseDir })
+          : new RecordingInterpreter({ observer, fixtureBaseDir, ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }) }));
       const heal: JourneyHealOptions | undefined =
         opts.heal === undefined || healGuard === undefined
           ? undefined

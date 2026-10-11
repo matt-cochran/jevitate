@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Recording, RecordedStep } from "@jevitate/recording";
 import { lintJourney, type Journey } from "./index.js";
 
@@ -245,5 +248,40 @@ describe("#466 lintJourney: the 0.10 anchor rules", () => {
 
   it("reports a job-linked Journey without anchors", () => {
     expect(lintJourney(j([click], { job: "checkout" })).some((f) => f.rule === "job-anchors" && f.level === "warning")).toBe(true);
+  });
+});
+
+describe("#488 lintJourney: relative upload fixture paths", () => {
+  function uploadStep(file: RecordedStep["step"] extends { file: infer F } ? F : never): RecordedStep {
+    return {
+      step: {
+        kind: "upload",
+        target: { testId: "receipt" },
+        file,
+        expect: { kind: "textIncludes", target: { role: "status" }, text: "Uploaded" },
+      },
+    } as RecordedStep;
+  }
+
+  it("flags an upload step whose literal file is missing, naming the resolved path", () => {
+    const findings = lintJourney(j([uploadStep({ redacted: false, value: "missing.pdf" })]), { baseDir: "/proj" });
+    expect(findings.some((f) => f.rule === "upload-file-missing" && f.message.includes("/proj/missing.pdf"))).toBe(true);
+  });
+
+  it("does not flag an upload step whose file is a {var} binding", () => {
+    const findings = lintJourney(j([uploadStep({ var: "receipt" })]), { baseDir: "/proj" });
+    expect(findings.some((f) => f.rule === "upload-file-missing")).toBe(false);
+  });
+
+  it("does not flag a redacted upload file", () => {
+    const findings = lintJourney(j([uploadStep({ redacted: true, length: 12 })]), { baseDir: "/proj" });
+    expect(findings.some((f) => f.rule === "upload-file-missing")).toBe(false);
+  });
+
+  it("does not flag an upload step whose literal file exists under the base dir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lint-fixture-"));
+    await writeFile(join(dir, "receipt.pdf"), "pdf");
+    const findings = lintJourney(j([uploadStep({ redacted: false, value: "receipt.pdf" })]), { baseDir: dir });
+    expect(findings.some((f) => f.rule === "upload-file-missing")).toBe(false);
   });
 });

@@ -4,6 +4,7 @@ import { perceive, verifyReplayVerdict, type VerifyFixResult, type VerifyFixVerd
 import { closeLogSources, openLogSources, parseLogSourceSpecs, type LogSourceSpec } from "./log-sources.js";
 import { matchesLogDefect, matchesLogIgnore, normalizeLogMessage, parseLogDefectSpec, parseLogIgnoreSpec, parseLogLine, type LogLine } from "./log-lines.js";
 import { clock } from "@jevitate/domain";
+import { journeyFixtureBaseDir } from "./journey-api.js";
 
 /**
  * `verify-fix` for a `server-log` defect (#142): NOT a re-check of `@jevitate/explore`'s
@@ -81,7 +82,7 @@ async function runOneServerLogReplay(params: VerifyServerLogParams, sourceSpecs:
     };
   }
   try {
-    const interpreter = new RecordingInterpreter(params.targetTimeoutMs === undefined ? {} : { targetTimeoutMs: params.targetTimeoutMs });
+    const interpreter = new RecordingInterpreter({ ...(params.targetTimeoutMs === undefined ? {} : { targetTimeoutMs: params.targetTimeoutMs }), fixtureBaseDir: journeyFixtureBaseDir() });
     const outcome = await interpreter.runToCheckpoint(session.actor, params.recording, params.recordingStepIndex);
     await perceive(session.page, {
       ...(params.settleCeilingMs === undefined ? {} : { renderWaitMs: params.settleCeilingMs }),

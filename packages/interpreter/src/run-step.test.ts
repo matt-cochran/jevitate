@@ -1,4 +1,7 @@
 import { expect, test, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Assertion, RecordedStep } from "@jevitate/recording";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { checkAssertion, PostconditionFailed } from "./assertion.js";
@@ -1047,4 +1050,49 @@ test("runStep: forEach sets ${as}.__index for each row, ending at the last index
 
   expect(seenIndexes).toEqual(["0", "1"]);
   expect(vars.get("row.__index")).toBe("1");
+});
+
+// === #488: upload fixture paths resolve against fixtureBaseDir, never the process cwd ===
+
+function uploadStep(value: string): RecordedStep {
+  return {
+    step: {
+      kind: "upload",
+      target: { testId: "file" },
+      file: { redacted: false, value },
+      expect: { kind: "visible", target: { testId: "file" } },
+    },
+  };
+}
+
+test("runStep upload: a relative file resolves against fixtureBaseDir", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "run-step-fixture-"));
+  await writeFile(join(dir, "receipt.pdf"), "pdf");
+  const setInputFiles = vi.fn(async () => {});
+  const actor = actorWithPage(fakePage(fakeLocator({ setInputFiles })));
+
+  await runStep(actor as any, uploadStep("receipt.pdf"), new Map(), 0, { fixtureBaseDir: dir });
+
+  expect(setInputFiles).toHaveBeenCalledWith(join(dir, "receipt.pdf"));
+});
+
+test("runStep upload: an absolute file is left unchanged", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "run-step-fixture-"));
+  const absolute = join(dir, "receipt.pdf");
+  await writeFile(absolute, "pdf");
+  const setInputFiles = vi.fn(async () => {});
+  const actor = actorWithPage(fakePage(fakeLocator({ setInputFiles })));
+
+  await runStep(actor as any, uploadStep(absolute), new Map(), 0, { fixtureBaseDir: join(dir, "elsewhere") });
+
+  expect(setInputFiles).toHaveBeenCalledWith(absolute);
+});
+
+test("runStep upload: a missing relative file fails naming the resolved absolute path", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "run-step-fixture-"));
+  const actor = actorWithPage(fakePage(fakeLocator()));
+
+  await expect(runStep(actor as any, uploadStep("missing.pdf"), new Map(), 0, { fixtureBaseDir: dir })).rejects.toThrow(
+    `fixture not found: ${join(dir, "missing.pdf")}`,
+  );
 });
