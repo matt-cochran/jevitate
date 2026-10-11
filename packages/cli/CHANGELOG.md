@@ -53,6 +53,7 @@
 
 ### Patch Changes
 
+- A busy indicator that clears on a page whose CSP has no `'unsafe-eval'` is no longer reported as a `ui-no-progress` hang, and `verify-fix` no longer reads it as still reproducing: the wait passes a function predicate, not a source string, and a wait that fails without timing out is no evidence of a stuck indicator (#491).
 - 45a4020: `publish journeeze` / MCP `publish_to_journeeze` now send the connected Journeeze product's real name as the bundle's `product.name` instead of the project's `package.json` name, and gain `--product-name` / `productName` to override it (must match `whoami`). A `--dry-run` verifies the key with `whoami` and refuses a mismatch with `E_JOURNEEZE_PRODUCT_MISMATCH` (#477).
 - af6a550: Anchor names now match the catalog bundle v1 `anchorName`: 1-64 of lowercase a-z, 0-9, . _ -
   starting with a letter or digit. `journey lint`/promote no longer silently drop names the export
