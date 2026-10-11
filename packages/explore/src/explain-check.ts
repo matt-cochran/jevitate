@@ -9,11 +9,13 @@ function cut(value: string): string {
 }
 
 /**
- * Words a recorded selector in plain English for a human reviewer. Preference order: a
- * role+name pair, then a bare name or label, then the element's text, then a test id (its
- * dashes/underscores become spaces), then a CSS selector.
+ * Words a recorded selector in plain English for a human reviewer. Preference order: the
+ * recorded display label (#497), then a role+name pair, then a bare name or label, then the
+ * element's text, then a test id (its dashes/underscores become spaces), then a CSS selector.
  */
 export function explainTarget(d: TargetDescriptor): string {
+  // #497: the label a person saw, recorded as display metadata, reads best of all.
+  if (d.display !== undefined) return d.display.role === undefined ? `"${d.display.name}"` : `the "${d.display.name}" ${d.display.role}`;
   if (d.role !== undefined && d.name !== undefined && d.name !== "") return `the "${d.name}" ${d.role}`;
   if (d.name !== undefined && d.name !== "") return `"${d.name}"`;
   if (d.label !== undefined && d.label !== "") return `"${d.label}"`;

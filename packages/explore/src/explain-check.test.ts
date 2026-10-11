@@ -14,6 +14,8 @@ const LONG_CUT = `${"x".repeat(80)}…`;
 
 describe("explainTarget", () => {
   it.each<[string, TargetDescriptor, string]>([
+    ["recorded display label with its role", { testId: "action-import", display: { role: "button", name: "Import" } }, 'the "Import" button'],
+    ["recorded display label without a role", { testId: "action-import", display: { name: "Import" } }, '"Import"'],
     ["role+name", saveButton, 'the "Save" button'],
     ["name", statusText, '"Status"'],
     ["label", { label: "Email" }, '"Email"'],
