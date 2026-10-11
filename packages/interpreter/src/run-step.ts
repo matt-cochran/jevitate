@@ -1,8 +1,6 @@
-import { access } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
 import type { Locator, Page } from "playwright";
 import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
-import { describeNavigateUrl, encodeUrlParamValue, navigateUrlParams, resolveNavigateUrl } from "@jevitate/recording";
+import { confineFixture, describeNavigateUrl, encodeUrlParamValue, navigateUrlParams, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
@@ -202,13 +200,11 @@ export async function runStep(
       // fast here with the path named, never attaching some other file.
       // #488: a relative path resolves against the project root (fixtureBaseDir), never the
       // process cwd — a Journey recorded on the project replays from any working directory.
+      // #498: and the fixture must be a file INSIDE that root once realpath'd (an absolute path,
+      // `../` or a symlink that escapes is refused; a `{var}` value is checked after binding). No
+      // root ⇒ refused (fail-closed): every CLI/MCP run passes `journeyFixtureBaseDir()`.
       const raw = resolveValue(step.file, vars);
-      const file = targetOpts.fixtureBaseDir !== undefined && !isAbsolute(raw) ? resolve(targetOpts.fixtureBaseDir, raw) : raw;
-      try {
-        await access(file);
-      } catch (err) {
-        throw new Error(`fixture not found: ${file}`, { cause: err });
-      }
+      const file = await confineFixture(raw, targetOpts.fixtureBaseDir);
       const page = actor.ability(BrowseTheWebToken).session.page;
       await (await resolveTarget(page, step.target, targetOpts)).setInputFiles(file);
       await postcondition(actor, step.expect, step.waitFor, "upload", index, targetOpts);

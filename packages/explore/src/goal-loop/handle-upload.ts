@@ -14,7 +14,7 @@ export async function handleUpload(ctx: RunContext, step: ActStep): Promise<Flow
   const { cfg } = ctx;
   const { snap, decision, record, control, at } = step;
   // upload — act fails closed without a fixture.
-  const r = await act(cfg.actor, { op: "upload", control, fixture: ctx.fixture });
+  const r = await act(cfg.actor, { op: "upload", control, fixture: ctx.fixture, fixtureRoot: ctx.fixtureRoot });
   if (r.ok && ctx.fixture !== null) {
     // The recorded path goes through the shared redaction seam: a path that
     // contains a registered secret is recorded redacted (replay then fails

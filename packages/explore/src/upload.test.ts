@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -55,9 +55,10 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
   origin = `http://127.0.0.1:${port}`;
-  fixtureDir = await mkdtemp(join(tmpdir(), "jevitate-upload-fixture-"));
+  fixtureDir = await realpath(await mkdtemp(join(tmpdir(), "jevitate-upload-fixture-")));
   fixture = join(fixtureDir, "avatar.txt");
   await writeFile(fixture, "fixture bytes\n", "utf8");
+  await mkdir(join(fixtureDir, "proj"));
 });
 
 afterAll(async () => {
@@ -111,7 +112,7 @@ describe("act — upload (G2)", () => {
           const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
           const control = fileInputOf((await snapshot(session.page)).controls);
 
-          const r = await act(actor, { op: "upload", control, fixture });
+          const r = await act(actor, { op: "upload", control, fixture, fixtureRoot: fixtureDir });
 
           expect(r).toEqual({ ok: true, mutated: true });
           expect(await readAttachedName(session)).toBe(basename(fixture));
@@ -130,7 +131,7 @@ describe("act — upload (G2)", () => {
         "explore-upload-notarget-",
         async (session) => {
           const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
-          const r = await act(actor, { op: "upload", control: null, fixture });
+          const r = await act(actor, { op: "upload", control: null, fixture, fixtureRoot: fixtureDir });
           expect(r).toEqual({ ok: false, mutated: false, reason: "upload needs a target" });
         },
         origin,
@@ -149,7 +150,7 @@ describe("act — upload (G2)", () => {
           const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
           const control = fileInputOf((await snapshot(session.page)).controls);
           for (const missing of [undefined, null]) {
-            const r = await act(actor, { op: "upload", control, fixture: missing });
+            const r = await act(actor, { op: "upload", control, fixture: missing, fixtureRoot: fixtureDir });
             expect(r).toEqual({ ok: false, mutated: false, reason: "upload has no mission fixture (fail-closed)" });
           }
           expect(await readAttachedName(session)).toBeNull();
@@ -171,7 +172,7 @@ describe("act — upload (G2)", () => {
           const nick = (await snapshot(session.page)).controls.find((c) => c.name === "Nickname");
           if (nick === undefined) throw new Error("Nickname control not surfaced");
 
-          const r = await act(actor, { op: "upload", control: nick, fixture });
+          const r = await act(actor, { op: "upload", control: nick, fixture, fixtureRoot: fixtureDir });
 
           expect(r.ok).toBe(false);
           expect(r.mutated).toBe(false);
@@ -198,7 +199,7 @@ describe("act — upload (G2)", () => {
           await session.page.evaluate(() => {
             document.querySelector<HTMLInputElement>("#avatar")!.disabled = true;
           });
-          const r = await act(actor, { op: "upload", control, fixture });
+          const r = await act(actor, { op: "upload", control, fixture, fixtureRoot: fixtureDir });
           expect(r).toEqual({ ok: false, mutated: false, reason: "target not enabled" });
         },
         origin,
@@ -206,6 +207,74 @@ describe("act — upload (G2)", () => {
     },
     120_000,
   );
+});
+
+describe("act — upload #498: the mission fixture must be inside the project root", () => {
+  it(
+    "refuses a fixture outside the root and attaches nothing",
+    async () => {
+      await withSession(
+        "explore-upload-outside-",
+        async (session) => {
+          await session.page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+          const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
+          const control = fileInputOf((await snapshot(session.page)).controls);
+          await act(actor, { op: "upload", control, fixture, fixtureRoot: join(fixtureDir, "proj") });
+          expect(await readAttachedName(session)).toBeNull();
+        },
+        origin,
+      );
+    },
+    120_000,
+  );
+
+  it(
+    "refuses a symlink inside the root that points outside, naming the root and the fix",
+    async () => {
+      await withSession(
+        "explore-upload-symlink-",
+        async (session) => {
+          await session.page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+          const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
+          const control = fileInputOf((await snapshot(session.page)).controls);
+          const root = join(fixtureDir, "proj");
+          await symlink(fixture, join(root, "link.txt"));
+          const r = await act(actor, { op: "upload", control, fixture: join(root, "link.txt"), fixtureRoot: root });
+          expect(r.reason).toContain(`is outside the project root ${root} — move the fixture into the project`);
+        },
+        origin,
+      );
+    },
+    120_000,
+  );
+
+  it(
+    "refuses an upload with no project root (fail-closed)",
+    async () => {
+      await withSession(
+        "explore-upload-noroot-",
+        async (session) => {
+          await session.page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+          const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
+          const control = fileInputOf((await snapshot(session.page)).controls);
+          const r = await act(actor, { op: "upload", control, fixture });
+          expect(r).toMatchObject({ ok: false, mutated: false });
+        },
+        origin,
+      );
+    },
+    120_000,
+  );
+});
+
+describe("#498 resolveMissionFixture with the project root", () => {
+  it("refuses a mission fixture outside the root before the mission starts", async () => {
+    await expect(resolveMissionFixture(fixture, join(fixtureDir, "proj"))).rejects.toThrow("outside the project root");
+  });
+
+  it("accepts a mission fixture inside the root", async () => {
+    expect(await resolveMissionFixture(fixture, fixtureDir)).toBe(fixture);
+  });
 });
 
 describe("mission fixture validation (fail fast at mission start)", () => {
@@ -238,6 +307,7 @@ describe("mission fixture validation (fail fast at mission start)", () => {
               allowlist: [origin],
               startUrl: `${origin}/`,
               fixture: missing,
+              fixtureRoot: fixtureDir,
             }),
           ).rejects.toThrow(`fixture not found: ${missing}`);
           expect(judge.states).toHaveLength(0);
@@ -267,6 +337,7 @@ describe("explore loop — upload is recorded and replays deterministically", ()
             allowlist: [origin],
             startUrl: `${origin}/`,
             fixture,
+            fixtureRoot: fixtureDir,
           });
           expect(await readAttachedName(session)).toBe("avatar.txt");
           return r;
@@ -288,7 +359,7 @@ describe("explore loop — upload is recorded and replays deterministically", ()
         "explore-upload-replay-",
         async (fresh) => {
           const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(fresh, [origin]));
-          const result = await new RecordingInterpreter().run(actor, run.recording);
+          const result = await new RecordingInterpreter({ fixtureBaseDir: fixtureDir }).run(actor, run.recording);
           expect(result.outcome).toBe("completed");
           expect(await readAttachedName(fresh)).toBe("avatar.txt");
         },
@@ -303,7 +374,7 @@ describe("explore loop — upload is recorded and replays deterministically", ()
         "explore-upload-replay-gone-",
         async (fresh) => {
           const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(fresh, [origin]));
-          const result = await new RecordingInterpreter().run(actor, pointingAtGone);
+          const result = await new RecordingInterpreter({ fixtureBaseDir: fixtureDir }).run(actor, pointingAtGone);
           expect(result).toMatchObject({ outcome: "failed", error: expect.stringContaining(`fixture not found: ${gone}`) });
           expect(await readAttachedName(fresh)).toBeNull();
         },
@@ -342,7 +413,7 @@ describe("explore loop — upload is recorded and replays deterministically", ()
     "a --secret inside the fixture path never reaches the Recording (or the model) on an upload run",
     async () => {
       const SECRET = "TOPSECRET42";
-      const secretDir = await mkdtemp(join(tmpdir(), "jevitate-upload-secret-"));
+      const secretDir = await realpath(await mkdtemp(join(tmpdir(), "jevitate-upload-secret-")));
       const secretFixture = join(secretDir, `avatar-${SECRET}.txt`);
       await writeFile(secretFixture, "fixture bytes\n", "utf8");
       try {
@@ -359,6 +430,7 @@ describe("explore loop — upload is recorded and replays deterministically", ()
               allowlist: [origin],
               startUrl: `${origin}/`,
               fixture: secretFixture,
+              fixtureRoot: secretDir,
               secrets: [SECRET],
             });
             // The real file WAS attached — redaction only affects what is persisted.

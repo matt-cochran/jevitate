@@ -1,4 +1,5 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { FixturePathError } from "@jevitate/recording";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
@@ -218,7 +219,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
       } catch (err) {
         if (err instanceof UnauthorizedExploreTargetError) {
           emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
-        } else if (err instanceof FixtureNotFoundError) {
+        } else if (err instanceof FixtureNotFoundError || err instanceof FixturePathError) {
           emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
         } else {
           emitJson(program, fail("E_AUTHOR_JOURNEY", String(err instanceof Error ? err.message : err)));

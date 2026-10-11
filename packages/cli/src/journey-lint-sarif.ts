@@ -20,6 +20,8 @@ const RULES: ReadonlyArray<{ id: JourneyLintRule; level: "error" | "warning" }> 
   { id: "intent-uncovered", level: "warning" },
   // #488: a literal upload fixture that is not there, resolved against the project root.
   { id: "upload-file-missing", level: "error" },
+  // #498: a literal upload fixture outside the project root (refused at run time; no override).
+  { id: "upload-outside-project", level: "error" },
   // #466: the 0.10 anchor rules — warnings on a Journey as it is; `journey promote` enforces them on new content.
   ...ANCHOR_RULE_CODES.map((id) => ({ id, level: "warning" as const })),
   { id: "anchor-job-step", level: "warning" },

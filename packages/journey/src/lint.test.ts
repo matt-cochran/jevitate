@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Recording, RecordedStep } from "@jevitate/recording";
@@ -282,6 +282,71 @@ describe("#488 lintJourney: relative upload fixture paths", () => {
     const dir = await mkdtemp(join(tmpdir(), "lint-fixture-"));
     await writeFile(join(dir, "receipt.pdf"), "pdf");
     const findings = lintJourney(j([uploadStep({ redacted: false, value: "receipt.pdf" })]), { baseDir: dir });
+    expect(findings.some((f) => f.rule === "upload-file-missing")).toBe(false);
+  });
+});
+
+describe("#498 lintJourney: upload fixtures outside the project root", () => {
+  function uploadOf(value: string): RecordedStep {
+    return {
+      step: {
+        kind: "upload",
+        target: { testId: "receipt" },
+        file: { redacted: false, value },
+        expect: { kind: "textIncludes", target: { role: "status" }, text: "Uploaded" },
+      },
+    } as RecordedStep;
+  }
+
+  async function project(): Promise<{ base: string; root: string }> {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "lint-outside-")));
+    const root = join(base, "proj");
+    await mkdir(root);
+    await writeFile(join(root, "receipt.pdf"), "pdf");
+    await writeFile(join(base, "secret.txt"), "secret");
+    return { base, root };
+  }
+
+  it("flags an absolute path outside the root as an upload-outside-project error", async () => {
+    const { base, root } = await project();
+    const findings = lintJourney(j([uploadOf(join(base, "secret.txt"))]), { baseDir: root });
+    expect(findings.some((f) => f.rule === "upload-outside-project" && f.level === "error")).toBe(true);
+  });
+
+  it("flags a ../ path that escapes the root", async () => {
+    const { root } = await project();
+    const findings = lintJourney(j([uploadOf("../secret.txt")]), { baseDir: root });
+    expect(findings.some((f) => f.rule === "upload-outside-project")).toBe(true);
+  });
+
+  it("flags a symlink inside the root that points outside", async () => {
+    const { base, root } = await project();
+    await symlink(join(base, "secret.txt"), join(root, "link.txt"));
+    const findings = lintJourney(j([uploadOf("link.txt")]), { baseDir: root });
+    expect(findings.some((f) => f.rule === "upload-outside-project")).toBe(true);
+  });
+
+  it("does not flag an absolute path inside the root", async () => {
+    const { root } = await project();
+    const findings = lintJourney(j([uploadOf(join(root, "receipt.pdf"))]), { baseDir: root });
+    expect(findings.some((f) => f.rule.startsWith("upload-"))).toBe(false);
+  });
+
+  it("names the path, the root and the fix", async () => {
+    const { base, root } = await project();
+    const finding = lintJourney(j([uploadOf(join(base, "secret.txt"))]), { baseDir: root }).find((f) => f.rule === "upload-outside-project");
+    expect(`${finding?.message} ${finding?.fix}`).toContain(`${join(base, "secret.txt")} is outside the project root ${root}`);
+  });
+
+  it("names the fix as moving the fixture into the project", async () => {
+    const { base, root } = await project();
+    const finding = lintJourney(j([uploadOf(join(base, "secret.txt"))]), { baseDir: root }).find((f) => f.rule === "upload-outside-project");
+    expect(finding?.fix).toContain("move the fixture into the project");
+  });
+
+  it("does not also report an outside fixture as missing", async () => {
+    const { root } = await project();
+    const findings = lintJourney(j([uploadOf("../nope.txt")]), { baseDir: root });
     expect(findings.some((f) => f.rule === "upload-file-missing")).toBe(false);
   });
 });
