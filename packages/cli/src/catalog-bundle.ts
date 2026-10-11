@@ -35,8 +35,9 @@ import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } fr
  *
  * Failure policy: personal data or a credential typed in clear anywhere, or a job the bundle cannot
  * carry (a structural reference problem, text that is not one line), REFUSES the export
- * (`CatalogBundleInputError`, exit 64) — nothing is guessed or silently rewritten. A Journey or a
- * check the bundle cannot carry is LEFT OUT with a warning (nothing else references it in a way the
+ * (`CatalogBundleInputError`, exit 64) — nothing is guessed or silently rewritten. So does a
+ * PROMOTED Journey the bundle cannot carry (#478: never a silent omission). A draft Journey, or a
+ * check the bundle cannot carry, is LEFT OUT with a warning (nothing else references it in a way the
  * reader would refuse). A persona key the bundle cannot carry drops that key and the persona's
  * approval (its hash could not recompute) with a warning.
  */
@@ -553,8 +554,9 @@ function bundleJourneys(catalog: Catalog, refuse: string[], warn: string[]): Exp
       else if (looksPersonal(c.value)) refuse.push(`journey ${cj.id}: ${c.path.slice(1)} types personal data in clear (an email or 9+ digits) — use a parameter or a synthetic value`);
     }
     const linked = journeyLink(catalog, cj);
+    // #478: a promoted Journey the bundle cannot carry refuses the export — never a silent omission.
     if ("omit" in linked) {
-      warn.push(`journey ${cj.id}: ${linked.omit} — left out`);
+      refuse.push(`journey ${cj.id}: ${linked.omit} — fix it (the bundle cannot carry it), or demote it`);
       continue;
     }
     const file = asJson(cj.journey) as unknown as Record<string, unknown> & { metadata: Record<string, unknown> };

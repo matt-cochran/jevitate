@@ -486,8 +486,9 @@ include; the default is `<project>/jevitate-check/check.json` (the `check --out`
 exists. `--product-name` sets `product.name` (default: the project's `package.json` name, else its
 folder name). The same catalog gives the same bytes, so a re-publish is deduplicated by the
 bundle's sha256. Personal data or a credential in clear, or a job with a structural reference
-problem, refuses the export (exit 64); a Journey or check the bundle cannot carry is left out with
-a warning. `catalog export` writes only `bundle.json` and its `media/` folder under `--out` (it
+problem, refuses the export (exit 64), and so does a promoted Journey the bundle cannot carry (an
+anchor name outside `anchorName`, a free-text persona, an unknown job); a draft Journey or a check
+the bundle cannot carry is left out with a warning. `catalog export` writes only `bundle.json` and its `media/` folder under `--out` (it
 refuses a directory holding anything else), never uploads and never approves. MCP: `export_catalog_bundle` (`format`, `out` —
 a directory inside the project —, `check`, `productName`).
 
