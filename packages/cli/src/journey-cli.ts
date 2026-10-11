@@ -180,6 +180,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--real", "use live Jev + OpenRouter gateways for self-heal (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
+    .option("--step-response-timeout <ms>", "#486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet, e.g. a cold start after a deploy (default 15000). A late 2xx is an advisory slow-step finding (slowSteps), not a quarantine; a non-2xx, or no response within the bound, fails. A step's own responseTimeoutMs overrides it", positiveIntArg)
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas")
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
@@ -212,6 +213,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         json,
         screenshots: _screenshots,
         actionDeltas,
+        stepResponseTimeout,
         changes,
         changeNote,
         healMaxAttempts,
@@ -229,6 +231,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         healMaxRunAttempts?: number;
         healMaxRunMs?: number;
         actionDeltas?: boolean;
+        stepResponseTimeout?: number;
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -342,6 +345,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           ...(screenshots === undefined ? {} : { screenshots }),
           ...(storageState !== undefined ? { storageState } : {}),
           ...(actionDeltas === true ? { actionDeltas: true } : {}),
+          ...(stepResponseTimeout === undefined ? {} : { stepResponseTimeoutMs: stepResponseTimeout }),
           ...(environment === undefined ? {} : { environment }),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
           // #247: under an environment, its allowed origins.

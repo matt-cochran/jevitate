@@ -34,7 +34,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
-import { JourneyOutcomeChecks, type OutcomeCheckFailure } from "./journey-network-checks.js";
+import { JourneyOutcomeChecks, type OutcomeCheckFailure, type SlowStep } from "./journey-network-checks.js";
 
 /**
  * Distinct from `@jevitate/journey`'s `ParamValidationError` so CLI/API callers
@@ -168,6 +168,12 @@ export interface RunJourneyProgrammaticallyOptions {
    * Observation only: it never changes the replay. Off: nothing is captured.
    */
   actionDeltas?: boolean;
+  /**
+   * #486: how long (ms) a step's response check waits for a matching request that was sent but has no
+   * response yet (a cold start). A late 2xx is an advisory `slowSteps` finding, never a quarantine.
+   * Default 15000; a step's own `responseTimeoutMs` overrides it.
+   */
+  stepResponseTimeoutMs?: number;
 }
 
 /**
@@ -445,7 +451,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
   mutation: MutationReplayOptions = {},
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[] } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -544,7 +550,10 @@ export async function runJourneyProgrammatically(
       const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
       // #322/#400: a full replay (never an anchored prefix) must also satisfy the Journey's end state
       // and each step's request expectations.
-      const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, { secrets });
+      const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, {
+        secrets,
+        ...(opts.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: opts.stepResponseTimeoutMs }),
+      });
       const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins);
       // #453 (Q2): a guarded click/fill heal probe runs under a per-step write blocker.
       // Context-level (popups, WebSockets), no write exemptions; see heal-probe-guard.ts.
@@ -594,14 +603,15 @@ export async function runJourneyProgrammatically(
         ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretParams([...outcomeChecks.lastFailures], journey, params) } : {}),
         ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
       };
+      const slowFields = outcomeChecks.slowSteps.length === 0 ? {} : { slowSteps: [...outcomeChecks.slowSteps] };
       const shotFields = shots === undefined ? {} : await shots.finish();
       const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretParams(replayDeltaSummary(replayDeltas), journey, params) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
-      if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...mutationFields };
+      if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...mutationFields };
       await fx.restore();
       // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
-      return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
+      return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
     } finally {
       await closeSession();
     }
