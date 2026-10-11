@@ -74,7 +74,7 @@ const NOTIFY_FORM = (): string => `<!doctype html><html><body><h1>Notify</h1>
     document.getElementById("notify").addEventListener("submit", async (e) => {
       e.preventDefault();
       await fetch("${other}/collect", { method: "POST", headers: { "content-type": "text/plain" }, body: "x" }).catch(() => {
-        console.error("message never delivered to /collect");
+        console.error("message never delivered to ${other}/collect");
       });
     });
   </script>
@@ -220,8 +220,8 @@ describe("adversarial: a write jevitate blocked is an environment fault, never a
     "the transcript reads a finding the blocked write caused as an environment fault, never a defect",
     async () => {
       const r = await run("/notify");
-      const step = r.transcript.find((e) => /never delivered to \/collect/.test(e.reason ?? ""));
-      expect(step?.reason).toMatch(/environment fault \(caused by a blocked write, never sent\): [^;]*never delivered to \/collect/);
+      const step = r.transcript.find((e) => (e.reason ?? "").includes(`never delivered to ${other}/collect`));
+      expect(step?.reason).toContain(`environment fault (caused by a blocked write, never sent): message never delivered to ${other}/collect`);
     },
     180_000,
   );

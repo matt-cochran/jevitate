@@ -10,7 +10,8 @@ import { journeyExitCode, safeRunPolicy, type SelfHealMode } from "@jevitate/dom
 import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
 import { CLI_HEAL_NAMES, JourneyHealArgsError, journeyHealBudget, journeyRunSummary, readJourneyChangeScope, validateJourneyHeal, type JourneyHealRequest } from "./journey-heal.js";
 import { ChangesArgsError, ChangesInputError } from "./change-context.js";
-import { positiveIntArg } from "./cli-args.js";
+import { intArg, positiveIntArg } from "./cli-args.js";
+import { MAX_STEP_RESPONSE_TIMEOUT_MS } from "./journey-network-checks.js";
 import type { ChangeScope } from "@jevitate/runtime";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
@@ -182,7 +183,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--real", "use live Jev + OpenRouter gateways for self-heal (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
-    .option("--step-response-timeout <ms>", "#486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet, e.g. a cold start after a deploy (default 15000). A late 2xx is an advisory slow-step finding (slowSteps), not a quarantine; a non-2xx, or no response within the bound, fails. A step's own responseTimeoutMs overrides it", positiveIntArg)
+    .option("--step-response-timeout <ms>", "#486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet, e.g. a cold start after a deploy (default 15000). A late 2xx is an advisory slow-step finding (slowSteps), not a quarantine; a non-2xx, or no response within the bound, fails. A step's own responseTimeoutMs overrides it; at most 300000", intArg({ min: 1, max: MAX_STEP_RESPONSE_TIMEOUT_MS }))
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas")
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])

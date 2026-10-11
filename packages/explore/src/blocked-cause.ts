@@ -21,6 +21,12 @@ export interface BlockedRoot {
   /** Origin + path for an off-allowlist write (`BlockedWrite.path`). */
   readonly path: string;
   readonly allowMismatch?: AllowOriginMismatch;
+  /**
+   * The busy indicator (`visibleBusyIndicator`'s description) that was NOT showing before the
+   * blocked write's action and was showing once it settled — the only indicator a later
+   * `ui-no-progress` hang may be linked to this write by.
+   */
+  readonly busyStarted?: string;
 }
 
 /** The link a consequence carries to the blocked write that caused it. */
@@ -54,44 +60,68 @@ export function writeOf(root: Pick<BlockedRoot, "method" | "path">): string {
   return `${root.method} ${root.path}`;
 }
 
-function pathOf(urlOrPath: string): string {
+/**
+ * How many transcript steps after the blocked one a consequence may land on. 1: the page's reaction
+ * to a refused write surfaces while its own step settles (same step) or is drained late into the one
+ * after it (`drainLate`; a hang check records its own step right after the action). Anything later
+ * is no longer attributable to that action — it stays the app's.
+ */
+export const BLOCKED_CONSEQUENCE_STEPS = 1;
+
+/** `origin + pathname` of an absolute http(s) URL, else null (a bare path never links). */
+function originPath(url: string): { readonly origin: string; readonly full: string } | null {
   try {
-    return new URL(urlOrPath).pathname;
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return { origin: u.origin, full: `${u.origin}${u.pathname}` };
   } catch {
-    return urlOrPath.split(/[?#]/)[0] ?? urlOrPath;
+    return null;
   }
 }
 
-/** Whether one signal is what a refused write looks like from the page (never a server or layout fault). */
+/**
+ * Whether one signal is the page reporting THIS refused write: a failed request with its exact
+ * method + origin + path, or a console/page error that names the blocked URL or origin. A generic
+ * "Failed to fetch" names neither — it could be any request — so it never links.
+ */
 function signalFromBlocked(s: DefectSignal, root: BlockedRoot): boolean {
-  const path = pathOf(root.path);
-  if (s.kind === "failed-request") return pathOf(s.url) === path;
-  if (s.kind === "console-error" || s.kind === "page-error") return BLOCKED_FETCH_ERROR.test(s.detail) || (path !== "/" && s.detail.includes(path));
+  const blocked = originPath(root.path);
+  if (blocked === null) return false;
+  if (s.kind === "failed-request") {
+    const got = originPath(s.url);
+    return got !== null && s.method !== undefined && s.method.toUpperCase() === root.method.toUpperCase() && got.full === blocked.full;
+  }
+  if (s.kind === "console-error" || s.kind === "page-error") return s.detail.includes(blocked.full) || s.detail.includes(blocked.origin);
   return false;
 }
 
 /**
- * The blocked write `candidate` is a consequence of, or undefined. The latest write blocked at or
- * before the candidate's step in the SAME session qualifies when every defect signal is the page
- * reporting a request that never left (its fetch error, its failed request) — or, for a hang, a busy
- * indicator stuck with nothing in flight (`ui-no-progress`, no pending request: it waits on a request
- * the guard refused). Anything else — a 5xx, a layout fault, a stuck request that WAS sent — stays the app's.
+ * The blocked write `candidate` is a consequence of, or undefined. Only a write blocked in the SAME
+ * session, at the candidate's step or up to `BLOCKED_CONSEQUENCE_STEPS` before it, qualifies — and
+ * only when every defect signal names that write (`signalFromBlocked`), or, for a hang, the stuck busy
+ * indicator is the one that APPEARED in that write's own action window (`busyStarted`) with nothing
+ * in flight. When unsure the finding stays the app's: a false defect beats a hidden bug.
  */
 export function blockedCauseOf(roots: readonly BlockedRoot[], candidate: ConsequenceCandidate): CausedBy | undefined {
-  let root: BlockedRoot | undefined;
-  for (const r of roots) if (r.session === candidate.session && r.step <= candidate.step && (root === undefined || r.step >= root.step)) root = r;
-  if (root === undefined) return undefined;
+  const inWindow = roots.filter(
+    (r) => r.session === candidate.session && r.step <= candidate.step && candidate.step - r.step <= BLOCKED_CONSEQUENCE_STEPS,
+  );
+  // Latest first: the nearest action wins.
+  inWindow.sort((a, b) => b.step - a.step);
   if ("hang" in candidate) {
     const h = candidate.hang;
-    if (h.kind !== "ui-no-progress" || h.pending.length > 0) return undefined;
+    if (h.kind !== "ui-no-progress" || h.pending.length > 0 || h.element === undefined) return undefined;
+    const root = inWindow.find((r) => r.busyStarted === h.element);
+    if (root === undefined) return undefined;
     return {
       step: root.step,
       write: writeOf(root),
-      why: `busy indicator${h.element === undefined ? "" : ` ${h.element}`} never cleared with nothing in flight: the write it waited on was blocked at step ${root.step} and never sent`,
+      why: `busy indicator ${h.element} appeared with the write blocked at step ${root.step} and never cleared with nothing in flight: that write was never sent`,
     };
   }
-  const r = root;
-  if (candidate.signals.length === 0 || !candidate.signals.every((s) => signalFromBlocked(s, r))) return undefined;
+  if (candidate.signals.length === 0) return undefined;
+  const root = inWindow.find((r) => candidate.signals.every((s) => signalFromBlocked(s, r)));
+  if (root === undefined) return undefined;
   return { step: root.step, write: writeOf(root), why: `the page reporting the write blocked at step ${root.step}, which was never sent` };
 }
 

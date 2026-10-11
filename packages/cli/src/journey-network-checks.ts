@@ -16,6 +16,9 @@ import { describeStep } from "@jevitate/journey";
 import { clock } from "@jevitate/domain";
 import { DEFAULT_STEP_RESPONSE_TIMEOUT_MS, evaluateNetworkCheckAwaiting, evaluateOutcomeChecks, type SlowStepFinding, monitorFor, type RequestCapture, type SuccessCheckResult } from "@jevitate/explore";
 
+/** #486/L2: the largest `--step-response-timeout` / `stepResponseTimeoutMs` accepted (5 minutes): a step never waits longer. */
+export const MAX_STEP_RESPONSE_TIMEOUT_MS = 300_000;
+
 /** How long the network may take to go idle after the last step before the checks read it. */
 const SETTLE_CEILING_MS = 5_000;
 

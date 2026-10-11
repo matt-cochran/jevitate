@@ -222,7 +222,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (432 exports)
+# @jevitate/explore (433 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -231,6 +231,7 @@
   ANSWER_VETO_BELOW: const (number)
   API_CREDENTIAL_HEADERS: array
   ActionDeltas: class
+  BLOCKED_CONSEQUENCE_STEPS: const (number)
   BLOCKED_FETCH_ERROR: object
   BoundsTracker: class
   BudgetMonitor: class
