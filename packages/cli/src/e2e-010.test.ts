@@ -19,7 +19,7 @@ import type { JourneezeHttpRequest } from "./journeeze-connect.js";
  * with steps and outcomes → `job draft-outcomes --fake-ai` → a Journey promoted with job-step
  * anchors → `journey migrate --step-ids --dry-run` → `locator-health` → `catalog export` (the bundle
  * validates against the pinned contract schema) → `publish journeeze --dry-run` with an env key
- * against a fake transport that must see nothing. The cases run in order on one project.
+ * against a fake transport that sees only the key check (`GET /whoami`), never an upload. The cases run in order on one project.
  */
 
 const KEY = "jzu_abcdefghijklmnopqrstuvwxyz234567abcdefgh";
@@ -112,6 +112,9 @@ function deps(): CliDeps {
       homedir: () => join(root, "home"),
       http: async (req) => {
         sent.push(req);
+        if (req.method === "GET" && req.url.endsWith("/whoami")) {
+          return { status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ product: { id: "p-ledgerly", name: "Ledgerly" }, tenant: { name: "Ledgerly Inc" }, keyPrefix: "jzu_abcd" }) };
+        }
         return { status: 500, headers: { get: () => null }, text: async () => "{}" };
       },
     },
@@ -210,7 +213,7 @@ describe("0.10 end to end: catalog → Journey → health → bundle → Journee
     expect(json.data.status).toBe("dry-run");
   });
 
-  it("publish journeeze --dry-run sends nothing to the transport", () => {
-    expect(sent).toEqual([]);
+  it("publish journeeze --dry-run only checks the key and uploads nothing", () => {
+    expect(sent.map((r) => r.method)).toEqual(["GET"]);
   });
 });

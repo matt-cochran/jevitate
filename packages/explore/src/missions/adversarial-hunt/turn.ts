@@ -29,7 +29,7 @@ export async function planTurn(ctx: HuntState, params: AdversarialMissionParams)
   ctx.chainStart = null;
   // #403: an episode that ended before its last step settled leaves the misuse window open: closed here.
   ctx.offAllowlist.settled();
-  ctx.blockedWrites.push(...ctx.offAllowlist.drain());
+  ctx.noteBlocked(ctx.offAllowlist.drain(), Math.max(0, ctx.transcript.nextStep - 1));
 
   // A perception's timing is reported once — on the first step decided on it.
   let stepSnap = ctx.snap;

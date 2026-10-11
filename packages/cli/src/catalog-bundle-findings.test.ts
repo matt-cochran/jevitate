@@ -6,8 +6,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import { runFromMissionResult, runFromUxReport } from "@jevitate/findings";
-import { bundleFindings, type BundleFindings } from "./catalog-bundle-findings.js";
+import type { Journey } from "@jevitate/journey";
+import type { TargetDescriptor } from "@jevitate/recording";
+import { bundleFindings, locatorFindings, type BundleFindings } from "./catalog-bundle-findings.js";
 import { exportCatalogBundle } from "./catalog-bundle-api.js";
+import type { CatalogJourney } from "./catalog.js";
 import type { GitExec } from "./change-context.js";
 
 /**
@@ -128,6 +131,98 @@ describe("defects and hangs", () => {
 
   it("leave advisory findings out (not a bundle finding kind)", () => {
     expect(fromDefect({ ...saveDefect, advisory: true }).findings).toEqual([]);
+  });
+});
+
+describe("locator findings (#470 into the bundle)", () => {
+  const CONVENTION = ["data-testid", "data-test"] as const;
+  const APPROVAL_AT = "2026-10-09T14:00:00.000Z";
+
+  function journeyOf(id: string, targets: readonly TargetDescriptor[], route = "/contacts/new", at = APPROVAL_AT): CatalogJourney {
+    const journey = {
+      metadata: { id, name: id, promoted: true, params: [], createdAtIso: "2026-10-09T12:00:00.000Z" },
+      recording: {
+        version: "1",
+        site: "https://app.test",
+        pages: [{ url: route, steps: targets.map((target, i) => ({ stepId: `s-${i}`, step: { kind: "click" as const, target, expect: { kind: "visible" as const, target: { role: "heading", name: "Contacts" } } } })) }],
+      },
+    } as unknown as Journey;
+    return { id, name: id, promoted: true, journey, approval: { contentHash: "a".repeat(64), at }, contentHash: "b".repeat(64), changedSinceApproval: false };
+  }
+
+  it("a brittle step yields one finding with producerClaim locator-brittle", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }])], CONVENTION);
+    expect(r.findings.map((f) => f.producerClaim)).toEqual(["locator-brittle"]);
+  });
+
+  it("a journey whose steps are all test-id located yields no locator finding", () => {
+    const r = locatorFindings([journeyOf("j", [{ testId: "save-contact", testIdAttr: "data-testid" }])], CONVENTION);
+    expect(r.findings).toEqual([]);
+  });
+
+  it("two steps in two journeys using the same brittle element yield one finding with two steps", () => {
+    const r = locatorFindings([journeyOf("j1", [{ role: "button", name: "Save" }]), journeyOf("j2", [{ role: "button", name: "Save" }])], CONVENTION);
+    expect(r.findings[0]?.locator?.steps).toBe(2);
+  });
+
+  it("derive the fingerprint over the route template and the key without its route prefix", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }], "/contacts/new")], CONVENTION);
+    expect(r.findings[0]?.fingerprint).toBe("19a32c2bd2f73f51");
+  });
+
+  it("the same journeys exported twice give identical locator findings", () => {
+    const journeys = [journeyOf("j", [{ role: "button", name: "Save" }])];
+    expect(locatorFindings(journeys, CONVENTION).findings).toEqual(locatorFindings(journeys, CONVENTION).findings);
+  });
+
+  it("name the element and route in the observation and the fix as the recommendation", () => {
+    const f = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }], "/contacts/new")], CONVENTION).findings[0]!;
+    expect([f.observation, f.recommendation]).toEqual(['the "Save" button on /contacts/new is found by a brittle locator (no test id)', 'add data-testid="save-contact" to the "Save" button on /contacts/new']);
+  });
+
+  it("leave out a locator finding whose element names a record id", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "link", name: "Order 48213377" }])], CONVENTION);
+    expect(r.findings).toEqual([]);
+  });
+
+  it("a locator finding is certain (confidence 1: a static classification)", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }])], CONVENTION);
+    expect(r.findings[0]?.confidence).toBe(1);
+  });
+
+  it("leave out a locator finding whose page has no route", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }], "")], CONVENTION);
+    expect(r.findings).toEqual([]);
+  });
+
+  it("drop a locator finding whose route cannot be templated", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }], "/my board")], CONVENTION);
+    expect(r.findings).toEqual([]);
+  });
+
+  it("warn when a locator finding's route cannot be templated", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }], "/my board")], CONVENTION);
+    expect(r.warnings).toContainEqual(expect.stringMatching(/route/));
+  });
+
+  it("drop a locator finding whose element carries personal data", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "ana@example.com" }])], CONVENTION);
+    expect(r.findings).toEqual([]);
+  });
+
+  it("warn without repeating the personal data when a locator finding is dropped", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "ana@example.com" }])], CONVENTION);
+    expect(r.warnings.join("\n")).not.toContain("@example.com");
+  });
+
+  it("name the page in the fix by its route template, never its record id", () => {
+    const r = locatorFindings([journeyOf("j", [{ role: "button", name: "Save" }], "/contacts/4821/edit")], CONVENTION);
+    expect(r.findings[0]?.recommendation).toContain("on /contacts/{id}/edit");
+  });
+
+  it("date the finding at the latest approval of the journeys it occurs in", () => {
+    const r = locatorFindings([journeyOf("j1", [{ role: "button", name: "Save" }], "/contacts/new", "2026-10-08T09:00:00.000Z"), journeyOf("j2", [{ role: "button", name: "Save" }], "/contacts/new", "2026-10-09T14:00:00.000Z")], CONVENTION);
+    expect(r.findings[0]?.at).toBe("2026-10-09T14:00:00.000Z");
   });
 });
 

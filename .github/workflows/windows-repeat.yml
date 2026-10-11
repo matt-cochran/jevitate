@@ -1,0 +1,76 @@
+name: Windows repeat
+
+# #475: prove a Windows-only flake is gone by running one test file N times in parallel on
+# fresh windows-latest runners.
+#   gh workflow run windows-repeat.yml --ref <branch> [-f reps=20] [-f test=<path>]
+# workflow_dispatch needs this file on the default branch; until then (or for an unmerged change),
+# push the commit to a `ci/windows-repeat/<name>` branch, which runs it with the defaults:
+#   git push origin HEAD:ci/windows-repeat/475
+on:
+  push:
+    branches: ["ci/windows-repeat/**"]
+  workflow_dispatch:
+    inputs:
+      reps:
+        description: Number of parallel runs (1-50)
+        required: true
+        default: "20"
+      test:
+        description: Test file or folder to run (repo-relative)
+        required: true
+        default: packages/playwright/src/playwright-browser-port.test.ts
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      reps: ${{ steps.reps.outputs.reps }}
+    steps:
+      - id: reps
+        env:
+          REPS: ${{ inputs.reps || '20' }}
+        run: |
+          if ! [[ "$REPS" =~ ^[0-9]+$ ]] || (( REPS < 1 || REPS > 50 )); then
+            echo "reps must be 1-50, got '$REPS'" >&2
+            exit 1
+          fi
+          echo "reps=$(seq -s, 1 "$REPS" | sed 's/^/[/;s/$/]/')" >> "$GITHUB_OUTPUT"
+
+  repeat:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: ${{ fromJSON(needs.plan.outputs.reps) }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browser (chromium)
+        timeout-minutes: 10
+        run: bash scripts/ci-install-chromium.sh
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Run ${{ inputs.test || 'the default test' }} (rep ${{ matrix.rep }})
+        env:
+          TEST_PATH: ${{ inputs.test || 'packages/playwright/src/playwright-browser-port.test.ts' }}
+        run: pnpm exec vitest run "$TEST_PATH"

@@ -78,6 +78,15 @@ mission takes over on the live page:
 
 ```bash
 jevitate journey anchors <journey-id> --json   # the named states worth exploring from, with suggested probes
+jevitate journey anchors <journey-id> --suggest --json   # advisory: where the flow changes state (writes nothing)
+jevitate journey anchor add <journey-id> --name <name> --step <n|stepId> --json   # a DRAFT Journey only
+```
+
+Over MCP: `journey_anchors` (`suggest: true`), `journey_anchor_add`, `journey_anchor_remove`, and
+`lint_journey` with `fix: true` (stamps number-only anchors with their step id). Anchor edits refuse a
+promoted Journey: its approval binds to the content hash, so edit a draft and a person re-promotes it.
+
+```bash
 jevitate explore --from-journey <journey-id> --at-step <anchor|n> --param <k=v> --env <env> --strategy adversarial --storage-state <persona-file> --max-actions 60 --evidence-video --real --json
 ```
 
@@ -113,6 +122,10 @@ Flags such as `--allow-destructive`, `--paid`, `--invariants`, `--log-source`/`-
 `--evidence-video` on `campaign run` are forwarded to every mission; `--hook-timeout-ms` bounds the
 spec's hooks. An invalid spec is refused with every problem listed (exit 64). Shell `before`/`after` restore
 hooks in the spec run only with `--allow-shell-hooks`, and only when the human asked for them.
+Before any mission, a preflight checks every start URL is reachable, every session is signed in and
+no app call slips outside the allow list, and refuses with the problems listed. Fix them;
+`--skip-preflight` (MCP `run_campaign` `skipPreflight`) only when the human asks, and it is recorded
+on the report.
 
 ## 5. A small untargeted pass, plus non-journey attacks
 

@@ -1,6 +1,7 @@
 import type { Page, Route, Request } from "playwright";
 import { rpcMethodOf, type WriteClassifier } from "@jevitate/recording";
 import { normalizeAllowlist, requestEndpoint } from "./authorized-targets.js";
+import { detectAllowOriginMismatch, type AllowOriginMismatch } from "./allow-origin-mismatch.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { controlRisk, type SafetyRefusal } from "./safety.js";
 import type { Control } from "./snapshot.js";
@@ -180,6 +181,13 @@ export interface BlockedWrite {
   readonly path: string;
   /** Set when the origin is not an `--allow` origin (#194): how to let it through or name it the app's. */
   readonly hint?: string;
+  /** #484: the off-allowlist origin the write went to (an off-allowlist guard's block). */
+  readonly origin?: string;
+  /**
+   * #484: the origin differs from an allowed one only by its loopback spelling (`localhost` vs
+   * `127.0.0.1`), or is a loopback port `--allow` misses on a loopback run — `detectAllowOriginMismatch`.
+   */
+  readonly allowMismatch?: AllowOriginMismatch;
 }
 
 export class ReadOnlyGuard {
@@ -198,6 +206,7 @@ export class ReadOnlyGuard {
   #inAction = false;
   /** #402: how a held main-frame write navigation is stopped (default: answered `204` in the browser). */
   readonly #navigationWrites: "no-content" | "abort";
+  readonly #startUrl: string | undefined;
   readonly #handler = (route: Route, request: Request): Promise<void> => this.#route(route, request);
 
   constructor(
@@ -213,12 +222,15 @@ export class ReadOnlyGuard {
        * a mutation proof never answers a write with anything that could read as a success.
        */
       readonly navigationWrites?: "no-content" | "abort";
+      /** #484: the run's start URL — a loopback run names a loopback port `--allow` misses (`allowMismatch`). */
+      readonly startUrl?: string;
     } = {},
   ) {
     this.#isWrite = isWrite;
     this.#navigationWrites = opts.navigationWrites ?? "no-content";
     this.#mode = opts.mode ?? "read-only";
     this.#origins = opts.allowlist ?? [];
+    this.#startUrl = opts.startUrl;
     this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
     this.#allowed = [...DEFAULT_ALLOWED_WRITES, ...(opts.allowWrites ?? [])].filter((g) => g.trim() !== "")
       .map((g) => ({ re: pathGlob(g), full: /^https?:\/\//i.test(g.trim()) }));
@@ -323,9 +335,12 @@ export class ReadOnlyGuard {
         await route.fallback().catch(() => undefined);
         return;
       }
+      const mismatch = detectAllowOriginMismatch(off, this.#origins, this.#startUrl === undefined ? {} : { startUrl: this.#startUrl });
       this.#blocked.push({
         method: request.method().toUpperCase(),
         path: endpoint,
+        origin: off,
+        ...(mismatch === null ? {} : { allowMismatch: mismatch }),
         hint: `${off} is not an --allow origin: a write the run's misuse fired to it was blocked — if it is the app's add it to --allow; to let it through deliberately pass --allow-write "${off}/<path glob>"`,
       });
       await this.#refuse(route, request);

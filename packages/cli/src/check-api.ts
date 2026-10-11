@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { reportSlowness } from "./cold-start-report.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { aggregateOf, formatUsageLine, type UsageCounts } from "@jevitate/ai-core";
@@ -104,6 +105,17 @@ function sumTrends(trends: readonly LocatorHealthTrend[]): LocatorHealthTrend {
 }
 
 const LOCATOR_WARNING_RULE = "jevitate/locator-health/brittle-locator";
+
+/**
+ * #479: stamps the app's release label into the SARIF run properties, next to `targetBuild`. The
+ * findings renderer owns `targetBuild`; this adds `appVersion` when the check was given one.
+ */
+function withAppVersion(sarif: ReturnType<typeof renderSarif>, appVersion: string | undefined): ReturnType<typeof renderSarif> {
+  if (appVersion === undefined) return sarif;
+  const [run, ...rest] = sarif.runs as ReadonlyArray<{ readonly properties?: Readonly<Record<string, unknown>> }>;
+  if (run === undefined) return sarif;
+  return { ...sarif, runs: [{ ...run, properties: { ...(run.properties ?? {}), appVersion } }, ...rest] };
+}
 
 /**
  * #470: advisory locator fixes as SARIF WARNINGS (never errors, never gating) — one result per element
@@ -320,6 +332,11 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
           ...(details.length === 0 ? {} : { line: combined.line }),
           ...(locatorTrend === undefined ? {} : { trend: locatorTrend }),
         };
+  // #486: advisory slowness across the Journey items (a cold start = slow first replay only).
+  const slowReport = reportSlowness(
+    executed.flatMap(({ item, ex }) => (item.kind === "journey" && item.journey !== undefined && ex?.slowSteps !== undefined ? [{ journey: item.journey.id, slowSteps: ex.slowSteps }] : [])),
+  );
+  const slowness = slowReport.coldStarts.length + slowReport.slowSteps.length === 0 ? undefined : slowReport;
   // Without the gate, each Journey item's fixes are JUnit/SARIF warnings (never failures).
   const warningsOf = (i: CheckItemReport, idx: number): string[] => {
     if (opts.maxBrittleSteps !== undefined || i.kind !== "journey") return [];
@@ -400,6 +417,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     exitCode,
     engine,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
+    ...(opts.appVersion === undefined ? {} : { appVersion: opts.appVersion }),
     startedAt,
     budget: meter.report(finalUsage, exceeded),
     ...(suiteUsage === undefined ? {} : { usage: suiteUsage }),
@@ -415,6 +433,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       pendingReview: pendingItems.length,
     },
     ...(locatorHealth === undefined ? {} : { locatorHealth }),
+    ...(slowness === undefined ? {} : { slowness }),
     proposals,
     ...(diff === undefined || baselineRuns === undefined ? {} : { diff: { baseline: baselineRuns.map(summarizeRun), summary: diff.summary } }),
     results: runs.map((r) => r.path),
@@ -425,14 +444,14 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   };
 
   await writeFile(junitPath, renderJUnit(`jevitate check: ${opts.suite.name}`, cases, startedAt), "utf8");
-  const sarif = withLocatorWarnings(renderSarif({
+  const sarif = withAppVersion(withLocatorWarnings(renderSarif({
     toolVersion: engine.version,
     engineCommit: engine.commit,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
     suiteUri: opts.suiteUri ?? opts.suite.path,
     automationId: `jevitate-check/${opts.suite.name}/`,
     findings: defects.map((d) => ({ defect: d, gating: gating.includes(d), ...(statusOf(d) === undefined ? {} : { status: statusOf(d) }) })),
-  }), opts.maxBrittleSteps === undefined ? combined.suggestions : [], opts.suiteUri ?? opts.suite.path);
+  }), opts.maxBrittleSteps === undefined ? combined.suggestions : [], opts.suiteUri ?? opts.suite.path), opts.appVersion);
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
   await writeFile(
     reportPath,

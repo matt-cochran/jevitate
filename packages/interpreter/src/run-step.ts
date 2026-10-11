@@ -1,4 +1,5 @@
 import { access } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 import type { Locator, Page } from "playwright";
 import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import { describeNavigateUrl, encodeUrlParamValue, navigateUrlParams, resolveNavigateUrl } from "@jevitate/recording";
@@ -141,7 +142,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions & StepWaitHooks = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks & { readonly fixtureBaseDir?: string } = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   switch (step.kind) {
@@ -199,7 +200,10 @@ export async function runStep(
       // Re-attach the SAME fixture the recording names (or a `{var}` binding).
       // A redacted path throws in `resolveValue`; a path that is gone fails
       // fast here with the path named, never attaching some other file.
-      const file = resolveValue(step.file, vars);
+      // #488: a relative path resolves against the project root (fixtureBaseDir), never the
+      // process cwd — a Journey recorded on the project replays from any working directory.
+      const raw = resolveValue(step.file, vars);
+      const file = targetOpts.fixtureBaseDir !== undefined && !isAbsolute(raw) ? resolve(targetOpts.fixtureBaseDir, raw) : raw;
       try {
         await access(file);
       } catch (err) {

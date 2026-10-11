@@ -93,7 +93,7 @@ async function fakeExport(req: ExportCatalogBundleRequest): Promise<ExportCatalo
   mkdirSync(req.outDir, { recursive: true });
   const bundlePath = join(req.outDir, "bundle.json");
   writeFileSync(bundlePath, BUNDLE);
-  return { format: "journeeze-bundle", bundlePath, digest: "", counts: { personas: 0, jobs: 0, journeys: 0, checks: 0, findings: 0, media: 0 }, warnings: [] };
+  return { format: "journeeze-bundle", bundlePath, digest: "", counts: { personas: 0, jobs: 0, journeys: 0, checks: 0, findings: 0, demos: 0, media: 0 }, warnings: [] };
 }
 
 let home: string;
@@ -239,7 +239,7 @@ describe("pinned Journeeze hosts (contract §2)", () => {
 describe("publish journeeze", () => {
   const publish = (http: JourneezeHttp, env: Record<string, string> = { JOURNEEZE_UPLOAD_KEY: KEY }, extra: Partial<PublishDeps> = {}, dryRun = false): Promise<PublishJourneezeResult> =>
     publishToJourneeze(
-      { catalogDir: project, journeysDir: join(project, "journeys"), dryRun },
+      { catalogDir: project, journeysDir: join(project, "journeys"), dryRun, productName: "Ledgerly" },
       { homedir, env, http, exportBundle: fakeExport, sleep: async () => {}, sources: sources(env), ...extra },
     );
   const digestHex = createHash("sha256").update(BUNDLE).digest("hex");
@@ -285,10 +285,10 @@ describe("publish journeeze", () => {
     expect(JSON.stringify(await publish(http))).not.toContain(KEY.slice(4));
   });
 
-  it("dry-run builds the bundle and sends nothing", async () => {
+  it("dry-run builds the bundle and makes no upload request", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     const r = await publish(http, undefined, {}, true);
-    expect([r.status, r.idempotencyKey, requests.length]).toEqual(["dry-run", `sha256-${digestHex}`, 0]);
+    expect([r.status, r.idempotencyKey, requests.filter((q) => q.method === "POST").length]).toEqual(["dry-run", `sha256-${digestHex}`, 0]);
   });
 
   it.each([
@@ -415,5 +415,216 @@ describe("publish journeeze", () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await errorOf(publish(http, undefined, { exportBundle: leaky }));
     expect(requests).toEqual([]);
+  });
+});
+
+// ── #471: a bundle with demo media is uploaded as a ZIP (upload contract §4.2) ─────────────────
+
+const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+const SHOT = "media/demo-x/step-01.png";
+const sha = (b: Uint8Array | string): string => createHash("sha256").update(b).digest("hex");
+const MEDIA_BUNDLE = JSON.stringify({
+  kind: "journeeze.catalog-bundle",
+  version: 1,
+  minor: 0,
+  producer: { tool: "jevitate", version: "0.11.0" },
+  catalog: { personas: [], jobs: [], journeys: [] },
+  files: [{ path: SHOT, sha256: sha(PNG), bytes: PNG.byteLength, type: "image/png" }],
+});
+
+/** An export that writes bundle.json and its media; `edit` may then change the folder. */
+const mediaExport =
+  (edit: (outDir: string) => void = () => {}) =>
+  async (req: ExportCatalogBundleRequest): Promise<ExportCatalogBundleResult> => {
+    mkdirSync(join(req.outDir, "media", "demo-x"), { recursive: true });
+    writeFileSync(join(req.outDir, "media", "demo-x", "step-01.png"), PNG);
+    const bundlePath = join(req.outDir, "bundle.json");
+    writeFileSync(bundlePath, MEDIA_BUNDLE);
+    edit(req.outDir);
+    return { format: "journeeze-bundle", bundlePath, digest: "", counts: { personas: 0, jobs: 0, journeys: 0, checks: 0, findings: 0, demos: 1, media: 1 }, warnings: [] };
+  };
+
+/** The entries of a STORED zip, by walking its local headers. */
+function zipEntries(body: Uint8Array): Map<string, Buffer> {
+  const b = Buffer.from(body);
+  const out = new Map<string, Buffer>();
+  let at = 0;
+  while (b.readUInt32LE(at) === 0x04034b50) {
+    const size = b.readUInt32LE(at + 18);
+    const nameLen = b.readUInt16LE(at + 26);
+    const extra = b.readUInt16LE(at + 28);
+    const name = b.toString("utf8", at + 30, at + 30 + nameLen);
+    const start = at + 30 + nameLen + extra;
+    out.set(name, b.subarray(start, start + size));
+    at = start + size;
+  }
+  return out;
+}
+
+/** The upload POST (a key from the environment is first checked with whoami, #477). */
+const upload = (requests: readonly JourneezeHttpRequest[]): JourneezeHttpRequest => requests.find((r) => r.method === "POST")!;
+
+describe("publish journeeze with demo media (#471)", () => {
+  const publish = (http: JourneezeHttp, exportBundle = mediaExport()): Promise<PublishJourneezeResult> =>
+    publishToJourneeze(
+      { catalogDir: project, journeysDir: join(project, "journeys"), dryRun: false },
+      { homedir, env: { JOURNEEZE_UPLOAD_KEY: KEY }, http, exportBundle, sleep: async () => {}, sources: sources({ JOURNEEZE_UPLOAD_KEY: KEY }) },
+    );
+
+  it("sends a bundle that lists media as application/zip", async () => {
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await publish(http);
+    expect(upload(requests).headers["Content-Type"]).toBe("application/zip");
+  });
+
+  it("the ZIP holds bundle.json and every listed media file, nothing else", async () => {
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await publish(http);
+    expect([...zipEntries(upload(requests).body!).keys()]).toEqual(["bundle.json", SHOT]);
+  });
+
+  it("the media in the ZIP is byte-identical to the export", async () => {
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await publish(http);
+    expect(zipEntries(upload(requests).body!).get(SHOT)!.equals(PNG)).toBe(true);
+  });
+
+  it("the Idempotency-Key stays the sha256 of bundle.json", async () => {
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await publish(http);
+    expect(upload(requests).headers["Idempotency-Key"]).toBe(`sha256-${sha(MEDIA_BUNDLE)}`);
+  });
+
+  it("the Content-Digest covers the ZIP body", async () => {
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await publish(http);
+    expect(upload(requests).headers["Content-Digest"]).toBe(`sha-256=:${createHash("sha256").update(upload(requests).body!).digest("base64")}:`);
+  });
+
+  it("the same bundle gives the same ZIP bytes (a re-publish dedupes)", async () => {
+    const a = fakeJourneeze(OK_ROUTES());
+    const b = fakeJourneeze(OK_ROUTES());
+    await publish(a.http);
+    await publish(b.http);
+    expect(sha(upload(a.requests).body!)).toBe(sha(upload(b.requests).body!));
+  });
+
+  it("a media file that differs from its listed sha256 is never sent", async () => {
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await errorOf(publish(http, mediaExport((out) => writeFileSync(join(out, "media", "demo-x", "step-01.png"), Buffer.concat([PNG, Buffer.from([1])])))));
+    expect(requests.some((r) => r.method === "POST")).toBe(false);
+  });
+
+  it("a media file the bundle does not list is never sent", async () => {
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await errorOf(publish(http, mediaExport((out) => writeFileSync(join(out, "media", "demo-x", "step-02.png"), PNG))));
+    expect(requests.some((r) => r.method === "POST")).toBe(false);
+  });
+});
+
+/**
+ * #477 — the bundle's product.name comes from the Journeeze product, not package.json. The saved
+ * connection's product wins, else whoami's (CI key); an explicit --product-name overrides; a dry run
+ * verifies the key with whoami and refuses a mismatch before exporting.
+ */
+describe("publish journeeze product name (#477)", () => {
+  const SAVED_PRODUCT = { id: PRODUCT.id, name: "Ledgerly web" };
+  const withSaved = (product: { id: string; name: string }) =>
+    saveConnection(project, { baseUrl: PROD, product, keyPrefix: "jzu_abcd", keyRef: { manager: "env", key: "MY_JZ_KEY", origin: PROD, field: "journeeze-upload-key" }, connectedAt: "2026-10-09T00:00:00Z" }, { homedir });
+
+  const recording = (): { seen: { productName?: string }; exportBundle: (req: ExportCatalogBundleRequest) => Promise<ExportCatalogBundleResult> } => {
+    const seen: { productName?: string } = {};
+    const exportBundle = async (req: ExportCatalogBundleRequest): Promise<ExportCatalogBundleResult> => {
+      seen.productName = req.productName;
+      return fakeExport(req);
+    };
+    return { seen, exportBundle };
+  };
+
+  const run = (
+    http: JourneezeHttp,
+    exportBundle: PublishDeps["exportBundle"],
+    env: Record<string, string>,
+    req: { dryRun?: boolean; productName?: string } = {},
+  ): Promise<PublishJourneezeResult> =>
+    publishToJourneeze(
+      { catalogDir: project, journeysDir: join(project, "journeys"), dryRun: req.dryRun ?? false, ...(req.productName === undefined ? {} : { productName: req.productName }) },
+      { homedir, env, http, exportBundle, sleep: async () => {}, sources: sources(env) },
+    );
+
+  it("sends the saved connection's product name in the bundle", async () => {
+    await withSaved(SAVED_PRODUCT);
+    const { http } = fakeJourneeze(OK_ROUTES());
+    const { seen, exportBundle } = recording();
+    await run(http, exportBundle, { MY_JZ_KEY: KEY });
+    expect(seen.productName).toBe("Ledgerly web");
+  });
+
+  it("sends whoami's product name in the bundle when the key comes from the environment", async () => {
+    const { http } = fakeJourneeze(OK_ROUTES());
+    const { seen, exportBundle } = recording();
+    await run(http, exportBundle, { JOURNEEZE_UPLOAD_KEY: KEY });
+    expect(seen.productName).toBe("Ledgerly");
+  });
+
+  it("checks whoami with the environment key when resolving the product name", async () => {
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await run(http, recording().exportBundle, { JOURNEEZE_UPLOAD_KEY: KEY });
+    const who = requests.find((r) => new URL(r.url).pathname.endsWith("/whoami"));
+    expect(who?.headers.Authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it("an explicit product name wins over the saved connection's name", async () => {
+    await withSaved(SAVED_PRODUCT);
+    const { http } = fakeJourneeze(OK_ROUTES());
+    const { seen, exportBundle } = recording();
+    await run(http, exportBundle, { MY_JZ_KEY: KEY }, { productName: "Explicit product" });
+    expect(seen.productName).toBe("Explicit product");
+  });
+
+  it("does not check whoami when the key comes from the saved connection", async () => {
+    await withSaved(SAVED_PRODUCT);
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await run(http, recording().exportBundle, { MY_JZ_KEY: KEY });
+    expect(requests.some((r) => new URL(r.url).pathname.endsWith("/whoami"))).toBe(false);
+  });
+
+  it("a dry run with a saved connection verifies the key with whoami once and sends no bundle", async () => {
+    await withSaved(PRODUCT);
+    const { http, requests } = fakeJourneeze(OK_ROUTES());
+    await run(http, recording().exportBundle, { MY_JZ_KEY: KEY }, { dryRun: true });
+    expect([requests.filter((r) => new URL(r.url).pathname.endsWith("/whoami")).length, requests.some((r) => r.method === "POST")]).toEqual([1, false]);
+  });
+
+  it("a dry run refuses when whoami's product name differs from the explicit product name", async () => {
+    const { http } = fakeJourneeze(OK_ROUTES());
+    const err = await errorOf(run(http, recording().exportBundle, { JOURNEEZE_UPLOAD_KEY: KEY }, { dryRun: true, productName: "Other product" }));
+    expect(err.code).toBe("E_JOURNEEZE_PRODUCT_MISMATCH");
+  });
+
+  it("a dry run refuses when whoami's product name differs from the saved product name", async () => {
+    await withSaved(SAVED_PRODUCT);
+    const { http } = fakeJourneeze(OK_ROUTES());
+    const err = await errorOf(run(http, recording().exportBundle, { MY_JZ_KEY: KEY }, { dryRun: true }));
+    expect(err.code).toBe("E_JOURNEEZE_PRODUCT_MISMATCH");
+  });
+
+  it("the product-name mismatch names both products and how to fix it", async () => {
+    const { http } = fakeJourneeze(OK_ROUTES());
+    const err = await errorOf(run(http, recording().exportBundle, { JOURNEEZE_UPLOAD_KEY: KEY }, { dryRun: true, productName: "Other product" }));
+    expect([err.message.includes("Other product"), err.message.includes("Ledgerly"), /--product-name|connect journeeze/.test(err.message)]).toEqual([true, true, true]);
+  });
+
+  it("a dry run whose whoami returns 401 reports E_JOURNEEZE_KEY_REFUSED without the key", async () => {
+    const { http } = fakeJourneeze({ "GET /api/upload/v1/whoami": [{ status: 401, body: { code: "key_revoked" } }] });
+    const err = await errorOf(run(http, recording().exportBundle, { JOURNEEZE_UPLOAD_KEY: KEY }, { dryRun: true }));
+    expect([err.code, err.message.includes(KEY.slice(4))]).toEqual(["E_JOURNEEZE_KEY_REFUSED", false]);
+  });
+
+  it("returns the product name sent in the bundle", async () => {
+    const { http } = fakeJourneeze(OK_ROUTES());
+    const { seen, exportBundle } = recording();
+    const r = await run(http, exportBundle, { JOURNEEZE_UPLOAD_KEY: KEY }, { dryRun: true });
+    expect(r.productName).toBe(seen.productName);
   });
 });

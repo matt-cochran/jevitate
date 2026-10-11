@@ -4,15 +4,16 @@ import type { Journey, JourneyAnchor } from "./journey.js";
  * Anchor rules (#293, #466), in two tiers.
  *
  * (a) STRUCTURAL — `anchorRuleIssues`, run by `JourneySchema`'s `superRefine`: a Journey that breaks
- * one does not load. Unchanged since #293 except that `:` is allowed after the first character (the
- * 0.10 name rule's alphabet, so a compliant name loads): a name is a safe word of at most 100
- * characters that is never all digits (`--at-step 3` is a step number), names are unique, and an
- * anchor's step is one the Journey has.
+ * one does not load. Unchanged since #293 except that `:` is allowed after the first character (a
+ * broader alphabet than the 0.10 name rule's, so names a prior release accepted still load): a name is
+ * a safe word of at most 100 characters that is never all digits (`--at-step 3` is a step number),
+ * names are unique, and an anchor's step is one the Journey has.
  *
  * (b) THE 0.10 RULES — `anchorLintIssues`, NEVER at parse time (#466 ruling: existing Journeys still
  * load and run). Lint and the review sheet report them as warnings with the fix; `journey promote`
  * enforces them (`enforce: true` → errors) on a new promotion and on a re-promotion whose content
- * changed beyond step ids. The rules: a lowercase `[a-z0-9._:-]{1,64}` name; an anchor points at a
+ * changed beyond step ids. The rules: a lowercase `[a-z0-9][a-z0-9._-]{0,63}` name (the catalog
+ * bundle v1 `anchorName`, #478); an anchor points at a
  * step the Journey has — by `stepId` when present, and when it also has a `step` number the two
  * agree; on a Journey whose steps have ids, the anchor carries its step's id (promote stamps it);
  * a Journey linked to a job names at least one anchor. The job-side references (`jobStep` names a
@@ -27,7 +28,7 @@ export const ANCHOR_NAME_RE = /^(?![0-9]+$)[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 export const ANCHOR_NAME_MAX = 100;
 
 /** #466: the 0.10 anchor name rule — what a new or re-promoted Journey's anchors must match. */
-export const ANCHOR_NAME_RULE_RE = /^[a-z0-9._:-]{1,64}$/;
+export const ANCHOR_NAME_RULE_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 /** One structural anchor-rule violation: where (a path from the Journey root) and why. */
 export interface AnchorRuleIssue {
@@ -64,7 +65,7 @@ export function anchorRuleIssues(journey: Journey): AnchorRuleIssue[] {
 
 /** #466: the 0.10 anchor rules (Journey-local; the catalog ones are the CLI's `journeyRefIssues`). */
 export type AnchorRuleCode =
-  /** The name is not lowercase `[a-z0-9._:-]{1,64}`. */
+  /** The name is not lowercase `[a-z0-9][a-z0-9._-]{0,63}`. */
   | "anchor-name"
   /** `stepId` names no step of the Journey. */
   | "anchor-step-id"
@@ -99,9 +100,9 @@ export interface AnchorLintOptions {
 export function suggestAnchorName(name: string): string {
   const s = name
     .toLowerCase()
-    .replace(/[^a-z0-9._:-]+/g, "-")
+    .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
+    .replace(/^[^a-z0-9]+/, "")
     .slice(0, 64)
     .replace(/-+$/, "");
   return s === "" ? "anchor" : s;
@@ -126,7 +127,7 @@ export function anchorLintIssues(journey: Journey, opts: AnchorLintOptions = {})
         severity,
         path: `${at}.name`,
         step: a.step,
-        message: `anchor '${a.name}': a name is 1-64 of lowercase a-z, 0-9, . _ : -`,
+        message: `anchor '${a.name}': a name is 1-64 of lowercase a-z, 0-9, . _ - and starts with a letter or digit`,
         fix: `rename it to '${suggestAnchorName(a.name)}' (and update any metric, mutation pair or campaign that names it)`,
       });
     }

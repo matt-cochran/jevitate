@@ -24,7 +24,10 @@ import { loadTargetsFile, TargetConfigError, type TargetConfig } from "./target-
  *    (relative to the environments file) used when `--fixtures` is absent; `hooks` — `before`/
  *    `after` shell hooks used when `--before`/`--after` are absent (they still need
  *    `--allow-shell-hooks`); `production: true` marks a live environment (`jevitate demo` refuses it,
- *    #249). Keys starting with `$` (`$comment`) are documentation. The file is
+ *    #249); `synthetic: true` attests the environment runs on a seeded, synthetic tenant (never
+ *    real customer data) — the data half of Journeeze's demo-media privacy attestation (#471): only
+ *    a demo approved on such an environment is rendered under jz-mask-v1 and exported with media.
+ *    Keys starting with `$` (`$comment`) are documentation. The file is
  *    committed, so it NEVER holds a secret or a session: a `storageState`/`secret`/`password`/
  *    `token`/`cookie`/`credential` key anywhere in it is refused.
  *  - `--base-url <origin>` — an ad-hoc environment (a preview deploy); with `--env`, it replaces
@@ -56,6 +59,8 @@ export interface EnvironmentDef {
   readonly hooks?: { readonly before?: string; readonly after?: string };
   /** `production: true` (#249): a live environment — `jevitate demo` refuses it. */
   readonly production?: boolean;
+  /** `synthetic: true` (#471): a seeded, synthetic tenant — an approved demo made here may export masked media. */
+  readonly synthetic?: boolean;
 }
 
 /** `.jevitate/environments.json` is missing a named environment, or is not what it should be. */
@@ -117,7 +122,7 @@ export function isEnvironmentError(err: unknown): err is EnvironmentError {
 }
 
 const ENV_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const ENV_KEYS = new Set(["baseUrl", "allow", "fixtures", "hooks", "production"]);
+const ENV_KEYS = new Set(["baseUrl", "allow", "fixtures", "hooks", "production", "synthetic"]);
 const HOOK_KEYS = new Set(["before", "after"]);
 /** A key that would put a secret or a session into a committed file. */
 const SECRET_KEY = /storage.?state|secret|passw(or)?d|token|cookie|credential|api.?key|session|auth(orization)?$/i;
@@ -162,7 +167,7 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
   refuseSecretKeys(v, where);
   const o = v as Record<string, unknown>;
   for (const k of Object.keys(o)) {
-    if (!ENV_KEYS.has(k) && !k.startsWith("$")) throw new EnvironmentConfigError(`${where}.${k}: unknown key (allowed: baseUrl, allow, fixtures, hooks, production)`);
+    if (!ENV_KEYS.has(k) && !k.startsWith("$")) throw new EnvironmentConfigError(`${where}.${k}: unknown key (allowed: baseUrl, allow, fixtures, hooks, production, synthetic)`);
   }
   if (o.baseUrl === undefined) throw new EnvironmentConfigError(`${where}.baseUrl is required`);
   const base = originOf(o.baseUrl);
@@ -193,12 +198,15 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
     }
   }
   if (o.production !== undefined && typeof o.production !== "boolean") throw new EnvironmentConfigError(`${where}.production must be true or false`);
+  if (o.synthetic !== undefined && typeof o.synthetic !== "boolean") throw new EnvironmentConfigError(`${where}.synthetic must be true or false`);
+  if (o.synthetic === true && o.production === true) throw new EnvironmentConfigError(`${where}: an environment cannot be both production: true and synthetic: true`);
   return {
     baseUrl: base.origin,
     allow: allow.filter((a) => a !== base.origin),
     ...(fixtures === undefined ? {} : { fixtures }),
     ...(hooks === undefined ? {} : { hooks }),
     ...(o.production === true ? { production: true } : {}),
+    ...(o.synthetic === true ? { synthetic: true } : {}),
   };
 }
 
@@ -260,6 +268,8 @@ export interface ResolvedJourneyEnvironment {
   readonly source: string;
   /** The named environment is flagged `production: true` (#249: `demo` refuses it). */
   readonly production?: true;
+  /** #471: the named environment declares `synthetic: true` (a seeded, synthetic tenant). */
+  readonly synthetic?: true;
 }
 
 export interface JourneyEnvironmentRequest {
@@ -335,6 +345,9 @@ export function resolveJourneyEnvironment(req: JourneyEnvironmentRequest): Resol
     ...(session?.secretFields === undefined ? {} : { secretFields: session.secretFields }),
     source,
     ...(def?.production === true ? { production: true as const } : {}),
+    // #471: the attestation is the named environment's, for its own origin only — a `--base-url`
+    // pointing elsewhere is not what the file vouches for.
+    ...(def?.synthetic === true && baseUrl === def.baseUrl ? { synthetic: true as const } : {}),
   };
 }
 

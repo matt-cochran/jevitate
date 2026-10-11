@@ -74,17 +74,24 @@ export class RecordingInterpreter {
        * never sunk. Absent by default, so behavior is unchanged.
        */
       readonly skipStep?: (index: number, recorded: RecordedStep) => boolean;
+      /**
+       * #488: the directory a relative `upload` fixture path resolves against — the project root,
+       * never the process cwd. Absent: a relative path is used as-is (the historical behavior).
+       */
+      readonly fixtureBaseDir?: string;
     } = {},
   ) {}
 
   #targetOpts(): ResolveTargetOptions & {
     observer?: StepObserver;
     skipStep?: (index: number, recorded: RecordedStep) => boolean;
+    fixtureBaseDir?: string;
   } {
     return {
       ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
       ...(this.options.observer === undefined ? {} : { observer: this.options.observer }),
       ...(this.options.skipStep === undefined ? {} : { skipStep: this.options.skipStep }),
+      ...(this.options.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: this.options.fixtureBaseDir }),
     };
   }
 
@@ -281,6 +288,7 @@ async function runFlat(
   runOpts: ResolveTargetOptions & {
     observer?: StepObserver;
     skipStep?: (index: number, recorded: RecordedStep) => boolean;
+    fixtureBaseDir?: string;
   },
   sink?: RecordingSink,
   startIndex = 0,

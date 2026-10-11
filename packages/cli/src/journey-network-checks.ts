@@ -14,7 +14,10 @@ import type { Actor } from "@jevitate/screenplay";
 import { installFlashRecorder, type StepObserver } from "@jevitate/interpreter";
 import { describeStep } from "@jevitate/journey";
 import { clock } from "@jevitate/domain";
-import { evaluateNetworkCheck, evaluateOutcomeChecks, monitorFor, type RequestCapture, type SuccessCheckResult } from "@jevitate/explore";
+import { DEFAULT_STEP_RESPONSE_TIMEOUT_MS, evaluateNetworkCheckAwaiting, evaluateOutcomeChecks, type SlowStepFinding, monitorFor, type RequestCapture, type SuccessCheckResult } from "@jevitate/explore";
+
+/** #486/L2: the largest `--step-response-timeout` / `stepResponseTimeoutMs` accepted (5 minutes): a step never waits longer. */
+export const MAX_STEP_RESPONSE_TIMEOUT_MS = 300_000;
 
 /** How long the network may take to go idle after the last step before the checks read it. */
 const SETTLE_CEILING_MS = 5_000;
@@ -32,11 +35,19 @@ export type OutcomeCheckFailure =
   | { readonly where: "end-state"; readonly index: number; readonly detail: string }
   | { readonly where: "unevaluable"; readonly detail: string };
 
+/** #486: an advisory `slow-step` finding — a step's response was late but 2xx (never a quarantine). */
+export interface SlowStep extends SlowStepFinding {
+  /** 1-based step number. */
+  readonly step: number;
+}
+
 /** One step's request expectations and the capture started when it began. */
 interface StepWindow {
   readonly index: number;
   readonly label: string;
   readonly checks: readonly NetworkCheck[];
+  /** #486: the step's own response bound (ms), when it sets one. */
+  readonly responseTimeoutMs?: number;
   capture?: RequestCapture;
   /** When the step began (the page monitor's clock): a request started earlier is not the step's. */
   startedAt?: number;
@@ -47,18 +58,21 @@ export class JourneyOutcomeChecks {
   readonly #end;
   readonly #steps: StepWindow[];
   readonly #secrets: readonly string[];
+  readonly #responseTimeoutMs: number;
   #lastFailures: readonly OutcomeCheckFailure[] = [];
+  #slowSteps: SlowStep[] = [];
 
   /** `journey` undefined (an anchored prefix run): nothing is judged. */
-  constructor(page: Page, journey: Journey | undefined, opts: { readonly secrets?: readonly string[] } = {}) {
+  constructor(page: Page, journey: Journey | undefined, opts: { readonly secrets?: readonly string[]; readonly stepResponseTimeoutMs?: number } = {}) {
     this.#page = page;
+    this.#responseTimeoutMs = opts.stepResponseTimeoutMs ?? DEFAULT_STEP_RESPONSE_TIMEOUT_MS;
     this.#secrets = opts.secrets ?? [];
     this.#end = journey === undefined ? [] : journeyEndState(journey);
     this.#steps = [];
     let i = 0;
     for (const p of journey?.recording.pages ?? []) {
       for (const r of p.steps) {
-        if ((r.expectRequests ?? []).length > 0) this.#steps.push({ index: i, label: describeStep(r.step), checks: r.expectRequests ?? [] });
+        if ((r.expectRequests ?? []).length > 0) this.#steps.push({ index: i, label: describeStep(r.step), checks: r.expectRequests ?? [], ...(r.responseTimeoutMs === undefined ? {} : { responseTimeoutMs: r.responseTimeoutMs }) });
         i += 1;
       }
     }
@@ -66,6 +80,11 @@ export class JourneyOutcomeChecks {
 
   get active(): boolean {
     return this.#end.length > 0 || this.#steps.length > 0;
+  }
+
+  /** #486: advisory `slow-step` findings of the last `run` (empty when every response came promptly). */
+  get slowSteps(): readonly SlowStep[] {
+    return this.#slowSteps;
   }
 
   /** #402: the failed assertion sites of the last `run` (empty when every check held, or none ran). */
@@ -92,12 +111,18 @@ export class JourneyOutcomeChecks {
     };
   }
 
+  #stopCaptures(monitor: ReturnType<typeof monitorFor>, capture: RequestCapture): void {
+    monitor.stopCapture(capture);
+    for (const s of this.#steps) if (s.capture !== undefined) monitor.stopCapture(s.capture);
+  }
+
   /**
    * Runs `replay` with the page's requests captured, then judges the checks. A replay that already
    * failed keeps its own reason. Without checks it just runs `replay`.
    */
   async run(actor: Actor, replay: () => Promise<JourneyRunResult>): Promise<JourneyRunResult> {
     this.#lastFailures = [];
+    this.#slowSteps = [];
     if (!this.active) return replay();
     const monitor = monitorFor(this.#page);
     await monitor.instrument();
@@ -108,13 +133,16 @@ export class JourneyOutcomeChecks {
     let result: JourneyRunResult;
     try {
       result = await replay();
-      if (result.outcome === "quarantined" || result.outcome === "heal-exhausted") return result;
+      if (result.outcome === "quarantined" || result.outcome === "heal-exhausted") {
+        this.#stopCaptures(monitor, capture);
+        return result;
+      }
       // A step's postcondition can hold before the write it triggered finished: wait for the network
       // to go idle (bounded) before reading what was sent.
       await monitor.waitSettled({ ceilingMs: SETTLE_CEILING_MS }).catch(() => undefined);
-    } finally {
-      monitor.stopCapture(capture);
-      for (const s of this.#steps) if (s.capture !== undefined) monitor.stopCapture(s.capture);
+    } catch (e) {
+      this.#stopCaptures(monitor, capture);
+      throw e;
     }
     // Step windows first (the end state's reload must not count as a step's request).
     const stepFailureSites: OutcomeCheckFailure[] = [];
@@ -125,14 +153,24 @@ export class JourneyOutcomeChecks {
       // A request still in flight when the step began (the previous step's write) finishes inside
       // this window: only requests SENT from the step's start count.
       const since = s.startedAt;
-      const sent = window.sent().filter((r) => since === undefined || (r.startedAt !== undefined && r.startedAt >= since));
-      s.checks.forEach((c, checkIndex) => {
-        const r = evaluateNetworkCheck(c, sent, window.truncated);
-        if (r.passed) return;
+      for (const [checkIndex, c] of s.checks.entries()) {
+        // #486: a request still awaiting its response (a cold start) is waited for, up to the bound.
+        const { result: r, slowStep } = await evaluateNetworkCheckAwaiting(
+          c,
+          () => ({
+            requests: window.sent().filter((q) => since === undefined || (q.startedAt !== undefined && q.startedAt >= since)),
+            truncated: window.truncated,
+          }),
+          s.responseTimeoutMs ?? this.#responseTimeoutMs,
+        );
+        if (slowStep !== undefined) this.#slowSteps.push({ ...slowStep, step: s.index + 1 });
+        if (r.passed) continue;
         stepFailureSites.push({ where: "step-request", step: s.index + 1, checkIndex, detail: `${r.check} — ${r.detail}` });
         stepFailureReasons.push(`step ${s.index + 1} (${s.label}): ${r.check} — ${r.detail}`);
-      });
+      }
     }
+    // The captures stay live through the waits above (#486): a pending request's response lands in them.
+    this.#stopCaptures(monitor, capture);
     let end: SuccessCheckResult[] = [];
     if (this.#end.length > 0) {
       try {

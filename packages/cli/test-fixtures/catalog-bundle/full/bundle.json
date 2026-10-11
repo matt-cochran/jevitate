@@ -2,7 +2,7 @@
   "$schema": "https://app.journeeze.dev/schemas/catalog-bundle.v1.json",
   "kind": "journeeze.catalog-bundle",
   "version": 1,
-  "minor": 0,
+  "minor": 1,
   "producer": {
     "tool": "jevitate",
     "version": "0.9.0",
@@ -320,7 +320,8 @@
             "atMs": 4000
           }
         ]
-      }
+      },
+      "appVersion": "2.4.0"
     },
     {
       "target": {
@@ -376,6 +377,29 @@
       "target": "board-adversarial",
       "route": "/board",
       "observation": "Saving a verdict twice in quick succession returns a server error"
+    },
+    {
+      "fingerprint": "9bb4954412cd99e1",
+      "kind": "ux",
+      "claim": "other",
+      "producerClaim": "locator-brittle",
+      "severity": "minor",
+      "confidence": 1,
+      "commit": "592a7021c4f0be9d3a8e6b1f2c7d4e5a6b7c8d9e",
+      "at": "2026-10-09T12:36:00.000Z",
+      "target": "jz-guide-fixture",
+      "journey": "jz-guide-fixture",
+      "step": 1,
+      "route": "/board",
+      "observation": "The \"Save note\" button on /board is found only by its text, so a copy change breaks the steps that use it",
+      "recommendation": "add data-testid=\"save-note\" to the \"Save note\" button on /board",
+      "locator": {
+        "element": "the \"Save note\" button",
+        "attribute": "data-testid",
+        "testId": "save-note",
+        "fix": "add data-testid=\"save-note\" to the \"Save note\" button on /board",
+        "steps": 3
+      }
     }
   ],
   "files": [

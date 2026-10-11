@@ -39,6 +39,11 @@ ends on: a state-changing job checks its write and what persisted, for example
   `responseStatus:<METHOD> <path>=2xx`, with id segments as `*`. It is judged over the requests
   the replay sent from the moment that step began, so it pairs the check with the step that
   causes it (`step request check not met: step 3 (click …): …`).
+  A request sent but not yet answered (a cold start after a deploy) is waited for, up to
+  `journey run --step-response-timeout <ms>` (MCP `run_journey` `stepResponseTimeoutMs`; default
+  15000; a step's own `responseTimeoutMs` overrides it). A 2xx within the bound passes and is reported as an advisory `slowSteps` finding
+  with its latency; a non-2xx, or no response within the bound, fails. `jevitate check` and
+  `campaign run` report a step slow only on a Journey's first replay as a `cold-start` note.
 - **A step's `expect`** comes from what the step changed: the navigation it caused
   (`urlIncludes`), the value a fill typed (`valueEquals`, for a constant value), or, with
   `--action-deltas`, the element or text a `relevant-change` step added. A step with nothing to
@@ -135,6 +140,7 @@ jevitate journey lint checkout --sarif lint.sarif
 | `nothing-after-last-write` | error | No effect assertion follows the last state-changing step |
 | `no-persistence-check` | warning | A write has no `reloadThen` end-state check, so persistence is unverified |
 | `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion |
+| `upload-file-missing` | error | An `upload` step's literal fixture path does not exist. Relative paths resolve against the project root (the folder holding `.jevitate/`), never the working directory; the message shows the resolved path |
 
 Warnings never block promotion. `--accept-weak "<reason>"` records the reason and the waived error
 rules in the Journey's `metadata.acceptedWeak`.
@@ -566,6 +572,37 @@ One anchored step with a state restore (`--fixtures`, `--before`/`--after` with
 setup before the prefix replay, the restore after the mission, and the sweep's result shape
 (`sweep.mode: "step"`, `sweep.atStep`).
 
+### Editing and suggesting anchors (#487)
+
+Anchors are edited with commands, not by hand-editing `metadata.anchors`. They change a **draft**
+Journey only: a promoted Journey's content hash covers its anchors, so edit it as a draft and
+re-promote.
+
+```bash
+jevitate journey anchor add checkout --name payment --step 4 --probe "double submit"   # --step: number or step id
+jevitate journey anchor remove checkout --name payment
+jevitate journey lint checkout --fix        # stamps each number-only anchor with its step's id
+jevitate journey anchors checkout --suggest # advisory; writes nothing
+```
+
+Over MCP the same edits are `journey_anchor_add` / `journey_anchor_remove`, `lint_journey` with
+`fix: true` and `journey_anchors` with `suggest: true`; a promoted Journey is refused there too.
+
+`anchor add` writes the step's stable id at once and prints the anchor issues that remain (name
+rule `[a-z0-9][a-z0-9._-]{0,63}`, duplicates, unknown steps are refused, exit 64).
+
+`--suggest` reads the recording and proposes an anchor where the flow changes state, one per step
+(a write wins over a new page, a new page over a form):
+
+| Kind | Evidence | Default probes |
+| --- | --- | --- |
+| `write` | the step's recorded requests include a state-changing request (the write classifier, as `journey lint`), or it expects one | double submit, back/reload, replay the write, a second tab |
+| `new-page` | the URL path changes (query and hash ignored), or a later page segment starts | back/reload, a second tab |
+| `form-valid` | the last fill before a submit-type click or Enter, or a fill whose delta reports a control enabled | double submit, back/reload |
+
+Steps that already carry an anchor are skipped. Each suggestion prints its name, step and step id,
+the reason, the probes, and the `journey anchor add` command that accepts it.
+
 ### Sweeping every step
 
 `--at-step all` runs the strategy from EVERY top-level step (an anchor's name where one names the
@@ -631,8 +668,23 @@ Declare anchors in the Journey's `metadata` (validated: names unique, each step 
 | `discovery` | `false` skips the discovery replay |
 | `maxRuns` | The mission cap (default 50, at most 200); `maxActions` (default 40) and `maxDecisions` are per-mission defaults |
 
+**Preflight (#485).** Before any mission, `campaign run` checks the campaign's own preconditions
+and refuses (`E_CAMPAIGN_PREFLIGHT`, exit 64) listing EVERY problem, not just the first: each job's
+start URL must be reachable (a connect probe — no environment declares a health check); each job's
+`storageState` must still be signed in (its Journey's start page must not land on a sign-in route
+or form — the same check as `explore`'s auth pre-flight; only the file's name is ever reported,
+never its contents); and the discovery replay of each job's Journey must not write to a loopback
+origin the environment's `allow` list misspells or leaves out (`localhost` vs `127.0.0.1`, or a
+backend port), which would block every mission's write there. Such a problem names the exact
+origin to add, e.g. `add http://127.0.0.1:3000 to the environment's allow list`. A job whose start
+URL is down or whose session is signed out is not replayed. The verdict is `preflight: { ok,
+problems[] }` in `campaign.json` (written even on a refusal) and a `preflight` line in the human
+summary. An expired session is not refreshed automatically (a campaign names no persona login):
+re-save it with `jevitate login`. `--skip-preflight` (MCP `run_campaign` `skipPreflight: true`) runs
+the campaign without these checks; the report records `preflight.skipped`.
+
 **Mission options (#311).** Every `campaign run` flag beyond its own (`--journeys-dir`, `--out`,
-`--allow-shell-hooks`, `--hook-timeout-ms`, `--real`/`--fake-ai`, `--json`) is forwarded to every
+`--allow-shell-hooks`, `--hook-timeout-ms`, `--skip-preflight`, `--real`/`--fake-ai`, `--json`) is forwarded to every
 anchored mission as given: `--allow-destructive`, `--allow-writes`, `--deny`, `--paid`,
 `--invariants`, the backend-log flags (`--log-source`, `--log-defect`, `--log-scope`, …,
 `--server-log-drain-ms`), `--evidence-video`, `--record-video` and `--screenshots`. They are operator
@@ -709,9 +761,14 @@ never overwrites it):
     "allow": ["https://auth.example.com"],
     "fixtures": "fixtures/staging.json",
     "hooks": { "before": "./scripts/seed-staging.sh" }
-  }
+  },
+  "demo": { "baseUrl": "https://demo.example.com", "synthetic": true }
 }
 ```
+
+`"production": true` marks a live environment (`jevitate demo` refuses it). `"synthetic": true`
+states that the environment runs on a seeded, synthetic tenant (never real customer data): a demo
+approved there can ship its masked media to Journeeze (#471). The two cannot be combined.
 
 ```bash
 jevitate journey run checkout --env staging
@@ -838,6 +895,13 @@ in `.jevitate/environments.json` is refused before anything runs (`E_DEMO_PRODUC
 session-ending controls are refused unless that origin's `safety` in `~/.jevitate/targets.json`
 allows them. Every replay uses `journey run`'s fail-closed policy, and every output is redacted.
 Nothing is promoted without `demo approve`.
+
+**Demo media for Journeeze.** When the environment declares `"synthetic": true` (a seeded,
+synthetic tenant), `demo approve` renders the final demo under Journeeze's `jz-mask-v1` policy —
+form fields, editable text and `[data-jz-mask]` masked, embeds replaced by placeholders,
+`[data-jz-block]` left out — and keeps the media it could prove masked in
+`<journeys>/.demos/<id>/` for `catalog export --format journeeze-bundle`. A screenshot it cannot
+prove is left out, and the video with it. See [Publishing to Journeeze](catalog.md#publishing-to-journeeze).
 
 | Exit | When |
 |---|---|

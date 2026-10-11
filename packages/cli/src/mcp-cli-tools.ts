@@ -104,6 +104,7 @@ export const OMIT = {
   browserBin: "which browser binary, channel and Chromium switches launch is the operator's setting (the server's own launch), never an MCP argument",
   storeDir: "store and results locations are the server's (the `jevitate mcp` defaults / --dir): an MCP argument never picks which directory is read or written as a store",
   envSecret: "binds an environment variable (or a literal secret) the run types or redacts: a request never chooses which of the operator's variables is read — secret fields come from targets.json (secretFields/personas)",
+  mcpOrigins: "#484: an MCP caller never names origins — a replay reaches only operator-configured origins; over MCP use 'env' (an environment in environments.json), or verify-fix --allow on the CLI",
   logCmd: "server-log sources can run commands and read arbitrary files: operator-declared only (targets.json logSources/allowLogCmd)",
   logTriage: "#313: sends the run's recorded log text (redacted) to the judgment model — an operator opt-in for their own logs, never a request's choice",
   hangWrites: "re-sending a paid/destructive write is the operator's call (targets.json safety.hangReplayWrites)",
@@ -238,7 +239,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "export_catalog_bundle",
     description:
-      "`jevitate catalog export --format journeeze-bundle --out <dir> --json` (#464): write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings; no media) as a Journeeze catalog bundle (bundle.json) under out — a directory inside the project (never ~/.jevitate/). " +
+      "`jevitate catalog export --format journeeze-bundle --out <dir> --json` (#464): write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings) and, #471, each approved demo's jz-mask-v1-masked media (media/<id>/…, only for demos approved on a synthetic: true environment) as a Journeeze catalog bundle (bundle.json) under out — a directory inside the project (never ~/.jevitate/). " +
       "check: `jevitate check` records (check.json paths, confined like every read path) to include — default <project>/jevitate-check/check.json when it exists; productName: the bundle's product.name (default the project's package.json name, else its folder name). " +
       "Returns the bundle path, its sha256 digest, counts and warnings. It never uploads (publish_to_journeeze) and never approves anything.",
     command: {
@@ -255,9 +256,10 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "publish_to_journeeze",
     description:
-      "`jevitate publish journeeze --json` (#464): export the catalog bundle and upload it to the Journeeze product this project is connected to, then wait until it is imported or refused; returns the status, summary, warnings and errors. dryRun: true exports and validates but sends nothing. " +
+      "`jevitate publish journeeze --json` (#464): export the catalog bundle and upload it to the Journeeze product this project is connected to (a ZIP with the masked demo media when there is any, else bundle.json), then wait until it is imported or refused; returns the status, productName, summary, warnings and errors. dryRun: true exports and validates but sends nothing. " +
+      "productName: the bundle's product.name — overrides the connected product's name (default: the saved connection's product name, or whoami's when the key comes from JOURNEEZE_UPLOAD_KEY). A dry run verifies the key with whoami and refuses with E_JOURNEEZE_PRODUCT_MISMATCH when its product.name differs from the one this publish names. " +
       "The upload key is resolved by jevitate itself (its secret store, or JOURNEEZE_UPLOAD_KEY in CI): it is never an argument and never in a result. A refusal carries its specific code (E_JOURNEEZE_NOT_CONNECTED, E_JOURNEEZE_KEY_REFUSED, E_JOURNEEZE_FORBIDDEN, E_JOURNEEZE_UNAVAILABLE, …). Connecting a project (entering the key) is a person's act on the CLI (`jevitate connect journeeze`) — there is no MCP tool for it. Publishing never approves anything.",
-    command: { path: "publish journeeze", params: { dryRun: b("--dry-run") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "publish journeeze", params: { dryRun: b("--dry-run"), productName: s("--product-name") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "review_journey",
@@ -275,14 +277,33 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "lint_journey",
     description:
-      "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding.",
-    command: { path: "journey lint", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
+      "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding. " +
+      "#487: fix: true stamps the step id of each anchor that references a step by number only and writes the Journey (a draft; a promoted Journey is refused — its approval binds to the content hash), reporting what was stamped.",
+    command: { path: "journey lint", params: { id: pos(), fix: b("--fix") }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "journey_anchors",
     description:
-      "`jevitate journey anchors <id>` (#293): a Journey's named anchors — states worth exploring from, each with the step it follows and its suggested adversarial probes. Branch a mission off one with run_exploration fromJourney + atStep.",
-    command: { path: "journey anchors", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+      "`jevitate journey anchors <id>` (#293): a Journey's named anchors — states worth exploring from, each with the step it follows and its suggested adversarial probes. Branch a mission off one with run_exploration fromJourney + atStep. " +
+      "#487: suggest: true instead proposes anchors where the recorded flow changes state (a new page, a form that became valid, a completed write) — advisory, writes nothing; accept one with journey_anchor_add.",
+    command: { path: "journey anchors", params: { id: pos(), suggest: b("--suggest") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "journey_anchor_add",
+    description:
+      "`jevitate journey anchor add <journeyId>` (#487): add a named anchor to a DRAFT Journey — step is a 1-based step number or a step id; the step's stable id is written at once. Returns the anchor lint issues that remain. " +
+      "A promoted Journey is refused (E_JOURNEY_ANCHOR_ARGS): its approval binds to the content hash — edit a draft and re-promote, a person re-approves.",
+    command: {
+      path: "journey anchor add",
+      params: { journeyId: pos(), name: s("--name", { required: true }), step: s("--step", { required: true }), description: s("--description"), probe: many("--probe") },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "journey_anchor_remove",
+    description:
+      "`jevitate journey anchor remove <journeyId>` (#487): remove the named anchor from a DRAFT Journey; returns the anchor lint issues that remain. A promoted Journey is refused (E_JOURNEY_ANCHOR_ARGS), as on the CLI.",
+    command: { path: "journey anchor remove", params: { journeyId: pos(), name: s("--name", { required: true }) }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "annotate_journey",
@@ -512,7 +533,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_campaign",
     description:
-      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. Needs real or fakeAi.",
+      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. #485: before any mission it runs a preflight (every start URL reachable, every session signed in, no allow-list origin slip) and refuses with the problems listed; skipPreflight: true runs without it (recorded on the report as preflight.skipped). allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. Needs real or fakeAi.",
     command: {
       path: "campaign run",
       params: {
@@ -529,6 +550,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         recordVideo: { kind: "optional-path", flag: "--record-video" },
         screenshots: { kind: "screenshots", flag: "--screenshots" },
         evidenceVideo: b("--evidence-video"),
+        // #485: like run_exploration authCheck "off" — an explicit opt-out, recorded on the report (preflight.skipped).
+        skipPreflight: b("--skip-preflight"),
         ...JEV_AI,
       },
       omitted: {
@@ -669,6 +692,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         baseline: s("--baseline"),
         changedRoutes: many("--changed-routes"),
         targetBuild: s("--target-build"),
+        appVersion: s("--app-version"),
         requireApprovals: b("--require-approvals"),
         allowChannels: s("--allow-channels"),
         maxBrittleSteps: n("--max-brittle-steps"),

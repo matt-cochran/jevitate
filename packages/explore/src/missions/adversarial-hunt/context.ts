@@ -27,6 +27,7 @@ import { hostProbe, type HostPressure, type HostProbe } from "../../host-pressur
 import { CrashWatch } from "../../mission-failure.js";
 import { MissionSafety } from "../../mission-safety.js";
 import { ReadOnlyGuard, type BlockedWrite } from "../../read-only.js";
+import { blockedCauseOf, type BlockedConsequence, type BlockedRoot, type ConsequenceCandidate } from "../../blocked-cause.js";
 import { writeClassifier } from "@jevitate/recording";
 import { MissionSessions } from "../../mission-session.js";
 import { RunRecorder } from "../../record.js";
@@ -79,6 +80,19 @@ export interface HuntContext {
    */
   readonly offAllowlist: ReadOnlyGuard;
   readonly blockedWrites: BlockedWrite[];
+  /** #484: every blocked write with its step and session — the roots later findings link to (`causedBy`). */
+  readonly blockedRoots: BlockedRoot[];
+  /** #484: findings a blocked write caused, by fingerprint — reported under it, never as defects. */
+  readonly blockedConsequences: Map<string, BlockedConsequence>;
+  /** #484: records writes the guard blocked at `step` (the first loopback `--allow` mismatch is warned about once). */
+  noteBlocked: (blocked: readonly BlockedWrite[], step: number, busyStarted?: string) => string | undefined;
+  /** #484: the busy indicator showing just before the current action (null: none) — see `BlockedRoot.busyStarted`. */
+  busyBeforeAction: string | null;
+  /** #484: the finding's `causedBy` link when a blocked write caused it — it is then recorded as its consequence. */
+  blockedConsequence: (
+    finding: { readonly fingerprint: string; readonly kind: string; readonly title: string; readonly route: string },
+    candidate: ConsequenceCandidate,
+  ) => boolean;
   readonly probeHost: HostProbe;
   crashHost: HostPressure | undefined;
   readonly secrets: readonly string[];
@@ -329,9 +343,53 @@ export function createHuntContext(params: AdversarialMissionParams): HuntContext
   ctx.offAllowlist = new ReadOnlyGuard(writeClassifier(params.safety?.readRequests === undefined ? {} : { readRequests: params.safety.readRequests }), {
     mode: "off-allowlist",
     allowlist: params.allowlist,
+    startUrl: params.seedUrl,
     ...(params.safety?.allowWriteRequests === undefined ? {} : { allowWrites: params.safety.allowWriteRequests }),
   });
   ctx.blockedWrites = [];
+  ctx.blockedRoots = [];
+  ctx.blockedConsequences = new Map<string, BlockedConsequence>();
+  let mismatchWarned = false;
+  ctx.busyBeforeAction = null;
+  ctx.noteBlocked = (blocked: readonly BlockedWrite[], step: number, busyStarted?: string): string | undefined => {
+    ctx.blockedWrites.push(...blocked);
+    const session = Math.max(0, ctx.segments.indexOf(ctx.recorder));
+    let warning: string | undefined;
+    for (const b of blocked) {
+      ctx.blockedRoots.push({
+        step,
+        session,
+        method: b.method,
+        path: b.path,
+        ...(b.allowMismatch === undefined ? {} : { allowMismatch: b.allowMismatch }),
+        ...(busyStarted === undefined ? {} : { busyStarted }),
+      });
+      if (!mismatchWarned && b.allowMismatch !== undefined) {
+        mismatchWarned = true;
+        warning = `WARNING: ${b.allowMismatch.message}`;
+      }
+    }
+    return warning;
+  };
+  ctx.blockedConsequence = (finding, candidate): boolean => {
+    const causedBy = blockedCauseOf(ctx.blockedRoots, candidate);
+    if (causedBy === undefined) return false;
+    const known = ctx.blockedConsequences.get(finding.fingerprint);
+    if (known !== undefined) {
+      if (!known.occurrenceSteps.includes(candidate.step)) known.occurrenceSteps.push(candidate.step);
+      return true;
+    }
+    ctx.blockedConsequences.set(finding.fingerprint, {
+      fingerprint: finding.fingerprint,
+      kind: finding.kind,
+      title: finding.title,
+      route: finding.route,
+      firstSeenStep: candidate.step,
+      occurrenceSteps: [candidate.step],
+      causedBy,
+    });
+    return true;
+  };
   ctx.probeHost = params.hostProbe ?? hostProbe();
   ctx.crashHost = undefined;
   ctx.secrets = params.secrets ?? [];

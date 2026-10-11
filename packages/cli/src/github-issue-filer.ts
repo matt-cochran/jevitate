@@ -69,8 +69,8 @@ export class GitHubFilingError extends Error {
 }
 
 const ISSUE_NUMBER = /\/issues\/(\d+)/;
-/** The dedup marker every jevitate draft body carries (see `fingerprintMarker`). */
-const FINGERPRINT_MARKER = /<!-- jevitate-fingerprint: [0-9a-f]+ -->/;
+/** The dedup marker Jevitate draft bodies carry (see `fingerprintMarker`), in either direction. */
+const FINGERPRINT_MARKERS = /<!-- (?:jevitate|journeeze)-fingerprint:\s*[0-9a-f]+ -->/g;
 
 function parseIssueUrl(url: string): IssueRef {
   const m = ISSUE_NUMBER.exec(url);
@@ -78,9 +78,14 @@ function parseIssueUrl(url: string): IssueRef {
   return { number: Number(m[1]), url };
 }
 
-/** The bare fingerprint inside a `<!-- jevitate-fingerprint: … -->` marker (the searchable token). */
+/** Every fingerprint marker in a body, in the order they appear. */
+function bodyMarkers(body: string): string[] {
+  return body.match(FINGERPRINT_MARKERS) ?? [];
+}
+
+/** The bare fingerprint inside a `<!-- jevitate|journeeze-fingerprint: … -->` marker (searchable). */
 function markerToken(marker: string): string {
-  return marker.replace(/^<!--\s*jevitate-fingerprint:\s*/, "").replace(/\s*-->$/, "");
+  return marker.replace(/^<!--\s*(?:jevitate|journeeze)-fingerprint:\s*/, "").replace(/\s*-->$/, "");
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -213,7 +218,7 @@ export class GitHubIssueFiler implements IssueFilerPort {
    * fingerprint marker cannot be checked, so it gets exactly one attempt. Same for both transports.
    */
   async create(repo: string, issue: NewIssue): Promise<IssueRef> {
-    const marker = FINGERPRINT_MARKER.exec(issue.body)?.[0];
+    const markers = bodyMarkers(issue.body);
     const schedule = this.#retry.schedule ?? BACKOFF_SCHEDULE_MS;
     const sleep = this.#retry.sleep ?? ((ms: number) => clock.sleep(ms));
     const random = this.#retry.random ?? Math.random;
@@ -222,9 +227,11 @@ export class GitHubIssueFiler implements IssueFilerPort {
         return await this.#createOnce(repo, issue);
       } catch (e) {
         const delay = schedule[attempt];
-        if (marker === undefined || delay === undefined || !isTransientError(e)) throw e;
-        const landed = await this.findOpenByMarker(repo, marker);
-        if (landed !== null) return landed;
+        if (markers.length === 0 || delay === undefined || !isTransientError(e)) throw e;
+        for (const marker of markers) {
+          const landed = await this.findOpenByMarker(repo, marker);
+          if (landed !== null) return landed;
+        }
         await sleep(jittered(delay, random));
       }
     }

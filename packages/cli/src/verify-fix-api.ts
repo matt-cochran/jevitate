@@ -22,8 +22,10 @@ import { dirname as dirnameOf, join as joinPath, resolve as resolveFile } from "
 import { assertSameExtensionBuild, listVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
+import { isEnvironmentError, resolveJourneyEnvironment } from "./environments.js";
 import {
   assertAuthorizedExploreTarget,
+  normalizeAllowlist,
   verifyFix,
   type HangSignal,
   type VerifyFixResult,
@@ -114,6 +116,60 @@ export interface RunVerifyFixOptions {
   readonly screenshots?: ScreenshotsSpec;
   /** #250: caption time per step in the "after" clip (ms). Default `EVIDENCE_PACE_MS`. */
   readonly evidencePaceMs?: number;
+  /**
+   * #484 `--allow <origin...>`: replay with these origins instead of the allow list stored with the
+   * result (e.g. to prove a `localhost` → `127.0.0.1` config fix). Explicit only — never widened implicitly.
+   */
+  readonly allow?: readonly string[];
+  /** #484 `--env <name>`: replay with that environment's CURRENT allow list (its `baseUrl` + `allow`). */
+  readonly env?: string;
+  /** The environments file `env` is read from (default: the repo's `.jevitate/environments.json`). */
+  readonly environmentsFile?: string;
+}
+
+/** #484: the replay ran with an allow list other than the one stored with the result — which, and where from. */
+export interface AllowlistOverride {
+  readonly source: "--allow" | `--env ${string}`;
+  /** The origins the replay was authorized against. */
+  readonly origins: readonly string[];
+  /** The allow list stored with the original result. */
+  readonly recorded: readonly string[];
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+}
+
+/**
+ * #484: the allow list a verify-fix replay runs under. The result's stored list, unless the operator
+ * EXPLICITLY overrides it with `--allow` or `--env` (not both) — the override is returned for the report.
+ */
+export function replayAllowlist(
+  recorded: readonly string[],
+  opts: Pick<RunVerifyFixOptions, "allow" | "env" | "environmentsFile">,
+): { readonly allowlist: readonly string[]; readonly override?: AllowlistOverride } {
+  const allow = opts.allow ?? [];
+  if (allow.length === 0 && opts.env === undefined) return { allowlist: recorded };
+  if (allow.length > 0 && opts.env !== undefined) throw new VerifyFixInputError("pass --allow or --env to override the stored allow list, not both");
+  let origins: string[];
+  let source: AllowlistOverride["source"];
+  if (opts.env !== undefined) {
+    try {
+      const env = resolveJourneyEnvironment({ env: opts.env, targets: {}, ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) });
+      origins = normalizeAllowlist(env?.allowedOrigins ?? []);
+    } catch (e) {
+      if (isEnvironmentError(e)) throw new VerifyFixInputError(e.message);
+      throw e;
+    }
+    source = `--env ${opts.env}`;
+  } else {
+    origins = normalizeAllowlist(allow);
+    source = "--allow";
+  }
+  if (origins.length === 0) throw new VerifyFixInputError(`${source} names no origin to replay against`);
+  const before = normalizeAllowlist(recorded);
+  return {
+    allowlist: origins,
+    override: { source, origins, recorded, added: origins.filter((o) => !before.includes(o)), removed: before.filter((o) => !origins.includes(o)) },
+  };
 }
 
 /**
@@ -145,6 +201,8 @@ export interface VerifyFixReport extends VerifyFixResult {
   readonly screenshotPaths?: string[];
   readonly screenshotIndex?: string;
   readonly screenshotsSkipped?: ScreenshotsResult["screenshotsSkipped"];
+  /** #484: present only when `--allow`/`--env` replaced the stored allow list — the origins used, and what changed. */
+  readonly allowlistOverride?: AllowlistOverride;
 }
 
 export class VerifyFixInputError extends Error {
@@ -367,7 +425,11 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   } catch (e) {
     throw new VerifyFixInputError(`cannot read mission result ${opts.resultPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
-  const mission = parsePersistedMission(raw);
+  const persisted = parsePersistedMission(raw);
+  // #484: the stored allow list, unless --allow/--env EXPLICITLY replaces it (recorded on the report).
+  const replay = replayAllowlist(persisted.target.allowlist, opts);
+  const mission: PersistedMission =
+    replay.override === undefined ? persisted : { ...persisted, target: { ...persisted.target, allowlist: [...replay.allowlist] } };
   const finding = findFinding(mission, opts.fingerprint);
   if (finding === undefined) {
     throw new VerifyFixInputError(`no finding with fingerprint ${opts.fingerprint} in ${opts.resultPath}`);
@@ -611,6 +673,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     ...(evidence === undefined ? {} : { evidence }),
     ...shotFields,
     ...(finding.title === undefined ? {} : { title: finding.title }),
+    ...(replay.override === undefined ? {} : { allowlistOverride: replay.override }),
     ...(fx === undefined ? {} : { fixtures: { ...fx.record(), missionIdentity: mission.fixtures?.identity ?? "none" } }),
     // Every replay closed its own session (finalizing its video) before verifyFix returned.
     ...(videoDir === undefined ? {} : { videoPaths: listVideos(videoDir) }),

@@ -14,3 +14,5 @@ export * from "./catalog-schema.js";
 export * from "./approval-schema.js";
 export * from "./proposal-schema.js";
 export * from "./anchor-rules.js";
+export * from "./anchor-edit.js";
+export * from "./anchor-suggest.js";

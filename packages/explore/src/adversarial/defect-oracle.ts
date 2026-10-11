@@ -54,7 +54,8 @@ export type DefectSignal =
   | { kind: "page-error"; detail: string; pageUrl?: string }
   /** `method` (#250): the request's HTTP method, when known — evidence only, never in the fingerprint. */
   | { kind: "http-5xx"; detail: string; url: string; status: number; method?: string }
-  | { kind: "failed-request"; detail: string; url: string }
+  /** `method` (#484): the request's HTTP method, when known — evidence only, never in the fingerprint. */
+  | { kind: "failed-request"; detail: string; url: string; method?: string }
   /**
    * Horizontal-overflow (#149): pure DOM geometry (`packages/explore/src/overflow.ts`'s
    * `detectOverflow`), never a console/network event — synthesized once per adjudicated step and
@@ -263,10 +264,12 @@ export class PageSignalCollector {
         // changed its mind; only an aborted WRITE (outcome-unknown to the server) still gates.
         if (request.isNavigationRequest() || !isWriteRequest({ method: request.method(), path: requestPathOf(request.url()) })) return;
       }
+      const method = methodOf(request);
       this.buffer.push({
         kind: "failed-request",
         detail: redactUrl(errorText),
         url: redactUrl(request.url()),
+        ...(method === undefined ? {} : { method: method.toUpperCase() }),
       });
     });
   }

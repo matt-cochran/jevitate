@@ -24,6 +24,11 @@ the evidence. No model decides any of these verdicts.
   target's session in `~/.jevitate/targets.json`. A finding recorded at a viewport or device
   replays at that emulation. `--viewport`/`--device` that differ are refused unless
   `--allow-emulation-override` is passed.
+- A finding replays under the allow list stored with its result. To prove an allow-list
+  config fix (e.g. `localhost` → `127.0.0.1`), pass `--allow <origin...>` or `--env <name>`
+  (that environment's CURRENT allow list), never both; MCP: `verify_fix`'s `env` only (an MCP caller never names origins).
+  The report then carries `allowlistOverride` (origins used, what was added and removed): say so
+  when you report the verdict.
 
 ## Evidence for a PR or an issue
 

@@ -21,7 +21,7 @@ import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
 import type { Page } from "playwright";
 import type { TargetDescriptor } from "@jevitate/recording";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
-import { captureStepScreenshot, SecretPixelMask, type CaptureLayer } from "./demo-capture.js";
+import { captureStepScreenshot, JzMaskUnprovenError, SecretPixelMask, type CaptureLayer } from "./demo-capture.js";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { clock as sysClock } from "@jevitate/domain";
 
@@ -73,6 +73,13 @@ export interface DemoJourneyOptions extends Omit<RunJourneyProgrammaticallyOptio
   /** #249: an unapproved demo — a `DRAFT` watermark on the overlay, and every output marked DRAFT. */
   draft?: boolean;
   /**
+   * #471: render under jz-mask-v1 (Journeeze's media policy): fields, editables and `[data-jz-mask]`
+   * masked, embeds replaced by placeholders, `[data-jz-block]` left out — in the video from its first
+   * paint and proven at every screenshot. A screenshot that cannot be proven is LEFT OUT (the step has
+   * none) instead of failing the demo; the result's `jz` says what was proven.
+   */
+  jzMask?: boolean;
+  /**
    * The Journeeze line at the end of the guide. Default: {@link promotionsEnabled} (on unless
    * `JEVITATE_PROMOTIONS=0` or `"promotions": false` in the config). Never in the video, subtitles
    * or JSON.
@@ -115,6 +122,20 @@ export interface DemoJourneyResult {
   readonly screenshotPaths?: string[];
   readonly screenshotIndex?: string;
   readonly screenshotsSkipped?: Array<{ readonly step: number; readonly reason: string }>;
+  /** #471: the jz-mask-v1 proof of this render (only with `jzMask`). */
+  readonly jz?: DemoJzReport;
+}
+
+/** #471: what a jz-mask-v1 render proved. */
+export interface DemoJzReport {
+  readonly method: "dom-before-capture";
+  /** Per step with a guide screenshot asked for: its proven region count, or why it was left out. */
+  readonly steps: ReadonlyArray<{ readonly step: number; readonly regions: number } | { readonly step: number; readonly leftOut: string }>;
+  /**
+   * The video may leave the machine only when `proven`: the layer covered every frame of every top
+   * document (no breach reported) and every screenshot was proven.
+   */
+  readonly video: { readonly proven: boolean; readonly reason?: string };
 }
 
 /** A WebVTT timestamp: `HH:MM:SS.mmm`. */
@@ -320,8 +341,10 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
   const work = await mkdtemp(join(tmpdir(), "jevitate-demo-"));
   // #250/#251: the demo's secret parameters are masked in pixels — in the video from its first
   // paint, and proven at every guide screenshot (a capture whose mask cannot be proven fails).
-  const mask = new SecretPixelMask(secrets);
-  const layers = [mask.layer(), ...(opts.captureLayers ?? [])];
+  const mask = new SecretPixelMask(secrets, { jzMaskV1: opts.jzMask === true });
+  const jz = opts.jzMask === true ? mask.jzLayer() : undefined;
+  const layers = [mask.layer(), ...(jz === undefined ? [] : [jz]), ...(opts.captureLayers ?? [])];
+  const jzLeftOut = new Map<number, string>();
   try {
     const overlay = new DemoOverlay(secrets);
     // The video's timeline starts at its FIRST FRAME, which under load arrives seconds after the page
@@ -385,7 +408,9 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
               const entry = steps.find((x) => x.number === index + 1);
               if (entry !== undefined) entry.screenshot = file;
             } catch (err) {
-              captureErrors.push(`step ${index + 1}: ${redact(err instanceof Error ? err.message : String(err))}`);
+              // #471: an unprovable jz-mask-v1 capture leaves out that screenshot, never the demo.
+              if (err instanceof JzMaskUnprovenError) jzLeftOut.set(index + 1, redact(err.message).slice(0, 300));
+              else captureErrors.push(`step ${index + 1}: ${redact(err instanceof Error ? err.message : String(err))}`);
             }
           }
           if (index === flat.length - 1) {
@@ -401,7 +426,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
       },
     };
 
-    const { video, guide, paceMs: _pace, captureLayers: _layers, annotations: _annotations, draft: _draft, promotions: _promotions, ...runOpts } = opts;
+    const { video, guide, paceMs: _pace, captureLayers: _layers, annotations: _annotations, draft: _draft, promotions: _promotions, jzMask: _jzMask, ...runOpts } = opts;
     const browser = video === undefined ? opts.browser : { ...opts.browser, recordVideo: { dir: work } };
     const run = await runJourneyProgrammatically({
       ...runOpts,
@@ -436,7 +461,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
 
     // The replay completed: every promised output must exist — never a silently partial demo.
     if (guide !== undefined) {
-      const missing = done.filter((s) => s.screenshot === undefined).map((s) => s.number);
+      const missing = done.filter((s) => s.screenshot === undefined && !jzLeftOut.has(s.number)).map((s) => s.number);
       if (captureErrors.length > 0 || missing.length > 0) {
         throw new DemoOutputError(`could not capture a screenshot for step(s) ${missing.join(", ")}${captureErrors.length > 0 ? `: ${captureErrors.join("; ")}` : ""}`);
       }
@@ -480,7 +505,24 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
       ...(run.screenshotIndex === undefined ? {} : { screenshotIndex: run.screenshotIndex }),
       ...(run.screenshotsSkipped === undefined ? {} : { screenshotsSkipped: run.screenshotsSkipped }),
     };
-    return { id: opts.id, outcome: "ok", totalSteps: flat.length, ...result, ...shotFields };
+    let jzReport: DemoJzReport | undefined;
+    if (jz !== undefined) {
+      const breaches = mask.jzBreaches();
+      const reason =
+        video === undefined
+          ? "no video was recorded"
+          : breaches.length > 0
+            ? `a frame could not be proven: ${breaches[0]}`
+            : jzLeftOut.size > 0
+              ? `step ${[...jzLeftOut.keys()].join(", ")}: a screenshot could not be proven, so the video is not either`
+              : undefined;
+      jzReport = {
+        method: "dom-before-capture",
+        steps: guide === undefined ? [] : done.map((s) => (jzLeftOut.has(s.number) ? { step: s.number, leftOut: jzLeftOut.get(s.number)! } : { step: s.number, regions: jz.regions(s.number) ?? 0 })),
+        video: reason === undefined ? { proven: true } : { proven: false, reason: redact(reason).slice(0, 300) },
+      };
+    }
+    return { id: opts.id, outcome: "ok", totalSteps: flat.length, ...result, ...shotFields, ...(jzReport === undefined ? {} : { jz: jzReport }) };
   } finally {
     await rm(work, { recursive: true, force: true });
   }

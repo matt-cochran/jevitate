@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, isAbsolute } from "node:path";
+import { join, relative, isAbsolute, sep } from "node:path";
+import { zipStore, type ZipEntry } from "./zip-store.js";
 import { envCredentialStore, redactText } from "@jevitate/ai-core";
 import { exportCatalogBundle, type ExportCatalogBundleRequest, type ExportCatalogBundleResult } from "./catalog-bundle-api.js";
 import { loadLocalCredentials } from "./credentials-file.js";
@@ -24,6 +25,7 @@ import {
   runConnect,
   scrubError,
   sendPinned,
+  whoami,
   type ConnectDeps,
   type JourneezeHttp,
   type JourneezeHttpResponse,
@@ -39,8 +41,10 @@ import {
  *   `GET /api/upload/v1/whoami`, the person confirms the product, and ONLY the reference is saved
  *   (`~/.jevitate/journeeze.json`, bound to the Journeeze origin). The key is never saved by jevitate.
  * - `jevitate publish journeeze [--dry-run]` / MCP `publish_to_journeeze`: exports the bundle
- *   (catalog-bundle-api.ts), `POST /api/upload/v1/bundles` (bundle.json as `application/json`: 0.10
- *   exports no media) with `Idempotency-Key = sha256-<hex of bundle.json>`, polls `statusUrl` to
+ *   (catalog-bundle-api.ts), `POST /api/upload/v1/bundles` — bundle.json as `application/json` when
+ *   it lists no media, else (#471) a ZIP (`application/zip`, contract §4.2) of bundle.json and every
+ *   listed media file, each re-checked against its listed sha256 and size before it is packed — with
+ *   `Idempotency-Key = sha256-<hex of bundle.json>`, polls `statusUrl` to
  *   `imported`/`refused`, and reports summary, warnings and errors. The key is resolved by jevitate
  *   itself: `JOURNEEZE_UPLOAD_KEY` (CI; never the plaintext credentials file), else the saved
  *   reference. It is never an argument, never in a result, never in an error — the model never sees
@@ -75,11 +79,15 @@ export interface PublishJourneezeRequest {
   readonly journeysDir: string;
   /** `--dry-run`: export and validate the bundle, resolve the connection, send nothing. */
   readonly dryRun: boolean;
+  /** `--product-name`: overrides the connected product's name; must match what whoami reports. */
+  readonly productName?: string;
 }
 
 export interface PublishJourneezeResult {
   readonly dryRun: boolean;
   readonly baseUrl: string;
+  /** The product.name carried in the bundle (the connected product's, or `--product-name`). */
+  readonly productName: string;
   /** `sha256-<hex of bundle.json>`. */
   readonly idempotencyKey: string;
   readonly uploadId?: string;
@@ -115,6 +123,9 @@ const MAX_RETRY_AFTER_MS = 60_000;
 interface ResolvedKey {
   readonly key: string;
   readonly origin: string;
+  /** True when the key came from the saved connection (its product.name is authoritative). */
+  readonly fromSaved: boolean;
+  readonly savedProductName?: string;
 }
 
 /**
@@ -137,7 +148,7 @@ async function resolvePublishKey(req: PublishJourneezeRequest, deps: PublishDeps
     if (!JOURNEEZE_KEY_RE.test(fromEnv)) {
       throw new JourneezeError("E_JOURNEEZE_KEY_FORMAT", `${JOURNEEZE_KEY_ENV} is not a Journeeze upload key (jzu_ followed by 40 characters)`);
     }
-    return { key: fromEnv, origin: pinnedJourneezeOrigin(envUrl || saved?.baseUrl || JOURNEEZE_DEFAULT_URL) };
+    return { key: fromEnv, origin: pinnedJourneezeOrigin(envUrl || saved?.baseUrl || JOURNEEZE_DEFAULT_URL), fromSaved: false };
   }
   if (saved === undefined) {
     throw new JourneezeError(
@@ -151,7 +162,7 @@ async function resolvePublishKey(req: PublishJourneezeRequest, deps: PublishDeps
   }
   const sources: KeySources = deps.sources ?? defaultKeySources(env);
   try {
-    return { key: await resolveKeyRef(saved.keyRef, sources), origin };
+    return { key: await resolveKeyRef(saved.keyRef, sources), origin, fromSaved: true, savedProductName: saved.product.name };
   } catch (err) {
     if (err instanceof JourneezeError) {
       throw new JourneezeError(err.code, `${err.message} — fix ${describeRef(saved.keyRef)} or run \`jevitate connect journeeze\` again`);
@@ -163,13 +174,93 @@ async function resolvePublishKey(req: PublishJourneezeRequest, deps: PublishDeps
 interface BuiltBundle {
   readonly body: Uint8Array;
   readonly idempotencyKey: string;
+  /** `application/json` (no media) or `application/zip` (#471: bundle.json + media). */
+  readonly contentType: "application/json" | "application/zip";
+}
+
+/** Contract §4.2: the upload body limit (`whoami.limits.maxUploadBytes`). */
+const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
+/** Contract §2: the media paths a bundle may list. */
+const MEDIA_PATH_RE = /^media\/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/(?:step-[0-9]{2,3}\.(?:png|webp)|demo\.webm|demo\.vtt)|findings\/[0-9a-f]{16}\.(?:png|webp))$/u;
+
+async function filesUnder(dir: string, base: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") return [];
+    throw err;
+  }
+  const out: string[] = [];
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...(await filesUnder(p, base)));
+    else out.push(relative(base, p).split(sep).join("/"));
+  }
+  return out;
+}
+
+/**
+ * #471: the ZIP body of a bundle that lists media — every listed file re-read from the export and
+ * checked against its listed size and sha256 (listed ⇔ present, nothing else in the folder), packed
+ * after bundle.json in listed order.
+ */
+async function zipBundle(outDir: string, bundleJson: Uint8Array, files: readonly unknown[], key: string): Promise<Uint8Array> {
+  const entries: ZipEntry[] = [{ name: "bundle.json", data: bundleJson }];
+  const listed = new Set<string>();
+  for (const f of files) {
+    const { path, sha256, bytes } = (f ?? {}) as { path?: unknown; sha256?: unknown; bytes?: unknown };
+    if (typeof path !== "string" || !MEDIA_PATH_RE.test(path) || listed.has(path)) throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the bundle lists an unsafe or duplicate media path ${JSON.stringify(path)}`);
+    listed.add(path);
+    let data: Buffer;
+    try {
+      data = await readFile(join(outDir, ...path.split("/")));
+    } catch {
+      throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the bundle lists ${path}, which the export did not write`);
+    }
+    if (data.byteLength !== bytes || createHash("sha256").update(data).digest("hex") !== sha256) {
+      throw new JourneezeError("E_JOURNEEZE_BUNDLE", `${path} does not match its listed size and sha256 — refusing to send it`);
+    }
+    if (data.includes(key)) throw new JourneezeError("E_JOURNEEZE_BUNDLE", `${path} contains the upload key — refusing to send it`);
+    entries.push({ name: path, data });
+  }
+  const unlisted = (await filesUnder(join(outDir, "media"), outDir)).filter((p) => !listed.has(p));
+  if (unlisted.length > 0) throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the export wrote media the bundle does not list (${unlisted.slice(0, 3).join(", ")}) — refusing to send it`);
+  const body = zipStore(entries);
+  if (body.byteLength > MAX_UPLOAD_BYTES) {
+    throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the bundle with its media is ${body.byteLength} bytes — over Journeeze's ${MAX_UPLOAD_BYTES}-byte upload limit`);
+  }
+  return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+}
+
+/**
+ * The product.name the bundle carries (#477): `--product-name` when given, else the saved
+ * connection's product name, else whoami's (the CI key path). The key is verified with whoami on
+ * every dry run and whenever the key came from the environment; a verified name that contradicts the
+ * named one refuses before exporting.
+ */
+async function resolveProductName(req: PublishJourneezeRequest, resolved: ResolvedKey, deps: PublishDeps): Promise<string> {
+  const verify = req.dryRun || (!resolved.fromSaved && req.productName === undefined);
+  const verified = verify ? await whoami(deps.http ?? fetchJourneezeHttp, resolved.origin, resolved.key) : undefined;
+  if (verified !== undefined) {
+    const named = req.productName ?? (resolved.fromSaved ? resolved.savedProductName : undefined);
+    if (named !== undefined && named !== verified.product.name) {
+      throw new JourneezeError(
+        "E_JOURNEEZE_PRODUCT_MISMATCH",
+        `this key belongs to Journeeze product '${verified.product.name}' but this publish names '${named}' — pass the right --product-name '${verified.product.name}', or rerun \`jevitate connect journeeze\` if the saved connection is stale`,
+      );
+    }
+  }
+  if (req.productName !== undefined) return req.productName;
+  if (resolved.fromSaved) return resolved.savedProductName as string;
+  return (verified as NonNullable<typeof verified>).product.name;
 }
 
 /** Exports the bundle into a temp dir and checks what the contract checks before `202` (§4.2). */
-async function buildBundle(req: PublishJourneezeRequest, deps: PublishDeps, key: string): Promise<BuiltBundle> {
+async function buildBundle(req: PublishJourneezeRequest, deps: PublishDeps, key: string, productName: string): Promise<BuiltBundle> {
   const outDir = await mkdtemp(join(tmpdir(), "jev-journeeze-"));
   try {
-    const exported = await (deps.exportBundle ?? exportCatalogBundle)({ format: "journeeze-bundle", catalogDir: req.catalogDir, journeysDir: req.journeysDir, outDir });
+    const exported = await (deps.exportBundle ?? exportCatalogBundle)({ format: "journeeze-bundle", catalogDir: req.catalogDir, journeysDir: req.journeysDir, outDir, productName });
     const rel = relative(outDir, exported.bundlePath);
     if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw new JourneezeError("E_JOURNEEZE_BUNDLE", "the exported bundle is not where it was asked to be written");
     const body = new Uint8Array(await readFile(exported.bundlePath));
@@ -187,11 +278,12 @@ async function buildBundle(req: PublishJourneezeRequest, deps: PublishDeps, key:
     if (bundle.kind !== "journeeze.catalog-bundle" || bundle.version !== 1) {
       throw new JourneezeError("E_JOURNEEZE_BUNDLE", 'the exported bundle is not a v1 catalog bundle (kind "journeeze.catalog-bundle", version 1)');
     }
-    if (Array.isArray(bundle.files) && bundle.files.length > 0) {
-      throw new JourneezeError("E_JOURNEEZE_BUNDLE", "the bundle lists media files; this version uploads only a media-free bundle (application/json)");
-    }
     const hex = createHash("sha256").update(body).digest("hex");
-    return { body, idempotencyKey: `sha256-${hex}` };
+    // Contract §4.2: bundle.json alone as JSON only with no media; with media, a ZIP.
+    if (Array.isArray(bundle.files) && bundle.files.length > 0) {
+      return { body: await zipBundle(outDir, body, bundle.files, key), idempotencyKey: `sha256-${hex}`, contentType: "application/zip" };
+    }
+    return { body, idempotencyKey: `sha256-${hex}`, contentType: "application/json" };
   } finally {
     await rm(outDir, { recursive: true, force: true });
   }
@@ -231,7 +323,7 @@ const TERMINAL = new Set(["imported", "refused"]);
  * Builds the result from a status body (contract §4.3). The nested summary is flattened to
  * `section.counter` numbers; findings become warnings; errors keep their code and path.
  */
-function fromStatus(base: Pick<PublishJourneezeResult, "baseUrl" | "idempotencyKey">, s: UploadStatus, statusUrl: string): PublishJourneezeResult {
+function fromStatus(base: Pick<PublishJourneezeResult, "baseUrl" | "productName" | "idempotencyKey">, s: UploadStatus, statusUrl: string): PublishJourneezeResult {
   const summary: Record<string, number> = {};
   const raw = s.body.summary;
   if (typeof raw === "object" && raw !== null) {
@@ -265,11 +357,11 @@ function parseStatus(body: Record<string, unknown>): UploadStatus {
   };
 }
 
-async function upload(origin: string, key: string, bundle: BuiltBundle, deps: PublishDeps): Promise<PublishJourneezeResult> {
+async function upload(origin: string, key: string, bundle: BuiltBundle, productName: string, deps: PublishDeps): Promise<PublishJourneezeResult> {
   const http: JourneezeHttp = deps.http ?? fetchJourneezeHttp;
   const sleep = deps.sleep ?? clockSleep;
   const auth = `Bearer ${key}`;
-  const base = { baseUrl: origin, idempotencyKey: bundle.idempotencyKey };
+  const base = { baseUrl: origin, productName, idempotencyKey: bundle.idempotencyKey };
   const digest = `sha-256=:${createHash("sha256").update(bundle.body).digest("base64")}:`;
 
   let accepted: UploadStatus | undefined;
@@ -282,7 +374,7 @@ async function upload(origin: string, key: string, bundle: BuiltBundle, deps: Pu
         url: `${origin}${JOURNEEZE_API_PREFIX}/bundles`,
         headers: {
           Authorization: auth,
-          "Content-Type": "application/json",
+          "Content-Type": bundle.contentType,
           "Content-Length": String(bundle.body.byteLength),
           "Content-Digest": digest,
           "Idempotency-Key": bundle.idempotencyKey,
@@ -350,10 +442,11 @@ export async function publishToJourneeze(req: PublishJourneezeRequest, deps: Pub
   try {
     const resolved = await resolvePublishKey(req, deps);
     key = resolved.key;
-    const bundle = await buildBundle(req, deps, key);
+    const productName = await resolveProductName(req, resolved, deps);
+    const bundle = await buildBundle(req, deps, key, productName);
     const result: PublishJourneezeResult = req.dryRun
-      ? { dryRun: true, baseUrl: resolved.origin, idempotencyKey: bundle.idempotencyKey, status: "dry-run", warnings: [], errors: [] }
-      : await upload(resolved.origin, key, bundle, deps);
+      ? { dryRun: true, baseUrl: resolved.origin, productName, idempotencyKey: bundle.idempotencyKey, status: "dry-run", warnings: [], errors: [] }
+      : await upload(resolved.origin, key, bundle, productName, deps);
     // Belt and braces: whatever Journeeze echoed, the key never leaves in a result.
     const text = JSON.stringify(result);
     return text.includes(key) ? (JSON.parse(redactText(text, [key])) as PublishJourneezeResult) : result;
@@ -365,5 +458,5 @@ export async function publishToJourneeze(req: PublishJourneezeRequest, deps: Pub
 /** The human rendering (no `--json`). */
 export function renderPublishJourneeze(r: PublishJourneezeResult): string {
   const summary = r.summary === undefined ? "" : `${Object.entries(r.summary).map(([k, v]) => `  ${k}: ${v}`).join("\n")}\n`;
-  return `${r.dryRun ? "dry run: nothing sent" : `upload ${r.uploadId ?? "?"}: ${r.status}`} (${r.idempotencyKey}) → ${r.baseUrl}\n${summary}${r.warnings.map((w) => `warning: ${w}\n`).join("")}${r.errors.map((e) => `error: ${e}\n`).join("")}`;
+  return `${r.dryRun ? "dry run: nothing sent" : `upload ${r.uploadId ?? "?"}: ${r.status}`} product '${r.productName}' (${r.idempotencyKey}) → ${r.baseUrl}\n${summary}${r.warnings.map((w) => `warning: ${w}\n`).join("")}${r.errors.map((e) => `error: ${e}\n`).join("")}`;
 }
