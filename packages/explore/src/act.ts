@@ -4,6 +4,7 @@ import { BrowseTheWebToken, Click, Enter, Target } from "@jevitate/screenplay";
 import { descriptorToLocator } from "@jevitate/recorder";
 import { applyTextEdit } from "@jevitate/interpreter";
 import type { TargetDescriptor, TextEdit } from "@jevitate/recording";
+import { confineFixture } from "@jevitate/recording";
 import type { Op } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { occluderOf, srOnlyLabelOf } from "./occlusion.js";
@@ -41,6 +42,11 @@ export interface ActArgs {
    * mission/loop (validated to exist at mission start), NEVER by the model.
    */
   readonly fixture?: string | null;
+  /**
+   * #498: the project root the fixture must lie inside (after realpath) — required for `upload`
+   * (absent ⇒ refused, fail-closed). Supplied by the mission/loop, NEVER by the model.
+   */
+  readonly fixtureRoot?: string | null;
   /**
    * The snapshot's controls — for `send`, the pool its Send/Submit control is chosen from (the one
    * nearest the field in the DOM), so a click is always on a control the snapshot described.
@@ -552,10 +558,17 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       if (args.fixture === null || args.fixture === undefined) {
         return { ok: false, mutated: false, reason: "upload has no mission fixture (fail-closed)" };
       }
+      // #498: the fixture must be a file inside the project root (realpath'd; no root ⇒ refused).
+      let file: string;
+      try {
+        file = await confineFixture(args.fixture, args.fixtureRoot ?? undefined);
+      } catch (err) {
+        return { ok: false, mutated: false, reason: err instanceof Error ? err.message : String(err) };
+      }
       const bad = await fileInputGate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
-      const file = args.fixture;
       const descriptor = args.control.descriptor;
+      // Residual risk (accepted): the file could be swapped between confineFixture and setInputFiles (TOCTOU).
       return dispatch(() => descriptorToLocator(page, descriptor).setInputFiles(file));
     }
     case "scroll_up":

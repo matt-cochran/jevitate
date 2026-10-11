@@ -222,7 +222,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (433 exports)
+# @jevitate/explore (436 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -421,6 +421,7 @@
   clippingSummary: function
   compareDeltas: function
   compileAllowControl: function
+  controlDisplay: function
   controlFields: function
   controlKey: function
   controlRisk: function
@@ -469,6 +470,8 @@
   expandBraces: function
   expectedChange: function
   expectedResultFromDelta: function
+  explainCheck: function
+  explainTarget: function
   explore: function
   failureLine: function
   fieldKind: function
@@ -744,7 +747,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (127 exports)
+# @jevitate/journey (129 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -812,6 +815,7 @@
   ProposalStepSchema: object
   RejectedProposalSchema: object
   ReviewAnchorWarningSchema: object
+  ReviewAttentionSchema: object
   ReviewChangeSchema: object
   ReviewLintFindingSchema: object
   ReviewLocatorHealthSchema: object
@@ -851,6 +855,7 @@
   journeyWriteSteps: function
   judgeAssertions: function
   lintJourney: function
+  lintUploadFixtures: function
   listJourneyAnchors: function
   mutationPairIssues: function
   mutationProofVerdict: function
@@ -1026,8 +1031,9 @@
   throttleDecision: function
   withOpenDeadline: function
 
-# @jevitate/recorder (24 exports)
+# @jevitate/recorder (30 exports)
   CAPPED_STABILITY: object
+  DISPLAY_NAME_MAX: const (number)
   EID_ATTRIBUTE: const (string)
   RECORDING_VERSION: const (string)
   RECORD_BINDING: const (string)
@@ -1039,6 +1045,9 @@
   checkpointToSpliceAt: function
   computeDescriptor: function
   descriptorToLocator: function
+  displayFromFacts: function
+  displayNameOf: function
+  displayOrRefusal: function
   findAnchor: function
   findOrdinalAmong: function
   installRecorderListener: function
@@ -1049,10 +1058,12 @@
   readElementFacts: function
   recordPatch: function
   resolvesToSameElement: function
+  roleOf: function
   rungLocator: function
+  targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (92 exports)
+# @jevitate/recording (106 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -1061,6 +1072,7 @@
   AuthoringTakeSchema: object
   COMPARE_OPS: array
   CONFIDENT_VARIABLE_THRESHOLD: const (number)
+  FixturePathError: class
   FsRecordingStore: class
   INVARIANT_HTTP_METHODS: array
   INVARIANT_ID_RE: object
@@ -1089,7 +1101,9 @@
   SecretMaterializationError: class
   StatusSpecSchema: object
   StepSchema: object
+  TARGET_DISPLAY_NAME_MAX: const (number)
   TargetDescriptorSchema: object
+  TargetDisplaySchema: object
   UNKNOWN: const (symbol)
   WAIT_FOR_MAX_MS: const (number)
   WAIT_FOR_STALL_MS: const (number)
@@ -1100,6 +1114,7 @@
   boundVariables: function
   captureRefs: function
   classifyColumns: function
+  confineFixture: function
   describeNavigateUrl: function
   diffColumns: function
   diffRecordings: function
@@ -1109,6 +1124,15 @@
   evaluateInvariantExpression: function
   expressionObservables: function
   fitInteractionPolicy: function
+  fixtureCandidatePath: function
+  fixtureEscapesRoot: function
+  fixtureNoRoot: function
+  fixtureNotFound: function
+  fixtureOutsideProject: function
+  fixtureRootRefusal: function
+  fixtureSensitive: function
+  fixtureSensitiveReason: function
+  fixtureUnsafeRoot: function
   flattenBaseFillSteps: function
   formatSpecPath: function
   globRegex: function
@@ -1116,6 +1140,7 @@
   invariantAuthSecretRefs: function
   invariantGate: function
   invariantObserver: function
+  isInsideRoot: function
   isWriteRequest: function
   jsonPathHasEach: function
   matchesPattern: function
@@ -1146,13 +1171,14 @@
   walkExpression: function
   writeClassifier: function
 
-# @jevitate/regression (15 exports)
+# @jevitate/regression (16 exports)
   FlakyNotCommittableError: class
   NeverFailedError: class
   appendOracleStep: function
   commitRegression: function
   deriveOracleFromTranscript: function
   fingerprintFailure: function
+  fixtureOptions: function
   flattenWithUrls: function
   loadRegressions: function
   makeSingleShotReproduces: function

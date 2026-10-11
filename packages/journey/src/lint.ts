@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import type { RecordedStep, Step } from "@jevitate/recording";
-import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
+import { fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason, writeClassifier, type WriteClassifier } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, isOwnTargetVisible, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { anchorLintIssues, type AnchorRuleCode } from "./anchor-rules.js";
@@ -19,6 +19,8 @@ export type JourneyLintRule =
   | "no-persistence-check"
   | "intent-uncovered"
   | "upload-file-missing"
+  | "upload-outside-project"
+  | "upload-sensitive-file"
   | AnchorRuleCode
   | "anchor-job-step"
   | "serves-outcome";
@@ -41,6 +43,77 @@ export interface JourneyLintOptions {
    * resolves against. Absent: the upload existence rule is skipped (no project root to resolve to).
    */
   readonly baseDir?: string;
+}
+
+/**
+ * #488/#498: the upload fixture rules for one Journey against project root `baseDir`. A literal path
+ * that resolves (after realpath) outside the root is `upload-outside-project` — refused at run time,
+ * with no override; so is every literal path when there is no root, or the root confines nothing
+ * (`/`, the home directory, `~/.jevitate`). One inside the root that looks like a secret or run
+ * evidence (`.env`, `.git/`, `*.pem`, a storage state, a HAR…) is `upload-sensitive-file`; one that
+ * is not there is `upload-file-missing`. A `{var}` binding or a redacted constant is not a literal
+ * path — skipped here, checked at run time.
+ */
+export function lintUploadFixtures(journey: Journey, baseDir: string | undefined): JourneyLintFinding[] {
+  const findings: JourneyLintFinding[] = [];
+  const recorded = flattenSteps(journey);
+  const rootProblem = baseDir === undefined ? "there is no project root" : fixtureRootRefusal(baseDir);
+  for (let i = 0; i < recorded.length; i += 1) {
+    const step = recorded[i]!.step;
+    if (step.kind !== "upload") continue;
+    const file = step.file;
+    if ("var" in file || file.redacted) continue;
+    if (baseDir === undefined || rootProblem !== null) {
+      findings.push({
+        rule: "upload-outside-project",
+        level: "error",
+        step: i + 1,
+        message: `step ${i + 1}: upload fixture ${file.value} has no project root to confine it to (${rootProblem ?? "there is no project root"})`,
+        fix: "run from a project (a folder holding .jevitate/) and move the fixture into the project",
+      });
+      continue;
+    }
+    const { escapes, candidate, real } = fixtureEscapesRoot(file.value, baseDir);
+    if (escapes) {
+      const shown = real === candidate ? candidate : `${candidate} (→ ${real})`;
+      findings.push({
+        rule: "upload-outside-project",
+        level: "error",
+        step: i + 1,
+        message: `step ${i + 1}: upload fixture ${shown} is outside the project root ${baseDir}`,
+        fix: `move the fixture into the project (under ${baseDir}) and name it by a path inside it`,
+      });
+      continue;
+    }
+    const sensitive = fixtureSensitiveReason(real, realRootOf(baseDir)) ?? fixtureSensitiveReason(candidate, resolve(baseDir));
+    if (sensitive !== null) {
+      findings.push({
+        rule: "upload-sensitive-file",
+        level: "error",
+        step: i + 1,
+        message: `step ${i + 1}: upload fixture ${candidate} looks sensitive (${sensitive})`,
+        fix: "use a dedicated test fixture file",
+      });
+      continue;
+    }
+    if (existsSync(candidate)) continue;
+    findings.push({
+      rule: "upload-file-missing",
+      level: "error",
+      step: i + 1,
+      message: `step ${i + 1}: upload fixture not found: ${candidate}`,
+      fix: `create ${candidate} (inside the project) or fix the fixture path`,
+    });
+  }
+  return findings;
+}
+
+function realRootOf(root: string): string {
+  try {
+    return realpathSync(root);
+  } catch {
+    return resolve(root);
+  }
 }
 
 /** #401: a step kind whose `relevant-change` delta is state-changing even with no recorded request. */
@@ -217,25 +290,8 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
     }
   }
 
-  // #488: a literal `upload` fixture path that is not there fails at replay with a resolved path;
-  // report it up front. A `{var}` binding or a redacted constant is not a literal path — skipped.
-  if (opts.baseDir !== undefined) {
-    for (let i = 0; i < recorded.length; i += 1) {
-      const step = recorded[i]!.step;
-      if (step.kind !== "upload") continue;
-      const file = step.file;
-      if ("var" in file || file.redacted) continue;
-      const resolved = isAbsolute(file.value) ? file.value : resolve(opts.baseDir, file.value);
-      if (existsSync(resolved)) continue;
-      findings.push({
-        rule: "upload-file-missing",
-        level: "error",
-        step: i + 1,
-        message: `step ${i + 1}: upload fixture not found: ${resolved}`,
-        fix: `create ${resolved} or make the fixture path absolute`,
-      });
-    }
-  }
+  // #488/#498: literal `upload` fixture paths — outside the project root, or not there.
+  if (opts.baseDir !== undefined) findings.push(...lintUploadFixtures(journey, opts.baseDir));
 
   // #466: the 0.10 anchor rules — warnings on a Journey as it is (promote enforces them on new content).
   for (const issue of anchorLintIssues(journey)) {

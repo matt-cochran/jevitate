@@ -3,6 +3,16 @@ import type { Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { fingerprintFailure, matchesFingerprint, type FailureFingerprint } from "./fingerprint.js";
 
+/** #498: the project root a replayed `upload` fixture must lie inside (absent ⇒ an upload step is refused). */
+export interface ReplayFixtureOptions {
+  readonly fixtureBaseDir?: string;
+}
+
+/** The interpreter options for `opts` (only a given root is passed). */
+export function fixtureOptions(opts: ReplayFixtureOptions): { fixtureBaseDir?: string } {
+  return opts.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: opts.fixtureBaseDir };
+}
+
 export class NeverFailedError extends Error {}
 
 export interface ReproductionReport {
@@ -26,10 +36,11 @@ export async function reproduceFailure(
   recording: Recording,
   makeActor: () => Promise<Actor>,
   attempts = 3,
+  opts: ReplayFixtureOptions = {},
 ): Promise<ReproductionReport> {
   if (attempts < 1) throw new Error("reproduceFailure: attempts must be >= 1");
 
-  const interpreter = new RecordingInterpreter();
+  const interpreter = new RecordingInterpreter(fixtureOptions(opts));
   let firstFailureAt = -1;
   let reproducedCount = 0;
   let fingerprint: FailureFingerprint | undefined;
@@ -72,10 +83,11 @@ export async function reproduceFailureAt(
   makeActor: () => Promise<Actor>,
   fingerprint: FailureFingerprint,
   attempts = 3,
+  opts: ReplayFixtureOptions = {},
 ): Promise<ReproductionReport> {
   if (attempts < 1) throw new Error("reproduceFailureAt: attempts must be >= 1");
 
-  const interpreter = new RecordingInterpreter();
+  const interpreter = new RecordingInterpreter(fixtureOptions(opts));
   let reproducedCount = 0;
   let firstFailureAt = -1;
 

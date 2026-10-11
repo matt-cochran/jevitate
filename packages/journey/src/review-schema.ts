@@ -26,6 +26,17 @@ export const ReviewStepSchema = z
     assertion: z.string().optional(),
     /** Parameters (by name) the step uses. */
     params: z.array(z.string()),
+    /** The step's checks in plain English (its own postcondition, then the requests it must answer), with whether each proves nothing. Additive. */
+    checks: z.array(z.object({ text: z.string(), weak: z.boolean() }).strict()).optional(),
+    /** An upload step's file: the recorded path, `{var}` or «redacted». Additive. */
+    file: z.string().optional(),
+    /** The names of the Journey's anchors on this step. Additive. */
+    anchors: z.array(z.string()).optional(),
+    /**
+     * The step's exact locator in short form (`data-testid=…`, else `role=… name="…"`), set when its
+     * target carries a recorded display label — a label can say "Cancel" on a delete button. Additive.
+     */
+    locator: z.string().optional(),
   })
   .strict();
 
@@ -154,6 +165,11 @@ export const ReviewChangeSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+/** One item that needs the reviewer's decision, most severe first. Additive. */
+export const ReviewAttentionSchema = z
+  .object({ severity: z.enum(["warn", "info"]), text: z.string(), hint: z.string().optional() })
+  .strict();
+
 export const JourneyReviewSchema = z
   .object({
     id: z.string(),
@@ -168,6 +184,8 @@ export const JourneyReviewSchema = z
         requiresAuth: z.boolean(),
         preconditions: z.array(z.string()),
         successCriteria: z.array(z.object({ description: z.string(), check: z.string().optional() }).strict()),
+        /** The recording's plain-English intent, shown when there is no goal. Additive. */
+        intent: z.string().optional(),
         /** What intent is missing (no goal, no success criteria, steps without an objective), with how to draft it. */
         missingIntent: z.array(z.string()),
       })
@@ -190,7 +208,9 @@ export const JourneyReviewSchema = z
     proof: z
       .object({
         endState: z.array(z.string()),
-        stepAssertions: z.array(z.object({ step: z.number().int(), check: z.string(), weak: z.boolean() }).strict()),
+        stepAssertions: z.array(z.object({ step: z.number().int(), check: z.string(), weak: z.boolean(), text: z.string().optional() }).strict()),
+        /** `endState` in plain English (same order). Additive. */
+        endStateText: z.array(z.string()).optional(),
         lint: z.object({ errors: z.number().int(), warnings: z.number().int(), findings: z.array(ReviewLintFindingSchema) }).strict(),
         acceptedWeak: z.object({ reason: z.string(), rules: z.array(z.string()) }).strict().optional(),
         verify: ReviewVerifySchema,
@@ -221,11 +241,16 @@ export const JourneyReviewSchema = z
     locatorHealth: ReviewLocatorHealthSchema.optional(),
     /** #453: the pending self-heal proposal, when there is one. */
     proposal: ReviewProposalSchema.optional(),
+    /** The Journey's anchors (name + 1-based step). Additive. */
+    anchors: z.array(z.object({ name: z.string(), step: z.number().int().min(1) }).strict()).optional(),
+    /** Everything that needs a decision, ordered by severity; empty means every gate is clear. Additive. */
+    attention: z.array(ReviewAttentionSchema).optional(),
     /** `journeyReviewHash`: what `journey promote --reviewed-hash` binds an approval to. */
     contentHash: z.string().regex(/^[0-9a-f]{64}$/),
   })
   .strict();
 
+export type JourneyReviewAttention = z.infer<typeof ReviewAttentionSchema>;
 export type JourneyReviewProposal = z.infer<typeof ReviewProposalSchema>;
 export type JourneyReview = z.infer<typeof JourneyReviewSchema>;
 export type JourneyReviewStep = z.infer<typeof ReviewStepSchema>;

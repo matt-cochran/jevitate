@@ -198,6 +198,18 @@ describe("#432 secrets never appear in the sheet", () => {
   }
 });
 
+describe("#497 a recorded display label that reads as a credential hides the typed literal", () => {
+  it("a fill whose only credential hint is its display label shows no literal", () => {
+    const j = fixtureJourney();
+    const page = j.recording.pages[0]!;
+    const withDisplay = {
+      ...j,
+      recording: { ...j.recording, pages: [{ ...page, steps: [{ step: { kind: "fill" as const, target: { testId: "field-7", display: { role: "textbox", name: "Password" } }, value: { redacted: false as const, value: "hunter2-literal" } } }, ...page.steps] }, ...j.recording.pages.slice(1)] },
+    };
+    expect(renderReviewText(buildJourneyReview(withDisplay))).not.toContain("hunter2-literal");
+  });
+});
+
 describe("#432 rendering", () => {
   it("markdown snapshot of the fixture Journey", () => {
     expect(renderReviewMarkdown(review)).toMatchSnapshot();
