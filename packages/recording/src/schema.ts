@@ -3,6 +3,19 @@ import { navigateTemplateProblem } from "./navigate-params.js";
 
 // === Interfaces - TypeScript types matching the brief exactly ===
 
+/**
+ * #497: what a person SAW on the target when it was recorded: its role and visible label (`button`
+ * "Import"). DISPLAY METADATA ONLY, like `tflowId`: shown wherever a step is described (the review
+ * sheet signs off on it, so it is inside the content hash), never used to locate an element, and
+ * never counted as a selector (a descriptor with only a `display` is refused). Deliberately NOT
+ * `label`, which IS a locator (`getByLabel`). Redacted like any recorded text: a credential field's
+ * label, or one holding a secret, is never stored.
+ */
+export interface TargetDisplay {
+  role?: string;
+  name: string;
+}
+
 export interface TargetDescriptor {
   testId?: string;
   /**
@@ -17,6 +30,8 @@ export interface TargetDescriptor {
    * descriptor with only a `tflowId` is refused). Tracking and automation conventions stay separate.
    */
   tflowId?: string;
+  /** #497: the visible label a reviewer reads — display metadata, never a locator (see `TargetDisplay`). */
+  display?: TargetDisplay;
   role?: string;
   name?: string;
   label?: string;
@@ -470,12 +485,23 @@ export function mintStepId(existing: ReadonlySet<string>, random: () => number =
  * `TargetDescriptorSchema` from inside its own definition needs the binding
  * to already have a declared type to close over.
  */
+/** #497: a target's recorded role + visible label (display metadata; see `TargetDisplay`). */
+export const TARGET_DISPLAY_NAME_MAX = 200;
+export const TargetDisplaySchema = z
+  .object({
+    role: z.string().min(1).max(64).optional(),
+    name: z.string().min(1).max(TARGET_DISPLAY_NAME_MAX),
+  })
+  .strict();
+
 export const TargetDescriptorSchema: z.ZodType<TargetDescriptor> = z
   .object({
     testId: z.string().optional(),
     testIdAttr: z.string().max(64).regex(/^[A-Za-z_:][-\w:.]*$/, "testIdAttr: an attribute name").optional(),
     // #468: metadata only — deliberately NOT part of the refine below.
     tflowId: z.string().min(1).max(256).optional(),
+    // #497: display metadata only — deliberately NOT part of the refine below.
+    display: TargetDisplaySchema.optional(),
     role: z.string().optional(),
     name: z.string().optional(),
     label: z.string().optional(),

@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
-import { computeDescriptor, isSecretField } from "@jevitate/recorder";
-import type { TargetDescriptor } from "@jevitate/recording";
+import { computeDescriptor, isSecretField, targetDisplay } from "@jevitate/recorder";
+import type { TargetDescriptor, TargetDisplay } from "@jevitate/recording";
+import { isCredentialField } from "./auth-completion.js";
 import { contentHash, clock } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
@@ -731,6 +732,20 @@ function readCheapNames(els: Element[]): string[] {
  * mission; invariants; screenshots) gets it. Bounded: `navigationRetries` re-reads, all waits within
  * `navigationWaitMs`; then `PageNavigatingError`. Any other error propagates unchanged.
  */
+/**
+ * #497: each perceived control's display (its role + visible label), keyed by the control's own
+ * descriptor object. Kept OFF the descriptor on purpose: a control's descriptor is its identity
+ * (`JSON.stringify(c.descriptor)` keys the repeat guard and "is the last target still here"), and a
+ * label that changes on click ("Save" → "Saving…") must not make it a different control. The
+ * recorder (`record.ts`) reads it when a step on that control is recorded.
+ */
+const CONTROL_DISPLAY = new WeakMap<TargetDescriptor, TargetDisplay>();
+
+/** The display perceived for the control whose descriptor this is, if any (#497). */
+export function controlDisplay(descriptor: TargetDescriptor): TargetDisplay | undefined {
+  return CONTROL_DISPLAY.get(descriptor);
+}
+
 export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snapshot> {
   const retries = opts?.navigationRetries ?? NAVIGATION_RETRIES;
   const deadline = clock.now() + (opts?.navigationWaitMs ?? NAVIGATION_WAIT_MS);
@@ -891,7 +906,15 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
         ...(conversational === null ? {} : { conversational }),
         ...(facts.clippedOffscreen ? { clippedOffscreen: true } : {}),
       };
-      controls.push(redactControl(control, opts?.secrets ?? []));
+      const kept = redactControl(control, opts?.secrets ?? []);
+      // #497: the label a person sees on it (role + accessible name), for the Recording only — never a
+      // credential field's, never one holding a secret (`targetDisplay` refuses both).
+      const display = targetDisplay(
+        { role: facts.role === "file-input" ? null : facts.role, name: facts.name },
+        { secretField: isSecretField(raw.inputType, raw.autocomplete) || isCredentialField(control), secrets: opts?.secrets ?? [] },
+      );
+      if (display !== undefined) CONTROL_DISPLAY.set(kept.descriptor, display);
+      controls.push(kept);
       keptFacts.push(facts);
     } catch (e) {
       // #372: the document itself was replaced — the whole read is stale; `snapshot` re-reads.
