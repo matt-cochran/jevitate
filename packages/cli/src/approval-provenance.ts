@@ -130,6 +130,8 @@ export interface ApprovalRequest {
   readonly waivers: readonly { readonly flag: string; readonly reason: string; readonly detail?: string }[];
   /** #453: a self-heal proposal being accepted — shown to the person before they confirm. */
   readonly proposal?: { readonly id: string; readonly baseHash: string; readonly steps: readonly { readonly number: number; readonly before: string; readonly after: string }[] };
+  /** #496: the review sheet's attention items, repeated just above the confirmation. */
+  readonly attention?: readonly { readonly severity: "warn" | "info"; readonly text: string; readonly hint?: string }[];
   /**
    * #469: where the entry lives (its file and how to find it in any version of that file). With it,
    * an approval in CI is checked for a verified pull-request review (`pr-review`) first.
@@ -173,6 +175,14 @@ export function needsHumanMessage(r: ApprovalRequest): string {
     `A coding agent hands this approval to a person — it never approves its own work. ` +
     `A scripted setup may pass --non-interactive-approval "<reason>": it is recorded as a non-interactive approval, never as a person's, and \`jevitate check --require-approvals\` fails it.`
   );
+}
+
+/** #496: the attention block prepended to the first prompt; "" when there is nothing to repeat (the prompt is then unchanged). */
+function attentionPrompt(attention: ApprovalRequest["attention"]): string {
+  if (attention === undefined || attention.length === 0) return "";
+  const ordered = [...attention.filter((a) => a.severity === "warn"), ...attention.filter((a) => a.severity === "info")];
+  const lines = ordered.map((a) => `  ${a.severity === "warn" ? "⚠" : "○"} ${a.text}${a.hint === undefined || a.hint === "" ? "" : ` → ${a.hint}`}`);
+  return `Before you approve: ${attention.length} item(s) need your attention\n${lines.join("\n")}\n`;
 }
 
 function confirmed(answer: string, r: ApprovalRequest): boolean {
@@ -276,7 +286,7 @@ export function makeApprovalConfirm(deps: ApprovalDeps | undefined, opts: Approv
         ? ""
         : `\nProposed revision ${r.proposal.id} (self-heal, against ${r.proposal.baseHash.slice(0, 8)}…):\n${r.proposal.steps.map((st) => `  step ${st.number}: ${st.before}\n       -> ${st.after}`).join("\n")}`;
     const first = await ask(
-      `${proposalText}\nApprove ${what}, content hash ${r.contentHash.slice(0, 8)}…?\nType its id (${r.id}) or the first 8 characters of its content hash to approve — anything else cancels: `,
+      `${attentionPrompt(r.attention)}${proposalText}\nApprove ${what}, content hash ${r.contentHash.slice(0, 8)}…?\nType its id (${r.id}) or the first 8 characters of its content hash to approve — anything else cancels: `,
     );
     if (!confirmed(first, r)) throw new ApprovalNotConfirmedError(`the typed confirmation did not match ${r.kind} '${r.id}' or its content hash — nothing was approved`);
     for (const w of r.waivers) {
