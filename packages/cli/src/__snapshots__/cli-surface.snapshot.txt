@@ -98,6 +98,7 @@
     - flags=--record-video [dir] required=false mandatory=false negate=false variadic=false default=null description=record a video of each mission's browser context (forwarded to every mission, as explore's)
     - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
     - flags=--server-log-drain-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's)
+    - flags=--skip-preflight required=false mandatory=false negate=false variadic=false default=false description=do not check the campaign's preconditions first (start URLs reachable, sessions signed in, no allow-list origin mismatch in discovery) — by default a failed check refuses the campaign (exit 64) before any mission
     - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
 
 # catalog
@@ -597,6 +598,30 @@
 # journey
   description: manage and run promoted Journeys (regression-test replays)
 
+# journey anchor
+  description: add or remove a draft Journey's anchors (#487): named steps to branch missions off, written with the step's stable id
+
+# journey anchor add
+  description: add an anchor to a draft Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues
+  arguments:
+    - name=journeyId required=true variadic=false default=null
+  options:
+    - flags=--description <text> required=true mandatory=false negate=false variadic=false default=null description=what this state is, in words
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--name <name> required=true mandatory=true negate=false variadic=false default=null description=the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit
+    - flags=--probe <text> required=true mandatory=false negate=false variadic=false default=[] description=a suggested adversarial probe at this state (repeatable)
+    - flags=--step <n|stepId> required=true mandatory=true negate=false variadic=false default=null description=the step the anchor follows: a 1-based step number or a step id
+
+# journey anchor remove
+  description: remove an anchor from a draft Journey; re-lints and prints the anchor issues
+  arguments:
+    - name=journeyId required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--name <name> required=true mandatory=true negate=false variadic=false default=null description=the anchor to remove
+
 # journey anchors
   description: list a Journey's anchors (#293): named steps to branch a mission off with `explore --from-journey <id> --at-step <name>`, and their suggested probes
   arguments:
@@ -604,6 +629,7 @@
   options:
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--suggest required=false mandatory=false negate=false variadic=false default=null description=propose anchors where the recorded flow changes state (a new page, a form that became valid, a completed write), each with the `journey anchor add` command to accept it; advisory, writes nothing (#487)
 
 # journey annotate
   description: draft each step's objective/expected result (and the goal/success criteria when missing) by replaying the Journey; writes a reviewable draft, never the Journey — `--approve` applies a reviewed draft (human gate)
@@ -687,6 +713,7 @@
     - name=id required=true variadic=false default=null
   options:
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--fix required=false mandatory=false negate=false variadic=false default=null description=#487: stamp the step id of each anchor that references a step by number only, write the Journey (a draft; a promoted one is refused), and report what was fixed
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--sarif <file> required=true mandatory=false negate=false variadic=false default=null description=also write a SARIF 2.1.0 log here
 
@@ -789,6 +816,7 @@
     - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
     - flags=--self-heal <mode> required=true mandatory=false negate=false variadic=false default="fail-closed" description=self-heal policy mode: fail-closed | hybrid | full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass)
     - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
+    - flags=--step-response-timeout <ms> required=true mandatory=false negate=false variadic=false default=null description=#486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet, e.g. a cold start after a deploy (default 15000). A late 2xx is an advisory slow-step finding (slowSteps), not a quarantine; a non-2xx, or no response within the bound, fails. A step's own responseTimeoutMs overrides it; at most 300000
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist
     - flags=--tag <key=value> required=true mandatory=false negate=false variadic=false default=[] description=run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
@@ -1413,6 +1441,7 @@
   options:
     - flags=--action-deltas required=false mandatory=false negate=false variadic=false default=null description=opt-in (#303): record what each replayed step changed and compare the defect step's delta with the one the Recording stored — a mismatch is evidence on each attempt (never the verdict)
     - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
+    - flags=--allow <origin...> required=true mandatory=false negate=false variadic=true default=null description=#484: replay with these origins instead of the allow list stored with the result (explicit only; recorded on the report)
     - flags=--allow-emulation-override required=false mandatory=false negate=false variadic=false default=null description=replay at --viewport/--device even though it differs from the finding's recorded emulation (#149); default: refused (fails closed)
     - flags=--allow-log-cmd required=false mandatory=false negate=false variadic=false default=false description=re-checking a server-log defect whose --log-source includes cmd:<command> needs this too (operator-declared only)
     - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
@@ -1421,6 +1450,7 @@
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=#484: replay with this environment's CURRENT allow list (.jevitate/environments.json) instead of the stored one
     - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
     - flags=--fingerprint <fp> required=true mandatory=false negate=false variadic=false default=null description=the defect/hang fingerprint to verify
     - flags=--fixture-identity <name=storageState> required=true mandatory=false negate=false variadic=false default=[] description=#243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable)

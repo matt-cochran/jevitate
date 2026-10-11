@@ -7,6 +7,47 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.11.0] – 2026-10-11
+
+0.11.0 makes campaigns trustworthy on a misconfigured environment, finishes the Journeeze catalog integration, and makes anchors easy to author.
+- **Environment faults, not app defects:** a write jevitate itself blocked is filed under Environment faults, with everything it caused linked to it. jevitate warns about `localhost`/`127.0.0.1` allow-list slips, and `campaign run` refuses to start on a signed-out session, an unreachable start URL or an origin missing from the allow list.
+- **Slow is not broken:** a late 2xx response is an advisory slow step, never a quarantine, and a cold start after a deploy is reported as such.
+- **Journeeze:** approved demos travel with masked media (`jz-mask-v1`); brittle locators export as findings; checks carry the app's release label; filed issues de-duplicate against Journeeze's; `publish journeeze` names the connected product.
+- **Anchors:** `journey anchor add|remove`, `journey lint --fix` and `journey anchors --suggest`.
+- **Fixes:** upload fixtures resolve against the project root, the AI SDK deprecation warning is gone, and the Windows browser-crash smoke no longer stalls.
+- **MCP parity:** new tools `journey_anchor_add` / `journey_anchor_remove`, and arguments `lint_journey fix`, `journey_anchors suggest`, `run_journey stepResponseTimeoutMs`, `run_campaign skipPreflight` and `verify_fix env`.
+
+### Behaviour changes
+
+- **Anchor names follow catalog bundle v1 (#478).** A name is 1-64 of lowercase a-z, 0-9, `.`, `_`, `-`, starting with a letter or digit. `:` is no longer allowed. `journey lint` and promote report a name outside the rule, and `suggestAnchorName` proposes a compliant one. Existing Journeys still load.
+- **`catalog export` refuses a promoted Journey it cannot carry (#478).** It exits 64 and names the fix, instead of leaving the Journey and its baselines out with only a warning. Draft Journeys and checks the bundle cannot carry are still left out with a warning. `publish journeeze` refuses the same way.
+- **`campaign run` preflights (#485).** Before any mission it refuses (exit 64, `E_CAMPAIGN_PREFLIGHT`), listing every problem: an unreachable start URL, a job `storageState` that is no longer signed in, or a discovery replay that wrote to an origin the environment's `allow` list misspells or leaves out (naming the exact origin to add). `--skip-preflight` runs without it.
+- **Blocked writes are environment faults (#484).** A request jevitate refused to send (its origin is not in `--allow`) and what it provably caused within that action's window (the same step or the next one) are no longer app defects: a console/page error naming the blocked URL, a failed request with its exact method, origin and path, or a busy indicator that appeared with the write and never cleared. They are linked to that write (`causedBy`) and grouped under Environment faults; anything less certain (a generic "Failed to fetch", a later step) stays an app defect. A run that only had such findings may now exit clean.
+- **`journey run` waits for an in-flight request (#486).** A `responseStatus` check whose request has no response yet waits up to `--step-response-timeout` (default 15000 ms, or the step's `responseTimeoutMs`). A late 2xx passes as an advisory slow step.
+- **Upload fixtures resolve against the project root (#488).** A relative path in a Journey's upload step resolves against the folder holding `.jevitate/`, not the working directory. `journey lint` reports a missing fixture as `upload-file-missing` (error) with the resolved path.
+- **`publish journeeze` sends the connected product's name (#477),** not `package.json`'s. `--dry-run` checks the key with `whoami` and refuses a mismatch (`E_JOURNEEZE_PRODUCT_MISMATCH`).
+
+### Added
+
+- `journey anchor add <journeyId> --name <n> --step <n|stepId>` and `journey anchor remove`: edit a draft Journey's anchors with the step id written at once. A promoted Journey is refused; edit it as a draft and re-promote (#487).
+- `journey lint --fix` stamps number-only anchors with their step id (#487).
+- `journey anchors <id> --suggest`: proposes anchors where the recorded flow changes state (a new page, a form that became valid, a completed write), with default probes and the `anchor add` command for each. Advisory; writes nothing (#487).
+- `verify-fix --allow <origin...>` / `--env <name>`: replay under a corrected allow list. The stored list is kept unless one is given; both together are refused; the report records the override (#484).
+- A warning when a blocked loopback origin differs from an allowed one only by `localhost`/`127.0.0.1` spelling or by port (#484).
+- Cold-start notes: `jevitate check` and `campaign run` report a step slow on a Journey's first replay and fast on later ones (`slowness.coldStarts`); advisory, never an exit code (#486).
+- Demo media in the Journeeze bundle, masked under `jz-mask-v1` and proven before and after capture; an environment declares `"synthetic": true` (#471).
+- Locator findings in the Journeeze bundle (catalog bundle v1 minor 1): one per brittle element (#479).
+- `jevitate check --app-version <label>` (or `JEVITATE_APP_VERSION`), exported as `check.appVersion` (#479).
+- Filed issues carry both the Jevitate and the Journeeze fingerprint markers, and filing searches both first (#479).
+- `publish journeeze --product-name` / MCP `productName` (#477).
+- MCP: `journey_anchor_add` and `journey_anchor_remove` tools; `lint_journey` `fix`, `journey_anchors` `suggest`, `run_journey` `stepResponseTimeoutMs`, `run_campaign` `skipPreflight` (recorded as `preflight.skipped`), and `verify_fix` `env`. `verify_fix` refuses `allow`: an MCP caller never names origins, so `verify-fix --allow` stays CLI-only.
+- `.github/workflows/windows-repeat.yml`: run one test file N times on fresh Windows runners (#475).
+
+### Fixed
+
+- Missions no longer print the AI SDK `generateObject` deprecation warning: structured output uses `generateText` with an output setting (#489).
+- The Windows browser-crash smoke no longer stalls: the browser's pid comes from CDP instead of an unbounded process query, and each step is bounded and timed (#475).
+
 ## [0.10.0] – 2026-10-09
 
 0.10.0 connects jevitate's catalog to Journeeze and makes Journeys sturdier as the app under test improves.

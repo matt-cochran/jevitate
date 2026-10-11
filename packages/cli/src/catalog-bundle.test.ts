@@ -233,14 +233,14 @@ describe("what jevitate never exports", () => {
     expect(err).toBeInstanceOf(CatalogBundleInputError);
   });
 
-  it("leaves out a Journey whose anchor takes a reserved name (reserved-anchor-name)", async () => {
-    const b = await sampleBundle((root) => editJson(journeyFile(root), (j) => (j.metadata.anchors[0].name = "job_end")));
-    expect(b.catalog.journeys).toEqual([]);
+  it("refuses a promoted Journey whose anchor takes a reserved name (reserved-anchor-name)", async () => {
+    const err = await refusal((root) => editJson(journeyFile(root), (j) => (j.metadata.anchors[0].name = "job_end")));
+    expect(err).toMatchObject({ code: "E_CATALOG_EXPORT_INPUT", message: expect.stringMatching(/journey jz-guide-fixture: anchor 'job_end' is not a bundle anchor name/) });
   });
 
-  it("leaves out a Journey whose persona is free text, not a persona id", async () => {
-    const b = await sampleBundle((root) => editJson(journeyFile(root), (j) => (j.metadata.persona = "a reviewer on the board")));
-    expect(b.result.warnings).toContainEqual(expect.stringMatching(/^journey jz-guide-fixture: metadata\.persona .* is free text/));
+  it("refuses a promoted Journey whose persona is free text, not a persona id", async () => {
+    const err = await refusal((root) => editJson(journeyFile(root), (j) => (j.metadata.persona = "a reviewer on the board")));
+    expect(err).toMatchObject({ code: "E_CATALOG_EXPORT_INPUT", message: expect.stringMatching(/journey jz-guide-fixture: metadata\.persona .* is free text/) });
   });
 
   it("drops a persona key the bundle cannot carry, and its approval with it (the hash could not recompute)", async () => {
@@ -326,7 +326,6 @@ describe("what jevitate never exports", () => {
 
   const variants: ReadonlyArray<readonly [string, (root: string) => void, readonly CatalogBundleFinding[]?]> = [
     ["a degraded persona", (root) => editJson(join(root, ".jevitate", "personas.json"), (ps) => (ps[0].description = "two\nlines"))],
-    ["an omitted Journey", (root) => editJson(journeyFile(root), (j) => (j.metadata.anchors[0].name = "job_start"))],
     ["a stale Journey approval", (root) => editJson(journeyFile(root), (j) => (j.metadata.goal = "Judge two review items"))],
     ["checks only partly carried", (root) => editJson(checkFile(root), (c) => (c.data.items[0].outcome = "host-starved"))],
     ["a templated defect finding", () => {}, [{ fingerprint: "5b7e448babe54616", kind: "defect", severity: "major", at: "2026-10-09T12:30:00.000Z", route: "/board/{item}", observation: "Saving the verdict fails" }]],

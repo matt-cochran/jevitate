@@ -338,7 +338,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (642 exports)
+# @jevitate/explore (664 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -362,6 +362,8 @@
   affordedOp: function
   AfterOptions: interface
   AfterResult: interface
+  AllowOriginMismatch: interface
+  AllowOriginMismatchKind: type-alias
   ALREADY_VETOED_REASON: variable
   ANSWER_FITS_INSTRUCTIONS: variable
   ANSWER_FITS_QUESTION: variable
@@ -386,8 +388,16 @@
   AuthorTakeDiagnostics: interface
   AuthorTakeRunner: type-alias
   autoDecidePostdoc: function
+  AwaitedNetworkCheck: interface
   awaitWrites: function
+  BLOCKED_CONSEQUENCE_STEPS: variable
+  BLOCKED_FETCH_ERROR: variable
+  blockedCauseOf: function
+  BlockedConsequence: interface
+  BlockedRoot: interface
   BlockedWrite: interface
+  BlockedWriteCause: interface
+  blockedWriteCauses: function
   boundaryValueCandidates: function
   Bounds: interface
   boundSecretField: function
@@ -414,6 +424,7 @@
   capMessage: function
   captureAria: function
   CapturedRequest: interface
+  CausedBy: interface
   CDP_PROBE_TIMEOUT_MS: variable
   chatReply: function
   ChatReplyRequest: interface
@@ -428,6 +439,7 @@
   compareDeltas: function
   compileAllowControl: function
   CompletedRequest: interface
+  ConsequenceCandidate: type-alias
   Control: interface
   controlFields: function
   controlKey: function
@@ -467,6 +479,7 @@
   DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: variable
   DEFAULT_SECRET_COMMAND_ATTEMPTS: variable
   DEFAULT_STALL_MS: variable
+  DEFAULT_STEP_RESPONSE_TIMEOUT_MS: variable
   DEFAULT_VERIFY_REPLAYS: variable
   defaultLoadPerCore: function
   DefectRecord: interface
@@ -509,8 +522,10 @@
   describeStatusWithRpc: function
   describeUnreachable: function
   DESTRUCTIVE: variable
+  detectAllowOriginMismatch: function
   detectClipping: function
   DetectClippingOptions: interface
+  detectColdStart: function
   detectForms: function
   detectOverflow: function
   DetectOverflowOptions: interface
@@ -531,9 +546,11 @@
   emptyRecording: function
   endpointOf: function
   EndpointTimingStat: interface
+  EnvironmentFaultCause: interface
   EpisodeContext: interface
   errorPageReason: function
   evaluateNetworkCheck: function
+  evaluateNetworkCheckAwaiting: function
   evaluateOutcomeChecks: function
   exactLiterals: function
   expandBraces: function
@@ -558,6 +575,7 @@
   FillHelper: class
   FillRequest: interface
   FillResult: interface
+  findAllowOriginMismatches: function
   finishDeclaredRun: function
   FiredWrite: interface
   FirstPartyOrigins: class
@@ -648,6 +666,7 @@
   isExercisable: function
   isInScope: function
   isLoginLikeUrl: function
+  isLoopbackHost: function
   isNavControl: function
   isNavigationInterruption: function
   isNavigationTimeout: function
@@ -804,6 +823,7 @@
   ReplayDeltas: class
   replayDeltaSummary: function
   ReplayDeltaSummary: interface
+  ReplaySlowness: type-alias
   ReplayStepDelta: interface
   replayTargetWaitMs: function
   replayWouldRepeatWrite: function
@@ -892,6 +912,7 @@
   SignalGroup: interface
   signalKey: function
   SINGLE_LINE_MAX_CHARS: variable
+  SlowStepFinding: interface
   snapshot: function
   Snapshot: interface
   SNAPSHOT_BUDGET_MS: variable
@@ -981,9 +1002,11 @@
   withheldReason: function
   WithheldWrite: interface
   WRITE_METHODS: variable
+  writeOf: function
 
-# @jevitate/findings (50 exports)
+# @jevitate/findings (51 exports)
   CaseStatus: type-alias
+  CausedFinding: interface
   ClassifiedLogCause: interface
   classify: function
   consolidate: function
@@ -1129,16 +1152,20 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (209 exports)
+# @jevitate/journey (221 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
+  addAnchor: function
+  AddAnchorInput: interface
   ANCHOR_BOUNDARIES: variable
   ANCHOR_NAME_MAX: variable
   ANCHOR_NAME_RE: other
   ANCHOR_NAME_RULE_RE: variable
   ANCHOR_RULE_CODES: variable
+  anchorAddCommand: function
   AnchorBoundary: type-alias
   ANCHORED_STRATEGIES: variable
+  AnchorEditError: class
   AnchoredStrategy: type-alias
   AnchorLintIssue: interface
   anchorLintIssues: function
@@ -1146,6 +1173,9 @@
   AnchorRuleCode: type-alias
   AnchorRuleIssue: interface
   anchorRuleIssues: function
+  AnchorSuggestion: interface
+  AnchorSuggestionKind: type-alias
+  AnchorSuggestOptions: interface
   AnnotationChange: interface
   AnnotationDraft: type-alias
   AnnotationDraftMismatchError: class
@@ -1314,7 +1344,9 @@
   QualityFinding: interface
   RejectedProposal: type-alias
   RejectedProposalSchema: variable
+  removeAnchor: function
   renderJobStory: function
+  resolveAnchorStep: function
   resolveJourneyStep: function
   ReviewAnchorWarningSchema: variable
   ReviewChangeSchema: variable
@@ -1331,8 +1363,11 @@
   SecretRef: interface
   splitBudget: function
   stampAnchorStepIds: function
+  StampedAnchor: interface
+  stampUnstampedAnchors: function
   stripStepIds: function
   suggestAnchorName: function
+  suggestAnchors: function
   SWEEP_MODES: variable
   SweepMode: type-alias
   sweepStops: function

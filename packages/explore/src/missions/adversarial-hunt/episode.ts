@@ -16,6 +16,7 @@ import type { MisuseStrategy } from "../../adversarial/misuse.js";
 import { controlIdentity } from "../../coverage/fingerprint.js";
 import type { DemoOverlay } from "../../demo-overlay.js";
 import { monitorFor } from "../../page-monitor.js";
+import { visibleBusyIndicator } from "../../hang.js";
 import type { Snapshot } from "../../snapshot.js";
 import type { PageTiming } from "../../timing.js";
 import type { HuntState } from "./context.js";
@@ -107,6 +108,8 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
     ctx.safety.mark(ctx.transcript.nextStep, s.op, s.control);
     // A step after a pending submit may type over what it sent: keep the inputs as the submit sent them.
     const held = ep.earlierSubmit !== null && ctx.declared !== null ? await ctx.declared.inputValues(ctx.sessions.actor) : null;
+    // #484: which busy indicator shows BEFORE the act — one that appears with a blocked write is that write's.
+    ctx.busyBeforeAction = await ctx.sessions.page.evaluate(visibleBusyIndicator).catch(() => null);
     // #403: from this act until the step settled, a write to an origin outside --allow is aborted.
     ctx.offAllowlist.beginAction();
     const { result, value } = await ctx.execute(s, ep.stepSnap.controls);

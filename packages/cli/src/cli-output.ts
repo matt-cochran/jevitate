@@ -161,7 +161,14 @@ export function formatMissionHuman(result: unknown): string {
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
   // #422: environment/config faults and expected validation errors — named, never counted as defects.
   const envCauses = isRecord(result.environmentFaults) ? arr(result.environmentFaults.causes).filter(isRecord) : [];
-  for (const c of envCauses) lines.push(`${tag("ENV-FAULT")}${causeText(c)} (fix in setup; not a defect)`);
+  // #484: a loopback --allow mismatch behind blocked writes, said once per origin before the faults.
+  const mismatches = new Set(arr(result.blockedWrites).filter(isRecord).flatMap((b) => (isRecord(b.allowMismatch) && str(b.allowMismatch.message) !== undefined ? [str(b.allowMismatch.message) as string] : [])));
+  for (const m of mismatches) lines.push(`${tag("WARNING")}${m}`);
+  for (const c of envCauses) {
+    lines.push(`${tag("ENV-FAULT")}${causeText(c)} (fix in setup; not a defect)`);
+    // #484: the findings a blocked write caused, beneath it (their `causedBy` root).
+    for (const k of arr(c.consequences).filter(isRecord)) lines.push(`${tag("  CAUSED")}${str(k.kind) ?? "?"}: ${str(k.title) ?? ""} (step ${String(k.firstSeenStep)}; not a defect)`);
+  }
   for (const c of arr(result.expectedValidation).filter(isRecord)) lines.push(`${tag("EXPECTED")}${causeText(c)} (expected validation; not a defect)`);
   if (isRecord(result.failure)) {
     lines.push(`${tag("REASON")}${str(result.failure.kind) ?? "failure"}: ${str(result.failure.message) ?? ""}`);
@@ -456,6 +463,12 @@ export function formatVerifyFixHuman(report: unknown, opts: { readonly result?: 
   const lines = [`${verdict.toUpperCase()}: ${fp}${str(report.title) === undefined ? "" : `  ${str(report.title)}`}`];
   const reason = str(report.reason);
   if (reason !== undefined) lines.push(`${tag("REASON")}${reason}`);
+  // #484: the replay ran under an explicitly overridden allow list — say which, never silently.
+  if (isRecord(report.allowlistOverride)) {
+    const o = report.allowlistOverride;
+    const list = (v: unknown): string => arr(v).filter((x): x is string => typeof x === "string").join(", ");
+    lines.push(`${tag("ALLOW")}overridden by ${str(o.source) ?? "?"}: ${list(o.origins)} (stored: ${list(o.recorded)})`);
+  }
   const attempts = arr(report.attempts).filter(isRecord);
   if (attempts.length > 0) {
     const fired = attempts.filter((a) => a.fired === true).length;

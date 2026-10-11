@@ -45,6 +45,7 @@ import {
 } from "../adversarial/run-coverage.js";
 import type { SafetyConfig, SafetyOverride } from "../safety.js";
 import type { BlockedWrite } from "../read-only.js";
+import type { BlockedConsequence, EnvironmentFaultCause } from "../blocked-cause.js";
 import { type SideEffect } from "../side-effects.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
@@ -282,6 +283,13 @@ export interface AdversarialOutcome {
    * allow it (`--allow` the origin, or `--allow-write "<origin>/<glob>"`).
    */
   readonly blockedWrites?: BlockedWrite[];
+  /**
+   * #484: findings a blocked write caused later in the same session (the page's fetch error, a busy
+   * indicator left spinning) — each with its `causedBy` link; never defects, never gating.
+   */
+  readonly blockedConsequences?: BlockedConsequence[];
+  /** #484: one `jevitate:blocked-write` cause per blocked write, its consequences grouped beneath it. */
+  readonly environmentFaults?: { readonly causes: readonly EnvironmentFaultCause[] };
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
   /** #300: every action that switched the signed-in identity (present when one did). */

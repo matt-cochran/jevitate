@@ -1,7 +1,7 @@
 import { failureClass, openRouterProviderSettings, type OpenRouterCall, type UsageSink } from "@jevitate/ai-core";
 import { clock } from "@jevitate/domain";
 
-/** The slice of the AI SDK's `generateObject` result/error this seam reads for usage accounting. */
+/** The slice of the AI SDK's `generateText` result/error this seam reads for usage accounting. */
 interface TokenUsage {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
@@ -21,25 +21,38 @@ export function openRouterReportedCost(providerMetadata: unknown): number | unde
   return typeof cost === "number" && Number.isFinite(cost) ? cost : undefined;
 }
 
-/** The AI SDK's `generateObject` — injectable so the accounting is testable without a network. */
-export type GenerateObjectFn = (args: Record<string, unknown>) => Promise<{ object: unknown; usage?: unknown; providerMetadata?: unknown }>;
+/**
+ * The AI SDK's structured-output call — `generateText` with an `output` built from the Zod
+ * `schema` — injectable so the accounting is testable without a network. The real seam
+ * (`realOpenRouterCall`) wraps the SDK's `generateText` and `Output.object`.
+ */
+export type GenerateTextFn = (args: {
+  model: unknown;
+  schema: unknown;
+  prompt: string;
+  maxRetries: number;
+  providerOptions: unknown;
+  temperature?: number;
+}) => Promise<{ output: unknown; usage?: unknown; providerMetadata?: unknown }>;
 
 /**
- * Wraps a `generateObject` into the OpenRouter seam with usage accounting (#100, #163). Every
- * attempt is recorded — including one that throws (the AI SDK's own retries are disabled with
- * `maxRetries: 0`, so `RetryingGenerationPort`'s re-invocations are the only retries and each is
- * counted here). A failed attempt carries its token usage when the SDK error reports one (a model
- * response that failed schema validation was still billed), and is otherwise recorded unpriced.
- * Usage accounting never itself breaks a call: a malformed usage/metadata counts as 0 tokens.
+ * Wraps a structured `generateText` call into the OpenRouter seam with usage accounting (#100,
+ * #163). Every attempt is recorded — including one that throws (the AI SDK's own retries are
+ * disabled with `maxRetries: 0`, so `RetryingGenerationPort`'s re-invocations are the only retries
+ * and each is counted here). A failed attempt carries its token usage when the SDK error reports
+ * one (a model response that failed schema validation was still billed), and is otherwise recorded
+ * unpriced. Usage accounting never itself breaks a call: a malformed usage/metadata counts as 0
+ * tokens. The parsed object is read from the result's `output` field (`generateObject` is
+ * deprecated in AI SDK 7).
  */
-export function openRouterCallWith(generateObject: GenerateObjectFn, createOpenRouter: (s: { apiKey: string }) => (model: string) => unknown, usage?: UsageSink): OpenRouterCall {
+export function openRouterCallWith(generateText: GenerateTextFn, createOpenRouter: (s: { apiKey: string }) => (model: string) => unknown, usage?: UsageSink): OpenRouterCall {
   return async ({ model, schema, body, authHeader, temperature, task }) => {
     const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = clock.now();
     const label = { model, ...(task === undefined ? {} : { task }) };
-    let out: Awaited<ReturnType<GenerateObjectFn>>;
+    let out: Awaited<ReturnType<GenerateTextFn>>;
     try {
-      out = await generateObject({
+      out = await generateText({
         model: openrouter(model),
         schema,
         prompt: JSON.stringify(body),
@@ -59,16 +72,18 @@ export function openRouterCallWith(generateObject: GenerateObjectFn, createOpenR
       ...label,
       ...(cost === undefined ? {} : { usd: cost }),
     });
-    return { object: out.object, latencyMs: clock.now() - start };
+    return { object: out.output, latencyMs: clock.now() - start };
   };
 }
 
 /** Real OpenRouter seam (lazy import) — the key reaches the provider only as `apiKey`. */
 export async function realOpenRouterCall(usage?: UsageSink): Promise<OpenRouterCall> {
-  const { generateObject } = await import("ai");
+  const { generateText, Output } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
+  const generateTextWithOutput: GenerateTextFn = async ({ schema, ...settings }) =>
+    generateText({ ...settings, output: Output.object({ schema: schema as never }) } as Parameters<typeof generateText>[0]);
   return openRouterCallWith(
-    generateObject as unknown as GenerateObjectFn,
+    generateTextWithOutput,
     (s) => {
       const provider = createOpenRouter(s);
       return (model: string) => provider(model);

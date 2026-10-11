@@ -1,4 +1,7 @@
 import { expect, test, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PageSegment, Recording, RecordedStep } from "@jevitate/recording";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter, type StepObserver } from "./interpreter.js";
@@ -427,4 +430,27 @@ test("run: a schema-invalid recording rejects with a zod error before any step e
   const interp = new RecordingInterpreter();
   await expect(interp.run(actor as any, rec)).rejects.toThrow();
   expect(locator.click).not.toHaveBeenCalled();
+});
+
+test("run: an upload step's relative file resolves against the interpreter's fixtureBaseDir", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "interp-fixture-"));
+  await writeFile(join(dir, "receipt.pdf"), "pdf");
+  const setInputFiles = vi.fn(async () => {});
+  const actor = actorWithPage(fakePage(fakeLocator({ setInputFiles })));
+  const rec = recording([
+    [
+      {
+        step: {
+          kind: "upload",
+          target: { testId: "file" },
+          file: { redacted: false, value: "receipt.pdf" },
+          expect: { kind: "visible", target: { testId: "file" } },
+        },
+      },
+    ],
+  ]);
+
+  await new RecordingInterpreter({ fixtureBaseDir: dir }).run(actor as any, rec);
+
+  expect(setInputFiles).toHaveBeenCalledWith(join(dir, "receipt.pdf"));
 });

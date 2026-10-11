@@ -56,6 +56,8 @@ export interface Executed {
   readonly locatorHealth?: LocatorHealth;
   /** #470: the same health in detail (levels, the fixes), for the check's totals and warnings. */
   readonly locatorDetail?: LocatorHealthDetail;
+  /** #486: a Journey item's advisory slow-step findings (a late 2xx); present on every replay, empty when fast. */
+  readonly slowSteps?: ReadonlyArray<{ readonly step: number; readonly check: string; readonly latencyMs: number }>;
 }
 
 const BROKEN = new Set(["crashed", "inconclusive"]);
@@ -244,11 +246,12 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     const journeyHash = journeyReviewHash(stored);
     const testIdAttributes = ctx.testIdAttributes ?? testIdAttributesOrDefault();
     /** What a Journey item reports beside its outcome: its hash, its baseline (completed runs) and its locator health. */
-    const measured = (r: JourneyRunResult, locatorHealth: LocatorHealth | undefined): Pick<Executed, "journeyHash" | "baseline" | "locatorHealth" | "locatorDetail"> => {
+    const measured = (r: JourneyRunResult, locatorHealth: LocatorHealth | undefined): Pick<Executed, "journeyHash" | "baseline" | "locatorHealth" | "locatorDetail" | "slowSteps"> => {
       const baseline = anchorBaseline(stored, { outcome: r.outcome === "ok" ? "completed" : r.outcome, steps: timer.steps() });
       const detail = journeyLocatorHealth(j, testIdAttributes, r.resolved);
       return {
         journeyHash,
+        slowSteps: (r as { slowSteps?: Executed["slowSteps"] }).slowSteps ?? [],
         ...(baseline === undefined ? {} : { baseline }),
         ...(locatorHealth === undefined ? {} : { locatorHealth }),
         ...(detail.steps.length === 0 ? {} : { locatorDetail: detail }),

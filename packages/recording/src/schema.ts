@@ -326,6 +326,12 @@ export interface RecordedStep {
    * interpreter itself (a step's `expect` stays its page postcondition).
    */
   expectRequests?: NetworkCheck[];
+  /**
+   * #486 — how long (ms) this step's `expectRequests` response checks wait for a matching request
+   * that was sent but has no response yet (a cold start after a deploy). Absent: the run's bound
+   * (`--step-response-timeout`, default 15000 ms). Additive: absent, nothing about the step changes.
+   */
+  responseTimeoutMs?: number;
 }
 
 /** #400: an expected HTTP status — a class (`2xx`) or an exact code (`201`). */
@@ -853,6 +859,7 @@ const RecordedStepSchema = z
     expectedResult: z.string().max(2000).optional(),
     delta: ActionDeltaRecordSchema.optional(),
     expectRequests: z.array(NetworkCheckSchema).max(20).optional(),
+    responseTimeoutMs: z.number().int().positive().max(600_000).optional(),
   })
   .strict();
 

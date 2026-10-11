@@ -62,6 +62,10 @@ export function installSessions(ctx: HuntState, params: AdversarialMissionParams
       authorized: (u) => isAuthorizedExploreTarget(u, params.allowlist),
     });
     const step = ctx.transcript.nextStep - 1;
+    // #484: a busy indicator left spinning by a write the guard refused is that write's consequence — no hang finding, no replay.
+    if (ctx.blockedConsequence({ fingerprint: hangFingerprint(h), kind: `hang:${h.kind}`, title: `Hang (${h.kind}) on ${h.route}: ${h.detail}`, route: h.route }, { session: ctx.segments.indexOf(ctx.recorder), step, hang: h })) {
+      return;
+    }
     const known = ctx.hangs.get(hangFingerprint(h));
     if (known !== undefined) {
       // Already confirmed (or being confirmed): no replay budget spent again — just one more
