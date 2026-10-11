@@ -33,7 +33,7 @@ import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js"
 import { withSiteGate } from "./site-gate-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
 import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
-import { registerJourneyAnchorCommands, anchorEditFailure } from "./journey-anchor-cli.js";
+import { registerJourneyAnchorCommands, runAnchorSuggest, anchorEditFailure } from "./journey-anchor-cli.js";
 import { fixJourneyAnchors } from "./journey-anchor-api.js";
 import { journeyIntentCoverage } from "./journey-annotate-api.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
@@ -822,10 +822,15 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   journey
     .command("anchors <id>")
     .description("list a Journey's anchors (#293): named steps to branch a mission off with `explore --from-journey <id> --at-step <name>`, and their suggested probes")
+    .option("--suggest", "propose anchors where the recorded flow changes state (a new page, a form that became valid, a completed write), each with the `journey anchor add` command to accept it; advisory, writes nothing (#487)")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      const { dir, json, suggest } = this.opts<{ dir?: string; json?: boolean; suggest?: boolean }>();
+      if (suggest) {
+        await runAnchorSuggest(program, deps, id, { dir, json });
+        return;
+      }
       try {
         const found = await new JourneyRegistry(new FsJourneyStore(resolveJourneysDir(deps, dir))).get(id);
         if (found === null) {

@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { UnknownJourneyError } from "./journey-api.js";
-import { AnchorEditError, PromotedJourneyEditError, addJourneyAnchor, removeJourneyAnchor, type AnchorEditResult } from "./journey-anchor-api.js";
+import { AnchorEditError, PromotedJourneyEditError, addJourneyAnchor, removeJourneyAnchor, suggestJourneyAnchors, type AnchorEditResult } from "./journey-anchor-api.js";
 import { type CliDeps, emitJson, resolveJourneysDir } from "./cli-shared.js";
 
 function collect(value: string, prev: string[]): string[] {
@@ -74,4 +74,27 @@ export function registerJourneyAnchorCommands(journey: Command, program: Command
         anchorEditFailure(program, err);
       }
     });
+}
+
+/**
+ * #487 — `journey anchors <id> --suggest`: advisory anchor proposals (a new page, a form that became
+ * valid, a completed write), each with the `journey anchor add` command that accepts it. Writes nothing.
+ */
+export async function runAnchorSuggest(program: Command, deps: CliDeps, id: string, opts: { dir?: string; json?: boolean }): Promise<void> {
+  try {
+    const result = await suggestJourneyAnchors(resolveJourneysDir(deps, opts.dir), id);
+    if (opts.json) {
+      emitJson(program, ok(result));
+      return;
+    }
+    const out = program.configureOutput().writeOut;
+    for (const s of result.suggestions) {
+      out?.(`${s.name}\tstep ${s.step}${s.stepId === undefined ? "" : ` (${s.stepId})`}\t${s.kind}\t${s.reason}\n\tprobes: ${s.probes.join("; ")}\n\t${s.command}\n`);
+    }
+    out?.(`${result.suggestions.length} suggestion(s) for journey '${id}' — advisory, nothing was written\n`);
+    process.exitCode = 0;
+  } catch (err) {
+    if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", err.message));
+    else emitJson(program, fail("E_JOURNEY_ANCHORS_ARGS", String(err instanceof Error ? err.message : err)));
+  }
 }

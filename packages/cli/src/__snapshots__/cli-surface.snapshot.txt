@@ -628,6 +628,7 @@
   options:
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--suggest required=false mandatory=false negate=false variadic=false default=null description=propose anchors where the recorded flow changes state (a new page, a form that became valid, a completed write), each with the `journey anchor add` command to accept it; advisory, writes nothing (#487)
 
 # journey annotate
   description: draft each step's objective/expected result (and the goal/success criteria when missing) by replaying the Journey; writes a reviewable draft, never the Journey — `--approve` applies a reviewed draft (human gate)

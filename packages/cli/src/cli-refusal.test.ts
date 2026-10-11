@@ -218,7 +218,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "catalog analyze": { cases: [["--dir", badCatalog], ["--max-pairs", "0"]] },
   "journey verify": { cases: [["nope", "--mutate"], ["nope"], ["nope", "--mutate", "--storage-state", missing]] },
   // #293: an unknown Journey (or an id that tries to leave the store) is refused.
-  "journey anchors": { cases: [["nope"], ["../x"]] },
+  "journey anchors": { cases: [["nope"], ["../x"], ["nope", "--suggest"], ["../x", "--suggest"]] },
   // #487: an unknown Journey (or traversal id), a bad or unknown step, a bad name; removing an unknown anchor.
   "journey anchor add": {
     base: ["nope", "--name", "a", "--step", "1"],

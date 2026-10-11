@@ -566,6 +566,34 @@ One anchored step with a state restore (`--fixtures`, `--before`/`--after` with
 setup before the prefix replay, the restore after the mission, and the sweep's result shape
 (`sweep.mode: "step"`, `sweep.atStep`).
 
+### Editing and suggesting anchors (#487)
+
+Anchors are edited with commands, not by hand-editing `metadata.anchors`. They change a **draft**
+Journey only: a promoted Journey's content hash covers its anchors, so edit it as a draft and
+re-promote.
+
+```bash
+jevitate journey anchor add checkout --name payment --step 4 --probe "double submit"   # --step: number or step id
+jevitate journey anchor remove checkout --name payment
+jevitate journey lint checkout --fix        # stamps each number-only anchor with its step's id
+jevitate journey anchors checkout --suggest # advisory; writes nothing
+```
+
+`anchor add` writes the step's stable id at once and prints the anchor issues that remain (name
+rule `[a-z0-9][a-z0-9._-]{0,63}`, duplicates, unknown steps are refused, exit 64).
+
+`--suggest` reads the recording and proposes an anchor where the flow changes state, one per step
+(a write wins over a new page, a new page over a form):
+
+| Kind | Evidence | Default probes |
+| --- | --- | --- |
+| `write` | the step's recorded requests include a state-changing request (the write classifier, as `journey lint`), or it expects one | double submit, back/reload, replay the write, a second tab |
+| `new-page` | the URL path changes (query and hash ignored), or a later page segment starts | back/reload, a second tab |
+| `form-valid` | the last fill before a submit-type click or Enter, or a fill whose delta reports a control enabled | double submit, back/reload |
+
+Steps that already carry an anchor are skipped. Each suggestion prints its name, step and step id,
+the reason, the probes, and the `journey anchor add` command that accepts it.
+
 ### Sweeping every step
 
 `--at-step all` runs the strategy from EVERY top-level step (an anchor's name where one names the

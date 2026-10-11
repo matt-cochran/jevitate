@@ -1,4 +1,4 @@
-import { AnchorEditError, FsJourneyStore, JourneyRegistry, addAnchor, anchorLintIssues, removeAnchor, stampUnstampedAnchors, type AddAnchorInput, type AnchorLintIssue, type Journey, type StampedAnchor } from "@jevitate/journey";
+import { AnchorEditError, FsJourneyStore, JourneyRegistry, addAnchor, anchorAddCommand, anchorLintIssues, removeAnchor, suggestAnchors, stampUnstampedAnchors, type AddAnchorInput, type AnchorLintIssue, type AnchorSuggestion, type Journey, type StampedAnchor } from "@jevitate/journey";
 import { UnknownJourneyError } from "./journey-api.js";
 
 /**
@@ -63,6 +63,20 @@ export async function fixJourneyAnchors(dir: string, id: string): Promise<Anchor
   if (journey.metadata.promoted) throw new PromotedJourneyEditError(id);
   await store.put(next);
   return { journeyId: id, issues: anchorLintIssues((await store.get(id)) ?? next), stamped };
+}
+
+export interface AnchorSuggestResult {
+  readonly journeyId: string;
+  readonly steps: number;
+  /** Advisory only: nothing was written. Each carries the `journey anchor add` command that accepts it. */
+  readonly suggestions: readonly (AnchorSuggestion & { readonly command: string })[];
+}
+
+/** `journey anchors --suggest`: anchors worth adding where the recorded flow changes state. Writes nothing. */
+export async function suggestJourneyAnchors(dir: string, id: string, readRequests?: readonly string[]): Promise<AnchorSuggestResult> {
+  const { journey } = await load(dir, id);
+  const suggestions = suggestAnchors(journey, { readRequests }).map((s) => ({ ...s, command: anchorAddCommand(id, s) }));
+  return { journeyId: id, steps: journey.recording.pages.reduce((n, p) => n + p.steps.length, 0), suggestions };
 }
 
 export { AnchorEditError };

@@ -121,6 +121,7 @@ export const OMIT = {
   nonInteractiveApproval:
     "#437: the scripted-setup escape hatch for a CLI approval is the operator's choice, never a request's: an MCP approval needs no hatch — it is always recorded with provenance channel `mcp` (an agent's approval), which `check --require-approvals` fails unless the operator allows `mcp`",
   anchorEdit: "#487: writing a Journey (journey lint --fix) gets its MCP argument with the d-surface deliverable of 0.11.0, alongside the anchor add/remove tools",
+  anchorSuggest: "#487: journey anchors --suggest (advisory anchor proposals) lands with the d-surface deliverable of 0.11.0",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
@@ -284,7 +285,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "journey_anchors",
     description:
       "`jevitate journey anchors <id>` (#293): a Journey's named anchors — states worth exploring from, each with the step it follows and its suggested adversarial probes. Branch a mission off one with run_exploration fromJourney + atStep.",
-    command: { path: "journey anchors", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "journey anchors", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, "--suggest": OMIT.anchorSuggest, ...JSON_FLAG } },
   },
   {
     name: "annotate_journey",
