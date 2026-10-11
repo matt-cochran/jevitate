@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { reportSlowness, type JourneyReplaySlowness, type SlownessReport } from "./cold-start-report.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -318,6 +319,8 @@ export interface CampaignResult {
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly discovery: readonly CampaignDiscovery[];
+  /** #486: advisory slowness of the discovery replays (a Journey shared by several jobs is replayed once per job). */
+  readonly slowness?: SlownessReport;
   readonly missions: readonly CampaignMission[];
   /** One deduped defect list across every mission (`@jevitate/findings`), each with its branch points. */
   readonly report: {
@@ -403,6 +406,7 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
   await mkdir(outDir, { recursive: true });
   const ai = opts.real === true ? ["--real"] : opts.fakeAi === true ? ["--fake-ai"] : [];
   const discovery: CampaignDiscovery[] = [];
+  const replaySlowness: JourneyReplaySlowness[] = [];
   const missions: CampaignMission[] = [];
   /** Runs `body` between the job's fixture setup and restore (a failed setup still restores). */
   const restored = async <T>(job: CampaignJobPlan, body: () => Promise<T>, onSetupFailed: (message: string) => T): Promise<T> => {
@@ -432,6 +436,7 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
           const r = await runChild(opts.newProgram, ["journey", "run", job.journey, "--dir", opts.journeysDir, ...shared, "--json"]);
           if (!r.ok) return { job: job.id, journeyId: job.journey, outcome: "error", reason: `${r.error?.code}: ${r.error?.message}` };
           const outcome = r.data?.outcome;
+          replaySlowness.push({ journey: job.journey, slowSteps: Array.isArray(r.data?.slowSteps) ? (r.data.slowSteps as JourneyReplaySlowness["slowSteps"]) : [] });
           if (outcome === "ok") return { job: job.id, journeyId: job.journey, outcome: "ok" };
           return { job: job.id, journeyId: job.journey, outcome: "stale", reason: typeof r.data?.reason === "string" ? r.data.reason : `the replay ended ${String(outcome)}` };
         },
@@ -523,6 +528,8 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
   });
   const report = await buildReport({ runs, missionTargetsDir: opts.missionTargetsDir });
   const missionOutcome = combineOutcomes(missions.map((m) => m.missionOutcome));
+  const slowReport = reportSlowness(replaySlowness);
+  const slowness = slowReport.coldStarts.length + slowReport.slowSteps.length === 0 ? undefined : slowReport;
   const finishedAt = now();
   const resultPath = join(outDir, "campaign.json");
   const reportPath = join(outDir, "campaign.md");
@@ -533,6 +540,7 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
     startedAt,
     finishedAt,
     discovery,
+    ...(slowness === undefined ? {} : { slowness }),
     missions,
     report: { defects: report.defects, summary: report.summary, runs: report.runs },
     resultPath,
