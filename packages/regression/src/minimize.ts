@@ -3,6 +3,7 @@ import { RecordingSchema } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { matchesFingerprint, type FailureFingerprint } from "./fingerprint.js";
+import { fixtureOptions, type ReplayFixtureOptions } from "./reproduce.js";
 
 interface FlatEntry {
   pageIndex: number;
@@ -48,10 +49,10 @@ export type Reproduces = (candidate: Recording) => Promise<boolean>;
  * reports true only if it fails at the SAME structural step. Single
  * attempt — flakiness is handled up front by `reproduceFailure`.
  */
-export function makeSingleShotReproduces(makeActor: () => Promise<Actor>, fingerprint: FailureFingerprint): Reproduces {
+export function makeSingleShotReproduces(makeActor: () => Promise<Actor>, fingerprint: FailureFingerprint, opts: ReplayFixtureOptions = {}): Reproduces {
   return async (candidate) => {
     const actor = await makeActor();
-    const result = await new RecordingInterpreter().run(actor, candidate);
+    const result = await new RecordingInterpreter(fixtureOptions(opts)).run(actor, candidate);
     if (result.outcome !== "failed") return false;
     return matchesFingerprint(candidate, result.at, fingerprint);
   };

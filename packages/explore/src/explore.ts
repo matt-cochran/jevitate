@@ -215,6 +215,12 @@ export interface ExploreConfig {
    */
   readonly fixture?: string;
   /**
+   * #498: the project root (the folder holding `.jevitate/`) the `fixture` must lie inside, after
+   * realpath. Required with `fixture` (absent ⇒ the mission refuses it, fail-closed); the CLI
+   * passes `journeyFixtureBaseDir()`. Replays of the mission's own Recording use it too.
+   */
+  readonly fixtureRoot?: string;
+  /**
    * Bound (ms) on waiting for a rendered page (≥1 interactive control) before each decision.
    * Default `RENDER_WAIT_MS` (see `perceive`).
    */

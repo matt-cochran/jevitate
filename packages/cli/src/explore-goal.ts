@@ -24,7 +24,7 @@ import { describeHttp5xx, http5xxGoalReason } from "./http-5xx-outcome.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
-import { redactSecretValues } from "./journey-api.js";
+import { journeyFixtureBaseDir, redactSecretValues } from "./journey-api.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
 import { failureWithHostStarved, finishHostHealth } from "./host-health-run.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogEvidence, type ServerLogRuntimeResult, type ServerLogsSummary, type TranscriptEntryWithLogs } from "./log-correlation.js";
@@ -397,7 +397,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   assertSaveStorageStateOutsideProject(opts.saveStorageState);
   // Fail fast on a missing fixture BEFORE launching Chromium.
-  const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
+  const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture, journeyFixtureBaseDir());
   // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well. So is a
   // declared probe's resolved auth token (#135) — redacted everywhere a run secret is, not only in
   // the invariant monitor's own evidence.
@@ -550,6 +550,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.typeFixtures === undefined ? {} : { typeFixtures: opts.typeFixtures }),
       site: origin,
       fixture,
+      fixtureRoot: journeyFixtureBaseDir(),
       ...conversationConfig(opts.conversation),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),

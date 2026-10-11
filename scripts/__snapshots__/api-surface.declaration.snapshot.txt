@@ -1152,7 +1152,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (221 exports)
+# @jevitate/journey (222 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1308,6 +1308,7 @@
   judgeAssertions: function
   JudgmentUsageSchema: variable
   lintJourney: function
+  lintUploadFixtures: function
   listJourneyAnchors: function
   Metric: type-alias
   METRIC_KINDS: variable
@@ -1662,7 +1663,7 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (158 exports)
+# @jevitate/recording (167 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1690,6 +1691,7 @@
   COMPARE_OPS: variable
   CompareOp: type-alias
   CONFIDENT_VARIABLE_THRESHOLD: variable
+  confineFixture: function
   DeclaredInvariant: interface
   DeniedAsSpec: interface
   describeNavigateUrl: function
@@ -1707,6 +1709,13 @@
   expressionObservables: function
   ExprNode: type-alias
   fitInteractionPolicy: function
+  fixtureCandidatePath: function
+  fixtureEscapesRoot: function
+  fixtureNoRoot: function
+  fixtureNotFound: function
+  fixtureOutsideProject: function
+  FixturePathError: class
+  FixturePathErrorCode: type-alias
   flattenBaseFillSteps: function
   formatSpecPath: function
   FsRecordingStore: class
@@ -1725,6 +1734,7 @@
   InvariantSpecError: class
   InvariantSpecSchema: variable
   InvariantWhen: interface
+  isInsideRoot: function
   isWriteRequest: function
   JSON_PATH_EACH: variable
   jsonPathHasEach: function
@@ -1822,13 +1832,14 @@
   WriteClassifier: type-alias
   WriteClassifierOptions: interface
 
-# @jevitate/regression (25 exports)
+# @jevitate/regression (27 exports)
   appendOracleStep: function
   commitRegression: function
   DerivedOracle: interface
   deriveOracleFromTranscript: function
   FailureFingerprint: interface
   fingerprintFailure: function
+  fixtureOptions: function
   FlakyNotCommittableError: class
   flattenWithUrls: function
   loadRegressions: function
@@ -1843,6 +1854,7 @@
   RegressionCase: interface
   RegressionMeta: interface
   RegressionOracle: type-alias
+  ReplayFixtureOptions: interface
   replayRegression: function
   reproduceFailure: function
   reproduceFailureAt: function

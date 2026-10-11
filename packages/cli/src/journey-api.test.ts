@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import type { BrowserPort, BrowserSession, OpenOptions } from "@jevitate/playwright";
-import { runJourneyProgrammatically, lintJourneyById, journeyFixtureBaseDir, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { runJourneyProgrammatically, lintJourneyById, journeyFixtureBaseDir, promoteJourney, UnknownJourneyError, WeakJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 
 /**
  * `--storage-state <file>` / `metadata.requiresAuth` (#118): a Journey authored behind a login
@@ -147,11 +147,11 @@ describe("#488 journeyFixtureBaseDir", () => {
   });
 });
 
-async function seedUploadJourney(dir: string): Promise<void> {
+async function seedUploadJourney(dir: string, file = "receipt.pdf", promoted = true): Promise<void> {
   const store = new FsJourneyStore(dir);
   const registry = new JourneyRegistry(store);
   await registry.put({
-    metadata: { id: "upload", name: "upload", promoted: true, params: [], createdAtIso: "2026-09-24T00:00:00Z" },
+    metadata: { id: "upload", name: "upload", promoted, params: [], createdAtIso: "2026-09-24T00:00:00Z" },
     recording: {
       version: "1",
       site: "https://example.test",
@@ -163,7 +163,7 @@ async function seedUploadJourney(dir: string): Promise<void> {
               step: {
                 kind: "upload",
                 target: { testId: "file" },
-                file: { redacted: false, value: "receipt.pdf" },
+                file: { redacted: false, value: file },
                 expect: { kind: "visible", target: { testId: "file" } },
               },
             },
@@ -232,6 +232,21 @@ describe("#488 lintJourneyById upload fixtures", () => {
     const result = await lintJourneyById(dir, "upload", { baseDir: "/proj", catalogDir: null });
 
     expect(result.findings.some((f) => f.rule === "upload-file-missing" && f.message.includes("/proj/receipt.pdf"))).toBe(true);
+  });
+});
+
+describe("#498 promoteJourney upload fixtures outside the project root", () => {
+  it("refuses to promote, even with --accept-weak, reporting upload-outside-project", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "jev-promote-outside-")));
+    await mkdir(join(base, "proj"));
+    await writeFile(join(base, "secret.txt"), "secret");
+    const dir = join(base, "proj", ".jevitate", "journeys");
+    await mkdir(dir, { recursive: true });
+    await seedUploadJourney(dir, join(base, "secret.txt"), false);
+
+    const err = await promoteJourney(dir, "upload", { fixtureBaseDir: join(base, "proj"), acceptWeak: "ok" }).catch((e: unknown) => e);
+
+    expect(err instanceof WeakJourneyError && err.findings.map((f) => f.rule)).toEqual(["upload-outside-project"]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, lintUploadFixtures, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
 import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
@@ -345,6 +345,8 @@ export interface PromoteJourneyOptions {
   reason?: string;
   /** #453: how the rejection was made (`rejectionProvenance`); omitted: the programmatic one. */
   rejectProvenance?: ApprovalProvenance;
+  /** #498: the project root upload fixtures must lie inside; default `journeyFixtureBaseDir()`. */
+  fixtureBaseDir?: string;
 }
 
 export async function promoteJourney(dir: string, id: string, opts: PromoteJourneyOptions = {}): Promise<Journey> {
@@ -383,6 +385,15 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
   if (reviewedNow !== undefined && reviewedNow !== contentHash && (subject === reviewed || reviewedNow !== journeyReviewHash(reviewed))) {
     throw new StaleReviewError(
       `journey '${id}' changed after its review sheet was produced (reviewed ${reviewedNow}, now ${contentHash}) — review it again: jevitate journey review ${id}`,
+    );
+  }
+  // #498: an upload fixture outside the project root is refused at run time, so it is never
+  // promoted either — not waivable by --accept-weak (no override flag).
+  const outside = lintUploadFixtures(subject, opts.fixtureBaseDir ?? journeyFixtureBaseDir()).filter((f) => f.rule === "upload-outside-project");
+  if (outside.length > 0) {
+    throw new WeakJourneyError(
+      [`journey '${id}' uploads ${outside.length} fixture(s) outside the project root:`, ...outside.map((f) => f.message), "move the fixture into the project"].join("\n"),
+      outside,
     );
   }
   const errors = lintJourney(subject).filter((f) => f.level === "error");

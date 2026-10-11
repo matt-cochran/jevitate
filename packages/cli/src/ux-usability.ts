@@ -1,4 +1,5 @@
 // ux-usability.ts — the live usability mission runner (`explore --strategy usability`) (#231).
+import { journeyFixtureBaseDir } from "./journey-api.js";
 import { logsDirFor } from "./project-dir.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
@@ -327,7 +328,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
   const maxFindingsPerRoute = resolveMaxFindingsPerRoute(opts.maxFindingsPerRoute, opts.env ?? process.env, loadUxMaxFindingsPerPage(opts.configPath));
-  const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
+  const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture, journeyFixtureBaseDir());
   // #198: the product facts are validated before a browser opens (a bad file is a usage error).
   const product = await loadProductFacts(opts.product);
   // #250/#251: a recorded or screenshotted run's sessions carry the live pixel mask from their first
@@ -493,6 +494,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       secrets: opts.secrets,
       site: origin,
       fixture,
+      fixtureRoot: journeyFixtureBaseDir(),
       ...conversationConfig(opts.conversation),
       onSnapshot: async (snap) => {
         let visibleText = "";
@@ -714,6 +716,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         recordingStepIndex: h.recordingStepIndex,
         hang: h.signal,
         openSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+        fixtureBaseDir: journeyFixtureBaseDir(),
         ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
         writtenBy: run.sideEffects.map((e) => e.control), // #181
         perceive: {

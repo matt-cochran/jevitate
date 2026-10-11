@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
 import type { RecordedStep, Step } from "@jevitate/recording";
-import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
+import { fixtureEscapesRoot, writeClassifier, type WriteClassifier } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, isOwnTargetVisible, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { anchorLintIssues, type AnchorRuleCode } from "./anchor-rules.js";
@@ -19,6 +18,7 @@ export type JourneyLintRule =
   | "no-persistence-check"
   | "intent-uncovered"
   | "upload-file-missing"
+  | "upload-outside-project"
   | AnchorRuleCode
   | "anchor-job-step"
   | "serves-outcome";
@@ -41,6 +41,44 @@ export interface JourneyLintOptions {
    * resolves against. Absent: the upload existence rule is skipped (no project root to resolve to).
    */
   readonly baseDir?: string;
+}
+
+/**
+ * #488/#498: the upload fixture rules for one Journey against project root `baseDir`. A literal path
+ * that resolves (after realpath) outside the root is `upload-outside-project` — refused at run time,
+ * with no override; one inside the root that is not there is `upload-file-missing`. A `{var}`
+ * binding or a redacted constant is not a literal path — skipped here, checked at run time.
+ */
+export function lintUploadFixtures(journey: Journey, baseDir: string): JourneyLintFinding[] {
+  const findings: JourneyLintFinding[] = [];
+  const recorded = flattenSteps(journey);
+  for (let i = 0; i < recorded.length; i += 1) {
+    const step = recorded[i]!.step;
+    if (step.kind !== "upload") continue;
+    const file = step.file;
+    if ("var" in file || file.redacted) continue;
+    const { escapes, candidate, real } = fixtureEscapesRoot(file.value, baseDir);
+    if (escapes) {
+      const shown = real === candidate ? candidate : `${candidate} (→ ${real})`;
+      findings.push({
+        rule: "upload-outside-project",
+        level: "error",
+        step: i + 1,
+        message: `step ${i + 1}: upload fixture ${shown} is outside the project root ${baseDir}`,
+        fix: `move the fixture into the project (under ${baseDir}) and name it by a path inside it`,
+      });
+      continue;
+    }
+    if (existsSync(candidate)) continue;
+    findings.push({
+      rule: "upload-file-missing",
+      level: "error",
+      step: i + 1,
+      message: `step ${i + 1}: upload fixture not found: ${candidate}`,
+      fix: `create ${candidate} (inside the project) or fix the fixture path`,
+    });
+  }
+  return findings;
 }
 
 /** #401: a step kind whose `relevant-change` delta is state-changing even with no recorded request. */
@@ -217,25 +255,8 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
     }
   }
 
-  // #488: a literal `upload` fixture path that is not there fails at replay with a resolved path;
-  // report it up front. A `{var}` binding or a redacted constant is not a literal path — skipped.
-  if (opts.baseDir !== undefined) {
-    for (let i = 0; i < recorded.length; i += 1) {
-      const step = recorded[i]!.step;
-      if (step.kind !== "upload") continue;
-      const file = step.file;
-      if ("var" in file || file.redacted) continue;
-      const resolved = isAbsolute(file.value) ? file.value : resolve(opts.baseDir, file.value);
-      if (existsSync(resolved)) continue;
-      findings.push({
-        rule: "upload-file-missing",
-        level: "error",
-        step: i + 1,
-        message: `step ${i + 1}: upload fixture not found: ${resolved}`,
-        fix: `create ${resolved} or make the fixture path absolute`,
-      });
-    }
-  }
+  // #488/#498: literal `upload` fixture paths — outside the project root, or not there.
+  if (opts.baseDir !== undefined) findings.push(...lintUploadFixtures(journey, opts.baseDir));
 
   // #466: the 0.10 anchor rules — warnings on a Journey as it is (promote enforces them on new content).
   for (const issue of anchorLintIssues(journey)) {
