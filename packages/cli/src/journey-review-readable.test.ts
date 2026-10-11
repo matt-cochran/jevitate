@@ -166,6 +166,15 @@ describe("#496 attention items", () => {
     expect(renderReviewText(r)).toContain("--proposal p-1 --reviewed-hash " + "c".repeat(64));
   });
 
+  it("a proposal that only retargets a labelled step still shows the locator change", () => {
+    const base = buildJourneyReview(crm(), { approvedSnapshot: crm() });
+    const step = (testId: string) => ({ kind: "click" as const, target: { testId, display: { role: "button", name: "Import" } } });
+    const retarget = { index: 1, before: step("action-import"), after: step("import-button"), justification: { hypothesis: "renamed", evidence: [] }, evidence: {} };
+    const proposal = { proposalId: "p-1", baseHash: base.contentHash, proposedHash: "c".repeat(64), createdAt: "2026-10-11T09:00:00.000Z", attempts: [], changes: { notes: [] }, steps: [retarget] };
+    const r = buildJourneyReview(crm(), { approvedSnapshot: crm(), proposal: { proposal: proposal as never, stale: false } });
+    expect(r.proposal?.steps[0]?.after).toContain("data-testid=import-button");
+  });
+
   it("with nothing to decide the sheet says so", () => {
     const r = buildJourneyReview(crm(), { approvedSnapshot: crm() });
     const clean = { ...r, attention: [] };

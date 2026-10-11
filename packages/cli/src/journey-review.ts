@@ -158,6 +158,29 @@ function evidenceLine(e: { kind: string; before?: string | undefined; after?: st
   return `${e.kind}${change}${where}`;
 }
 
+/** A target's exact locator, e.g. `data-testid=publish-now` or `role=button name="Save"`. */
+function locatorSpec(t: TargetDescriptor): string {
+  if (t.testId !== undefined) return `${t.testIdAttr ?? "data-testid"}=${t.testId}`;
+  const parts = [
+    t.role === undefined ? null : `role=${t.role}`,
+    t.name === undefined ? null : `name="${t.name}"`,
+    t.label === undefined ? null : `label="${t.label}"`,
+    t.text === undefined ? null : `text="${t.text}"`,
+    t.css === undefined ? null : `css=${t.css}`,
+  ].filter((x): x is string => x !== null);
+  return parts.join(" ");
+}
+
+/**
+ * #497: a self-heal proposal changes a step's LOCATOR, which a recorded display label hides
+ * (`click "Import"` before and after) — so a proposal's step shows its exact locator too.
+ */
+function withLocator(step: Step): string {
+  const target = targetOf(step);
+  const spec = target === undefined ? "" : locatorSpec(target);
+  return spec === "" ? describeStep(sanitized(step)) : `${describeStep(sanitized(step))} · locator ${spec}`;
+}
+
 function buildProposal(ctx: NonNullable<JourneyReviewContext["proposal"]>, journeyId: string): JourneyReviewProposal {
   const p = ctx.proposal;
   return {
@@ -170,8 +193,8 @@ function buildProposal(ctx: NonNullable<JourneyReviewContext["proposal"]>, journ
     changes: { ...(p.changes.range === undefined ? {} : { range: p.changes.range }), ...(p.changes.baseSha === undefined ? {} : { baseSha: p.changes.baseSha }), ...(p.changes.headSha === undefined ? {} : { headSha: p.changes.headSha }), notes: [...p.changes.notes] },
     steps: p.steps.map((s) => ({
       number: s.index + 1,
-      before: describeStep(s.before),
-      after: describeStep(s.after),
+      before: withLocator(s.before),
+      after: withLocator(s.after),
       hypothesis: s.justification.hypothesis + (s.justification.anchorNotInChange === true ? " (the new anchor is not named by any change evidence)" : ""),
       evidence: s.justification.evidence.map(evidenceLine),
       screenshots: [...(s.screenshots ?? [])],
@@ -712,7 +735,7 @@ function renderSheet(r: JourneyReview, style: Style, opts: RenderOptions = {}): 
     ? "not promoted"
     : r.approval === undefined
       ? "promoted (no approval recorded)"
-      : `approved ${humanTime(r.approval.at)}${plainApproval ? `${approvedBy} (terminal)` : ` — ${describeProvenance(prov)}`} · ${changed ? "CHANGED since" : "unchanged since"}`;
+      : `approved ${humanTime(r.approval.at)}${plainApproval ? `${approvedBy} (terminal)` : ` — ${describeProvenance(prov)}`} · ${nb(changed ? "CHANGED since approval" : "unchanged since approval")}`;
   if (md) out.push(`# Review: ${r.name}`, "", `**${r.id}** · ${status}`);
   else {
     put("Review  ", r.name);
@@ -748,7 +771,7 @@ function renderSheet(r: JourneyReview, style: Style, opts: RenderOptions = {}): 
   for (const pc of s.preconditions) put(bullet, `Needs: ${pc}`);
   if (s.persona !== undefined) wid.push(`persona ${s.persona}`);
   if (s.role !== undefined) wid.push(`runs as ${s.role}`);
-  if (s.requiresAuth) wid.push("signed in");
+  if (s.requiresAuth) wid.push("Signed in");
   wid.push(...r.sideEffects.origins.slice(0, 1));
   const files = r.steps.flatMap((st) => (st.file === undefined ? [] : [st.file]));
   if (wid.length > 0) put(bullet, wid.join(" · "));
