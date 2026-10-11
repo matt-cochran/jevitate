@@ -68,6 +68,10 @@ const BRANCH_RECORDED = "#293: a branch-point finding still replays through its 
 const NO_ANCHORED_HERE = "#293: a journey-anchored mission is an `explore --from-journey` run, a suite mission item or a campaign job — never this surface";
 
 /** `<file> <api>` → option → why that surface does not pass it. */
+/** #488: a testing seam — every Journey run defaults it to the project root (journeyFixtureBaseDir). */
+const FIXTURE_BASE_DIR = "#488: testing seam; defaults to the project root (the folder holding .jevitate/)";
+/** #486: the in-flight response bound defaults to 15 s; its per-surface flag/argument lands with the d-surface step. */
+const STEP_RESPONSE_DEFAULT = "#486: defaults to the 15 s in-flight bound (or the step's responseTimeoutMs); surface flags land with d-surface";
 /** #484: replaying under another allow list is an explicit, per-finding `verify-fix --allow/--env` decision. */
 const STORED_ALLOWLIST = { allow: "#484: replays with the result's stored allow list; overriding it is an explicit verify-fix --allow/--env", env: "#484: replays with the result's stored allow list; overriding it is an explicit verify-fix --allow/--env", environmentsFile: "#484: only read for an explicit verify-fix --env" };
 
@@ -144,8 +148,10 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
-  "journey-cli.ts runJourneyProgrammatically": { account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
+  "journey-cli.ts runJourneyProgrammatically": { fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+    stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
     account: SITE_ACCOUNT,
     actionDeltas:
       "#303 × #293: the prefix is the anchored mission's setup, not its actions — `--action-deltas` records the mission's own steps from the branch point on; a prefix that no longer replays is already a typed journey-stale (fail-closed), never a delta mismatch",
@@ -171,6 +177,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+    stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
     actionDeltas: NO_DELTAS_HERE,
     account: SITE_ACCOUNT,
     interpreter: "#249: a clean-path candidate replay only needs its verdict (the demo/annotate stages observe their own replays)",
@@ -185,6 +193,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+    stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
     mask: MASK_INTERNAL,
     observer: OBSERVER_INTERNAL,
     account: SITE_ACCOUNT,
@@ -194,6 +204,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     stopAfterStep: WHOLE_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+    stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
     actionDeltas: NO_DELTAS_HERE,
     mask: MASK_INTERNAL,
     screenshots: NO_SCREENSHOTS_HERE,
