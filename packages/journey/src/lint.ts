@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import type { RecordedStep, Step } from "@jevitate/recording";
 import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
@@ -16,6 +18,7 @@ export type JourneyLintRule =
   | "nothing-after-last-write"
   | "no-persistence-check"
   | "intent-uncovered"
+  | "upload-file-missing"
   | AnchorRuleCode
   | "anchor-job-step"
   | "serves-outcome";
@@ -33,6 +36,11 @@ export interface JourneyLintFinding {
 export interface JourneyLintOptions {
   /** Read patterns for the write classifier (`--read-rpc`, target config `safety.readRequests`). */
   readonly readRequests?: readonly string[];
+  /**
+   * #488: the project root (the directory containing `.jevitate/`) a relative `upload` fixture path
+   * resolves against. Absent: the upload existence rule is skipped (no project root to resolve to).
+   */
+  readonly baseDir?: string;
 }
 
 /** #401: a step kind whose `relevant-change` delta is state-changing even with no recorded request. */
@@ -205,6 +213,26 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
         level: "warning",
         step: n,
         message: `step ${n}: expectedResult is documented but no effect assertion checks it`,
+      });
+    }
+  }
+
+  // #488: a literal `upload` fixture path that is not there fails at replay with a resolved path;
+  // report it up front. A `{var}` binding or a redacted constant is not a literal path — skipped.
+  if (opts.baseDir !== undefined) {
+    for (let i = 0; i < recorded.length; i += 1) {
+      const step = recorded[i]!.step;
+      if (step.kind !== "upload") continue;
+      const file = step.file;
+      if ("var" in file || file.redacted) continue;
+      const resolved = isAbsolute(file.value) ? file.value : resolve(opts.baseDir, file.value);
+      if (existsSync(resolved)) continue;
+      findings.push({
+        rule: "upload-file-missing",
+        level: "error",
+        step: i + 1,
+        message: `step ${i + 1}: upload fixture not found: ${resolved}`,
+        fix: `create ${resolved} or make the fixture path absolute`,
       });
     }
   }

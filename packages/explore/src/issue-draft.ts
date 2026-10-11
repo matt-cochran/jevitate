@@ -1,5 +1,5 @@
 import { redactText, redactUrl } from "@jevitate/ai-core";
-import { fingerprintMarker, targetsFor, contentHash, type Attribution, type IssueDraft } from "@jevitate/domain";
+import { fingerprintMarkers, targetsFor, contentHash, type Attribution, type IssueDraft } from "@jevitate/domain";
 import type { TranscriptEntry } from "./transcript.js";
 import type { AdversarialDefect } from "./missions/adversarial.js";
 import type { CrashReport } from "./crash-report.js";
@@ -105,7 +105,7 @@ function finalize(
   attribution: Attribution,
   secrets: readonly string[],
 ): IssueDraft {
-  const body = [...sections.filter((s) => s !== ""), fingerprintMarker(fingerprint)].join("\n\n");
+  const body = [...sections.filter((s) => s !== ""), ...fingerprintMarkers(fingerprint)].join("\n\n");
   return {
     fingerprint,
     title: redactText(redactUrl(title), secrets),

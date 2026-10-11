@@ -30,18 +30,18 @@ export async function liveGateways() {
   const store = envCredentialStore(process.env, localCredentials());
   requireKeys("generation", store);
   requireKeys("judgment", store);
-  const { generateObject } = await import("ai");
+  const { generateText, Output } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
   const call = async ({ model, schema, body, authHeader, temperature }) => {
     const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = Date.now();
-    const { object } = await generateObject({
+    const { output } = await generateText({
       model: openrouter(model),
-      schema,
+      output: Output.object({ schema }),
       prompt: JSON.stringify(body),
       ...(temperature === undefined ? {} : { temperature }),
     });
-    return { object, latencyMs: Date.now() - start };
+    return { object: output, latencyMs: Date.now() - start };
   };
   const gen = new OpenRouterGenerationGateway({ store, catalog: CATALOG, constraints: { requiredCapabilities: [] }, call });
   const judge = new JevJudgmentGateway(store, await realJevClientCall(() => import("@typesafe-ai/sdk")));

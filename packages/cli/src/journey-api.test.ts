@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import type { BrowserPort, BrowserSession, OpenOptions } from "@jevitate/playwright";
-import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { runJourneyProgrammatically, lintJourneyById, journeyFixtureBaseDir, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 
 /**
  * `--storage-state <file>` / `metadata.requiresAuth` (#118): a Journey authored behind a login
@@ -126,6 +126,112 @@ describe("runJourneyProgrammatically", () => {
     await expect(runJourneyProgrammatically({ dir, id: "does-not-exist", params: {} })).rejects.toBeInstanceOf(
       UnknownJourneyError,
     );
+  });
+});
+
+// === #488: relative upload fixture paths resolve against the project root ===
+
+describe("#488 journeyFixtureBaseDir", () => {
+  it("is the parent of the nearest .jevitate directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jev-base-"));
+    await mkdir(join(root, ".jevitate"));
+    expect(journeyFixtureBaseDir({ cwd: () => root })).toBe(root);
+  });
+
+  it("falls back to the git root when there is no .jevitate directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jev-base-"));
+    await mkdir(join(root, ".git"));
+    const nested = join(root, "a", "b");
+    await mkdir(nested, { recursive: true });
+    expect(journeyFixtureBaseDir({ cwd: () => nested })).toBe(root);
+  });
+});
+
+async function seedUploadJourney(dir: string): Promise<void> {
+  const store = new FsJourneyStore(dir);
+  const registry = new JourneyRegistry(store);
+  await registry.put({
+    metadata: { id: "upload", name: "upload", promoted: true, params: [], createdAtIso: "2026-09-24T00:00:00Z" },
+    recording: {
+      version: "1",
+      site: "https://example.test",
+      pages: [
+        {
+          url: "/form",
+          steps: [
+            {
+              step: {
+                kind: "upload",
+                target: { testId: "file" },
+                file: { redacted: false, value: "receipt.pdf" },
+                expect: { kind: "visible", target: { testId: "file" } },
+              },
+            },
+          ],
+        },
+      ],
+    },
+  } as any);
+}
+
+function fakeUploadBrowserPortFactory(setInputFiles: (path: string) => Promise<void>): () => BrowserPort {
+  return () => ({
+    async open(): Promise<BrowserSession> {
+      const locator = {
+        count: vi.fn(async () => 1),
+        isVisible: vi.fn(async () => true),
+        setInputFiles: vi.fn(setInputFiles),
+      };
+      const page = {
+        getByTestId: vi.fn(() => locator),
+        getByRole: vi.fn(() => locator),
+        getByLabel: vi.fn(() => locator),
+        getByText: vi.fn(() => locator),
+        locator: vi.fn(() => locator),
+        url: vi.fn(() => "https://example.test/form"),
+        goto: vi.fn(async () => {}),
+      };
+      return {
+        page: page as unknown as BrowserSession["page"],
+        startTracing: vi.fn(async () => {}),
+        stopTracingToFile: vi.fn(async () => {}),
+        saveStorageState: vi.fn(async () => {}),
+        admission: undefined,
+        close: vi.fn(async () => {}),
+      };
+    },
+  });
+}
+
+describe("#488 runJourneyProgrammatically upload fixtures", () => {
+  it("attaches a relative fixture resolved against fixtureBaseDir", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jev-run-"));
+    await writeFile(join(root, "receipt.pdf"), "pdf");
+    const dir = join(root, ".jevitate", "journeys");
+    await mkdir(dir, { recursive: true });
+    await seedUploadJourney(dir);
+    const attached: string[] = [];
+
+    await runJourneyProgrammatically({
+      dir,
+      id: "upload",
+      params: {},
+      fixtureBaseDir: root,
+      browserPortFactory: fakeUploadBrowserPortFactory(async (p) => void attached.push(p)),
+    });
+
+    expect(attached).toEqual([join(root, "receipt.pdf")]);
+  });
+});
+
+describe("#488 lintJourneyById upload fixtures", () => {
+  it("errors on a missing relative upload fixture with the resolved path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-lint-"));
+    await seedUploadJourney(dir);
+
+    const result = await lintJourneyById(dir, "upload", { baseDir: "/proj", catalogDir: null });
+
+    expect(result.findings.some((f) => f.rule === "upload-file-missing" && f.message.includes("/proj/receipt.pdf"))).toBe(true);
   });
 });
 

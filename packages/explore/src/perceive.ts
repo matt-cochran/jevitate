@@ -280,10 +280,12 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     if (busy !== null) {
       const busySince = clock.now();
       const remaining = Math.max(1, ceiling - (clock.now() - started));
+      // #491: a wait that FAILED (not timed out) proves nothing about the indicator — it is no
+      // evidence of a stuck one, so it is never read as "never went away".
       const gone = await clockBounded(
-        page.waitForFunction(`!(${visibleBusyIndicator.toString()})()`, undefined, { timeout: remaining, polling: "raf" }).then(
+        page.waitForFunction<boolean, true>(visibleBusyIndicator, true, { timeout: remaining, polling: "raf" }).then(
           () => true,
-          () => false,
+          (e: unknown) => !(e instanceof Error && e.name === "TimeoutError"),
         ),
         remaining,
         false,

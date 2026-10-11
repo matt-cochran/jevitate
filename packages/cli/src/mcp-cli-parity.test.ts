@@ -229,6 +229,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       maxBrowserMemory: "--max-browser-memory",
       actionDeltas: "--action-deltas",
       tags: "--tag",
+      stepResponseTimeoutMs: "--step-response-timeout",
     },
     omitted: {
       "--ignore-host-load": OMIT.hostLoad,
@@ -266,8 +267,10 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       maxBrowserMemory: "--max-browser-memory",
       actionDeltas: "--action-deltas",
       tags: "--tag",
+      env: "--env",
     },
     omitted: {
+      "--allow": OMIT.mcpOrigins,
       "--ignore-host-load": OMIT.hostLoad,
       "--fingerprint": "the positional's alias: MCP takes one 'fingerprint'",
       "--regressions-dir": "MCP names the finding by its result id (never a path); the ledger fallback is the ledger tool's `verify` action",

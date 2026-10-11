@@ -10,7 +10,8 @@ import { journeyExitCode, safeRunPolicy, type SelfHealMode } from "@jevitate/dom
 import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
 import { CLI_HEAL_NAMES, JourneyHealArgsError, journeyHealBudget, journeyRunSummary, readJourneyChangeScope, validateJourneyHeal, type JourneyHealRequest } from "./journey-heal.js";
 import { ChangesArgsError, ChangesInputError } from "./change-context.js";
-import { positiveIntArg } from "./cli-args.js";
+import { intArg, positiveIntArg } from "./cli-args.js";
+import { MAX_STEP_RESPONSE_TIMEOUT_MS } from "./journey-network-checks.js";
 import type { ChangeScope } from "@jevitate/runtime";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
@@ -33,6 +34,8 @@ import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js"
 import { withSiteGate } from "./site-gate-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
 import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
+import { registerJourneyAnchorCommands, runAnchorSuggest, anchorEditFailure } from "./journey-anchor-cli.js";
+import { fixJourneyAnchors } from "./journey-anchor-api.js";
 import { journeyIntentCoverage } from "./journey-annotate-api.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
@@ -180,6 +183,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--real", "use live Jev + OpenRouter gateways for self-heal (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
+    .option("--step-response-timeout <ms>", "#486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet, e.g. a cold start after a deploy (default 15000). A late 2xx is an advisory slow-step finding (slowSteps), not a quarantine; a non-2xx, or no response within the bound, fails. A step's own responseTimeoutMs overrides it; at most 300000", intArg({ min: 1, max: MAX_STEP_RESPONSE_TIMEOUT_MS }))
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas")
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
@@ -212,6 +216,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         json,
         screenshots: _screenshots,
         actionDeltas,
+        stepResponseTimeout,
         changes,
         changeNote,
         healMaxAttempts,
@@ -229,6 +234,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         healMaxRunAttempts?: number;
         healMaxRunMs?: number;
         actionDeltas?: boolean;
+        stepResponseTimeout?: number;
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -342,6 +348,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           ...(screenshots === undefined ? {} : { screenshots }),
           ...(storageState !== undefined ? { storageState } : {}),
           ...(actionDeltas === true ? { actionDeltas: true } : {}),
+          ...(stepResponseTimeout === undefined ? {} : { stepResponseTimeoutMs: stepResponseTimeout }),
           ...(environment === undefined ? {} : { environment }),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
           // #247: under an environment, its allowed origins.
@@ -673,19 +680,34 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .description("report a Journey's weak assertions (writes without an asserted effect, visibility-only claims, nothing after the last write, …)")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--sarif <file>", "also write a SARIF 2.1.0 log here")
+    .option("--fix", "#487: stamp the step id of each anchor that references a step by number only, write the Journey (a draft; a promoted one is refused), and report what was fixed")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, sarif } = this.opts<{ dir?: string; json?: boolean; sarif?: string }>();
+      const { dir, json, sarif, fix } = this.opts<{ dir?: string; json?: boolean; sarif?: string; fix?: boolean }>();
       try {
+        let fixed: Awaited<ReturnType<typeof fixJourneyAnchors>>["stamped"] = [];
+        if (fix === true) {
+          try {
+            fixed = (await fixJourneyAnchors(resolveJourneysDir(deps, dir), id)).stamped;
+          } catch (err) {
+            if (err instanceof UnknownJourneyError) throw err;
+            anchorEditFailure(program, err);
+            return;
+          }
+        }
         const result = await lintJourneyById(resolveJourneysDir(deps, dir), id, { catalogDir: resolveCatalogDir(deps.catalogDir) });
         if (sarif !== undefined) {
           const log = renderJourneyLintSarif({ id: result.id, findings: result.findings, version: currentEngineInfo().version });
           await writeFile(sarif, `${JSON.stringify(log, null, 2)}\n`);
         }
         if (json) {
-          emitJson(program, ok({ id: result.id, findings: result.findings, errors: result.errors, warnings: result.warnings }));
+          emitJson(program, ok({ id: result.id, findings: result.findings, errors: result.errors, warnings: result.warnings, ...(fix === true ? { fixed } : {}) }));
         } else {
           const out = program.configureOutput().writeOut;
+          if (fix === true) {
+            for (const a of fixed) out?.(`fixed: anchor '${a.name}' now carries stepId '${a.stepId}' (step ${a.step})\n`);
+            if (fixed.length === 0) out?.("fixed: nothing — no anchor references a step by number only\n");
+          }
           for (const finding of result.findings) out?.(`${lintFindingLine(finding)}\n`);
           out?.(`${result.errors} error(s), ${result.warnings} warning(s) — journey '${result.id}'\n`);
         }
@@ -805,10 +827,15 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   journey
     .command("anchors <id>")
     .description("list a Journey's anchors (#293): named steps to branch a mission off with `explore --from-journey <id> --at-step <name>`, and their suggested probes")
+    .option("--suggest", "propose anchors where the recorded flow changes state (a new page, a form that became valid, a completed write), each with the `journey anchor add` command to accept it; advisory, writes nothing (#487)")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      const { dir, json, suggest } = this.opts<{ dir?: string; json?: boolean; suggest?: boolean }>();
+      if (suggest) {
+        await runAnchorSuggest(program, deps, id, { dir, json });
+        return;
+      }
       try {
         const found = await new JourneyRegistry(new FsJourneyStore(resolveJourneysDir(deps, dir))).get(id);
         if (found === null) {
@@ -833,6 +860,9 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         emitJson(program, fail("E_JOURNEY_ANCHORS_ARGS", String(err instanceof Error ? err.message : err)));
       }
     });
+
+  // #487 — add/remove a draft Journey's anchors with the step id written at once.
+  registerJourneyAnchorCommands(journey, program, deps);
 
   // #246 — draft a Journey's intent on playback; `--approve` is the human gate that writes it.
   registerJourneyAnnotateCommand(journey, program, deps);

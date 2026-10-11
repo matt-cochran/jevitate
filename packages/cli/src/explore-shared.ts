@@ -104,6 +104,18 @@ export function serverLogResult(
 }
 
 /**
+ * #484: the run's blocked-write environment causes (the hunt's own) beside its classified backend-log
+ * ones — both under the result's one `environmentFaults`.
+ */
+export function withBlockedWriteFaults<T extends { environmentFaults?: { causes: readonly LogClassCause[] } }>(
+  logs: T,
+  blocked: { readonly causes: readonly LogClassCause[] } | undefined,
+): T {
+  if (blocked === undefined || blocked.causes.length === 0) return logs;
+  return { ...logs, environmentFaults: { causes: [...blocked.causes, ...(logs.environmentFaults?.causes ?? [])] } };
+}
+
+/**
  * Overflow/emulation CLI flags shared by every strategy (#149): `emulation` is validated and
  * resolved by `PlaywrightBrowserPort.open` itself (an unknown device or --viewport+--device
  * together refuses BEFORE any browser opens); `overflow` gates and configures the horizontal-

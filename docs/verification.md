@@ -124,6 +124,13 @@ The MCP tool `verify_fix` (`{ id, fingerprint }`, plus `replays`, `recordVideo`,
 evidence for the defect (`evidence.before`/`evidence.after`; see
 [operations](./operations.md#evidence-clips-and-screenshots)).
 
+A finding replays under the allow list stored with its result. To prove a fix to that list itself
+(e.g. the app's backend moved from `localhost` to `127.0.0.1`), pass `--allow <origin...>` or
+`--env <name>` (that environment's current `baseUrl` + `allow`) — explicit only, never both. The
+report then carries `allowlistOverride` (`source`, `origins`, `recorded`, `added`, `removed`). Over
+MCP only `env` is accepted (`verify_fix`'s `env` argument, the same `allowlistOverride` in the
+result): an MCP caller never names origins, so `--allow` is CLI-only; `ledger verify` and `check` suites always replay the stored list.
+
 ## Replay finds the recorded element exactly
 
 A replay (a Journey, `verify-fix`, a hang reproduction) never clicks a guess:

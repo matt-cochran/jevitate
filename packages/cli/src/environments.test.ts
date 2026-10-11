@@ -104,6 +104,29 @@ describe(".jevitate/environments.json", () => {
     expect(resolveJourneyEnvironment({ env: "staging", environmentsFile: file, targets: {} })).not.toHaveProperty("production");
   });
 
+  it("#471: `synthetic: true` is carried to the resolved environment", () => {
+    const file = envFile({ seeded: { baseUrl: "https://seed.test", synthetic: true } });
+    expect(resolveJourneyEnvironment({ env: "seeded", environmentsFile: file, targets: {} })?.synthetic).toBe(true);
+  });
+
+  it("#471: an environment without `synthetic: true` attests nothing", () => {
+    const file = envFile({ staging: { baseUrl: "https://s.test" } });
+    expect(resolveJourneyEnvironment({ env: "staging", environmentsFile: file, targets: {} })).not.toHaveProperty("synthetic");
+  });
+
+  it("#471: `--base-url` onto another origin drops the synthetic attestation (the file vouches for its own origin only)", () => {
+    const file = envFile({ seeded: { baseUrl: "https://seed.test", synthetic: true } });
+    expect(resolveJourneyEnvironment({ env: "seeded", baseUrl: "https://elsewhere.test", environmentsFile: file, targets: {} })).not.toHaveProperty("synthetic");
+  });
+
+  it("#471: an environment cannot be both production and synthetic", () => {
+    expect(() => loadEnvironmentsFile(envFile({ x: { baseUrl: "https://x.test", production: true, synthetic: true } }))).toThrow(/cannot be both production: true and synthetic: true/);
+  });
+
+  it("#471: `synthetic` must be a boolean", () => {
+    expect(() => loadEnvironmentsFile(envFile({ x: { baseUrl: "https://x.test", synthetic: "yes" } }))).toThrow(/\[x\]\.synthetic must be true or false/);
+  });
+
   it("NEVER holds secrets or sessions: such keys are refused, pointing at ~/.jevitate", () => {
     for (const key of ["storageState", "secretFields", "password", "apiKey", "token", "cookies", "credentials"]) {
       expect(() => parseEnvironments({ staging: { baseUrl: "https://s.test", [key]: "x" } }, "environments.json", root)).toThrow(EnvironmentConfigError);

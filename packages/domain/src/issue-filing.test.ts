@@ -2,12 +2,27 @@ import { describe, expect, it } from "vitest";
 import {
   fileDraft,
   fingerprintMarker,
+  fingerprintMarkers,
+  journeezeFingerprintMarker,
   targetsFor,
   type IssueDraft,
   type IssueFilerPort,
   type IssueRef,
   type NewIssue,
 } from "./issue-filing.js";
+
+describe("fingerprintMarkers — cross-filing dedup markers (spec §3)", () => {
+  it("includes the Journeeze marker after the Jevitate marker for a 16-hex fingerprint", () => {
+    expect(fingerprintMarkers("5b7e448babe54616")).toEqual([
+      "<!-- jevitate-fingerprint: 5b7e448babe54616 -->",
+      "<!-- journeeze-fingerprint:5b7e448babe54616 -->",
+    ]);
+  });
+
+  it("returns only the Jevitate marker for a non-16-hex fingerprint", () => {
+    expect(fingerprintMarkers("not-a-fingerprint")).toEqual(["<!-- jevitate-fingerprint: not-a-fingerprint -->"]);
+  });
+});
 
 /** A fake filer: records every call; NOTHING is filed anywhere real. */
 class FakeFiler implements IssueFilerPort {
@@ -60,7 +75,11 @@ describe("fileDraft — the filing rule (owner ruling 3)", () => {
     expect(out).toEqual([
       { target: "system-under-test", status: "filed", repo: "o/app", action: "created", issue: { number: 7, url: "https://example.test/o/app/issues/7" } },
     ]);
-    expect(filer.calls).toEqual([`search o/app ${fingerprintMarker("abcdef0123456789")}`, "create o/app t"]);
+    expect(filer.calls).toEqual([
+      `search o/app ${fingerprintMarker("abcdef0123456789")}`,
+      `search o/app ${journeezeFingerprintMarker("abcdef0123456789")}`,
+      "create o/app t",
+    ]);
   });
 
   it("comments on the existing open issue instead of opening a duplicate", async () => {
@@ -76,6 +95,19 @@ describe("fileDraft — the filing rule (owner ruling 3)", () => {
     const cfg = { enabled: true, jevitateRepo: "o/j", targetRepo: "o/app" };
     expect((await fileDraft(filer, draft("jevitate"), cfg, NOW)).map((o) => o.status === "filed" && o.repo)).toEqual(["o/j"]);
     expect((await fileDraft(filer, draft("uncertain"), cfg, NOW)).map((o) => o.status === "filed" && o.repo)).toEqual(["o/j", "o/app"]);
+  });
+
+  it("comments on an open issue that carries only the Journeeze marker", async () => {
+    const jm = journeezeFingerprintMarker("abcdef0123456789");
+    const filer = new FakeFiler({ [`o/app|${jm}`]: { number: 42, url: "u" } });
+    const out = await fileDraft(filer, draft("system-under-test"), { enabled: true, jevitateRepo: "o/j", targetRepo: "o/app" }, NOW);
+    expect(out[0]).toMatchObject({ status: "filed", action: "commented", issue: { number: 42 } });
+  });
+
+  it("creates an issue when neither marker is found", async () => {
+    const filer = new FakeFiler();
+    const out = await fileDraft(filer, draft("system-under-test"), { enabled: true, jevitateRepo: "o/j", targetRepo: "o/app" }, NOW);
+    expect(out[0]).toMatchObject({ status: "filed", action: "created" });
   });
 
   it("a filer failure is a typed `failed` outcome, never a throw", async () => {

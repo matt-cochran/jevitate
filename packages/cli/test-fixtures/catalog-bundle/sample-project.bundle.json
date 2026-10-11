@@ -1,7 +1,7 @@
 {
   "kind": "journeeze.catalog-bundle",
   "version": 1,
-  "minor": 0,
+  "minor": 1,
   "producer": {
     "tool": "jevitate",
     "version": "0.10.0",

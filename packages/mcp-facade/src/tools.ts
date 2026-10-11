@@ -24,7 +24,7 @@ export const ALLOWED_TOOLS = [
   "review_persona", "review_job", "catalog_status",
   // #435 — the read-only, advisory catalog analysis (conflicts, duplicates, gaps; GtWR set characteristics).
   "analyze_catalog",
-  // 0.10 (d-surface-0, reviewed once up front; each mirrors its CLI command — packages/cli/src/mcp-cli-tools.ts):
+  // 0.10 (the surface tools, reviewed once up front; each mirrors its CLI command — packages/cli/src/mcp-cli-tools.ts):
   // #465 — draft 1-3 job outcomes as provenance ai_draft for the team to review. Never approves
   // (approve_job stays FORBIDDEN).
   "draft_job_outcomes",
@@ -34,6 +34,9 @@ export const ALLOWED_TOOLS = [
   // and publish it. publish_to_journeeze takes NO key argument: jevitate resolves the upload key itself
   // (secret store / CI env) and never returns it. Connecting (entering the key) is CLI only: connect_journeeze is FORBIDDEN.
   "export_catalog_bundle", "publish_to_journeeze",
+  // #487 — add/remove a DRAFT Journey's anchors (the step id written at once). A promoted Journey is
+  // refused (its approval binds to the content hash): never an approval, never a promoted-Journey edit.
+  "journey_anchor_add", "journey_anchor_remove",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [

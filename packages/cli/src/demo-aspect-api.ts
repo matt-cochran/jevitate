@@ -35,6 +35,7 @@ import {
   StaleAnnotationDraftError,
 } from "./journey-annotate-api.js";
 import { demoJourney, type DemoJourneyResult } from "./journey-demo-api.js";
+import { clearApprovedDemo, recordApprovedDemo } from "./approved-demo.js";
 import type { CaptureLayer } from "./demo-capture.js";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import type { ResolvedJourneyEnvironment } from "./environments.js";
@@ -450,8 +451,9 @@ function outputsOf(demo: DemoJourneyResult): { video?: string; subtitles?: strin
 }
 
 /** One demo render (#248) of `id` in `dir`, narrated with `annotations`, into `outDir`. */
-function renderDemo(dir: string, id: string, opts: DemoReplayOptions, annotations: AnnotationDraft, draft: boolean, outDir: string): Promise<DemoJourneyResult> {
+function renderDemo(dir: string, id: string, opts: DemoReplayOptions, annotations: AnnotationDraft, draft: boolean, outDir: string, jzMask = false): Promise<DemoJourneyResult> {
   return demoJourney({
+    ...(jzMask ? { jzMask: true } : {}),
     dir,
     id,
     params: {},
@@ -509,6 +511,12 @@ export interface ApproveDemoResult {
    */
   readonly acceptedWeak?: readonly string[];
   readonly final?: { readonly video?: string; readonly subtitles?: string; readonly guide?: string };
+  /**
+   * #471: whether the approved demo ships media to Journeeze (`catalog export --format
+   * journeeze-bundle`). Only an environment declaring `synthetic: true` renders the final demo under
+   * jz-mask-v1 and records its proven media; `leftOut` lists what was not proven (never exported).
+   */
+  readonly journeeze?: { readonly media: boolean; readonly reason?: string; readonly record?: string; readonly leftOut?: readonly string[] };
 }
 
 /** Reads what `demo approve <id>` would approve (the Journey, its draft annotations, the record) — refusals are typed. */
@@ -561,7 +569,9 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
             ...(gated.acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: gated.acceptedFindings.reason, detail: gated.acceptedFindings.findings.join(", ") }]),
           ],
         });
-  const demo = await renderDemo(opts.journeysDir, opts.id, opts, annotations, false, opts.outDir);
+  // #471: an environment that declares synthetic data renders the final demo under jz-mask-v1.
+  const synthetic = opts.environment.synthetic === true;
+  const demo = await renderDemo(opts.journeysDir, opts.id, opts, annotations, false, opts.outDir, synthetic);
   if (demo.outcome !== "ok") {
     return {
       id: opts.id,
@@ -577,6 +587,25 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
   const promotedJourney = await promoteJourney(opts.journeysDir, opts.id, { acceptWeak: DEMO_APPROVAL_WAIVER, ...gate, action: "demo approve", confirm: () => Promise.resolve(provenance) });
   const waived = promotedJourney.metadata.acceptedWeak?.rules;
   await rm(demoDraftPath(opts.journeysDir, opts.id), { force: true });
+  // #471: the export record — only for a synthetic environment's jz-mask-v1 render; else any older
+  // record goes (it was rendered from another version and must not be exported in this one's name).
+  let journeeze: NonNullable<ApproveDemoResult["journeeze"]>;
+  if (synthetic && demo.jz !== undefined) {
+    const title = promotedJourney.metadata.name.trim();
+    const record = await recordApprovedDemo({
+      journeysDir: opts.journeysDir,
+      id: opts.id,
+      renderedFrom: journeyReviewHash(promotedJourney),
+      approvedAtIso: clock.nowIso(),
+      environment,
+      ...(title === "" ? {} : { title }),
+      demo,
+    });
+    journeeze = { media: true, record: join(opts.journeysDir, ".demos", opts.id), ...(record.leftOut.length === 0 ? {} : { leftOut: record.leftOut }) };
+  } else {
+    await clearApprovedDemo(opts.journeysDir, opts.id);
+    journeeze = { media: false, reason: `environment '${environment}' does not declare synthetic: true — no demo media is exported to Journeeze` };
+  }
   return {
     id: opts.id,
     outcome: "approved",
@@ -586,5 +615,6 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
     ...(waived === undefined ? {} : { acceptedWeak: waived }),
     promoted: true,
     final: outputsOf(demo),
+    journeeze,
   };
 }

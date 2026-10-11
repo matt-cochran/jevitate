@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateObject, jsonSchema } from "ai";
+import { generateText, jsonSchema, Output } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { openRouterProviderSettings } from "@jevitate/ai-core";
 
@@ -25,7 +25,12 @@ describe("OpenRouter provider contract", () => {
     try {
       const openrouter = createOpenRouter({ ...openRouterProviderSettings("Bearer sk-or-contract"), fetch: fetchSpy });
       await expect(
-        generateObject({ model: openrouter("openai/gpt-4o-mini"), schema: jsonSchema<{ a: string }>({ type: "object", properties: { a: { type: "string" } }, required: ["a"] }), prompt: "x", maxRetries: 0 }),
+        generateText({
+          model: openrouter("openai/gpt-4o-mini"),
+          output: Output.object({ schema: jsonSchema<{ a: string }>({ type: "object", properties: { a: { type: "string" } }, required: ["a"] }) }),
+          prompt: "x",
+          maxRetries: 0,
+        }),
       ).rejects.toThrow();
       expect(auth).toBe("Bearer sk-or-contract");
     } finally {

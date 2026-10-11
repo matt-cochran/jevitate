@@ -21,7 +21,7 @@ import {
   type SourceEntry,
 } from "@jevitate/sources";
 import type { SourceApiDeps } from "./source-api.js";
-import { JourneyRequiresAuthError, redactErrorSecrets, redactSecretParams } from "./journey-api.js";
+import { JourneyRequiresAuthError, journeyFixtureBaseDir, redactErrorSecrets, redactSecretParams } from "./journey-api.js";
 
 /**
  * The runner seam for a source-resolved Journey. Takes the ALREADY-GATED
@@ -90,7 +90,7 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     // #322/#400: a trusted remote Journey's end state and step request checks hold for its replay too.
     const outcomeChecks = new JourneyOutcomeChecks(session.page, file);
     const observer = outcomeChecks.observer();
-    const runner = new JourneyRunner(actor, new RecordingInterpreter(observer === undefined ? {} : { observer }));
+    const runner = new JourneyRunner(actor, new RecordingInterpreter({ ...(observer === undefined ? {} : { observer }), fixtureBaseDir: journeyFixtureBaseDir() }));
     try {
       return await outcomeChecks.run(actor, () => runner.run({ journey: file, params, policy }));
     } finally {

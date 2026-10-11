@@ -16,6 +16,7 @@ import {
 } from "../../adversarial/defect-fingerprint.js";
 import { isAdvisoryConsoleError, type DefectSignal } from "../../adversarial/defect-oracle.js";
 import type { InvariantAction, InvariantViolation } from "../../declared-invariants.js";
+import { BLOCKED_FETCH_ERROR, blockedCauseOf, type CausedBy } from "../../blocked-cause.js";
 import { hangOutcome } from "../../hang-repro.js";
 import { tryTriage } from "../../mission-failure.js";
 import { clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow } from "../../overflow.js";
@@ -25,8 +26,6 @@ import type { AdversarialMissionParams } from "../adversarial.js";
 import type { HuntState } from "./context.js";
 import { stepAdvisory, type EarlierSubmit, type StepAdvisory, type StepFinding } from "./helpers.js";
 
-/** #403: how a browser reports a fetch/XHR that was aborted before it left (Chromium, Firefox, WebKit). */
-const BLOCKED_FETCH_ERROR = /Failed to fetch|NetworkError when attempting to fetch|Load failed|ERR_BLOCKED_BY_CLIENT/i;
 
 /** Installs the oracle's closures (and its fired-action log) on `ctx`. */
 export function installOracle(ctx: HuntState, params: AdversarialMissionParams): void {
@@ -197,7 +196,15 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
     ]
       .filter((r): r is string => Boolean(r))
       .join("; ");
-    const prefix = findings.length > 0 ? "defect" : "advisory";
+    // #484: findings a blocked write set off are recorded as its consequence (fold), never the app's
+    // defect — so the transcript reads them as the environment fault they are.
+    const drainedAt = action?.step ?? ctx.transcript.nextStep;
+    const prefix =
+      findings.length === 0
+        ? "advisory"
+        : findings.every((f) => blockedCauseFor(f, drainedAt) !== undefined)
+          ? "environment fault (caused by a blocked write, never sent)"
+          : "defect";
     return { reason: [`${prefix}: ${reasons}`, ...inconclusive].join("; "), findings, advisories: stepAdvisories };
   };
 
@@ -279,6 +286,18 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
   };
 
   /**
+   * #484: the blocked write a finding is a consequence of (`causedBy`), judged at the step it belongs
+   * to (its request's origin step, when earlier than the step that drained it). Invariant and
+   * markup-injection findings are the app's own verdicts: never attributed to a blocked write.
+   */
+  const blockedCauseFor = (f: StepFinding, drainedAt: number): CausedBy | undefined => {
+    if (f.kind === "invariant" || f.kind === "markup-injection") return undefined;
+    const origin = f.origin ?? ctx.requestOrigin(f);
+    const step = origin === undefined ? drainedAt : Math.min(drainedAt, origin.step);
+    return blockedCauseOf(ctx.blockedRoots, { session: ctx.segments.indexOf(ctx.recorder), step, signals: f.signals });
+  };
+
+  /**
    * Folds one step's findings into the deduped defect set — called AFTER the step is in the
    * transcript, so a new defect's repro includes the step that surfaced it. A known fingerprint
    * (or one seen in a known defect's cascade) only counts an occurrence.
@@ -289,6 +308,11 @@ export function installOracle(ctx: HuntState, params: AdversarialMissionParams):
       // drained it (a submit left pending while the next step ran blamed that next step).
       const origin = f.origin ?? ctx.requestOrigin(f);
       const step = origin === undefined ? drainedAt : Math.min(drainedAt, origin.step);
+      // #484: what a write jevitate refused to send set off later in this session is linked to it
+      // (`causedBy`) and reported under Environment faults — never the app's defect.
+      if (f.kind !== "invariant" && f.kind !== "markup-injection" && ctx.blockedConsequence(f, { session: ctx.segments.indexOf(ctx.recorder), step, signals: f.signals })) {
+        continue;
+      }
       const known = [...ctx.defects.values()].find((d) => d.fingerprint === f.fingerprint || d.related.has(f.fingerprint));
       if (known !== undefined) {
         if (!known.occurrenceSteps.includes(step)) known.occurrenceSteps.push(step);

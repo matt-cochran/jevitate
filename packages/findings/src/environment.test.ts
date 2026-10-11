@@ -43,4 +43,16 @@ describe("environment faults across a batch (#422)", () => {
   it("no causes: no section", () => {
     expect(renderReportMarkdown({ title: "t", runs: [result("2026-10-08T10-00-00-000Z", [])!], defects: [] })).not.toContain("Environment faults");
   });
+
+  it("lists a finding a blocked write caused under that write, never as a defect (#484)", () => {
+    const cause = {
+      ruleId: "jevitate:blocked-write",
+      source: "jevitate --allow guard",
+      message: "POST http://127.0.0.1:3000/api/upload: not an --allow origin, never sent",
+      count: 1,
+      consequences: [{ fingerprint: "abc123", kind: "hang:ui-no-progress", title: "Hang (ui-no-progress) on /files", firstSeenStep: 5, causedBy: { step: 3 } }],
+    };
+    const md = renderReportMarkdown({ title: "t", runs: [result("2026-10-08T10-00-00-000Z", [cause])!], defects: [] });
+    expect(md).toContain("- hang:ui-no-progress: Hang (ui-no-progress) on /files (step 5, `abc123`)");
+  });
 });

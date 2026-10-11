@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fingerprintMarker } from "@jevitate/domain";
+import { fingerprintMarker, journeezeFingerprintMarker } from "@jevitate/domain";
 import { draftForCrash, draftForDefect, type DraftContext } from "./issue-draft.js";
 import { buildCrashReport, jevitateCodeRoots } from "./crash-report.js";
 import type { AdversarialDefect } from "./missions/adversarial.js";
@@ -53,7 +53,12 @@ describe("issue drafts — ready to file, and redacted (owner ruling 3)", () => 
     expect(d.body).toContain("## Evidence");
     expect(d.body).toContain("flat step index 1");
     expect(d.body).toContain("jevitate verify-fix");
-    expect(d.body.endsWith(fingerprintMarker("0123456789abcdef"))).toBe(true);
+    expect(d.body.endsWith(journeezeFingerprintMarker("0123456789abcdef"))).toBe(true);
+  });
+
+  it("a defect draft body carries the Journeeze marker for a 16-hex fingerprint", () => {
+    const d = draftForDefect(defect, ctx);
+    expect(d.body).toContain(journeezeFingerprintMarker("0123456789abcdef"));
   });
 
   it("a --secret value NEVER appears in a draft — not in the title, steps, evidence or triage", () => {

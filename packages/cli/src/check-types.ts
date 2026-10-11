@@ -1,5 +1,6 @@
 import type { ApprovalChannel } from "@jevitate/journey";
 // check-types.ts — `jevitate check` option, result and error types (#231).
+import type { SlownessReport } from "./cold-start-report.js";
 import { type GenerationPort, type JudgmentPort, type UsageAggregate, type UsageTracker } from "@jevitate/ai-core";
 import type { BrowserPort } from "@jevitate/playwright";
 import type { BrowserRunOptions } from "./browser-run-options.js";
@@ -86,6 +87,8 @@ export interface RunCheckOptions {
   readonly outDir: string;
   /** The caller's target build/commit id, stamped on every result. */
   readonly targetBuild?: string;
+  /** #479: the app's release/version label the check ran against, stamped on the result. */
+  readonly appVersion?: string;
   /** `--baseline <run|tag|last>`: only findings not in it gate. */
   readonly baseline?: string;
   /** Dirs searched for run ids and `last` (default: this check's results dir). */
@@ -298,6 +301,8 @@ export interface CheckResult {
   readonly exitCode: 0 | 1 | 2 | 5;
   readonly engine: EngineInfo;
   readonly targetBuild?: string;
+  /** #479: the app's release/version label the check ran against (stamped next to `targetBuild`). */
+  readonly appVersion?: string;
   readonly startedAt: string;
   readonly budget: BudgetReport;
   /**
@@ -320,6 +325,8 @@ export interface CheckResult {
   };
   /** #470: locator health over the check's Journey items (advisory unless `maxBrittleSteps` is set). */
   readonly locatorHealth?: LocatorHealthSummary;
+  /** #486: advisory slowness of Journey replays — cold starts (slow first replay only) and late-2xx steps. Never gates. */
+  readonly slowness?: SlownessReport;
   /** #453: the proposed Journey revisions awaiting review (`jevitate journey review <journeyId>`). */
   readonly proposals: ReadonlyArray<{ readonly journeyId: string; readonly proposalId?: string; readonly path?: string }>;
   readonly diff?: { readonly baseline: readonly RunSummary[]; readonly summary: FindingsDiff["summary"] };

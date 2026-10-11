@@ -413,12 +413,16 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
       "#464: export the catalog bundle and upload it to the connected Journeeze product (key from jevitate's secret store, or JOURNEEZE_UPLOAD_KEY in CI — never an argument), then wait for it to be imported or refused. Never approves",
     )
     .option("--dir <path>", DIR_HELP)
+    .option("--product-name <name>", "the bundle's product.name (default: the connected Journeeze product's name)")
     .option("--dry-run", "export and validate the bundle and resolve the connection, but send nothing")
     .option("--json", "emit a JSON envelope (never contains the key)")
     .action(async function (this: Command) {
-      const { dir, json, dryRun } = this.opts<{ dir?: string; json?: boolean; dryRun?: boolean }>();
+      const { dir, json, dryRun, productName } = this.opts<{ dir?: string; json?: boolean; dryRun?: boolean; productName?: string }>();
       try {
-        const result = await publishToJourneeze({ catalogDir: resolveCatalogDir(deps.catalogDir, dir), journeysDir: catalogJourneysDir(dir, resolveJourneysDir(deps)), dryRun: dryRun === true }, deps.journeeze);
+        const result = await publishToJourneeze(
+          { catalogDir: resolveCatalogDir(deps.catalogDir, dir), journeysDir: catalogJourneysDir(dir, resolveJourneysDir(deps)), dryRun: dryRun === true, ...(productName === undefined ? {} : { productName }) },
+          deps.journeeze,
+        );
         if (json) emitJson(program, ok(result));
         else program.configureOutput().writeOut?.(renderPublishJourneeze(result));
         process.exitCode = result.status === "refused" ? EXIT_CODES.defects : 0;

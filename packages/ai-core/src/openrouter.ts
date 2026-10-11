@@ -5,8 +5,8 @@ import { type CredentialStore, requireKeys } from "./credentials.js";
 import { assertNoOutboundCredential } from "./credential-guard.js";
 import { type CatalogModel, type ModelConstraints, selectModel } from "./model-policy.js";
 
-/** The one injectable seam. Production wires the AI SDK's generateObject; the
- *  unit test injects a fake. The key is read HERE and only HERE, and placed
+/** The one injectable seam. Production wires the AI SDK's generateText with an
+ *  `output` spec; the unit test injects a fake. The key is read HERE and only HERE, and placed
  *  ONLY into the Authorization header — never in `body`. */
 export interface OpenRouterCall {
   (args: {
@@ -63,9 +63,10 @@ export class OpenRouterGenerationGateway implements GenerationPort {
 
 // Real seam (wired in bin/host): the production OpenRouterCall lazily imports
 // `ai` + `@openrouter/ai-sdk-provider`, builds the provider from
-// `openRouterProviderSettings(authHeader)` and calls generateObject({ model:
-// openrouter(model), schema, prompt: JSON.stringify(body) }). Lazy import keeps
-// the package building/testing without the SDK installed.
+// `openRouterProviderSettings(authHeader)` and calls generateText({ model:
+// openrouter(model), output: Output.object({ schema }), prompt:
+// JSON.stringify(body) }). Lazy import keeps the package building/testing
+// without the SDK installed.
 
 /**
  * `@openrouter/ai-sdk-provider` settings for a gateway `Bearer <key>` auth header. The provider

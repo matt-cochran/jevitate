@@ -1,5 +1,67 @@
 # @jevitate/cli
 
+## 0.11.0
+
+### Minor Changes
+
+- a19a08f: Anchors without hand-editing JSON (#487): `jevitate journey anchor add|remove` edit a draft Journey's
+  anchors (the step id is written at once), `journey lint --fix` stamps number-only anchors, and
+  `journey anchors <id> --suggest` proposes anchors where the recorded flow changes state (a new page,
+  a form that became valid, a completed write) with default probes and the `anchor add` command to
+  accept each. `journey anchors` also lists each anchor's `stepId`.
+- 627a72c: `campaign run` now checks its own preconditions before any mission and refuses (exit 64, `E_CAMPAIGN_PREFLIGHT`) listing every problem: an unreachable start URL, a job's `storageState` that is no longer signed in, and a discovery replay that wrote to a loopback origin the environment's `allow` list misspells or leaves out (`localhost` vs `127.0.0.1`) — naming the exact origin to add. The verdict is `preflight: { ok, problems }` in `campaign.json` and the human summary; `--skip-preflight` runs without it. `journey run` results list `offAllowlistWrites` (origins only) when the replay wrote outside its allow list (#485).
+- 5065b62: Approved demos now travel to Journeeze with their media, masked under Journeeze's `jz-mask-v1`
+  policy (#471). An environment can declare `"synthetic": true` in `.jevitate/environments.json` (a
+  seeded, synthetic tenant). `demo approve` on such an environment renders the final demo under
+  jz-mask-v1. Form fields, editable text and `[data-jz-mask]` are painted over with their subtree,
+  embeds (`iframe`, `video`, `canvas`, …) become placeholders, and `[data-jz-block]` is left out.
+  Every screenshot is proven before and after the capture, down to its pixels. The video is proven on
+  every frame. The media proven masked is kept in `<journeys>/.demos/<id>/`, and anything unproven is
+  left out: a screenshot that fails takes the video with it. `catalog export --format
+  journeeze-bundle` then writes `demos[]` (with `renderedFrom` and the privacy attestation) and
+  `files[]`, with the media under `media/<id>/`. It re-verifies every file's sha256 and leaves out
+  anything over the contract's limits with a warning. `publish journeeze` uploads such a bundle as a
+  deterministic ZIP. A draft demo, a demo of an older Journey version, or one approved on a
+  non-synthetic environment is never exported.
+- 5c660ef: A write jevitate itself blocked (its origin is not in `--allow`) is now an environment fault, never an app defect: console errors, failed requests and a stuck busy state it caused are linked to it (`causedBy`) and grouped under that blocked write in reports. jevitate warns when a blocked loopback origin differs from an allowed one only by `localhost`/`127.0.0.1` spelling or by port. `verify-fix` keeps the run's stored allow list unless you pass `--allow <origin...>` or `--env <name>`, and its report records the override (#484).
+- db4e18b: `jevitate check` records the app's release label: `--app-version <label>` (else a valid
+  `JEVITATE_APP_VERSION`) is stamped next to `targetBuild` in the check record and the SARIF run
+  properties. The Journeeze catalog bundle v1 minor 1 exports it as the optional `check.appVersion`
+  (spec §2); an invalid label is refused before anything runs, and an invalid bundled value is left
+  out with a warning while the check still exports.
+- 810a486: Catalog bundle export (Journeeze) emits one locator finding per brittle element of the exported
+  Journeys: catalog bundle v1 minor 1 adds the optional `finding.locator` object (element, attribute,
+  testId, fix, steps) on `kind: "ux"` / claim `other` / producerClaim `locator-brittle` findings,
+  derived from locator health and de-duplicated across steps and Journeys.
+- ce4480f: Cross-tool issue dedup: filed issue bodies now also carry the Journeeze fingerprint marker for 16-hex fingerprints, and filing searches both markers (Jevitate then Journeeze) before creating, so Jevitate and Journeeze de-duplicate against each other's issues.
+- c37da31: `jevitate journey anchor add <journeyId> --name <n> --step <n|stepId> [--description <text>] [--probe <text>]...` and `journey anchor remove <journeyId> --name <n>` edit a draft Journey's anchors without hand-editing `metadata.anchors`: the step's stable `stepId` is written at once, the name is checked against the anchor name rule, duplicates and unknown steps are refused (exit 64), and the remaining anchor lint issues are printed. `journey lint --fix` stamps the missing `stepId` of each anchor that references a step by number only and reports what it fixed. A promoted Journey is refused (its approval binds to the content hash): edit it as a draft and re-promote (#487).
+- 4e021cd: MCP parity for the 0.11 CLI capabilities:
+  
+  - New MCP tools `journey_anchor_add` / `journey_anchor_remove` (`journey anchor add|remove`, #487): edit a draft Journey's anchors with the step id written at once; a promoted Journey is refused, as on the CLI.
+  - `lint_journey` takes `fix` (`journey lint --fix`, #487) and `journey_anchors` takes `suggest` (`journey anchors --suggest`, advisory, writes nothing).
+  - `run_journey` takes `stepResponseTimeoutMs` (`journey run --step-response-timeout`, #486).
+  - `verify_fix` takes `env` (`verify-fix --env`, #484): explicit only, and the result carries `allowlistOverride`. `allow` is refused over MCP: an MCP caller never names origins, so `verify-fix --allow` stays CLI-only.
+  - `run_campaign` takes `skipPreflight` (`campaign run --skip-preflight`, #485), recorded on the report as `preflight.skipped`.
+  - An adversarial run's transcript now reads a finding a blocked write caused as an environment fault instead of `defect:` (#484).
+- e994d30: `journey run` waits for a step's in-flight request instead of quarantining on it (#486): a
+  `responseStatus` check whose request was sent but has no response yet (a cold start after a deploy)
+  waits up to `--step-response-timeout <ms>` (default 15000; a step's own `responseTimeoutMs`
+  overrides it). A 2xx that arrives in time passes and is reported as an advisory `slowSteps` finding
+  with its measured latency; a non-2xx, or no response within the bound, still fails. `jevitate check`
+  and `campaign run` report a step slow on a Journey's first replay and fast on later ones as a
+  `cold-start` note (`slowness.coldStarts`), advisory and never changing an exit code.
+
+### Patch Changes
+
+- A busy indicator that clears on a page whose CSP has no `'unsafe-eval'` is no longer reported as a `ui-no-progress` hang, and `verify-fix` no longer reads it as still reproducing: the wait passes a function predicate, not a source string, and a wait that fails without timing out is no evidence of a stuck indicator (#491).
+- 45a4020: `publish journeeze` / MCP `publish_to_journeeze` now send the connected Journeeze product's real name as the bundle's `product.name` instead of the project's `package.json` name, and gain `--product-name` / `productName` to override it (must match `whoami`). A `--dry-run` verifies the key with `whoami` and refuses a mismatch with `E_JOURNEEZE_PRODUCT_MISMATCH` (#477).
+- af6a550: Anchor names now match the catalog bundle v1 `anchorName`: 1-64 of lowercase a-z, 0-9, . _ -
+  starting with a letter or digit. `journey lint`/promote no longer silently drop names the export
+  refuses (#478).
+- 5bb86cb: `catalog export` (and `publish journeeze`) now refuses with exit 64 when a promoted Journey cannot be carried by the bundle, instead of leaving it out with only a warning (#478).
+- ecaa3a5: A Journey's relative upload fixture path now resolves against the project root (the folder holding `.jevitate/`), not the process working directory, so `journey run` works from any directory or CI working dir. `journey lint` reports a missing upload fixture as `upload-file-missing` (error) with the resolved path (#488).
+- 767d02c: Structured model output now uses the AI SDK's `generateText` with an output setting instead of the deprecated `generateObject`, so missions and campaigns no longer print the `AISDK_DEP_GENERATE_OBJECT` warning to stderr (#489).
+
 ## 0.10.0
 
 ### Minor Changes

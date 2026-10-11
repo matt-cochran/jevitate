@@ -46,6 +46,40 @@ const NATIVE_FORM = (): string => `<!doctype html><html><body><h1>Feedback</h1>
   </form>
 </body></html>`;
 
+/** #484: an upload whose busy indicator only clears when the (off-allowlist) request answers. */
+const UPLOAD_FORM = (): string => `<!doctype html><html><body><h1>Upload</h1>
+  <form id="upload">
+    <label>Name <input name="name" aria-label="Name" value="report.pdf"></label>
+    <button type="submit">Upload</button>
+  </form>
+  <div id="busy"></div>
+  <script>
+    document.getElementById("upload").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      document.getElementById("busy").innerHTML = '<div role="progressbar" aria-label="Uploading" style="width:20px;height:20px"></div>';
+      await fetch("${other}/upload", { method: "POST", headers: { "content-type": "text/plain" }, body: "x" }).then(() => {
+        document.getElementById("busy").innerHTML = "";
+      }, () => undefined);
+    });
+  </script>
+</body></html>`;
+
+/** #484: a page that reports the (blocked) send in its own words, naming the path — a consequence, not a defect. */
+const NOTIFY_FORM = (): string => `<!doctype html><html><body><h1>Notify</h1>
+  <form id="notify">
+    <label>Message <input name="message" aria-label="Message" value="hello"></label>
+    <button type="submit">Notify</button>
+  </form>
+  <script>
+    document.getElementById("notify").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      await fetch("${other}/collect", { method: "POST", headers: { "content-type": "text/plain" }, body: "x" }).catch(() => {
+        console.error("message never delivered to ${other}/collect");
+      });
+    });
+  </script>
+</body></html>`;
+
 beforeAll(async () => {
   elsewhere = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
@@ -64,6 +98,14 @@ beforeAll(async () => {
     const path = (req.url ?? "").split("?")[0] ?? "";
     if (path === "/contact") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(FETCH_FORM());
+      return;
+    }
+    if (path === "/notify") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(NOTIFY_FORM());
+      return;
+    }
+    if (path === "/upload") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(UPLOAD_FORM());
       return;
     }
     if (path === "/feedback") {
@@ -138,6 +180,48 @@ describe("adversarial: misuse writes never leave for an origin outside --allow (
       const r = await run("/contact", [`${other}/collect`]);
       expect(received.filter((x) => x.method === "POST").length).toBeGreaterThan(0);
       expect(r.blockedWrites).toBeUndefined();
+    },
+    180_000,
+  );
+});
+
+describe("adversarial: a write jevitate blocked is an environment fault, never an app defect (#484)", () => {
+  it(
+    "warns that the blocked loopback origin is a port --allow does not include",
+    async () => {
+      const r = await run("/contact");
+      expect(r.blockedWrites?.[0]?.allowMismatch?.blockedOrigin).toBe(other);
+    },
+    180_000,
+  );
+
+  it(
+    "lists each blocked write under environment faults",
+    async () => {
+      const r = await run("/contact");
+      expect(r.environmentFaults?.causes[0]?.message).toContain(`POST ${other}/collect: not an --allow origin, never sent`);
+    },
+    180_000,
+  );
+
+  it(
+    "links a busy indicator the blocked upload left spinning to that write instead of reporting a hang",
+    async () => {
+      const r = await run("/upload");
+      expect({ hangs: r.hangs.length, causedBy: r.blockedConsequences?.map((c) => `${c.kind} ${c.causedBy.write}`) }).toEqual({
+        hangs: 0,
+        causedBy: [`hang:ui-no-progress POST ${other}/upload`],
+      });
+    },
+    180_000,
+  );
+
+  it(
+    "the transcript reads a finding the blocked write caused as an environment fault, never a defect",
+    async () => {
+      const r = await run("/notify");
+      const step = r.transcript.find((e) => (e.reason ?? "").includes(`never delivered to ${other}/collect`));
+      expect(step?.reason).toContain(`environment fault (caused by a blocked write, never sent): message never delivered to ${other}/collect`);
     },
     180_000,
   );
