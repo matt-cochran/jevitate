@@ -1,5 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { clock } from "@jevitate/domain";
+import type { Browser } from "playwright";
 import { afterAll, describe, expect, test } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
@@ -32,38 +32,54 @@ async function browserArgvsWith(marker: string): Promise<string[]> {
   return (await browserProcsWith(marker)).map((p) => p.argv);
 }
 
-async function browserPidsWith(marker: string): Promise<number[]> {
-  if (process.platform === "linux") return (await browserProcsWith(marker)).map((p) => p.pid);
-  return (await processTable()).filter((p) => p.argv.includes(marker) && !p.argv.includes("--type=")).map((p) => p.pid);
+/**
+ * The pid of `browser`'s own process, asked over CDP (`SystemInfo.getProcessInfo`) on the pipe the
+ * port already holds — one short RPC on every OS. #475: the Windows path used to enumerate every
+ * process's command line through PowerShell + `Get-CimInstance Win32_Process`, an unbounded child
+ * process that can take tens of seconds on a CPU-starved runner (the 60 s test timeout it hit).
+ */
+async function browserPid(browser: Browser): Promise<number> {
+  const cdp = await browser.newBrowserCDPSession();
+  try {
+    const { processInfo } = (await cdp.send("SystemInfo.getProcessInfo")) as { processInfo: { type: string; id: number }[] };
+    const own = processInfo.filter((p) => p.type === "browser");
+    if (own.length !== 1) throw new Error(`SystemInfo.getProcessInfo reported ${own.length} browser processes: ${JSON.stringify(processInfo)}`);
+    return own[0]!.id;
+  } finally {
+    await cdp.detach().catch(() => undefined);
+  }
 }
 
 /**
- * Every process's pid + command line where there is no /proc: `ps` on macOS, CIM on Windows.
- * Lets the crash test SIGKILL/TerminateProcess the real browser on every OS instead of asking it
- * to close over CDP — a polite close can stall on a starved runner, a kill cannot.
+ * Named, bounded steps for a real-time test (#475). Each step races its own deadline; a step that
+ * fails or stalls throws naming itself and the timing of every step so far, so a CI timeout says
+ * WHICH step stalled instead of a bare "Test timed out". `timings()` is logged on success too.
  */
-async function processTable(): Promise<{ pid: number; argv: string }[]> {
-  if (process.platform === "win32") {
-    const { stdout } = await execFileAsync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
-      { maxBuffer: 64 * 1024 * 1024 },
-    );
-    return parseTable(stdout, "\t");
-  }
-  const { stdout } = await execFileAsync("ps", ["-axww", "-o", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 });
-  return parseTable(stdout.replace(/^\s*(\d+)\s+/gm, "$1\t"), "\t");
-}
-
-function parseTable(stdout: string, sep: string): { pid: number; argv: string }[] {
-  const rows: { pid: number; argv: string }[] = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    const at = line.indexOf(sep);
-    if (at <= 0) continue;
-    const pid = Number(line.slice(0, at).trim());
-    if (Number.isInteger(pid) && pid > 0) rows.push({ pid, argv: line.slice(at + sep.length) });
-  }
-  return rows;
+function boundedSteps(): { step<T>(label: string, boundMs: number, work: () => Promise<T>): Promise<T>; timings(): string } {
+  const done: string[] = [];
+  const timings = (): string => (done.length === 0 ? "(none)" : done.join(", "));
+  return {
+    timings,
+    async step(label, boundMs, work) {
+      const started = clock.now();
+      let timer: ReturnType<typeof clock.setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = clock.setTimeout(() => reject(new Error(`did not finish within its ${boundMs}ms bound`)), boundMs);
+      });
+      try {
+        const value = await Promise.race([work(), deadline]);
+        done.push(`${label}=${clock.now() - started}ms`);
+        return value;
+      } catch (err) {
+        const elapsed = clock.now() - started;
+        const before = timings();
+        done.push(`${label}=FAILED@${elapsed}ms`);
+        throw new Error(`step "${label}" failed after ${elapsed}ms (bound ${boundMs}ms); earlier steps: ${before}. Cause: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+      } finally {
+        if (timer !== undefined) clock.clearTimeout(timer);
+      }
+    },
+  };
 }
 
 async function browserProcsWith(marker: string): Promise<{ pid: number; argv: string }[]> {
@@ -80,8 +96,6 @@ async function browserProcsWith(marker: string): Promise<{ pid: number; argv: st
   }
   return found;
 }
-
-const execFileAsync = promisify(execFile);
 
 describe("pooled PlaywrightBrowserPort (real Chromium)", () => {
   test("two sessions = two isolated contexts on ONE browser; admission sample is recorded", async () => {
@@ -135,30 +149,6 @@ describe("pooled PlaywrightBrowserPort (real Chromium)", () => {
     }
   }, 60_000);
 
-  test("browser crash fails the live session loudly and the next session relaunches", async () => {
-    const port = new PlaywrightBrowserPort({ pool: realPool() });
-    const marker = `--jevitate-test-marker=${randomUUID()}`;
-    const session = await port.open({ ...base, args: [marker] });
-    const browserBefore = session.page.context().browser();
-    if (browserBefore === null) throw new Error("pooled session has no Browser");
-    // A real crash on every OS: kill the browser process (found by its unique argv marker). A CDP
-    // `Browser.close` was used off Linux before, but that polite shutdown stalled past 20 s on a
-    // CPU-starved Windows runner — a kill can't.
-    const pids = await browserPidsWith(marker);
-    expect(pids).toHaveLength(1);
-    process.kill(pids[0]!, "SIGKILL");
-    await expect.poll(() => browserBefore.isConnected(), { timeout: 20_000 }).toBe(false);
-    await expect(session.close()).rejects.toBeInstanceOf(BrowserCrashedError);
-    const next = await port.open(base);
-    try {
-      expect(next.page.context().browser()).not.toBe(browserBefore);
-      await next.page.setContent("<p>alive</p>");
-      expect(await next.page.locator("p").textContent()).toBe("alive");
-    } finally {
-      await next.close();
-    }
-  }, 60_000);
-
   test("--viewport / --device (#149) set the context's actual viewport, scale, mobile and UA", async () => {
     const port = new PlaywrightBrowserPort({ pool: realPool() });
     const sized = await port.open({ ...base, viewport: { width: 375, height: 812 } });
@@ -178,6 +168,45 @@ describe("pooled PlaywrightBrowserPort (real Chromium)", () => {
       await device.close();
     }
   }, 60_000);
+});
+
+/**
+ * A real crash and a real relaunch only exist in real time (AGENTS.md #304: launch/teardown stay
+ * on the real clock). Every step has its own bound, and the bounds sum to less than the test
+ * timeout, so a stall on a starved runner fails naming its step with all step timings (#475).
+ */
+describe("[realtime] pooled PlaywrightBrowserPort crash + relaunch (real Chromium)", () => {
+  test("browser crash fails the live session loudly and the next session relaunches", async () => {
+    const { step, timings } = boundedSteps();
+    const port = new PlaywrightBrowserPort({ pool: realPool() });
+    const marker = `--jevitate-test-marker=${randomUUID()}`;
+    const session = await step("open session", 30_000, () => port.open({ ...base, args: [marker] }));
+    const browserBefore = session.page.context().browser();
+    if (browserBefore === null) throw new Error("pooled session has no Browser");
+    // A real crash on every OS: kill the browser process. A CDP `Browser.close` was used off Linux
+    // before, but that polite shutdown stalled past 20 s on a CPU-starved Windows runner — a kill can't.
+    const pid = await step("find browser pid (CDP)", 15_000, () => browserPid(browserBefore));
+    if (process.platform === "linux") {
+      // Cross-check the CDP pid against /proc: the argv-marked browser process is that very pid.
+      expect((await browserProcsWith(marker)).map((p) => p.pid)).toEqual([pid]);
+    }
+    await step("kill + observe disconnect", 20_000, async () => {
+      process.kill(pid, "SIGKILL");
+      await expect.poll(() => browserBefore.isConnected(), { timeout: 18_000 }).toBe(false);
+    });
+    await step("crashed session.close() rejects", 10_000, () => expect(session.close()).rejects.toBeInstanceOf(BrowserCrashedError));
+    const next = await step("relaunch (port.open)", 30_000, () => port.open(base));
+    try {
+      await step("use relaunched page", 15_000, async () => {
+        expect(next.page.context().browser()).not.toBe(browserBefore);
+        await next.page.setContent("<p>alive</p>");
+        expect(await next.page.locator("p").textContent()).toBe("alive");
+      });
+    } finally {
+      await step("next.close()", 15_000, () => next.close());
+    }
+    console.log(`[crash-smoke] ${process.platform} steps: ${timings()}`);
+  }, 150_000);
 });
 
 describe("persistentProfile opt-in (real Chromium)", () => {
