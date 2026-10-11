@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { redactUrl } from "@jevitate/ai-core";
-import { findAllowOriginMismatches } from "@jevitate/explore";
+import { findAllowOriginMismatches, normalizeAllowlist } from "@jevitate/explore";
 import { PlaywrightBrowserPort, probeReachable, type BrowserPort } from "@jevitate/playwright";
 import { ensurePersonaSession, type SessionCheck } from "./persona-login.js";
 
@@ -95,6 +95,16 @@ export async function checkCampaignTargets(jobs: readonly PreflightJob[], deps: 
       origin = new URL(url).origin;
     } catch {
       // probed as given
+    }
+    // Guardrail #1: never probe (or open a browser on) an origin outside the job's own allow list.
+    if (!normalizeAllowlist(job.allowlist).includes(origin)) {
+      problems.push({
+        check: "allow-origin",
+        job: job.id,
+        origin,
+        message: `job ${job.id}: the start URL ${redactUrl(url)} is not on the job's allow list (${job.allowlist.join(", ")}) — not probed; add ${origin} to the environment's allow list or fix the Journey's site`,
+      });
+      continue;
     }
     if (!probed.has(origin)) probed.set(origin, await probe(url));
     const down = probed.get(origin) ?? null;

@@ -85,7 +85,9 @@ export interface HuntContext {
   /** #484: findings a blocked write caused, by fingerprint — reported under it, never as defects. */
   readonly blockedConsequences: Map<string, BlockedConsequence>;
   /** #484: records writes the guard blocked at `step` (the first loopback `--allow` mismatch is warned about once). */
-  noteBlocked: (blocked: readonly BlockedWrite[], step: number) => string | undefined;
+  noteBlocked: (blocked: readonly BlockedWrite[], step: number, busyStarted?: string) => string | undefined;
+  /** #484: the busy indicator showing just before the current action (null: none) — see `BlockedRoot.busyStarted`. */
+  busyBeforeAction: string | null;
   /** #484: the finding's `causedBy` link when a blocked write caused it — it is then recorded as its consequence. */
   blockedConsequence: (
     finding: { readonly fingerprint: string; readonly kind: string; readonly title: string; readonly route: string },
@@ -348,12 +350,20 @@ export function createHuntContext(params: AdversarialMissionParams): HuntContext
   ctx.blockedRoots = [];
   ctx.blockedConsequences = new Map<string, BlockedConsequence>();
   let mismatchWarned = false;
-  ctx.noteBlocked = (blocked: readonly BlockedWrite[], step: number): string | undefined => {
+  ctx.busyBeforeAction = null;
+  ctx.noteBlocked = (blocked: readonly BlockedWrite[], step: number, busyStarted?: string): string | undefined => {
     ctx.blockedWrites.push(...blocked);
     const session = Math.max(0, ctx.segments.indexOf(ctx.recorder));
     let warning: string | undefined;
     for (const b of blocked) {
-      ctx.blockedRoots.push({ step, session, method: b.method, path: b.path, ...(b.allowMismatch === undefined ? {} : { allowMismatch: b.allowMismatch }) });
+      ctx.blockedRoots.push({
+        step,
+        session,
+        method: b.method,
+        path: b.path,
+        ...(b.allowMismatch === undefined ? {} : { allowMismatch: b.allowMismatch }),
+        ...(busyStarted === undefined ? {} : { busyStarted }),
+      });
       if (!mismatchWarned && b.allowMismatch !== undefined) {
         mismatchWarned = true;
         warning = `WARNING: ${b.allowMismatch.message}`;

@@ -338,7 +338,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (663 exports)
+# @jevitate/explore (664 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -390,6 +390,7 @@
   autoDecidePostdoc: function
   AwaitedNetworkCheck: interface
   awaitWrites: function
+  BLOCKED_CONSEQUENCE_STEPS: variable
   BLOCKED_FETCH_ERROR: variable
   blockedCauseOf: function
   BlockedConsequence: interface

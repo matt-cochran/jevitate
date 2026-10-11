@@ -14,6 +14,7 @@ import { identityChange, readIdentity } from "../../adversarial/identity.js";
 import { controlIdentity } from "../../coverage/fingerprint.js";
 import { monitorFor, type InflightRequest } from "../../page-monitor.js";
 import { redactText } from "../../redact.js";
+import { visibleBusyIndicator } from "../../hang.js";
 import type { HuntState } from "./context.js";
 import type { EpisodeState, Turn } from "./episode.js";
 import { FORM_STRATEGY, joinReasons } from "./helpers.js";
@@ -63,7 +64,10 @@ export async function settleMisuseStep(ctx: HuntState, ep: EpisodeState, turn: T
   ctx.offAllowlist.settled();
   const blockedNow = ctx.offAllowlist.drain();
   // #484: each block is a root later findings link to; the first loopback --allow mismatch is warned about, first.
-  const mismatchWarning = ctx.noteBlocked(blockedNow, step);
+  // A busy indicator that appeared in this action's window is the only one a later hang may be linked to it by.
+  const busyNow = blockedNow.length === 0 ? null : await ctx.sessions.page.evaluate(visibleBusyIndicator).catch(() => null);
+  const busyStarted = busyNow !== null && busyNow !== ctx.busyBeforeAction ? busyNow : undefined;
+  const mismatchWarning = ctx.noteBlocked(blockedNow, step, busyStarted);
   const blocked = [...new Set(blockedNow.map((b) => `${b.method} ${b.path}`))];
   const blockedNote =
     blocked.length === 0

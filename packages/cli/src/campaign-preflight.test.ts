@@ -89,6 +89,18 @@ describe("campaign run preflight (#485)", () => {
     expect((r as CampaignPreflightError).message).toContain("job checkout: the start URL http://localhost:3000/app is not reachable: connection refused");
   });
 
+  it("a start URL outside the job's allow list is never probed", async () => {
+    const probed: string[] = [];
+    const deps: CampaignPreflightDeps = { ...healthy, probe: async (url) => (probed.push(url), null) };
+    await run(plan([job("checkout", { startUrl: "https://elsewhere.example/app" })]), fakeCli(), deps);
+    expect(probed).toEqual([]);
+  });
+
+  it("a start URL outside the job's allow list refuses the campaign naming the origin", async () => {
+    const r = await run(plan([job("checkout", { startUrl: "https://elsewhere.example/app" })]), fakeCli(), healthy);
+    expect((r as CampaignPreflightError).message).toContain("job checkout: the start URL https://elsewhere.example/app is not on the job's allow list");
+  });
+
   it("an expired storage state refuses the campaign with the signed-in check's reason", async () => {
     const deps: CampaignPreflightDeps = {
       ...healthy,

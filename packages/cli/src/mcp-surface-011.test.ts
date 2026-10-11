@@ -119,6 +119,10 @@ describe("#486 run_journey stepResponseTimeoutMs", () => {
   it("refuses a bound below 1 ms", async () => {
     expect((await runWith({ stepResponseTimeoutMs: 0 })).isError).toBe(true);
   });
+
+  it("refuses a bound above 300000 ms", async () => {
+    expect((await runWith({ stepResponseTimeoutMs: 300_001 })).isError).toBe(true);
+  });
 });
 
 describe("#484 verify_fix env (allow is CLI-only)", () => {
