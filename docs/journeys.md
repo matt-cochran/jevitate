@@ -141,6 +141,7 @@ jevitate journey lint checkout --sarif lint.sarif
 | `no-persistence-check` | warning | A write has no `reloadThen` end-state check, so persistence is unverified |
 | `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion |
 | `upload-file-missing` | error | An `upload` step's literal fixture path does not exist. Relative paths resolve against the project root (the folder holding `.jevitate/`), never the working directory; the message shows the resolved path |
+| `upload-outside-project` | error | An `upload` step's fixture resolves (after symlinks) outside the project root: an absolute path, a `../` path or a symlink that escapes. A run refuses it (`fixture-outside-project`), `journey promote` refuses it (`E_JOURNEY_WEAK`) and `--accept-weak` does not waive it — move the fixture into the project. There is no override flag |
 
 Warnings never block promotion. `--accept-weak "<reason>"` records the reason and the waived error
 rules in the Journey's `metadata.acceptedWeak`.
@@ -224,22 +225,28 @@ blocked save can still find the base replay's saved data.
 one sheet that says what the Journey does, what it changes and what it proves:
 
 ```bash
-jevitate journey review checkout                          # the sheet, as text
-jevitate journey review checkout --markdown --out review.md   # Markdown, to a file (attach it to a PR)
+jevitate journey review checkout                          # the sheet, as text (wrapped to the terminal, coloured on a TTY)
+jevitate journey review checkout --full                   # every detail section too
+jevitate journey review checkout --markdown --out review.md   # Markdown, to a file (attach it to a PR; never coloured)
 jevitate journey review checkout --json                   # the schema-checked sheet (MCP: review_journey)
 ```
 
+The text sheet is as wide as the terminal (100 columns when piped); colour is off when stdout is not
+a terminal, when `NO_COLOR` is set, and in `--out` files. `journey promote` and `demo approve` show
+the same sheet, and `journey promote` accepts `--full` too. The default sheet is short; `--full` adds
+the catalog analysis, the full lint list, locator health, provenance and the full change diff.
+
 | Section | What it shows |
 |---|---|
-| Summary | goal and success criteria (from annotations); missing intent is flagged with the `journey annotate` command that drafts it |
-| Steps | each step's action in plain words, its target control (role and accessible name), objective, expected result, its own check, and the parameters it uses |
-| Side effects | the write requests it is expected to fire (method and endpoint, from recorded deltas, `expectRequests` and network end-state checks); clicked controls that match the [safety rules](safety.md) with their rule ids (`builtin:destructive`, `builtin:may-cost-money`, `builtin:session-end`, and the site's `targets.json` `safety.deny` / `safety.paid` as `deny:<pattern>` / `paid:<pattern>`); the origins it touches |
+| Needs your attention | what to read before approving: weak proof, changes since the last approval, brittle locators, unvetted links — each with the command or flag that settles it, or "nothing — every gate is clear". The same items are repeated just above the typed confirmation in `journey promote` (and in the JSON as `attention`) |
+| What it does | goal and success criteria (from annotations); missing intent is flagged with the `journey annotate` command that drafts it |
+| Steps | each step in plain words using the control's visible label when the step has one ([step labels](#step-display-labels)), its objective and expected result, and the parameters it uses |
+| Proves at the end | end-state checks and per-step assertions (weak ones marked), the `journey lint` result, and the last `journey verify --mutate` verdict (`stale` when the Journey changed after it ran) — or "not verified" with the command to run |
+| Writes | the write requests it is expected to fire (method and endpoint, from recorded deltas, `expectRequests` and network end-state checks); clicked controls that match the [safety rules](safety.md) with their rule ids (`builtin:destructive`, `builtin:may-cost-money`, `builtin:session-end`, and the site's `targets.json` `safety.deny` / `safety.paid` as `deny:<pattern>` / `paid:<pattern>`); the origins it touches |
 | Inputs | parameters and secret references **by name only** — never a value (a literal typed into a credential-looking field shows as «redacted»; a secret reference shows its field and manager, never its key) |
-| Proof | end-state checks, per-step assertions (weak ones marked), the `journey lint` result, and the last `journey verify --mutate` verdict (`stale` when the Journey changed after it ran) — or "not verified" with the command to run |
-| Change since last approval | a diff of steps, assertions and side effects against the version last approved, or "first approval" |
-| Anchor rules (#466) | anchor-rule and catalog-reference warnings, each with its fix (see [anchors](#explore-from-a-journey-step-anchors-and-campaigns) and [the catalog](./catalog.md)) — only when there are any |
-| Locator health (advisory, #470) | the brittle steps — step number and step id, the locator, why it is brittle, and the fix for the app ([locator health](#locator-health)) |
-| Content hash | the hash an approval binds to |
+| Clear | the gates that passed, in one line |
+| Approve | the content hash an approval binds to, and the command that approves it |
+| Detail (`--full`) | catalog analysis, the full lint list, locator health (advisory, #470; [locator health](#locator-health)), anchor-rule and catalog-reference warnings with their fixes (see [anchors](#explore-from-a-journey-step-anchors-and-campaigns) and [the catalog](./catalog.md)), provenance and the full diff of steps, assertions and side effects against the version last approved (or "first approval") |
 
 A Journey approved through a verified pull-request review shows the pull request on its approval
 line (`Pull-request approval: PR #… · reviewer … · merged …`, see
@@ -312,6 +319,20 @@ Ids change a Journey's content hash, so **every promoted Journey needs re-approv
 migration never approves. The result names them, and `jevitate journey review --stale` lists them
 later, marking those that changed only by step ids. Recommended: run the migration on one branch,
 commit the result as a single PR, and have a reviewer re-approve the step-id-only changes there.
+
+### Step display labels
+
+A recording made since 0.12 stores the visible label of each step's control, so the review sheet and
+guides can say "click the Publish button" instead of quoting a locator. Display metadata only: it
+never changes how a step finds its element, and a credential field's label is never stored.
+
+For Journeys recorded earlier, `jevitate journey migrate --labels [--id <id>...] [--dry-run]
+[--param k=v] [--env <name> | --base-url <origin>] [--storage-state <file>] [--json]` **replays**
+them in a browser and stores each step's label. It is a real run: the app must be running and its
+side effects happen, so point it at a safe environment. A file is written only when a step gained a
+label. Labels change a promoted Journey's content hash, so **it needs re-approval** afterwards
+(`jevitate journey review --stale`); the migration never approves. It is exclusive with `--step-ids`,
+CLI only (a repo rewrite the operator runs and commits; no MCP tool).
 
 ## Record a flow by demonstration
 
