@@ -247,6 +247,7 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--record-video [dir]` | record a video of each mission's browser context (forwarded to every mission, as explore's) |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--skip-preflight` | do not check the campaign's preconditions first (start URLs reachable, sessions signed in, no allow-list origin mismatch in discovery) — by default a failed check refuses the campaign (exit 64) before any mission | `false` |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 
 ## catalog
@@ -1050,6 +1051,61 @@ jevitate journey [command]
 
 manage and run promoted Journeys (regression-test replays)
 
+### journey anchor
+
+```
+jevitate journey anchor [command]
+```
+
+add or remove a draft Journey's anchors (#487): named steps to branch missions off, written with the step's stable id
+
+#### journey anchor add
+
+```
+jevitate journey anchor add [options] <journeyId>
+```
+
+add an anchor to a draft Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `journeyId` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--description <text>` | what this state is, in words |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--name <name>` | the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit |  |  | yes |  |
+| `--probe <text>` | a suggested adversarial probe at this state (repeatable) | `[]` |  |  |  |
+| `--step <n|stepId>` | the step the anchor follows: a 1-based step number or a step id |  |  | yes |  |
+
+#### journey anchor remove
+
+```
+jevitate journey anchor remove [options] <journeyId>
+```
+
+remove an anchor from a draft Journey; re-lints and prints the anchor issues
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `journeyId` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--name <name>` | the anchor to remove |  |  | yes |  |
+
 ### journey anchors
 
 ```
@@ -1070,6 +1126,7 @@ list a Journey's anchors (#293): named steps to branch a mission off with `explo
 | --- | --- | --- | --- | --- | --- |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--suggest` | propose anchors where the recorded flow changes state (a new page, a form that became valid, a completed write), each with the `journey anchor add` command to accept it; advisory, writes nothing (#487) |  |  |  |  |
 
 ### journey annotate
 
@@ -1203,6 +1260,7 @@ report a Journey's weak assertions (writes without an asserted effect, visibilit
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--fix` | #487: stamp the step id of each anchor that references a step by number only, write the Journey (a draft; a promoted one is refused), and report what was fixed |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--sarif <file>` | also write a SARIF 2.1.0 log here |  |  |  |  |
 
@@ -1369,6 +1427,7 @@ jevitate journey run [options] <id>
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass) | `fail-closed` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
+| `--step-response-timeout <ms>` | #486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet, e.g. a cold start after a deploy (default 15000). A late 2xx is an advisory slow-step finding (slowSteps), not a quarantine; a non-2xx, or no response within the bound, fails. A step's own responseTimeoutMs overrides it |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
@@ -2549,6 +2608,7 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | --- | --- | --- | --- | --- | --- |
 | `--action-deltas` | opt-in (#303): record what each replayed step changed and compare the defect step's delta with the one the Recording stored — a mismatch is evidence on each attempt (never the verdict) |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
+| `--allow <origin...>` | #484: replay with these origins instead of the allow list stored with the result (explicit only; recorded on the report) |  |  |  |  |
 | `--allow-emulation-override` | replay at --viewport/--device even though it differs from the finding's recorded emulation (#149); default: refused (fails closed) |  |  |  |  |
 | `--allow-log-cmd` | re-checking a server-log defect whose --log-source includes cmd:<command> needs this too (operator-declared only) | `false` |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
@@ -2557,6 +2617,7 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
+| `--env <name>` | #484: replay with this environment's CURRENT allow list (.jevitate/environments.json) instead of the stored one |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fingerprint <fp>` | the defect/hang fingerprint to verify |  |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
