@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { Step } from "@jevitate/recording";
 import { UnknownJourneyError } from "./journey-api.js";
-import { AnchorEditError, PromotedJourneyEditError, addJourneyAnchor, fixJourneyAnchors, removeJourneyAnchor } from "./journey-anchor-api.js";
+import { AnchorEditError, PromotedJourneyEditError, addJourneyAnchor, fixJourneyAnchors, removeJourneyAnchor, suggestJourneyAnchors } from "./journey-anchor-api.js";
 
 /** #487: adding/removing anchors and `lint --fix` write the step id at once and refuse to touch a promoted Journey. */
 
@@ -107,5 +107,29 @@ describe("fixJourneyAnchors", () => {
   it("does nothing to a promoted Journey that needs no stamping", async () => {
     await seed(journey({ promoted: true, anchors: [{ name: "review", step: 2, stepId: "s-assrt1" }] }));
     expect((await fixJourneyAnchors(dir, "draft")).stamped).toEqual([]);
+  });
+});
+
+describe("suggestJourneyAnchors", () => {
+  const writing = (): Journey => {
+    const j = journey();
+    j.recording.pages[0]!.steps[0] = { step: CLICK, stepId: "s-click1", delta: { verdict: "relevant-change", why: "w", changes: [], requests: ["POST /api/orders \u2192 201"], overheadMs: 1 } };
+    return j;
+  };
+
+  it("proposes the accepting command for a recorded write", async () => {
+    await seed(writing());
+    expect((await suggestJourneyAnchors(dir, "draft")).suggestions[0]?.command).toMatch(/^jevitate journey anchor add draft --name orders-written --step s-click1 /);
+  });
+
+  it("writes nothing to the stored Journey", async () => {
+    await seed(writing());
+    const before = await stored();
+    await suggestJourneyAnchors(dir, "draft");
+    expect(await stored()).toEqual(before);
+  });
+
+  it("refuses an unknown Journey", async () => {
+    await expect(suggestJourneyAnchors(dir, "nope")).rejects.toBeInstanceOf(UnknownJourneyError);
   });
 });

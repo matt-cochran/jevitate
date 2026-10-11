@@ -31,6 +31,8 @@ export interface JourneyBranchPoint {
 export interface JourneyAnchorListing {
   readonly name: string;
   readonly step: number;
+  /** The step's stable id, when the anchor carries one (#487). */
+  readonly stepId?: string;
   /** The step the anchor follows, described without values. */
   readonly afterStep: string;
   readonly description?: string;
@@ -54,6 +56,7 @@ export function listJourneyAnchors(journey: Journey): JourneyAnchorListing[] {
   return (journey.metadata.anchors ?? []).map((a) => ({
     name: a.name,
     step: a.step,
+    ...(a.stepId === undefined ? {} : { stepId: a.stepId }),
     afterStep: stepLabel(journey, a.step) ?? `step ${a.step}`,
     ...(a.description === undefined ? {} : { description: a.description }),
     probes: [...(a.probes ?? [])],
