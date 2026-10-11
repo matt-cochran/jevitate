@@ -187,6 +187,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       omitted: {
         "--dir": OMIT.storeDir,
         "--accept-weak": OMIT.acceptWeak,
+        "--full": OMIT.reviewRendering,
         "--review-sheet": OMIT.reviewSheet,
         "--accept-findings": OMIT.acceptFindings,
         "--non-interactive-approval": OMIT.nonInteractiveApproval,
@@ -271,7 +272,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "journey review",
       params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), ...JEV_ADVICE },
-      omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
+      omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
     },
   },
   {

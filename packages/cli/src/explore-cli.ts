@@ -1,4 +1,5 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { FixturePathError } from "@jevitate/recording";
 import { TAG_FLAG, TAG_HELP, TARGET_FLAG, TARGET_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
@@ -1412,7 +1413,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           } else if (err instanceof ScopeUnderivableError) {
             // #224: no default route scope from --url — a usage error (64), refused before any browser.
             emitExplore(fail("E_EXPLORE_ARGS", err.message));
-          } else if (err instanceof FixtureNotFoundError) {
+          } else if (err instanceof FixtureNotFoundError || err instanceof FixturePathError) {
             emitExplore(fail("E_EXPLORE_FIXTURE", err.message));
           } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof MaxFindingsPerRouteError || err instanceof UxConfigError) {
             emitExplore(fail("E_UX_ARGS", err.message));
@@ -1620,7 +1621,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         if (emitJourneyFailure(err)) return;
         if (err instanceof UnauthorizedExploreTargetError) {
           emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
-        } else if (err instanceof FixtureNotFoundError) {
+        } else if (err instanceof FixtureNotFoundError || err instanceof FixturePathError) {
           emitExplore(fail("E_EXPLORE_FIXTURE", err.message));
         } else {
           emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));

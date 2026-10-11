@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { RecordingSchema, type Recording } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
+import { fixtureOptions, type ReplayFixtureOptions } from "./reproduce.js";
 
 export interface RegressionCase {
   id: string;
@@ -28,7 +29,7 @@ export async function loadRegressions(dir: string): Promise<RegressionCase[]> {
   return cases;
 }
 
-export async function replayRegression(actor: Actor, recording: Recording): Promise<"completed" | "failed"> {
-  const result = await new RecordingInterpreter().run(actor, recording);
+export async function replayRegression(actor: Actor, recording: Recording, opts: ReplayFixtureOptions = {}): Promise<"completed" | "failed"> {
+  const result = await new RecordingInterpreter(fixtureOptions(opts)).run(actor, recording);
   return result.outcome === "completed" ? "completed" : "failed";
 }

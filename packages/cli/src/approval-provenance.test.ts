@@ -184,6 +184,52 @@ describe("#437 the confirmation", () => {
   });
 });
 
+describe("#496 the typed confirmation repeats the review sheet's attention", () => {
+  const req: ApprovalRequest = { kind: "journey", id: "loose", contentHash: "ab12cd34".padEnd(64, "0"), waivers: [] };
+
+  it("shows the count and the warn item before the info item, just above the prompt", async () => {
+    const p = person(["loose"]);
+    await makeApprovalConfirm(p)({
+      ...req,
+      attention: [
+        { severity: "info", text: "Not mutation-tested" },
+        { severity: "warn", text: "Steps 4–5 prove nothing" },
+      ],
+    });
+    expect(p.asked[0]).toContain("Before you approve: 2 item(s) need your attention\n  ⚠ Steps 4–5 prove nothing\n  ○ Not mutation-tested\n");
+  });
+
+  it("renders an item's hint after its text", async () => {
+    const p = person(["loose"]);
+    await makeApprovalConfirm(p)({ ...req, attention: [{ severity: "warn", text: "Steps 4–5 prove nothing", hint: "jevitate journey annotate x" }] });
+    expect(p.asked[0]).toContain("  ⚠ Steps 4–5 prove nothing → jevitate journey annotate x");
+  });
+
+  it("leaves the prompt byte-for-byte unchanged when attention is absent", async () => {
+    const p = person(["loose"]);
+    await makeApprovalConfirm(p)(req);
+    expect(p.asked[0]).toBe(`\nApprove journey 'loose', content hash ab12cd34…?\nType its id (loose) or the first 8 characters of its content hash to approve — anything else cancels: `);
+  });
+
+  it("leaves the prompt byte-for-byte unchanged when attention is empty", async () => {
+    const p = person(["loose"]);
+    await makeApprovalConfirm(p)({ ...req, attention: [] });
+    expect(p.asked[0]).toBe(`\nApprove journey 'loose', content hash ab12cd34…?\nType its id (loose) or the first 8 characters of its content hash to approve — anything else cancels: `);
+  });
+
+  it("does not prompt over MCP even with attention", async () => {
+    const p = person([]);
+    await runAsMcpInvocation(() => makeApprovalConfirm(p)({ ...req, attention: [{ severity: "warn", text: "x" }] }));
+    expect(p.asked).toEqual([]);
+  });
+
+  it("does not prompt for --non-interactive-approval even with attention", async () => {
+    const p = person([]);
+    await makeApprovalConfirm(p, { nonInteractiveReason: "seed" })({ ...req, attention: [{ severity: "warn", text: "x" }] });
+    expect(p.asked).toEqual([]);
+  });
+});
+
 describe("#437 every CLI approval path refuses without a TTY", () => {
   it("journey promote → E_APPROVAL_NEEDS_HUMAN, exit 64", async () => {
     const r = await cli(["journey", "promote", "loose", "--json"]);
@@ -265,7 +311,7 @@ describe("#437 provenance is recorded per channel", () => {
 
   it("the review sheet says how it was approved", async () => {
     await cli(["journey", "promote", "loose", "--json"], person(["loose"]));
-    expect((await cli(["journey", "review", "loose"])).out).toContain("approved at a terminal by alice (typed confirmation)");
+    expect((await cli(["journey", "review", "loose"])).out).toContain("by alice (terminal)");
   });
 
   it("MCP promote_journey is recorded as mcp", async () => {

@@ -265,6 +265,8 @@ export interface ReproduceHangParams {
    * a replay through one is withheld like a paid write, whatever the control's name.
    */
   readonly writtenBy?: readonly string[];
+  /** #498: the project root a replayed `upload` fixture must lie inside (absent ⇒ an upload step is refused). */
+  readonly fixtureBaseDir?: string;
 }
 
 function firstLine(e: unknown): string {
@@ -294,6 +296,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
     // the verdict — the hang rule applied afterwards is).
     const replayP = new RecordingInterpreter({
       targetTimeoutMs: replayTargetWaitMs({ targetTimeoutMs: p.targetTimeoutMs, renderWaitMs: p.perceive?.renderWaitMs }),
+      ...(p.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: p.fixtureBaseDir }),
     }).runToCheckpoint(
       session.actor,
       observeAfterStep(p.recording, p.recordingStepIndex),

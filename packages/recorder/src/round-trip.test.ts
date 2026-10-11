@@ -99,14 +99,14 @@ test(
     if (signIn === undefined || signIn.step.kind !== "click") {
       throw new Error(`no Sign in click captured; steps: ${JSON.stringify(steps, null, 2)}`);
     }
-    expect(signIn.step.target).toEqual({ role: "button", name: "Sign in" });
+    expect(signIn.step.target).toEqual({ role: "button", name: "Sign in", display: { role: "button", name: "Sign in" } });
     expect(signIn.step.target.css).toBeUndefined();
 
     const threadLink = steps.find((s) => s.step.kind === "click" && s.step.target.name === FIRST_THREAD.subject);
     if (threadLink === undefined || threadLink.step.kind !== "click") {
       throw new Error(`no inbox link click captured; steps: ${JSON.stringify(steps, null, 2)}`);
     }
-    expect(threadLink.step.target).toEqual({ role: "link", name: FIRST_THREAD.subject });
+    expect(threadLink.step.target).toEqual({ role: "link", name: FIRST_THREAD.subject, display: { role: "link", name: FIRST_THREAD.subject } });
     expect(threadLink.step.target.css).toBeUndefined();
 
     // === Phase B — compose the captured artifact with hand-authored edits ===

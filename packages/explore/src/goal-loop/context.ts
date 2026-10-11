@@ -56,6 +56,7 @@ import {
 } from "../conversation.js";
 import { RunRecorder } from "../record.js";
 import { resolveMissionFixture } from "../fixture.js";
+import { fixtureNoRoot } from "@jevitate/recording";
 import { ChromeTracker } from "../feature/relevance.js";
 import { GoalFocus } from "./goal-focus.js";
 import { REPLY_MAX_CHARS, WAIT_OP_MS } from "./limits.js";
@@ -88,6 +89,8 @@ export interface RunContext {
   readonly cfg: ExploreConfig;
   readonly startOrigin: string;
   readonly fixture: string | null;
+  /** #498: the project root the mission fixture must lie inside (`cfg.fixtureRoot`), or null. */
+  readonly fixtureRoot: string | null;
   readonly secrets: string[];
   /** #359: how many times each `cmd:` binding's command has run this run (by descriptor). */
   readonly secretCommandRuns: Map<string, number>;
@@ -428,7 +431,10 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   // #1 — authorize the start target before ANY snapshot/decision/action.
   ctx.startOrigin = assertAuthorizedExploreTarget(cfg.startUrl, cfg.allowlist);
   // Mission fixture: validated before any navigation/decision (fail fast).
-  ctx.fixture = cfg.fixture === undefined ? null : await resolveMissionFixture(cfg.fixture);
+  // #498: confined to the project root (realpath'd); a fixture with no root is refused (fail-closed).
+  if (cfg.fixture !== undefined && cfg.fixtureRoot === undefined) throw fixtureNoRoot(cfg.fixture);
+  ctx.fixture = cfg.fixture === undefined ? null : await resolveMissionFixture(cfg.fixture, cfg.fixtureRoot);
+  ctx.fixtureRoot = cfg.fixtureRoot ?? null;
 
   // A bound secret field's value (or TOTP seed) is a run secret: every redaction seam scrubs it.
   ctx.secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];

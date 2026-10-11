@@ -338,7 +338,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (664 exports)
+# @jevitate/explore (667 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -441,6 +441,7 @@
   CompletedRequest: interface
   ConsequenceCandidate: type-alias
   Control: interface
+  controlDisplay: function
   controlFields: function
   controlKey: function
   controlRisk: function
@@ -557,6 +558,8 @@
   expectedChange: function
   ExpectedChange: interface
   expectedResultFromDelta: function
+  explainCheck: function
+  explainTarget: function
   explore: function
   EXPLORE: variable
   ExploreConfig: interface
@@ -1152,7 +1155,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (221 exports)
+# @jevitate/journey (224 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1288,6 +1291,7 @@
   JourneyRegistry: class
   JourneyReview: type-alias
   JourneyReviewAnchorWarning: type-alias
+  JourneyReviewAttention: type-alias
   JourneyReviewChange: type-alias
   JourneyReviewLocatorHealth: type-alias
   JourneyReviewProposal: type-alias
@@ -1308,6 +1312,7 @@
   judgeAssertions: function
   JudgmentUsageSchema: variable
   lintJourney: function
+  lintUploadFixtures: function
   listJourneyAnchors: function
   Metric: type-alias
   METRIC_KINDS: variable
@@ -1349,6 +1354,7 @@
   resolveAnchorStep: function
   resolveJourneyStep: function
   ReviewAnchorWarningSchema: variable
+  ReviewAttentionSchema: variable
   ReviewChangeSchema: variable
   ReviewLintFindingSchema: variable
   ReviewLocatorHealthSchema: variable
@@ -1619,7 +1625,7 @@
   Win32SignalDeps: interface
   withOpenDeadline: function
 
-# @jevitate/recorder (41 exports)
+# @jevitate/recorder (50 exports)
   ActionCaptureEvent: interface
   anchorLocator: other
   AssembleOptions: interface
@@ -1636,6 +1642,13 @@
   DescriptorCandidate: interface
   DescriptorResolution: type-alias
   descriptorToLocator: function
+  DISPLAY_NAME_MAX: variable
+  displayFromFacts: function
+  DisplayGuard: interface
+  DisplayInput: interface
+  displayNameOf: function
+  displayOrRefusal: function
+  DisplayRefusal: type-alias
   DomEventKind: type-alias
   EID_ATTRIBUTE: variable
   ElementFacts: interface
@@ -1656,13 +1669,15 @@
   RecordPatchOptions: interface
   ResolutionFailureCause: type-alias
   resolvesToSameElement: function
+  roleOf: function
   Rung: type-alias
   rungLocator: other
   SecretFieldPredicate: type-alias
   Stability: type-alias
+  targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (158 exports)
+# @jevitate/recording (174 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1690,6 +1705,7 @@
   COMPARE_OPS: variable
   CompareOp: type-alias
   CONFIDENT_VARIABLE_THRESHOLD: variable
+  confineFixture: function
   DeclaredInvariant: interface
   DeniedAsSpec: interface
   describeNavigateUrl: function
@@ -1707,6 +1723,17 @@
   expressionObservables: function
   ExprNode: type-alias
   fitInteractionPolicy: function
+  fixtureCandidatePath: function
+  fixtureEscapesRoot: function
+  fixtureNoRoot: function
+  fixtureNotFound: function
+  fixtureOutsideProject: function
+  FixturePathError: class
+  FixturePathErrorCode: type-alias
+  fixtureRootRefusal: function
+  fixtureSensitive: function
+  fixtureSensitiveReason: function
+  fixtureUnsafeRoot: function
   flattenBaseFillSteps: function
   formatSpecPath: function
   FsRecordingStore: class
@@ -1725,6 +1752,7 @@
   InvariantSpecError: class
   InvariantSpecSchema: variable
   InvariantWhen: interface
+  isInsideRoot: function
   isWriteRequest: function
   JSON_PATH_EACH: variable
   jsonPathHasEach: function
@@ -1802,8 +1830,11 @@
   StyleProperty: type-alias
   substituteCaptureRefs: function
   takeValueFor: function
+  TARGET_DISPLAY_NAME_MAX: variable
   TargetDescriptor: interface
   TargetDescriptorSchema: variable
+  TargetDisplay: interface
+  TargetDisplaySchema: variable
   TextAnchor: type-alias
   TextEdit: interface
   TextEditAction: type-alias
@@ -1822,13 +1853,14 @@
   WriteClassifier: type-alias
   WriteClassifierOptions: interface
 
-# @jevitate/regression (25 exports)
+# @jevitate/regression (27 exports)
   appendOracleStep: function
   commitRegression: function
   DerivedOracle: interface
   deriveOracleFromTranscript: function
   FailureFingerprint: interface
   fingerprintFailure: function
+  fixtureOptions: function
   FlakyNotCommittableError: class
   flattenWithUrls: function
   loadRegressions: function
@@ -1843,6 +1875,7 @@
   RegressionCase: interface
   RegressionMeta: interface
   RegressionOracle: type-alias
+  ReplayFixtureOptions: interface
   replayRegression: function
   reproduceFailure: function
   reproduceFailureAt: function

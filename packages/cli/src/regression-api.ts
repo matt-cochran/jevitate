@@ -297,15 +297,15 @@ export async function runRegressionCapture(opts: RunRegressionCaptureOptions): P
   let report;
   try {
     report = requiredFingerprint
-      ? await reproduceFailureAt(working, opts.makeActor, requiredFingerprint, attempts)
-      : await reproduceFailure(working, opts.makeActor, attempts);
+      ? await reproduceFailureAt(working, opts.makeActor, requiredFingerprint, attempts, { fixtureBaseDir: journeyFixtureBaseDir() })
+      : await reproduceFailure(working, opts.makeActor, attempts, { fixtureBaseDir: journeyFixtureBaseDir() });
   } catch (cause) {
     if (cause instanceof NeverFailedError) throw new NoFailureToReproduceError();
     throw cause;
   }
   if (report.label === "flaky") return { skipped: "flaky", rate: report.rate };
 
-  const reproduces = makeSingleShotReproduces(opts.makeActor, report.fingerprint);
+  const reproduces = makeSingleShotReproduces(opts.makeActor, report.fingerprint, { fixtureBaseDir: journeyFixtureBaseDir() });
   const minimized = await minimizeRecording(working, reproduces);
 
   return commitRegression(opts.regressionsDir, opts.id, minimized, report, opts.bugSummary);
@@ -390,6 +390,7 @@ async function captureInvariantRegression(
   assertAuthorizedExploreTarget(mission.target.seedUrl, mission.target.allowlist);
 
   const verifyResult = await verifyFix({
+    fixtureBaseDir: journeyFixtureBaseDir(),
     recording,
     recordingStepIndex: finding.repro.recordingStepIndex,
     fingerprint: finding.fingerprint,
@@ -495,7 +496,7 @@ export async function runRegressionRun(opts: RunRegressionRunOptions): Promise<R
       : { ...stored, baseUrl: `${env.baseUrl}${new URL(stored.baseUrl).pathname}`, allowlist: [...env.allowedOrigins] };
   if (oracle === undefined) {
     const actor = await opts.makeActor();
-    const outcome = await replayRegression(actor, recording);
+    const outcome = await replayRegression(actor, recording, { fixtureBaseDir: journeyFixtureBaseDir() });
     return outcome === "failed"
       ? { id: opts.id, verdict: "reproduces", reason: "the committed Recording's own oracle step failed again on replay" }
       : { id: opts.id, verdict: "fixed", reason: "the committed Recording replayed clean; its oracle step held" };
@@ -512,6 +513,7 @@ export async function runRegressionRun(opts: RunRegressionRunOptions): Promise<R
   // oracle.kind === "invariant"
   assertAuthorizedExploreTarget(oracle.baseUrl, oracle.allowlist);
   const verifyResult = await verifyFix({
+    fixtureBaseDir: journeyFixtureBaseDir(),
     recording,
     recordingStepIndex: oracle.recordingStepIndex,
     fingerprint: oracle.defectFingerprint,

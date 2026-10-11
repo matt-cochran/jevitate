@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, lintUploadFixtures, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
 import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
@@ -13,11 +13,11 @@ import { dirname, join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type EmulationSpec } from "@jevitate/playwright";
 import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
-import { findGitRoot, findProjectDir, logsDirFor, type LayoutDeps } from "./project-dir.js";
+import { findProjectDir, logsDirFor, type LayoutDeps } from "./project-dir.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
-import { ReadOnlyGuard, ReplayDeltas, monitorFor, replayDeltaSummary, type BlockedWrite, type ReplayDeltaSummary } from "@jevitate/explore";
-import { ensureStepIds, writeClassifier } from "@jevitate/recording";
+import { ReadOnlyGuard, ReplayDeltas, monitorFor, replayDeltaSummary, resolveMissionFixture, type BlockedWrite, type ReplayDeltaSummary } from "@jevitate/explore";
+import { ensureStepIds, fixtureNoRoot, writeClassifier } from "@jevitate/recording";
 import type { Page } from "playwright";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { SecretPixelMask, maskingPort } from "./demo-capture.js";
@@ -254,14 +254,24 @@ export function prefixParams(full: Journey, prefix: Journey, params: Record<stri
 }
 
 /**
- * #488: the project root relative `upload` fixture paths resolve against — the directory holding
- * `.jevitate/`, else the git root, else the working directory. Never the process cwd by default.
+ * #488/#498: the project root relative `upload` fixture paths resolve against and must lie inside —
+ * the directory holding a found `.jevitate/` project, and nothing else. No project ⇒ undefined, and
+ * every upload is refused (`fixture-no-root`): a git root or the working directory (`/`, `$HOME`)
+ * would confine nothing (0.12.0 review H1).
  */
-export function journeyFixtureBaseDir(deps: LayoutDeps = {}): string {
+export function journeyFixtureBaseDir(deps: LayoutDeps = {}): string | undefined {
   const project = findProjectDir(deps);
-  if (project !== null) return dirname(project);
-  const cwd = (deps.cwd ?? (() => process.cwd()))();
-  return findGitRoot(cwd) ?? cwd;
+  return project === null ? undefined : dirname(project);
+}
+
+/**
+ * #498: a mission's `--fixture`, checked at mission start against the project root — refused
+ * (`fixture-no-root`) when there is no project, rather than only stat-checked (0.12.0 review H1).
+ */
+export async function resolveProjectMissionFixture(path: string, deps: LayoutDeps = {}): Promise<string> {
+  const root = journeyFixtureBaseDir(deps);
+  if (root === undefined) throw fixtureNoRoot(path);
+  return resolveMissionFixture(path, root);
 }
 
 /**
@@ -281,11 +291,14 @@ export async function lintJourneyById(
   // #466: the 0.10 anchor rules are warnings here (lintJourney's own, plus the catalog's jobStep/serves references).
   const { refIssues } = await journeyAnchorIssues(journey, { catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir, journeysDir: dir });
   // #488: resolve relative upload fixture paths against the project root (the `.jevitate` parent).
+  const baseDir = opts.baseDir ?? journeyFixtureBaseDir();
   const lintOpts = {
-    baseDir: opts.baseDir ?? journeyFixtureBaseDir(),
+    ...(baseDir === undefined ? {} : { baseDir }),
     ...(opts.readRequests === undefined ? {} : { readRequests: opts.readRequests }),
   };
-  const findings = [...lintJourney(journey, lintOpts), ...refLintFindings(refIssues)];
+  // #498: with no project, every literal upload fixture is refused at run time — say so here too.
+  const noRoot = baseDir === undefined ? lintUploadFixtures(journey, undefined) : [];
+  const findings = [...lintJourney(journey, lintOpts), ...noRoot, ...refLintFindings(refIssues)];
   return {
     id,
     findings,
@@ -345,6 +358,8 @@ export interface PromoteJourneyOptions {
   reason?: string;
   /** #453: how the rejection was made (`rejectionProvenance`); omitted: the programmatic one. */
   rejectProvenance?: ApprovalProvenance;
+  /** #498: the project root upload fixtures must lie inside; default `journeyFixtureBaseDir()`. */
+  fixtureBaseDir?: string;
 }
 
 export async function promoteJourney(dir: string, id: string, opts: PromoteJourneyOptions = {}): Promise<Journey> {
@@ -383,6 +398,21 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
   if (reviewedNow !== undefined && reviewedNow !== contentHash && (subject === reviewed || reviewedNow !== journeyReviewHash(reviewed))) {
     throw new StaleReviewError(
       `journey '${id}' changed after its review sheet was produced (reviewed ${reviewedNow}, now ${contentHash}) — review it again: jevitate journey review ${id}`,
+    );
+  }
+  // #498: an upload fixture outside the project root (or a sensitive one inside it) is refused at
+  // run time, so it is never promoted either — not waivable by --accept-weak (no override flag).
+  const refused = lintUploadFixtures(subject, opts.fixtureBaseDir ?? journeyFixtureBaseDir()).filter(
+    (f) => f.rule === "upload-outside-project" || f.rule === "upload-sensitive-file",
+  );
+  if (refused.length > 0) {
+    throw new WeakJourneyError(
+      [
+        `journey '${id}' uploads ${refused.length} fixture(s) that would be refused:`,
+        ...refused.map((f) => f.message),
+        "move the fixture into the project as a dedicated test fixture file",
+      ].join("\n"),
+      refused,
     );
   }
   const errors = lintJourney(subject).filter((f) => f.level === "error");

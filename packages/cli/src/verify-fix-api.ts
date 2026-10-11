@@ -1,3 +1,4 @@
+import { journeyFixtureBaseDir } from "./journey-api.js";
 import { BranchReplayInputError, anchoredRecording, prefixFromBranch, prefixedOpener, recordedBranchOf, type JourneyPrefix, type PrefixFromBranchOptions, type RecordedBranch } from "./journey-prefix.js";
 import { readFile } from "node:fs/promises";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
@@ -591,6 +592,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
       }
     } else {
       result = await verifyFix({
+        fixtureBaseDir: journeyFixtureBaseDir(),
         perceive: perceiveOpts,
         recording,
         recordingStepIndex: finding.repro.recordingStepIndex,

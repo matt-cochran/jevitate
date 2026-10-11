@@ -13,7 +13,9 @@ import {
   type ValueOrVar,
 } from "@jevitate/recording";
 import { assertNoSecretInPayload, redactText, redactUrl, secretForms } from "@jevitate/ai-core";
+import { targetDisplay } from "@jevitate/recorder";
 import type { PageTiming } from "./timing.js";
+import { controlDisplay } from "./snapshot.js";
 
 /**
  * record: accumulate executed steps into a schema-valid, deterministically
@@ -144,8 +146,16 @@ export class RunRecorder {
     return holds ? { redacted: true, length: value.length } : { redacted: false, value };
   }
 
+  /**
+   * The recorded target: redacted, plus (#497) the visible label the snapshot perceived on that
+   * control (or one the caller set) as `display` — display metadata only. A label holding a
+   * registered secret is dropped, never masked into the Recording.
+   */
   #target(d: TargetDescriptor): TargetDescriptor {
-    return redactDescriptor(d, this.#secrets);
+    const out = redactDescriptor(d, this.#secrets);
+    const seen = controlDisplay(d) ?? d.display;
+    const display = seen === undefined ? undefined : targetDisplay(seen, { secrets: this.#secrets });
+    return display === undefined ? out : { ...out, display };
   }
 
   #pageTiming(t: PageTiming): PageTimingRecord {

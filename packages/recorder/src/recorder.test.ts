@@ -356,9 +356,9 @@ test(
       expect(login[1]).toEqual({
         kind: "fill",
         // The stable `name` attribute is captured as the replay anchor (never the value).
-        target: { role: "textbox", name: "Username", anchor: { name: "u" } },
+        target: { role: "textbox", name: "Username", anchor: { name: "u" }, display: { role: "textbox", name: "Username" } },
         value: { redacted: true, length: 4 },
-        expect: { kind: "visible", target: { role: "textbox", name: "Username", anchor: { name: "u" } } },
+        expect: { kind: "visible", target: { role: "textbox", name: "Username", anchor: { name: "u" }, display: { role: "textbox", name: "Username" } } },
       });
 
       // 6. The secret field is a handback, not a fill/select: no value, no
@@ -389,8 +389,8 @@ test(
       expect(inbox).toEqual([
         {
           kind: "click",
-          target: { role: "button", name: "Refresh", anchor: { id: "refresh" } },
-          expect: { kind: "visible", target: { role: "button", name: "Refresh", anchor: { id: "refresh" } } },
+          target: { role: "button", name: "Refresh", anchor: { id: "refresh" }, display: { role: "button", name: "Refresh" } },
+          expect: { kind: "visible", target: { role: "button", name: "Refresh", anchor: { id: "refresh" }, display: { role: "button", name: "Refresh" } } },
         },
       ]);
 
@@ -475,8 +475,8 @@ test(
       // The checkbox produced click + input + change; only the click is a step.
       expect(steps[3]).toEqual({
         kind: "click",
-        target: { label: "Remember me", anchor: { name: "r" } },
-        expect: { kind: "visible", target: { label: "Remember me", anchor: { name: "r" } } },
+        target: { label: "Remember me", anchor: { name: "r" }, display: { role: "checkbox", name: "Remember me" } },
+        expect: { kind: "visible", target: { label: "Remember me", anchor: { name: "r" }, display: { role: "checkbox", name: "Remember me" } } },
       });
     });
   },
@@ -545,7 +545,7 @@ test(
       // into its postcondition rather than emitted as a step of its own.
       expect(steps[1]).toEqual({
         kind: "click",
-        target: { role: "button", name: "Sign in" },
+        target: { role: "button", name: "Sign in", display: { role: "button", name: "Sign in" } },
         expect: { kind: "urlIncludes", text: "/inbox" },
       });
       expect(stepsOf(recording.pages[1]!.steps)).toEqual([]);
@@ -581,7 +581,7 @@ test(
       const navigating = clicks[0]!.resolution;
       expect(navigating?.ok).toBe(true);
       if (navigating?.ok !== true) throw new Error("expected the navigating click to be described");
-      expect(navigating.descriptor).toEqual({ role: "button", name: "Sign in" });
+      expect(navigating.descriptor).toEqual({ role: "button", name: "Sign in", display: { role: "button", name: "Sign in" } });
       expect(navigating.stability).toBe("medium");
       expect(navigating.alternates).toEqual([]);
 
@@ -591,7 +591,7 @@ test(
       const settled = clicks[1]!.resolution;
       expect(settled?.ok).toBe(true);
       if (settled?.ok !== true) throw new Error("expected the settled click to be described");
-      expect(settled.descriptor).toEqual({ role: "button", name: "Refresh", anchor: { id: "refresh" } });
+      expect(settled.descriptor).toEqual({ role: "button", name: "Refresh", anchor: { id: "refresh" }, display: { role: "button", name: "Refresh" } });
       expect(settled.stability).toBe("high");
       expect(settled.alternates.length).toBeGreaterThan(0);
 
@@ -660,7 +660,7 @@ test(
         expect(JSON.stringify(login), diagnostic).not.toContain("Refresh");
         expect(login[1], diagnostic).toEqual({
           kind: "click",
-          target: { role: "button", name: "Sign in" },
+          target: { role: "button", name: "Sign in", display: { role: "button", name: "Sign in" } },
           expect: { kind: "urlIncludes", text: "/inbox" },
         });
         expect(clicks[0]!.resolution, diagnostic).toMatchObject({ ok: true, stability: "medium" });
@@ -670,8 +670,8 @@ test(
         expect(stepsOf(recording.pages[1]!.steps), diagnostic).toEqual([
           {
             kind: "click",
-            target: { role: "button", name: "Refresh", anchor: { id: "auto" } },
-            expect: { kind: "visible", target: { role: "button", name: "Refresh", anchor: { id: "auto" } } },
+            target: { role: "button", name: "Refresh", anchor: { id: "auto" }, display: { role: "button", name: "Refresh" } },
+            expect: { kind: "visible", target: { role: "button", name: "Refresh", anchor: { id: "auto" }, display: { role: "button", name: "Refresh" } } },
           },
         ]);
       },
@@ -708,9 +708,9 @@ test(
       expect(login[1]).toEqual({
         kind: "fill",
         // The stable `name` attribute is captured as the replay anchor (never the value).
-        target: { role: "textbox", name: "Username", anchor: { name: "u" } },
+        target: { role: "textbox", name: "Username", anchor: { name: "u" }, display: { role: "textbox", name: "Username" } },
         value: { redacted: true, length: 4 },
-        expect: { kind: "visible", target: { role: "textbox", name: "Username", anchor: { name: "u" } } },
+        expect: { kind: "visible", target: { role: "textbox", name: "Username", anchor: { name: "u" }, display: { role: "textbox", name: "Username" } } },
       });
       expect(login[2]!.kind).toBe("handback");
 
@@ -767,8 +767,8 @@ test(
       // "OK" — so each click's descriptor is corroborated with `ordinal`
       // recording *which* match was acted on, rather than falling all the
       // way down to a generated css nth-of-type selector.
-      expect(first.descriptor).toEqual({ role: "button", name: "OK", ordinal: 0, candidates: 2 });
-      expect(second.descriptor).toEqual({ role: "button", name: "OK", ordinal: 1, candidates: 2 });
+      expect(first.descriptor).toEqual({ role: "button", name: "OK", ordinal: 0, candidates: 2, display: { role: "button", name: "OK" } });
+      expect(second.descriptor).toEqual({ role: "button", name: "OK", ordinal: 1, candidates: 2, display: { role: "button", name: "OK" } });
 
       const recording = await recorder.stop();
       expect(() => RecordingSchema.parse(recording)).not.toThrow();

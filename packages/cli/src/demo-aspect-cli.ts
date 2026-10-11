@@ -5,6 +5,7 @@ import { ApprovalFindingsError } from "./pre-approval.js";
 import { REAL_JEV_FLAG_HELP, jevSetupFor } from "./catalog-cli.js";
 import { reviewJourneyById } from "./journey-review-api.js";
 import { renderReviewText } from "./journey-review.js";
+import { reviewRenderOptions } from "./review-render-options.js";
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
@@ -322,7 +323,7 @@ export function registerDemoCommands(program: Command, deps: CliDeps): void {
           readiness: true,
           jev,
         });
-        out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${renderReviewText(review)}\n`);
+        out?.(`journey '${id}' — "${record.aspect}" on ${result.environment}:\n${renderReviewText(review, reviewRenderOptions({}))}\n`);
         out?.(formatAnnotationChanges(result.changes));
         out?.(`approved: journey '${id}' promoted\n`);
         if (result.final?.video !== undefined) out?.(`video: ${result.final.video}\nsubtitles: ${result.final.subtitles ?? ""}\n`);

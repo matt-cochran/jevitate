@@ -100,7 +100,7 @@ describe("#432 journey review", () => {
 
   it("the human sheet covers every section", async () => {
     const { out } = await cli(["journey", "review", "strong"]);
-    for (const h of ["SUMMARY", "STEPS", "SIDE EFFECTS", "INPUTS", "PROOF", "CHANGE SINCE LAST APPROVAL", "CONTENT HASH"]) expect(out).toContain(h);
+    for (const h of ["NEEDS YOUR ATTENTION", "WHAT IT DOES", "STEPS", "WRITES", "INPUTS", "PROVES AT THE END", "APPROVE", "Content hash:"]) expect(out).toContain(h);
   });
 
   it("--markdown --out writes a Markdown sheet that names its hash", async () => {

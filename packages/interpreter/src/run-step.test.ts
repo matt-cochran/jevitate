@@ -1,8 +1,9 @@
 import { expect, test, vi } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Assertion, RecordedStep } from "@jevitate/recording";
+import { FixturePathError } from "@jevitate/recording";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { checkAssertion, PostconditionFailed } from "./assertion.js";
 import { runStep } from "./run-step.js";
@@ -1065,34 +1066,87 @@ function uploadStep(value: string): RecordedStep {
   };
 }
 
-test("runStep upload: a relative file resolves against fixtureBaseDir", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "run-step-fixture-"));
-  await writeFile(join(dir, "receipt.pdf"), "pdf");
+async function fixtureRoot(): Promise<string> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "run-step-fixture-")));
+  await mkdir(join(dir, "proj"));
+  await writeFile(join(dir, "proj", "receipt.pdf"), "pdf");
+  await writeFile(join(dir, "secret.txt"), "secret");
+  return dir;
+}
+
+function uploadSpy() {
   const setInputFiles = vi.fn(async () => {});
-  const actor = actorWithPage(fakePage(fakeLocator({ setInputFiles })));
+  return { setInputFiles, actor: actorWithPage(fakePage(fakeLocator({ setInputFiles }))) };
+}
 
-  await runStep(actor as any, uploadStep("receipt.pdf"), new Map(), 0, { fixtureBaseDir: dir });
+test("runStep upload: a relative file resolves against fixtureBaseDir", async () => {
+  const dir = await fixtureRoot();
+  const { setInputFiles, actor } = uploadSpy();
 
-  expect(setInputFiles).toHaveBeenCalledWith(join(dir, "receipt.pdf"));
+  await runStep(actor as any, uploadStep("receipt.pdf"), new Map(), 0, { fixtureBaseDir: join(dir, "proj") });
+
+  expect(setInputFiles).toHaveBeenCalledWith(join(dir, "proj", "receipt.pdf"));
 });
 
-test("runStep upload: an absolute file is left unchanged", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "run-step-fixture-"));
-  const absolute = join(dir, "receipt.pdf");
-  await writeFile(absolute, "pdf");
-  const setInputFiles = vi.fn(async () => {});
-  const actor = actorWithPage(fakePage(fakeLocator({ setInputFiles })));
+test("runStep upload: an absolute file inside the root is accepted", async () => {
+  const dir = await fixtureRoot();
+  const { setInputFiles, actor } = uploadSpy();
 
-  await runStep(actor as any, uploadStep(absolute), new Map(), 0, { fixtureBaseDir: join(dir, "elsewhere") });
+  await runStep(actor as any, uploadStep(join(dir, "proj", "receipt.pdf")), new Map(), 0, { fixtureBaseDir: join(dir, "proj") });
 
-  expect(setInputFiles).toHaveBeenCalledWith(absolute);
+  expect(setInputFiles).toHaveBeenCalledWith(join(dir, "proj", "receipt.pdf"));
 });
 
 test("runStep upload: a missing relative file fails naming the resolved absolute path", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "run-step-fixture-"));
+  const dir = await fixtureRoot();
   const actor = actorWithPage(fakePage(fakeLocator()));
 
-  await expect(runStep(actor as any, uploadStep("missing.pdf"), new Map(), 0, { fixtureBaseDir: dir })).rejects.toThrow(
-    `fixture not found: ${join(dir, "missing.pdf")}`,
+  await expect(runStep(actor as any, uploadStep("missing.pdf"), new Map(), 0, { fixtureBaseDir: join(dir, "proj") })).rejects.toThrow(
+    `fixture not found: ${join(dir, "proj", "missing.pdf")}`,
   );
+});
+
+// === #498: an upload fixture must be a file inside the project root ===
+
+test("runStep upload #498: an absolute file outside the root is refused, never attached", async () => {
+  const dir = await fixtureRoot();
+  const { setInputFiles, actor } = uploadSpy();
+
+  await runStep(actor as any, uploadStep(join(dir, "secret.txt")), new Map(), 0, { fixtureBaseDir: join(dir, "proj") }).catch(() => undefined);
+
+  expect(setInputFiles).not.toHaveBeenCalled();
+});
+
+test("runStep upload #498: a ../ path is refused naming the path, the root and the fix", async () => {
+  const dir = await fixtureRoot();
+  const { actor } = uploadSpy();
+
+  await expect(runStep(actor as any, uploadStep("../secret.txt"), new Map(), 0, { fixtureBaseDir: join(dir, "proj") })).rejects.toThrow(
+    `upload fixture ${join(dir, "secret.txt")} is outside the project root ${join(dir, "proj")} — move the fixture into the project`,
+  );
+});
+
+test("runStep upload #498: a symlink inside the root pointing outside is refused", async () => {
+  const dir = await fixtureRoot();
+  await symlink(join(dir, "secret.txt"), join(dir, "proj", "link.txt"));
+  const { actor } = uploadSpy();
+
+  await expect(runStep(actor as any, uploadStep("link.txt"), new Map(), 0, { fixtureBaseDir: join(dir, "proj") })).rejects.toBeInstanceOf(FixturePathError);
+});
+
+test("runStep upload #498: a {var}-bound path is checked after binding", async () => {
+  const dir = await fixtureRoot();
+  const { actor } = uploadSpy();
+  const step = { step: { ...uploadStep("x").step, file: { var: "doc" } } } as RecordedStep;
+
+  await expect(runStep(actor as any, step, new Map([["doc", join(dir, "secret.txt")]]), 0, { fixtureBaseDir: join(dir, "proj") })).rejects.toThrow(
+    "outside the project root",
+  );
+});
+
+test("runStep upload #498: with no fixtureBaseDir the upload is refused (fail-closed)", async () => {
+  const dir = await fixtureRoot();
+  const { actor } = uploadSpy();
+
+  await expect(runStep(actor as any, uploadStep(join(dir, "proj", "receipt.pdf")), new Map(), 0)).rejects.toThrow("no project root to confine it to");
 });

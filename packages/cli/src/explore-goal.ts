@@ -11,7 +11,7 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
 import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary } from "@jevitate/domain";
-import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
+import { runGoalBasedMission, assertAuthorizedExploreTarget, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, startedOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
@@ -24,7 +24,7 @@ import { describeHttp5xx, http5xxGoalReason } from "./http-5xx-outcome.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
-import { redactSecretValues } from "./journey-api.js";
+import { journeyFixtureBaseDir, resolveProjectMissionFixture, redactSecretValues } from "./journey-api.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
 import { failureWithHostStarved, finishHostHealth } from "./host-health-run.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogEvidence, type ServerLogRuntimeResult, type ServerLogsSummary, type TranscriptEntryWithLogs } from "./log-correlation.js";
@@ -397,7 +397,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   assertSaveStorageStateOutsideProject(opts.saveStorageState);
   // Fail fast on a missing fixture BEFORE launching Chromium.
-  const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
+  const fixture = opts.fixture === undefined ? undefined : await resolveProjectMissionFixture(opts.fixture);
   // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well. So is a
   // declared probe's resolved auth token (#135) — redacted everywhere a run secret is, not only in
   // the invariant monitor's own evidence.
@@ -550,6 +550,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.typeFixtures === undefined ? {} : { typeFixtures: opts.typeFixtures }),
       site: origin,
       fixture,
+      fixtureRoot: journeyFixtureBaseDir(),
       ...conversationConfig(opts.conversation),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
