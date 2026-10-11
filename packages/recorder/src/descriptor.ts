@@ -196,6 +196,8 @@ export interface ElementFacts {
   readonly autocomplete?: string | null;
   /** The `placeholder` attribute: the last-resort visible label of a text field (#497). */
   readonly placeholder?: string | null;
+  /** `isContentEditable`: a rich-text field, whose text is typed content — never its label (0.12.0 review). */
+  readonly editable?: boolean;
   /** Shortest unique css path found, or `null` if none could be proven. */
   readonly css: string | null;
 }
@@ -338,6 +340,7 @@ export function readElementFacts(node: Node, options: ReadFactsOptions): Element
     tflowId: attr("data-tflow-id"),
     autocomplete: attr("autocomplete"),
     placeholder: attr("placeholder"),
+    editable: (el as HTMLElement).isContentEditable === true,
     css: cssPath(),
   };
 }

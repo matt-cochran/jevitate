@@ -5,6 +5,7 @@ import { displayOrRefusal, isSecretField, type DisplayRefusal } from "@jevitate/
 import type { Step, TargetDescriptor, TargetDisplay } from "@jevitate/recording";
 import { redactText } from "@jevitate/ai-core";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
+import { parseSecretField, secretFieldSecrets } from "@jevitate/explore";
 import type { Locator } from "playwright";
 import { runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
@@ -42,8 +43,30 @@ export interface MigrateLabelsRequest {
   readonly params?: Readonly<Record<string, string>>;
   /** How long a step's target may take to appear before it is left unlabelled. Default 5s. */
   readonly targetTimeoutMs?: number;
+  /**
+   * The run's other secrets (a vault or login credential the caller resolved): a label holding one is
+   * refused, like one holding a secret parameter's value. The environment's `env:VAR` secret fields
+   * (`run.environment.secretFields`) are added on their own.
+   */
+  readonly secrets?: readonly string[];
   /** Every other `journey run` option (environment, storage state, browser, site policy…). */
   readonly run?: Omit<RunJourneyProgrammaticallyOptions, "dir" | "id" | "params" | "observer" | "interpreter">;
+}
+
+/**
+ * 0.12.0 review L6: every secret value of the run beyond its secret parameters — the caller's
+ * `secrets` and the environment's `env:VAR` secret-field values (a `cmd:` field has no value yet; a
+ * spec that does not resolve contributes nothing — the run itself never reads it).
+ */
+function runSecrets(req: MigrateLabelsRequest): string[] {
+  const fromEnv = (req.run?.environment?.secretFields ?? []).flatMap((spec) => {
+    try {
+      return secretFieldSecrets([parseSecretField(spec, "value", process.env)]);
+    } catch {
+      return [];
+    }
+  });
+  return [...(req.secrets ?? []), ...fromEnv].filter((v) => v !== "");
 }
 
 /** Why a step was left without a label. */
@@ -158,7 +181,7 @@ async function migrateOne(store: FsJourneyStore, journey: Journey, req: MigrateL
   // The request's params serve every Journey: each replay gets only the ones it declares.
   const declared = new Set([...journey.metadata.params, ...(journey.metadata.parameters ?? []).map((p) => p.name)]);
   const params = Object.fromEntries(Object.entries(req.params ?? {}).filter(([k]) => declared.has(k)));
-  const secrets = secretParamValues(journey, params);
+  const secrets = [...secretParamValues(journey, params), ...runSecrets(req)];
   const timeoutMs = req.targetTimeoutMs ?? DEFAULT_TARGET_TIMEOUT_MS;
   const flat = flatJourneySteps(journey);
   const need = flat.filter((s) => {

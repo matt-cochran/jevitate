@@ -467,8 +467,12 @@ function readControlFacts(node: Node): ControlFacts {
   }
   const placeholder = norm(el.getAttribute("placeholder"));
   const buttonish = inputType === "button" || inputType === "submit" || inputType === "reset";
-  // A select's own text is every option label run together — never its name.
-  const own = tag === "select" ? "" : norm(el.textContent);
+  // A select's own text is every option label run together — never its name. A text field's own
+  // text (a textarea, a contenteditable editor, an explicit textbox/searchbox/combobox) is typed
+  // content — never its name either (0.12.0 review M3).
+  const typedText =
+    tag === "select" || tag === "textarea" || (el as HTMLElement).isContentEditable === true || role === "textbox" || role === "searchbox" || role === "combobox";
+  const own = typedText ? "" : norm(el.textContent);
   // #396: an icon-only control carries its name in a nested <img alt> (own text empty), or last in
   // its own `title` attribute.
   const imgAlt = own === "" ? norm(el.querySelector("img[alt]")?.getAttribute("alt") ?? null) : "";

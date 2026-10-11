@@ -206,6 +206,7 @@ export async function runStep(
       const raw = resolveValue(step.file, vars);
       const file = await confineFixture(raw, targetOpts.fixtureBaseDir);
       const page = actor.ability(BrowseTheWebToken).session.page;
+      // Residual risk (accepted): the file could be swapped between confineFixture and setInputFiles (TOCTOU).
       await (await resolveTarget(page, step.target, targetOpts)).setInputFiles(file);
       await postcondition(actor, step.expect, step.waitFor, "upload", index, targetOpts);
       return { kind: "done" };

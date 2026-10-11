@@ -171,6 +171,7 @@ export function installRecorderListener(isSecret: SecretFieldPredicate): void {
       tflowId: attr("data-tflow-id"),
       autocomplete: attr("autocomplete"),
       placeholder: attr("placeholder"),
+      editable: (el as HTMLElement).isContentEditable === true,
       css: cssPath(),
     };
   };

@@ -20,6 +20,10 @@ const APP = `<main>
   <label for="pw">Password</label><input id="pw" type="password" data-testid="login-pw">
   <button type="button" data-testid="account">Signed in as ${SECRET}</button>
   <label>Upload a file <input type="file" data-testid="import-file" style="display:none"></label>
+  <textarea data-testid="note" placeholder="Note">my private note</textarea>
+  <div contenteditable="true" data-testid="rich">typed secret note</div>
+  <div contenteditable="true" role="textbox" aria-label="Message" data-testid="labelled-rich">typed secret note</div>
+  <div role="combobox" tabindex="0" data-testid="faux-combo">typed search terms</div>
 </main>`;
 
 type Act = (rec: RunRecorder, c: Control) => void;
@@ -69,5 +73,28 @@ describe("Jev/explore recordings record a step's visible label (#497, real Chrom
   it("an upload to a hidden file input records its label", async () => {
     const { recording } = await recordOn("import-file", (rec, c) => rec.upload(c.descriptor, "contacts.csv", 1));
     expect(lastTarget(recording)?.display?.name).toBe("Upload a file");
+  });
+
+  // 0.12.0 review M3: a field's typed content is never its label.
+  const fill: Act = (rec, c) => rec.fill(c.descriptor, { redacted: true, length: 8 }, 1);
+
+  it("a textarea's content is never its label (its placeholder is)", async () => {
+    const { recording } = await recordOn("note", fill);
+    expect(lastTarget(recording)?.display?.name).toBe("Note");
+  });
+
+  it("a contenteditable element's text is never its label", async () => {
+    const { recording } = await recordOn("rich", fill);
+    expect(JSON.stringify(recording)).not.toContain("typed secret note");
+  });
+
+  it("a contenteditable element's aria-label is still its label", async () => {
+    const { recording } = await recordOn("labelled-rich", fill);
+    expect(lastTarget(recording)?.display?.name).toBe("Message");
+  });
+
+  it("a role=combobox element's text is never its label", async () => {
+    const { recording } = await recordOn("faux-combo", click);
+    expect(JSON.stringify(recording)).not.toContain("typed search terms");
   });
 });

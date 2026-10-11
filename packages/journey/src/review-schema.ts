@@ -32,6 +32,11 @@ export const ReviewStepSchema = z
     file: z.string().optional(),
     /** The names of the Journey's anchors on this step. Additive. */
     anchors: z.array(z.string()).optional(),
+    /**
+     * The step's exact locator in short form (`data-testid=…`, else `role=… name="…"`), set when its
+     * target carries a recorded display label — a label can say "Cancel" on a delete button. Additive.
+     */
+    locator: z.string().optional(),
   })
   .strict();
 

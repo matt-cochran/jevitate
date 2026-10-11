@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import type { BrowserPort, BrowserSession, OpenOptions } from "@jevitate/playwright";
-import { runJourneyProgrammatically, lintJourneyById, journeyFixtureBaseDir, promoteJourney, UnknownJourneyError, WeakJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { runJourneyProgrammatically, lintJourneyById, journeyFixtureBaseDir, resolveProjectMissionFixture, promoteJourney, UnknownJourneyError, WeakJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 
 /**
  * `--storage-state <file>` / `metadata.requiresAuth` (#118): a Journey authored behind a login
@@ -138,12 +138,28 @@ describe("#488 journeyFixtureBaseDir", () => {
     expect(journeyFixtureBaseDir({ cwd: () => root })).toBe(root);
   });
 
-  it("falls back to the git root when there is no .jevitate directory", async () => {
+  // 0.12.0 review H1: only a found project confines fixtures — never the git root or the cwd.
+  it("is undefined inside a git repo with no .jevitate directory", async () => {
     const root = await mkdtemp(join(tmpdir(), "jev-base-"));
     await mkdir(join(root, ".git"));
     const nested = join(root, "a", "b");
     await mkdir(nested, { recursive: true });
-    expect(journeyFixtureBaseDir({ cwd: () => nested })).toBe(root);
+    expect(journeyFixtureBaseDir({ cwd: () => nested })).toBeUndefined();
+  });
+
+  it("is undefined when only the home .jevitate exists", async () => {
+    const home = await mkdtemp(join(tmpdir(), "jev-home-"));
+    await mkdir(join(home, ".jevitate"));
+    expect(journeyFixtureBaseDir({ cwd: () => home, homedir: () => home })).toBeUndefined();
+  });
+});
+
+describe("0.12.0 review: resolveProjectMissionFixture", () => {
+  it("refuses a mission fixture with fixture-no-root when there is no project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jev-noproj-"));
+    await writeFile(join(root, "data.csv"), "a,b");
+    const err = await resolveProjectMissionFixture(join(root, "data.csv"), { cwd: () => root, homedir: () => root }).catch((e: unknown) => e);
+    expect((err as { code?: string }).code).toBe("fixture-no-root");
   });
 });
 
@@ -247,6 +263,20 @@ describe("#498 promoteJourney upload fixtures outside the project root", () => {
     const err = await promoteJourney(dir, "upload", { fixtureBaseDir: join(base, "proj"), acceptWeak: "ok" }).catch((e: unknown) => e);
 
     expect(err instanceof WeakJourneyError && err.findings.map((f) => f.rule)).toEqual(["upload-outside-project"]);
+  });
+});
+
+describe("0.12.0 review: promoteJourney refuses a sensitive upload fixture", () => {
+  it("refuses to promote, even with --accept-weak, reporting upload-sensitive-file", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "jev-promote-sensitive-")));
+    await writeFile(join(root, ".env"), "TOKEN=x");
+    const dir = join(root, ".jevitate", "journeys");
+    await mkdir(dir, { recursive: true });
+    await seedUploadJourney(dir, ".env", false);
+
+    const err = await promoteJourney(dir, "upload", { fixtureBaseDir: root, acceptWeak: "ok" }).catch((e: unknown) => e);
+
+    expect(err instanceof WeakJourneyError && err.findings.map((f) => f.rule)).toEqual(["upload-sensitive-file"]);
   });
 });
 

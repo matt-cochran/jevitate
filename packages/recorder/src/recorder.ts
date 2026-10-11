@@ -660,6 +660,7 @@ function toFacts(raw: unknown): ElementFacts | undefined {
     tflowId: str(f.tflowId),
     autocomplete: str(f.autocomplete),
     placeholder: str(f.placeholder),
+    editable: f.editable === true,
     css: str(f.css),
   };
 }

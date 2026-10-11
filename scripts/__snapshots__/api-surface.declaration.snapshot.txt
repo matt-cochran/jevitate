@@ -1677,7 +1677,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (170 exports)
+# @jevitate/recording (174 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1730,6 +1730,10 @@
   fixtureOutsideProject: function
   FixturePathError: class
   FixturePathErrorCode: type-alias
+  fixtureRootRefusal: function
+  fixtureSensitive: function
+  fixtureSensitiveReason: function
+  fixtureUnsafeRoot: function
   flattenBaseFillSteps: function
   formatSpecPath: function
   FsRecordingStore: class
