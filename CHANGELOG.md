@@ -14,7 +14,7 @@ behaviour changes).
 - **Slow is not broken:** a late 2xx response is an advisory slow step, never a quarantine, and a cold start after a deploy is reported as such.
 - **Journeeze:** approved demos travel with masked media (`jz-mask-v1`); brittle locators export as findings; checks carry the app's release label; filed issues de-duplicate against Journeeze's; `publish journeeze` names the connected product.
 - **Anchors:** `journey anchor add|remove`, `journey lint --fix` and `journey anchors --suggest`.
-- **Fixes:** upload fixtures resolve against the project root, the AI SDK deprecation warning is gone, and the Windows browser-crash smoke no longer stalls.
+- **Fixes:** upload fixtures resolve against the project root, the AI SDK deprecation warning is gone, the Windows browser-crash smoke no longer stalls, and a busy spinner on a page with a strict CSP is no longer a false hang.
 - **MCP parity:** new tools `journey_anchor_add` / `journey_anchor_remove`, and arguments `lint_journey fix`, `journey_anchors suggest`, `run_journey stepResponseTimeoutMs`, `run_campaign skipPreflight` and `verify_fix env`.
 
 ### Behaviour changes
@@ -47,6 +47,7 @@ behaviour changes).
 
 - Missions no longer print the AI SDK `generateObject` deprecation warning: structured output uses `generateText` with an output setting (#489).
 - The Windows browser-crash smoke no longer stalls: the browser's pid comes from CDP instead of an unbounded process query, and each step is bounded and timed (#475).
+- A busy indicator that clears on a page whose CSP has no `'unsafe-eval'` is no longer reported as a `ui-no-progress` hang (and `verify-fix` no longer reads it as still reproducing). The wait passes a function predicate instead of a source string, and a wait that fails without timing out is no evidence of a stuck indicator (#491).
 
 ## [0.10.0] – 2026-10-09
 

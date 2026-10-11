@@ -144,8 +144,14 @@ export async function probeResponsive(page: Page, boundMs: number): Promise<bool
  *
  * A countdown rendered as an indeterminate progressbar inside a notification/toast container, or
  * one whose own label says it is a timer, is not a busy indicator (#419).
+ *
+ * `gone: true` answers "is no indicator visible?" instead — the form a `waitForFunction` waits on.
+ * That wait must pass this FUNCTION, never a source string: a page whose CSP has no `'unsafe-eval'`
+ * rejects a string predicate (#491).
  */
-export function visibleBusyIndicator(): string | null {
+export function visibleBusyIndicator(gone: true): boolean;
+export function visibleBusyIndicator(): string | null;
+export function visibleBusyIndicator(gone?: true): string | null | boolean {
   const shown = (el: Element): boolean => {
     const r = (el as HTMLElement).getBoundingClientRect();
     const s = window.getComputedStyle(el as HTMLElement);
@@ -181,10 +187,10 @@ export function visibleBusyIndicator(): string | null {
     for (const el of Array.from(document.querySelectorAll(sel))) {
       if (!shown(el)) continue;
       if (sel === '[role="progressbar"]:not([aria-valuenow])' && isNotificationTimer(el)) continue;
-      return describe(el);
+      return gone === true ? false : describe(el);
     }
   }
-  return null;
+  return gone === true ? true : null;
 }
 
 /**
