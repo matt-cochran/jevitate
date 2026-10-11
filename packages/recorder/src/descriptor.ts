@@ -192,6 +192,10 @@ export interface ElementFacts {
   readonly testIdAttr?: string | null;
   /** `data-tflow-id`: TFlow tracking metadata (#468). Never a locator: no ladder rung is built from it. */
   readonly tflowId?: string | null;
+  /** The `autocomplete` attribute: with `inputType`, whether this is a credential field (#497: its label is never stored). */
+  readonly autocomplete?: string | null;
+  /** The `placeholder` attribute: the last-resort visible label of a text field (#497). */
+  readonly placeholder?: string | null;
   /** Shortest unique css path found, or `null` if none could be proven. */
   readonly css: string | null;
 }
@@ -332,14 +336,16 @@ export function readElementFacts(node: Node, options: ReadFactsOptions): Element
     testId: attr("data-testid") ?? attr("data-test"),
     testIdAttr: attr("data-testid") !== null ? "data-testid" : attr("data-test") !== null ? "data-test" : null,
     tflowId: attr("data-tflow-id"),
+    autocomplete: attr("autocomplete"),
+    placeholder: attr("placeholder"),
     css: cssPath(),
   };
 }
 
 // === Ladder construction ===
 
-/** Explicit `role` wins; otherwise the documented implicit mapping. */
-function roleOf(facts: ElementFacts): string | undefined {
+/** Explicit `role` wins; otherwise the documented implicit mapping. Exported for `display.ts` (#497). */
+export function roleOf(facts: ElementFacts): string | undefined {
   if (facts.roleAttr !== null) return facts.roleAttr;
 
   if (facts.tag === "input") {

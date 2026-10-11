@@ -222,7 +222,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (433 exports)
+# @jevitate/explore (434 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -421,6 +421,7 @@
   clippingSummary: function
   compareDeltas: function
   compileAllowControl: function
+  controlDisplay: function
   controlFields: function
   controlKey: function
   controlRisk: function
@@ -1026,8 +1027,9 @@
   throttleDecision: function
   withOpenDeadline: function
 
-# @jevitate/recorder (24 exports)
+# @jevitate/recorder (30 exports)
   CAPPED_STABILITY: object
+  DISPLAY_NAME_MAX: const (number)
   EID_ATTRIBUTE: const (string)
   RECORDING_VERSION: const (string)
   RECORD_BINDING: const (string)
@@ -1039,6 +1041,9 @@
   checkpointToSpliceAt: function
   computeDescriptor: function
   descriptorToLocator: function
+  displayFromFacts: function
+  displayNameOf: function
+  displayOrRefusal: function
   findAnchor: function
   findOrdinalAmong: function
   installRecorderListener: function
@@ -1049,10 +1054,12 @@
   readElementFacts: function
   recordPatch: function
   resolvesToSameElement: function
+  roleOf: function
   rungLocator: function
+  targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (92 exports)
+# @jevitate/recording (94 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -1089,7 +1096,9 @@
   SecretMaterializationError: class
   StatusSpecSchema: object
   StepSchema: object
+  TARGET_DISPLAY_NAME_MAX: const (number)
   TargetDescriptorSchema: object
+  TargetDisplaySchema: object
   UNKNOWN: const (symbol)
   WAIT_FOR_MAX_MS: const (number)
   WAIT_FOR_STALL_MS: const (number)

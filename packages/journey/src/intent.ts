@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { RecordedStep, Step } from "@jevitate/recording";
+import type { RecordedStep, Step, TargetDescriptor } from "@jevitate/recording";
 import { describeNavigateUrl } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 
@@ -102,13 +102,26 @@ export function describeStep(step: Step): string {
   }
 }
 
-function describeTarget(t: { testId?: string; role?: string; name?: string; label?: string; text?: string; css?: string }): string {
+/**
+ * A target as a person reads it. #497: the recorded visible label (`display`) wins — `"Import"` — since
+ * a reviewer signs off on what they saw. Without one, the locator's own visible text (role+name,
+ * label, text) is used; a bare test id is shown in words and marked `(no recorded label)`, so it is
+ * never mistaken for something on screen.
+ */
+function describeTarget(t: TargetDescriptor): string {
+  if (t.display !== undefined && t.display.name.trim() !== "") return `"${t.display.name}"`;
   if (t.role !== undefined && t.name !== undefined) return `${t.role} "${t.name}"`;
   if (t.label !== undefined) return `field "${t.label}"`;
   if (t.text !== undefined) return `"${t.text}"`;
-  if (t.testId !== undefined) return `[data-testid=${t.testId}]`;
+  if (t.testId !== undefined) return `[${readableTestId(t.testId)}] (no recorded label)`;
   if (t.role !== undefined) return t.role;
   return t.css ?? "an element";
+}
+
+/** `action-import` → `action import`: dashes/underscores as single spaces. */
+function readableTestId(testId: string): string {
+  const words = testId.replace(/[-_]+/g, " ").trim();
+  return words === "" ? testId : words;
 }
 
 function describeValue(v: { var: string } | { redacted: true; length: number } | { redacted: false; value: string }): string {

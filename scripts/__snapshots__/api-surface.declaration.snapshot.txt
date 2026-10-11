@@ -338,7 +338,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (664 exports)
+# @jevitate/explore (665 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -441,6 +441,7 @@
   CompletedRequest: interface
   ConsequenceCandidate: type-alias
   Control: interface
+  controlDisplay: function
   controlFields: function
   controlKey: function
   controlRisk: function
@@ -1619,7 +1620,7 @@
   Win32SignalDeps: interface
   withOpenDeadline: function
 
-# @jevitate/recorder (41 exports)
+# @jevitate/recorder (50 exports)
   ActionCaptureEvent: interface
   anchorLocator: other
   AssembleOptions: interface
@@ -1636,6 +1637,13 @@
   DescriptorCandidate: interface
   DescriptorResolution: type-alias
   descriptorToLocator: function
+  DISPLAY_NAME_MAX: variable
+  displayFromFacts: function
+  DisplayGuard: interface
+  DisplayInput: interface
+  displayNameOf: function
+  displayOrRefusal: function
+  DisplayRefusal: type-alias
   DomEventKind: type-alias
   EID_ATTRIBUTE: variable
   ElementFacts: interface
@@ -1656,13 +1664,15 @@
   RecordPatchOptions: interface
   ResolutionFailureCause: type-alias
   resolvesToSameElement: function
+  roleOf: function
   Rung: type-alias
   rungLocator: other
   SecretFieldPredicate: type-alias
   Stability: type-alias
+  targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (158 exports)
+# @jevitate/recording (161 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1802,8 +1812,11 @@
   StyleProperty: type-alias
   substituteCaptureRefs: function
   takeValueFor: function
+  TARGET_DISPLAY_NAME_MAX: variable
   TargetDescriptor: interface
   TargetDescriptorSchema: variable
+  TargetDisplay: interface
+  TargetDisplaySchema: variable
   TextAnchor: type-alias
   TextEdit: interface
   TextEditAction: type-alias
