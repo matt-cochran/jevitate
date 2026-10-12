@@ -599,10 +599,10 @@
   description: manage and run promoted Journeys (regression-test replays)
 
 # journey anchor
-  description: add or remove a draft Journey's anchors (#487): named steps to branch missions off, written with the step's stable id
+  description: add or remove a Journey's anchors (#487): named steps to branch missions off, written with the step's stable id; on a promoted Journey the approval goes stale (#507)
 
 # journey anchor add
-  description: add an anchor to a draft Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues
+  description: add an anchor to a Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues
   arguments:
     - name=journeyId required=true variadic=false default=null
   options:
@@ -614,7 +614,7 @@
     - flags=--step <n|stepId> required=true mandatory=true negate=false variadic=false default=null description=the step the anchor follows: a 1-based step number or a step id
 
 # journey anchor remove
-  description: remove an anchor from a draft Journey; re-lints and prints the anchor issues
+  description: remove an anchor from a Journey; re-lints and prints the anchor issues
   arguments:
     - name=journeyId required=true variadic=false default=null
   options:
@@ -713,7 +713,7 @@
     - name=id required=true variadic=false default=null
   options:
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
-    - flags=--fix required=false mandatory=false negate=false variadic=false default=null description=#487: stamp the step id of each anchor that references a step by number only, write the Journey (a draft; a promoted one is refused), and report what was fixed
+    - flags=--fix required=false mandatory=false negate=false variadic=false default=null description=#487: stamp the step id of each anchor that references a step by number only, write the Journey (#507: on a promoted Journey its approval goes stale), and report what was fixed
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--sarif <file> required=true mandatory=false negate=false variadic=false default=null description=also write a SARIF 2.1.0 log here
 

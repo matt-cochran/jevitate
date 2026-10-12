@@ -30,11 +30,11 @@ export function anchorEditFailure(program: Command, err: unknown): void {
  * `metadata.anchors`. The step id is written at once; the anchor lint issues that remain are printed.
  */
 export function registerJourneyAnchorCommands(journey: Command, program: Command, deps: CliDeps): void {
-  const anchor = journey.command("anchor").description("add or remove a draft Journey's anchors (#487): named steps to branch missions off, written with the step's stable id");
+  const anchor = journey.command("anchor").description("add or remove a Journey's anchors (#487): named steps to branch missions off, written with the step's stable id; on a promoted Journey the approval goes stale (#507)");
 
   anchor
     .command("add <journeyId>")
-    .description("add an anchor to a draft Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues")
+    .description("add an anchor to a Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues")
     .requiredOption("--name <name>", "the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit")
     .requiredOption("--step <n|stepId>", "the step the anchor follows: a 1-based step number or a step id")
     .option("--description <text>", "what this state is, in words")
@@ -59,7 +59,7 @@ export function registerJourneyAnchorCommands(journey: Command, program: Command
 
   anchor
     .command("remove <journeyId>")
-    .description("remove an anchor from a draft Journey; re-lints and prints the anchor issues")
+    .description("remove an anchor from a Journey; re-lints and prints the anchor issues")
     .requiredOption("--name <name>", "the anchor to remove")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")

@@ -279,7 +279,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "lint_journey",
     description:
       "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding. " +
-      "#487: fix: true stamps the step id of each anchor that references a step by number only and writes the Journey (a draft; a promoted Journey is refused — its approval binds to the content hash), reporting what was stamped.",
+      "#487: fix: true stamps the step id of each anchor that references a step by number only and writes the Journey (#507: on a promoted Journey its approval goes stale; the result carries needsReapproval and reapproveCommand), reporting what was stamped.",
     command: { path: "journey lint", params: { id: pos(), fix: b("--fix") }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
@@ -292,8 +292,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "journey_anchor_add",
     description:
-      "`jevitate journey anchor add <journeyId>` (#487): add a named anchor to a DRAFT Journey — step is a 1-based step number or a step id; the step's stable id is written at once. Returns the anchor lint issues that remain. " +
-      "A promoted Journey is refused (E_JOURNEY_ANCHOR_ARGS): its approval binds to the content hash — edit a draft and re-promote, a person re-approves.",
+      "`jevitate journey anchor add <journeyId>` (#487): add a named anchor to a Journey — step is a 1-based step number or a step id; the step's stable id is written at once. Returns the anchor lint issues that remain. " +
+      "On a promoted Journey (#507) the approval goes stale: it stays promoted, the old approval is kept for the review diff, and the result carries needsReapproval: true and reapproveCommand (jevitate journey promote <id> --reviewed-hash <new review hash>), which only a person runs.",
     command: {
       path: "journey anchor add",
       params: { journeyId: pos(), name: s("--name", { required: true }), step: s("--step", { required: true }), description: s("--description"), probe: many("--probe") },
@@ -303,7 +303,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "journey_anchor_remove",
     description:
-      "`jevitate journey anchor remove <journeyId>` (#487): remove the named anchor from a DRAFT Journey; returns the anchor lint issues that remain. A promoted Journey is refused (E_JOURNEY_ANCHOR_ARGS), as on the CLI.",
+      "`jevitate journey anchor remove <journeyId>` (#487): remove the named anchor from a Journey; returns the anchor lint issues that remain. On a promoted Journey (#507) the approval goes stale: it stays promoted, the old approval is kept for the review diff, and the result carries needsReapproval: true and reapproveCommand (jevitate journey promote <id> --reviewed-hash <new review hash>), which only a person runs.",
     command: { path: "journey anchor remove", params: { journeyId: pos(), name: s("--name", { required: true }) }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
