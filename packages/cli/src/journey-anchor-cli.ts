@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { UnknownJourneyError } from "./journey-api.js";
-import { AnchorEditError, PromotedJourneyEditError, addJourneyAnchor, removeJourneyAnchor, suggestJourneyAnchors, type AnchorEditResult } from "./journey-anchor-api.js";
+import { AnchorEditError, addJourneyAnchor, removeJourneyAnchor, suggestJourneyAnchors, type AnchorEditResult } from "./journey-anchor-api.js";
 import { type CliDeps, emitJson, resolveJourneysDir } from "./cli-shared.js";
 
 function collect(value: string, prev: string[]): string[] {
@@ -21,7 +21,7 @@ function renderIssues(result: AnchorEditResult, out: ((s: string) => void) | und
 /** Maps an edit failure to its envelope: unknown id and refused edits are usage errors (64). */
 export function anchorEditFailure(program: Command, err: unknown): void {
   if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", err.message));
-  else if (err instanceof AnchorEditError || err instanceof PromotedJourneyEditError) emitJson(program, fail("E_JOURNEY_ANCHOR_ARGS", err.message));
+  else if (err instanceof AnchorEditError) emitJson(program, fail("E_JOURNEY_ANCHOR_ARGS", err.message));
   else emitJson(program, fail("E_JOURNEY_ANCHOR_ARGS", String(err instanceof Error ? err.message : err)));
 }
 

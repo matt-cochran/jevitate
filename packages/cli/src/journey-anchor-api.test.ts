@@ -6,7 +6,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { Step } from "@jevitate/recording";
 import { UnknownJourneyError } from "./journey-api.js";
 import { journeyReviewHash } from "./journey-review.js";
-import { AnchorEditError, PromotedJourneyEditError, addJourneyAnchor, fixJourneyAnchors, removeJourneyAnchor, suggestJourneyAnchors } from "./journey-anchor-api.js";
+import { AnchorEditError, addJourneyAnchor, fixJourneyAnchors, removeJourneyAnchor, suggestJourneyAnchors } from "./journey-anchor-api.js";
 
 /** #487: adding/removing anchors and `lint --fix` write the step id at once and refuse to touch a promoted Journey. */
 
@@ -119,9 +119,9 @@ describe("fixJourneyAnchors", () => {
     expect((await fixJourneyAnchors(dir, "draft")).issues).toEqual([]);
   });
 
-  it("refuses to stamp a promoted Journey", async () => {
+  it("#507: stamps a promoted Journey and says its approval needs renewing", async () => {
     await seed(journey({ promoted: true, anchors: [{ name: "review", step: 2 }] }));
-    await expect(fixJourneyAnchors(dir, "draft")).rejects.toBeInstanceOf(PromotedJourneyEditError);
+    expect((await fixJourneyAnchors(dir, "draft")).needsReapproval).toBe(true);
   });
 
   it("does nothing to a promoted Journey that needs no stamping", async () => {

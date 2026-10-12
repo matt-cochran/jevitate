@@ -7,19 +7,8 @@ import { journeyReviewHash } from "./journey-review.js";
  * both the CLI and MCP call. Each edit writes the Journey (step ids minted and anchors stamped the
  * way `promote` does) and returns the anchor lint issues that remain. On a PROMOTED Journey (#507)
  * add/remove still work: it stays promoted with its old approval kept (as after `migrate --step-ids`),
- * the approval is now stale, and the result carries the re-approval command.
+ * the approval is now stale, and the result carries the re-approval command. `journey lint --fix` does the same.
  */
-
-/** `journey lint --fix` on a PROMOTED Journey: refused (its approval binds to the content hash). Exit 64. */
-export class PromotedJourneyEditError extends Error {
-  readonly code = "E_JOURNEY_ANCHOR_ARGS";
-  constructor(id: string) {
-    super(
-      `journey '${id}' is promoted: changing its anchors changes the content hash its approval is bound to (stamping a step id included, since the hash covers it). ` +
-        `Edit it as a draft and re-promote — jevitate journey review ${id}, then jevitate journey promote ${id} — a person re-approves the new content`,
-    );
-  }
-}
 
 export interface AnchorEditResult {
   readonly journeyId: string;
@@ -43,14 +32,18 @@ async function load(dir: string, id: string): Promise<{ store: FsJourneyStore; j
   return { store, journey };
 }
 
+/** The result for a Journey just written: its anchor issues, plus (#507) the re-approval a promoted one now needs. */
+function written(id: string, journey: Journey): AnchorEditResult {
+  const issues = anchorLintIssues(journey);
+  if (!journey.metadata.promoted) return { journeyId: id, issues };
+  return { journeyId: id, issues, needsReapproval: true, reapproveCommand: `jevitate journey promote ${id} --reviewed-hash ${journeyReviewHash(journey)}` };
+}
+
 async function edit(dir: string, id: string, change: (j: Journey) => Journey): Promise<AnchorEditResult> {
   const { store, journey } = await load(dir, id);
   const next = change(journey);
   await store.put(next);
-  const written = (await store.get(id)) ?? next;
-  const issues = anchorLintIssues(written);
-  if (!written.metadata.promoted) return { journeyId: id, issues };
-  return { journeyId: id, issues, needsReapproval: true, reapproveCommand: `jevitate journey promote ${id} --reviewed-hash ${journeyReviewHash(written)}` };
+  return written(id, (await store.get(id)) ?? next);
 }
 
 /** Adds an anchor (`stepId` written at once). Throws `UnknownJourneyError`, `AnchorEditError`. */
@@ -63,14 +56,13 @@ export function removeJourneyAnchor(dir: string, id: string, name: string): Prom
   return edit(dir, id, (j) => removeAnchor(j, name));
 }
 
-/** `journey lint --fix`: stamps each number-only anchor with its step's id and writes the Journey. Nothing to stamp: nothing written, even when promoted. */
+/** `journey lint --fix`: stamps each number-only anchor with its step's id and writes the Journey (#507: a promoted one too — its approval goes stale). Nothing to stamp: nothing written. */
 export async function fixJourneyAnchors(dir: string, id: string): Promise<AnchorFixResult> {
   const { store, journey } = await load(dir, id);
   const { journey: next, stamped } = stampUnstampedAnchors(journey);
   if (stamped.length === 0) return { journeyId: id, issues: anchorLintIssues(journey), stamped };
-  if (journey.metadata.promoted) throw new PromotedJourneyEditError(id);
   await store.put(next);
-  return { journeyId: id, issues: anchorLintIssues((await store.get(id)) ?? next), stamped };
+  return { ...written(id, (await store.get(id)) ?? next), stamped };
 }
 
 export interface AnchorSuggestResult {
