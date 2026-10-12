@@ -1,13 +1,16 @@
 import { AnchorEditError, FsJourneyStore, JourneyRegistry, addAnchor, anchorAddCommand, anchorLintIssues, removeAnchor, suggestAnchors, stampUnstampedAnchors, type AddAnchorInput, type AnchorLintIssue, type AnchorSuggestion, type Journey, type StampedAnchor } from "@jevitate/journey";
 import { UnknownJourneyError } from "./journey-api.js";
+import { journeyReviewHash } from "./journey-review.js";
 
 /**
- * #487: edit a draft Journey's anchors (`journey anchor add|remove`, `journey lint --fix`) — the API
+ * #487/#507: edit a Journey's anchors (`journey anchor add|remove`, `journey lint --fix`) — the API
  * both the CLI and MCP call. Each edit writes the Journey (step ids minted and anchors stamped the
- * way `promote` does) and returns the anchor lint issues that remain.
+ * way `promote` does) and returns the anchor lint issues that remain. On a PROMOTED Journey (#507)
+ * add/remove still work: it stays promoted with its old approval kept (as after `migrate --step-ids`),
+ * the approval is now stale, and the result carries the re-approval command.
  */
 
-/** A PROMOTED Journey's anchors changed: its approval binds to the content hash, so the edit would silently void it. Exit 64. */
+/** `journey lint --fix` on a PROMOTED Journey: refused (its approval binds to the content hash). Exit 64. */
 export class PromotedJourneyEditError extends Error {
   readonly code = "E_JOURNEY_ANCHOR_ARGS";
   constructor(id: string) {
@@ -22,6 +25,10 @@ export interface AnchorEditResult {
   readonly journeyId: string;
   /** The Journey's anchor-rule problems after the edit (warnings; empty when it complies). */
   readonly issues: readonly AnchorLintIssue[];
+  /** #507: true (only) when the edited Journey is promoted — its approval is now stale until a person re-approves. */
+  readonly needsReapproval?: true;
+  /** #507: with `needsReapproval`: `jevitate journey promote <id> --reviewed-hash <new review hash>`. */
+  readonly reapproveCommand?: string;
 }
 
 export interface AnchorFixResult extends AnchorEditResult {
@@ -38,14 +45,15 @@ async function load(dir: string, id: string): Promise<{ store: FsJourneyStore; j
 
 async function edit(dir: string, id: string, change: (j: Journey) => Journey): Promise<AnchorEditResult> {
   const { store, journey } = await load(dir, id);
-  if (journey.metadata.promoted) throw new PromotedJourneyEditError(id);
   const next = change(journey);
   await store.put(next);
   const written = (await store.get(id)) ?? next;
-  return { journeyId: id, issues: anchorLintIssues(written) };
+  const issues = anchorLintIssues(written);
+  if (!written.metadata.promoted) return { journeyId: id, issues };
+  return { journeyId: id, issues, needsReapproval: true, reapproveCommand: `jevitate journey promote ${id} --reviewed-hash ${journeyReviewHash(written)}` };
 }
 
-/** Adds an anchor (`stepId` written at once). Throws `UnknownJourneyError`, `PromotedJourneyEditError`, `AnchorEditError`. */
+/** Adds an anchor (`stepId` written at once). Throws `UnknownJourneyError`, `AnchorEditError`. */
 export function addJourneyAnchor(dir: string, id: string, input: AddAnchorInput): Promise<AnchorEditResult> {
   return edit(dir, id, (j) => addAnchor(j, input));
 }

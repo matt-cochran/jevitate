@@ -12,6 +12,10 @@ function collect(value: string, prev: string[]): string[] {
 function renderIssues(result: AnchorEditResult, out: ((s: string) => void) | undefined): void {
   for (const i of result.issues) out?.(`${i.severity}\t${i.code}\t${i.message}\n\t  fix: ${i.fix}\n`);
   out?.(`${result.issues.length} anchor issue(s) — journey '${result.journeyId}'\n`);
+  if (result.needsReapproval) {
+    out?.(`journey '${result.journeyId}' is promoted: its approval is now stale (kept for the review diff; \`journey review --stale\` lists it, \`check --require-approvals\` fails it)\n`);
+    out?.(`re-approve after review: ${result.reapproveCommand}\n`);
+  }
 }
 
 /** Maps an edit failure to its envelope: unknown id and refused edits are usage errors (64). */
@@ -22,7 +26,7 @@ export function anchorEditFailure(program: Command, err: unknown): void {
 }
 
 /**
- * #487 — `jevitate journey anchor add|remove`: edit a draft Journey's anchors without hand-editing
+ * #487 — `jevitate journey anchor add|remove`: edit a Journey's anchors without hand-editing
  * `metadata.anchors`. The step id is written at once; the anchor lint issues that remain are printed.
  */
 export function registerJourneyAnchorCommands(journey: Command, program: Command, deps: CliDeps): void {
