@@ -5,6 +5,8 @@ import { withEngine } from "./engine.js";
 import { JEV_PROVIDER_FLAG_HELP, type CliDeps, emitCommandResult, environmentSeams, jevProviderArg, withBrowserLaunchFlags } from "./cli-shared.js";
 import { intArg, positiveIntArg } from "./cli-args.js";
 import { forwardedArgv, lastEnvelope } from "./multi-run-cli.js";
+import { FixturePathError } from "@jevitate/recording";
+import { journeyFixtureBaseDir } from "./journey-api.js";
 import { withMissionFlags } from "./campaign-cli.js";
 import { setKillSummary } from "./kill-signal.js";
 import { environmentFromFlags, isEnvironmentError } from "./environments.js";
@@ -15,6 +17,7 @@ import {
   SweepArgsError,
   SweepSpecError,
   defaultSweepOutDir,
+  confineSweepFixture,
   loadSweepTargets,
   runSweep,
   type SweepResult,
@@ -95,6 +98,7 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
     .option("--no-host-starved-retry", "record a target whose run stalled on a starved host (failure.kind host-starved) as is; by default it is retried ONCE after the host's load drops (bounded wait, #452)")
     .option("--base-url <url>", "resolve each target's route against this origin (wins over --env and the file's baseUrl; else JEVITATE_BASE_URL)")
     .option("--env <name>", "resolve each target's route against this named environment's base URL (.jevitate/environments.json)")
+    .option("--fixture <path>", "the upload fixture for every target without its own options.fixture (a file inside the project, confined like explore --fixture; checked before any run)")
     .option("--real", "use live Jev + OpenRouter gateways for every run (requires keys)")
     .option("--fake-ai", "use deterministic fake gateways for every run (pipeline smoke only)")
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
@@ -102,13 +106,21 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(
       taggedAction(program, "sweep", async function (this: Command) {
-        const o = this.opts<{ targets: string; concurrency?: number; resume?: boolean; out?: string; stopOnEnvFailure?: number; hostStarvedRetry?: boolean; baseUrl?: string; env?: string; json?: boolean }>();
+        const o = this.opts<{ targets: string; concurrency?: number; resume?: boolean; out?: string; stopOnEnvFailure?: number; hostStarvedRetry?: boolean; baseUrl?: string; env?: string; fixture?: string; json?: boolean }>();
         const emit = (envelope: Parameters<typeof emitCommandResult>[1], exitCode?: number): void =>
           emitCommandResult(program, envelope, { json: o.json === true, command: "sweep", human: formatSweepHuman, ...(exitCode === undefined ? {} : { exitCode }) });
         try {
           if (o.resume === true && o.out === undefined) throw new SweepArgsError("--resume needs --out <dir> (the sweep directory to resume)");
           let baseUrl = o.baseUrl;
           if (baseUrl === undefined && o.env !== undefined) baseUrl = environmentFromFlags({ env: o.env }, environmentSeams(deps))?.baseUrl;
+          if (o.fixture !== undefined) {
+            try {
+              confineSweepFixture(o.fixture, journeyFixtureBaseDir());
+            } catch (err) {
+              if (!(err instanceof FixturePathError)) throw err;
+              throw new SweepArgsError(`--fixture ${JSON.stringify(o.fixture)} refused (${err.code}): ${err.message}`);
+            }
+          }
           const targets = loadSweepTargets(o.targets, { ...(baseUrl === undefined ? {} : { baseUrl }) });
           const result = await runSweep({
             plan: {
