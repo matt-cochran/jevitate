@@ -595,9 +595,13 @@ setup before the prefix replay, the restore after the mission, and the sweep's r
 
 ### Editing and suggesting anchors (#487)
 
-Anchors are edited with commands, not by hand-editing `metadata.anchors`. They change a **draft**
-Journey only: a promoted Journey's content hash covers its anchors, so edit it as a draft and
-re-promote.
+Anchors are edited with commands, not by hand-editing `metadata.anchors`. They work on a draft and on a
+promoted Journey. A promoted Journey's content hash covers its anchors, so the edit makes its
+approval **stale**: it stays `promoted` and its old approval is kept for the review diff (as after
+`journey migrate --step-ids`), `journey review --stale` lists it, and `check --require-approvals`
+fails it until a person re-approves. The command prints the re-approval command
+(`jevitate journey promote <id> --reviewed-hash <new review hash>`); its JSON result gains
+`needsReapproval: true` and `reapproveCommand`. `journey lint --fix` still refuses a promoted Journey.
 
 ```bash
 jevitate journey anchor add checkout --name payment --step 4 --probe "double submit"   # --step: number or step id
@@ -607,7 +611,7 @@ jevitate journey anchors checkout --suggest # advisory; writes nothing
 ```
 
 Over MCP the same edits are `journey_anchor_add` / `journey_anchor_remove`, `lint_journey` with
-`fix: true` and `journey_anchors` with `suggest: true`; a promoted Journey is refused there too.
+`fix: true` and `journey_anchors` with `suggest: true`; the add/remove results carry `needsReapproval` and `reapproveCommand` there too.
 
 `anchor add` writes the step's stable id at once and prints the anchor issues that remain (name
 rule `[a-z0-9][a-z0-9._-]{0,63}`, duplicates, unknown steps are refused, exit 64).
