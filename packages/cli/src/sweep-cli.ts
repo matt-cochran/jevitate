@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { withEngine } from "./engine.js";
-import { JEV_PROVIDER_FLAG_HELP, type CliDeps, emitCommandResult, environmentSeams, jevProviderArg } from "./cli-shared.js";
+import { JEV_PROVIDER_FLAG_HELP, type CliDeps, emitCommandResult, environmentSeams, jevProviderArg, withBrowserLaunchFlags } from "./cli-shared.js";
 import { intArg, positiveIntArg } from "./cli-args.js";
 import { forwardedArgv, lastEnvelope } from "./multi-run-cli.js";
 import { withMissionFlags } from "./campaign-cli.js";
@@ -23,6 +23,11 @@ import {
 
 /** `sweep`'s own options: everything else it declares is forwarded to every run (as `campaign run`'s). */
 const SWEEP_OWNED: ReadonlySet<string> = new Set(["targets", "concurrency", "resume", "out", "stopOnEnvFailure", "hostStarvedRetry", "baseUrl", "env", "json", "tag"]);
+
+/** The operator flags `sweep` forwards to every run (the browser launch flags included, in order). */
+export function sweepForwardedArgv(cmd: Command): string[] {
+  return forwardedArgv(cmd, SWEEP_OWNED);
+}
 
 /** The human summary: outcome, every target, the deduped defects and the grouped environment causes. */
 export function formatSweepHuman(data: unknown): string {
@@ -72,13 +77,15 @@ export function exploreRunOnce(newProgram: () => Command): SweepRunOnce {
 /** Registers `jevitate sweep` (#425). */
 export function registerSweepCommand(program: Command, deps: CliDeps, buildProgram: (deps: CliDeps) => Command): void {
   withMissionFlags(
-    program
-      .command("sweep")
-      .description(
-        "run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — " +
-          "with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. " +
-          "Every run is tagged target=<id> plus the sweep's and the target's tags",
-      ),
+    withBrowserLaunchFlags(
+      program
+        .command("sweep")
+        .description(
+          "run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — " +
+            "with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. " +
+            "Every run is tagged target=<id> plus the sweep's and the target's tags",
+        ),
+    ),
   )
     .requiredOption("--targets <file>", "the targets file (.tsv with a header row, or .json: an array or {baseUrl?, defaults?, targets})")
     .option("--concurrency <n>", `runs at once (default 1, at most ${MAX_SWEEP_CONCURRENCY}; the machine-wide browser cap still applies)`, intArg({ min: 1, max: MAX_SWEEP_CONCURRENCY }))
@@ -113,7 +120,7 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
               ...(o.stopOnEnvFailure === undefined ? {} : { stopOnEnvFailure: o.stopOnEnvFailure }),
               ...(o.hostStarvedRetry === false ? { retryHostStarved: false } : {}),
               tags: currentRunMetadata()?.tags ?? {},
-              runArgs: forwardedArgv(this, SWEEP_OWNED),
+              runArgs: sweepForwardedArgv(this),
             },
             runOnce: exploreRunOnce(() => buildProgram(deps)),
             // A kill writes (and prints) the sweep's partial aggregate synchronously, then exits 130/143.

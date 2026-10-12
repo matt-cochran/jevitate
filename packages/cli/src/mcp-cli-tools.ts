@@ -603,6 +603,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...JEV_AI,
       },
       omitted: {
+        // The sweep forwards the browser launch flags to every run; as on every browser-driving
+        // command they are the operator's setting, never an MCP argument.
+        ...BROWSER_FLAGS,
+        "--max-browsers": OMIT.browserBin,
+        "--max-browser-memory": OMIT.browserBin,
+        "--extension": OMIT.browserBin,
         "--allow-log-cmd": OMIT.logCmd,
         "--log-source": OMIT.logCmd,
         "--log-defect": OMIT.logCmd,
