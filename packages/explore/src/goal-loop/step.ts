@@ -36,6 +36,18 @@ const CYCLE_OPS: ReadonlySet<string> = new Set([...TARGET_OPS, "scroll_up", "scr
 
 import type { Perception } from "../perceive.js";
 import type { RunContext } from "./context.js";
+import { jobWriteEvidence, writesAllSucceeded, type WriteEvidence } from "../write-evidence.js";
+import { urlMatcher } from "../settle-config.js";
+
+/** #514: the writes the run's own actions made since it started, and whether every one succeeded. */
+function jobWritesOf(ctx: RunContext): WriteEvidence {
+  const { sideEffects, truncated } = ctx.effectLog.entries();
+  return jobWriteEvidence(sideEffects, {
+    truncated,
+    blocked: ctx.readOnly?.blockedTotal ?? 0,
+    ignore: urlMatcher(ctx.cfg.settle?.ignoreRequests),
+  });
+}
 
 /** What a step module tells the loop: go on to the next step, end the run, or fall through. */
 export type Flow = "continue" | "stop" | "next";
@@ -151,9 +163,14 @@ export function newStep(ctx: RunContext, input: StepInput) {
   const acceptedBy = (o: RunOutcome): string => {
     const pending = pendingNote(o);
     if (pending !== null) return `the in-run success checks held, but the final verdict is still pending — ${pending}`;
-    return `goal verified by ${o.status === "completed" ? o.verifiedBy : "?"}`;
+    return `goal verified by ${o.status === "completed" ? `${o.verifiedBy}${o.note === undefined ? "" : ` — ${o.note}`}` : "?"}`;
   };
-  const groundGoal = async (advisoryOnly = false): Promise<{
+  /**
+   * #514: `proposedDone` — the model proposed `done`: the job's own write evidence is weighed too
+   * (never for the before-acting "already met?" check, which would stop a multi-step job at its first
+   * successful write).
+   */
+  const groundGoal = async (advisoryOnly = false, proposedDone = false): Promise<{
     verdict: ReturnType<typeof groundDone>;
     judgments: Record<string, { value: boolean; probability: number }> | undefined;
   }> => {
@@ -163,6 +180,8 @@ export function newStep(ctx: RunContext, input: StepInput) {
     let goalIsSignIn: number | null = null;
     let goalIsSave: number | null = null;
     let saved: ReturnType<SaveProgress["signal"]> = null;
+    let goalIsWrites: number | null = null;
+    let writes: WriteEvidence | undefined;
     if (unsubmittedLabels.length === 0) {
       if (cfg.successCheck !== undefined && !advisoryOnly) {
         successCheck = await cfg.successCheck().then(
@@ -175,6 +194,10 @@ export function newStep(ctx: RunContext, input: StepInput) {
         // #225: the run's own save, as code observed it — its writes, the page's notice, and whether
         // the page still displays what it saved (a field's value is never in the page text).
         saved = ctx.save.signal(snap, ctx.status, ctx.sideEffects.lastClick(), fullText);
+        // #514: a proposed done's own writes, as code observed them — scoped in the same round trip
+        // (no extra model call) only when every one succeeded, and never beside the #225 save facts.
+        if (proposedDone) writes = jobWritesOf(ctx);
+        const writeFacts = writes !== undefined && saved === null && writesAllSucceeded(writes) ? writes.facts : undefined;
         const judged = await judgeGoalCompletion(cfg.judge, {
           goal: cfg.goal,
           url: snap.url,
@@ -184,11 +207,13 @@ export function newStep(ctx: RunContext, input: StepInput) {
           ...pageStatusOf(ctx),
           ...(signIn === null ? {} : { signInFacts: signIn.facts }),
           ...(saved === null ? {} : { saveFacts: saved.facts }),
+          ...(writeFacts === undefined ? {} : { writeFacts }),
           fieldValues: fieldValuesOf(snap.controls, ctx.isBound),
-        }).catch(() => ({ goalMet: null, goalIsSignIn: null, goalIsSave: null }));
+        }).catch(() => ({ goalMet: null, goalIsSignIn: null, goalIsSave: null, goalIsWrites: null }));
         goalMet = judged.goalMet;
         goalIsSignIn = judged.goalIsSignIn;
         goalIsSave = judged.goalIsSave;
+        goalIsWrites = judged.goalIsWrites;
       }
     }
     const verdict = groundDone({
@@ -197,6 +222,7 @@ export function newStep(ctx: RunContext, input: StepInput) {
       ...(goalMet === undefined ? {} : { goalMetProbability: goalMet }),
       ...(signIn === null || goalMet === undefined ? {} : { signIn: { completed: signIn.completed, goalIsSignIn } }),
       ...(saved === null || goalMet === undefined ? {} : { save: { completed: saved.completed, goalIsSave } }),
+      ...(writes === undefined || goalMet === undefined ? {} : { writes: { ...writes, goalIsWrites } }),
     });
     // `value` is code's reading of the probability (the acceptance threshold), not the port's
     // p >= 0.5 — a transcript must never show "goalMet: true" beside "done rejected" (#91).
@@ -204,6 +230,7 @@ export function newStep(ctx: RunContext, input: StepInput) {
     if (goalMet !== undefined && goalMet !== null) judgments.goalMet = { value: goalMet >= GOAL_MET_THRESHOLD, probability: goalMet };
     if (goalIsSignIn !== null) judgments.goalIsSignIn = { value: goalIsSignIn >= GOAL_MET_THRESHOLD, probability: goalIsSignIn };
     if (goalIsSave !== null) judgments.goalIsSave = { value: goalIsSave >= GOAL_MET_THRESHOLD, probability: goalIsSave };
+    if (goalIsWrites !== null) judgments.goalIsWrites = { value: goalIsWrites >= GOAL_MET_THRESHOLD, probability: goalIsWrites };
     return { verdict, judgments: Object.keys(judgments).length === 0 ? undefined : judgments };
   };
   return { ...input, record, signIn, pendingNote, acceptedBy, groundGoal };

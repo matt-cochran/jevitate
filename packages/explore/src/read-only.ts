@@ -194,6 +194,8 @@ export class ReadOnlyGuard {
   readonly #isWrite: WriteClassifier;
   readonly #mode: ReadOnlyMode;
   readonly #blocked: BlockedWrite[] = [];
+  /** #514: every write blocked this run (never reset by `drain`) — a blocked write never succeeded. */
+  #blockedTotal = 0;
   /** Exempt globs; `full` = origin-qualified (matched against origin + path, #194). */
   readonly #allowed: ReadonlyArray<{ readonly re: RegExp; readonly full: boolean }>;
   /** The run's authorized origins (#194); empty = every origin is first-party (fail-closed). */
@@ -336,6 +338,7 @@ export class ReadOnlyGuard {
         return;
       }
       const mismatch = detectAllowOriginMismatch(off, this.#origins, this.#startUrl === undefined ? {} : { startUrl: this.#startUrl });
+      this.#blockedTotal += 1;
       this.#blocked.push({
         method: request.method().toUpperCase(),
         path: endpoint,
@@ -351,6 +354,7 @@ export class ReadOnlyGuard {
       await route.fallback().catch(() => undefined);
       return;
     }
+    this.#blockedTotal += 1;
     this.#blocked.push({ method: request.method().toUpperCase(), path: endpoint, ...this.#hint(request.url()) });
     await this.#refuse(route, request);
   }
@@ -415,6 +419,11 @@ export class ReadOnlyGuard {
     return {
       hint: `${origin} is not an --allow origin but was treated as the app's (same site, API credentials, or an API the page authenticated to) — if it is the app's backend add it to --allow; to let this request through deliberately pass --allow-write "${origin}/<path glob>"`,
     };
+  }
+
+  /** #514: how many writes this guard has blocked over the whole run. */
+  get blockedTotal(): number {
+    return this.#blockedTotal;
   }
 
   /** The writes blocked since the last call. */
