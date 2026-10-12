@@ -14,6 +14,9 @@ import {
   type SweepRunArgs,
   type SweepTarget,
 } from "./sweep-api.js";
+import { sweepForwardedArgv } from "./sweep-cli.js";
+import { buildProgram } from "./program.js";
+import { ProfileManager } from "@jevitate/daemon";
 import type { RunEnvelope } from "./multi-run.js";
 
 /**
@@ -168,6 +171,28 @@ describe("loadSweepTargets", () => {
       expect(msg, fragment).toContain(fragment);
     }
     expect(msg).toMatch(/deny/);
+  });
+
+  it("refuses a per-target browserArg, naming the sweep-level flag that sets it for every run", () => {
+    const p = file("browser-arg.json", JSON.stringify([{ id: "a", url: "http://x.test/", goal: "g", options: { browserArg: ["--no-sandbox"] } }]));
+    expect(() => loadSweepTargets(p, { roots: roots() })).toThrow(/a sweep launches every run's browser the same way: pass --browser-arg to `jevitate sweep`/);
+  });
+
+  it("refuses a per-target browserExecutable, naming the sweep-level flag that sets it for every run", () => {
+    const p = file("browser-exe.json", JSON.stringify([{ id: "a", url: "http://x.test/", goal: "g", options: { browserExecutable: "/opt/chrome" } }]));
+    expect(() => loadSweepTargets(p, { roots: roots() })).toThrow(/a sweep launches every run's browser the same way: pass --browser-executable to `jevitate sweep`/);
+  });
+
+  it("refuses a per-target browserChannel, naming the sweep-level flag that sets it for every run", () => {
+    const p = file("browser-channel.json", JSON.stringify([{ id: "a", url: "http://x.test/", goal: "g", options: { browserChannel: "chrome" } }]));
+    expect(() => loadSweepTargets(p, { roots: roots() })).toThrow(/a sweep launches every run's browser the same way: pass --browser-channel to `jevitate sweep`/);
+  });
+
+  it("the sweep command forwards each --browser-arg value, in order, to every run", () => {
+    const program = buildProgram({ profiles: new ProfileManager("/unused-in-sweep-api-test") });
+    const sweep = program.commands.find((c) => c.name() === "sweep")!;
+    sweep.parseOptions(["--browser-arg", "A", "--browser-arg", "B"]);
+    expect(sweepForwardedArgv(sweep)).toEqual(["--browser-arg", "A", "--browser-arg", "B"]);
   });
 
   it("a target may set only the value-typed run_exploration options (no paths, log commands, secrets, hooks)", () => {
