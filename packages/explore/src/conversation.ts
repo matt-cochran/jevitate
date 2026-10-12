@@ -621,5 +621,11 @@ export function groundDone(e: DoneEvidence): DoneVerdict {
   if (w !== undefined && writesAllSucceeded(w) && w.goalIsWrites !== null && w.goalIsWrites >= GOAL_MET_THRESHOLD) {
     return { accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: WRITES_DONE_NOTE } };
   }
-  return { accept: false, reason: `the goal is not observably achieved on this page (p=${p.toFixed(2)})` };
+  const notMet = `the goal is not observably achieved on this page (p=${p.toFixed(2)})`;
+  // #514: the writes went through but the scope judgment won't vouch for them — say so, so the reader
+  // checks the goal (or repeat test data) instead of hunting an app defect.
+  if (w !== undefined && writesAllSucceeded(w) && w.goalIsWrites !== null) {
+    return { accept: false, reason: `${notMet}; the job's writes succeeded, but they are not judged to be the whole goal (p=${w.goalIsWrites.toFixed(2)})` };
+  }
+  return { accept: false, reason: notMet };
 }

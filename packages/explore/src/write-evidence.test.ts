@@ -42,7 +42,15 @@ describe("#514 groundDone — the job's succeeded writes", () => {
 
   it("rejects a done whose writes all succeeded when the scope judgment says the goal is more than those writes", () => {
     const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: scoped([write(201)], 0.2) });
-    expect(v).toEqual({ accept: false, reason: "the goal is not observably achieved on this page (p=0.24)" });
+    expect(v).toMatchObject({ accept: false });
+  });
+
+  it("says why when the writes all succeeded but are judged not to be the whole goal", () => {
+    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: scoped([write(201)], 0.2) });
+    expect(v).toEqual({
+      accept: false,
+      reason: "the goal is not observably achieved on this page (p=0.24); the job's writes succeeded, but they are not judged to be the whole goal (p=0.20)",
+    });
   });
 
   it("rejects a done whose writes all succeeded when the scope judgment is unavailable", () => {
