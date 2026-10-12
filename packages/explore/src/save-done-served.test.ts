@@ -177,11 +177,10 @@ describe("#225 — a completed save is recognised as done", () => {
   );
 
   it(
-    "a goal asking for more than the save still needs the goal judgment (scope < threshold): not done",
+    "a goal asking for more than the save is not proven by save signals (scope < threshold): only its succeeded write accepts it (#514)",
     async () => {
       const r = await run(timid(0.2));
-      expect(r.outcome.status).toBe("incomplete");
-      expect(r.transcript.at(-1)?.reason).toMatch(/done rejected \(3\/3\)/);
+      expect(r.outcome).toMatchObject({ status: "completed", verifiedBy: "succeeded-writes" });
     },
     90_000,
   );

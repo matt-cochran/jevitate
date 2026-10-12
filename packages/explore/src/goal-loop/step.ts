@@ -36,6 +36,18 @@ const CYCLE_OPS: ReadonlySet<string> = new Set([...TARGET_OPS, "scroll_up", "scr
 
 import type { Perception } from "../perceive.js";
 import type { RunContext } from "./context.js";
+import { jobWriteEvidence, type WriteEvidence } from "../write-evidence.js";
+import { urlMatcher } from "../settle-config.js";
+
+/** #514: the writes the run's own actions made since it started, and whether every one succeeded. */
+function jobWritesOf(ctx: RunContext): WriteEvidence {
+  const { sideEffects, truncated } = ctx.effectLog.entries();
+  return jobWriteEvidence(sideEffects, {
+    truncated,
+    blocked: ctx.readOnly?.blockedTotal ?? 0,
+    ignore: urlMatcher(ctx.cfg.settle?.ignoreRequests),
+  });
+}
 
 /** What a step module tells the loop: go on to the next step, end the run, or fall through. */
 export type Flow = "continue" | "stop" | "next";
@@ -151,9 +163,14 @@ export function newStep(ctx: RunContext, input: StepInput) {
   const acceptedBy = (o: RunOutcome): string => {
     const pending = pendingNote(o);
     if (pending !== null) return `the in-run success checks held, but the final verdict is still pending — ${pending}`;
-    return `goal verified by ${o.status === "completed" ? o.verifiedBy : "?"}`;
+    return `goal verified by ${o.status === "completed" ? `${o.verifiedBy}${o.note === undefined ? "" : ` — ${o.note}`}` : "?"}`;
   };
-  const groundGoal = async (advisoryOnly = false): Promise<{
+  /**
+   * #514: `proposedDone` — the model proposed `done`: the job's own write evidence is weighed too
+   * (never for the before-acting "already met?" check, which would stop a multi-step job at its first
+   * successful write).
+   */
+  const groundGoal = async (advisoryOnly = false, proposedDone = false): Promise<{
     verdict: ReturnType<typeof groundDone>;
     judgments: Record<string, { value: boolean; probability: number }> | undefined;
   }> => {
@@ -197,6 +214,7 @@ export function newStep(ctx: RunContext, input: StepInput) {
       ...(goalMet === undefined ? {} : { goalMetProbability: goalMet }),
       ...(signIn === null || goalMet === undefined ? {} : { signIn: { completed: signIn.completed, goalIsSignIn } }),
       ...(saved === null || goalMet === undefined ? {} : { save: { completed: saved.completed, goalIsSave } }),
+      ...(proposedDone && goalMet !== undefined ? { writes: jobWritesOf(ctx) } : {}),
     });
     // `value` is code's reading of the probability (the acceptance threshold), not the port's
     // p >= 0.5 — a transcript must never show "goalMet: true" beside "done rejected" (#91).

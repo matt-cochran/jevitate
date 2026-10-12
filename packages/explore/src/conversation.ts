@@ -7,6 +7,7 @@ import { backgroundEndpoints, endpointKey } from "./stuck-actions.js";
 import { clock } from "@jevitate/domain";
 import { clockBounded } from "./clock-bound.js";
 import { SUBMIT_NAME } from "./composer-evidence.js";
+import type { WriteEvidence } from "./write-evidence.js";
 
 /**
  * Conversational pages (chat composers, assistants, interview flows): the independent-code side of
@@ -512,9 +513,12 @@ export type RunOutcome =
       /**
        * What proved it: the mission's success condition, the grounded goal judgment, or (a find-out
        * goal, #101) a reported answer whose every claim code found on an observed page, or (a sign-in
-       * goal, #188) the sign-in completion code observed after the run's own sign-in steps.
+       * goal, #188) the sign-in completion code observed after the run's own sign-in steps, or (#514)
+       * the job's own writes, every one of which succeeded, on a page that shows no change.
        */
-      readonly verifiedBy: "success-condition" | "grounded-judgment" | "grounded-answer" | "sign-in-signals" | "save-signals";
+      readonly verifiedBy: "success-condition" | "grounded-judgment" | "grounded-answer" | "sign-in-signals" | "save-signals" | "succeeded-writes";
+      /** #514: what the proof leaves open, for the result and the transcript (`WRITES_DONE_NOTE`). */
+      readonly note?: string;
     }
   | { readonly status: "incomplete"; readonly reason: string };
 
@@ -535,6 +539,9 @@ export const GOAL_MET_THRESHOLD = 0.75;
  * trigger: the grounded check (`groundDone`, same threshold as a proposed `done`) is the verdict.
  */
 export const GOAL_CHECK_TRIGGER = 0.5;
+
+/** #514: the note an outcome accepted on the job's succeeded writes carries (result and transcript). */
+export const WRITES_DONE_NOTE = "the job's writes succeeded; the page shows no change (repeat data?)";
 
 export interface DoneEvidence {
   /** Fields holding typed text that was never submitted (labels). */
@@ -561,6 +568,12 @@ export interface DoneEvidence {
    * without a success condition — and preferred over the goal judgment's probability.
    */
   readonly save?: { readonly completed: boolean; readonly goalIsSave: number | null };
+  /**
+   * #514: the writes the run's own actions made since the mission started (./write-evidence.ts),
+   * present only for a model-proposed `done`. Weighed only without a success condition, and only
+   * after the page judgment ran and said the goal is not observably met.
+   */
+  readonly writes?: WriteEvidence;
 }
 
 /**
@@ -573,7 +586,10 @@ export interface DoneEvidence {
  *    the goal — a goal asking for more than signing in still needs the goal judgment;
  *  - (#225, checked BEFORE the goal judgment: code evidence is preferred) code observed the run's own
  *    save go through and stay displayed AND the advisory scope judgment says the whole goal is that
- *    save — same split: code proves the save, the model only scopes the goal.
+ *    save — same split: code proves the save, the model only scopes the goal;
+ *  - (#514, last) the page judgment ran and says not met, but the job's own actions made at least
+ *    one write and EVERY one succeeded (2xx; none failed, blocked, unanswered or unlisted): the
+ *    job's work went through on a page that shows no change (repeat data) — accepted with a note.
  */
 export function groundDone(e: DoneEvidence): DoneVerdict {
   if (e.unsubmitted.length > 0) {
@@ -598,5 +614,9 @@ export function groundDone(e: DoneEvidence): DoneVerdict {
     return { accept: true, outcome: { status: "completed", verifiedBy: "sign-in-signals" } };
   }
   if (p === undefined || p === null) return { accept: false, reason: "goal completion could not be judged on this page" };
+  const w = e.writes;
+  if (w !== undefined && w.succeeded > 0 && w.unsucceeded.length === 0) {
+    return { accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: WRITES_DONE_NOTE } };
+  }
   return { accept: false, reason: `the goal is not observably achieved on this page (p=${p.toFixed(2)})` };
 }
