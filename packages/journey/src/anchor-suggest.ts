@@ -11,7 +11,7 @@ import type { Journey } from "./journey.js";
  */
 
 /** What changed at the step: a write request completed, a new page was reached, or a form became valid. */
-export type AnchorSuggestionKind = "write" | "new-page" | "form-valid";
+export type AnchorSuggestionKind = "write" | "new-page" | "form-valid" | "job-end";
 
 export interface AnchorSuggestion {
   /** Satisfies `ANCHOR_NAME_RULE_RE` and collides with no existing or earlier-suggested anchor. */
@@ -36,6 +36,7 @@ const PROBES: Record<AnchorSuggestionKind, readonly string[]> = {
   write: ["double submit", "back/reload", "replay the write", "a second tab"],
   "new-page": ["back/reload", "a second tab"],
   "form-valid": ["double submit", "back/reload"],
+  "job-end": ["back/reload", "a second tab"],
 };
 
 const SUBMIT_WORDS = /\b(submit|save|send|place|pay|purchase|buy|continue|next|confirm|create|add|sign ?up|sign ?in|log ?in|register|apply|book|checkout|finish|done|post)\b/i;
@@ -69,6 +70,39 @@ function isSubmitControl(r: RecordedStep): boolean {
   return r.step.kind === "click" && SUBMIT_WORDS.test(`${controlName(r)} ${r.step.label ?? ""}`);
 }
 
+interface WriteEvidence {
+  readonly method: string;
+  readonly path: string;
+  readonly line: string;
+}
+
+/**
+ * #506: write requests an older recording kept only as page timing (`timing.page.requests.slowest`,
+ * no action delta): classified by the same write classifier, and only when the request did not fail.
+ */
+function timingWrites(recorded: RecordedStep, classify: ReturnType<typeof writeClassifier>): WriteEvidence[] {
+  const out: WriteEvidence[] = [];
+  for (const r of recorded.timing?.page?.requests.slowest ?? []) {
+    if (r.status !== null && r.status >= 400) continue;
+    const m = /^(\S+)\s+(\S+)/.exec(r.endpoint.trim());
+    const method = m?.[1] ?? "";
+    const path = m !== null ? pathOf(m[2]!) : pathOf(r.url);
+    if (method === "" || !classify({ method, path })) continue;
+    out.push({ method, path, line: `${method} ${path}${r.status === null ? "" : ` → ${r.status}`}` });
+  }
+  return out;
+}
+
+/** Does the Journey's end state name this write (a `requestMade` / `responseStatus` check on it)? */
+function endStateNames(journey: Journey, w: WriteEvidence): boolean {
+  return (journey.metadata.endState ?? []).some((c) => (c.kind === "requestMade" || c.kind === "responseStatus") && c.method.toUpperCase() === w.method.toUpperCase() && globMatches(c.pathGlob, w.path));
+}
+
+function globMatches(glob: string, value: string): boolean {
+  const src = glob.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+  return new RegExp(`^${src}$`, "i").test(value);
+}
+
 /**
  * Anchors worth adding to `journey`, in step order, one per step (a write wins over a new page, a
  * new page over a valid form). Steps already carrying an anchor (by id or number) are skipped.
@@ -94,24 +128,36 @@ export function suggestAnchors(journey: Journey, opts: AnchorSuggestOptions = {}
     out.push({ name: uniqueName(base), step: index + 1, ...(recorded.stepId === undefined ? {} : { stepId: recorded.stepId }), kind, reason, probes: PROBES[kind] });
   };
 
-  let prevPath: string | undefined;
-  let prevPage = -1;
-  flat.forEach(({ index, page, recorded }) => {
-    const segmentPath = pathOf(journey.recording.pages[page]!.url);
-    const stepUrl = recorded.step.kind === "navigate" ? recorded.step.url : undefined;
-    const path = recorded.delta?.url !== undefined ? pathOf(recorded.delta.url.after) : stepUrl !== undefined ? pathOf(stepUrl) : segmentPath;
-    const pageChanged = page !== prevPage && prevPage >= 0 ? segmentPath !== prevPath : path !== prevPath;
-    const reached = prevPath !== undefined && pageChanged;
-    const beforePath = prevPath;
-    prevPath = path;
-    prevPage = page;
+  // New-page evidence per step. A change with no recorded url delta is credited to the LAST step of
+  // the previous page segment — the action that navigated — not the first step of the next one.
+  const reachedAt = new Map<number, string>();
+  {
+    let before: string | undefined;
+    let beforePage = -1;
+    flat.forEach(({ index, page, recorded }) => {
+      const segmentPath = pathOf(journey.recording.pages[page]!.url);
+      const stepUrl = recorded.step.kind === "navigate" ? recorded.step.url : undefined;
+      const deltaUrl = recorded.delta?.url?.after;
+      const path = deltaUrl !== undefined ? pathOf(deltaUrl) : stepUrl !== undefined ? pathOf(stepUrl) : segmentPath;
+      const segmentChange = page !== beforePage && beforePage >= 0;
+      const changed = before !== undefined && (segmentChange ? segmentPath !== before : path !== before);
+      if (changed) {
+        const at = segmentChange && deltaUrl === undefined && stepUrl === undefined ? index - 1 : index;
+        if (!reachedAt.has(at)) reachedAt.set(at, `navigates from ${before} to ${path}`);
+      }
+      before = path;
+      beforePage = page;
+    });
+  }
 
+  flat.forEach(({ index, recorded }) => {
     const anchored = (recorded.stepId !== undefined && anchoredIds.has(recorded.stepId)) || anchoredSteps.has(index + 1);
 
-    const writes = (recorded.delta?.requests ?? []).flatMap((line) => {
+    const deltaWrites = (recorded.delta?.requests ?? []).flatMap((line) => {
       const m = /^(\S+)\s+(\S+)/.exec(line.trim());
-      return m !== null && classify({ method: m[1]!, path: m[2]! }) ? [{ method: m[1]!, path: m[2]!, line: line.trim() }] : [];
+      return m !== null && classify({ method: m[1]!, path: m[2]!, }) ? [{ method: m[1]!, path: m[2]!, line: line.trim() }] : [];
     });
+    const writes = deltaWrites.length > 0 ? deltaWrites : timingWrites(recorded, classify);
     const declared = (recorded.expectRequests ?? []).filter((c) => classify({ method: c.method, path: c.pathGlob }));
     const next = flat[index + 1]?.recorded;
     const formValid =
@@ -122,19 +168,26 @@ export function suggestAnchors(journey: Journey, opts: AnchorSuggestOptions = {}
     if (writes.length > 0) {
       const w = writes[0]!;
       const seg = lastSegment(pathOf(w.path));
-      push(index, "write", seg === "" ? "write-done" : `${slug(seg)}-written`, `${w.line} completed here`);
+      push(index, "write", seg === "" ? "write-done" : `${slug(seg)}-written`, `${w.line} completed here${endStateNames(journey, w) ? " (named by the end state)" : ""}`);
     } else if (declared.length > 0) {
       const c = declared[0]!;
       const seg = lastSegment(pathOf(c.pathGlob.replace(/\*/g, "")));
       push(index, "write", seg === "" ? "write-done" : `${slug(seg)}-written`, `the step expects a ${c.method.toUpperCase()} ${c.pathGlob} write`);
-    } else if (reached) {
-      const seg = lastSegment(path);
-      push(index, "new-page", seg === "" ? "home-page" : `${slug(seg)}-page`, `navigates from ${beforePath} to ${path}`);
+    } else if (reachedAt.has(index)) {
+      const reason = reachedAt.get(index)!;
+      const seg = lastSegment(reason.slice(reason.lastIndexOf(" to ") + 4));
+      push(index, "new-page", seg === "" ? "home-page" : `${slug(seg)}-page`, reason);
     } else if (formValid) {
       const submit = next !== undefined && isSubmitControl(next) ? controlName(next) : "";
       push(index, "form-valid", submit === "" ? "form-valid" : `${slug(submit)}-ready`, submit === "" ? "a change enabled the form" : `the form is filled and ready for '${submit}'`);
     }
   });
+  const lastIndex = flat.length - 1;
+  if (out.length === 0 && journey.metadata.job !== undefined && lastIndex >= 0) {
+    const last = flat[lastIndex]!.recorded;
+    const anchored = (last.stepId !== undefined && anchoredIds.has(last.stepId)) || anchoredSteps.has(lastIndex + 1);
+    if (!anchored) push(lastIndex, "job-end", `${journey.metadata.job}-done`, `fallback: nothing else changed state, so the last step is proposed as the end of job '${journey.metadata.job}'`);
+  }
   return out;
 }
 
