@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import {
   MISSION_EXIT_CODES,
@@ -17,6 +17,18 @@ import { confineMcpPath, defaultMcpPathRoots } from "./mcp-paths.js";
 import { EXPLORE_STRATEGIES } from "./cli-shared.js";
 import { STARVED_LOAD_PER_CORE, hostProbe, validateAllowControlPatterns, validateDenyPatterns } from "@jevitate/explore";
 import { parseAuthCheck } from "./persona-login.js";
+import { journeyFixtureBaseDir } from "./journey-api.js";
+import {
+  FixturePathError,
+  fixtureEscapesRoot,
+  fixtureNoRoot,
+  fixtureNotFound,
+  fixtureOutsideProject,
+  fixtureRootRefusal,
+  fixtureSensitive,
+  fixtureSensitiveReason,
+  fixtureUnsafeRoot,
+} from "@jevitate/recording";
 
 /**
  * `jevitate sweep` (#425): one release check over many targets (features/routes) × personas, run
@@ -108,7 +120,41 @@ export function sweepTargetOptions(): Readonly<Record<string, CliParam>> {
     if (SWEEP_OWNED.has(name) || p.positional === true || !VALUE_KINDS.has(p.kind)) continue;
     out[name] = p;
   }
+  // `fixture` is a path kind on MCP (so excluded above), but the CLI's `explore --fixture` is confined to
+  // the project root (#498) and the sweep re-checks it when the spec loads: a target may set it (#513).
+  out.fixture = { kind: "string", flag: "--fixture" };
   return out;
+}
+
+/**
+ * #513: a sweep fixture, checked synchronously against the project root exactly like every upload
+ * fixture (#498): inside the root (after realpath), an existing file, not sensitive. Returns the absolute
+ * path (a relative one resolves against the working directory, as `explore --fixture` does).
+ * Throws `FixturePathError`.
+ */
+export function confineSweepFixture(raw: string, root: string | undefined): string {
+  if (root === undefined) throw fixtureNoRoot(raw);
+  const unsafe = fixtureRootRefusal(root);
+  if (unsafe !== null) throw fixtureUnsafeRoot(raw, root, unsafe);
+  const absolute = resolve(raw);
+  const { escapes, real } = fixtureEscapesRoot(absolute, root);
+  if (escapes) throw fixtureOutsideProject(real === absolute ? absolute : `${absolute} (→ ${real})`, root);
+  let isFile = false;
+  try {
+    isFile = statSync(real).isFile();
+  } catch {
+    // not there
+  }
+  if (!isFile) throw fixtureNotFound(absolute, root);
+  let realRoot = resolve(root);
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    // keep the lexical root
+  }
+  const sensitive = fixtureSensitiveReason(real, realRoot) ?? fixtureSensitiveReason(absolute, resolve(root));
+  if (sensitive !== null) throw fixtureSensitive(absolute, root, sensitive);
+  return absolute;
 }
 
 export interface SweepPersona {
@@ -140,6 +186,8 @@ export interface LoadSweepTargetsOptions {
   /** Extra roots a persona storage state may live in (default: the project and `~/.jevitate`). */
   readonly roots?: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
+  /** The project root a target's `options.fixture` is confined to (default: the folder holding `.jevitate/`). */
+  readonly projectRoot?: string;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -480,6 +528,15 @@ export function loadSweepTargets(path: string, opts: LoadSweepTargetsOptions = {
     if ((effectiveStrategy === "goal" || effectiveStrategy === "usability") && typeof goal !== "string" && options.feature === undefined) {
       problems.push(`${where}: strategy ${effectiveStrategy} needs a goal${effectiveStrategy === "goal" ? " (or options.feature for a feature run)" : ""}`);
     }
+    if (typeof options.fixture === "string") {
+      try {
+        options.fixture = confineSweepFixture(options.fixture, opts.projectRoot ?? journeyFixtureBaseDir());
+      } catch (err) {
+        if (!(err instanceof FixturePathError)) throw err;
+        problems.push(`${where}: options.fixture ${JSON.stringify(options.fixture)} refused (${err.code}): ${err.message}`);
+        delete options.fixture;
+      }
+    } else if (options.fixture !== undefined) problems.push(`${where}: options.fixture must be a file path`);
     const optionArgv = optionArgvOf(options, where, problems);
     validateRunShaping(options, effectiveStrategy, where, problems);
 

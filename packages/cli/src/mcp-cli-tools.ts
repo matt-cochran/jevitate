@@ -587,6 +587,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         concurrency: n("--concurrency"),
         resume: b("--resume"),
         out: path("--out"),
+        // #513: the sweep-wide upload fixture (confined to the path roots here and to the project root by the CLI, #498).
+        fixture: path("--fixture"),
         stopOnEnvFailure: n("--stop-on-env-failure"),
         hostStarvedRetry: b("--no-host-starved-retry"),
         ...ENVIRONMENT,
