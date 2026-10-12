@@ -21,7 +21,10 @@ import type { Journey, JourneyAnchor } from "./journey.js";
  * `journeyRefIssues` (catalog-refs.ts). `boundary` needs a `jobStep` — the schema refuses one without.
  */
 
-/** An anchor name (structural): a safe word that is never all digits (`--at-step 3` is a step number). */
+/**
+ * The legacy LOAD rule: broad on purpose — it accepts ':' and uppercase so pre-0.11 Journeys still
+ * load. New names follow ANCHOR_NAME_RULE_RE (the 0.11 rule below, #478).
+ */
 export const ANCHOR_NAME_RE = /^(?![0-9]+$)[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
 /** The longest anchor name accepted at load (structural). */
@@ -169,7 +172,7 @@ export function anchorLintIssues(journey: Journey, opts: AnchorLintOptions = {})
       severity,
       path: "metadata.anchors",
       message: `the Journey is linked to job '${journey.metadata.job}' but names no anchor — a job-linked Journey marks where the job's steps start and end`,
-      fix: `add a named anchor, e.g. metadata.anchors: [{ "name": "<job-step>:end", "step": <n>, "jobStep": "<job step id>", "boundary": "end" }]`,
+      fix: `add a named anchor, e.g. metadata.anchors: [{ "name": "<job-step>.end", "step": <n>, "jobStep": "<job step id>", "boundary": "end" }]`,
     });
   }
   return out;

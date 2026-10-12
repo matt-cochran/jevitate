@@ -7,6 +7,42 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.13.0] – 2026-10-12
+
+0.13.0 fixes what Journeeze hit upgrading to 0.12: anchors on promoted Journeys, `--suggest` on older recordings, the allow-list hint, and sweep browser flags, fixtures and exit. Missions now count a job's own succeeded writes, and the largest wiring and mission-loop functions are split into modules (no behaviour change).
+
+### Behaviour changes
+
+- **Anchors on a promoted Journey (#507).** `journey anchor add|remove` and `journey lint --fix` work on a promoted Journey, from the CLI and over MCP.
+  - The approval goes stale. The Journey stays promoted, and its old approval is kept for the review diff.
+  - `journey review --stale` lists it, and `check --require-approvals` fails it until a person re-approves.
+  - The result carries `needsReapproval` and `reapproveCommand`.
+- **A job whose writes succeeded is done, even when the page looks unchanged (#514).** In goal and usability missions, a rejected `done` is accepted when:
+  - the job's own actions made at least one write;
+  - every write succeeded (2xx, none blocked);
+  - the scope judgment says those writes are the whole goal. It is asked in the same judgment call, at the threshold the sign-in and save rules use.
+
+  Otherwise the rejection stands. When the writes succeeded but scope is low, the reason now says so.
+- **`journey anchors --suggest` on older recordings (#506).**
+  - Writes come from recorded request timings and end-state checks.
+  - A new page goes on the click that navigated.
+  - A job-linked Journey with nothing else to suggest gets its last step proposed.
+- **Allow-list hint (#508).** The blocked-write hint prints the full `--allow` list to set, start origin included. `E_UNAUTHORIZED_EXPLORE_TARGET` says the start URL's origin must be in it. The list itself stays exact.
+
+### Added
+
+- `sweep` takes the browser launch flags (`--browser-arg`, `--browser-executable`, `--browser-channel`, `--extension`, `--max-browsers`, `--max-browser-memory`, `--ignore-host-load`) and forwards them to every run (#509).
+- `sweep` targets can carry their own upload fixture: `options.fixture`, or a sweep-wide `--fixture`. It is confined like every upload fixture and checked when the spec loads. MCP `run_sweep` takes `fixture` (#513).
+
+### Fixed
+
+- A run ends after writing its result again: a `cmd:`/`docker:` log source's pipes are destroyed on close (#511).
+- `journey lint`'s `job-anchors` hint suggests an anchor name the 0.11 rule accepts (#505).
+
+### Internal
+
+- The `explore` and `journey` command wiring, the MCP tool definitions, the review-sheet renderer and the mission loops are split from large functions into orchestrators plus modules (#499, #500). There is no behaviour change. It is guarded by byte-identical `--help`, MCP-parity, allowlist and API-surface snapshots, and by a real-model dogfood comparison.
+
 ## [0.12.0] – 2026-10-11
 
 0.12.0 makes Journey sign-off readable and closes an upload exfiltration path.

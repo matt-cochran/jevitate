@@ -14,6 +14,9 @@ import {
   type SweepRunArgs,
   type SweepTarget,
 } from "./sweep-api.js";
+import { sweepForwardedArgv } from "./sweep-cli.js";
+import { buildProgram } from "./program.js";
+import { ProfileManager } from "@jevitate/daemon";
 import type { RunEnvelope } from "./multi-run.js";
 
 /**
@@ -168,6 +171,28 @@ describe("loadSweepTargets", () => {
       expect(msg, fragment).toContain(fragment);
     }
     expect(msg).toMatch(/deny/);
+  });
+
+  it("refuses a per-target browserArg, naming the sweep-level flag that sets it for every run", () => {
+    const p = file("browser-arg.json", JSON.stringify([{ id: "a", url: "http://x.test/", goal: "g", options: { browserArg: ["--no-sandbox"] } }]));
+    expect(() => loadSweepTargets(p, { roots: roots() })).toThrow(/a sweep launches every run's browser the same way: pass --browser-arg to `jevitate sweep`/);
+  });
+
+  it("refuses a per-target browserExecutable, naming the sweep-level flag that sets it for every run", () => {
+    const p = file("browser-exe.json", JSON.stringify([{ id: "a", url: "http://x.test/", goal: "g", options: { browserExecutable: "/opt/chrome" } }]));
+    expect(() => loadSweepTargets(p, { roots: roots() })).toThrow(/a sweep launches every run's browser the same way: pass --browser-executable to `jevitate sweep`/);
+  });
+
+  it("refuses a per-target browserChannel, naming the sweep-level flag that sets it for every run", () => {
+    const p = file("browser-channel.json", JSON.stringify([{ id: "a", url: "http://x.test/", goal: "g", options: { browserChannel: "chrome" } }]));
+    expect(() => loadSweepTargets(p, { roots: roots() })).toThrow(/a sweep launches every run's browser the same way: pass --browser-channel to `jevitate sweep`/);
+  });
+
+  it("the sweep command forwards each --browser-arg value, in order, to every run", () => {
+    const program = buildProgram({ profiles: new ProfileManager("/unused-in-sweep-api-test") });
+    const sweep = program.commands.find((c) => c.name() === "sweep")!;
+    sweep.parseOptions(["--browser-arg", "A", "--browser-arg", "B"]);
+    expect(sweepForwardedArgv(sweep)).toEqual(["--browser-arg", "A", "--browser-arg", "B"]);
   });
 
   it("a target may set only the value-typed run_exploration options (no paths, log commands, secrets, hooks)", () => {
@@ -379,5 +404,53 @@ describe("runSweep", () => {
   it("targetArgv passes the target's id as --target", () => {
     const argv = targetArgv({ tags: {}, runArgs: [] }, target("checkout"), "/out/checkout");
     expect(argv).toEqual(expect.arrayContaining(["--target", "checkout"]));
+  });
+});
+
+describe("#513 per-target fixture", () => {
+  const proj = (): string => {
+    mkdirSync(join(dir, "proj", ".jevitate"), { recursive: true });
+    mkdirSync(join(dir, "proj", "fixtures"), { recursive: true });
+    writeFileSync(join(dir, "proj", "fixtures", "contacts.csv"), "a,b\n");
+    return join(dir, "proj");
+  };
+  const spec = (fixture: string): string => file("fx.json", JSON.stringify([{ id: "import", url: "http://x.test/", goal: "import the CSV", options: { fixture } }]));
+
+  it("forwards a project-relative fixture to the target's explore run as an absolute --fixture", () => {
+    const root = proj();
+    const t = loadSweepTargets(spec(join(root, "fixtures", "contacts.csv")), { roots: roots(), projectRoot: root });
+    expect(t[0]!.optionArgv).toContain(`--fixture=${join(root, "fixtures", "contacts.csv")}`);
+  });
+
+  it("refuses a fixture outside the project root, naming the target, the path and the reason", () => {
+    const root = proj();
+    const outside = file("secret.csv", "x");
+    expect(() => loadSweepTargets(spec(outside), { roots: roots(), projectRoot: root })).toThrow(
+      new RegExp(`fx.json: targets\\[0\\] \\(import\\): options\\.fixture.*secret\\.csv.*fixture-outside-project.*outside the project root`),
+    );
+  });
+
+  it("refuses a sensitive fixture inside the project root", () => {
+    const root = proj();
+    writeFileSync(join(root, "fixtures", "id_rsa"), "k");
+    expect(() => loadSweepTargets(spec(join(root, "fixtures", "id_rsa")), { roots: roots(), projectRoot: root })).toThrow(/fixture-sensitive.*SSH private key/);
+  });
+
+  it("refuses a missing fixture before any run", () => {
+    const root = proj();
+    expect(() => loadSweepTargets(spec(join(root, "fixtures", "nope.csv")), { roots: roots(), projectRoot: root })).toThrow(/fixture-not-found/);
+  });
+
+  it("sweep --fixture is forwarded to every run", () => {
+    const program = buildProgram({ profiles: new ProfileManager("/unused-in-sweep-api-test") });
+    const sweep = program.commands.find((c) => c.name() === "sweep")!;
+    sweep.parseOptions(["--fixture", "fixtures/contacts.csv"]);
+    expect(sweepForwardedArgv(sweep)).toEqual(["--fixture", "fixtures/contacts.csv"]);
+  });
+
+  it("puts a target's own --fixture after the sweep-wide one so it overrides", () => {
+    const t = { id: "a", url: "http://x.test/", tags: {}, options: {}, optionArgv: ["--fixture=/own.csv"] } as SweepTarget;
+    const argv = targetArgv({ tags: {}, runArgs: ["--fixture", "/default.csv"] }, t, "/out");
+    expect(argv.lastIndexOf("--fixture=/own.csv")).toBeGreaterThan(argv.indexOf("--fixture"));
   });
 });

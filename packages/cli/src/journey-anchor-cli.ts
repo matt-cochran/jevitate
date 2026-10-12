@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { UnknownJourneyError } from "./journey-api.js";
-import { AnchorEditError, PromotedJourneyEditError, addJourneyAnchor, removeJourneyAnchor, suggestJourneyAnchors, type AnchorEditResult } from "./journey-anchor-api.js";
+import { AnchorEditError, addJourneyAnchor, removeJourneyAnchor, suggestJourneyAnchors, type AnchorEditResult } from "./journey-anchor-api.js";
 import { type CliDeps, emitJson, resolveJourneysDir } from "./cli-shared.js";
 
 function collect(value: string, prev: string[]): string[] {
@@ -12,25 +12,29 @@ function collect(value: string, prev: string[]): string[] {
 function renderIssues(result: AnchorEditResult, out: ((s: string) => void) | undefined): void {
   for (const i of result.issues) out?.(`${i.severity}\t${i.code}\t${i.message}\n\t  fix: ${i.fix}\n`);
   out?.(`${result.issues.length} anchor issue(s) — journey '${result.journeyId}'\n`);
+  if (result.needsReapproval) {
+    out?.(`journey '${result.journeyId}' is promoted: its approval is now stale (kept for the review diff; \`journey review --stale\` lists it, \`check --require-approvals\` fails it)\n`);
+    out?.(`re-approve after review: ${result.reapproveCommand}\n`);
+  }
 }
 
 /** Maps an edit failure to its envelope: unknown id and refused edits are usage errors (64). */
 export function anchorEditFailure(program: Command, err: unknown): void {
   if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", err.message));
-  else if (err instanceof AnchorEditError || err instanceof PromotedJourneyEditError) emitJson(program, fail("E_JOURNEY_ANCHOR_ARGS", err.message));
+  else if (err instanceof AnchorEditError) emitJson(program, fail("E_JOURNEY_ANCHOR_ARGS", err.message));
   else emitJson(program, fail("E_JOURNEY_ANCHOR_ARGS", String(err instanceof Error ? err.message : err)));
 }
 
 /**
- * #487 — `jevitate journey anchor add|remove`: edit a draft Journey's anchors without hand-editing
+ * #487 — `jevitate journey anchor add|remove`: edit a Journey's anchors without hand-editing
  * `metadata.anchors`. The step id is written at once; the anchor lint issues that remain are printed.
  */
 export function registerJourneyAnchorCommands(journey: Command, program: Command, deps: CliDeps): void {
-  const anchor = journey.command("anchor").description("add or remove a draft Journey's anchors (#487): named steps to branch missions off, written with the step's stable id");
+  const anchor = journey.command("anchor").description("add or remove a Journey's anchors (#487): named steps to branch missions off, written with the step's stable id; on a promoted Journey the approval goes stale (#507)");
 
   anchor
     .command("add <journeyId>")
-    .description("add an anchor to a draft Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues")
+    .description("add an anchor to a Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues")
     .requiredOption("--name <name>", "the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit")
     .requiredOption("--step <n|stepId>", "the step the anchor follows: a 1-based step number or a step id")
     .option("--description <text>", "what this state is, in words")
@@ -55,7 +59,7 @@ export function registerJourneyAnchorCommands(journey: Command, program: Command
 
   anchor
     .command("remove <journeyId>")
-    .description("remove an anchor from a draft Journey; re-lints and prints the anchor issues")
+    .description("remove an anchor from a Journey; re-lints and prints the anchor issues")
     .requiredOption("--name <name>", "the anchor to remove")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")

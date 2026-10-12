@@ -374,6 +374,18 @@ export const GOAL_IS_SAVE_INSTRUCTIONS =
   "wording only. Not only saving: the goal also asks to find, check, compare, send, or do something else " +
   "after the save, or to save something on a different page.";
 
+/**
+ * The advisory "is the WHOLE goal what these writes did?" head (#514), asked in the same round trip
+ * only for a proposed `done` whose job writes all succeeded (and no save facts are shown, #225).
+ */
+export const GOAL_IS_WRITES_QUESTION = "goalIsOnlyWhatTheseWritesDid";
+
+export const GOAL_IS_WRITES_INSTRUCTIONS =
+  "Is the WHOLE goal what the run's write requests listed under WRITES (observed by code) did, with " +
+  "nothing further to do once they went through? Answer from the goal's wording and the steps already " +
+  "taken (history). Not the whole goal: a step the goal needs was not taken yet (a confirm / import / " +
+  "submit / send step still to do), or the goal also asks to find, check, compare or do something else.";
+
 /** Cap on the form-field values shown to the goal judgment (#225). */
 const FIELD_VALUES_CHARS = 1_500;
 
@@ -396,13 +408,15 @@ export async function judgeGoalCompletion(
     readonly signInFacts?: string;
     /** #225: code-observed save facts (./save-completion.ts), when the run submitted typed form values. */
     readonly saveFacts?: string;
+    /** #514: code-observed write facts (method, endpoint, status — never a value), when every job write succeeded. */
+    readonly writeFacts?: string;
     /**
      * #225: the page's form fields and their current values (non-secret — see `Control.value`). A
      * field's value is never in the page's `innerText`, yet it is where a form displays what was saved.
      */
     readonly fieldValues?: ReadonlyArray<{ readonly label: string; readonly value: string }>;
   },
-): Promise<{ goalMet: number | null; goalIsSignIn: number | null; goalIsSave: number | null }> {
+): Promise<{ goalMet: number | null; goalIsSignIn: number | null; goalIsSave: number | null; goalIsWrites: number | null }> {
   const secrets = input.secrets ?? [];
   const state = buildJudgmentState({
     goal: input.goal,
@@ -411,6 +425,7 @@ export async function judgeGoalCompletion(
       PROMPT_INJECTION_GUARD,
       ...(input.signInFacts === undefined ? [] : [`SIGN-IN (observed by code, trusted): ${input.signInFacts}`]),
       ...(input.saveFacts === undefined ? [] : [`SAVE (observed by code, trusted): ${input.saveFacts}`]),
+      ...(input.writeFacts === undefined ? [] : [`WRITES (observed by code, trusted): ${input.writeFacts}`]),
       ...(input.pageStatus === undefined || input.pageStatus === "" ? [] : [`PAGE STATUS (untrusted): ${input.pageStatus}`]),
       `VISIBLE PAGE TEXT (untrusted): ${input.pageText.replace(/\s+/g, " ").slice(0, GOAL_TEXT_CHARS)}`,
       ...(input.fieldValues === undefined || input.fieldValues.length === 0
@@ -432,6 +447,9 @@ export async function judgeGoalCompletion(
   if (input.saveFacts !== undefined) {
     questions[GOAL_IS_SAVE_QUESTION] = { kind: "noul", instructions: GOAL_IS_SAVE_INSTRUCTIONS };
   }
+  if (input.writeFacts !== undefined) {
+    questions[GOAL_IS_WRITES_QUESTION] = { kind: "noul", instructions: GOAL_IS_WRITES_INSTRUCTIONS };
+  }
   assertNoSecretInPayload(questions, secrets);
   const answers = await judge.systemOne({ state, questions });
   // `probability` is P(yes) — the port's noul contract.
@@ -443,5 +461,6 @@ export async function judgeGoalCompletion(
     goalMet: p(GOAL_MET_QUESTION),
     goalIsSignIn: input.signInFacts === undefined ? null : p(GOAL_IS_SIGN_IN_QUESTION),
     goalIsSave: input.saveFacts === undefined ? null : p(GOAL_IS_SAVE_QUESTION),
+    goalIsWrites: input.writeFacts === undefined ? null : p(GOAL_IS_WRITES_QUESTION),
   };
 }

@@ -1057,7 +1057,7 @@ manage and run promoted Journeys (regression-test replays)
 jevitate journey anchor [command]
 ```
 
-add or remove a draft Journey's anchors (#487): named steps to branch missions off, written with the step's stable id
+add or remove a Journey's anchors (#487): named steps to branch missions off, written with the step's stable id; on a promoted Journey the approval goes stale (#507)
 
 #### journey anchor add
 
@@ -1065,7 +1065,7 @@ add or remove a draft Journey's anchors (#487): named steps to branch missions o
 jevitate journey anchor add [options] <journeyId>
 ```
 
-add an anchor to a draft Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues
+add an anchor to a Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues
 
 **Arguments**
 
@@ -1090,7 +1090,7 @@ add an anchor to a draft Journey: --step takes a 1-based step number or a step i
 jevitate journey anchor remove [options] <journeyId>
 ```
 
-remove an anchor from a draft Journey; re-lints and prints the anchor issues
+remove an anchor from a Journey; re-lints and prints the anchor issues
 
 **Arguments**
 
@@ -1260,7 +1260,7 @@ report a Journey's weak assertions (writes without an asserted effect, visibilit
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
-| `--fix` | #487: stamp the step id of each anchor that references a step by number only, write the Journey (a draft; a promoted one is refused), and report what was fixed |  |  |  |  |
+| `--fix` | #487: stamp the step id of each anchor that references a step by number only, write the Journey (#507: on a promoted Journey its approval goes stale), and report what was fixed |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--sarif <file>` | also write a SARIF 2.1.0 log here |  |  |  |  |
 
@@ -2525,11 +2525,17 @@ run many explore missions — one per target in a targets file (.tsv or .json: i
 | `--allow-log-cmd` | a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's) |  |  |  |  |
 | `--allow-writes` | let a find-out mission change the app (forwarded to every mission, as explore's) |  |  |  |  |
 | `--base-url <url>` | resolve each target's route against this origin (wins over --env and the file's baseUrl; else JEVITATE_BASE_URL) |  |  |  |  |
+| `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
+| `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
+| `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--concurrency <n>` | runs at once (default 1, at most 16; the machine-wide browser cap still applies) |  |  |  |  |
 | `--deny <pattern>` | a control no mission may click (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--env <name>` | resolve each target's route against this named environment's base URL (.jevitate/environments.json) |  |  |  |  |
 | `--evidence-video` | per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways for every run (pipeline smoke only) |  |  |  |  |
+| `--fixture <path>` | the upload fixture for every target without its own options.fixture (a file inside the project, confined like explore --fixture; checked before any run) |  |  |  |  |
+| `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
@@ -2541,6 +2547,8 @@ run many explore missions — one per target in a targets file (.tsv or .json: i
 | `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
+| `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--no-host-starved-retry` | record a target whose run stalled on a starved host (failure.kind host-starved) as is; by default it is retried ONCE after the host's load drops (bounded wait, #452) |  |  |  |  |
 | `--out <dir>` | the sweep directory: <id>/ per target and sweep.result.json (default .jevitate/logs/<date>/sweep-<stamp>; required with --resume) |  |  |  |  |
 | `--paid <pattern>` | an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
