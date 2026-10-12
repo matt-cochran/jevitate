@@ -339,10 +339,23 @@ const OPTION_SPEC = (params: Readonly<Record<string, CliParam>>): CliToolSpec =>
   command: { path: "explore", params, omitted: {} },
 });
 
+/**
+ * Browser launch settings are per-sweep, never per-target: a run's browser is launched the same way
+ * for every target. Set them with the `sweep` command's own flag; a target's option is refused.
+ */
+const BROWSER_TARGET_OPTIONS: Readonly<Record<string, string>> = {
+  browserArg: "--browser-arg",
+  browserExecutable: "--browser-executable",
+  browserChannel: "--browser-channel",
+};
+
 /** A target's options as explore flags (typed and closed: an unknown option or a wrong type is a problem). */
 function optionArgvOf(options: Record<string, unknown>, where: string, problems: string[]): string[] {
   const allowed = sweepTargetOptions();
-  const unknown = Object.keys(options).filter((k) => allowed[k] === undefined);
+  for (const [key, flag] of Object.entries(BROWSER_TARGET_OPTIONS)) {
+    if (options[key] !== undefined) problems.push(`${where}: ${key} is not a per-target option — a sweep launches every run's browser the same way: pass ${flag} to \`jevitate sweep\``);
+  }
+  const unknown = Object.keys(options).filter((k) => allowed[k] === undefined && BROWSER_TARGET_OPTIONS[k] === undefined);
   if (unknown.length > 0) {
     problems.push(
       `${where}: unknown or not-allowed explore option(s) ${unknown.join(", ")} (a target may set: ${Object.keys(allowed).sort().join(", ")}; ` +

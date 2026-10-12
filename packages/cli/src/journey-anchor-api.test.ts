@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { Step } from "@jevitate/recording";
 import { UnknownJourneyError } from "./journey-api.js";
-import { AnchorEditError, PromotedJourneyEditError, addJourneyAnchor, fixJourneyAnchors, removeJourneyAnchor, suggestJourneyAnchors } from "./journey-anchor-api.js";
+import { journeyReviewHash } from "./journey-review.js";
+import { AnchorEditError, addJourneyAnchor, fixJourneyAnchors, removeJourneyAnchor, suggestJourneyAnchors } from "./journey-anchor-api.js";
 
 /** #487: adding/removing anchors and `lint --fix` write the step id at once and refuse to touch a promoted Journey. */
 
@@ -52,20 +53,39 @@ describe("addJourneyAnchor", () => {
     await expect(addJourneyAnchor(dir, "nope", { name: "review", step: "2" })).rejects.toBeInstanceOf(UnknownJourneyError);
   });
 
-  it("refuses a promoted Journey", async () => {
+  it("adds the anchor to a promoted Journey", async () => {
     await seed(journey({ promoted: true }));
-    await expect(addJourneyAnchor(dir, "draft", { name: "review", step: "2" })).rejects.toBeInstanceOf(PromotedJourneyEditError);
+    await addJourneyAnchor(dir, "draft", { name: "review", step: "2" });
+    expect((await stored()).metadata.anchors?.[0]).toEqual({ name: "review", step: 2, stepId: "s-assrt1" });
   });
 
-  it("leaves a promoted Journey's anchors untouched", async () => {
+  it("keeps a promoted Journey promoted", async () => {
     await seed(journey({ promoted: true }));
-    await addJourneyAnchor(dir, "draft", { name: "review", step: "2" }).catch(() => undefined);
-    expect((await stored()).metadata.anchors).toBeUndefined();
+    await addJourneyAnchor(dir, "draft", { name: "review", step: "2" });
+    expect((await stored()).metadata.promoted).toBe(true);
   });
 
-  it("tells the reader to re-promote", async () => {
+  it("keeps the old approval of a promoted Journey", async () => {
+    const approval = { contentHash: "a".repeat(64), at: "2026-10-09T00:00:00Z" };
+    await seed(journey({ promoted: true, approval } as Partial<Journey["metadata"]>));
+    await addJourneyAnchor(dir, "draft", { name: "review", step: "2" });
+    expect((await stored()).metadata).toMatchObject({ approval });
+  });
+
+  it("flags a promoted Journey as needing re-approval", async () => {
     await seed(journey({ promoted: true }));
-    await expect(addJourneyAnchor(dir, "draft", { name: "review", step: "2" })).rejects.toThrow(/journey promote draft/);
+    expect((await addJourneyAnchor(dir, "draft", { name: "review", step: "2" })).needsReapproval).toBe(true);
+  });
+
+  it("prints the re-approval command bound to the new review hash", async () => {
+    await seed(journey({ promoted: true }));
+    const result = await addJourneyAnchor(dir, "draft", { name: "review", step: "2" });
+    expect(result.reapproveCommand).toBe(`jevitate journey promote draft --reviewed-hash ${journeyReviewHash(await stored())}`);
+  });
+
+  it("does not flag a draft Journey", async () => {
+    await seed(journey());
+    expect(await addJourneyAnchor(dir, "draft", { name: "review", step: "2" })).not.toHaveProperty("needsReapproval");
   });
 });
 
@@ -99,9 +119,9 @@ describe("fixJourneyAnchors", () => {
     expect((await fixJourneyAnchors(dir, "draft")).issues).toEqual([]);
   });
 
-  it("refuses to stamp a promoted Journey", async () => {
+  it("#507: stamps a promoted Journey and says its approval needs renewing", async () => {
     await seed(journey({ promoted: true, anchors: [{ name: "review", step: 2 }] }));
-    await expect(fixJourneyAnchors(dir, "draft")).rejects.toBeInstanceOf(PromotedJourneyEditError);
+    expect((await fixJourneyAnchors(dir, "draft")).needsReapproval).toBe(true);
   });
 
   it("does nothing to a promoted Journey that needs no stamping", async () => {

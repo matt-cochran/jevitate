@@ -53,15 +53,15 @@ describe("#487 journey_anchor_add", () => {
     expect((await stored()).metadata.anchors?.[0]).toEqual({ name: "review", step: 2, stepId: "s-assrt1" });
   });
 
-  it("refuses a promoted Journey", async () => {
+  it("#507: on a promoted Journey, says its approval needs renewing", async () => {
     await seed(journey({ promoted: true }));
-    expect(await cliTool("journey_anchor_add")({ journeyId: "draft", name: "review", step: "2" })).toMatchObject({ isError: true, body: { code: "E_JOURNEY_ANCHOR_ARGS" } });
+    expect(await cliTool("journey_anchor_add")({ journeyId: "draft", name: "review", step: "2" })).toMatchObject({ body: { data: { needsReapproval: true } } });
   });
 
-  it("leaves a promoted Journey's anchors untouched", async () => {
+  it("#507: writes the anchor into a promoted Journey", async () => {
     await seed(journey({ promoted: true }));
     await cliTool("journey_anchor_add")({ journeyId: "draft", name: "review", step: "2" });
-    expect((await stored()).metadata.anchors).toBeUndefined();
+    expect((await stored()).metadata.anchors?.[0]?.name).toBe("review");
   });
 });
 
@@ -72,9 +72,9 @@ describe("#487 journey_anchor_remove", () => {
     expect((await stored()).metadata.anchors ?? []).toEqual([]);
   });
 
-  it("refuses a promoted Journey", async () => {
+  it("#507: on a promoted Journey, says its approval needs renewing", async () => {
     await seed(journey({ promoted: true, anchors: [{ name: "review", step: 2, stepId: "s-assrt1" }] }));
-    expect(await cliTool("journey_anchor_remove")({ journeyId: "draft", name: "review" })).toMatchObject({ isError: true, body: { code: "E_JOURNEY_ANCHOR_ARGS" } });
+    expect(await cliTool("journey_anchor_remove")({ journeyId: "draft", name: "review" })).toMatchObject({ body: { data: { needsReapproval: true } } });
   });
 });
 

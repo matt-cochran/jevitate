@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { JourneySchema, anchorAddCommand, suggestAnchors, type Journey } from "./index.js";
+import { ANCHOR_NAME_RULE_RE, JourneySchema, anchorAddCommand, suggestAnchors, type Journey } from "./index.js";
 
 /** #487 part 2: anchors are suggested where the recorded flow changes state. */
 
@@ -38,12 +38,12 @@ describe("suggestAnchors", () => {
     expect(suggestAnchors(j)).toEqual([]);
   });
 
-  it("suggests a new-page anchor at the first step of a later page segment", () => {
+  it("credits a segment change with no url delta to the last step of the previous segment", () => {
     const j = journey([
       { url: "/cart", steps: [nav("/cart", "s-a")] },
       { url: "/done", steps: [{ stepId: "s-b", step: { kind: "assert", check: EXPECT } }] },
     ]);
-    expect(suggestAnchors(j).map((s) => [s.kind, s.step])).toEqual([["new-page", 2]]);
+    expect(suggestAnchors(j).map((s) => [s.kind, s.step])).toEqual([["new-page", 1]]);
   });
 
   it("suggests a form-valid anchor at the last fill before a submit click", () => {
@@ -95,6 +95,70 @@ describe("suggestAnchors", () => {
   it("avoids the name of an existing anchor", () => {
     const j = journey([{ url: "/c", steps: [nav("/c", "s-a"), click("Pay", "s-b", delta({ requests: ["POST /api/pay → 200"] })), click("Pay", "s-c")] }], [{ name: "pay-written", step: 3, stepId: "s-c" }]);
     expect(suggestAnchors(j)[0]?.name).toBe("pay-written-2");
+  });
+});
+
+/** #506: recordings without step deltas keep their requests only in `timing.page.requests`. */
+const timed = (endpoint: string, status = 200): StepSpec => ({
+  timing: { atMs: 0, durationMs: 1, gapBeforeMs: 0, page: { route: "/", kind: "transition", settled: true, requests: { count: 1, pending: 0, slowest: [{ endpoint, url: `http://127.0.0.1:1${endpoint.split(" ")[1]}`, status, durationMs: 5 }] } } },
+});
+const withMeta = (j: Journey, meta: Record<string, unknown>): Journey => JourneySchema.parse({ ...j, metadata: { ...j.metadata, ...meta } });
+
+describe("suggestAnchors on recordings without step deltas (#506)", () => {
+  const filesIssue = (): Journey =>
+    withMeta(
+      journey([
+        { url: "/clusters", steps: [nav("/clusters", "s-a"), click("Open cluster", "s-b")] },
+        { url: "/clusters/abc12345", steps: [click("Create GitHub issue", "s-c", timed("POST /api/ClusterService/FileIssue"))] },
+      ]),
+      { endState: [{ kind: "responseStatus", method: "POST", pathGlob: "*/FileIssue", status: { class: 2 } }] },
+    );
+
+  it("suggests a write anchor at the step whose timing records a write request", () => {
+    expect(suggestAnchors(filesIssue()).filter((s) => s.kind === "write").map((s) => s.step)).toEqual([3]);
+  });
+
+  it("suggests the new page at the click that navigated", () => {
+    expect(suggestAnchors(filesIssue()).filter((s) => s.kind === "new-page").map((s) => s.step)).toEqual([2]);
+  });
+
+  it("names the end state in a write reason it matches", () => {
+    expect(suggestAnchors(filesIssue()).find((s) => s.kind === "write")?.reason).toContain("named by the end state");
+  });
+
+  it("suggests a write anchor at each of two timing-only writes", () => {
+    const j = journey([{ url: "/site", steps: [nav("/site", "s-a"), click("Save site", "s-b", timed("PUT /api/sites/1")), click("Next", "s-c"), click("Invite", "s-d", timed("POST /api/invites"))] }]);
+    expect(suggestAnchors(j).filter((s) => s.kind === "write").map((s) => s.step)).toEqual([2, 4]);
+  });
+
+  it("does not suggest a write anchor for a timing-only GET", () => {
+    const j = journey([{ url: "/a", steps: [nav("/a", "s-a"), click("Refresh", "s-b", timed("GET /api/items"))] }]);
+    expect(suggestAnchors(j)).toEqual([]);
+  });
+
+  it("does not suggest a write anchor for a timing-only write that failed", () => {
+    const j = journey([{ url: "/a", steps: [nav("/a", "s-a"), click("Save", "s-b", timed("POST /api/items", 500))] }]);
+    expect(suggestAnchors(j)).toEqual([]);
+  });
+
+  it("proposes the last step as a fallback end anchor for a job-linked Journey with no other suggestion", () => {
+    const j = withMeta(journey([{ url: "/invite", steps: [nav("/invite", "s-a"), click("Look", "s-b")] }]), { job: "accept-invite" });
+    expect(suggestAnchors(j).map((s) => [s.kind, s.step])).toEqual([["job-end", 2]]);
+  });
+
+  it("gives the job fallback an anchor-rule-conforming name and a fallback reason", () => {
+    const j = withMeta(journey([{ url: "/invite", steps: [nav("/invite", "s-a"), click("Look", "s-b")] }]), { job: "accept-invite" });
+    const s = suggestAnchors(j)[0]!;
+    expect([ANCHOR_NAME_RULE_RE.test(s.name), s.reason.startsWith("fallback")]).toEqual([true, true]);
+  });
+
+  it("does not add the job fallback when another suggestion exists", () => {
+    const j = withMeta(journey([{ url: "/invite", steps: [nav("/invite", "s-a"), click("Accept", "s-b", timed("POST /api/invites/accept"))] }]), { job: "accept-invite" });
+    expect(suggestAnchors(j).map((s) => s.kind)).toEqual(["write"]);
+  });
+
+  it("proposes no job fallback for a Journey without a job", () => {
+    expect(suggestAnchors(journey([{ url: "/a", steps: [nav("/a", "s-a")] }]))).toEqual([]);
   });
 });
 

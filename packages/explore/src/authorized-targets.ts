@@ -28,7 +28,9 @@ export class UnauthorizedExploreTargetError extends Error {
       originOf(url) === null
         ? `exploration target ${JSON.stringify(url)} is not a valid URL`
         : `exploration target ${JSON.stringify(url)} is not an authorized origin ` +
-            `(allowed: ${allowlist.length === 0 ? "<none>" : allowlist.join(", ")}) — refused`,
+            `(allowed: ${allowlist.length === 0 ? "<none>" : allowlist.join(", ")}) — refused: ` +
+            // #508: `--allow` REPLACES the implicit start origin, so the start URL's own must be listed too.
+            `the start URL's origin must be in --allow; add --allow ${originOf(url)}`,
     );
     this.name = "UnauthorizedExploreTargetError";
   }
