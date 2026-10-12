@@ -338,7 +338,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (667 exports)
+# @jevitate/explore (669 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -594,6 +594,8 @@
   GOAL_IS_SAVE_QUESTION: variable
   GOAL_IS_SIGN_IN_INSTRUCTIONS: variable
   GOAL_IS_SIGN_IN_QUESTION: variable
+  GOAL_IS_WRITES_INSTRUCTIONS: variable
+  GOAL_IS_WRITES_QUESTION: variable
   GOAL_MET_INSTRUCTIONS: variable
   GOAL_MET_QUESTION: variable
   goalAdmitsAbsence: function

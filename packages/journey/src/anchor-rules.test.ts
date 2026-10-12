@@ -74,6 +74,25 @@ describe("#466 anchor rules (lint, not parse)", () => {
     expect(codes(journey({ job: "order" }))).toEqual(["job-anchors"]);
   });
 
+  it("the job-anchors fix hint shows the example anchor name <job-step>.end", () => {
+    const fix = anchorLintIssues(journey({ job: "order" })).find((i) => i.code === "job-anchors")?.fix;
+    expect(fix).toContain('"<job-step>.end"');
+  });
+
+  it("every example anchor name in an anchor-rules fix hint matches the 0.10 name rule", () => {
+    const examples = [
+      journey({ job: "order" }),
+      journey({ anchors: [{ name: "cart:review", step: 1, stepId: "s-aaaaaa" }] }),
+      journey({ anchors: [{ name: "review", step: 1, stepId: "s-zzzzzz" }] }),
+      journey({ anchors: [{ name: "review", step: 1, stepId: "s-bbbbbb" }] }),
+      journey({ anchors: [{ name: "review", step: 2 }] }),
+    ]
+      .flatMap((j) => anchorLintIssues(j))
+      .flatMap((i) => [...i.fix.matchAll(/"name":\s*"([^"]+)"/g)])
+      .map((m) => m[1]!.replace(/<[^>]+>/g, "step"));
+    expect(examples.every((name) => ANCHOR_NAME_RULE_RE.test(name))).toBe(true);
+  });
+
   it("suggests a compliant name", () => {
     expect(suggestAnchorName("Review Step #2")).toBe("review-step-2");
   });

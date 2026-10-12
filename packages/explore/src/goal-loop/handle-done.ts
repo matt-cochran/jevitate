@@ -83,7 +83,8 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
   }
   // `done` is a PROPOSAL (guardrail #4), grounded by `groundGoal`.
   if (decision.op === "done") {
-    const { verdict, judgments } = await groundGoal();
+    // #514: a proposed `done` also weighs the job's own write evidence.
+    const { verdict, judgments } = await groundGoal(false, true);
     if (verdict.accept) {
       record(true, `done accepted${pendingNote(verdict.outcome) === null ? "" : " provisionally"}: ${acceptedBy(verdict.outcome)}`, {
         ...(judgments === undefined ? {} : { judgments }),

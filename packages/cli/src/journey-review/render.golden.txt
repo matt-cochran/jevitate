@@ -1,0 +1,59 @@
+Review  CRM contacts CSV import: upload, auto-map, validate, import, contacts listed
+        crm-contacts-import-happy · approved 11 Oct 2026 08:33 UTC by mc (terminal) ·
+        unchanged since approval
+
+NEEDS YOUR ATTENTION
+  ⚠ Steps 4–5 prove nothing: their checks pass even if the step fails
+  ⚠ No goal or success criteria written → jevitate journey annotate crm-contacts-import-happy
+  ○ Not mutation-tested → jevitate journey verify crm-contacts-import-happy --mutate
+
+WHAT IT DOES
+  Import the attached CSV file of contacts: on the Contacts page click Import, upload the file in
+  the 'Upload a file' drop zone, click Auto-Accept, click Continue to Validation, then click the
+  button that imports the records ready to import, and wait until you are back on the Contacts list
+  showing the imported contacts.
+  Signed in · http://localhost:3001
+  Uploads PresentationTier/ui.autopilot/scripts/jevitate/fixtures/crm-import-journey-happy.csv
+
+STEPS
+  1  navigate to /dev-org-admin/sales/crm/contacts
+     ✓ the URL contains "/dev-org-admin/sales/crm/contacts"
+     ✓ POST /api/v1/tool/crm-contacts/query answers 2xx
+     writes POST /api/v1/tool/crm-contacts/query
+  2  click [action import] (no recorded label) ⚓ import-open
+     ✓ the URL contains "/dev-org-admin/sales/crm/contacts"
+     ✓ POST /api/v1/tool/crm-upload/sessions answers 2xx
+     writes POST /api/v1/tool/crm-upload/sessions
+  3  upload a file to [import source file dropzone local file input] (no recorded label) ⚓ mapping
+     ✓ the URL contains "/dev-org-admin/sales/crm/contacts"
+     ✓ POST /api/v1/tool/crm-upload/sessions/*/operations answers 2xx
+     writes POST /api/v1/tool/crm-upload/sessions/*/operations
+  4  click [field mapper auto accept] (no recorded label) ⚓ mapped
+     ⚠ any number of field mapper auto accept, including none (proves nothing)
+     ✓ POST /api/v1/tool/crm-upload/sessions/*/operations answers 2xx
+     writes POST /api/v1/tool/crm-upload/sessions/*/operations
+  5  click [field mapper continue validation] (no recorded label) ⚓ validation
+     ⚠ any number of field mapper continue validation, including none (proves nothing)
+  6  click [import confirm btn] (no recorded label) ⚓ import-started
+     ✓ the URL contains "/dev-org-admin/sales/crm/contacts"
+     ✓ POST /api/v1/tool/crm-upload/sessions/*/operations answers 2xx
+     ✓ POST /api/v1/tool/crm-contacts/query answers 2xx
+     writes POST /api/v1/tool/crm-upload/sessions/*/operations · POST
+       /api/v1/tool/crm-contacts/query
+
+PROVES AT THE END
+  ✓ crm contacts page shows "jevita.happythree@crmup-journey.example.com"
+  ✓ POST /api/v1/tool/crm-upload/sessions/*/operations answers 2xx
+  ✓ after a reload, crm contacts page shows "jevita.happythree@crmup-journey.example.com"
+
+WRITES
+  POST /api/v1/tool/crm-contacts/query (steps 1, 6)
+  POST /api/v1/tool/crm-upload/sessions (step 2)
+  POST /api/v1/tool/crm-upload/sessions/*/operations (steps 3–4, 6, end state)
+
+CLEAR    lint ✓
+
+APPROVE
+  (already approved)
+  jevitate journey promote crm-contacts-import-happy --reviewed-hash 041c04a08d345b8f749842f3e033235efa257d5288d6038707ff35773873f018
+Content hash: 041c04a08d345b8f749842f3e033235efa257d5288d6038707ff35773873f018

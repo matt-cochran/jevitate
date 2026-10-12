@@ -1,18 +1,16 @@
 import type { Assertion, Recording } from "@jevitate/recording";
-import { checkAssertion, installFlashRecorder } from "@jevitate/interpreter";
-import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
+import { installFlashRecorder } from "@jevitate/interpreter";
+import { BrowseTheWebToken } from "@jevitate/screenplay";
 import type { Page } from "playwright";
 import type { MissionFailure } from "@jevitate/domain";
-import { DEFAULT_ORACLE_SETTLE_MS, evaluateOutcomeChecks } from "../outcome-checks.js";
-import { monitorFor, type CapturedRequest, type RequestCapture } from "../page-monitor.js";
+import { DEFAULT_ORACLE_SETTLE_MS } from "../outcome-checks.js";
+import { monitorFor, type RequestCapture } from "../page-monitor.js";
 import {
-  describeCheck,
-  evaluateNetworkCheck,
   type SuccessCheck,
   type SuccessCheckResult,
 } from "../success-checks.js";
-import { explore, type ExploreConfig, type ExploreRun, type RunOutcome, type TranscriptEntry } from "../explore.js";
-import { NOT_REPLAYED, hangFinding, reproduceHang, withheldReason, type HangFinding, type HangReproduction } from "../hang-repro.js";
+import { type ExploreConfig, type ExploreRun, type TranscriptEntry } from "../explore.js";
+import { type HangFinding } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
@@ -26,15 +24,19 @@ import {
   type InvariantReport,
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
-import { goalAsksForChange } from "../read-only.js";
-import { goalAsksForReport } from "../answer.js";
-import { resolveMinEffort, type MinEffortRequest } from "../run-depth.js";
-import { resolveBounds } from "../bounds.js";
+import { type MinEffortRequest } from "../run-depth.js";
 
-/** #286: the pseudo-check a goal that asks for a report adds to its `--success` checks. */
-const REPORT_CHECK = "report (the goal asks for a grounded answer)";
 import { demoOverlayFor } from "../demo-overlay.js";
 import { secretFieldSecrets } from "../secret-fields.js";
+import { act } from "./goal-based/act.js";
+import { adjudicate } from "./goal-based/adjudicate.js";
+import type { DeclaredHooks } from "./goal-based/declared-hooks.js";
+import { earlyVerdict } from "./goal-based/early-verdicts.js";
+import { evaluateOracle } from "./goal-based/oracle.js";
+import { report } from "./goal-based/report.js";
+import { setupAdjudication } from "./goal-based/setup.js";
+
+export * from "./goal-based/vacuous-message.js";
 
 /**
  * The goal-based exploratory mission (P1's first mission).
@@ -174,8 +176,6 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
  */
 export type SuccessWhen = "held" | "final" | "each";
 
-/** Bound (ms) on each per-step page-check evaluation under `successWhen: "held"` (a quick look). */
-const HELD_CHECK_TIMEOUT_MS = 250;
 
 export type GoalBasedOutcome =
   | "succeeded"
@@ -238,74 +238,6 @@ export interface GoalBasedResult {
   readonly warnings?: string[];
 }
 
-/** Does this result belong to a page check (the kind `held` can remember)? Matched by description. */
-function isPageCheck(r: SuccessCheckResult, pageChecks: readonly SuccessCheck[]): boolean {
-  return pageChecks.some((c) => describeCheck(c) === r.check);
-}
-
-/** A quick, bounded look: do ALL the page checks hold right now? */
-async function everyPageCheckHolds(actor: Actor, pageChecks: readonly SuccessCheck[]): Promise<boolean> {
-  for (const c of pageChecks) {
-    if (c.kind !== "page") continue;
-    if (!(await checkAssertion(actor, c.assertion, { timeoutMs: HELD_CHECK_TIMEOUT_MS }))) return false;
-  }
-  return true;
-}
-
-/** The one-line account of an unsuccessful run: how the loop ended, then the checks that failed. */
-function whyNot(run: ExploreRun, results: readonly SuccessCheckResult[]): string {
-  const ended = run.outcome.status === "incomplete" ? run.outcome.reason : `the run stopped (${run.stop})`;
-  const failed = results.filter((r) => !r.passed).map((r) => `${r.check} ${r.detail}`);
-  return failed.length === 0 ? ended : `${ended}; success check failed: ${failed.join("; ")}`;
-}
-
-/** #202: the named message for a check that was satisfied before the run did anything. */
-export function vacuousCheckMessage(spec: string): string {
-  return `check '${spec}' held at step 0, before any action — it cannot verify the goal`;
-}
-
-/**
- * #202: when network checks start counting. `firstActionAt` is the run's first action (explore's
- * `onAction`: a control op or a chosen reload, at the same point and on the same wall clock as its
- * request→step attribution mark `SideEffectLog.mark` and each captured request's `startedAt`); null
- * while no action has happened.
- */
-interface NetworkScope {
-  readonly firstActionAt: number | null;
-  readonly allowVacuous: boolean;
-}
-
-/** #202: the requests the run's own actions could have caused — sent at or after its first action. */
-function sentSinceFirstAction(requests: readonly CapturedRequest[], firstActionAt: number | null): CapturedRequest[] {
-  // A request without a start time cannot be attributed to an action: never counted (fail closed).
-  return firstActionAt === null ? [] : requests.filter((r) => r.startedAt !== undefined && r.startedAt >= firstActionAt);
-}
-
-/**
- * #202: a network check counts only requests sent after the run's first action — a page-load or
- * polling request that matched before anything was done proves nothing. A check matched ONLY by such
- * a request is vacuous: failed by default, or (`allowVacuous`) judged over every request with a
- * warning (`onVacuous`).
- */
-function judgeNetworkCheck(
-  c: Extract<SuccessCheck, { kind: "requestMade" | "responseStatus" }>,
-  requests: readonly CapturedRequest[],
-  truncated: boolean,
-  scope: NetworkScope,
-  onVacuous?: (spec: string) => void,
-): SuccessCheckResult {
-  const after = evaluateNetworkCheck(c, sentSinceFirstAction(requests, scope.firstActionAt), truncated);
-  const all = evaluateNetworkCheck(c, requests, truncated);
-  const vacuous = !after.passed && all.passed;
-  if (vacuous) onVacuous?.(after.check);
-  if (scope.allowVacuous) return all;
-  return vacuous
-    ? {
-        ...after,
-        detail: `vacuous: matched only by request(s) sent before the run's first action (page load, polling) — held at step 0, before any action, it cannot verify the goal (only requests sent after the first action count; --allow-vacuous-checks downgrades this to a warning); ${after.detail}`,
-      }
-    : after;
-}
 
 /**
  * Every check the oracle must pass, in the order given — possibly none (#130d): a find-out goal has
@@ -361,21 +293,6 @@ async function adjudicated(
   return result;
 }
 
-/**
- * Declared invariants (#86) through the loop's own hooks: the transcript names each action, the
- * Recording its step index, and every settled snapshot evaluates the action(s) since the previous
- * one (then re-arms the "before" for the next). An action the loop took but never re-observed (the
- * run ended right after it) is evaluated on the final page once it settles.
- */
-interface DeclaredHooks {
-  readonly onTranscriptEntry: NonNullable<ExploreConfig["onTranscriptEntry"]>;
-  readonly onRecording: NonNullable<ExploreConfig["onRecording"]>;
-  readonly onBeforeAction: ExploreConfig["onBeforeAction"];
-  readonly onSettled: ExploreConfig["onSettled"];
-  readonly settled: () => Promise<void>;
-  readonly finish: (run: ExploreRun) => Promise<void>;
-  readonly fold: (result: GoalBasedResult) => GoalBasedResult;
-}
 
 /** Ops that change nothing in the app: no invariant is judged around them. */
 const NON_ACTIONS: ReadonlySet<string> = new Set(["wait", "done", "blocked", "scroll_up", "scroll_down"]);
@@ -494,6 +411,11 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
   };
 }
 
+/**
+ * The goal mission's run and verdict (#500: an orchestrator over its phases, in order) — setup, act
+ * (with the #126 seed-hang retry), the declared invariants' finish, the early verdicts, the
+ * independent oracle, the adjudication, and the report.
+ */
 async function adjudicatedRun(
   cfg: GoalBasedMissionConfig,
   checks: readonly SuccessCheck[],
@@ -501,547 +423,18 @@ async function adjudicatedRun(
   capture: RequestCapture | null,
   declared: DeclaredHooks | null,
 ): Promise<GoalBasedResult> {
-  const pageChecks = checks.filter((c) => c.kind === "page");
-  /** Under `held`: the first settled step at which every page check held together (1-based), or null. */
-  let heldAtStep: number | null = null;
-  let settledSteps = 0;
-  const held = cfg.successWhen === "held" && pageChecks.length > 0;
-  /**
-   * #337 `each`: per page check (by its index in `pageChecks`) — seen NOT holding at a settled step,
-   * the first settled step it held at AFTER that (the transition), and whether it held on the start.
-   */
-  const each = cfg.successWhen === "each" && pageChecks.length > 0;
-  const eachSawNot = pageChecks.map(() => false);
-  const eachHeldAt: Array<number | null> = pageChecks.map(() => null);
-  const eachHeldAtStart = pageChecks.map(() => false);
-  const pageIndexOf = (r: SuccessCheckResult): number => pageChecks.findIndex((c) => describeCheck(c) === r.check);
-  /**
-   * #174: a held page check counts only once it CHANGED from not holding to holding — never because
-   * it already held on the start page (a placeholder that is there before anything was done).
-   */
-  let sawNotHolding = false;
-  /** #174: the page checks all held on the start state, before any action (vacuous there). */
-  let heldAtStart = false;
-  /**
-   * #202 — the general rule behind #174, per check and under either `successWhen`: a page/reloadThen
-   * check that held on the seed page (before any action) and was never seen NOT holding at a later
-   * settled step cannot verify the goal. `seedHeld` — the checks (by index) that held on the seed
-   * page; `changedSinceSeed` — those later seen not holding (no longer vacuous).
-   */
-  const allowVacuous = cfg.allowVacuousChecks === true;
-  const seedHeld = new Set<number>();
-  const changedSinceSeed = new Set<number>();
-  /** #202: when the run first acted (a control op or a chosen reload) — network checks count requests from here on. */
-  let firstActionAt: number | null = null;
-  const scope = (): NetworkScope => ({ firstActionAt, allowVacuous });
-  const stateChecks = [...checks.entries()].filter(
-    (e): e is [number, Extract<SuccessCheck, { kind: "page" | "reloadThen" }>] => e[1].kind === "page" || e[1].kind === "reloadThen",
-  );
-  const holdsNow = (a: Assertion): Promise<boolean> =>
-    checkAssertion(cfg.actor, a, { timeoutMs: HELD_CHECK_TIMEOUT_MS }).catch(() => false);
-  const networkChecks = checks.filter(
-    (c): c is Extract<SuccessCheck, { kind: "requestMade" | "responseStatus" }> => c.kind === "requestMade" || c.kind === "responseStatus",
-  );
-  // #174: under `held`, once every check has held the run stops — it never keeps acting (or writing)
-  // past a met goal. `reloadThen` is final-only, so a run that declares one keeps the model's `done`.
-  // #286: a goal that also asks for a report needs its grounded answer — checks holding never stop it.
-  const answerRequired = checks.length > 0 && goalAsksForReport(cfg.goal);
-  const stopWhenHeld = (cfg.successWhen === "held" || cfg.successWhen === "each") && checks.length > 0 && !checks.some((c) => c.kind === "reloadThen") && !answerRequired;
-  // A find-out goal (#130d) has no page/network check to independently ground `done` with: it is
-  // verified instead by a grounded `report` (#101), which `explore()` grounds on its own regardless
-  // of `successCheck`. Leaving `successCheck` unset here (rather than wiring one that vacuously
-  // "passes" over zero checks) sends `done` through the advisory goal-judgment path instead of a
-  // false independent pass.
-  const hasChecks = checks.length > 0;
-  // #158 — a find-out goal is READ-ONLY unless its text asks for a change or `--allow-writes`:
-  // independent code refuses write flows and aborts write requests; the model is told.
-  const writesLifted = cfg.safety?.allowWrites === true;
-  const readOnly = !hasChecks && !writesLifted && !goalAsksForChange(cfg.goal);
-  // #270 — the goal's own words never lift the guard on a DESTRUCTIVE write ("Remove a product…"
-  // clicked a member row's "Remove" → RemoveMember 200): only the operator can.
-  const noDestructiveWrites = !hasChecks && !readOnly && !writesLifted && cfg.safety?.allowDestructive !== true;
-  // #424: the minimum exploration effort before the model may conclude (never past the budget).
-  const bounds = resolveBounds(cfg.bounds);
-  const effort = resolveMinEffort({
-    goal: cfg.goal,
-    answerIsVerdict: !hasChecks || answerRequired,
-    ...(cfg.minEffort === undefined ? {} : { request: cfg.minEffort }),
-    maxActions: bounds.maxActions,
-    maxDecisions: bounds.maxDecisions,
-  });
-  // The loop takes the RESOLVED minimum, never the request.
-  const exploreBase: Omit<GoalBasedMissionConfig, "minEffort"> = { ...cfg };
-  delete (exploreBase as { minEffort?: unknown }).minEffort;
-  let attempts = 0;
-  const runOnce = async (): Promise<ExploreRun> => {
-    // A retried run (#126) starts over from the seed: nothing the first attempt saw carries over.
-    // #293: the first attempt starts in place (on the anchored page); a retry re-replays the Journey
-    // prefix when it can (`restartAtStart`), else loads the seed.
-    const first = attempts++ === 0;
-    const startInPlace = cfg.startInPlace === true && (first || (cfg.restartAtStart !== undefined && (await cfg.restartAtStart(cfg.actor))));
-    settledSteps = 0;
-    heldAtStep = null;
-    sawNotHolding = false;
-    heldAtStart = false;
-    eachSawNot.fill(false);
-    eachHeldAt.fill(null);
-    eachHeldAtStart.fill(false);
-    seedHeld.clear();
-    changedSinceSeed.clear();
-    firstActionAt = null;
-    return explore({
-      ...exploreBase,
-      startInPlace,
-      readOnly,
-      noDestructiveWrites,
-      ...(effort.minEffort === null ? {} : { minEffort: effort.minEffort }),
-      missionContext: `${cfg.missionBrief === undefined ? "" : `${cfg.missionBrief}; `}${
-        hasChecks
-          ? `success is judged independently by user-supplied checks — your \`done\` is only a proposal, not the verdict${
-              answerRequired ? "; the goal also asks you to report what you found: end with `report` once the page shows it" : ""
-            }`
-          : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict"
-      }`,
-      // `held`: after every settled step, a quick look at the page checks — remembered once they all
-      // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
-      ...(declared === null
-        ? {}
-        : {
-            onTranscriptEntry: declared.onTranscriptEntry,
-            onRecording: declared.onRecording,
-            ...(declared.onBeforeAction === undefined ? {} : { onBeforeAction: declared.onBeforeAction }),
-            ...(declared.onSettled === undefined ? {} : { onSettled: declared.onSettled }),
-          }),
-      // #202: the run's first action starts the window network checks count requests in.
-      onAction: ({ at }) => {
-        firstActionAt ??= at;
-      },
-      onSnapshot: async (snap) => {
-        await cfg.onSnapshot?.(snap);
-        await declared?.settled().catch(() => undefined);
-        settledSteps += 1;
-        // #202: which checks already hold on the seed page, and which of them later stop holding
-        // (only those are re-read — a check that holds answers at once, so this stays cheap).
-        if (settledSteps === 1) {
-          for (const [i, c] of stateChecks) if (await holdsNow(c.assertion)) seedHeld.add(i);
-        } else {
-          for (const [i, c] of stateChecks) {
-            if (seedHeld.has(i) && !changedSinceSeed.has(i) && !(await holdsNow(c.assertion))) changedSinceSeed.add(i);
-          }
-        }
-        // #337 `each`: every page check on its own — it counts once it went from not holding to holding.
-        if (each) {
-          for (const [i, c] of pageChecks.entries()) {
-            if (c.kind !== "page" || eachHeldAt[i] !== null) continue;
-            const ok = await holdsNow(c.assertion);
-            if (!ok) eachSawNot[i] = true;
-            else if (eachSawNot[i]) eachHeldAt[i] = settledSteps;
-            else if (settledSteps === 1) {
-              eachHeldAtStart[i] = true;
-              // #377: --allow-vacuous-checks — a check that already held on the start page counts.
-              if (allowVacuous) eachHeldAt[i] = 1;
-            }
-          }
-          return;
-        }
-        if (!held || heldAtStep !== null) return;
-        const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
-        if (!ok) sawNotHolding = true;
-        else if (sawNotHolding) heldAtStep = settledSteps;
-        else if (settledSteps === 1) {
-          heldAtStart = true;
-          // #377: --allow-vacuous-checks — checks that already held on the start page count (the
-          // run may succeed without acting), the same rule as under `final` and `each`.
-          if (allowVacuous) heldAtStep = 1;
-        }
-      },
-      ...(stopWhenHeld
-        ? {
-            successMetNow: async (): Promise<string | null> => {
-              // Never before an action: the start state proves nothing was done — unless
-              // --allow-vacuous-checks accepts exactly that (#377).
-              if (settledSteps < 2 && !allowVacuous) return null;
-              if (pageChecks.length > 0 && (each ? eachHeldAt.some((at) => at === null) : heldAtStep === null)) return null;
-              const requests = capture?.sent() ?? [];
-              if (!networkChecks.every((c) => judgeNetworkCheck(c, requests, capture?.truncated ?? false, scope()).passed)) return null;
-              if (each && pageChecks.length > 0) {
-                return `every --success check held (the page checks at settled steps ${eachHeldAt.join(", ")}; --success-when each)`;
-              }
-              return pageChecks.length > 0
-                ? `every --success check held (the page checks at settled step ${heldAtStep}; --success-when held)`
-                : `every --success check held (--success-when ${cfg.successWhen})`;
-            },
-          }
-        : {}),
-      // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
-      // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
-      // final verdict — reloading mid-run would throw away the state the run is still building.
-      // Under `held`, a page check that already held (together, at a settled step) counts.
-      ...(hasChecks
-        ? {
-            // #209: what the in-run grounding cannot judge yet — so an accepted `done` is recorded as
-            // provisional, never "goal verified", while the final verdict may still fail it.
-            successCheckPending: (): string | null => {
-              const pending: string[] = [];
-              const reloads = checks.filter((c) => c.kind === "reloadThen").map((c) => `'${describeCheck(c)}'`);
-              if (reloads.length > 0) pending.push(`${reloads.join(", ")} is judged after the run (it reloads the page)`);
-              if (!allowVacuous) {
-                const since = stateChecks.filter(([i]) => seedHeld.has(i) && !changedSinceSeed.has(i)).map(([, c]) => `'${describeCheck(c)}'`);
-                if (since.length > 0) pending.push(`${since.join(", ")} has held since before any action (vacuous unless it changes)`);
-              }
-              return pending.length === 0 ? null : pending.join("; ");
-            },
-            ...(answerRequired ? { requireAnswer: true } : {}),
-            // #235: only `reloadThen` checks — the in-run check below evaluates none of them.
-            ...(checks.every((c) => c.kind === "reloadThen") ? { successCheckDeferred: true } : {}),
-            // #377: the checks as they read now (no held/each transition rule) — a `blocked` while
-            // they hold is not refused as "nothing tried yet".
-            ...(checks.every((c) => c.kind === "reloadThen")
-              ? {}
-              : {
-                  successChecksHoldNow: () =>
-                    evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
-                      (rs) => rs.every((r) => r.passed),
-                      () => false,
-                    ),
-                }),
-            successCheck: () =>
-              evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
-                (rs) =>
-                  rs.every((r) =>
-                    each && isPageCheck(r, pageChecks)
-                      ? // #337: under `each` a page check counts once IT went from not holding to holding.
-                        eachHeldAt[pageIndexOf(r)] !== null || (r.passed && eachSawNot[pageIndexOf(r)] === true)
-                      : held && isPageCheck(r, pageChecks)
-                        ? // #174: under `held` a page check counts once it went from not holding to holding.
-                          heldAtStep !== null || (r.passed && sawNotHolding)
-                        : r.passed,
-                  ),
-                () => false,
-              ),
-          }
-        : {}),
-    });
-  };
-
-  let run = await runOnce();
-  /**
-   * #126: a hang met on the SEED load (before any action — `recordingStepIndex === 0`) that does
-   * NOT reproduce is not proof the app is stuck; it can be a single slow request on a loaded host.
-   * It must not end the mission. It is recorded as an intermittent finding and the goal is tried
-   * once more from a fresh navigate of the seed. A hang that DOES reproduce (or that could not be
-   * replayed at all) ends the run exactly as before.
-   */
-  const intermittentHangs: HangFinding[] = [];
-  if (run.stop === "hang" && run.hang !== undefined && run.hang.recordingStepIndex === 0 && cfg.openFreshSession !== undefined) {
-    const h = run.hang;
-    const reproduction = await reproduceSeedHang(cfg, run, h);
-    if (reproduction.status === "intermittent") {
-      intermittentHangs.push(hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction));
-      run = await runOnce();
-    } else {
-      return { ...hangResult(run, h, reproduction), ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }) };
-    }
-  }
+  const ctx = setupAdjudication(cfg, checks, page, capture, declared);
+  const acted = await act(ctx);
+  if (acted.kind === "ended") return acted.result;
+  const { run, intermittentHangs } = acted;
 
   await declared?.finish(run);
 
-  // A hang is a first-class finding: reproduce it in fresh contexts, then report k/N.
-  if (run.stop === "hang" && run.hang !== undefined) {
-    const h = run.hang;
-    const reproduction = await reproduceSeedHang(cfg, run, h);
-    return { ...hangResult(run, h, reproduction), ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }) };
-  }
+  const early = await earlyVerdict(ctx, run, intermittentHangs);
+  if (early !== null) return early;
 
-  // A broken run proves nothing: its assertion is never evaluated into a pass.
-  if (run.stop === "crashed" || run.stop === "inconclusive") {
-    return {
-      outcome: run.stop,
-      assertionPassed: false,
-      checks: [],
-      run,
-      recording: run.recording,
-      transcript: run.transcript,
-      finalUrl: run.finalUrl,
-      reason: whyNot(run, []),
-      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
-    };
-  }
+  const oracle = await evaluateOracle(ctx, run, intermittentHangs);
+  if (oracle.kind === "ended") return oracle.result;
 
-  // #150 — a declared mission spend budget was crossed (or a paid action refused before crossing
-  // it): the run stopped cleanly, before its next action. Never `succeeded`, never `crashed` — maps
-  // to `inconclusive` (its own work past the stop is unproven), kept apart from `run.stop`.
-  if (run.stop === "budget") {
-    return {
-      outcome: "inconclusive",
-      assertionPassed: false,
-      checks: [],
-      run,
-      recording: run.recording,
-      transcript: run.transcript,
-      finalUrl: run.finalUrl,
-      reason: whyNot(run, []),
-      ...(effort.warnings.length === 0 ? {} : { warnings: effort.warnings }),
-      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
-    };
-  }
-
-  // A find-out goal (#130d): no --success check was given, so there is nothing to evaluate against
-  // the live page. The verdict is the run's own grounded outcome instead — `report` grounding an
-  // answer (#101), or the advisory goal judgment grounding a `done`. Never a vacuous pass: a run that
-  // exhausted its budget or got blocked without either is simply not succeeded.
-  if (!hasChecks) {
-    const succeeded = run.outcome.status === "completed";
-    return {
-      outcome: succeeded ? "succeeded" : run.stop === "exhausted" ? "exhausted" : "blocked",
-      assertionPassed: succeeded,
-      checks: [],
-      run,
-      recording: run.recording,
-      transcript: run.transcript,
-      finalUrl: run.finalUrl,
-      ...(succeeded ? {} : { reason: whyNot(run, []) }),
-      // #424: a minimum effort capped by the budget is named.
-      ...(effort.warnings.length === 0 ? {} : { warnings: effort.warnings }),
-      // #126 evidence on the find-out path too, like every other outcome (surface-wiring audit).
-      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
-    };
-  }
-
-  // Independent oracle: never Jev's self-report. Evaluated against the live page. An oracle that
-  // cannot even be evaluated (the page died after the loop ended) is a crash, never a pass.
-  let results: SuccessCheckResult[];
-  /** #202: network checks matched only by a request sent before the run's first action. */
-  const vacuousNetwork: string[] = [];
-  try {
-    results = await evaluateChecks(cfg, checks, page, capture, scope(), (spec) => vacuousNetwork.push(spec));
-  } catch (e) {
-    const message = e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
-    const crashedRun: ExploreRun = {
-      ...run,
-      stop: "crashed",
-      failure: { kind: "exception", message: `success oracle failed: ${message}` },
-    };
-    return {
-      outcome: "crashed",
-      assertionPassed: false,
-      checks: [],
-      run: crashedRun,
-      recording: run.recording,
-      transcript: run.transcript,
-      finalUrl: run.finalUrl,
-      reason: `success oracle failed: ${message}`,
-      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
-    };
-  }
-
-  // `held`: a page check that failed on the final page passes when every page check held together
-  // at a settled step of the run — and says so. Never on a run that could not be evaluated (above).
-  if (heldAtStep !== null) {
-    const step = heldAtStep;
-    results = results.map((r) =>
-      !r.passed && isPageCheck(r, pageChecks)
-        ? { ...r, passed: true, detail: `held at settled step ${step} (--success-when held); ${r.detail}` }
-        : r,
-    );
-  }
-  // #337 `each`: a page check that failed on the final page passes when it went from not holding to
-  // holding at a settled step of the run (each at its own) — and says so. One that held on the start
-  // page and never stopped holding is vacuous (as under `held`), unless --allow-vacuous-checks.
-  if (each) {
-    results = results.map((r) => {
-      const i = pageIndexOf(r);
-      if (i === -1) return r;
-      const at = eachHeldAt[i];
-      if (!r.passed && at !== null && at !== undefined) return { ...r, passed: true, detail: `held at settled step ${at} (--success-when each); ${r.detail}` };
-      if (r.passed && eachHeldAtStart[i] === true && eachSawNot[i] !== true && !allowVacuous) {
-        return { ...r, passed: false, detail: "vacuous: already held on the start page before any action and never changed (--success-when each needs it to go from not holding to holding)" };
-      }
-      return r;
-    });
-  }
-  // #174: under `held`, page checks that already held on the start page and never stopped holding
-  // prove nothing was done — vacuous, never a pass (not even on the final page).
-  const vacuous = held && heldAtStart && !sawNotHolding && !allowVacuous;
-  if (vacuous) {
-    results = results.map((r) =>
-      r.passed && isPageCheck(r, pageChecks)
-        ? {
-            ...r,
-            passed: false,
-            // #209: the passing detail ("held on the final page") is not appended — it read as a pass.
-            detail: "vacuous: already held on the start page before any action and never changed (--success-when held needs it to go from not holding to holding)",
-          }
-        : r,
-    );
-  }
-  const warnings: string[] = held && heldAtStart && (vacuous || sawNotHolding)
-    ? [
-        vacuous
-          ? "--success-when held: the page checks already held on the start page, before any action, and never changed — vacuous, not counted"
-          : "--success-when held: the page checks already held on the start page, before any action (vacuous there); they counted only once they went from not holding to holding",
-      ]
-    : [];
-  // #202 — the general rule: a page/reloadThen check that held on the seed page and never stopped
-  // holding, or a network check matched only before the first action, cannot verify the goal. It
-  // fails (a run that proved nothing is never clean) unless --allow-vacuous-checks downgrades it to
-  // a warning. Named in `warnings` either way.
-  const vacuousState = stateChecks.filter(([i]) => seedHeld.has(i) && !changedSinceSeed.has(i)).map(([i]) => i);
-  for (const i of vacuousState) {
-    const r = results[i];
-    // Failed on the final verdict anyway (it changed after the last settled step, or #174 failed it).
-    if (r === undefined || !r.passed) continue;
-    warnings.push(`${vacuousCheckMessage(r.check)}${allowVacuous ? " (allowed by --allow-vacuous-checks)" : ""}`);
-    if (!allowVacuous) {
-      results[i] = {
-        ...r,
-        passed: false,
-        // #209: the passing detail ("held on the final page") is not appended — it read as a pass.
-        detail: "vacuous: held on the seed page at step 0, before any action, and never stopped holding — it cannot verify the goal (--allow-vacuous-checks downgrades this to a warning)",
-      };
-    }
-  }
-  for (const spec of vacuousNetwork) {
-    warnings.push(
-      `${vacuousCheckMessage(spec)}: only request(s) sent before the run's first action (page load, polling) matched${
-        allowVacuous ? " (allowed by --allow-vacuous-checks)" : ""
-      }`,
-    );
-  }
-  warnings.push(...effort.warnings);
-  // #286: the goal asked for a report — without a grounded answer the checks alone are not the goal.
-  if (answerRequired && run.answer === undefined) {
-    results = [...results, { check: REPORT_CHECK, passed: false, detail: "the goal asks to report what was found, but the run reported no grounded answer" }];
-  }
-  const assertionPassed = results.every((r) => r.passed);
-  // #209 — a truthful ending for a miss. `blocked` means the loop gave up; it is never used for a run
-  // whose model claimed the goal (`done`) and whose independent check then failed — that is `failed`,
-  // naming the check. A run whose ONLY failing checks are vacuous (#202) proved nothing either way:
-  // `inconclusive`, never a verdict about the app.
-  const failing = results.filter((r) => !r.passed);
-  const onlyVacuous = failing.length > 0 && failing.every((r) => r.detail.startsWith("vacuous:"));
-  const modelClaimedDone = run.stop === "done" || run.doneRejected === true;
-  const outcome: GoalBasedOutcome = assertionPassed
-    ? "succeeded"
-    : onlyVacuous
-      ? "inconclusive"
-      : run.stop === "exhausted"
-        ? "exhausted"
-        : modelClaimedDone
-          ? "failed"
-          : "blocked";
-  const named = failing.map((r) => `'${r.check}'`).join(", ");
-  const failure: MissionFailure | undefined =
-    outcome === "inconclusive"
-      ? {
-          kind: "vacuous-check",
-          message: `success check ${named} was satisfied before the run's first action (vacuous) — it cannot verify the goal, so the run proved nothing; use a check that only holds once the goal's work is done, or --allow-vacuous-checks to accept it`,
-        }
-      : outcome === "failed"
-        ? {
-            kind: "success-check-failed",
-            message: `the model said done, but success check ${failing.map((r) => `'${r.check}' ${r.detail}`).join("; ")}`,
-          }
-        : undefined;
-
-  // `runOutcome` and `outcome` must never disagree (#113): the in-run `done` grounding (the
-  // `successCheck` given to `explore` above) evaluates every check EXCEPT `reloadThen` — a mid-run
-  // reload would throw away state the run is still building — so a run can end `completed` there and
-  // this, the final, full evaluation (including `reloadThen`) can still fail. The final verdict
-  // overrides: a mission that did not succeed never carries a `completed` runOutcome.
-  const runOutcome: RunOutcome =
-    !assertionPassed && run.outcome.status === "completed"
-      ? { status: "incomplete", reason: whyNot(run, results) }
-      : run.outcome;
-  const finalRun: ExploreRun = runOutcome === run.outcome ? run : { ...run, outcome: runOutcome };
-
-  return {
-    outcome,
-    assertionPassed,
-    checks: results,
-    run: finalRun,
-    recording: run.recording,
-    transcript: run.transcript,
-    finalUrl: run.finalUrl,
-    ...(outcome === "succeeded" ? {} : { reason: whyNot(run, results) }),
-    ...(failure === undefined ? {} : { failure }),
-    ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
-    ...(warnings.length === 0 ? {} : { warnings }),
-  };
-}
-
-/** Reproduce a hang the loop stopped on, in fresh contexts (owner ruling 7). */
-async function reproduceSeedHang(
-  cfg: GoalBasedMissionConfig,
-  run: ExploreRun,
-  h: NonNullable<ExploreRun["hang"]>,
-): Promise<HangReproduction> {
-  return cfg.openFreshSession === undefined
-    ? NOT_REPLAYED
-    : await reproduceHang({
-        recording: run.recording,
-        recordingStepIndex: h.recordingStepIndex,
-        hang: h.signal,
-        openSession: cfg.openFreshSession,
-        ...(cfg.hangReplays === undefined ? {} : { attempts: cfg.hangReplays }),
-        perceive: {
-          ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
-          ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
-          ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
-          ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
-          ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
-        },
-        ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
-        ...(cfg.safety === undefined ? {} : { safety: cfg.safety }),
-        ...(cfg.fixtureRoot === undefined ? {} : { fixtureBaseDir: cfg.fixtureRoot }),
-        // #181: a control the run saw fire a write is never replayed by default, whatever its name.
-        writtenBy: run.sideEffects.map((e) => e.control),
-      });
-}
-
-/** The mission-ending result for a hang whose reproduction is already known. */
-function hangResult(run: ExploreRun, h: NonNullable<ExploreRun["hang"]>, reproduction: HangReproduction): GoalBasedResult {
-  const finding = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
-  return {
-    // A hang whose replays could not run at all is `inconclusive`, never a non-reproduction.
-    outcome: reproduction.status === "reproduced" ? "hang" : reproduction.status,
-    assertionPassed: false,
-    checks: [],
-    run,
-    recording: run.recording,
-    transcript: run.transcript,
-    finalUrl: run.finalUrl,
-    hang: finding,
-    reason:
-      reproduction.withheld !== undefined
-        ? `${finding.title} (${withheldReason(reproduction.withheld)})`
-        : reproduction.attempts === 0
-        ? `${finding.title} (unconfirmed: not replayed)`
-        : `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
-  };
-}
-
-/**
- * The oracle, in order: let the page settle (a save still in flight lands first), read the captured
- * requests, check the final page, then reload and check what persisted. The network checks use the
- * requests from BEFORE the oracle's own reload, and (#202) only those sent after the run's first
- * action — only what the run did counts. Results keep the order the checks were given in.
- */
-async function evaluateChecks(
-  cfg: GoalBasedMissionConfig,
-  checks: readonly SuccessCheck[],
-  page: Page,
-  capture: RequestCapture | null,
-  scope: NetworkScope,
-  onVacuous?: (spec: string) => void,
-): Promise<SuccessCheckResult[]> {
-  return evaluateOutcomeChecks(checks, {
-    actor: cfg.actor,
-    page,
-    capture,
-    ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
-    timeoutMs: cfg.oracleTimeoutMs ?? 3000,
-    settleMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS,
-    judgeNetwork: (c, requests, truncated) => judgeNetworkCheck(c, requests, truncated, scope, onVacuous),
-  });
+  return report(run, adjudicate(ctx, run, oracle.results, oracle.vacuousNetwork), intermittentHangs);
 }

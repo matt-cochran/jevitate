@@ -599,10 +599,10 @@
   description: manage and run promoted Journeys (regression-test replays)
 
 # journey anchor
-  description: add or remove a draft Journey's anchors (#487): named steps to branch missions off, written with the step's stable id
+  description: add or remove a Journey's anchors (#487): named steps to branch missions off, written with the step's stable id; on a promoted Journey the approval goes stale (#507)
 
 # journey anchor add
-  description: add an anchor to a draft Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues
+  description: add an anchor to a Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues
   arguments:
     - name=journeyId required=true variadic=false default=null
   options:
@@ -614,7 +614,7 @@
     - flags=--step <n|stepId> required=true mandatory=true negate=false variadic=false default=null description=the step the anchor follows: a 1-based step number or a step id
 
 # journey anchor remove
-  description: remove an anchor from a draft Journey; re-lints and prints the anchor issues
+  description: remove an anchor from a Journey; re-lints and prints the anchor issues
   arguments:
     - name=journeyId required=true variadic=false default=null
   options:
@@ -713,7 +713,7 @@
     - name=id required=true variadic=false default=null
   options:
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
-    - flags=--fix required=false mandatory=false negate=false variadic=false default=null description=#487: stamp the step id of each anchor that references a step by number only, write the Journey (a draft; a promoted one is refused), and report what was fixed
+    - flags=--fix required=false mandatory=false negate=false variadic=false default=null description=#487: stamp the step id of each anchor that references a step by number only, write the Journey (#507: on a promoted Journey its approval goes stale), and report what was fixed
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--sarif <file> required=true mandatory=false negate=false variadic=false default=null description=also write a SARIF 2.1.0 log here
 
@@ -1393,11 +1393,17 @@
     - flags=--allow-log-cmd required=false mandatory=false negate=false variadic=false default=null description=a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's)
     - flags=--allow-writes required=false mandatory=false negate=false variadic=false default=null description=let a find-out mission change the app (forwarded to every mission, as explore's)
     - flags=--base-url <url> required=true mandatory=false negate=false variadic=false default=null description=resolve each target's route against this origin (wins over --env and the file's baseUrl; else JEVITATE_BASE_URL)
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--concurrency <n> required=true mandatory=false negate=false variadic=false default=null description=runs at once (default 1, at most 16; the machine-wide browser cap still applies)
     - flags=--deny <pattern> required=true mandatory=false negate=false variadic=false default=[] description=a control no mission may click (repeatable) (forwarded to every mission, as explore's)
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=resolve each target's route against this named environment's base URL (.jevitate/environments.json)
     - flags=--evidence-video required=false mandatory=false negate=false variadic=false default=null description=per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's)
+    - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=null description=use deterministic fake gateways for every run (pipeline smoke only)
+    - flags=--fixture <path> required=true mandatory=false negate=false variadic=false default=null description=the upload fixture for every target without its own options.fixture (a file inside the project, confined like explore --fixture; checked before any run)
+    - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
     - flags=--invariants <file> required=true mandatory=false negate=false variadic=false default=[] description=app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's)
     - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope (default: a human summary)
@@ -1409,6 +1415,8 @@
     - flags=--log-scope <regex|substring> required=true mandatory=false negate=false variadic=false default=[] description=attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's)
     - flags=--log-source <spec> required=true mandatory=false negate=false variadic=false default=[] description=backend log source: file:<path> | docker:<container> | cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's)
     - flags=--log-triage required=false mandatory=false negate=false variadic=false default=null description=record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's)
+    - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
+    - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
     - flags=--no-host-starved-retry required=false mandatory=false negate=true variadic=false default=null description=record a target whose run stalled on a starved host (failure.kind host-starved) as is; by default it is retried ONCE after the host's load drops (bounded wait, #452)
     - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=the sweep directory: <id>/ per target and sweep.result.json (default .jevitate/logs/<date>/sweep-<stamp>; required with --resume)
     - flags=--paid <pattern> required=true mandatory=false negate=false variadic=false default=[] description=an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's)

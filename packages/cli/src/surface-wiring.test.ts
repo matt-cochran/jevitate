@@ -78,7 +78,7 @@ const STORED_ALLOWLIST = { allow: "#484: replays with the result's stored allow 
 
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
-  "explore-cli.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
+  "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
   // #369: every explore-author-journey take is explore's goal run — what authoring leaves out, and why.
   "explore-author.ts runExploration": {
     hostHealth: SEAM,
@@ -95,12 +95,12 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     minEffort: "#424: every take is checked by --success and stops at the first verified path; a minimum effort would only delay it (`explore --min-actions`)",
     serverLog: "backend log sources are operator-declared `explore --log-source`; authoring needs only the goal's checks",
   },
-  "explore-cli.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
-  "explore-cli.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
-  "explore-cli.ts runFeatureCliMission": { hostHealth: SEAM, nowIso: SEAM },
-  "explore-cli.ts runExploreMultiRun": { nowIso: SEAM },
+  "coverage-strategy.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
+  "adversarial-strategy.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
+  "feature-strategy.ts runFeatureCliMission": { hostHealth: SEAM, nowIso: SEAM },
+  "run.ts runExploreMultiRun": { nowIso: SEAM },
   "verify-fix-cli.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait", evidencePaceMs: EVIDENCE_PACE },
-  "explore-cli.ts runUsabilityMission": {
+  "usability-strategy.ts runUsabilityMission": {
     hostHealth: SEAM,
     env: SEAM,
     configPath: SEAM,
@@ -148,7 +148,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
   // #497: the labels backfill replays with its own label-reading observer, never a whole interpreter.
   "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: OBSERVER_NOT_INTERPRETER },
-  "journey-cli.ts runJourneyProgrammatically": { fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
+  "run.ts runJourneyProgrammatically": { fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
@@ -419,7 +419,7 @@ describe("surface wiring — every mission option is passed by every surface, or
 
   it("finds the surfaces (the analysis itself is not vacuous)", () => {
     const keys = sites.map((s) => s.key);
-    for (const k of ["explore-cli.ts runExploration", "mission-queue-runner.ts runFeatureCliMission", "check-execute.ts runCoverageMission", "mcp-api.ts runVerifyFix"]) {
+    for (const k of ["goal-strategy.ts runExploration", "mission-queue-runner.ts runFeatureCliMission", "check-execute.ts runCoverageMission", "mcp-api.ts runVerifyFix"]) {
       expect(keys, k).toContain(k);
     }
   }, 120_000);

@@ -1,6 +1,5 @@
 import { contentHash } from "@jevitate/domain";
 import type { JourneyProposal, JourneyReviewProposal } from "@jevitate/journey";
-import { describeProvenance } from "./approval-provenance.js";
 import {
   SECRET_PARAM_NAME_RE,
   describeStep,
@@ -30,9 +29,28 @@ import {
   type JourneyReviewAttention,
 } from "@jevitate/journey";
 import type { LocatorHealthDetail } from "./locator-health.js";
-import { renderFindings } from "./catalog-review.js";
 import { SafetyPolicy, describeCheck, explainCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
+import {
+  createSheetWriter,
+  finishSheet,
+  plural,
+  renderApprove,
+  renderAttention,
+  renderClear,
+  renderFullDetail,
+  renderHeader,
+  renderInputs,
+  renderProposal,
+  renderProvesAtTheEnd,
+  renderSteps,
+  renderWhatItDoes,
+  renderWrites,
+  stepRanges,
+  type Style,
+} from "./journey-review/render.js";
+
+export { humanTime, stepRanges } from "./journey-review/render.js";
 
 /**
  * #432 — `jevitate journey review <id>`: one human-readable review sheet for promotion sign-off.
@@ -43,9 +61,6 @@ import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, t
  * (values only arrive as `--param`). Defense in depth: a literal typed into a field whose name reads
  * as a credential is shown «redacted», and a secret reference is listed by field and manager only.
  */
-
-/** #467: the label of a change that only added step ids; re-approving it takes the warn path of the anchor rules. */
-const STEP_ID_ONLY_LABEL = "ids added only (warn path)";
 
 /** The approval bookkeeping a review hash leaves out: promoting writes them, so they cannot be part of what was reviewed. */
 const BOOKKEEPING = ["promoted", "approval", "acceptedWeak"] as const;
@@ -526,21 +541,6 @@ function describeFile(step: Extract<Step, { kind: "upload" }>): string | undefin
   return f.redacted ? "«redacted»" : f.value;
 }
 
-/** Step numbers as ranges: 1, 2, 3, 5 becomes `1–3, 5`. */
-export function stepRanges(numbers: readonly number[]): string {
-  const sorted = [...new Set(numbers)].sort((a, b) => a - b);
-  const parts: string[] = [];
-  for (let i = 0; i < sorted.length; ) {
-    let j = i;
-    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j]! + 1) j++;
-    parts.push(j === i ? `${sorted[i]}` : `${sorted[i]}–${sorted[j]}`);
-    i = j + 1;
-  }
-  return parts.join(", ");
-}
-
-const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
-
 /** Everything that needs the reviewer's decision, warnings first (stable within a severity). */
 function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: readonly string[], goal: string | undefined): JourneyReviewAttention[] {
   const out: JourneyReviewAttention[] = [];
@@ -659,22 +659,6 @@ function provenanceField(p: ApprovalProvenance | undefined): { provenance?: Appr
 
 // ── Rendering ─────────────────────────────────────────────────────────────────────────────────
 
-type Style = "markdown" | "text";
-
-/** #469: the verified pull request behind a pr-review approval, one line (empty for any other channel). */
-function prLines(p: ApprovalProvenance | undefined): string[] {
-  const pr = p?.pr;
-  if (pr === undefined) return [];
-  const parts = [
-    `PR #${pr.number}${pr.url === undefined ? "" : ` (${pr.url})`}`,
-    `reviewer ${pr.reviewer}`,
-    ...(pr.author === undefined ? [] : [`author ${pr.author}`]),
-    `merged ${pr.mergedSha.slice(0, 12)}`,
-    ...(pr.codeOwner === undefined ? [] : [pr.codeOwner ? "reviewer is a code owner" : "reviewer is NOT a code owner"]),
-  ];
-  return [`Pull-request approval: ${parts.join(" · ")}`];
-}
-
 /** How the sheet is drawn. `width` wraps the text sheet (default 100); `color` adds ANSI; `full` adds the detail sections. */
 export interface RenderOptions {
   readonly width?: number;
@@ -682,315 +666,20 @@ export interface RenderOptions {
   readonly full?: boolean;
 }
 
-const DEFAULT_WIDTH = 100;
-const NB = " ";
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** `2026-10-11T08:33:26.979Z` as `11 Oct 2026 08:33 UTC` — parsed, not locale-formatted, so it is deterministic. */
-export function humanTime(iso: string): string {
-  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(iso);
-  if (m === null) return iso;
-  return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1] ?? m[2]} ${m[1]} ${m[4]}:${m[5]} UTC`;
-}
-
-/** Spaces inside a command or hash must not become line breaks. */
-const nb = (s: string): string => s.replace(/ /g, NB);
-
-/** Wraps `text` after `prefix`; continuation lines are indented `hang` columns. Words (and nb-joined commands) are never cut. */
-function wrapText(prefix: string, text: string, width: number, hang = prefix.length): string[] {
-  const words = text.split(" ").filter((w) => w !== "");
-  const lines: string[] = [];
-  let cur = prefix;
-  let empty = true;
-  for (const w of words) {
-    if (!empty && cur.length + 1 + w.length > width) {
-      lines.push(cur);
-      cur = " ".repeat(hang);
-      empty = true;
-    }
-    cur += `${empty ? "" : " "}${w}`;
-    empty = false;
-  }
-  lines.push(cur);
-  return lines.map((l) => l.replaceAll(NB, " ").trimEnd());
-}
-
-const HEADERS = ["NEEDS YOUR ATTENTION", "WHAT IT DOES", "STEPS", "PROVES AT THE END", "WRITES", "CLEAR", "APPROVE", "INPUTS", "PROPOSED REVISION (SELF-HEAL)", "DETAIL", "Review"];
-
-function paint(line: string, color: boolean): string {
-  if (!color) return line;
-  const header = HEADERS.find((h) => line.startsWith(h) && (line.length === h.length || line[h.length] === " "));
-  const body = line.replaceAll("⚠", "\u001b[33m⚠\u001b[0m").replaceAll("✓", "\u001b[32m✓\u001b[0m");
-  return header === undefined ? body : `\u001b[1m${header}\u001b[0m${body.slice(header.length)}`;
-}
-
 function renderSheet(r: JourneyReview, style: Style, opts: RenderOptions = {}): string {
-  const md = style === "markdown";
-  const width = Math.max(40, opts.width ?? DEFAULT_WIDTH);
-  const full = opts.full === true;
-  const code = (s: string): string => (md ? `\`${s.replace(/`/g, "'")}\`` : s);
-  const em = (s: string): string => (md ? `_${s}_` : s);
-  const out: string[] = [];
-  /** One item: wrapped and hanging in text, a single line in Markdown. */
-  const put = (prefix: string, text: string, hang?: number): void => {
-    if (md) out.push(`${prefix}${text}`.replaceAll(NB, " "));
-    else out.push(...wrapText(prefix, text, width, hang));
-  };
-  const gap = (): void => void out.push("");
-  /** A section header: caps in text, a heading in Markdown. */
-  const head = (label: string, title: string = label.charAt(0) + label.slice(1).toLowerCase()): void => {
-    if (!md) out.push(label);
-    else out.push(`## ${title}`, "");
-  };
-  const bullet = md ? "- " : "  ";
-  const cmd = (c: string): string => (md ? code(c) : nb(c));
-
-  // ── Header
-  const prov = r.approval?.provenance;
-  const c = r.changeSinceApproval;
-  const changed = (c.kind === "diff" || c.kind === "snapshot-missing") && c.changed;
-  const plainApproval = prov !== undefined && prov.channel === "tty" && prov.agentSignals.filter((x) => !/not.?tty/i.test(x)).length === 0;
-  const approvedBy = prov?.user === undefined ? "" : ` by ${prov.user}`;
-  const status = !r.promoted
-    ? "not promoted"
-    : r.approval === undefined
-      ? "promoted (no approval recorded)"
-      : `approved ${humanTime(r.approval.at)}${plainApproval ? `${approvedBy} (terminal)` : ` — ${describeProvenance(prov)}`} · ${nb(changed ? "CHANGED since approval" : "unchanged since approval")}`;
-  if (md) out.push(`# Review: ${r.name}`, "", `**${r.id}** · ${status}`);
-  else {
-    put("Review  ", r.name);
-    put("        ", `${r.id} · ${status}`);
-  }
-  for (const l of prLines(prov)) put(md ? "" : "        ", l);
-  gap();
-
-  // ── Needs your attention
-  const attention = r.attention ?? [];
-  if (attention.length === 0) {
-    if (md) out.push("## Needs your attention", "", "Nothing — every gate is clear.");
-    else out.push("NEEDS YOUR ATTENTION  nothing — every gate is clear");
-  } else {
-    head("NEEDS YOUR ATTENTION", "Needs your attention");
-    for (const a of attention) {
-      const icon = a.severity === "warn" ? "⚠" : "○";
-      const hint = a.hint === undefined ? "" : ` → ${/^(jevitate|--)/.test(a.hint) ? cmd(a.hint) : a.hint}`;
-      put(`${bullet}${icon} `, `${a.text}${hint}`, bullet.length + 2);
-    }
-  }
-  gap();
-
-  // ── What it does
-  const s = r.summary;
-  const wid: string[] = [];
-  const primary = s.goal ?? s.intent ?? s.description;
-  head("WHAT IT DOES", "What it does");
-  if (primary !== undefined) put(bullet, primary);
-  if (s.goal !== undefined && s.intent !== undefined && s.intent !== s.goal && full) put(bullet, s.intent);
-  if (s.description !== undefined && s.description !== primary && full) put(bullet, s.description);
-  for (const cr of s.successCriteria) put(bullet, `Success: ${cr.description}${cr.check === undefined || !full ? "" : ` (checked by ${code(cr.check)})`}`);
-  for (const pc of s.preconditions) put(bullet, `Needs: ${pc}`);
-  if (s.persona !== undefined) wid.push(`persona ${s.persona}`);
-  if (s.role !== undefined) wid.push(`runs as ${s.role}`);
-  if (s.requiresAuth) wid.push("Signed in");
-  wid.push(...r.sideEffects.origins.slice(0, 1));
-  const files = r.steps.flatMap((st) => (st.file === undefined ? [] : [st.file]));
-  if (wid.length > 0) put(bullet, wid.join(" · "));
-  if (files.length > 0) put(bullet, `Uploads ${files.map(nb).join(", ")}`);
-  gap();
-
-  // ── Inputs (only when present)
-  if (r.inputs.params.length > 0 || r.inputs.secrets.length > 0) {
-    head("INPUTS", "Inputs");
-    if (r.inputs.params.length > 0) put(bullet, `Parameters: ${r.inputs.params.map((p) => `${code(p.name)}${p.secret ? " (secret)" : ""}${p.description === undefined ? "" : ` — ${p.description}`}`).join("; ")}`);
-    for (const x of r.inputs.secrets) put(bullet, `Secret ${code(x.field)} from ${x.manager} on ${x.origin}`);
-    gap();
-  }
-
-  // ── Steps
-  if (r.steps.length > 0) {
-    head("STEPS", "Steps");
-    const numW = String(r.steps.length).length;
-    for (const st of r.steps) {
-      const anchors = (st.anchors ?? []).map((a) => `⚓ ${a}`).join(" ");
-      const target = full && st.target !== undefined ? ` — target: ${[st.target.role, st.target.name === undefined ? undefined : `"${st.target.name}"`].filter((x) => x !== undefined).join(" ")}` : "";
-      const lead = md ? `${st.number}. ` : `  ${String(st.number).padStart(numW)}  `;
-      const prefixLen = lead.length;
-      // M4: a labelled step's exact locator follows its label, so a spoofed label cannot hide it.
-      const locator = st.locator === undefined ? "" : `${md ? " " : "  "}‹${code(st.locator)}›`;
-      put(lead, `${md ? `**${st.action}**` : st.action}${locator}${target}${anchors === "" ? "" : `  ${anchors}`}`, md ? 0 : prefixLen);
-      const sub = md ? "   - " : " ".repeat(prefixLen);
-      const subHang = sub.length + 2;
-      if (st.checks !== undefined) {
-        const joined = st.checks.map((k) => (k.weak ? `⚠ ${k.text} (proves nothing)` : `✓ ${k.text}`));
-        if (md) for (const j of joined) put(sub, j);
-        else if (sub.length + joined.join(" · ").length <= width) put(sub, joined.join(" · "), subHang);
-        else for (const j of joined) put(sub, j, subHang);
-      }
-      const writes = [...new Set(r.sideEffects.writeRequests.filter((w) => w.step === st.number && w.source !== "end-state").map((w) => `${w.method} ${w.endpoint}`))];
-      if (writes.length > 0) put(sub, `writes ${writes.join(" · ")}`, subHang);
-      if (full) {
-        if (st.objective !== undefined) put(sub, `Objective: ${st.objective}`, subHang);
-        if (st.expectedResult !== undefined) put(sub, `Expected result: ${st.expectedResult}`, subHang);
-        if (st.file !== undefined) put(sub, `File: ${code(st.file)}`, subHang);
-        if (st.params.length > 0) put(sub, `Params: ${st.params.map(code).join(", ")}`, subHang);
-      }
-    }
-    gap();
-  }
-
-  // ── Proves at the end
-  const endState = r.proof.endStateText ?? r.proof.endState;
-  if (endState.length > 0) {
-    head("PROVES AT THE END", "Proves at the end");
-    for (const e of endState) put(`${bullet}✓ `, e, bullet.length + 2);
-    gap();
-  }
-
-  // ── Writes
-  const fx = r.sideEffects;
-  const byEndpoint = new Map<string, { steps: number[]; end: boolean }>();
-  for (const w of fx.writeRequests) {
-    const key = `${w.method} ${w.endpoint}`;
-    const e = byEndpoint.get(key) ?? { steps: [], end: false };
-    if (w.step !== undefined) e.steps.push(w.step);
-    if (w.source === "end-state") e.end = true;
-    byEndpoint.set(key, e);
-  }
-  if (byEndpoint.size > 0 || fx.riskyControls.length > 0 || fx.origins.length > 1) {
-    head("WRITES", "Writes");
-    for (const [key, e] of byEndpoint) {
-      const where = [...(e.steps.length === 0 ? [] : [`${e.steps.length > 1 ? "steps" : "step"} ${stepRanges(e.steps)}`]), ...(e.end ? ["end state"] : [])];
-      put(bullet, `${code(key)}${where.length === 0 ? "" : ` (${where.join(", ")})`}`);
-    }
-    for (const x of fx.riskyControls) {
-      put(bullet, `Risky control, step ${x.step}: ${x.role === undefined ? "" : `${x.role} `}"${x.control}" — ${x.risk} [${code(x.ruleId)}]${x.waivedBy === undefined ? "" : ` (exempted by allowControl ${code(x.waivedBy)})`}`);
-    }
-    if (fx.origins.length > 1) put(bullet, `Origins: ${fx.origins.map(code).join(", ")}`);
-    gap();
-  }
-
-  // ── Clear
-  const clear: string[] = [];
-  const lint = r.proof.lint;
-  if (lint.errors === 0 && lint.warnings === 0) clear.push("lint ✓");
-  if (r.locatorHealth !== undefined && r.locatorHealth.brittle === 0) clear.push(`locators ${r.locatorHealth.stable}/${r.locatorHealth.stable} stable ✓`);
-  if (r.catalog !== undefined && !r.catalog.linked) clear.push("not linked to a job/persona (info)");
-  else if (r.catalog !== undefined && r.catalog.unvetted.length === 0 && r.catalog.needsReReview.length === 0) clear.push("catalog links ✓");
-  const related = new Set((r.findings ?? []).filter((f) => f.analyzer === "catalog-analysis" && f.code.startsWith("pair:")).flatMap((f) => (f.items ?? []).filter((i) => i !== `journey:${r.id}`)));
-  const relatedCount = related.size > 0 ? related.size : (r.findings ?? []).filter((f) => f.analyzer === "catalog-analysis" && f.code.startsWith("pair:")).length;
-  if (relatedCount > 0) clear.push(`${plural(relatedCount, "related Journey", "related Journeys")} share writes${full ? "" : " (--full for detail)"}`);
-  const v = r.proof.verify;
-  if (v.status === "recorded" && !v.stale && v.verdict !== "insensitive") clear.push(`mutation proof ${v.verdict} ✓`);
-  if (clear.length > 0) {
-    if (md) out.push("## Clear", "", clear.join(" · "));
-    else put("CLEAR    ", clear.join(" · "), 9);
-    gap();
-  }
-
-  // ── Self-heal proposal
-  if (r.proposal !== undefined) {
-    const pr = r.proposal;
-    head("PROPOSED REVISION (SELF-HEAL)", "Proposed revision (self-heal)");
-    put(bullet, `${code(pr.proposalId)} from ${humanTime(pr.createdAt)}: accepting it makes the content hash ${nb(code(pr.proposedHash))} (made against ${nb(code(pr.baseHash))})`);
-    const scope = pr.changes.range ?? (pr.changes.notes.length > 0 ? "change notes" : "no change context");
-    put(bullet, `Change context: ${scope}${pr.changes.baseSha === undefined ? "" : ` (${pr.changes.baseSha.slice(0, 8)}..${(pr.changes.headSha ?? "").slice(0, 8)})`} · heal attempts ${pr.attempts.total} (${pr.attempts.rejected} rejected)`);
-    for (const n of pr.changes.notes) put(bullet, `note: ${n}`);
-    if (pr.stale) put(bullet, `STALE — the Journey changed after this proposal was made; it cannot be accepted. Re-run: ${cmd(`jevitate journey run ${r.id} --self-heal`)}`);
-    if (pr.problem !== undefined && !pr.stale) put(bullet, `REFUSED — ${pr.problem}`);
-    for (const st of pr.steps) {
-      put(bullet, `Step ${st.number}: ${st.hypothesis}`);
-      put(`${bullet}  `, `before: ${code(st.before)}`);
-      put(`${bullet}  `, `after:  ${code(st.after)}`);
-      for (const e of st.evidence) put(`${bullet}  `, `evidence: ${e}`);
-      for (const sh of st.screenshots) put(`${bullet}  `, `screenshot: ${sh}`);
-    }
-    if (pr.stale || pr.problem !== undefined) put(bullet, em("not acceptable as it stands"));
-    else put(bullet, `Accept exactly this revision: ${cmd(pr.acceptCommand)}`);
-    put(bullet, `Reject it: ${cmd(`jevitate journey promote ${r.id} --reject-proposal ${pr.proposalId} --reason "<why>"`)}`);
-    gap();
-  }
-
-  // ── Full detail
-  if (full) {
-    head("DETAIL", "Detail");
-    const h3 = (t: string): void => {
-      out.push(md ? `### ${t}` : `${t}:`);
-    };
-    h3(`Lint: ${lint.errors} error(s), ${lint.warnings} warning(s)`);
-    if (lint.findings.length === 0) put(bullet, em("no findings"));
-    for (const f of lint.findings) put(bullet, `${f.level} ${f.rule}${f.step === undefined ? "" : ` (step ${f.step})`}: ${f.message}`);
-    if (r.proof.acceptedWeak !== undefined) put(bullet, `Accepted weak: "${r.proof.acceptedWeak.reason}" (waived: ${r.proof.acceptedWeak.rules.join(", ")})`);
-    const verify = v.status === "not-verified" ? `not verified — ${v.hint}` : `${v.verdict} (${humanTime(v.at)})${v.stale ? " — STALE: the Journey changed after this proof ran" : ""}${v.reason === undefined ? "" : ` — ${v.reason}`}: ${Object.entries(v.summary).map(([k, n]) => `${n} ${k}`).join(", ")}`;
-    put("", `Mutation proof: ${verify}`);
-    gap();
-
-    h3("Change since last approval");
-    if (c.kind === "first-approval") put(bullet, em("first approval — nothing approved before"));
-    else if (c.kind === "no-record") put(bullet, em("promoted before approvals were recorded — no approved version to compare with"));
-    else {
-      put(bullet, `Approved${c.approvedAt === undefined ? "" : ` ${humanTime(c.approvedAt)}`} as ${nb(code(c.approvedHash))}${c.kind === "snapshot-missing" ? "; its snapshot is missing" : ""} — ${c.changed ? "CHANGED since" : "unchanged since"}`);
-      if (c.stepIdOnly === true) put(bullet, STEP_ID_ONLY_LABEL);
-      if (c.kind === "diff") {
-        for (const [label, d] of [["Steps", c.steps], ["Assertions", c.assertions], ["Side effects", c.sideEffects]] as const) {
-          if (d.added.length === 0 && d.removed.length === 0) continue;
-          put(bullet, `${label}:`);
-          for (const l of d.removed) put(`${bullet}  `, `− ${l}`, bullet.length + 4);
-          for (const l of d.added) put(`${bullet}  `, `+ ${l}`, bullet.length + 4);
-        }
-      }
-    }
-    gap();
-
-    if (r.anchorWarnings !== undefined && r.anchorWarnings.length > 0) {
-      h3("Anchor rules");
-      for (const w of r.anchorWarnings) put(bullet, `${w.severity} ${w.path}${w.step === undefined ? "" : ` (step ${w.step})`}: ${w.message}${w.fix === undefined ? "" : ` — fix: ${w.fix}`}`);
-      gap();
-    }
-    if (r.locatorHealth !== undefined) {
-      const lh = r.locatorHealth;
-      h3("Locator health (advisory)");
-      put("", lh.line);
-      if (lh.brittleSteps.length === 0) put(bullet, em("no brittle steps"));
-      for (const b of lh.brittleSteps) put(bullet, `step ${b.index + 1}${b.stepId === undefined ? "" : ` [${b.stepId}]`} ${b.kind} ${code(b.locator)}${b.route === undefined ? "" : ` on ${b.route}`} — ${b.reasons.join("; ")} — fix: ${b.fix}`);
-      gap();
-    }
-    if (r.catalog !== undefined) {
-      const k = r.catalog;
-      const st = (x: string): string => (x === "stale" ? "STALE — needs re-review" : x === "unknown" ? "UNKNOWN — not declared in the catalog" : x);
-      h3("Catalog");
-      if (!k.linked) put(bullet, em("not linked to a job/persona"));
-      else {
-        put(bullet, k.job === undefined ? "Job: none" : `Job: ${code(k.job.id)} (${st(k.job.status)})${k.job.story === undefined ? "" : ` — ${k.job.story}`}`);
-        put(bullet, k.persona === undefined ? "Persona: none" : `Persona: ${code(k.persona.id)} (${st(k.persona.status)})`);
-      }
-      gap();
-    }
-    if (r.findings !== undefined) {
-      for (const l of renderFindings(r.findings, style)) {
-        if (md || l === "" || !/^\s*- /.test(l)) out.push(l);
-        else {
-          const lead = /^(\s*- )/.exec(l)![1]!;
-          put(lead, l.slice(lead.length), lead.length + 2);
-        }
-      }
-    }
-    if (r.approval !== undefined) {
-      h3("Approval record");
-      put(bullet, describeProvenance(prov));
-      for (const w of r.approval.waivers ?? []) put(bullet, `waived (${w.kind}): "${w.reason}" — ${w.items.join(", ")}`);
-      if (r.approval.acceptedFindings !== undefined) put(bullet, `acknowledged findings: "${r.approval.acceptedFindings.reason}" — ${r.approval.acceptedFindings.findings.join(", ")}`);
-      gap();
-    }
-  }
-
-  // ── Approve (the one place the content hash appears)
-  const approved = r.promoted && !changed && (c.kind === "diff" || c.kind === "snapshot-missing" || c.kind === "no-record");
-  head("APPROVE", "Approve");
-  const approveCmd = cmd(`jevitate journey promote ${r.id} --reviewed-hash ${r.contentHash}`);
-  put(bullet, `${approved ? "(already approved) " : ""}${approveCmd}`);
-  if (md) out.push("", `Content hash: ${code(r.contentHash)}`);
-  else out.push(`Content hash: ${r.contentHash}`);
-  return `${out.map((l) => paint(l, opts.color === true && !md)).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+  const w = createSheetWriter(style, opts);
+  renderHeader(r, w, opts);
+  renderAttention(r, w, opts);
+  renderWhatItDoes(r, w, opts);
+  renderInputs(r, w, opts);
+  renderSteps(r, w, opts);
+  renderProvesAtTheEnd(r, w, opts);
+  renderWrites(r, w, opts);
+  renderClear(r, w, opts);
+  renderProposal(r, w, opts);
+  if (opts.full === true) renderFullDetail(r, w, opts);
+  renderApprove(r, w, opts);
+  return finishSheet(w);
 }
 
 /** #432: the review sheet as Markdown (`journey review --markdown`). */

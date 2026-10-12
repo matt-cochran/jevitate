@@ -2,9 +2,11 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { withEngine } from "./engine.js";
-import { JEV_PROVIDER_FLAG_HELP, type CliDeps, emitCommandResult, environmentSeams, jevProviderArg } from "./cli-shared.js";
+import { JEV_PROVIDER_FLAG_HELP, type CliDeps, emitCommandResult, environmentSeams, jevProviderArg, withBrowserLaunchFlags } from "./cli-shared.js";
 import { intArg, positiveIntArg } from "./cli-args.js";
 import { forwardedArgv, lastEnvelope } from "./multi-run-cli.js";
+import { FixturePathError } from "@jevitate/recording";
+import { journeyFixtureBaseDir } from "./journey-api.js";
 import { withMissionFlags } from "./campaign-cli.js";
 import { setKillSummary } from "./kill-signal.js";
 import { environmentFromFlags, isEnvironmentError } from "./environments.js";
@@ -15,6 +17,7 @@ import {
   SweepArgsError,
   SweepSpecError,
   defaultSweepOutDir,
+  confineSweepFixture,
   loadSweepTargets,
   runSweep,
   type SweepResult,
@@ -23,6 +26,11 @@ import {
 
 /** `sweep`'s own options: everything else it declares is forwarded to every run (as `campaign run`'s). */
 const SWEEP_OWNED: ReadonlySet<string> = new Set(["targets", "concurrency", "resume", "out", "stopOnEnvFailure", "hostStarvedRetry", "baseUrl", "env", "json", "tag"]);
+
+/** The operator flags `sweep` forwards to every run (the browser launch flags included, in order). */
+export function sweepForwardedArgv(cmd: Command): string[] {
+  return forwardedArgv(cmd, SWEEP_OWNED);
+}
 
 /** The human summary: outcome, every target, the deduped defects and the grouped environment causes. */
 export function formatSweepHuman(data: unknown): string {
@@ -72,13 +80,15 @@ export function exploreRunOnce(newProgram: () => Command): SweepRunOnce {
 /** Registers `jevitate sweep` (#425). */
 export function registerSweepCommand(program: Command, deps: CliDeps, buildProgram: (deps: CliDeps) => Command): void {
   withMissionFlags(
-    program
-      .command("sweep")
-      .description(
-        "run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — " +
-          "with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. " +
-          "Every run is tagged target=<id> plus the sweep's and the target's tags",
-      ),
+    withBrowserLaunchFlags(
+      program
+        .command("sweep")
+        .description(
+          "run many explore missions — one per target in a targets file (.tsv or .json: id, url|route, persona, strategy, goal, tags, explore options) — " +
+            "with bounded concurrency, resumable, and write ONE sweep.result.json: per-target outcomes and depth, defects deduped by fingerprint across targets, environment causes grouped. " +
+            "Every run is tagged target=<id> plus the sweep's and the target's tags",
+        ),
+    ),
   )
     .requiredOption("--targets <file>", "the targets file (.tsv with a header row, or .json: an array or {baseUrl?, defaults?, targets})")
     .option("--concurrency <n>", `runs at once (default 1, at most ${MAX_SWEEP_CONCURRENCY}; the machine-wide browser cap still applies)`, intArg({ min: 1, max: MAX_SWEEP_CONCURRENCY }))
@@ -88,6 +98,7 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
     .option("--no-host-starved-retry", "record a target whose run stalled on a starved host (failure.kind host-starved) as is; by default it is retried ONCE after the host's load drops (bounded wait, #452)")
     .option("--base-url <url>", "resolve each target's route against this origin (wins over --env and the file's baseUrl; else JEVITATE_BASE_URL)")
     .option("--env <name>", "resolve each target's route against this named environment's base URL (.jevitate/environments.json)")
+    .option("--fixture <path>", "the upload fixture for every target without its own options.fixture (a file inside the project, confined like explore --fixture; checked before any run)")
     .option("--real", "use live Jev + OpenRouter gateways for every run (requires keys)")
     .option("--fake-ai", "use deterministic fake gateways for every run (pipeline smoke only)")
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
@@ -95,13 +106,21 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(
       taggedAction(program, "sweep", async function (this: Command) {
-        const o = this.opts<{ targets: string; concurrency?: number; resume?: boolean; out?: string; stopOnEnvFailure?: number; hostStarvedRetry?: boolean; baseUrl?: string; env?: string; json?: boolean }>();
+        const o = this.opts<{ targets: string; concurrency?: number; resume?: boolean; out?: string; stopOnEnvFailure?: number; hostStarvedRetry?: boolean; baseUrl?: string; env?: string; fixture?: string; json?: boolean }>();
         const emit = (envelope: Parameters<typeof emitCommandResult>[1], exitCode?: number): void =>
           emitCommandResult(program, envelope, { json: o.json === true, command: "sweep", human: formatSweepHuman, ...(exitCode === undefined ? {} : { exitCode }) });
         try {
           if (o.resume === true && o.out === undefined) throw new SweepArgsError("--resume needs --out <dir> (the sweep directory to resume)");
           let baseUrl = o.baseUrl;
           if (baseUrl === undefined && o.env !== undefined) baseUrl = environmentFromFlags({ env: o.env }, environmentSeams(deps))?.baseUrl;
+          if (o.fixture !== undefined) {
+            try {
+              confineSweepFixture(o.fixture, journeyFixtureBaseDir());
+            } catch (err) {
+              if (!(err instanceof FixturePathError)) throw err;
+              throw new SweepArgsError(`--fixture ${JSON.stringify(o.fixture)} refused (${err.code}): ${err.message}`);
+            }
+          }
           const targets = loadSweepTargets(o.targets, { ...(baseUrl === undefined ? {} : { baseUrl }) });
           const result = await runSweep({
             plan: {
@@ -113,7 +132,7 @@ export function registerSweepCommand(program: Command, deps: CliDeps, buildProgr
               ...(o.stopOnEnvFailure === undefined ? {} : { stopOnEnvFailure: o.stopOnEnvFailure }),
               ...(o.hostStarvedRetry === false ? { retryHostStarved: false } : {}),
               tags: currentRunMetadata()?.tags ?? {},
-              runArgs: forwardedArgv(this, SWEEP_OWNED),
+              runArgs: sweepForwardedArgv(this),
             },
             runOnce: exploreRunOnce(() => buildProgram(deps)),
             // A kill writes (and prints) the sweep's partial aggregate synchronously, then exits 130/143.
