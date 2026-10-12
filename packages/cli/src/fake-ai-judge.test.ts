@@ -72,7 +72,19 @@ describe("fakeDoneJudge — total over every question shape the product asks (#2
       signInFacts: "typed a password field",
       saveFacts: "submitted a form",
     });
-    expect(r).toEqual({ goalMet: 0, goalIsSignIn: 0, goalIsSave: 0 });
+    expect(r).toEqual({ goalMet: 0, goalIsSignIn: 0, goalIsSave: 0, goalIsWrites: null });
+  });
+
+  it("answers judgeGoalCompletion's #514 writes-scope question without throwing", async () => {
+    const judge = fakeDoneJudge();
+    const r = await judgeGoalCompletion(judge, {
+      goal: "import the contacts",
+      url: "https://app.example.com/",
+      pageText: "contacts",
+      history: [],
+      writeFacts: "POST /api/import 201",
+    });
+    expect(r.goalIsWrites).toBe(0);
   });
 
   it("answers every real v1 rubric question (noul + score families) without throwing", async () => {

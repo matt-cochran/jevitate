@@ -222,7 +222,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (436 exports)
+# @jevitate/explore (438 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -284,6 +284,8 @@
   GOAL_IS_SAVE_QUESTION: const (string)
   GOAL_IS_SIGN_IN_INSTRUCTIONS: const (string)
   GOAL_IS_SIGN_IN_QUESTION: const (string)
+  GOAL_IS_WRITES_INSTRUCTIONS: const (string)
+  GOAL_IS_WRITES_QUESTION: const (string)
   GOAL_MET_INSTRUCTIONS: const (string)
   GOAL_MET_QUESTION: const (string)
   GRPC_CODE_NAMES: array
