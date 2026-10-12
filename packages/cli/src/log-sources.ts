@@ -186,6 +186,20 @@ function killGroup(child: LogChildProcess): void {
   }
 }
 
+/**
+ * #511: destroys the child's stdout/stderr pipes once tailing stops. Killing the process group is not
+ * enough to end them: a helper that left the group (its own session — `ssh`'s daemonized
+ * ControlPersist master is the common one) inherits the pipes' write ends and keeps them open after
+ * the child itself is gone, and an open, ref'd pipe keeps the CLI's event loop alive forever after
+ * the run's result is written. Idempotent.
+ */
+function releasePipes(child: LogChildProcess): void {
+  for (const pipe of [child.stdout, child.stderr]) {
+    pipe.removeAllListeners("data");
+    pipe.destroy();
+  }
+}
+
 function openProcessSource(spec: LogSourceSpec, command: string, args: readonly string[], opts: LogSourceOpenOptions, useShell: boolean): LogSourceHandle {
   let child: LogChildProcess | undefined;
   // #199: set the moment WE ask the child to stop (mission end) — BEFORE `killGroup` sends the
@@ -213,10 +227,14 @@ function openProcessSource(spec: LogSourceSpec, command: string, args: readonly 
         const t = clock.setTimeout(done, 2000);
         t.unref?.();
       });
+      releasePipes(child);
     },
     killSync: () => {
       stopRequested = true;
-      if (child !== undefined) killGroup(child);
+      if (child !== undefined) {
+        killGroup(child);
+        releasePipes(child);
+      }
     },
   };
   try {
