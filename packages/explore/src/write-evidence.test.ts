@@ -16,45 +16,57 @@ const write = (status: number | null, extra: Partial<SideEffect> = {}): SideEffe
   ...extra,
 });
 const evidence = (effects: SideEffect[], blocked = 0) => jobWriteEvidence(effects, { truncated: 0, blocked });
+/** The job's writes plus the advisory scope "the whole goal is what these writes did" (default: yes, 0.9). */
+const scoped = (effects: SideEffect[], goalIsWrites: number | null = 0.9, blocked = 0) => ({ ...evidence(effects, blocked), goalIsWrites });
 
 describe("#514 groundDone — the job's succeeded writes", () => {
   it("accepts a done whose every write succeeded although the page judgment says not met", () => {
-    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: evidence([write(201), write(200)]) });
+    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: scoped([write(201), write(200)]) });
     expect(v).toEqual({ accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: WRITES_DONE_NOTE } });
   });
 
   it("rejects a done when one of the job's writes failed", () => {
-    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: evidence([write(201), write(500)]) });
+    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: scoped([write(201), write(500)]) });
     expect(v).toEqual({ accept: false, reason: "the goal is not observably achieved on this page (p=0.24)" });
   });
 
   it("rejects a done when the job made no writes", () => {
-    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: evidence([]) });
+    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: scoped([]) });
     expect(v).toEqual({ accept: false, reason: "the goal is not observably achieved on this page (p=0.24)" });
   });
 
   it("rejects a done when a write was blocked by jevitate's guard (it never succeeded)", () => {
-    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: evidence([write(204)], 1) });
+    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: scoped([write(204)], 0.9, 1) });
+    expect(v).toMatchObject({ accept: false });
+  });
+
+  it("rejects a done whose writes all succeeded when the scope judgment says the goal is more than those writes", () => {
+    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: scoped([write(201)], 0.2) });
+    expect(v).toEqual({ accept: false, reason: "the goal is not observably achieved on this page (p=0.24)" });
+  });
+
+  it("rejects a done whose writes all succeeded when the scope judgment is unavailable", () => {
+    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: scoped([write(201)], null) });
     expect(v).toMatchObject({ accept: false });
   });
 
   it("a declared success check that fails still fails, whatever the writes", () => {
-    const v = groundDone({ unsubmitted: [], successCheck: false, writes: evidence([write(201)]) });
+    const v = groundDone({ unsubmitted: [], successCheck: false, writes: scoped([write(201)]) });
     expect(v).toMatchObject({ accept: false, reason: /success condition/ });
   });
 
   it("typed text never submitted still rejects, whatever the writes", () => {
-    const v = groundDone({ unsubmitted: ["Name"], goalMetProbability: 0.24, writes: evidence([write(201)]) });
+    const v = groundDone({ unsubmitted: ["Name"], goalMetProbability: 0.24, writes: scoped([write(201)]) });
     expect(v).toMatchObject({ accept: false });
   });
 
   it("an unavailable page judgment is no license: writes are weighed only against a judged page", () => {
-    const v = groundDone({ unsubmitted: [], goalMetProbability: null, writes: evidence([write(201)]) });
+    const v = groundDone({ unsubmitted: [], goalMetProbability: null, writes: scoped([write(201)]) });
     expect(v).toMatchObject({ accept: false, reason: /could not be judged/ });
   });
 
   it("a page-observed done keeps its own proof (the judgment), not the writes", () => {
-    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.9, writes: evidence([write(201)]) });
+    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.9, writes: scoped([write(201)]) });
     expect(v).toMatchObject({ outcome: { verifiedBy: "grounded-judgment" } });
   });
 });
@@ -78,6 +90,10 @@ describe("#514 jobWriteEvidence — only the job's own actions' writes count", (
 
   it("a blocked write is named as one that never succeeded", () => {
     expect(evidence([], 2).unsucceeded).toEqual(["2 write(s) blocked by jevitate's write guard"]);
+  });
+
+  it("the scope judgment's facts name each succeeded write by method, endpoint and status", () => {
+    expect(evidence([write(201)]).facts).toBe("the run's actions sent POST /api/v1/tool/crm-upload/sessions → 201 — every one succeeded");
   });
 
   it("writes past the listed cap are unknown, so not succeeded", () => {

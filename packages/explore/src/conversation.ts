@@ -7,7 +7,7 @@ import { backgroundEndpoints, endpointKey } from "./stuck-actions.js";
 import { clock } from "@jevitate/domain";
 import { clockBounded } from "./clock-bound.js";
 import { SUBMIT_NAME } from "./composer-evidence.js";
-import type { WriteEvidence } from "./write-evidence.js";
+import { writesAllSucceeded, type WriteEvidence } from "./write-evidence.js";
 
 /**
  * Conversational pages (chat composers, assistants, interview flows): the independent-code side of
@@ -570,10 +570,11 @@ export interface DoneEvidence {
   readonly save?: { readonly completed: boolean; readonly goalIsSave: number | null };
   /**
    * #514: the writes the run's own actions made since the mission started (./write-evidence.ts),
-   * present only for a model-proposed `done`. Weighed only without a success condition, and only
-   * after the page judgment ran and said the goal is not observably met.
+   * present only for a model-proposed `done`; `goalIsWrites` is the advisory P("the whole goal is
+   * what these writes did"), `null` when unavailable (or not asked). Weighed only without a success
+   * condition, and only after the page judgment ran and said the goal is not observably met.
    */
-  readonly writes?: WriteEvidence;
+  readonly writes?: WriteEvidence & { readonly goalIsWrites: number | null };
 }
 
 /**
@@ -587,9 +588,11 @@ export interface DoneEvidence {
  *  - (#225, checked BEFORE the goal judgment: code evidence is preferred) code observed the run's own
  *    save go through and stay displayed AND the advisory scope judgment says the whole goal is that
  *    save — same split: code proves the save, the model only scopes the goal;
- *  - (#514, last) the page judgment ran and says not met, but the job's own actions made at least
- *    one write and EVERY one succeeded (2xx; none failed, blocked, unanswered or unlisted): the
- *    job's work went through on a page that shows no change (repeat data) — accepted with a note.
+ *  - (#514, last, only after the page judgment ran) code observed the job's own actions make at
+ *    least one write and EVERY one succeed (2xx; none failed, blocked, unanswered or unlisted) AND
+ *    the advisory scope judgment says the whole goal is what those writes did, at the same threshold
+ *    — same split: code proves the writes, the model only scopes the goal (a multi-step job writes
+ *    2xx halfway through). Accepted with a note: the page shows no change (repeat data?).
  */
 export function groundDone(e: DoneEvidence): DoneVerdict {
   if (e.unsubmitted.length > 0) {
@@ -615,7 +618,7 @@ export function groundDone(e: DoneEvidence): DoneVerdict {
   }
   if (p === undefined || p === null) return { accept: false, reason: "goal completion could not be judged on this page" };
   const w = e.writes;
-  if (w !== undefined && w.succeeded > 0 && w.unsucceeded.length === 0) {
+  if (w !== undefined && writesAllSucceeded(w) && w.goalIsWrites !== null && w.goalIsWrites >= GOAL_MET_THRESHOLD) {
     return { accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: WRITES_DONE_NOTE } };
   }
   return { accept: false, reason: `the goal is not observably achieved on this page (p=${p.toFixed(2)})` };

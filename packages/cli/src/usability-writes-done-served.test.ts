@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
-import { GOAL_MET_QUESTION } from "@jevitate/explore";
+import { GOAL_IS_WRITES_QUESTION, GOAL_MET_QUESTION } from "@jevitate/explore";
 import { runUsabilityMission } from "./ux-api.js";
 
 /**
@@ -48,7 +48,10 @@ afterAll(async () => {
 // Contacts: [0] Import contacts.
 const STEPS = ["click:0", "done"];
 
-/** Plays click Import → done; the page judgment says the goal is not observably met (p 0.24). */
+/**
+ * Plays click Import → done; the page judgment says the goal is not observably met (p 0.24), and the
+ * scope head says the whole job is what the import's write did (0.95).
+ */
 function unchangedPageJudge(): JudgmentPort {
   let i = 0;
   return {
@@ -60,6 +63,7 @@ function unchangedPageJudge(): JudgmentPort {
           i += 1;
           out[key] = { kind: "choice", value: q.options.includes(want) ? want : (q.options[0] ?? ""), confidence: 0.9 };
         } else if (key === GOAL_MET_QUESTION) out[key] = { kind: "noul", value: false, probability: 0.24 };
+        else if (key === GOAL_IS_WRITES_QUESTION) out[key] = { kind: "noul", value: true, probability: 0.95 };
         else if (q.kind === "noul") out[key] = { kind: "noul", value: false, probability: 0.1 };
         else if (q.kind === "score") out[key] = { kind: "score", value: 0.1 };
         else out[key] = { kind: "choice", value: q.options[0] ?? "", confidence: 0.1 };
