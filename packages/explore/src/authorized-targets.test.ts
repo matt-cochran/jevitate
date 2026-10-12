@@ -88,4 +88,10 @@ describe("#256: chrome-extension:// origins", () => {
   it("an extension origin is never a third-party origin", () => {
     expect(thirdPartyOrigin(`${EXT}/x.js`, ["http://127.0.0.1:3000"])).toBeNull();
   });
+
+  it("#508: the refusal says the start URL's origin must be in --allow and names it", () => {
+    expect(() => assertAuthorizedExploreTarget("http://localhost:8090/", ["http://localhost:8080"])).toThrow(
+      "(allowed: http://localhost:8080) — refused: the start URL's origin must be in --allow; add --allow http://localhost:8090",
+    );
+  });
 });

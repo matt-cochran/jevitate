@@ -47,6 +47,18 @@ function portOf(u: URL): string {
 }
 
 /**
+ * #508: the full `--allow` list to set. `--allow` REPLACES the implicit start origin, so the hint names
+ * every origin: the current list (the start origin when none was given) plus the blocked one.
+ */
+function fixHint(allowed: readonly string[], blockedOrigin: string, start: URL | null): string {
+  const current = allowed.length === 0 && start !== null ? [start.origin] : [...allowed];
+  const full = current.includes(blockedOrigin) ? current : [...current, blockedOrigin];
+  const flags = full.map((o) => `--allow ${o}`).join(" ");
+  const lead = full.length === 2 && start !== null && full[0] === start.origin ? "add both to --allow" : "set the full list (--allow replaces the start origin)";
+  return `${lead}: ${flags} (or the environment's allow list)`;
+}
+
+/**
  * The mismatch behind a blocked request to `blockedUrl` (a URL or an origin), or null when there is
  * none: the origin is not loopback, is itself allowed, or (port case) the start URL is not loopback.
  */
@@ -69,7 +81,7 @@ export function detectAllowOriginMismatch(
         allowedOrigin: u.origin,
         message:
           `the app called ${blocked.origin} but --allow names ${u.origin} — localhost and 127.0.0.1 are different origins to the browser, ` +
-          `so every write there is blocked and never sent; add ${blocked.origin} to --allow (or the environment's allow list)`,
+          `so every write there is blocked and never sent; ${fixHint(allowed, blocked.origin, parse(opts.startUrl ?? ""))}`,
       };
     }
   }
@@ -84,7 +96,7 @@ export function detectAllowOriginMismatch(
     blockedOrigin: blocked.origin,
     message:
       `the app called ${blocked.origin}, a loopback port --allow does not include while the run starts on ${start.origin} — ` +
-      `if it is the app's backend, add ${blocked.origin} to --allow (or the environment's allow list)`,
+      `if it is the app's backend, ${fixHint(allowed, blocked.origin, start)}`,
   };
 }
 

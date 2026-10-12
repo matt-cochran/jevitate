@@ -30,7 +30,19 @@ describe("detectAllowOriginMismatch (#484)", () => {
   });
 
   it("tells the operator which origin to add to --allow", () => {
-    expect(detectAllowOriginMismatch("http://127.0.0.1:3000/api", ["http://localhost:3000"])?.message).toContain("add http://127.0.0.1:3000 to --allow");
+    expect(detectAllowOriginMismatch("http://127.0.0.1:3000/api", ["http://localhost:3000"])?.message).toContain("--allow http://localhost:3000 --allow http://127.0.0.1:3000");
+  });
+
+  it("#508: with no allow list, the loopback-port hint names the start origin plus the blocked one", () => {
+    expect(detectAllowOriginMismatch("http://localhost:8080/x", [], { startUrl: "http://localhost:8090/" })?.message).toContain(
+      "add both to --allow: --allow http://localhost:8090 --allow http://localhost:8080",
+    );
+  });
+
+  it("#508: with an allow list, the loopback-port hint prints the existing list plus the blocked origin", () => {
+    expect(detectAllowOriginMismatch("http://localhost:8080/x", ["http://localhost:8090"], { startUrl: "http://localhost:8090/" })?.message).toContain(
+      "--allow http://localhost:8090 --allow http://localhost:8080",
+    );
   });
 
   it("reports each mismatched origin once across many requests", () => {
