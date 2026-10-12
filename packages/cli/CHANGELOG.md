@@ -1,5 +1,30 @@
 # @jevitate/cli
 
+## 0.13.0
+
+### Minor Changes
+
+- 6dd137d: Fixes from Journeeze's 0.12 upgrade.
+  - **Anchors on a promoted Journey (#507):** `journey anchor add|remove` and `journey lint --fix` now work on a promoted Journey (and over MCP). Before, they were refused with advice that had no command behind it.
+    - The edit makes the approval stale. The Journey stays promoted, and its old approval is kept for the review diff.
+    - `journey review --stale` lists it, and `check --require-approvals` fails it until a person re-approves.
+    - The result carries `needsReapproval` and `reapproveCommand`.
+  - **`journey anchors --suggest` (#506):**
+    - It finds write steps in older recordings from their recorded request timings and end-state checks.
+    - A new page goes on the click that navigated.
+    - A job-linked Journey with nothing else to suggest gets its last step proposed as the job's end.
+  - **Allow-list hint (#508):** the blocked-write hint prints the full `--allow` list to set, start origin included. `E_UNAUTHORIZED_EXPLORE_TARGET` says the start URL's origin must be in it. The allow list itself is unchanged: no implicit origins once `--allow` is given.
+  - **`sweep` browser flags (#509):** `sweep` takes the browser launch flags (`--browser-arg`, `--browser-executable`, `--browser-channel`, `--extension`, `--max-browsers`, `--max-browser-memory`, `--ignore-host-load`) and forwards them to every run. A per-target `browserArg` is refused with a pointer to the flag.
+  - **Anchor-name hint (#505):** `journey lint`'s `job-anchors` hint suggests an anchor name the 0.11 rule accepts (`<job-step>.end`).
+  - **A run ends after its result again (#511).** A `cmd:` (or `docker:`) log source's pipes are destroyed when it closes. A helper that left the process group (for example ssh's ControlPersist master) held them open, so `sweep` (and other runs) stayed alive after writing a complete result.
+- bb328ee: **A job whose writes succeeded is done, even when the page looks unchanged (#514).** In goal and usability missions, a `done` the page judgment rejects is accepted when code observed the job's own actions make at least one write and every one succeed (2xx; read RPCs, background, third-party and bookkeeping requests excluded) AND the advisory scope judgment, asked in the same judgment call, says the whole goal is what those writes did (same threshold as the sign-in and save rules). A failed, blocked, unanswered or unlisted write, no write at all, or a scope judgment below the threshold or unavailable keeps the rejection, so an early `done` halfway through a multi-step job is still refused. A declared success check still decides when present. The outcome carries `verifiedBy: "succeeded-writes"` and the note `the job's writes succeeded; the page shows no change (repeat data?)`, also written to the transcript. No extra model call. When the writes all succeeded but the scope judgment won't vouch for them, the rejection now says so: `…; the job's writes succeeded, but they are not judged to be the whole goal (p=…)`.
+- a835751: `sweep` targets can carry their own upload fixture (#513). A target's `options.fixture` (JSON, `defaults.options` or a TSV column) and a sweep-wide `sweep --fixture <file>` are forwarded to each run; a target's own fixture wins. Both are confined like every upload fixture (#498: inside the project root, sensitive files refused), checked when the sweep spec loads, so a bad path fails the whole sweep up front (`E_SWEEP_SPEC` / `E_SWEEP_ARGS`). MCP `run_sweep` takes `fixture`.
+
+### Patch Changes
+
+- a835751: Internal refactor, no behaviour change (#500). The mission loops (`runUsabilityMission`, the goal mission's `adjudicatedRun`, and `createRunContext`) are split into short orchestrators plus phase and per-concern modules. A real-model dogfood comparison against the build before the refactor (15 missions on a live app, 3 runs each) showed no regression.
+- 5702ad0: Internal refactor, no behaviour change (#499). The CLI's `explore` and `journey` command wiring, the MCP tool definitions and the Journey review sheet renderer are split from four large functions into an orchestrator plus per-command, per-domain and per-section modules. Commands, flags, output, MCP tools and exported APIs are unchanged; the `--help`, MCP parity, tool-allowlist and API-surface snapshots are byte-identical.
+
 ## 0.12.0
 
 ### Minor Changes
