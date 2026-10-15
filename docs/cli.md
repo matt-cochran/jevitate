@@ -631,6 +631,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--route <glob>` | in-scope route glob (repeatable), e.g. /thread/** — for --feature it replaces the default scope (the start URL's route and everything under it); it widens --strategy adversarial/coverage/exploratory beyond the start URL's route | `[]` |  |  |  |
 | `--save-storage-state <file>` | write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run. Written on every exit path -- a crash or a SIGTERM/SIGINT kill included (#159), not only a clean end -- but never over a good file with a session that already looks lost/logged-out; the last known-good state is used instead, or nothing is written if none was ever captured. |  |  |  |  |
 | `--scope <mode>` | --strategy coverage/exploratory: 'app' widens containment to the whole app (same as --route '/**'); default: the start URL's route plus --route globs |  |  |  |  |
+| `--scope-region <descriptor>` | adversarial/coverage/exploratory: measure and hunt only the controls inside this page region (repeatable; the --success descriptor syntax, e.g. testId=import-view or role=region;name=Import); a Journey anchor's own region is used by default and cannot be overridden (#519) | `[]` |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--secret <value|env:VAR>` | REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable); env:VAR reads it from the environment (preferred: a literal is visible in the process list and shell history). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state) | `[]` |  |  |  |
 | `--secret-cmd-attempts <n>` | #359: how many times one cmd: secret field's command may run in this run (default 3); past it, typing that field fails without running the command again (read-the-code commands usually have side effects) |  |  |  |  |
@@ -1082,6 +1083,7 @@ add an anchor to a Journey: --step takes a 1-based step number or a step id and 
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--name <name>` | the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit |  |  | yes |  |
 | `--probe <text>` | a suggested adversarial probe at this state (repeatable) | `[]` |  |  |  |
+| `--region <descriptor>` | the page region missions at this anchor attack (the --success descriptor syntax, e.g. testId=import-view); scopes control coverage to it (#519) |  |  |  |  |
 | `--step <n|stepId>` | the step the anchor follows: a 1-based step number or a step id |  |  | yes |  |
 
 #### journey anchor remove
