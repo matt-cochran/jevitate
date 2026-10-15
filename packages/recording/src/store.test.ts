@@ -169,3 +169,19 @@ describe("FsRecordingStore", () => {
     });
   });
 });
+
+describe("FsRecordingStore id guard (#520)", () => {
+  const unsafe = ["", "..", "../x", "a/b", "a\\\\b", "a\\u0000b", "C:x"];
+  const mk = async () => new FsRecordingStore(await mkdtemp(join(tmpdir(), "rec-guard-")));
+  it.each(unsafe)("get refuses unsafe id %j", async (id) => {
+    await expect((await mk()).get(id)).rejects.toThrow(/invalid/i);
+  });
+  it.each(unsafe)("put refuses unsafe id %j", async (id) => {
+    await expect((await mk()).put(id, makeRecording())).rejects.toThrow(/invalid/i);
+  });
+  it("accepts a timestamped id", async () => {
+    const store = await mk();
+    await store.put("usability-2026-09-24T21-09-52-740Z", makeRecording());
+    expect(await store.get("usability-2026-09-24T21-09-52-740Z")).not.toBeNull();
+  });
+});

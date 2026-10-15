@@ -49,21 +49,21 @@ describe("validateForPublish", () => {
 
   it("throws on a path-traversal asId (fix round 1 — publish path traversal)", () => {
     const req = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail", asId: "../../evil" };
-    expect(() => validateForPublish(req)).toThrow(/path traversal/i);
+    expect(() => validateForPublish(req)).toThrow(/invalid/i);
   });
 
   it("throws on a ..-containing metadata.id when no asId override is given", () => {
     const journey = journeyWithFill({ var: "pw" });
     journey.metadata = { ...journey.metadata, id: "../../evil" };
     const req = { journey, declaredOrigins: [ORIGIN], toSource: "gmail" };
-    expect(() => validateForPublish(req)).toThrow(/path traversal/i);
+    expect(() => validateForPublish(req)).toThrow(/invalid/i);
   });
 
   it("throws on an asId containing a forward or back slash", () => {
     const reqSlash = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail", asId: "sub/evil" };
-    expect(() => validateForPublish(reqSlash)).toThrow(/path traversal/i);
+    expect(() => validateForPublish(reqSlash)).toThrow(/invalid/i);
     const reqBackslash = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail", asId: "sub\\evil" };
-    expect(() => validateForPublish(reqBackslash)).toThrow(/path traversal/i);
+    expect(() => validateForPublish(reqBackslash)).toThrow(/invalid/i);
   });
 });
 
@@ -154,7 +154,7 @@ describe("publishJourney (fake GitExec + fake GhPort)", () => {
     const gh: GhPort = { available: async () => false, createPr: async () => "" };
     const req = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail", asId: "../../evil" };
 
-    await expect(publishJourney(mgr, gh, req)).rejects.toThrow(/path traversal/i);
+    await expect(publishJourney(mgr, gh, req)).rejects.toThrow(/invalid/i);
 
     // No git operation (checkout/add/commit/push) was ever attempted.
     expect(calls).toHaveLength(0);
@@ -164,5 +164,12 @@ describe("publishJourney (fake GitExec + fake GhPort)", () => {
     const sourcesDir = join(cloneDir, "..");
     expect(existsSync(join(sourcesDir, "..", "evil.journey.json"))).toBe(false);
     expect(existsSync(join(sourcesDir, "evil.journey.json"))).toBe(false);
+  });
+});
+
+describe("validateForPublish asId guard (#520)", () => {
+  it.each(["", "..", "../x", "a/b", "a\\b", "a\u0000b", "C:x"])("refuses unsafe asId %j", (asId) => {
+    const req = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail", asId };
+    expect(() => validateForPublish(req)).toThrow(/invalid/i);
   });
 });

@@ -65,7 +65,7 @@ describe("FsMissionQueueStore", () => {
     await store.update({ ...mkMission("m-1"), status: "done", resultId: "explore-2026-09-20T00-00-01-000Z", exitCode: 0 });
     expect(await store.get("m-1")).toMatchObject({ status: "done", resultId: "explore-2026-09-20T00-00-01-000Z" });
     await expect(store.update({ ...mkMission("m-9"), status: "running" })).rejects.toThrow(/unknown mission/);
-    await expect(store.update({ ...mkMission("m-1"), status: "bogus" } as never)).rejects.toThrow();
+    await expect(store.update({ ...mkMission("m-1"), status: "bogus" })).rejects.toThrow();
   });
 
   it("get on a missing id returns null", async () => {
@@ -81,5 +81,22 @@ describe("FsMissionQueueStore", () => {
     writeFileSync(join(dir, "corrupt.json"), "{not valid json", "utf8");
     const list = await store.list();
     expect(list.map((m) => m.id)).toEqual(["m-1"]);
+  });
+});
+
+describe("FsMissionQueueStore id guard (#520)", () => {
+  const unsafe = ["", "..", "../x", "a/b", "a\\\\b", "a\\u0000b", "C:x"];
+  const mk = () => new FsMissionQueueStore(mkdtempSync(join(tmpdir(), "mqs-guard-")));
+  it.each(unsafe)("get refuses unsafe id %j", async (id) => {
+    await expect(mk().get(id)).rejects.toThrow(/invalid/i);
+  });
+  it.each(unsafe)("claim refuses unsafe id %j", async (id) => {
+    await expect(mk().claim(id, { pid: 1, host: "h", claimedAtIso: "2026-01-01T00:00:00Z" })).rejects.toThrow(/invalid/i);
+  });
+  it("accepts a uuid mission id", async () => {
+    const store = mk();
+    const id = "549db40a-cd30-4706-b7f5-01ddea8f6d1f";
+    await store.enqueue(mkMission(id));
+    expect((await store.get(id))?.id).toBe(id);
   });
 });
