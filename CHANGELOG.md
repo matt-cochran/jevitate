@@ -7,6 +7,51 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.14.0] – 2026-10-15
+
+0.14.0 lets a mission measure the part of the page it was sent to attack, adds an opt-in browser guard for off-allowlist navigations, and makes "promotion-ready" machine-checkable, so an agent hands a Journey over only when the owner's review sheet is clean. It also consolidates helpers, tightens store ids and adds knip.
+
+### Behaviour changes
+
+- **Store ids (#520).** Recording, mission, mission-target and publish ids go through the shared safe-name rule:
+  - letters, digits, `.`, `_` and `-`;
+  - starting with a letter or digit;
+  - at most 128 characters.
+
+  Anything else (empty, `..`, a slash or backslash, NUL, `:` or a drive prefix) is refused with `E_INVALID_NAME` (exit 64), replacing the old "path traversal risk" error. Source-trust ids keep their wider rule, now also refusing empty, NUL and `:`. Every id jevitate generates already fits.
+- **Mutation proofs go stale only when executable content changes (#523).** `journey verify --mutate` records a `proofHash`, so rewording the goal, success criteria, objectives or expected results (what `journey annotate --approve` writes) no longer stales the proof. An approval still goes stale on any content change. Older proof records without a `proofHash` keep the old rule.
+
+### Added
+
+- **Scope regions (#519).**
+  - `--scope-region <descriptor>` (repeatable; the `--success` syntax) for adversarial, coverage and exploratory runs. Only controls inside the region count toward coverage and are hunted or enqueued; the rest stay reachable.
+  - A Journey anchor can carry its own `region` (`journey anchor add --region`). `--at-step <anchor>` uses it, and `--scope-region` cannot override it.
+  - Results show `coverage.controls` (the region) beside `coverage.pageControls` (the whole route). Two steps in a row without the region send the run back to its start. A region that never appears ends `inconclusive` (`scope-unreachable`), never `clean`.
+  - MCP `run_exploration.scopeRegion` and `journey_anchor_add.region`; suite option `scopeRegion`.
+  - Don't lower `--min-control-coverage` for an in-place sub-flow; declare its region.
+- **Opt-in navigation guard (#521).** `--block-off-allowlist-navigation` (MCP `run_exploration.blockOffAllowlistNavigation`, suite option `blockOffAllowlistNavigation`) for mission runs.
+  - An off-allowlist page navigation is answered 204, the page stays put, and the run treats it as a departure.
+  - Server redirects still pass, so the after-settle check remains the guard. Subresources load as usual, and the HTTP cache is off for a guarded run.
+  - It never applies to login, `journey run`, `source run`, `load`, `record` or `demo` sessions.
+  - `allowedOrigins` is documented as what it is (docs/design/allowed-origins.md).
+- **Promotion-ready workflow (#523).**
+  - `journey review --strict` exits 1 on any ⚠ item and on missing job/persona links (MCP `review_journey.strict`).
+  - `journey link <id> --job|--persona` (MCP `journey_link`).
+  - `catalog draft persona|job` (MCP `catalog_draft`).
+  - `catalog status --strict` (MCP `catalog_status.strict`).
+  - `missing-job` / `missing-persona` warnings in `journey lint` and author results.
+  - The new `jevitate-promotion-ready` skill.
+
+### Fixed
+
+- A guarded page that redirects by script while loading no longer stalls `page.goto` until its timeout (#521).
+- `catalog analyze` proof advice uses the new proof hash (#523).
+
+### Internal
+
+- One copy of the shared guards (`isRecord`, `isPlainObject`, `isNodeError`, `sha256`) in `@jevitate/domain`, replacing about 35 private copies (#520).
+- No `any` types left; `knip` runs in `pnpm lint`, and 9 dead exports and 10 unused dependencies are removed (#522).
+
 ## [0.13.0] – 2026-10-12
 
 0.13.0 fixes what Journeeze hit upgrading to 0.12: anchors on promoted Journeys, `--suggest` on older recordings, the allow-list hint, and sweep browser flags, fixtures and exit. Missions now count a job's own succeeded writes, and the largest wiring and mission-loop functions are split into modules (no behaviour change).
