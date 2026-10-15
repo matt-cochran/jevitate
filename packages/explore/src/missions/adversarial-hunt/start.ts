@@ -21,7 +21,7 @@ import { buildJudgmentState } from "../../redact.js";
 import type { Control, Snapshot } from "../../snapshot.js";
 import type { TranscriptJudgment } from "../../transcript.js";
 import type { AdversarialMissionParams, AdversarialStop } from "../adversarial.js";
-import type { HuntState } from "./context.js";
+import { REGION_LOST_RESET_AFTER, type HuntState } from "./context.js";
 import { joinReasons, otherOption, type StepFinding } from "./helpers.js";
 
 /** Sets the hunt's loop state and installs its step closures on `ctx` (after the seed load, before the loop). */
@@ -83,7 +83,9 @@ export function startHunt(ctx: HuntState, params: AdversarialMissionParams): voi
   };
   /** Page chrome (#115/#193): a landmark control, or one seen unchanged on 2+ in-scope pathnames. */
   ctx.chrome = new ChromeTracker();
-  ctx.isChrome = (c: Control): boolean => (c.landmark ?? null) !== null || ctx.chrome.isChrome(c);
+  // #519: with a scope region, every control outside it is chrome too (tried after the region's own, still reachable).
+  ctx.isChrome = (c: Control): boolean =>
+    (c.landmark ?? null) !== null || ctx.chrome.isChrome(c) || (ctx.regionDeclared && c.inRegion !== true);
   /** What clicks revealed (#193): a control that made a form appear, and disclosures that showed none. */
   ctx.revealed = new Map<string, readonly string[]>();
   ctx.barren = new Set<string>();
@@ -314,7 +316,31 @@ export function startHunt(ctx: HuntState, params: AdversarialMissionParams): voi
         return { kind: "stop", stop: "hang" };
       }
       restarted = await ctx.restartAtSeed();
+    } else if (ctx.regionDeclared && (ctx.snap.region?.matched ?? 0) === 0) {
+      // #519: in scope, but the scope region is gone (Back, a reload, a step that closed it): the step
+      // counts as out of scope, never as coverage; REGION_LOST_RESET_AFTER in a row go back to the start.
+      ctx.outOfScopeSteps += 1;
+      ctx.regionLostStreak += 1;
+      if (ctx.regionLostStreak < REGION_LOST_RESET_AFTER) return { kind: "ok" };
+      ctx.regionLostStreak = 0;
+      ctx.regionLostResets += 1;
+      const fresh = params.openFreshSession !== undefined;
+      ctx.transcript.record({
+        op: null,
+        control: null,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "scope-reset",
+        actOk: true,
+        reason: `left the scope region ${ctx.regionSpec} (${REGION_LOST_RESET_AFTER} steps without it); reset to the start${fresh ? " in a fresh page" : ""}`,
+        snapshot: ctx.snap,
+        ...(ctx.snapTiming === undefined ? {} : { timing: ctx.snapTiming }),
+      });
+      ctx.snapTiming = undefined;
+      await ctx.sessions.fresh();
+      restarted = await ctx.restartAtSeed();
     } else {
+      ctx.regionLostStreak = 0;
       return { kind: "ok" };
     }
     ctx.last = null;

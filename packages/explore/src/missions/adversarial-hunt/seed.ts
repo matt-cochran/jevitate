@@ -117,6 +117,24 @@ export async function loadSeed(ctx: HuntState, params: AdversarialMissionParams)
     });
     return ctx.finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message });
   }
+  if (ctx.regionDeclared && (seed.snapshot.region?.matched ?? 0) === 0) {
+    // #519: the declared scope region is not on the start page (a typo in the descriptor, a wrong
+    // anchor): the run cannot test what it was asked to — `inconclusive`, before any action.
+    ctx.cov.observe(seed.snapshot);
+    const message = `the scope region ${ctx.regionSpec} is not on the start page (${redactUrl(seed.snapshot.url)}) — check the descriptor, or the Journey anchor it came from`;
+    ctx.transcript.record({
+      op: null,
+      control: null,
+      confidence: null,
+      chosenBy: "strategy",
+      strategy: "seed-load",
+      actOk: false,
+      reason: `${message} (inconclusive)`,
+      snapshot: seed.snapshot,
+      timing: seed.timing,
+    });
+    return ctx.finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message });
+  }
   // #300: who the run is signed in as (or that it is signed out), before any action.
   ctx.baseline = await readIdentity(ctx.sessions.page);
   ctx.snap = seed.snapshot;

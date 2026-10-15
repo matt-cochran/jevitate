@@ -47,7 +47,7 @@ import type { SafetyConfig, SafetyOverride } from "../safety.js";
 import type { BlockedWrite } from "../read-only.js";
 import type { BlockedConsequence, EnvironmentFaultCause } from "../blocked-cause.js";
 import { type SideEffect } from "../side-effects.js";
-import type { InvariantSpec } from "@jevitate/recording";
+import type { InvariantSpec, TargetDescriptor } from "@jevitate/recording";
 import {
   type InvariantReport,
   type InvariantViolation,
@@ -318,6 +318,16 @@ export interface AdversarialMissionParams {
   readonly restartAtStart?: (actor: Actor) => Promise<boolean>;
   /** #293: the actions one `restartAtStart` costs against `maxActions` (the prefix's step count). Default 0. */
   readonly restartCost?: number;
+  /**
+   * #519: the scope region(s) — page elements (by `TargetDescriptor`) the hunt is confined to. Coverage
+   * counts only controls inside them; controls outside are page chrome (tried last, still reachable);
+   * an in-scope step whose page has no region counts as out of scope, and `REGION_LOST_RESET_AFTER`
+   * of them in a row send the run back to its start. A region missing at the start (or after a reset)
+   * ends the run `inconclusive` / `scope-unreachable` — never `clean`.
+   */
+  readonly scopeRegions?: readonly TargetDescriptor[];
+  /** #519: the region(s) as the operator wrote them (display text for reports and failures). */
+  readonly scopeRegionSpec?: string;
   readonly allowlist: readonly string[];
   /** The strategies, cycled in order until a budget runs out. */
   readonly strategies: readonly MisuseStrategy[];
@@ -428,9 +438,15 @@ export interface AdversarialScope {
   readonly departures: ScopeDeparture[];
   /** Times the run moved to a fresh page (after a departure or a hang). */
   readonly resets: number;
+  /**
+   * #519: the declared scope region (present only when one was declared): its spec, and how many
+   * times the run went back to its start because the region was gone for `REGION_LOST_RESET_AFTER` steps.
+   */
+  readonly region?: { readonly spec: string; readonly lostResets: number };
 }
 
 export const DEFAULT_ADVERSARIAL_TIME_BUDGET_MS = DEFAULT_TIME_BUDGET_MS;
+export { REGION_LOST_RESET_AFTER } from "./adversarial-hunt/context.js";
 
 export async function runAdversarialMission(params: AdversarialMissionParams): Promise<AdversarialOutcome> {
   const overlay = demoOverlayFor(params.demoOverlay, params.secrets ?? []);
@@ -478,7 +494,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       const late = await ctx.declared.flushResponses().catch(() => null);
       if (late !== null && late.violations.length > 0) await ctx.fold(Math.max(1, ctx.transcript.nextStep - 1), late.violations.map(ctx.declaredFinding));
     }
-    if (ctx.stop === "identity-changed") return ctx.finish(ctx.budgetVerdict(), ctx.stop, ctx.defects.size > 0 ? undefined : ctx.stopFailure);
+    // #300 identity-changed, #519 a scope region gone after a reset: never `clean`, the typed failure unless a defect won.
+    if (ctx.stop === "identity-changed" || ctx.stopFailure !== undefined) return ctx.finish(ctx.budgetVerdict(), ctx.stop!, ctx.defects.size > 0 ? undefined : ctx.stopFailure);
     // Non-null here: every way out of the loop above set it (a turn that returns "stop" set it too).
     return ctx.finish(ctx.stop === "budget" ? ctx.budgetVerdict() : ctx.verdict(), ctx.stop!);
   } catch (e) {
