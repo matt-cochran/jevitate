@@ -90,12 +90,44 @@ export interface AdversarialCoverage {
   readonly sufficient: boolean;
   /** Why not, when it did not (empty when sufficient). */
   readonly shortfalls: string[];
+  /**
+   * #519: the route-wide numbers a region run excluded — for a reviewer; never decides `sufficient`.
+   * Present only in region mode; `controls` above is then computed over in-region controls only.
+   */
+  readonly pageControls?: {
+    readonly total: number;
+    readonly exercised: number;
+    readonly ratio: number;
+  };
+  /**
+   * #519: how the declared scope region behaved over the run. Present only in region mode.
+   * `spec` is the region spec text; `stepsMatched`/`stepsWithoutRegion` count in-scope snapshots
+   * with/without a region match; `outOfRegion` is the page-wide controls the region excluded.
+   */
+  readonly region?: {
+    readonly spec: string;
+    readonly stepsMatched: number;
+    readonly stepsWithoutRegion: number;
+    readonly outOfRegion: number;
+  };
+}
+
+/** Options for {@link CoverageTracker}. */
+export interface CoverageTrackerOptions {
+  /** #519: the declared scope region (spec text, for reports). Present ⇒ coverage counts in-region controls only. */
+  readonly region?: string;
 }
 
 /** Accumulates a run's coverage. Only in-scope pages are observed; only on-target actions count. */
 export class CoverageTracker {
   readonly #inScope: (url: string) => boolean;
+  /** #519: the declared scope region spec; present ⇒ region mode. */
+  readonly #region: string | undefined;
   readonly #controls = new Set<string>();
+  /** #519: every exercisable control on an in-scope page, in and out of the region. */
+  readonly #pageControls = new Set<string>();
+  #stepsMatched = 0;
+  #stepsWithoutRegion = 0;
   readonly #exercised = new Set<string>();
   readonly #forms = new Set<string>();
   readonly #submitted = new Set<string>();
@@ -106,8 +138,14 @@ export class CoverageTracker {
   readonly #refused = new Map<string, { readonly name: string; readonly risk: string }>();
   #actions = 0;
 
-  constructor(inScope: (url: string) => boolean) {
+  constructor(inScope: (url: string) => boolean, opts: CoverageTrackerOptions = {}) {
     this.#inScope = inScope;
+    this.#region = opts.region;
+  }
+
+  /** #519: in region mode only an in-region control counts toward `controls`. */
+  #counts(c: Control): boolean {
+    return this.#region === undefined || c.inRegion === true;
   }
 
   /** Keys (`controlKey`) of the target controls acted on so far. */
@@ -118,9 +156,19 @@ export class CoverageTracker {
   /** Notes the controls and forms of a page (ignored when the page is out of scope). */
   observe(snapshot: Snapshot): void {
     if (!this.#inScope(snapshot.url)) return;
-    for (const c of snapshot.controls) if (isExercisable(c, this.#inScope)) this.#controls.add(controlKey(c));
+    if (this.#region !== undefined) {
+      if ((snapshot.region?.matched ?? 0) > 0) this.#stepsMatched += 1;
+      else this.#stepsWithoutRegion += 1;
+    }
+    for (const c of snapshot.controls) {
+      if (!isExercisable(c, this.#inScope)) continue;
+      const key = controlKey(c);
+      this.#pageControls.add(key);
+      if (this.#counts(c)) this.#controls.add(key);
+    }
     const route = routeOf(snapshot.url);
-    for (const f of detectForms(snapshot.controls, this.#inScope)) this.#forms.add(`${route}|${f.key}`);
+    const formControls = this.#region === undefined ? snapshot.controls : snapshot.controls.filter((c) => c.inRegion === true);
+    for (const f of detectForms(formControls, this.#inScope)) this.#forms.add(`${route}|${f.key}`);
   }
 
   /**
@@ -139,7 +187,10 @@ export class CoverageTracker {
     if (control !== null) {
       const key = controlKey(control);
       this.#exercised.add(key);
-      if (isExercisable(control, this.#inScope)) this.#controls.add(key);
+      if (isExercisable(control, this.#inScope)) {
+        this.#pageControls.add(key);
+        if (this.#counts(control)) this.#controls.add(key);
+      }
     }
   }
 
@@ -196,6 +247,7 @@ export class CoverageTracker {
     const total = this.#controls.size;
     const exercised = [...this.#exercised].filter((k) => this.#controls.has(k)).length;
     const ratio = total === 0 ? 0 : exercised / total;
+    const pageExercised = [...this.#exercised].filter((k) => this.#pageControls.has(k)).length;
     const blockedEntries = [...this.#blocked.values()].filter((v) => this.#forms.has(v.form));
     const blockedCount = blockedEntries.reduce((sum, v) => sum + v.count, 0);
     const blockedBy: Partial<Record<SubmitBlock, number>> = {};
@@ -207,8 +259,15 @@ export class CoverageTracker {
       ...(blockedCount === 0 ? {} : { blockedBy }),
     };
     const shortfalls: string[] = [];
-    if (total === 0) shortfalls.push("the target offered no control to exercise");
-    else if (exercised === 0) shortfalls.push("no target control was exercised");
+    if (this.#region !== undefined && this.#stepsMatched === 0) {
+      shortfalls.unshift(
+        `the scope region ${this.#region} never appeared on an in-scope page (check the descriptor, or the anchor it came from)`,
+      );
+    } else if (total === 0) {
+      shortfalls.push("the target offered no control to exercise");
+    } else if (exercised === 0) {
+      shortfalls.push("no target control was exercised");
+    }
     const refusedTargets = [...this.#refused].filter(([k]) => this.#controls.has(k) && !this.#exercised.has(k)).map(([, v]) => v);
     if (total > 0 && ratio < thresholds.minControlRatio) {
       shortfalls.push(
@@ -239,6 +298,21 @@ export class CoverageTracker {
       thresholds,
       sufficient: shortfalls.length === 0,
       shortfalls,
+      ...(this.#region === undefined
+        ? {}
+        : {
+            pageControls: {
+              total: this.#pageControls.size,
+              exercised: pageExercised,
+              ratio: this.#pageControls.size === 0 ? 0 : pageExercised / this.#pageControls.size,
+            },
+            region: {
+              spec: this.#region,
+              stepsMatched: this.#stepsMatched,
+              stepsWithoutRegion: this.#stepsWithoutRegion,
+              outOfRegion: this.#pageControls.size - this.#controls.size,
+            },
+          }),
     };
   }
 }
