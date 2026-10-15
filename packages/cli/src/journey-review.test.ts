@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { JourneyReviewSchema, type Journey } from "@jevitate/journey";
+import { JourneyReviewSchema, applyAnnotationDraft, journeyProofHash, type AnnotationDraft, type Journey } from "@jevitate/journey";
 import { buildJourneyReview, journeyReviewHash, renderReviewMarkdown, renderReviewText, reviewSheetHash, type JourneyVerifyRecord } from "./journey-review.js";
 
 /** #432 — the review sheet builder: one assertion per test, per section. */
@@ -183,6 +183,45 @@ describe("#432 buildJourneyReview", () => {
 
   it("content hash: the review hash, which promoting does not change", () => {
     expect(review.contentHash).toBe(journeyReviewHash(fixtureJourney({ promoted: true, acceptedWeak: { reason: "x", rules: [] } })));
+  });
+});
+
+describe("#523 a mutation proof goes stale only when executable content changes", () => {
+  /** What `journey annotate --approve` writes: goal, criteria wording, step objective and expected result. */
+  function annotated(): Journey {
+    const draft: AnnotationDraft = {
+      kind: "jevitate.journey-annotations.draft",
+      version: 1,
+      journeyId: "buy-pro",
+      journeyHash: "0".repeat(64),
+      createdAtIso: "2026-10-04T00:00:00.000Z",
+      provenance: { adapter: "human", model: "-", promptVersion: "1" },
+      replay: { outcome: "completed", reachedSteps: 7, totalSteps: 7 },
+      goal: "Upgrade to the Pro plan",
+      successCriteria: ["The order is confirmed", "A receipt is shown"],
+      steps: [{ index: 1, step: "fill Email", objective: "Enter the login email", expectedResult: "The email is filled" }],
+    };
+    return applyAnnotationDraft(fixtureJourney(), draft).journey;
+  }
+  const PROOF: JourneyVerifyRecord = { ...VERIFY, proofHash: journeyProofHash(fixtureJourney()) };
+
+  it("the proof stays fresh after an annotation-only change", () => {
+    expect(buildJourneyReview(annotated(), { lastVerify: PROOF }).proof.verify).toMatchObject({ status: "recorded", stale: false });
+  });
+
+  it("the proof goes stale when a step's target changes", () => {
+    const j = fixtureJourney();
+    const s = j.recording.pages[1]!.steps[0]!.step;
+    if (s.kind === "click") s.target = { role: "button", name: "Buy Pro" };
+    expect(buildJourneyReview(j, { lastVerify: PROOF }).proof.verify).toMatchObject({ stale: true });
+  });
+
+  it("an old record without proofHash still compares the full content hash (stale after a prose change)", () => {
+    expect(buildJourneyReview(annotated(), { lastVerify: VERIFY }).proof.verify).toMatchObject({ stale: true });
+  });
+
+  it("the approval still goes stale on an annotation change (journeyReviewHash)", () => {
+    expect(journeyReviewHash(annotated())).not.toBe(journeyReviewHash(fixtureJourney()));
   });
 });
 

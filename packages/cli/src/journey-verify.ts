@@ -14,6 +14,7 @@ import {
   JourneyRegistry,
   assertionSiteKey,
   journeyAssertions,
+  journeyProofHash,
   judgeAssertions,
   mutationProofVerdict,
   mutationReplay,
@@ -192,6 +193,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   await writeVerifyRecord(opts.dir, {
     journeyId: journey.metadata.id,
     contentHash: journeyReviewHash(journey),
+    proofHash: journeyProofHash(journey),
     verdict: redacted.verdict,
     ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
     summary: { ...redacted.summary },

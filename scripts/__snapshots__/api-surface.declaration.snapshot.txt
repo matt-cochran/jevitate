@@ -1168,7 +1168,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (224 exports)
+# @jevitate/journey (225 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1299,6 +1299,7 @@
   JourneyParameter: interface
   JourneyPrecondition: interface
   journeyPrefix: function
+  journeyProofHash: function
   JourneyProposal: type-alias
   JourneyProposalSchema: variable
   JourneyRegistry: class
