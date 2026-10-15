@@ -1,5 +1,18 @@
 # @jevitate/cli
 
+## 0.15.0
+
+### Minor Changes
+
+- b801fba: `journey run` and `journey verify` take `--allow <origin>` (repeatable), so `verify --mutate` can block a write to another origin and a split-origin app's Journey reaches a conclusive mutation proof (#542). `explore-author-journey` records the origins it was given as `metadata.allowedOrigins`. A replay's allowlist is the recorded site (or the `--env` origins), plus `metadata.allowedOrigins`, plus `--allow`. MCP `run_journey` and `verify` take no `allow` argument: they get the recorded origins.
+- eb4d704: `http:` end-state checks prove a write whose effect is off the app's UI (#543), such as a password-reset email in a dev outbox: `--success 'http:GET <url>|jsonPath=$.messages[*].Subject|includes=Reset'` (also `status=`, `equals=`, `exists`, `textIncludes=`, `within=`) on `explore`, `explore-author-journey` and MCP success strings. The check is a polled GET to an origin in the run's allowlist, with no credentials and no redirects followed; the body is capped at 1 MiB and never saved. It satisfies `no-persistence-check`, and `journey run` and `verify --mutate` judge it. A transport error counts as unevaluable, never as mutation proof. New lint rules: `http-check-off-allowlist` (error) and `http-check-without-reset` (warning). A Journey's recorded fixtures may now reach its allowed origins, so they can reset the outbox before every replay.
+- b801fba: `explore-author-journey` takes `--fixtures` (with `--before`, `--after`, `--fixture-identity`), set up before and restored after every take (#544). The Journey records `metadata.fixtures` (`{ file, specHash }`), and `journey run`, `verify --mutate` and `annotate` reuse it with no flag. Precedence is `--fixtures`, then the recorded file, then the environment's. A missing recorded file is refused with `E_FIXTURE_SPEC` before any browser opens; a changed spec runs with a warning and `fixtureDrift` in the result. MCP `author_journey` takes `fixtures` and `fixtureIdentity`. `explore-author-journey` also takes `--log-*` (backend-log) flags and `--allow-writes`; MCP `author_journey` maps `allowWrites` and omits the log flags, like `run_exploration`.
+
+### Patch Changes
+
+- 5d63b69: Releases publish the bytes CI tested (#534). A push to `dev` that passes the full suite packs both packages into a release-candidate artifact named after the git tree. Promotion PRs into `staging` and `main` reuse that verdict when their merge tree matches. A merge to `staging` publishes those tarballs to npm as `next`, and pushing the `vX.Y.Z` tag on `main` moves `latest` to the same version without rebuilding (a merge to `main` only reports that the tag is ready to push). `jevitate --version` now also prints the tree hash (`x.y.z (commit <sha>, tree <tree>, built <time>)`), so a build packed from a dev commit matches the `main` commit that released it.
+- e055a86: The pixel mask no longer trusts a page's `requestAnimationFrame` (#547). It uses only the browser's own `requestAnimationFrame`, `MutationObserver`, `getBoundingClientRect` and `Range.getClientRects`, captured before any page script, so a page that replaces them (a polyfill, an animation library, test hooks) cannot make a recorded frame show a secret unmasked. If one was already replaced before the mask loaded, masking fails closed: the whole viewport is painted over, and screenshots and capture sessions are refused with `E_PIXEL_MASK` (reason `untrusted-primitive`).
+
 ## 0.14.1
 
 ### Patch Changes
