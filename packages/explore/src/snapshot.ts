@@ -1,4 +1,5 @@
-import type { Page } from "playwright";
+import type { ElementHandle, Page } from "playwright";
+import { descriptorLocator } from "@jevitate/interpreter";
 import { computeDescriptor, isSecretField, targetDisplay } from "@jevitate/recorder";
 import type { TargetDescriptor, TargetDisplay } from "@jevitate/recording";
 import { isCredentialField } from "./auth-completion.js";
@@ -85,6 +86,12 @@ export interface Control {
    */
   readonly scope?: string | null;
   /**
+   * #519: whether the control sits inside the run's declared scope region (`--scope-region`, or the
+   * Journey anchor's `region`). Present on every control only when a region is declared; never part
+   * of the signature or the descriptor.
+   */
+  readonly inRegion?: boolean;
+  /**
    * #356: the text of the nearest VISIBLE heading before the control in document order (the
    * heading of the screen / section it sits under), or null. Part of the repeat guard's action
    * identity: two same-labelled controls under different headings on one route (an SPA's two
@@ -148,6 +155,8 @@ export interface Snapshot {
    * when none was — then `controls` (with `truncated` false) is the page's whole control inventory.
    */
   readonly dropped?: readonly string[];
+  /** #519: how many elements matched the declared scope region(s). Present only when one is declared. */
+  readonly region?: { readonly matched: number };
   /** Semantic freshness signature (document url + viewport + safe control state). */
   readonly signature: string;
 }
@@ -168,6 +177,11 @@ export interface SnapshotOptions {
    * snapshot ever holds a secret the page merely displays. Default none.
    */
   readonly secrets?: readonly string[];
+  /**
+   * #519: the run's scope region(s). Every control is tagged `inRegion`, and in-region controls are
+   * read first so the `maxCandidates` bound never crowds them out. Default none.
+   */
+  readonly regions?: readonly TargetDescriptor[];
   /**
    * #278: wall-clock bound (ms) on reading the controls. A page with hundreds of clickable elements
    * (a heatmap of words) costs a few live queries per control; past the bound the rest are left
@@ -707,6 +721,19 @@ function readListItems(els: Element[], roles: string[]): Array<{ list: number; n
   });
 }
 
+/**
+ * BROWSER CODE — serialized by `evaluateAll`: no imports, no closure. #519: for each candidate, whether
+ * it is one of `regions` or inside one, across OPEN shadow roots (as `readControlFacts`' `holds`).
+ */
+function markInRegion(els: Element[], regions: Node[]): boolean[] {
+  const parentOf = (a: Element): Element | null =>
+    a.parentElement ?? (a.parentNode instanceof ShadowRoot ? a.parentNode.host : null);
+  return els.map((el) => {
+    for (let n: Element | null = el; n !== null; n = parentOf(n)) if (regions.includes(n)) return true;
+    return false;
+  });
+}
+
 /** BROWSER CODE — each candidate's approximate accessible name (aria-label, aria-labelledby, label, text, placeholder, title). */
 function readCheapNames(els: Element[]): string[] {
   const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
@@ -822,7 +849,50 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
   // #287 goal-named rescue is still read, so perception stays well inside the stall watchdog.
   const deadline = clock.now() + (opts?.budgetMs ?? SNAPSHOT_BUDGET_MS);
 
-  for (const [i, handle] of handles.entries()) {
+  // #519: resolve the scope region(s) once per read (no polling: a region absent now is absent) and
+  // tag every candidate in/out of it in one in-page pass — never guessed.
+  const regionDescs = opts?.regions ?? [];
+  let regionMatched = 0;
+  let inRegion: boolean[] | null = null;
+  if (regionDescs.length > 0) {
+    const regionHandles: ElementHandle<Node>[] = [];
+    try {
+      for (const d of regionDescs) {
+        // A descriptor with no usable rung throws synchronously; like a miss, it matches nothing.
+        const found = await Promise.resolve()
+          .then(() => descriptorLocator(page, d).elementHandles())
+          .catch(() => []);
+        regionHandles.push(...found);
+      }
+      regionMatched = regionHandles.length;
+      const read =
+        regionHandles.length === 0
+          ? handles.map(() => false)
+          : await page
+              .locator(INTERACTIVE_SELECTOR)
+              // Playwright serializes the handles in the array arg back into the page's elements.
+              .evaluateAll(markInRegion, regionHandles)
+              .catch(() => null);
+      if (read === null || read.length !== handles.length) {
+        // The page changed between the two reads (or the pass failed): nothing is claimed in-region.
+        dropped.add("scope region changed mid-read");
+        inRegion = handles.map(() => false);
+      } else {
+        inRegion = read;
+      }
+    } finally {
+      await Promise.all(regionHandles.map((h) => h.dispose().catch(() => undefined)));
+    }
+  }
+  // In-region candidates first, so the `maxCandidates` bound never crowds them out.
+  const order = handles.map((_, i) => i);
+  if (inRegion !== null) {
+    const tags = inRegion;
+    order.sort((a, b) => Number(tags[b]) - Number(tags[a]) || a - b);
+  }
+
+  for (const i of order) {
+    const handle = handles[i] as (typeof handles)[number];
     try {
       if (controls.length >= maxCandidates || evaluated >= maxEvaluated || clock.now() > deadline) {
         truncated = true;
@@ -909,6 +979,7 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
         ...(facts.richText ? { richText: true } : {}),
         ...(conversational === null ? {} : { conversational }),
         ...(facts.clippedOffscreen ? { clippedOffscreen: true } : {}),
+        ...(inRegion === null ? {} : { inRegion: inRegion[i] === true }),
       };
       const kept = redactControl(control, opts?.secrets ?? []);
       // #497: the label a person sees on it (role + accessible name), for the Recording only — never a
@@ -934,6 +1005,7 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
     controls,
     truncated,
     ...(dropped.size === 0 ? {} : { dropped: [...dropped] }),
+    ...(regionDescs.length === 0 ? {} : { region: { matched: regionMatched } }),
     signature: computeSignature(url, viewport, keptFacts),
   };
 }
