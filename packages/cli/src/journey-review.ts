@@ -50,8 +50,6 @@ import {
   type Style,
 } from "./journey-review/render.js";
 
-export { humanTime, stepRanges } from "./journey-review/render.js";
-
 /**
  * #432 — `jevitate journey review <id>`: one human-readable review sheet for promotion sign-off.
  * `buildJourneyReview` is PURE (no I/O, no clock): the CLI loads what it needs (the targets.json
