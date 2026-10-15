@@ -1,6 +1,16 @@
 # `allowedOrigins`: enforce at the browser, or retire the TODO (#521)
 
-Status: proposal for the maintainer's decision. No code changes yet.
+Status: decided — C + A in 0.14.0.
+
+**Implemented (0.14.0).** C: the stale TODO is gone and `allowedOrigins` is documented as the
+authorized origins (geolocation grant), not a network guard. A, opt-in: `OpenOptions.blockOffAllowlistNavigation`
+arms `NavigationGuard` (`packages/playwright/src/nav-guard.ts`: `context.route`, `204`, `route.fallback()`),
+and `BrowserSession.drainBlockedNavigations()` returns what it stopped. `explore --block-off-allowlist-navigation`
+(MCP `run_exploration`, suite option) passes it to the mission session and its fresh/hang-replay sessions only.
+Every mission loop drains after each settle (`packages/explore/src/blocked-navigation.ts`) and treats a
+main-frame block as a departure; seed loaders read a blocked seed redirect as the landed URL (#82 kept) and do
+not report the aborted seed load as unreachable. Log triage drops the navigation's `ERR_ABORTED`. Login,
+Journey, source, load, record and demo sessions are never guarded. Safety doc: `docs/safety.md`.
 
 ## Where things stand
 

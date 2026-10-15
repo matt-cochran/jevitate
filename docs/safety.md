@@ -13,6 +13,21 @@ security bug, and how to report one.
     is on is checked again after each action settles (an adversarial run returns to its start
     page). An action that navigates off the allowlist is stopped there, but that page has already
     loaded and run by then: the check is after the fact, not a network block.
+  - **Opt-in: off-allowlist navigations (#521).** `explore --block-off-allowlist-navigation` (MCP
+    `run_exploration.blockOffAllowlistNavigation`, suite option `blockOffAllowlistNavigation`) arms a
+    navigation guard on the mission's own browser session (goal, usability, adversarial, coverage,
+    exploratory and `--feature` runs, and their fresh and hang-replay sessions). A page navigation to an
+    origin outside the allowlist that the page starts itself — a link click, `location.href = …`, a
+    form GET, a popup — is answered `204 No Content` in the browser, so the other page never loads or
+    runs and the page stays where it was. The mission treats it exactly as a departure seen after the
+    settle: a goal run stops `blocked` (the transcript names the blocked URL), adversarial records it in
+    `scope.departures` and resets, coverage/exploratory/feature record it and do not expand it, and a
+    blocked seed redirect to a login page keeps the "session is not authenticated" reason. What it does
+    not change: a server redirect (`302`) is invisible to the guard and still loads, so the after-settle
+    check stays the guard; subresources and fetch/XHR still load; an embedded off-allowlist iframe is
+    not loaded but is not a departure; the session runs with the HTTP cache off. It is never armed on
+    `login`/persona sign-in, `journey run`, `source run`, `load`, `record` or `demo` sessions, which may
+    legitimately cross to an IdP or checkout. Off by default.
   - **First-party writes in find-out goals.** A find-out goal's write requests are blocked at the
     network (below).
   - **Adversarial misuse writes (#403).** During an adversarial run, a write request (anything but
