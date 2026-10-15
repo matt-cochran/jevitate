@@ -239,7 +239,7 @@ More: [how it works](./docs/how-it-works.md), including the architecture and pac
 | | |
 | --- | --- |
 | **Missions** | `explore` with a `--goal`, or `--strategy adversarial \| coverage \| exploratory \| usability`, or `--feature <name>` ([exploration](./docs/exploration.md)) |
-| **Success checks** | URL, visibility, text, values, counts, network (`requestMade`, `responseStatus`), persistence (`reloadThen`), computed style and layout. Find-out goals are answered only with grounded claims ([success checks](./docs/success-checks.md)) |
+| **Success checks** | URL, visibility, text, values, counts, network (`requestMade`, `responseStatus`), persistence (`reloadThen`), an `http:` end-state read of an allow-listed origin (a dev mail outbox), computed style and layout. Find-out goals are answered only with grounded claims ([success checks](./docs/success-checks.md)) |
 | **App-declared invariants** | rules over DOM, network and read-only probes, checked around every action ([invariants](./docs/invariants.md)) |
 | **Reproduce and verify** | `verify-fix`, `regression capture`, `regression run`, and `ledger add` / `ledger verify` to re-check a finding by fingerprint long after its run ([verification](./docs/verification.md)) |
 | **CI** | `jevitate check --suite` with a budget, JUnit and SARIF; `report` and `diff` for deduped findings and baselines ([CI](./docs/ci.md)) |
