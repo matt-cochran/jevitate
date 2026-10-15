@@ -1,4 +1,5 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyPrefix, lintJourney, lintUploadFixtures, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyEndState, journeyPrefix, lintJourney, lintUploadFixtures, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
 import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
@@ -105,8 +106,11 @@ export interface RunJourneyProgrammaticallyOptions {
    * Mission fixtures (#140/#144), built for the journey's own site once it is known: set up before
    * the browser opens (a failure throws `FixtureSetupError` — the journey never runs on unknown
    * state), `${setup.<name>}` in params bound to its outputs, and restored after the run.
+   * `allowedOrigins` (#543): the replay's effective allowlist (site/environment ∪ the Journey's
+   * `metadata.allowedOrigins` ∪ `--allow`) — what `journey run`/`verify` let a fixture reach, so a
+   * fixture can reset an `http` check's source (a dev outbox) on an origin the human allowed.
    */
-  fixtures?: (site: string) => MissionFixtures | undefined;
+  fixtures?: (site: string, allowedOrigins: readonly string[]) => MissionFixtures | undefined;
   /**
    * Playwright storageState JSON to seed the session from (CLI/MCP `--storage-state`, #118) —
    * the deterministic authenticated pre-step a Journey authored behind a login needs to
@@ -521,6 +525,9 @@ export async function runJourneyProgrammatically(
   // #293: only the prefix up to the anchor runs (its params are the ones those steps take).
   const journey = opts.stopAfterStep === undefined ? full : journeyPrefix(full, opts.stopAfterStep);
   const allowedOrigins = effectiveAllowedOrigins(journey, opts.environment, opts.allow);
+  // #543: an http end-state check reads only an origin the replay allows — refused before any
+  // fixture or browser (the probe re-checks every request after substitution).
+  if (journey === full) assertHttpChecksAllowed(journeyEndState(journey), allowedOrigins, `journey '${opts.id}' end state`);
   // #256: a Journey recorded with extensions replays only under that same build (ExtensionMismatchError, exit 64).
   if ((journey.recording.extensions ?? []).length > 0) assertSameExtensionBuild(journey.recording.extensions, opts.browser, `journey '${opts.id}'`);
 
@@ -545,7 +552,7 @@ export async function runJourneyProgrammatically(
   // decided before any fixture or browser; a refusal says why and when to retry.
   const gate = await gateJourney(opts.siteGate, journey.recording, { ...(opts.account === undefined ? {} : { account: opts.account }), enforceLimits: true });
 
-  const fx = opts.fixtures?.(journey.recording.site);
+  const fx = opts.fixtures?.(journey.recording.site, allowedOrigins);
   let params = inputParams;
   try {
     if (fx !== undefined) {
@@ -612,6 +619,10 @@ export async function runJourneyProgrammatically(
       // and each step's request expectations.
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, {
         secrets,
+        // #543: the end state's http checks: allowlist-bound requests; `${name}` from the run's params
+        // (a secret param refused) and `${setup.x}` from the fixture bindings.
+        httpProbe: createHttpProbe({ allowlist: allowedOrigins }),
+        resolveRef: httpCheckRefs({ params, secretParams: secretParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) }),
         ...(opts.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: opts.stepResponseTimeoutMs }),
       });
       const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins);

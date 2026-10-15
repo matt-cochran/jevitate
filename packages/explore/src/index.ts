@@ -59,6 +59,7 @@ export * from "./settle-config.js";
 export * from "./success-checks.js";
 export * from "./explain-check.js";
 export * from "./outcome-checks.js";
+export * from "./http-check.js";
 export * from "./mission-session.js";
 export * from "./host-pressure.js";
 export * from "./host-health.js";

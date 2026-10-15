@@ -1,4 +1,5 @@
 import { FixturePathError } from "@jevitate/recording";
+import { assertHttpChecksAllowed, HttpCheckOffAllowlistError, parseSuccessSpecUnderSetup } from "../http-probe.js";
 import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { FixtureNotFoundError, UnauthorizedExploreTargetError, type SuccessCheck, type SuccessWhen } from "@jevitate/explore";
 import { ok, fail } from "../envelope.js";
@@ -39,6 +40,14 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
     return;
   }
   const allowlist = resolveExploreAllowlist(setupRefFreeUrl(o.url), o.allow);
+  // #543: an http success check reads only an origin the run allows — refused before anything opens.
+  try {
+    assertHttpChecksAllowed(successChecks, allowlist);
+  } catch (err) {
+    if (!(err instanceof HttpCheckOffAllowlistError)) throw err;
+    emitExplore(fail(err.code, err.message));
+    return;
+  }
   // Fixtures (#140/#144): the spec and every ${setup.x} reference are validated here, before any
   // browser or request; the setup itself runs just before the mission (below).
   let fx: MissionFixtures | undefined;
@@ -88,7 +97,7 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       const b = fx.bindings();
       url = substituteUrlSetupRefs(o.url, b);
       goal = substituteSetupRefs(o.goal, b, { where: "--goal" });
-      successChecks = o.success.map((spec) => parseSuccessSpec(substituteSetupRefs(spec, b, { where: "--success" })));
+      successChecks = o.success.map((spec) => parseSuccessSpecUnderSetup(spec, b, "--success"));
       // #187: ${setup.x} in the invariants (probe paths, deniedAs.open, capture routes), origin-fixed.
       if (invariants !== undefined) runInvariants = { ...withInvariants, invariants: substituteSpecSetupRefs(invariants, b, url) };
       // #399: `--param name=${setup.x}` for the Journey prefix is bound to the fixture's output, and the

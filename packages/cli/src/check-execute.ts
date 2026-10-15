@@ -1,5 +1,6 @@
 // check-execute.ts — `jevitate check` item execution (#231).
 import { triagedServerLog } from "./explore-shared.js";
+import { parseSuccessSpecUnderSetup } from "./http-probe.js";
 import { recordRun } from "./run-index.js";
 import { stampRunMetadata } from "./run-metadata.js";
 import type { EmulationSpec } from "@jevitate/playwright";
@@ -336,7 +337,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         const b = fx.bindings();
         url = substituteSetupRefs(url, b, { where: `goal ${g.name} url` });
         goal = substituteSetupRefs(goal, b, { where: `goal ${g.name}` });
-        successChecks = g.success.map((s) => parseSuccessSpec(substituteSetupRefs(s, b, { where: `goal ${g.name} success` })));
+        successChecks = g.success.map((s) => parseSuccessSpecUnderSetup(s, b, `goal ${g.name} success`));
       }
       const r = await runners.goal({
         ...common,

@@ -1,4 +1,5 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { assertHttpChecksAllowed, HttpCheckOffAllowlistError } from "./http-probe.js";
 import { FixturePathError } from "@jevitate/recording";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
@@ -105,7 +106,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
     .option(
       "--success <spec>",
       "independent success check (repeatable; all must hold), any explore --success kind, e.g. urlIncludes:/confirmed, " +
-        "'reloadThen:textIncludes:css=main|Saved' or 'responseStatus:POST /api/save=2xx': every check is kept as the Journey's end state and re-checked after every replay's last step",
+        "'reloadThen:textIncludes:css=main|Saved', 'responseStatus:POST /api/save=2xx' or 'http:GET <outbox url>|jsonPath=$.messages[*].Subject|includes=Reset' (its origin must be in --allow): every check is kept as the Journey's end state and re-checked after every replay's last step",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -208,6 +209,15 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
       }
       // #256: loaded extensions' chrome-extension://<id> origins are allowed too (only those ids).
       const allowlist = allowWithExtensions(o.url, resolveExploreAllowlist(setupRefFreeUrl(o.url), o.allow), browserLaunchFromFlags(o));
+      // #543: an http end-state check reads only an origin the run allows (it is recorded in the
+      // Journey's metadata.allowedOrigins from this same --allow list) — refused before anything opens.
+      try {
+        assertHttpChecksAllowed(successChecks, allowlist);
+      } catch (err) {
+        if (!(err instanceof HttpCheckOffAllowlistError)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
       // #544: the fixture spec and every ${setup.x} reference are validated before any gateway or
       // browser; setup itself runs around each take.
       let fixtures: MissionFixtures | undefined;

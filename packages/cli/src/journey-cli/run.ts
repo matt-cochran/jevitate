@@ -1,4 +1,5 @@
 import { type CliDeps, JEV_PROVIDER_FLAG_HELP, jevProviderArg, resolveDbPath, resolveJourneysDir, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, withDemoFlags, withScreenshotsFlag, type ScreenshotsFlags, type DemoFlags, type EmulationFlags, withEmulationFlags, emulationFromFlags, collectParam, emitJson, environmentSeams, writeRawResult, GatewaySelectionError, buildExploreGateways } from "../cli-shared.js";
+import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "../run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
@@ -223,12 +224,14 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           ...(stepResponseTimeout === undefined ? {} : { stepResponseTimeoutMs: stepResponseTimeout }),
           ...(environment === undefined ? {} : { environment }),
           ...(allow.length === 0 ? {} : { allow }),
-          // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
-          // #247: under an environment, its allowed origins.
-          fixtures: (site) => {
-            fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: environment === undefined ? [site] : environment.allowedOrigins, baseUrl: site });
+          // #140: fixture HTTP steps may only reach the replay's allowlist (authenticated from --storage-state):
+          // the journey's own site (#247: under an environment, its allowed origins), plus (#542/#543) its
+          // recorded metadata.allowedOrigins and --allow — so a fixture can reset an http check's outbox.
+          fixtures: (site, allowedOrigins) => {
+            // #543: the replay's effective allowlist (#542), so a fixture can reset an allowed outbox.
+            fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: [...allowedOrigins], baseUrl: site });
             const fx = buildMissionFixtures(recorded.flags, {
-              allowlist: environment === undefined ? [site] : environment.allowedOrigins,
+              allowlist: [...allowedOrigins],
               baseUrl: site,
               ...(storageState !== undefined ? { storageState } : {}),
               ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
@@ -258,7 +261,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           process.exitCode = journeyExitCode(result.outcome);
         }
       } catch (err) {
-        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {
+        if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));

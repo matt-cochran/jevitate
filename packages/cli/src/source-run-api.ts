@@ -1,4 +1,5 @@
-import { deriveParamSchema, secretParamValues, validateParams } from "@jevitate/journey";
+import { deriveParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
+import { createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import type { SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
@@ -88,7 +89,11 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
   try {
     const actor = CastActor.named("source-runner").whoCan(new BrowseTheWeb(session, allowedOrigins), ...gate.abilities);
     // #322/#400: a trusted remote Journey's end state and step request checks hold for its replay too.
-    const outcomeChecks = new JourneyOutcomeChecks(session.page, file);
+    // #543: its http end-state checks request only origins in this same allowlist.
+    const outcomeChecks = new JourneyOutcomeChecks(session.page, file, {
+      httpProbe: createHttpProbe({ allowlist: allowedOrigins }),
+      resolveRef: httpCheckRefs({ params, secretParams: secretParamNames(file, params) }),
+    });
     const observer = outcomeChecks.observer();
     const runner = new JourneyRunner(actor, new RecordingInterpreter({ ...(observer === undefined ? {} : { observer }), fixtureBaseDir: journeyFixtureBaseDir() }));
     try {
