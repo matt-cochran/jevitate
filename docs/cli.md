@@ -1419,6 +1419,7 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 | `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 | `--stale` | #467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids |  |  |  |  |
+| `--strict` | #523: exit 1 (defects) when the sheet has any ⚠ attention item, and run the code-only readiness link checks (missing job / persona) even without --readiness; advisory ○ items and Jev never fail it. With --json the envelope also carries strict: { passed, warnings } |  |  |  |  |
 
 ### journey run
 
