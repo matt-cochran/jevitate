@@ -759,7 +759,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (129 exports)
+# @jevitate/journey (130 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -862,6 +862,7 @@
   journeyBranchPoint: function
   journeyEndState: function
   journeyPrefix: function
+  journeyProofHash: function
   journeyRunParams: function
   journeyStepCount: function
   journeyWriteSteps: function
