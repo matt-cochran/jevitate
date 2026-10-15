@@ -11,7 +11,7 @@ import {
   type VerifyFixReport,
 } from "./verify-fix-api.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
-import { clock } from "@jevitate/domain";
+import { clock, isRecord } from "@jevitate/domain";
 
 /**
  * The finding ledger (#195 part 6): a built-in store of the repro material `verify-fix` needs,
@@ -69,9 +69,6 @@ export function ledgerDir(regressionsDir?: string): string {
 
 const FINGERPRINT = /^[0-9a-f]{16}$/;
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 function entryPath(dir: string, fingerprint: string): string {
   if (!FINGERPRINT.test(fingerprint)) throw new LedgerError("E_LEDGER_INPUT", `not a finding fingerprint: ${JSON.stringify(fingerprint)} (16 hex characters)`);

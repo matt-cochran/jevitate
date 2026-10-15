@@ -271,6 +271,9 @@ importers:
 
   packages/journey:
     dependencies:
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
@@ -451,6 +454,9 @@ importers:
 
   packages/sources:
     dependencies:
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@jevitate/journey':
         specifier: workspace:*
         version: link:../journey

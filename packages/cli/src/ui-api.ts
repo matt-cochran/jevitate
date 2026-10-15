@@ -13,7 +13,7 @@ import {
   type Action,
 } from "@jevitate/inbox";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
-import { clock } from "@jevitate/domain";
+import { clock, isPlainObject } from "@jevitate/domain";
 
 /**
  * The `jevitate ui` local HTTP server — the human-facing side of the HITL
@@ -61,9 +61,6 @@ const TOKEN_COOKIE = "jevitate_ui_token";
 const SWEEP_INTERVAL_MS = 60_000;
 const RESOLVE_ACTIONS = new Set(["approve", "reject", "resume"]);
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isAddrInUse(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "EADDRINUSE";

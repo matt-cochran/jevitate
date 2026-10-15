@@ -12,6 +12,7 @@ import {
   type GoalOutcome,
   type MissionOutcome,
 } from "@jevitate/domain";
+import { isRecord } from "@jevitate/domain";
 import { sumUsage, usageCountsFrom, type UsageAggregate, type UsageCounts } from "@jevitate/ai-core";
 import { normalizeRoute } from "@jevitate/explore";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -283,9 +284,6 @@ export function findingIdentity(f: RunFinding): string {
   return `${f.kind}:${f.rubricItemId ?? f.title}@${route}[${[...(f.controls ?? [])].sort().join("|")}]`;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 function str(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;

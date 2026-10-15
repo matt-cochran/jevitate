@@ -8,6 +8,7 @@ import {
   validateRunTags,
   type MissionOutcome,
 } from "@jevitate/domain";
+import { isRecord } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import { logsDirFor } from "./project-dir.js";
@@ -190,9 +191,6 @@ export interface LoadSweepTargetsOptions {
   readonly projectRoot?: string;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 interface RawTarget {
   readonly where: string;

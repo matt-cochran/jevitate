@@ -2,7 +2,7 @@ import { existsSync as realExistsSync } from "node:fs";
 import { readFile, writeFile, mkdir, rm, rmdir } from "node:fs/promises";
 import { homedir as realHomedir } from "node:os";
 import { join, dirname } from "node:path";
-import { createHash } from "node:crypto";
+import { sha256 } from "@jevitate/domain";
 import type { ResolvedSkill } from "@jevitate/skills";
 
 export type RuntimeId = "claude-code" | "codex" | "cursor" | "generic";
@@ -65,9 +65,6 @@ export type InstallAction =
   | "force-update"
   | "refuse-malformed";
 
-function sha256(s: string): string {
-  return createHash("sha256").update(s, "utf8").digest("hex");
-}
 
 /**
  * Decides what to do with one whole-file target. Never writes. A target whose

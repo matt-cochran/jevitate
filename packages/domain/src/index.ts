@@ -1,4 +1,5 @@
 export * from "./content-hash.js";
+export * from "./guards.js";
 export * from "./interaction-policy.js";
 export * from "./rng.js";
 export * from "./run-policy.js";

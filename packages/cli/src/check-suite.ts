@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { isRecord } from "@jevitate/domain";
 import { parseGeolocation, parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
 import { validateAllowControlPatterns, validateDenyPatterns } from "@jevitate/explore";
 import {
@@ -198,9 +199,6 @@ export class SuiteError extends Error {
 
 type Json = Record<string, unknown>;
 
-function isRecord(v: unknown): v is Json {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 class Reader {
   /** #213: every problem `collect` caught, so a suite reports ALL of them, not just the first. */

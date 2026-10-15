@@ -24,6 +24,7 @@ import { resolveJourneyPrefix, type JourneyPrefix } from "./journey-prefix.js";
 import { isSweepMode, splitBudget, sweepStops } from "@jevitate/journey";
 import type { SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
 import { CheckAiSetupError, CheckArgsError, CheckPreflightError, type ItemKind, type RunCheckOptions } from "./check-types.js";
+import { isRecord } from "@jevitate/domain";
 import type { HealBudget, SelfHealMode } from "@jevitate/domain";
 import type { ChangeScope } from "@jevitate/runtime";
 import { JourneyHealArgsError, journeyHealBudget, readJourneyChangeScope, validateJourneyHeal } from "./journey-heal.js";
@@ -64,9 +65,7 @@ function journeyRoutes(j: Journey): string[] {
 
 export type Json = Record<string, unknown>;
 
-export function isRecord(v: unknown): v is Json {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
+export { isRecord };
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

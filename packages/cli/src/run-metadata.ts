@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isRecord } from "@jevitate/domain";
 import type { RunTags } from "@jevitate/domain";
 
 /**
@@ -39,9 +40,6 @@ export function withRunMetadata<T>(meta: Partial<RunMetadata>, fn: () => T): T {
   return scope.run(merged, fn);
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 /**
  * The result with the run metadata stamped on: `tags` (when any) and the structured target

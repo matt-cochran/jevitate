@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { fingerprintMarkers, isExternalSchemeUrl } from "@jevitate/domain";
+import { fingerprintMarkers, isExternalSchemeUrl, isRecord } from "@jevitate/domain";
 import { assertNoSecretInPayload, redactCredentialShapes, redactText, redactUrl, type JudgmentPort, type JudgmentState, type Question } from "@jevitate/ai-core";
 import { normalizeLogMessage } from "./log-lines.js";
 
@@ -287,7 +287,6 @@ export async function triageDefects(
   return { byFingerprint, triage: { mode: opts.judge === undefined ? "code" : "jev", defects: defects.length, candidates: candidatesTotal, kept, jevCalls, capped } };
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const asDefect = (v: unknown): DefectLike | undefined =>
   isRecord(v) && typeof v.fingerprint === "string" && typeof v.kind === "string" ? (v as unknown as DefectLike) : undefined;
 
