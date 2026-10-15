@@ -7,7 +7,7 @@ import { registerAiCommands } from "./ai-cli.js";
 import { registerCheckCommand } from "./check-cli.js";
 import { registerReportCommands } from "./report-cli.js";
 import { registerInvariantsCommands } from "./invariants-validate.js";
-import { currentEngineInfo } from "./engine.js";
+import { currentEngineInfo, formatVersion } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { commandPath, trackActionCommand } from "./cli-refusal.js";
 import {
@@ -51,15 +51,13 @@ export { fakeDoneJudge } from "./cli-shared.js";
 
 /**
  * `--version`'s display string: the published semver alone once that alone identifies the
- * build (a real npm install), plus commit/builtAt whenever the build could determine them (a
+ * build (a real npm install), plus commit/tree/builtAt (#534 added the tree) whenever the build could determine them (a
  * dev checkout / `npm link`ed working tree) — issue #83, "`jevitate --version` stays `0.1.0`
  * across 3 rebuilds in one hour ... nothing says which commit produced a result." `"unknown"`
  * (never shown here at all — omitted instead) rather than a fabricated commit/time.
  */
 function versionString(): string {
-  const engine = currentEngineInfo();
-  if (engine.commit === "unknown" && engine.builtAt === "unknown") return engine.version;
-  return `${engine.version} (commit ${engine.commit}, built ${engine.builtAt})`;
+  return formatVersion(currentEngineInfo());
 }
 
 export function buildProgram(deps: CliDeps): Command {

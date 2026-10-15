@@ -1,5 +1,6 @@
 /** Journey authoring behind `jevitate explore-author-journey`: a model-driven run that authors a promotable Journey. */
 import type { JudgmentPort, GenerationPort, UsageTracker } from "@jevitate/ai-core";
+import { parseSuccessSpecUnderSetup } from "./http-probe.js";
 import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
 import { type Assertion } from "@jevitate/recording";
 import type { SafetyConfig, SuccessCheck } from "@jevitate/explore";
@@ -15,6 +16,11 @@ import { FsJourneyStore } from "@jevitate/journey";
 import { runExploration, type RunExplorationResult } from "./explore-goal.js";
 import type { GoalRunShaping } from "./goal-run-flags.js";
 import { screenshotsDirFor } from "./run-screenshots.js";
+import { FixtureSetupError, UnboundSetupRefError, substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
+import { fixtureSetupFailedResult, substituteUrlSetupRefs } from "./fixture-cli.js";
+import { parseSuccessSpec } from "./explore-specs.js";
+import { recordedFixturesFor } from "./journey-fixtures.js";
+import type { LayoutDeps } from "./project-dir.js";
 
 /**
  * Arguments handed to the authoring step of `runAuthorJourney`. Kept separate
@@ -55,6 +61,14 @@ export interface AuthorViaBrowserArgs {
   readonly outDir?: string;
   /** Usage accounting shared by every take (the gateways' tracker). */
   readonly usage?: UsageTracker;
+  /**
+   * #544: mission fixtures, set up before and restored after EVERY take (so each starts from the
+   * same state) and handed to each goal run (hang replays re-run setup). `${setup.x}` in the
+   * url/goal/success specs is bound per take.
+   */
+  readonly fixtures?: MissionFixtures;
+  /** #544: the raw `--success` specs, re-parsed per take once `${setup.x}` is bound (needs `fixtures`). */
+  readonly successSpecs?: readonly string[];
 }
 
 export interface RunAuthorJourneyOptions {
@@ -89,6 +103,18 @@ export interface RunAuthorJourneyOptions {
   /** #369: where each take's artifacts go (see `AuthorViaBrowserArgs.outDir`). */
   readonly outDir?: string;
   readonly usage?: UsageTracker;
+  /**
+   * #544: mission fixtures, set up before and restored after EVERY take (so each starts from the
+   * same state) and handed to each goal run (hang replays re-run setup). `${setup.x}` in the
+   * url/goal/success specs is bound per take.
+   */
+  readonly fixtures?: MissionFixtures;
+  /** #544: the raw `--success` specs, re-parsed per take once `${setup.x}` is bound (needs `fixtures`). */
+  readonly successSpecs?: readonly string[];
+  /** #544: the `--fixtures` file path, kept so a Journey can record the fixture it was authored under. */
+  readonly fixturesFile?: string;
+  /** Test seam: where the project root (the `.jevitate/` parent a recorded fixtures path is relative to) is found. */
+  readonly layout?: LayoutDeps;
   /**
    * Test seam: override the authoring step. Defaults to `authorViaBrowser`,
    * which drives a real Playwright-backed actor through `authorJourney`.
@@ -133,15 +159,29 @@ export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<A
     ...(opts.goalRun === undefined ? {} : { goalRun: opts.goalRun }),
     ...(opts.outDir === undefined ? {} : { outDir: opts.outDir }),
     ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    ...(opts.fixtures === undefined ? {} : { fixtures: opts.fixtures }),
+    ...(opts.successSpecs === undefined ? {} : { successSpecs: opts.successSpecs }),
   });
 
   if (result.outcome === "authored") {
     // #170: a Journey authored behind a login (--storage-state) declares it, so a run without a
     // storage state fails fast as a configuration error instead of a gating step-1 assertion.
-    const journey =
+    const withAuth =
       opts.storageState !== undefined && result.journey.metadata.requiresAuth !== true
         ? { ...result.journey, metadata: { ...result.journey.metadata, requiresAuth: true } }
         : result.journey;
+    // #544: a Journey authored under --fixtures records the file and spec hash, so a later run replays
+    // under the same fixtures. Shell hooks (--before/--after) are never recorded.
+    const journey =
+      opts.fixturesFile !== undefined
+        ? {
+            ...withAuth,
+            metadata: {
+              ...withAuth.metadata,
+              fixtures: recordedFixturesFor(opts.fixturesFile, { allowlist: opts.allowlist, baseUrl: origin }, opts.layout),
+            },
+          }
+        : withAuth;
     await new FsJourneyStore(opts.journeysDir).put(journey);
     return journey === result.journey ? result : { ...result, journey };
   }
@@ -163,7 +203,9 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
   const g = args.goalRun ?? {};
   // targets.json's safety (`goalRun.target`) wins; a caller's `safety` (#249) applies without one.
   const target = g.target ?? (args.safety === undefined ? undefined : { safety: args.safety });
-  return authorJourney({
+  const fx = args.fixtures;
+  try {
+    return await authorJourney({
     goal: args.goal,
     ...(args.successAssertion === undefined ? {} : { successAssertion: args.successAssertion }),
     ...(args.successChecks === undefined ? {} : { successChecks: args.successChecks }),
@@ -173,11 +215,31 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
     takes: args.takes,
     journeyId: args.journeyId,
     journeyName: args.journeyName,
-    runTake: async ({ goal, successChecks }) => {
+    runTake: async ({ goal: takeGoal, successChecks: takeChecks }) => {
+      let url = args.url;
+      let goal = takeGoal;
+      let successChecks = takeChecks;
+      if (fx !== undefined) {
+        // Never run a take on unknown state: a failed setup ends authoring (after restoring whatever
+        // the partial setup created).
+        try {
+          await fx.setup();
+          const b = fx.bindings();
+          url = substituteUrlSetupRefs(args.url, b);
+          goal = substituteSetupRefs(takeGoal, b, { where: "--goal" });
+          if (args.successSpecs !== undefined) successChecks = args.successSpecs.map((spec) => parseSuccessSpecUnderSetup(spec, b, "--success"));
+        } catch (err) {
+          await fx.restore();
+          if (err instanceof FixtureSetupError || err instanceof UnboundSetupRefError) throw new AuthorFixtureSetupError(fixtureSetupFailedResult(err, fx));
+          throw err;
+        }
+      }
+      try {
       const r = await runExploration({
         ...g,
         ...(target === undefined ? {} : { target }),
-        url: args.url,
+        ...(fx === undefined ? {} : { fixtures: fx }),
+        url,
         goal,
         successChecks,
         allowlist: args.allowlist,
@@ -191,8 +253,23 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
         ...(args.storageState === undefined ? {} : { storageState: args.storageState }),
       });
       return goalRunTake(r, g);
+      } finally {
+        // Every take ends restored, so the next one starts from the same state.
+        await fx?.restore();
+      }
     },
   });
+  } catch (err) {
+    if (!(err instanceof AuthorFixtureSetupError)) throw err;
+    return { outcome: "not-reached", reason: err.result.reason, failure: err.result.failure };
+  }
+}
+
+/** #544: a take's fixture setup failed — authoring ends (no Journey), with explore's own failure shape. */
+class AuthorFixtureSetupError extends Error {
+  constructor(readonly result: ReturnType<typeof fixtureSetupFailedResult>) {
+    super(result.reason);
+  }
 }
 
 /** #369: one goal run as an authoring take — its Recording and where everything it wrote is. */

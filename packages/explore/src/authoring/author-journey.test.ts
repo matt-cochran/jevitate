@@ -304,3 +304,32 @@ test("#369: a code-typed (redacted) field becomes a secret parameter, never a ke
   expect(result.discovery).toEqual({ outcome: "succeeded", resultPath: "/logs/r.result.json" });
   expect(result.takes).toEqual({ requested: 1, run: 1, succeeded: 1 });
 });
+
+const authorWith = async (allowlist: string[]) => {
+  const result = await authorJourney({
+    goal: "search for widgets",
+    successAssertion: { kind: "visible", target: { testId: "results" } },
+    allowlist,
+    startUrl: "https://example.test/search",
+    actor: {} as never,
+    judgment: fakeJudgment,
+    generation: fakeGeneration,
+    takes: 1,
+    journeyId: "explore-search",
+    journeyName: "Explore: search",
+  });
+  if (result.outcome !== "authored") throw new Error("unreachable");
+  return result.journey;
+};
+
+test("#542: an authoring allowlist beyond the start origin is recorded as metadata.allowedOrigins", async () => {
+  expect((await authorWith(["https://example.test", "https://api.example.test:8443/"])).metadata.allowedOrigins).toEqual(["https://example.test", "https://api.example.test:8443"]);
+});
+
+test("#542: an authoring allowlist of only the start origin leaves metadata.allowedOrigins absent", async () => {
+  expect("allowedOrigins" in (await authorWith(["https://example.test/"])).metadata).toBe(false);
+});
+
+test("#542: a Journey with metadata.allowedOrigins validates against the schema", async () => {
+  expect(JourneySchema.safeParse(await authorWith(["https://example.test", "https://api.example.test"])).success).toBe(true);
+});

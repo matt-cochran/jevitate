@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc --build",
     "test": "vitest run",
+    "test:live": "vitest run packages/cli/src/ai-live.integration.test.ts packages/cli/src/ux-quality.integration.test.ts",
     "lint": "eslint . && node scripts/check-clock.mjs && knip",
     "knip": "knip",
     "docs:cli": "pnpm --filter @jevitate/cli run build && node packages/cli/scripts/generate-cli-reference.mjs",

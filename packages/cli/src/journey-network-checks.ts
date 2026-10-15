@@ -17,7 +17,7 @@ import type { Actor } from "@jevitate/screenplay";
 import { installFlashRecorder, type StepObserver } from "@jevitate/interpreter";
 import { describeStep } from "@jevitate/journey";
 import { clock } from "@jevitate/domain";
-import { DEFAULT_STEP_RESPONSE_TIMEOUT_MS, evaluateNetworkCheckAwaiting, evaluateOutcomeChecks, type SlowStepFinding, monitorFor, type RequestCapture, type SuccessCheckResult } from "@jevitate/explore";
+import { DEFAULT_STEP_RESPONSE_TIMEOUT_MS, evaluateNetworkCheckAwaiting, evaluateOutcomeChecks, type HttpCheckRefResolver, type HttpProbe, type SlowStepFinding, monitorFor, type RequestCapture, type SuccessCheckResult } from "@jevitate/explore";
 
 /** #486/L2: the largest `--step-response-timeout` / `stepResponseTimeoutMs` accepted (5 minutes): a step never waits longer. */
 export const MAX_STEP_RESPONSE_TIMEOUT_MS = 300_000;
@@ -72,12 +72,27 @@ export class JourneyOutcomeChecks {
   readonly #steps: StepWindow[];
   readonly #secrets: readonly string[];
   readonly #responseTimeoutMs: number;
+  readonly #httpProbe: HttpProbe | undefined;
+  readonly #resolveRef: HttpCheckRefResolver | undefined;
   #lastFailures: readonly OutcomeCheckFailure[] = [];
   #slowSteps: SlowStep[] = [];
 
   /** `journey` undefined (an anchored prefix run): nothing is judged. */
-  constructor(page: Page, journey: Journey | undefined, opts: { readonly secrets?: readonly string[]; readonly stepResponseTimeoutMs?: number } = {}) {
+  constructor(
+    page: Page,
+    journey: Journey | undefined,
+    opts: {
+      readonly secrets?: readonly string[];
+      readonly stepResponseTimeoutMs?: number;
+      /** #543: makes the end state's `http` checks' requests; absent, they fail closed (unevaluable). */
+      readonly httpProbe?: HttpProbe;
+      /** #543: resolves an `http` check's `${name}` (a param, `setup.x`); a secret one is refused. */
+      readonly resolveRef?: HttpCheckRefResolver;
+    } = {},
+  ) {
     this.#page = page;
+    this.#httpProbe = opts.httpProbe;
+    this.#resolveRef = opts.resolveRef;
     this.#responseTimeoutMs = opts.stepResponseTimeoutMs ?? DEFAULT_STEP_RESPONSE_TIMEOUT_MS;
     this.#secrets = opts.secrets ?? [];
     this.#end = journey === undefined ? [] : journeyEndState(journey);
@@ -228,7 +243,15 @@ export class JourneyOutcomeChecks {
     let end: SuccessCheckResult[] = [];
     if (this.#end.length > 0) {
       try {
-        end = await evaluateOutcomeChecks(this.#end, { actor, page: this.#page, capture, secrets: this.#secrets, settleMs: SETTLE_CEILING_MS });
+        end = await evaluateOutcomeChecks(this.#end, {
+          actor,
+          page: this.#page,
+          capture,
+          secrets: this.#secrets,
+          settleMs: SETTLE_CEILING_MS,
+          ...(this.#httpProbe === undefined ? {} : { httpProbe: this.#httpProbe }),
+          ...(this.#resolveRef === undefined ? {} : { resolveRef: this.#resolveRef }),
+        });
       } catch (e) {
         // A check that cannot be evaluated (an unusable target) is never a pass.
         const detail = `success checks could not be evaluated after the last step: ${e instanceof Error ? e.message : String(e)}`;
@@ -238,8 +261,10 @@ export class JourneyOutcomeChecks {
     }
     // `evaluateOutcomeChecks` keeps the checks' order, which is `journeyEndState`: `endState` then
     // legacy `networkChecks` — so an index here is that list's own position.
-    const endFailureSites: OutcomeCheckFailure[] = end.flatMap((r, index) =>
-      r.passed ? [] : [{ where: "end-state" as const, index, detail: `${r.check} — ${r.detail}` }],
+    // #543: a check that could not be judged at all (an `http` check's transport error) is
+    // `unevaluable` — never proof a mutation broke it (the mutation proof reads it as a cascade).
+    const endFailureSites: OutcomeCheckFailure[] = end.flatMap((r, index): OutcomeCheckFailure[] =>
+      r.passed ? [] : r.unevaluable === true ? [{ where: "unevaluable", detail: `${r.check} — ${r.detail}` }] : [{ where: "end-state", index, detail: `${r.check} — ${r.detail}` }],
     );
     this.#lastFailures = [...stepFailureSites, ...endFailureSites];
     const endFailures = endFailureSites.map((f) => f.detail);

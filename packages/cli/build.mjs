@@ -15,12 +15,12 @@ import { writeBuildInfoModule } from "./scripts/generate-build-info.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// Build identity (issue #83): the commit/build-time this bundle was made from, injected as
+// Build identity (issue #83; tree #534): the commit/tree/build-time this bundle was made from, injected as
 // literals via esbuild `define` — never fabricated, `"unknown"` when `git rev-parse` fails
 // (see generate-build-info.mjs). Also (re)writes `src/build-info.generated.ts`, the fallback
 // `./engine.ts` reads when `__JEVITATE_*__` isn't defined (the plain `tsc --build` dist that
 // `npm link` runs never goes through esbuild, so it never gets this `define` substitution).
-const { commit, builtAt } = writeBuildInfoModule();
+const { commit, tree, builtAt } = writeBuildInfoModule();
 
 const EXTERNAL = [
   "playwright",
@@ -47,6 +47,7 @@ await build({
   logLevel: "info",
   define: {
     __JEVITATE_BUILD_COMMIT__: JSON.stringify(commit),
+    __JEVITATE_BUILD_TREE__: JSON.stringify(tree),
     __JEVITATE_BUILT_AT__: JSON.stringify(builtAt),
   },
 });

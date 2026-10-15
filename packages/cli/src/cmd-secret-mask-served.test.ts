@@ -15,7 +15,8 @@ import { runUsabilityMission } from "./ux-api.js";
 import { ScriptedJudge, useSkippingTime } from "../../explore/src/testkit.js";
 
 // #304: Node and page time skip idle waits; assertions unchanged.
-useSkippingTime({ per: "all" });
+// #547: the page keeps the browser's own clock: page.clock replaces requestAnimationFrame before the pixel mask loads, and a capture then fails closed.
+useSkippingTime({ per: "all", pageClock: false });
 
 /**
  * #360 — a value a `cmd:` secret source reads mid-run (a one-time code) was redacted from text but

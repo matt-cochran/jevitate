@@ -28,6 +28,12 @@ security bug, and how to report one.
     not loaded but is not a departure; the session runs with the HTTP cache off. It is never armed on
     `login`/persona sign-in, `journey run`, `source run`, `load`, `record` or `demo` sessions, which may
     legitimately cross to an IdP or checkout. Off by default.
+  - **`http:` end-state checks (#543).** A success or end-state check that reads an outbox or
+    another endpoint makes its own GET from jevitate (not the browser). Its origin must be in the
+    run's allowlist — checked before anything opens (`E_HTTP_CHECK_OFF_ALLOWLIST`), by `journey lint`
+    (`http-check-off-allowlist`), and again on every request after `${…}` substitution. It sends no
+    cookies or auth headers, never follows a redirect, reads at most 1 MiB, and never saves the body;
+    a secret param or setup output in its URL is refused.
   - **First-party writes in find-out goals.** A find-out goal's write requests are blocked at the
     network (below).
   - **Adversarial misuse writes (#403).** During an adversarial run, a write request (anything but
@@ -278,6 +284,20 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   from the video's first frame, and re-prove the mask at every step. This fails closed: a clip or
   image whose mask cannot be proven is not written, and the reason is recorded. The demo overlay
   is hidden in screenshots.
+- The mask follows the page's paints with the browser's own `requestAnimationFrame` (#547), and
+  reads geometry and DOM changes with the browser's own `getBoundingClientRect`,
+  `Range.getClientRects` and `MutationObserver`. It captures them before any page script runs, so
+  a page that later replaces or wraps them (a polyfill, an animation library, an app's test hooks)
+  does not affect the mask. If a script that ran **earlier** (another init script, Playwright's
+  `page.clock`) already replaced one, so that it is no longer the browser's own built-in, the mask
+  fails closed in that document: it paints the whole viewport in the mask colour (the video shows a
+  solid frame, never a lagging mask), every screenshot is refused with `E_PIXEL_MASK` and reason
+  `untrusted-primitive`, a defect clip or `jz-mask-v1` video is marked unproven, and a session
+  whose open page is affected is not opened for capture. The mask does not use `setTimeout`,
+  `performance.now` or `ResizeObserver`. **Limit:** the built-in check reads each function's
+  source through `Function.prototype.toString` (a shim prints its own source; a bound function or a
+  `Proxy` prints no name). A script that runs before the mask and also forges
+  `Function.prototype.toString` defeats the check. jevitate adds no such script.
 - **Secrets the app reveals during the run** (#298) — a freshly minted API key, a one-time reveal
   panel, an invite or reset link — are not known in advance, so they cannot be registered. The
   pixel mask also covers, with no registration:

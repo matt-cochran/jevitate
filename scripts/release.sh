@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 #
-# Manual release (the FALLBACK path; normally pushing a vX.Y.Z tag publishes
-# through the Release workflow, see RELEASING.md) — publishes the
-# two public packages to npm:
+# Manual release (the FALLBACK path; normally the Release workflow publishes the
+# tarballs CI built and tested on dev: a merge to staging publishes them as
+# `next`, a merge to main moves `latest`; see RELEASING.md) — builds locally and
+# publishes the two public packages to npm with the `latest` tag:
 #   1. @jevitate/cli   (the real CLI; dist + bundled skills)
 #   2. jevitate        (the bare-name alias; depends on @jevitate/cli)
 #
-# Use it when the workflow's OIDC publish fails (npm/cli#9969 returns E404 for
-# repos with immutable OIDC subject claims). No long-lived NPM_TOKEN is stored
+# Use it when the workflow's OIDC publish fails. If the version is already on
+# npm (published as `next` from staging) and only moving `latest` failed, don't
+# run this; run `npm dist-tag add <pkg>@<version> latest` for both packages
+# instead. No long-lived NPM_TOKEN is stored
 # (by decision); npm prompts for your 2FA one-time password interactively.
 #
 # After publishing it waits (bounded) until the registry serves the new
@@ -29,7 +32,7 @@ make_tags=1
 for arg in "$@"; do
   case "$arg" in
     --no-tags) make_tags=0 ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) echo "✗ unknown argument: $arg" >&2; exit 64 ;;
   esac
 done

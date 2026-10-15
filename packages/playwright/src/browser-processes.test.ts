@@ -45,6 +45,15 @@ function restricted(pids: () => readonly number[]): ProcessTable {
   };
 }
 
+/**
+ * Waits until `table` lists exactly `n` processes that each show their `--jevitate-owner` marker.
+ * A just-spawned child is alive (and listed) before its exec completes, still showing the parent's
+ * argv, so waiting for "alive" or "listed" alone races the marker under load (#549 CI).
+ */
+async function waitForMarked(table: ProcessTable, n: number): Promise<void> {
+  await waitFor(() => (table.list() ?? []).filter((p) => p.argv.some((a) => a.startsWith("--jevitate-owner="))).length === n);
+}
+
 async function waitFor(cond: () => boolean, ms = 5_000): Promise<void> {
   const until = Date.now() + ms;
   while (!cond()) {
@@ -86,7 +95,7 @@ describe.runIf(linux)("orphan cleanup (real processes, restricted table)", () =>
   it("a reused owner pid (same pid, different start time) is an orphan's owner gone", async () => {
     const reused = fakeProcess([`--jevitate-owner=${process.pid}@1`]); // this pid, but a start that is not ours
     const table = restricted(() => [reused.pid!]);
-    await waitFor(() => (table.list() ?? []).length === 1);
+    await waitForMarked(table, 1);
     expect(findOrphanBrowsers(table)[0]?.orphan).toMatch(/now belongs to another process/);
     const cleanup = await cleanupOrphanBrowsers({ table });
     expect(cleanup.orphans.map((o) => o.result)).toEqual(["terminated"]);
@@ -97,7 +106,7 @@ describe.runIf(linux)("orphan cleanup (real processes, restricted table)", () =>
     const stubborn = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)", "--", `--jevitate-owner=${dead}@0`], { stdio: "ignore" });
     spawned.push(stubborn);
     const table = restricted(() => [stubborn.pid!]);
-    await waitFor(() => (table.list() ?? []).length === 1);
+    await waitForMarked(table, 1);
     await new Promise((r) => setTimeout(r, 200)); // its SIGTERM handler is installed
     const cleanup = await cleanupOrphanBrowsers({ table, graceMs: 300 });
     expect(cleanup.orphans.map((o) => o.result)).toEqual(["killed"]);
@@ -109,7 +118,7 @@ describe.runIf(linux)("orphan cleanup (real processes, restricted table)", () =>
     const dead = spawnSync(process.execPath, ["-e", "0"]).pid!;
     const notMine = fakeProcess([`--jevitate-owner=${dead}@0`]);
     const table = restricted(() => [mine.pid!, notMine.pid!]);
-    await waitFor(() => (table.list() ?? []).length === 2);
+    await waitForMarked(table, 2);
     const reading = measureOwnBrowserMemory({ table });
     expect(reading).toBeDefined();
     expect(reading!.roots).toEqual([mine.pid]);
@@ -185,8 +194,8 @@ describe("terminateOwnBrowsersSync (#326)", () => {
   it.runIf(linux)("real processes: a marked tree owned by this process is gone after the call", async () => {
     const owner = 2_000_000_000; // a fake owner pid, so only this test's processes match
     const p = fakeProcess([`--jevitate-owner=${owner}@1`]);
-    await waitFor(() => p.pid !== undefined && processAlive(p.pid));
     const table = restricted(() => (p.pid === undefined ? [] : [p.pid]));
+    await waitForMarked(table, 1);
     const r = terminateOwnBrowsersSync({ table, ownerPid: owner, graceMs: 2000 });
     expect(r.roots).toEqual([p.pid]);
     await waitFor(() => p.exitCode !== null || p.signalCode !== null);

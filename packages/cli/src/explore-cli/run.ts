@@ -24,10 +24,8 @@ import { EXIT_CODES } from "../exit-codes.js";
 import { nonNegativeIntArg } from "../cli-args.js";
 import { formatMissionHuman, formatMultiRunHuman } from "../cli-output.js";
 import { resolveExploreAllowlist, type ServerLogOptions } from "../explore-api.js";
-import { parseLogSourceSpecs, LogSourceSpecError } from "../log-sources.js";
-import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "../log-correlation.js";
-import { LogClassesError, loadLogClassRules } from "../log-classes.js";
-import { parseCorrelationHeaders, parseLogIdPatterns } from "../log-trace.js";
+import { LogSourceSpecError } from "../log-sources.js";
+import { LogClassesError } from "../log-classes.js";
 import { LogSpecError } from "../log-lines.js";
 import { MultiRunArgsError, projectPersonaFor, resolveMultiRunPlan, wantsMultiRun, type Persona } from "../multi-run.js";
 import { authExpiredResult, ensurePersonaSession, LoginArgsError, parseAuthCheck, type AuthCheck, type AuthExpiredResult } from "../persona-login.js";
@@ -56,7 +54,7 @@ import { runAdversarialStrategy } from "./adversarial-strategy.js";
 import { runUsabilityStrategy } from "./usability-strategy.js";
 import { runFeatureStrategy } from "./feature-strategy.js";
 import { runGoalStrategy } from "./goal-strategy.js";
-import { AUTH_PREFLIGHT_TIMEOUT_MS, SWEEP_OWNED, fixtureBoundUrlRoot, type ExploreOpts, type ExploreRunContext } from "./shared.js";
+import { AUTH_PREFLIGHT_TIMEOUT_MS, SWEEP_OWNED, fixtureBoundUrlRoot, serverLogOptionsFromFlags, type ExploreOpts, type ExploreRunContext } from "./shared.js";
 
 /**
  * Registers `jevitate explore` (every strategy: goal, coverage, exploratory, adversarial, usability, feature, multi-run).
@@ -559,42 +557,17 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       // same way, though a UX run's own outcome stays advisory (a server-log defect is still reported,
       // never gates the exit code — the same rule as every other UX finding).
       let serverLog: ServerLogOptions | undefined;
-      if (o.logSource.length > 0 || o.logDefect.length > 0) {
-        try {
-          const sources = parseLogSourceSpecs(o.logSource, o.allowLogCmd ?? false);
-          const logDefect = parseLogDefectSpecs(o.logDefect);
-          const logIgnore = parseLogIgnoreSpecs(o.logIgnore);
-          const logScope = parseLogScopeSpecs(o.logScope);
-          const correlationHeaders = parseCorrelationHeaders(o.logCorrelationHeader);
-          const idPatterns = parseLogIdPatterns(o.logIdPattern);
-          // #422: the project's .jevitate/log-classes.json, validated before any browser opens.
-          const logClasses = loadLogClassRules();
-          serverLog = {
-            sources,
-            logDefect,
-            allowLogCmd: o.allowLogCmd ?? false,
-            quietOk: o.logQuietOk,
-            logIgnore,
-            logScope,
-            correlationHeaders,
-            idPatterns,
-            logClasses,
-            ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
-          };
-        } catch (err) {
-          if (err instanceof LogSourceSpecError || err instanceof LogSpecError || err instanceof LogClassesError) {
-            emitExplore(fail(err.code, err.message));
-            return;
-          }
-          throw err;
-        }
-      }
-      if (o.logTriage === true) {
-        if (serverLog === undefined) {
-          emitExplore(fail("E_EXPLORE_ARGS", "--log-triage triages the run's backend and browser signals: it needs at least one --log-source"));
+      try {
+        // The one builder every surface shares (`explore-cli/shared.ts`): spec shape, the
+        // --allow-log-cmd gate, matcher regexes and --log-triage's source requirement, all here
+        // before any browser opens.
+        serverLog = serverLogOptionsFromFlags(o);
+      } catch (err) {
+        if (err instanceof LogSourceSpecError || err instanceof LogSpecError || err instanceof LogClassesError || err instanceof GoalRunFlagError) {
+          emitExplore(fail(err.code, err.message));
           return;
         }
-        serverLog = { ...serverLog, triage: {} };
+        throw err;
       }
       const withServerLog = serverLog === undefined ? {} : { serverLog };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.

@@ -1,4 +1,4 @@
-import { GENERATED_BUILT_AT, GENERATED_COMMIT } from "./build-info.generated.js";
+import { GENERATED_BUILT_AT, GENERATED_COMMIT, GENERATED_TREE } from "./build-info.generated.js";
 import { readCliVersion } from "./version.js";
 
 /**
@@ -32,6 +32,7 @@ export interface EngineInfo {
 // reading these through the guards below is safe either way.
 declare const __JEVITATE_BUILD_COMMIT__: string;
 declare const __JEVITATE_BUILT_AT__: string;
+declare const __JEVITATE_BUILD_TREE__: string;
 
 function bundledCommit(): string | undefined {
   return typeof __JEVITATE_BUILD_COMMIT__ !== "undefined" ? __JEVITATE_BUILD_COMMIT__ : undefined;
@@ -39,6 +40,31 @@ function bundledCommit(): string | undefined {
 
 function bundledBuiltAt(): string | undefined {
   return typeof __JEVITATE_BUILT_AT__ !== "undefined" ? __JEVITATE_BUILT_AT__ : undefined;
+}
+
+function bundledTree(): string | undefined {
+  return typeof __JEVITATE_BUILD_TREE__ !== "undefined" ? __JEVITATE_BUILD_TREE__ : undefined;
+}
+
+/**
+ * The git tree this build was made from, short hash or `"unknown"` (#534). Kept out of
+ * `EngineInfo` (and so out of every result envelope's schema): it is for `--version`, where it ties
+ * a build packed from a dev commit to the staging/main merge commit that released it, since all
+ * three share one tree (`git rev-parse --short <commit>^{tree}`).
+ */
+export function currentBuildTree(): string {
+  return bundledTree() ?? GENERATED_TREE;
+}
+
+/**
+ * `--version`'s display string: the published semver alone when the build could determine
+ * neither commit nor build time, else `x.y.z (commit <sha>, tree <tree>, built <iso>)`. The
+ * tree part is omitted (never fabricated) when it is `"unknown"`.
+ */
+export function formatVersion(engine: EngineInfo, tree: string = currentBuildTree()): string {
+  if (engine.commit === "unknown" && engine.builtAt === "unknown") return engine.version;
+  const treePart = tree === "unknown" ? "" : `, tree ${tree}`;
+  return `${engine.version} (commit ${engine.commit}${treePart}, built ${engine.builtAt})`;
 }
 
 /** This build's identity: the published version plus which commit/build produced it. */

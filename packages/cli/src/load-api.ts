@@ -1,4 +1,5 @@
-import { FsJourneyStore, JourneyRegistry, deriveParamSchema, secretParamValues, validateParams } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, deriveParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
+import { createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import type { SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
@@ -121,7 +122,12 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       );
       // #400: a load iteration means the same as a `journey run` — the Journey's end state and
       // each step's `expectRequests` are judged, so a replay whose checks fail is not an ok run.
-      const outcomeChecks = new JourneyOutcomeChecks(session.page, journey, { secrets: secretParamValues(journey, opts.params) });
+      const outcomeChecks = new JourneyOutcomeChecks(session.page, journey, {
+        secrets: secretParamValues(journey, opts.params),
+        // #543: http end-state checks request only origins in this run's allowlist.
+        httpProbe: createHttpProbe({ allowlist: allowedOrigins }),
+        resolveRef: httpCheckRefs({ params: opts.params, secretParams: secretParamNames(journey, opts.params) }),
+      });
       const observer = outcomeChecks.observer();
       const interpreter = observer === undefined ? new RecordingInterpreter({ fixtureBaseDir }) : new RecordingInterpreter({ observer, fixtureBaseDir });
       const runner = new JourneyRunner(actor, interpreter);
