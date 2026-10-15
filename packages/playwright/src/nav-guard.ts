@@ -1,5 +1,5 @@
 import { clock } from "@jevitate/domain";
-import type { BrowserContext, Request, Route } from "playwright";
+import type { BrowserContext, Page, Request, Response, Route } from "playwright";
 
 /**
  * #521 (option A): one navigation the guard stopped because its target origin is not one of the
@@ -46,6 +46,14 @@ function httpOrigins(entries: readonly string[]): Set<string> {
  * settle. Every other request (subresources, fetch/XHR, allowlisted navigations) goes on with
  * `route.fallback()`, so it composes with `ReadOnlyGuard`'s page route (page routes run first).
  *
+ * A page that redirects BY SCRIPT off the allowlist while it loads (a `location.href` in its HTML)
+ * starts the blocked navigation before its own `DOMContentLoaded`/`load`; Chromium then never reports
+ * those lifecycle events for the document (even after the 204 cancels the navigation), so a plain
+ * `page.goto` waiting for them would hang until its timeout. `arm` therefore wraps each page's `goto`:
+ * for `"load"`/`"domcontentloaded"` it navigates to `"commit"`, then waits for the lifecycle event
+ * OR — once the guard blocked a main-frame navigation of that page — for the document's own ready
+ * state in the page. `"commit"`/`"networkidle"` gotos are untouched (they do not depend on it).
+ *
  * Limits (docs/design/allowed-origins.md): a server redirect is invisible to `route` (only the first
  * URL of a chain is routed), so the post-settle URL check stays the enforcement; and routing turns off
  * the context's HTTP cache.
@@ -53,6 +61,8 @@ function httpOrigins(entries: readonly string[]): Set<string> {
 export class NavigationGuard {
   readonly #origins: Set<string>;
   #blocked: BlockedNavigation[] = [];
+  /** Per page: callbacks run when the guard blocks a main-frame navigation of that page. */
+  readonly #mainBlockWaiters = new WeakMap<Page, Set<() => void>>();
   readonly #handler = (route: Route, request: Request): Promise<void> => this.#route(route, request);
 
   /** `allowedOrigins` + `baseUrl` are the authorized origins (as for the geolocation grant). */
@@ -61,7 +71,33 @@ export class NavigationGuard {
   }
 
   async arm(context: BrowserContext): Promise<void> {
+    for (const page of context.pages()) this.#wrapGoto(page);
+    context.on("page", (page) => this.#wrapGoto(page));
     await context.route("**/*", this.#handler);
+  }
+
+  /** Makes `page.goto` survive a script redirect the guard blocks while the document loads (see class doc). */
+  #wrapGoto(page: Page): void {
+    const goto = page.goto.bind(page);
+    const wrapped = async (url: string, options: Parameters<Page["goto"]>[1] = {}): Promise<Response | null> => {
+      const waitUntil = options.waitUntil ?? "load";
+      if (waitUntil !== "load" && waitUntil !== "domcontentloaded") return goto(url, options);
+      let onBlocked = (): void => undefined;
+      const blocked = new Promise<void>((resolve) => (onBlocked = resolve));
+      const waiters = this.#mainBlockWaiters.get(page) ?? new Set<() => void>();
+      this.#mainBlockWaiters.set(page, waiters);
+      waiters.add(onBlocked);
+      try {
+        const response = await goto(url, { ...options, waitUntil: "commit" });
+        const lifecycle = page.waitForLoadState(waitUntil, options.timeout === undefined ? {} : { timeout: options.timeout });
+        lifecycle.catch(() => undefined); // it may lose the race below and reject later on its timeout
+        await Promise.race([lifecycle, blocked.then(() => documentReady(page, waitUntil))]);
+        return response;
+      } finally {
+        waiters.delete(onBlocked);
+      }
+    };
+    page.goto = wrapped as Page["goto"];
   }
 
   /** The navigations stopped since the last drain, oldest first; the record is then emptied. */
@@ -78,7 +114,18 @@ export class NavigationGuard {
       return;
     }
     this.#blocked.push({ url: strippedUrl(request.url()), at: clock.now(), frame });
+    if (frame === "main") this.#notifyMainBlocked(request);
     await route.fulfill({ status: 204, body: "" }).catch(() => undefined);
+  }
+
+  #notifyMainBlocked(request: Request): void {
+    let page: Page;
+    try {
+      page = request.frame().page();
+    } catch {
+      return; // a popup's first navigation: no page yet, so no goto of it is waiting
+    }
+    for (const waiter of this.#mainBlockWaiters.get(page) ?? []) waiter();
   }
 
   /** Which frame an off-allowlist http(s) navigation is in, or null when `request` is not one. */
@@ -99,4 +146,23 @@ export class NavigationGuard {
       return "main";
     }
   }
+}
+
+/**
+ * Resolves once `page`'s current document reached `state` by its own `document.readyState` (the
+ * lifecycle Chromium no longer reports after a blocked script redirect). A document replaced
+ * meanwhile (an allowed navigation) ends the wait too: that goto's document is gone.
+ */
+async function documentReady(page: Page, state: "load" | "domcontentloaded"): Promise<void> {
+  await page
+    .evaluate((s) => {
+      // BROWSER CODE
+      const ready = (): boolean => (s === "load" ? document.readyState === "complete" : document.readyState !== "loading");
+      if (ready()) return undefined;
+      return new Promise<void>((resolve) => {
+        if (s === "load") window.addEventListener("load", () => resolve(), { once: true });
+        else document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+      });
+    }, state)
+    .catch(() => undefined);
 }
