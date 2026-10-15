@@ -6,7 +6,7 @@
 
 import { redactUrl } from "@jevitate/ai-core";
 import type { PageSegment, RecordedStep, Recording, Step, TargetDescriptor } from "@jevitate/recording";
-import { actionKey, type FrontierOp } from "../../coverage/fingerprint.js";
+import { actionKey, controlIdentity, type FrontierOp } from "../../coverage/fingerprint.js";
 import { Frontier } from "../../coverage/frontier.js";
 import { targetCandidates, toPath, type Control, type Snapshot, type TargetOp } from "../../index.js";
 
@@ -41,6 +41,8 @@ export function enqueueFrom(
   controls: readonly Control[],
   withheld: (control: Control) => boolean,
   inRegionOnly = false,
+  /** #519: collects the identity of every out-of-region candidate skipped (distinct across states). */
+  outOfRegionSeen?: Set<string>,
 ): number {
   let outOfRegion = 0;
   // A disabled control can never be acted on — never enqueue it; nor one the safety policy refuses (#186).
@@ -48,6 +50,7 @@ export function enqueueFrom(
     // #519: with a scope region, only its controls are frontier candidates; the rest are counted and reported.
     if (inRegionOnly && control.inRegion !== true) {
       outOfRegion += 1;
+      outOfRegionSeen?.add(controlIdentity(control));
       continue;
     }
     if (withheld(control)) continue;

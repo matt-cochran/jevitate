@@ -100,7 +100,8 @@ export interface FrontierContext {
   /** #519: a scope region is declared — the frontier takes in-region controls only. */
   readonly regionDeclared: boolean;
   readonly regionSpec: string;
-  outOfRegionControls: number;
+  /** #519: identities of the distinct out-of-region click candidates the frontier skipped. */
+  readonly outOfRegionSeen: Set<string>;
   stepsWithoutRegion: number;
 }
 
@@ -139,7 +140,7 @@ export function createFrontierContext(
   ctx.timings = [];
   ctx.regionDeclared = (params.scopeRegions?.length ?? 0) > 0;
   ctx.regionSpec = params.scopeRegionSpec ?? "(declared region)";
-  ctx.outOfRegionControls = 0;
+  ctx.outOfRegionSeen = new Set<string>();
   ctx.stepsWithoutRegion = 0;
   ctx.takeSnapshot = async (): Promise<Snapshot> => {
     const p = await perceive(ctx.sessions.page, {
@@ -267,7 +268,7 @@ export function createFrontierContext(
       ctx.sufficiencyThresholds,
     ),
     scope: { routeGlobs: ctx.routeGlobs, outOfScopeTransitions: ctx.outOfScopeTransitions, departures: ctx.departures.slice(0, ctx.MAX_LISTED_DEPARTURES),
-      ...(ctx.regionDeclared ? { region: { spec: ctx.regionSpec, outOfRegionControls: ctx.outOfRegionControls, stepsWithoutRegion: ctx.stepsWithoutRegion } } : {}),
+      ...(ctx.regionDeclared ? { region: { spec: ctx.regionSpec, outOfRegionControls: ctx.outOfRegionSeen.size, stepsWithoutRegion: ctx.stepsWithoutRegion } } : {}),
     },
   });
 

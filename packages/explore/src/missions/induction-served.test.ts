@@ -188,8 +188,8 @@ describe("runInductionMission — a declared scope region filters the frontier (
     "reports the out-of-region controls it skipped",
     async () => {
       const result = await run([{ testId: "panel" }], "testId=panel");
-      // Counted per visited state (the button is skipped again on the state the in-region click reaches).
-      expect(result.coverage.scope.region?.outOfRegionControls).toBeGreaterThanOrEqual(1);
+      // Distinct controls: the one outside button, however many states it was skipped on.
+      expect(result.coverage.scope.region?.outOfRegionControls).toBe(1);
     },
     30_000,
   );

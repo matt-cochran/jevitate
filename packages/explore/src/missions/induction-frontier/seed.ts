@@ -146,7 +146,7 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
   ctx.seedRecording = { version: "1", site: ctx.site, pages: [] };
   ctx.statePaths.set(ctx.currentFingerprint, ctx.seedRecording);
   ctx.seedCandidates = targetCandidates(ctx.snap.controls, { ops: FRONTIER_OPS, enabledOnly: true }).length;
-  ctx.outOfRegionControls += enqueueFrom(ctx.frontier, ctx.currentFingerprint, ctx.seedRecording, ctx.snap.controls, (c) => ctx.withheld(c, ctx.snap), ctx.regionDeclared);
+  enqueueFrom(ctx.frontier, ctx.currentFingerprint, ctx.seedRecording, ctx.snap.controls, (c) => ctx.withheld(c, ctx.snap), ctx.regionDeclared, ctx.outOfRegionSeen);
   // #149: checked on the seed page too — a defect that only shows up on first paint, never revisited.
   await ctx.guard(ctx.checkOverflow(ctx.currentFingerprint, ctx.snap.url, withSeed(ctx.seedRecording, params.seedUrl)));
   return null;
