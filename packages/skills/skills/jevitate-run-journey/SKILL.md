@@ -110,6 +110,9 @@ artifact; your job is to find the right one and run it with the right params.
 
 ## Promoting a Journey
 
+- Before handing a Journey over, follow `jevitate-promotion-ready`: link its job and persona,
+  prove it last, and pass `jevitate journey review <id> --strict` (0 ⚠). That skill has the
+  owner's ordered approval commands.
 - Before asking the human to promote, give them the review sheet:
   `jevitate journey review <id> --markdown` (MCP `review_journey`) — steps,
   side effects (write requests, risky controls, origins), inputs by name,
