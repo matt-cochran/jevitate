@@ -36,6 +36,14 @@ export interface JourneyMetadata {
    * `replay-target-not-found` a logged-out replay would otherwise hit deep into the steps.
    */
   requiresAuth?: boolean;
+  /**
+   * #542 — the normalized origins the Journey was authored against when that was more than its own
+   * site (a split-origin app: UI on one origin, API on another). A replay's allowlist is the union of
+   * the recorded site (or the environment's origins), these, and `journey run|verify --allow`; it is
+   * what lets `journey verify --mutate` block a step's cross-origin write. Absent when the authoring
+   * allowlist was only the site's own origin. Under `--env`/`--base-url` these are NOT remapped.
+   */
+  allowedOrigins?: string[];
   /*
    * #246 intent — every field optional and additive: a Journey without them validates and runs
    * exactly as before. Documentation for people, demos and models; nothing here changes a replay.
@@ -315,6 +323,7 @@ export const JourneySchema: ZodType<Journey> = z.object({
     authoredBy: z.enum(["human-demonstration", "jev-driven"]).optional(),
     createdAtIso: z.string(),
     requiresAuth: z.boolean().optional(),
+    allowedOrigins: z.array(z.string().max(2048)).max(50).optional(),
     goal: TEXT.optional(),
     persona: z.string().max(500).optional(),
     role: z.string().max(200).optional(),

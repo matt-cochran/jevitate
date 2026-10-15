@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
+import { normalizeAllowlist } from "@jevitate/explore";
 import type { Journey } from "@jevitate/journey";
 import type { Recording } from "@jevitate/recording";
 import { ENVIRONMENTS_FILE, findProjectDir, type LayoutDeps } from "./project-dir.js";
@@ -436,4 +437,22 @@ export function environmentFromFlags(
     ...(seams.environmentsFile === undefined ? {} : { environmentsFile: seams.environmentsFile }),
     ...(seams.targetsFile === undefined ? {} : { targetsFile: seams.targetsFile }),
   });
+}
+
+/** #542: `--allow <origin>` (repeatable) for a replay: extra origins it may reach and block writes on. */
+export function withReplayAllowFlag(cmd: Command): Command {
+  return cmd.option(
+    "--allow <origin>",
+    "an extra origin the replay may reach, e.g. the API of a split-origin app (repeatable; added to the recorded site, the environment's origins and the Journey's metadata.allowedOrigins)",
+    (v: string, prev: string[]) => [...prev, v],
+    [] as string[],
+  );
+}
+
+/** #542: the normalized origins of `--allow`; an entry that is not an http(s) origin is refused (never silently dropped). */
+export function replayAllowFromFlags(allow: readonly string[]): string[] {
+  const origins = normalizeAllowlist(allow);
+  const bad = allow.filter((a) => normalizeAllowlist([a]).length === 0);
+  if (bad.length > 0) throw new EnvironmentArgsError(`--allow: not an http(s) origin: ${bad.join(", ")}`);
+  return origins;
 }

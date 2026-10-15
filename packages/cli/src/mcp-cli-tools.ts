@@ -391,7 +391,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         fixtureIdentity: FIXTURE_IDENTITY,
         ...ENVIRONMENT,
       },
-      omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {

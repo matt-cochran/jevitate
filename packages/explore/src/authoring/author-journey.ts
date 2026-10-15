@@ -9,6 +9,7 @@ import type { Bounds, StopReason } from "../bounds.js";
 import type { SafetyConfig } from "../safety.js";
 import type { RunOutcome } from "../conversation.js";
 import type { SuccessCheck, SuccessCheckResult } from "../success-checks.js";
+import { normalizeAllowlist } from "../authorized-targets.js";
 import { deriveStepExpectations } from "./step-expectations.js";
 import { autoDecidePostdoc } from "./auto-decide.js";
 import { clock, type MissionFailure } from "@jevitate/domain";
@@ -230,6 +231,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     authoredBy: "jev-driven",
     createdAtIso: clock.nowIso(),
     endState,
+    ...authoredAllowedOrigins(req),
     ...(secretParams.length === 0 ? {} : { parameters: secretParams }),
   };
 
@@ -240,6 +242,16 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     takes: { requested: takes, run: takes, succeeded: authoringTakes.length },
     ...(corroborating.length === 0 ? {} : { corroboratingTakes: corroborating }),
   };
+}
+
+/**
+ * #542: the authoring allowlist's origins as `metadata.allowedOrigins` — only when it reaches beyond
+ * the start URL's own origin (otherwise the Journey stays byte-identical to before).
+ */
+function authoredAllowedOrigins(req: AuthorJourneyRequest): { allowedOrigins?: string[] } {
+  const origins = normalizeAllowlist(req.allowlist);
+  const own = normalizeAllowlist([req.startUrl]);
+  return origins.some((o) => !own.includes(o)) ? { allowedOrigins: origins } : {};
 }
 
 /** The default take: the goal mission in process, on the request's own actor. */

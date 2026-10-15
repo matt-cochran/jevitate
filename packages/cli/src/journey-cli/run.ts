@@ -21,11 +21,11 @@ import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFla
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
 import { withEngine } from "../engine.js";
 import { type EmulationSpec } from "@jevitate/playwright";
-import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 
 /** Registers `jevitate journey run`. */
 export function registerJourneyRun(journey: Command, program: Command, deps: CliDeps): void {
-  withScreenshotsFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true })))
+  withScreenshotsFlag(withReplayAllowFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true }))))
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -57,7 +57,9 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where the Journey runs (unknown env / bad file → 64, nothing opened).
       let environment: ResolvedJourneyEnvironment | undefined;
+      let allow: string[];
       try {
+        allow = replayAllowFromFlags(this.opts<{ allow: string[] }>().allow);
         environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
       } catch (err) {
         if (!isEnvironmentError(err)) throw err;
@@ -216,6 +218,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           ...(actionDeltas === true ? { actionDeltas: true } : {}),
           ...(stepResponseTimeout === undefined ? {} : { stepResponseTimeoutMs: stepResponseTimeout }),
           ...(environment === undefined ? {} : { environment }),
+          ...(allow.length === 0 ? {} : { allow }),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
           // #247: under an environment, its allowed origins.
           fixtures: (site) => {
