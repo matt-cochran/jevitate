@@ -17,7 +17,8 @@ Build and test once, then promote the same bytes (#534). Versioning goes through
 | --- | --- | --- |
 | `dev` (push) | full suite + 3-OS pool, then packs both packages into the artifact `jevitate-<tree hash>` | the **release candidate** (not published) |
 | `staging` (merge) | promotion PR passes by reuse; Release publishes the tree's tarballs | `next` |
-| `main` (merge, or a `vX.Y.Z` tag) | promotion PR passes by reuse; Release moves the dist-tag, tags, GitHub release | `latest` |
+| `main` (merge) | promotion PR passes by reuse; Release reports "ready: push the tag" | (none) |
+| `vX.Y.Z` tag on `main` | Release moves the dist-tag, tags, GitHub release | `latest` |
 
 A dev squash commit and the staging/main merge commits that promote it have different SHAs but the
 same **git tree**, so the tree hash names the build everywhere: the artifact is
@@ -41,12 +42,17 @@ same **git tree**, so the tree hash names the build everywhere: the artifact is
 4. **Dogfood the candidate:** `npm install -g @jevitate/cli@next && jevitate --version` (check the
    tree), then one no-key run (`jevitate explore --strategy adversarial --url <a local app> --fake-ai`).
    A bug found here needs a new patch version: a version on npm can't be replaced.
-5. **Promote `staging → main`.** On the merge, Release checks both versions are on npm and runs
-   `npm dist-tag add <pkg>@x.y.z latest` for both: no rebuild, no republish. Then it pushes
-   `@jevitate/cli@x.y.z`, `jevitate@x.y.z` and `vx.y.z` on the merge commit and creates the
-   **Jevitate vx.y.z** GitHub release from the root `CHANGELOG.md` section. Pushing a `vX.Y.Z` tag on
-   `main` by hand does the same (it is validated: `v` + both packages' version, on `main`, no
-   pending changesets) and is a no-op once done.
+5. **Promote `staging → main`, then tag to release.** The merge only reports "ready: push the
+   tag": prod is an explicit act. Push the tag on `main`:
+
+   ```bash
+   git fetch origin && git tag -a vX.Y.Z -m vX.Y.Z origin/main && git push origin vX.Y.Z
+   ```
+
+   The tag is validated (`v` + both packages' version, on `main`, no pending changesets). Release
+   checks both versions are on npm and runs `npm dist-tag add <pkg>@x.y.z latest` for both: no
+   rebuild, no republish. Then it pushes `@jevitate/cli@x.y.z` and `jevitate@x.y.z` and creates the
+   **Jevitate vx.y.z** GitHub release from the root `CHANGELOG.md` section. Re-pushing is a no-op.
 6. **Verify:** `npm view @jevitate/cli dist-tags` shows `latest: x.y.z`; `npm install -g
    @jevitate/cli && jevitate --version`.
 7. **Back-merge `main` into `dev`** (next section).
@@ -134,7 +140,7 @@ on manual dispatch. `plan` (`scripts/ci/release-plan.mjs`) picks one mode:
 | Mode | When | What runs |
 | --- | --- | --- |
 | `next` | `staging`, no pending changesets, a package's version isn't on npm | download + verify the tree's artifact (or `build` it), `npm publish --tag next` |
-| `latest` | `main`, a `vX.Y.Z` tag, or a manual run with `publish` on `main`, no pending changesets | `npm dist-tag add … latest` (publishing the artifact first only if npm lacks the version), then tags and GitHub release |
+| `latest` | a `vX.Y.Z` tag, or a manual run with `publish` on `main`, no pending changesets | `npm dist-tag add … latest` (publishing the artifact first only if npm lacks the version), then tags and GitHub release |
 | `version` | `main`, `.changeset/*.md` pending | `changeset version`, push `changeset-release/main`, print how to open the PR |
 | `none` | otherwise (incl. a manual run without `publish`) | nothing |
 
@@ -152,7 +158,7 @@ the exact version (the verify step checks this).
 On npmjs.com, **each** package (`@jevitate/cli` and `jevitate`) has a Trusted Publisher under
 **Settings → Trusted Publishers**: GitHub Actions, `matt-cochran` / `jevitate`, workflow
 `release.yml`, no environment, publish allowed, **and dist-tag management allowed**: the merge to
-`main` moves `latest` with `npm dist-tag add` over the same OIDC exchange. Without that permission
+The tag run moves `latest` with `npm dist-tag add` over the same OIDC exchange. Without that permission
 the `npm` job fails with "Could not move latest"; move it by hand (above) until it is enabled. A new
 trusted publisher stays "pending validation" until its first OIDC publish. Don't add an
 `NPM_TOKEN` secret: OIDC makes it unnecessary.

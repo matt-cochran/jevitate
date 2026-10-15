@@ -23,10 +23,14 @@ describe("planRelease (#534)", () => {
     expect(planRelease({ ...base, pending: 2 }).mode).toBe("none");
   });
 
-  it("main moves latest; it publishes only when npm lacks the version", () => {
-    const main = { ...base, refName: "main" };
-    expect(planRelease({ ...main, onNpm: { cli: true, alias: true } })).toMatchObject({ mode: "latest", needsArtifact: false });
-    expect(planRelease(main)).toMatchObject({ mode: "latest", needsArtifact: true });
+  it("a push to main never promotes: it reports the tag to push", () => {
+    expect(planRelease({ ...base, refName: "main", onNpm: { cli: true, alias: true } })).toMatchObject({ mode: "none", reason: expect.stringMatching(/push the tag/) });
+  });
+
+  it("a tag moves latest; it publishes only when npm lacks the version", () => {
+    const tag = { ...base, refType: "tag", refName: "v1.2.3" };
+    expect(planRelease({ ...tag, onNpm: { cli: true, alias: true } })).toMatchObject({ mode: "latest", needsArtifact: false });
+    expect(planRelease(tag)).toMatchObject({ mode: "latest", needsArtifact: true });
   });
 
   it("a vX.Y.Z tag is the main channel", () => {

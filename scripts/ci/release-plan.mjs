@@ -5,11 +5,12 @@
 //   version - main, changesets pending: `changeset version`, push changeset-release/main.
 //   next    - staging, a version npm doesn't have: publish the tree's tested tarballs with
 //             dist-tag `next` (the release candidate; `npm i -g @jevitate/cli@next`).
-//   latest  - main or a vX.Y.Z tag: point dist-tag `latest` at the version (published by the
-//             staging run), publishing the tested tarballs first only if npm lacks the version
+//   latest  - a pushed vX.Y.Z tag (or a manual run with `publish` on main): point dist-tag
+//             `latest` at the version (published by the staging run), publishing the tested tarballs first only if npm lacks the version
 //             (the staging step was skipped or failed); then package tags, vX.Y.Z and the
 //             GitHub release.
-//   none    - nothing to do.
+//   none    - nothing to do. A plain push to main never promotes: prod is the explicit tag push
+//             (maintainer decision, 0.15.0), so main only reports "ready: push vX.Y.Z".
 //
 // A manual run (workflow_dispatch) only acts with `publish` checked: it is the retry path.
 //
@@ -44,6 +45,9 @@ export function planRelease(f) {
   const missing = !f.onNpm.cli || !f.onNpm.alias;
   if (channel === "staging") {
     return missing ? { mode: "next", needsArtifact: true, reason: `${f.version} is not on npm: publish it as next` } : none(`${f.version} is already on npm`);
+  }
+  if (f.refType !== "tag" && f.event === "push") {
+    return none(`${f.version} is ready for prod: push the tag (git tag -a v${f.version} -m v${f.version} origin/main && git push origin v${f.version})`);
   }
   return {
     mode: "latest",
