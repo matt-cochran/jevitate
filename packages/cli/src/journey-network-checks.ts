@@ -1,7 +1,10 @@
 /**
  * A Journey's outcome checks, judged over its replay (#322, #400): the end state
  * (`metadata.endState`, plus an older Journey's `metadata.networkChecks`) after the last step, and
- * each step's `expectRequests` over the requests sent from the moment that step began. The SAME
+ * each step's `expectRequests` over the requests THAT step sent (#526: from the moment it began until
+ * it ended — a later step's request to the same endpoint is never the step's), judged as the step
+ * ends, once its own requests were answered (bounded), so the next step (a navigation) cannot
+ * abandon a write before its response is seen. The SAME
  * evaluator a live goal mission's verdict uses (`evaluateOutcomeChecks`: page checks on the final
  * page, one reload for the `reloadThen` checks, network checks over the page-monitor capture). A
  * replay whose steps all passed but whose outcome is absent is a failed run, never `ok`.
@@ -51,6 +54,16 @@ interface StepWindow {
   capture?: RequestCapture;
   /** When the step began (the page monitor's clock): a request started earlier is not the step's. */
   startedAt?: number;
+  /** #526: when the step's window closed (it ended, or the next step began): a request started later is not the step's. */
+  until?: number;
+  /** #526: the step's checks, judged as it ended (absent when no step end was reported). */
+  judged?: readonly JudgedCheck[];
+}
+
+/** #526: one check of a step, judged as the step ended. */
+interface JudgedCheck {
+  readonly result: SuccessCheckResult;
+  readonly slowStep?: SlowStepFinding;
 }
 
 export class JourneyOutcomeChecks {
@@ -96,19 +109,62 @@ export class JourneyOutcomeChecks {
    * Starts a step's request window as it begins (never changes the replay). #453: the window
    * RESTARTS each time the step runs again — a failed original attempt or a rejected heal probe's
    * requests never satisfy the expectations of the attempt that finally passed.
+   *
+   * #526: the window CLOSES when the step ends. Its checks are judged then, over the requests it
+   * sent: after the network settled (bounded) and, for a request still awaiting its response, after
+   * that response (bounded by the step's response timeout, #486) — before the next step acts, so a
+   * following navigation or write can neither abandon the step's request nor be counted for it.
    */
   observer(): StepObserver | undefined {
     if (this.#steps.length === 0) return undefined;
     return {
       beforeStep: async ({ index }) => {
+        const now = clock.now();
+        // A window still open (its step reported no end) closes as the next step begins.
+        for (const s of this.#steps) if (s.index !== index && s.startedAt !== undefined && s.until === undefined) s.until = now;
         const w = this.#steps.find((s) => s.index === index);
         if (w === undefined) return;
         const monitor = monitorFor(this.#page);
         if (w.capture !== undefined) monitor.stopCapture(w.capture);
-        w.startedAt = clock.now();
+        w.startedAt = now;
+        delete w.until;
+        delete w.judged;
         w.capture = monitor.startCapture();
       },
+      afterStep: async ({ index, outcome }) => {
+        const w = this.#steps.find((s) => s.index === index);
+        if (w?.capture === undefined || outcome !== "done") return;
+        // A step's write can be sent a moment after its action (a lazily loaded handler): let it go out.
+        await monitorFor(this.#page).waitSettled({ ceilingMs: SETTLE_CEILING_MS }).catch(() => undefined);
+        w.until = clock.now();
+        w.judged = await this.#judge(w);
+      },
     };
+  }
+
+  /** The step's checks over the requests it sent in its window (the capture stays live for their responses). */
+  async #judge(s: StepWindow, fallback?: RequestCapture): Promise<JudgedCheck[]> {
+    const window = s.capture ?? fallback;
+    if (window === undefined) return [];
+    const since = s.startedAt;
+    const until = s.until;
+    const out: JudgedCheck[] = [];
+    for (const c of s.checks) {
+      // #486: a request still awaiting its response (a cold start) is waited for, up to the bound.
+      out.push(
+        await evaluateNetworkCheckAwaiting(
+          c,
+          () => ({
+            requests: window
+              .sent()
+              .filter((q) => (since === undefined || (q.startedAt !== undefined && q.startedAt >= since)) && (until === undefined || (q.startedAt !== undefined && q.startedAt <= until))),
+            truncated: window.truncated,
+          }),
+          s.responseTimeoutMs ?? this.#responseTimeoutMs,
+        ),
+      );
+    }
+    return out;
   }
 
   #stopCaptures(monitor: ReturnType<typeof monitorFor>, capture: RequestCapture): void {
@@ -124,6 +180,14 @@ export class JourneyOutcomeChecks {
     this.#lastFailures = [];
     this.#slowSteps = [];
     if (!this.active) return replay();
+    // A step's window and verdict belong to one run.
+    for (const s of this.#steps) {
+      if (s.capture !== undefined) monitorFor(this.#page).stopCapture(s.capture);
+      delete s.capture;
+      delete s.startedAt;
+      delete s.until;
+      delete s.judged;
+    }
     const monitor = monitorFor(this.#page);
     await monitor.instrument();
     if (this.#end.some((c) => (c.kind === "page" || c.kind === "reloadThen") && c.assertion.kind === "flashed")) {
@@ -148,21 +212,11 @@ export class JourneyOutcomeChecks {
     const stepFailureSites: OutcomeCheckFailure[] = [];
     const stepFailureReasons: string[] = [];
     for (const s of this.#steps) {
-      // No window (an interpreter that reported no step boundaries): judged over the whole replay.
-      const window = s.capture ?? capture;
-      // A request still in flight when the step began (the previous step's write) finishes inside
-      // this window: only requests SENT from the step's start count.
-      const since = s.startedAt;
-      for (const [checkIndex, c] of s.checks.entries()) {
-        // #486: a request still awaiting its response (a cold start) is waited for, up to the bound.
-        const { result: r, slowStep } = await evaluateNetworkCheckAwaiting(
-          c,
-          () => ({
-            requests: window.sent().filter((q) => since === undefined || (q.startedAt !== undefined && q.startedAt >= since)),
-            truncated: window.truncated,
-          }),
-          s.responseTimeoutMs ?? this.#responseTimeoutMs,
-        );
+      // Judged as the step ended (#526); else now — over the whole replay when the interpreter
+      // reported no step boundaries. A request in flight when the step began (the previous step's
+      // write) finishes inside its window: only requests SENT within the window count.
+      const judged = s.judged ?? (await this.#judge(s, capture));
+      for (const [checkIndex, { result: r, slowStep }] of judged.entries()) {
         if (slowStep !== undefined) this.#slowSteps.push({ ...slowStep, step: s.index + 1 });
         if (r.passed) continue;
         stepFailureSites.push({ where: "step-request", step: s.index + 1, checkIndex, detail: `${r.check} — ${r.detail}` });
