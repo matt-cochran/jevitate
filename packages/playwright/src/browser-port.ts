@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { AdmissionRecord } from "./browser-pool.js";
+import type { BlockedNavigation } from "./nav-guard.js";
 import type { GeolocationSpec, ViewportSize } from "./emulation.js";
 import type { UnpackedExtension } from "./extensions.js";
 import type { ResourceLimits } from "./resource-governor.js";
@@ -37,6 +38,14 @@ export interface BrowserSession {
    * the 30s navigation timeout. Optional: a test double without it is never probed.
    */
   probeReachable?(url: string): Promise<string | null>;
+  /**
+   * #521: the off-allowlist navigations the navigation guard stopped since the last call (oldest
+   * first), then forgets them — a mission drains it after each settle and treats a `main` entry as
+   * a departure. Always `[]` for a session opened without `OpenOptions.blockOffAllowlistNavigation`.
+   * Optional: a test double that never arms the guard need not implement it (read it as
+   * `session.drainBlockedNavigations?.() ?? []`).
+   */
+  drainBlockedNavigations?(): readonly BlockedNavigation[];
   close(): Promise<void>;
 }
 
@@ -91,8 +100,22 @@ export interface OpenOptions extends BrowserLaunchOptions {
   storageState?: string;
   persistentProfile?: string;
   headless: boolean;
-  /** TODO(M3): inert until route-level enforcement lands — not yet a navigation guard. */
+  /**
+   * The session's authorized origins: scopes the geolocation grant (#329); not a network guard unless
+   * `blockOffAllowlistNavigation` is set — the acting origin is checked by the caller after each
+   * settle (redirects cannot be intercepted), and writes by `ReadOnlyGuard`; see docs/safety.md.
+   */
   allowedOrigins: string[];
+  /**
+   * #521 (opt-in, default false; mission sessions only — never login, record, Journey replays or
+   * demos): arm the navigation guard on the context before the first navigation (popups covered). A
+   * main-frame or subframe navigation to an http(s) origin outside `allowedOrigins` + `baseUrl` is
+   * answered `204` in the browser (the page stays put, no error page) and reported by
+   * `BrowserSession.drainBlockedNavigations`. Subresources and fetch/XHR are untouched; a server
+   * redirect still passes (the post-settle check remains the enforcement). Routing disables the
+   * context's HTTP cache.
+   */
+  blockOffAllowlistNavigation?: boolean;
   baseUrl: string;
   viewport?: ViewportSize;
   device?: string;
