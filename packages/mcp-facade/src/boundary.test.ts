@@ -59,6 +59,14 @@ test("0.10: facade serves the new allowlisted tools; connecting Journeeze stays 
   expect([...names].filter((n) => /approve/.test(n)).sort()).toEqual(["approve_action", "approve_demo"]);
 });
 
+test("#523: facade serves catalog_draft", () => {
+  expect(new Set(listToolNames()).has("catalog_draft")).toBe(true);
+});
+
+test("#523: catalog_draft is no approval — the only approve tools stay approve_action and approve_demo", () => {
+  expect(listToolNames().filter((n) => /approve/.test(n)).sort()).toEqual(["approve_action", "approve_demo"]);
+});
+
 test("ALLOWED_TOOLS and FORBIDDEN_TOOLS are disjoint and duplicate-free", () => {
   const allowed = [...ALLOWED_TOOLS] as string[];
   expect(new Set(allowed).size).toBe(allowed.length);

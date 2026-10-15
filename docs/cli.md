@@ -277,6 +277,32 @@ jevitate catalog analyze [options]
 | `--max-pairs <n>` | the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped |  |  |  |  |
 | `--real` | #435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only |  |  |  |  |
 
+### catalog draft
+
+```
+jevitate catalog draft [options] <kind> <id>
+```
+
+#523: add a DRAFT persona or job to the catalog (kind: persona | job) — personas.json / jobs.json, created when missing — so a Journey can link it now. Never approves (a person runs `persona|job approve` after review); an id the catalog already has is refused
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `kind` |  | yes |  |  |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--description <text>` | a persona: its description; a job: its goal |  |  |  |  |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--name <text>` | a persona: who they are (written as its role); a job: what the user wants to do (its motivation, "I want to …") |  |  | yes |  |
+| `--outcome <text>` | a job: what doing it lets them do ("so I can …"); default: a placeholder to write before approving |  |  |  |  |
+| `--trigger <text>` | a job: when it comes up ("When …"); default: a placeholder to write before approving |  |  |  |  |
+
 ### catalog export
 
 ```
@@ -312,6 +338,7 @@ the jobs × personas matrix (which have a promoted Journey), approved jobs with 
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
 | `--require-approvals` | #437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels) |  |  |  |  |
+| `--strict` | #523: exit 1 when a persona/job approval is stale, or a promoted Journey links a catalog entry that is not approved (a draft) or links no job / no persona — the repo-wide gate on what the review sheet flags |  |  |  |  |
 
 ## check
 

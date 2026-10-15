@@ -480,3 +480,92 @@ export function catalogEntryHash(kind: "persona" | "job", text: string | null, i
     return null; // not JSON / not a catalog file at that version: it does not hold the entry
   }
 }
+
+// ── #523: drafting a catalog entry ────────────────────────────────────────────────────────────
+
+/** #523: `catalog draft` refused: the id is already in the catalog (exit 64; nothing is written). */
+export class CatalogDraftExistsError extends Error {
+  readonly code = "E_CATALOG_DRAFT_EXISTS";
+}
+
+/** #523: `catalog draft` arguments the catalog cannot take (an id off the id rule, text too long, no project). */
+export class CatalogDraftArgsError extends Error {
+  readonly code = "E_CATALOG_DRAFT_ARGS";
+}
+
+export interface CatalogDraftInput {
+  readonly kind: "persona" | "job";
+  readonly id: string;
+  /** A persona's name (written as its `role`); a job's name (its motivation: "I want to [name]"). */
+  readonly name: string;
+  /** A persona's `description`; a job's `goal`. */
+  readonly description?: string;
+  /** A job's story parts; absent: a placeholder that says what to write before approving. */
+  readonly trigger?: string;
+  readonly outcome?: string;
+}
+
+export interface CatalogDraftResult {
+  readonly kind: "persona" | "job";
+  readonly id: string;
+  readonly status: "draft";
+  readonly file: string;
+  readonly contentHash: string;
+  /** What to do next: link it from a Journey, review it, and (a person, on the CLI) approve it. */
+  readonly next: { readonly link: string; readonly review: string; readonly approve: string };
+}
+
+/** #523: a job draft's story placeholders — schema-valid, and plainly not yet written. */
+export const DRAFT_TRIGGER_PLACEHOLDER = "(draft: say when this job comes up)";
+export const DRAFT_OUTCOME_PLACEHOLDER = "(draft: say what doing it lets them do)";
+
+function oneLine(text: string, what: string, max: number): string {
+  const t = text.trim();
+  if (t === "" || /[\r\n]/.test(t) || t.length > max) throw new CatalogDraftArgsError(`${what} must be one non-blank line of at most ${max} characters`);
+  return t;
+}
+
+/**
+ * #523: writes a DRAFT persona or job (no approval) into personas.json / the jobs file, creating the
+ * file when it does not exist. Never approves and never overwrites: an id the catalog already has is
+ * refused (`CatalogDraftExistsError`). The entry is validated as the catalog loader reads it before
+ * anything is written.
+ */
+export async function writeCatalogDraft(catalogDir: string | null, input: CatalogDraftInput): Promise<CatalogDraftResult> {
+  if (catalogDir === null) throw new CatalogDraftArgsError("no .jevitate/ project was found — run inside a project (jevitate init), or pass --dir");
+  if (!CATALOG_ID_RE.test(input.id)) throw new CatalogDraftArgsError(`<id> must be a catalog id (1-64 of [A-Za-z0-9._-], starting alphanumeric), got ${JSON.stringify(input.id)}`);
+  const loader = new CatalogLoader({ catalogDir, journeysDir: join(catalogDir, "journeys") });
+  const { kind, id } = input;
+  const next = {
+    link: `set metadata.${kind} to "${id}" in the Journey's file`,
+    review: `jevitate ${kind} review ${id}`,
+    approve: `jevitate ${kind} approve ${id} --reviewed-hash <the hash its review sheet shows>`,
+  };
+  if (kind === "persona") {
+    const role = oneLine(input.name, "--name", 200);
+    const description = input.description === undefined ? undefined : oneLine(input.description, "--description", 2000);
+    const { file: existing, personas } = await loader.loadPersonas();
+    if (personas.some((p) => p.id === id)) throw new CatalogDraftExistsError(`persona '${id}' already exists in ${existing} — link it, or pick another id (jevitate persona review ${id})`);
+    const file = existing ?? join(catalogDir, PERSONAS_FILE);
+    const fields: Record<string, unknown> = { role, ...(description === undefined ? {} : { description }) };
+    const persona = catalogPersona({ id, fields, slot: { form: "list", index: 0 } }, file);
+    const raw = existing === null ? [] : await readJsonFile(file);
+    const list = personaList(raw);
+    const nextRaw = list !== null ? (Array.isArray(raw) ? [...list, { name: id, ...fields }] : { ...(raw as Record<string, unknown>), personas: [...list, { name: id, ...fields }] }) : { ...(raw as Record<string, unknown>), [id]: fields };
+    await writeJsonFile(file, nextRaw);
+    return { kind, id, status: "draft", file, contentHash: persona.contentHash, next };
+  }
+  const motivation = oneLine(input.name, "--name", 500);
+  const goal = input.description === undefined ? undefined : oneLine(input.description, "--description", 2000);
+  const trigger = input.trigger === undefined ? DRAFT_TRIGGER_PLACEHOLDER : oneLine(input.trigger, "--trigger", 500);
+  const outcome = input.outcome === undefined ? DRAFT_OUTCOME_PLACEHOLDER : oneLine(input.outcome, "--outcome", 500);
+  const { file: existing, jobs } = await loader.loadJobs();
+  if (jobs.some((j) => j.id === id)) throw new CatalogDraftExistsError(`job '${id}' already exists in ${existing} — link it, or pick another id (jevitate job review ${id})`);
+  const file = existing ?? join(catalogDir, JOBS_FILE);
+  const entry = { id, trigger, motivation, outcome, ...(goal === undefined ? {} : { goal }) };
+  const job = catalogJob(entry, 0, file);
+  const raw = existing === null ? [] : await readJsonFile(file);
+  const list = jobList(raw, file);
+  await writeJsonFile(file, Array.isArray(raw) ? [...list, entry] : { ...(raw as Record<string, unknown>), jobs: [...list, entry] });
+  return { kind, id, status: "draft", file, contentHash: job.contentHash, next };
+}

@@ -114,6 +114,19 @@
     - flags=--max-pairs <n> required=true mandatory=false negate=false variadic=false default=null description=the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped
     - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only
 
+# catalog draft
+  description: #523: add a DRAFT persona or job to the catalog (kind: persona | job) — personas.json / jobs.json, created when missing — so a Journey can link it now. Never approves (a person runs `persona|job approve` after review); an id the catalog already has is refused
+  arguments:
+    - name=kind required=true variadic=false default=null
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--description <text> required=true mandatory=false negate=false variadic=false default=null description=a persona: its description; a job: its goal
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--name <text> required=true mandatory=true negate=false variadic=false default=null description=a persona: who they are (written as its role); a job: what the user wants to do (its motivation, "I want to …")
+    - flags=--outcome <text> required=true mandatory=false negate=false variadic=false default=null description=a job: what doing it lets them do ("so I can …"); default: a placeholder to write before approving
+    - flags=--trigger <text> required=true mandatory=false negate=false variadic=false default=null description=a job: when it comes up ("When …"); default: a placeholder to write before approving
+
 # catalog export
   description: #464: write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings; no media) as a Journeeze catalog bundle (bundle.json) under --out. Never uploads (publish journeeze) and never approves
   options:
@@ -131,6 +144,7 @@
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked report)
     - flags=--require-approvals required=false mandatory=false negate=false variadic=false default=null description=#437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels)
+    - flags=--strict required=false mandatory=false negate=false variadic=false default=null description=#523: exit 1 when a persona/job approval is stale, or a promoted Journey links a catalog entry that is not approved (a draft) or links no job / no persona — the repo-wide gate on what the review sheet flags
 
 # check
   description: CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
