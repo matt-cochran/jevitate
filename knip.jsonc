@@ -1,0 +1,43 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // An export used only inside its own file is not dead code; only exports nobody uses are reported.
+  "ignoreExportsUsedInFile": true,
+  // ffmpeg is a system binary scripts/render-demo.mjs shells out to (it checks for it itself).
+  "ignoreBinaries": ["ffmpeg"],
+  // Entries come from each package.json (main/bin map back to src through tsconfig outDir). Only
+  // @jevitate/cli is published; esbuild bundles every other package into it, so a private
+  // package's export used by another package counts as used.
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs", "scripts/**/*.test.mjs", "scripts/codemods/*.mjs", "test/**/*.ts"],
+      "project": ["scripts/**/*.mjs", "test/**/*.ts"]
+    },
+    "packages/*": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/cli": {
+      "entry": ["scripts/**/*.mjs"],
+      "project": ["src/**/*.ts"],
+      // Published runtime dependency: declared in package.json, kept EXTERNAL by build.mjs (native /
+      // loaded at runtime), so no source import is expected to resolve to it.
+      "ignoreDependencies": ["better-sqlite3"]
+    },
+    "packages/jevitate-cli-alias": {
+      "entry": ["bin/*.js"],
+      "project": ["bin/**/*.js"]
+    },
+    "apps/example-site": {
+      "entry": ["src/server.ts", "src/serve.ts"],
+      "project": ["src/**/*.ts"]
+    }
+  },
+  // The scripts API: these files are barrels re-exporting the programmatic surface
+  // (scripts/__snapshots__/api-surface.*.snapshot.txt pins it byte-for-byte), so their re-exports
+  // are intentionally public even when nothing in this repo imports them.
+  "ignoreIssues": {
+    "packages/cli/src/campaign-api.ts": ["exports", "types"],
+    "packages/cli/src/check-api.ts": ["exports", "types"],
+    "packages/cli/src/explore-api.ts": ["exports", "types"],
+    "packages/cli/src/ux-api.ts": ["exports", "types"]
+  }
+}
