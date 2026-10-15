@@ -11,3 +11,8 @@ function canonical(value: unknown): string {
 export function contentHash(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
 }
+
+/** SHA-256 of UTF-8 text as lowercase hex. */
+export function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}

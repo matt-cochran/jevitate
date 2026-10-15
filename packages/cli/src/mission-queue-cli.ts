@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isRecord } from "@jevitate/domain";
 import { Command, Option } from "commander";
 import { MISSION_STRATEGIES, QUEUED_SCREENSHOT_MODES } from "@jevitate/missions";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
@@ -19,9 +20,6 @@ import { callMcpTool, mcpErrorOf, mcpToolDeps, refusalFor } from "./mcp-cli-brid
 
 const QUEUE_DIR_HELP = "mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use)";
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 /**
  * A `get_mission_result` body's exit code (exit-codes.ts): a finished mission's own `exitCode`; a

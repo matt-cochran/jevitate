@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { isRecord } from "@jevitate/domain";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { LocatorHealthSummary } from "./check-types.js";
 import {
@@ -111,9 +112,6 @@ export function runLocatorHealth(
   return health.steps.length === 0 ? undefined : compactHealth(health);
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 async function readJson(path: string, what: string): Promise<unknown> {
   let raw: string;

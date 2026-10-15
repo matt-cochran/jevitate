@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { isNodeError } from "@jevitate/domain";
 import { JourneySchema, type Journey } from "@jevitate/journey";
 import { SourceValidationError } from "./errors.js";
 
@@ -41,14 +42,6 @@ export const SharedJourneyFileSchema = z.intersection(
   z.object({ declaredOrigins: z.array(z.string().url()).min(1) }).strict(),
 ) as unknown as z.ZodType<SharedJourneyFile>;
 
-function isNodeError(err: unknown, code: string): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === code
-  );
-}
 
 /**
  * Loads and validates `<cloneDir>/jevitate.json`. Missing/malformed/unknown

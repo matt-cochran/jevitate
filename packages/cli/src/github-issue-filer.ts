@@ -8,8 +8,8 @@ import {
   type CredentialStore,
   type RetryDeps,
 } from "@jevitate/ai-core";
+import { clock, isRecord } from "@jevitate/domain";
 import type { IssueFilerPort, IssueRef, NewIssue } from "@jevitate/domain";
-import { clock } from "@jevitate/domain";
 
 /**
  * The GitHub adapter for the domain's `IssueFilerPort` (owner ruling 3). It prefers the `gh` CLI
@@ -88,9 +88,6 @@ function markerToken(marker: string): string {
   return marker.replace(/^<!--\s*(?:jevitate|journeeze)-fingerprint:\s*/, "").replace(/\s*-->$/, "");
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 export class GitHubIssueFiler implements IssueFilerPort {
   readonly #exec: Exec;

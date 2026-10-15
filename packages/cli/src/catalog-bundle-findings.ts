@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { isRecord } from "@jevitate/domain";
 import { join, resolve } from "node:path";
 import { consolidate, runFromMissionResult, runFromUxReport, type ConsolidatedDefect, type RunBranch, type RunRecord } from "@jevitate/findings";
 import { contractRouteTemplate, uxFindingFingerprint } from "@jevitate/ux";
@@ -68,9 +69,6 @@ const RESERVED_ANCHORS: ReadonlySet<string> = new Set(["job_start", "job_end"]);
 const MAX_CONTROLS = 10;
 const MAX_FINDINGS = 5000;
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x !== "") : []);
 

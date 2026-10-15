@@ -18,7 +18,7 @@ import {
 } from "@jevitate/findings";
 import { formatUsageLine, sumUsage, usageCountsFrom, type UsageAggregate } from "@jevitate/ai-core";
 import { resolveDataDir } from "./data-dir.js";
-import { clock, matchesRunTags } from "@jevitate/domain";
+import { clock, isRecord, matchesRunTags } from "@jevitate/domain";
 
 /**
  * The programmatic surface behind `jevitate report` (#139), `jevitate diff` / `--baseline` (#138)
@@ -108,9 +108,6 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 const UX_REPORT = /^usability-.*\d{3}Z\.json$/;
 
