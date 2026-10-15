@@ -40,12 +40,20 @@ export function enqueueFrom(
   pathPrefix: Recording,
   controls: readonly Control[],
   withheld: (control: Control) => boolean,
-): void {
+  inRegionOnly = false,
+): number {
+  let outOfRegion = 0;
   // A disabled control can never be acted on — never enqueue it; nor one the safety policy refuses (#186).
   for (const { control } of targetCandidates(controls, { ops: FRONTIER_OPS, enabledOnly: true })) {
+    // #519: with a scope region, only its controls are frontier candidates; the rest are counted and reported.
+    if (inRegionOnly && control.inRegion !== true) {
+      outOfRegion += 1;
+      continue;
+    }
     if (withheld(control)) continue;
     frontier.push({ key: actionKey(fingerprint, control, "click"), fromFingerprint: fingerprint, pathPrefix, control, op: "click" });
   }
+  return outOfRegion;
 }
 
 /**

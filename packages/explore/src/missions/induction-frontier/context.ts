@@ -97,6 +97,11 @@ export interface FrontierContext {
   /** The last transition left the target scope — the next reset is a return after a departure. */
   departed: boolean;
   readonly seedRecording: Recording;
+  /** #519: a scope region is declared — the frontier takes in-region controls only. */
+  readonly regionDeclared: boolean;
+  readonly regionSpec: string;
+  outOfRegionControls: number;
+  stepsWithoutRegion: number;
 }
 
 /** The writable view of the run state, for the code that sets it up. */
@@ -132,9 +137,14 @@ export function createFrontierContext(
   ctx.lastTiming = undefined;
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   ctx.timings = [];
+  ctx.regionDeclared = (params.scopeRegions?.length ?? 0) > 0;
+  ctx.regionSpec = params.scopeRegionSpec ?? "(declared region)";
+  ctx.outOfRegionControls = 0;
+  ctx.stepsWithoutRegion = 0;
   ctx.takeSnapshot = async (): Promise<Snapshot> => {
     const p = await perceive(ctx.sessions.page, {
       maxCandidates: ctx.bounds.maxCandidates,
+      ...(ctx.regionDeclared ? { regions: params.scopeRegions! } : {}),
       ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
       ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
       ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
@@ -143,6 +153,7 @@ export function createFrontierContext(
     ctx.lastTiming = p.timing;
     ctx.seenHang.last = p.hang;
     ctx.timings.push(p.timing);
+    if (ctx.regionDeclared && p.snapshot.region?.matched === 0) ctx.stepsWithoutRegion += 1;
     return p.snapshot;
   };
   // No-progress watchdog (#114): every recorded step kicks it; every await on the page is guarded by
@@ -255,7 +266,9 @@ export function createFrontierContext(
       },
       ctx.sufficiencyThresholds,
     ),
-    scope: { routeGlobs: ctx.routeGlobs, outOfScopeTransitions: ctx.outOfScopeTransitions, departures: ctx.departures.slice(0, ctx.MAX_LISTED_DEPARTURES) },
+    scope: { routeGlobs: ctx.routeGlobs, outOfScopeTransitions: ctx.outOfScopeTransitions, departures: ctx.departures.slice(0, ctx.MAX_LISTED_DEPARTURES),
+      ...(ctx.regionDeclared ? { region: { spec: ctx.regionSpec, outOfRegionControls: ctx.outOfRegionControls, stepsWithoutRegion: ctx.stepsWithoutRegion } } : {}),
+    },
   });
 
   ctx.ended = (outcome: "scope-unreachable" | "stalled", failure: MissionFailure): InductionRunResult => ({
