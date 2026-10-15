@@ -12,7 +12,8 @@ import { RunScreenshots } from "./run-screenshots.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
 // #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
-useSkippingTime({ per: "all" });
+// #547: the page keeps the browser's own clock: page.clock replaces requestAnimationFrame before the pixel mask loads, and a capture then fails closed.
+useSkippingTime({ per: "all", pageClock: false });
 
 /**
  * #298 — a secret the app REVEALS during the run (a freshly minted API key on a one-time reveal

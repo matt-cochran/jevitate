@@ -165,7 +165,8 @@ describe("#255 CLI-mirroring MCP tools — the surface", () => {
 
 describe("#255 the Journey lifecycle over MCP", () => {
   // #304: Node and page time skip idle waits (replay polling, minimization timeouts, settle windows).
-  useSkippingTime();
+  // #547: the page keeps the browser's own clock: page.clock replaces requestAnimationFrame before the pixel mask loads, and a capture then fails closed.
+  useSkippingTime({ pageClock: false });
   it(
     "list → annotate (draft, then approve) → promote → demo (video + guide on disk)",
     async () => {
