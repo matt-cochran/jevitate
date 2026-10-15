@@ -24,6 +24,10 @@ behaviour changes).
 - **Build and test once per tree; staging publishes `next`; the tag push moves `latest` (#534).** A push to `dev` that passes the full suite uploads both packages as a release-candidate artifact named after the git tree. Promotion PRs into `staging` and `main` pass by reusing that run when their merge tree matches, and run the full suite otherwise. A merge to `staging` publishes the tested tarballs as `next`. A merge to `main` only reports "ready: push the tag"; prod is an explicit act. Pushing `vX.Y.Z` on `main` moves `latest` to the already-published version (no rebuild, no republish), pushes the package tags and creates the GitHub release. `staging` and `main` pushes no longer rerun CI. See RELEASING.md.
 - **`jevitate --version` prints the git tree hash** (`x.y.z (commit <sha>, tree <tree>, built <time>)`), so a build packed from a `dev` commit matches the `main` merge commit that released it (#534).
 
+### Fixed
+
+- **The pixel mask can't be fooled by a replaced `requestAnimationFrame` (#547).** It captures the browser's own `requestAnimationFrame`, `MutationObserver`, `getBoundingClientRect` and `Range.getClientRects` before any page script and uses only those, so a page that later swaps them (a polyfill, an animation library, its own test hooks) can't make a recorded frame show a secret unmasked. If a primitive was already replaced before the mask loaded, masking fails closed: the viewport is painted over, and screenshots and capture sessions are refused with `E_PIXEL_MASK` (reason `untrusted-primitive`).
+
 ### Internal
 
 - Opt-in live smoke tests now call the production OpenRouter and Jev clients (#531). `docs/testing.md` lists every opt-in live suite, and `pnpm test:live` runs them (#532). The pixel-mask video test checks every recorded frame on the real clock (#540).
