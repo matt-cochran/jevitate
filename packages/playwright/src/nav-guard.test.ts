@@ -32,6 +32,10 @@ function appHtml(path: string): string {
           fetch("${OTHER}/data").then((res) => res.json()).then((j) => j.ok === true, () => false),
         ]);
       </script></body></html>`;
+    case "/script-href":
+      return `<!doctype html><html><body><h1>Loading</h1><script>location.href = "${OTHER}/login?next=%2Fapp";</script></body></html>`;
+    case "/script-replace":
+      return `<!doctype html><html><body><h1>Loading</h1><script>location.replace("${OTHER}/login?next=%2Fapp");</script></body></html>`;
     case "/iframe":
       return `<!doctype html><html><body><iframe src="${OTHER}/page?embed=1"></iframe></body></html>`;
     default:
@@ -208,6 +212,27 @@ describe("navigation guard armed (blockOffAllowlistNavigation, real Chromium)", 
     });
     expect(drained).toEqual([`${OTHER}/page`]);
   });
+});
+
+/**
+ * A goto to a page that redirects by script off the allowlist must settle on the original document:
+ * Chromium reports no DOMContentLoaded/load for a document whose scripted navigation was started (and
+ * then cancelled by the 204), so a plain goto waited out its whole timeout. Playwright's own `timeout` (real time)
+ * is the bound — far under the 30 s default, so a stalled goto fails rather than passes slowly.
+ */
+describe("navigation guard armed: a script redirect during page.goto (#521)", () => {
+  for (const path of ["/script-href", "/script-replace"]) {
+    for (const waitUntil of ["load", "domcontentloaded", "commit"] as const) {
+      it(`${path} under waitUntil "${waitUntil}": the goto returns promptly on the allowed URL and the stop is drained`, async () => {
+        const seen = await withGuard(true, async (s) => {
+          // (under "commit" the goto may return before the redirect: wait for the stopped request too)
+          const [, response] = await Promise.all([otherRequestEnded(s.page), s.page.goto(`${APP}${path}`, { waitUntil, timeout: 3_000 })]);
+          return { status: response?.status(), url: s.page.url(), drained: s.drainBlockedNavigations?.() };
+        });
+        expect(seen).toEqual({ status: 200, url: `${APP}${path}`, drained: [{ url: `${OTHER}/login`, at: expect.any(Number), frame: "main" }] });
+      });
+    }
+  }
 });
 
 describe("navigation guard off (the default, real Chromium)", () => {
