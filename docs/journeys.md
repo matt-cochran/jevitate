@@ -173,6 +173,7 @@ pass), then once per mutation, and checks that each mutation breaks the assertio
 jevitate journey verify checkout --mutate                 # one line per assertion, then a summary
 jevitate journey verify checkout --mutate --json          # the full report
 jevitate journey verify checkout --mutate --env staging --param sku=A1 --fixtures reset.json
+jevitate journey verify checkout --mutate --allow http://127.0.0.1:26110   # block a write to another origin
 ```
 
 | Mutation | What the replay does | Derived for |
@@ -524,6 +525,7 @@ key is refused when the file is read.
 | `authoredBy` | no | `human-demonstration` or `jev-driven` |
 | `createdAtIso` | yes | When it was written |
 | `requiresAuth` | no | `true`: refuses to start without `--storage-state` |
+| `allowedOrigins` | no | Origins (normalized) the Journey was authored against beyond its own site, e.g. a split-origin app's API (`explore-author-journey --allow …`). A replay's allowlist is the union of the recorded site (or the environment's origins), these, and `journey run\|verify --allow <origin>` (repeatable), so `journey verify --mutate` can block a step's cross-origin write. Not remapped under `--env`/`--base-url`: name the replacement origin with `--allow` or the environment's `allow`. Over MCP only this field applies (no `allow` argument) |
 | `goal` | no | What the Journey achieves, in one sentence |
 | `persona` | no | Who does it |
 | `role` | no | The account role it runs as (which environment session it needs) |

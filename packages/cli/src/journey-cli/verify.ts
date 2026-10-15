@@ -10,7 +10,7 @@ import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFla
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
 import { withEngine } from "../engine.js";
 import { verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
-import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 import { type CliDeps, resolveDbPath, resolveJourneysDir, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, type DemoFlags, collectParam, emitJson, environmentSeams } from "../cli-shared.js";
 
 /** Registers `jevitate journey verify`. */
@@ -18,7 +18,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
   // #402 — the negative proof: replay the Journey once as recorded, then once per mutation (skip a
   // write step, abort its writes, type an empty value into a checked fill); each assertion must fail
   // under its paired mutation. `verify` is reserved for proofs: today only `--mutate` exists.
-  withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(journey.command("verify <id>"))))
+  withReplayAllowFlag(withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(journey.command("verify <id>")))))
     .description("prove each assertion of a Journey can fail: --mutate replays it with each write step skipped or blocked, and each checked fill emptied")
     .option("--mutate", "run the mutation proof (required)")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
@@ -34,7 +34,9 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         return;
       }
       let environment: ResolvedJourneyEnvironment | undefined;
+      let allow: string[];
       try {
+        allow = replayAllowFromFlags(this.opts<{ allow: string[] }>().allow);
         environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
       } catch (err) {
         if (!isEnvironmentError(err)) throw err;
@@ -70,6 +72,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
             ...(browser === undefined ? {} : { browser }),
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
+            ...(allow.length === 0 ? {} : { allow }),
             // Fixtures run around EVERY replay, so each mutation starts from the same state as the base.
             fixtures: (site) => {
               const fx = buildMissionFixtures(fixtureFlags, {
