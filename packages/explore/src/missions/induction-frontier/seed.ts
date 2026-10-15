@@ -4,6 +4,7 @@
  * way the run can end before its first action. Moved out of `runInductionFrontier` unchanged (#232).
  */
 
+import { redactUrl } from "@jevitate/ai-core";
 import { Navigate } from "@jevitate/screenplay";
 import { chromeClassifier } from "../../coverage/chrome.js";
 import { stateFingerprint } from "../../coverage/fingerprint.js";
@@ -75,6 +76,15 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
     };
   }
 
+  // #519: a declared region that is not on the start page — a typo, or the wrong anchor — cannot be
+  // tested; never `clean`, and the budget is not burnt first.
+  if (ctx.regionDeclared && ctx.snap.region?.matched === 0) {
+    return ctx.ended("scope-unreachable", {
+      kind: "target-unreachable",
+      message: `the scope region ${ctx.regionSpec} is not on the start page (${redactUrl(ctx.snap.url)}) — check the descriptor, or the Journey anchor it came from`,
+    });
+  }
+
   ctx.currentFingerprint = stateFingerprint(ctx.snap);
   ctx.visited.add(ctx.currentFingerprint);
   ctx.observe(ctx.snap);
@@ -136,7 +146,7 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
   ctx.seedRecording = { version: "1", site: ctx.site, pages: [] };
   ctx.statePaths.set(ctx.currentFingerprint, ctx.seedRecording);
   ctx.seedCandidates = targetCandidates(ctx.snap.controls, { ops: FRONTIER_OPS, enabledOnly: true }).length;
-  enqueueFrom(ctx.frontier, ctx.currentFingerprint, ctx.seedRecording, ctx.snap.controls, (c) => ctx.withheld(c, ctx.snap));
+  enqueueFrom(ctx.frontier, ctx.currentFingerprint, ctx.seedRecording, ctx.snap.controls, (c) => ctx.withheld(c, ctx.snap), ctx.regionDeclared, ctx.outOfRegionSeen);
   // #149: checked on the seed page too — a defect that only shows up on first paint, never revisited.
   await ctx.guard(ctx.checkOverflow(ctx.currentFingerprint, ctx.snap.url, withSeed(ctx.seedRecording, params.seedUrl)));
   return null;

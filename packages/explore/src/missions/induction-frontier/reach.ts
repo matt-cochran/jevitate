@@ -5,6 +5,7 @@
  * is the run's former `return`.
  */
 
+import { redactUrl } from "@jevitate/ai-core";
 import type { FrontierItem } from "../../coverage/frontier.js";
 import { reachFrontierState } from "../../coverage/reach.js";
 import type { InductionRunResult } from "../induction.js";
@@ -47,6 +48,13 @@ export async function reachItem(ctx: FrontierState, item: FrontierItem): Promise
     });
   }
   ctx.snap = reached.snapshot;
+  // #519: a reset that lands without the region is the same stop as a seed without it.
+  if (ctx.regionDeclared && ctx.snap.region?.matched === 0) {
+    return ctx.ended("scope-unreachable", {
+      kind: "target-unreachable",
+      message: `the scope region ${ctx.regionSpec} is not on the page the reset landed on (${redactUrl(ctx.snap.url)}) — check the descriptor, or the Journey anchor it came from`,
+    });
+  }
   ctx.observe(ctx.snap);
   ctx.currentFingerprint = item.fromFingerprint;
   ctx.departed = false;
