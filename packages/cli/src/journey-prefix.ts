@@ -17,13 +17,14 @@ import {
 import { resolve as resolvePath } from "node:path";
 import { UnauthorizedExploreTargetError, assertAuthorizedExploreTarget } from "@jevitate/explore";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
-import type { Recording, RecordedStep } from "@jevitate/recording";
+import type { Recording, RecordedStep, TargetDescriptor } from "@jevitate/recording";
 import type { BrowserSession } from "@jevitate/playwright";
 import { SiteGateRefusedError } from "@jevitate/runtime";
 import { applyJourneyEnvironment, environmentFromFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import { JourneyRequiresAuthError, UnknownJourneyError, prefixParams, runJourneyProgrammatically } from "./journey-api.js";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import { withSiteGate } from "./site-gate-cli.js";
+import { parseDescriptorSpec } from "./explore-specs.js";
 
 /**
  * #293 — journey-anchored exploration: `jevitate explore --from-journey <id> --at-step <n|name>`.
@@ -122,6 +123,11 @@ export interface JourneyPrefix {
    * replay types them into the page the mission then perceives, so the mission must redact them.
    */
   readonly secrets: readonly string[];
+  /**
+   * #519: the page region the named anchor declares (`region` on the anchor), parsed. Absent for a
+   * numeric `--at-step` or an anchor without one. Authoritative: a per-run `--scope-region` is refused.
+   */
+  readonly region?: { readonly spec: string; readonly descriptor: TargetDescriptor };
   /** Top-level steps the prefix replays: what one re-replay on a reset costs against `maxActions`. */
   readonly steps: number;
   /**
@@ -206,6 +212,15 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
     throw new JourneyPrefixArgsError(`journey '${opts.id}' has no usable site URL (${JSON.stringify(site)})`);
   }
   const allowedOrigins = opts.environment === undefined ? [new URL(site).origin] : [...opts.environment.allowedOrigins];
+  let region: JourneyPrefix["region"];
+  // #519: only an anchor NAMED by --at-step scopes the run; a step number that happens to be an anchor does not.
+  if (resolved.anchor?.region !== undefined && !/^[0-9]+$/.test(opts.atStep.trim())) {
+    try {
+      region = { spec: resolved.anchor.region, descriptor: parseDescriptorSpec(resolved.anchor.region) };
+    } catch (err) {
+      throw new JourneyPrefixArgsError(`anchor ${resolved.anchor.name}'s region ${JSON.stringify(resolved.anchor.region)} is not a usable descriptor: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   const where = `step ${branch.step}${branch.anchor === undefined ? "" : ` (anchor ${branch.anchor})`}`;
   const secretNames = secretParamNames(full, used).filter((n) => n in used);
   const secretValues = secretParamValues(full, used);
@@ -214,6 +229,7 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
     startUrl,
     allowedOrigins,
     secrets: secretValues,
+    ...(region === undefined ? {} : { region }),
     steps: resolved.step,
     replayInfo: {
       journeysDir: resolvePath(opts.dir),
