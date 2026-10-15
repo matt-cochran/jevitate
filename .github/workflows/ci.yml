@@ -220,7 +220,10 @@ jobs:
   # The release candidate: only after the whole gate passed for this exact tree.
   package:
     needs: [test, cross-platform-pool]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/dev') || inputs.package
+    # Explicit results: a bare condition implies success(), which is false because `reuse` (an ancestor) is skipped here.
+    if: >-
+      !cancelled() && needs.test.result == 'success' && needs.cross-platform-pool.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || inputs.package)
     runs-on: ubuntu-latest
     timeout-minutes: 30  # #417: a normal run takes ~3–5 min
     steps:

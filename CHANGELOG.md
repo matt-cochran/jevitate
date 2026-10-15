@@ -7,7 +7,7 @@ behaviour changes).
 
 ## [Unreleased]
 
-## [0.15.0] – unreleased
+## [0.15.0] – 2026-10-15
 
 0.15.0 makes split-origin apps and off-UI side effects first-class: a Journey can be replayed and mutation-proved across origins, an `http:` end-state check proves a write whose effect shows up outside the page (a dev mail outbox), and authored Journeys remember the fixtures they were authored under. Releases now build and test once per tree, publish `next` from staging, and reach `latest` only when the `vX.Y.Z` tag is pushed.
 
