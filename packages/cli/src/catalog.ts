@@ -537,7 +537,7 @@ export async function writeCatalogDraft(catalogDir: string | null, input: Catalo
   const loader = new CatalogLoader({ catalogDir, journeysDir: join(catalogDir, "journeys") });
   const { kind, id } = input;
   const next = {
-    link: `set metadata.${kind} to "${id}" in the Journey's file`,
+    link: `jevitate journey link <journey-id> --${kind} ${id}`,
     review: `jevitate ${kind} review ${id}`,
     approve: `jevitate ${kind} approve ${id} --reviewed-hash <the hash its review sheet shows>`,
   };

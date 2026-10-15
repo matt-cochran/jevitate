@@ -5,9 +5,10 @@ import { CatalogLoader, catalogJourney, findJob, personaLinkId, type Catalog } f
 /**
  * #523 — a Journey with no job or no persona link is flagged on the promote review sheet; these
  * warnings surface the same gap earlier (`journey lint`, `explore-author-journey`), each with the
- * exact way out: link an existing catalog id (listed when the catalog has some) or create a draft
- * (`jevitate catalog draft job|persona …`). Advisory: a warning, never a failure. The rule lives in
- * the CLI because it reads the catalog; `lintJourney` stays pure.
+ * exact way out: `jevitate journey link <id> --job|--persona` to an existing catalog id (listed when
+ * the catalog has some), else create a draft (`jevitate catalog draft job|persona …`) and link it.
+ * Advisory: a warning, never a failure. The rule lives in the CLI because it reads the catalog;
+ * `lintJourney` stays pure.
  */
 
 /** How many catalog ids a fix hint lists before "…". */
@@ -44,8 +45,8 @@ export function missingLinkFindings(catalog: Catalog, journey: Journey): Journey
       message: `journey '${id}' links no job (metadata.job) — the promote review sheet flags it`,
       fix:
         jobIds.length > 0
-          ? `set metadata.job in the Journey's file to an existing job (${listed(jobIds)}), or create a draft: ${draft} and set metadata.job to "${id}"`
-          : `create a draft job: ${draft}, then set metadata.job to "${id}" in the Journey's file`,
+          ? `jevitate journey link ${id} --job <job-id> — an existing job (${listed(jobIds)}); or create a draft: ${draft}, then jevitate journey link ${id} --job ${id}`
+          : `create a draft job: ${draft}, then link it: jevitate journey link ${id} --job ${id}`,
     });
   }
   if (personaLinkId(catalog, j) === undefined) {
@@ -60,8 +61,8 @@ export function missingLinkFindings(catalog: Catalog, journey: Journey): Journey
       message: `journey '${id}' links no catalog persona (metadata.persona${freeText === undefined || freeText === "" ? " is not set" : ` "${freeText}" names no catalog persona`}) — the promote review sheet flags it`,
       fix:
         personaIds.length > 0
-          ? `set metadata.persona in the Journey's file to an existing persona (${listed(personaIds)}), or create a draft: ${draft} and set metadata.persona to its id`
-          : `create a draft persona: ${draft}, then set metadata.persona to its id in the Journey's file`,
+          ? `jevitate journey link ${id} --persona <persona-id> — an existing persona (${listed(personaIds)}); or create a draft: ${draft}, then jevitate journey link ${id} --persona <persona-id>`
+          : `create a draft persona: ${draft}, then link it: jevitate journey link ${id} --persona <persona-id>`,
     });
   }
   return out;

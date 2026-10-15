@@ -67,6 +67,14 @@ test("#523: catalog_draft is no approval — the only approve tools stay approve
   expect(listToolNames().filter((n) => /approve/.test(n)).sort()).toEqual(["approve_action", "approve_demo"]);
 });
 
+test("#523: facade serves journey_link", () => {
+  expect(new Set(listToolNames()).has("journey_link")).toBe(true);
+});
+
+test("#523: journey_link is no approval — the approve/promote tools stay approve_action, approve_demo and promote_journey", () => {
+  expect(listToolNames().filter((n) => /approve|promot/.test(n)).sort()).toEqual(["approve_action", "approve_demo", "promote_journey"]);
+});
+
 test("ALLOWED_TOOLS and FORBIDDEN_TOOLS are disjoint and duplicate-free", () => {
   const allowed = [...ALLOWED_TOOLS] as string[];
   expect(new Set(allowed).size).toBe(allowed.length);

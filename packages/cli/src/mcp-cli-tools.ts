@@ -328,6 +328,18 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: { path: "journey anchor remove", params: { journeyId: pos(), name: s("--name", { required: true }) }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
+    name: "journey_link",
+    description:
+      "`jevitate journey link <id> --json` (#523): link a Journey to a catalog job (job) and/or persona (persona) — metadata.job / metadata.persona — or clear a link (unlinkJob / unlinkPersona: true); at least one of the four. " +
+      "Each id is checked against the catalog: an unknown id is refused (E_JOURNEY_LINK_ARGS, the message lists the catalog's ids). A draft entry (catalog_draft) may be linked: the result's needsApproval says a person still approves it before promote. Linking is never an approval. " +
+      "On a promoted Journey the approval goes stale (#507): it stays promoted, the result carries needsReapproval: true and reapproveCommand, which only a person runs. A link is not executable content, so it never stales a mutation proof.",
+    command: {
+      path: "journey link",
+      params: { id: pos(), job: s("--job"), persona: s("--persona"), unlinkJob: b("--unlink-job"), unlinkPersona: b("--unlink-persona") },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
     name: "annotate_journey",
     description:
       "`jevitate journey annotate <id>` (#246): replay the Journey and DRAFT each step's objective/expected result (and a missing goal/success criteria) into a reviewable draft — the Journey itself is never written. " +
