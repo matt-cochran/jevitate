@@ -7,7 +7,6 @@ export class LockTimeoutError extends Error {
   constructor(id: string) { super(`could not acquire inbox lock for '${id}'`); this.name = "LockTimeoutError"; }
 }
 
-const sleep = (ms: number) => clock.sleep(ms);
 
 export async function withIdLock<T>(
   dir: string,
@@ -41,7 +40,7 @@ export async function withIdLock<T>(
         }
       } catch { /* lock vanished or was reclaimed by another proc — retry */ }
       if (clock.now() > deadline) throw new LockTimeoutError(id);
-      await sleep(retryMs);
+      await clock.sleep(retryMs);
     }
   }
   try { return await fn(); }

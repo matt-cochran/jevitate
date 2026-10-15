@@ -272,7 +272,7 @@ hash). The [assertion-strength gate](#assertion-strength) still applies: `--acce
 
 **Catalog links (#433).** A Journey can link the job it does and the persona doing it
 (`metadata.job`, `metadata.persona`: ids from `.jevitate/jobs.json` and `.jevitate/personas.json`,
-see [the catalog](./catalog.md)). The sheet then has a **Catalog** section: the linked job (its
+see [the catalog](./catalog.md); set them with `jevitate journey link`). The sheet then has a **Catalog** section: the linked job (its
 story) and persona with their approval state, and **needs re-review** when the Journey or a linked
 item changed since its approval. `journey promote` (and `demo approve`) refuses a Journey whose
 linked job or persona is not approved (`E_JOURNEY_UNVETTED`, exit 1) unless you pass
@@ -280,6 +280,46 @@ linked job or persona is not approved (`E_JOURNEY_UNVETTED`, exit 1) unless you 
 Journey promotes as before. Every sheet also lists the **pre-approval findings**. When one needs
 an acknowledgment, promotion is refused (`E_APPROVAL_FINDINGS`, exit 1) unless you pass
 `--accept-findings "<reason>"`, which is recorded in `metadata.approval.acceptedFindings`.
+
+**Promotion-ready (#523).** An agent hands a Journey over only when the sheet is clean:
+
+```bash
+jevitate journey review checkout --strict         # exit 1 on any ⚠ attention item
+jevitate journey review checkout --strict --json  # the envelope adds strict: { passed, warnings } next to data
+```
+
+`--strict` also runs the code-only job/persona link checks without `--readiness`. Advisory ○ items
+and Jev never fail it. `--stale --strict` is refused. MCP: `review_journey` with `strict: true`.
+
+- **Proof staleness.** `journey verify --mutate` records a `proofHash` over executable content only
+  (steps, targets, assertions, end state). Rewording the goal, a success criterion, a step objective
+  or an expected result, which is what `journey annotate --approve` writes, does not stale the proof;
+  an approval still binds to the full review hash, so annotating re-stales an approval. One
+  exception: annotating drops a success criterion's code `check` when that criterion is reworded,
+  which changes executable content and does stale the proof.
+- **Linking.** `jevitate journey link <id> --job <jobId> --persona <personaId>` (MCP `journey_link`)
+  sets `metadata.job` / `metadata.persona` without hand-editing the file; `--unlink-job` /
+  `--unlink-persona` clear them. Each id is checked against the catalog: an unknown one is refused
+  (`E_JOURNEY_LINK_ARGS`, exit 64, listing the catalog's ids). A draft entry can be linked, and the
+  output says it still needs a person's approval. On a promoted Journey the approval goes stale and
+  the re-approve command is printed, as for an anchor edit. A link is not executable content, so it
+  never stales a mutation proof.
+- **Link warnings.** `journey lint` and `explore-author-journey` warn `missing-job` / `missing-persona`
+  with the fix: `jevitate journey link <id> --job|--persona <id>` with the listed catalog ids, or
+  `jevitate catalog draft …` and then `journey link`. Warnings never change the exit code. `record` and `recording promote`
+  write only a Recording and do not warn.
+- **Draft catalog entries.** `jevitate catalog draft persona|job <id> --name <text> [--description]
+  [--trigger] [--outcome]` (MCP `catalog_draft`) adds a DRAFT entry and never approves it. A persona's
+  `--name` is its role; a job's `--name` is its motivation and `--description` its goal; `--trigger`
+  and `--outcome` default to visible `(draft: …)` placeholders to fill before approval. An existing id
+  is refused (exit 64).
+- **Repo-wide gate.** `jevitate catalog status --strict` (MCP `catalog_status` with `strict: true`)
+  exits 1 on a stale persona or job approval, or a promoted Journey that links an unapproved or
+  unknown catalog entry or no job/persona; `--json` carries `strict.violations`.
+
+The owner's order is persona approve, job approve, `journey annotate --approve`, then
+`journey promote --reviewed-hash` (the hash from the review after annotating). See the
+`jevitate-promotion-ready` skill.
 
 **Confirmation and provenance (#437).** `journey promote` and `demo approve` need an interactive
 terminal: after the sheet, type the Journey id (or the first 8 characters of its content hash),
@@ -490,7 +530,7 @@ key is refused when the file is read.
 | `preconditions` | no | `[{ "description", "fixture"?, "hook"?, "login"? }]`: the seed data and login it needs, linked to the `--fixtures` file and `--before` hook that set it up |
 | `successCriteria` | no | `[{ "description", "check"? }]`: the end state that shows it worked; `check` is any [assertion](./success-checks.md) that checks it in code |
 | `parameters` | no | `[{ "name", "description"?, "secret"? }]`: its inputs. `secret: true` marks a value (a password, a token) that is redacted wherever it is shown. A declared parameter never carries a value |
-| `anchors` | no | `[{ "name", "step", "description"?, "probes"? }]`: named states worth exploring from — the state after `step` top-level steps (1-based). `name` is letters, digits, `.`, `_`, `-` and never all digits; `probes` are suggested adversarial attacks there. See [Explore from a Journey step](#explore-from-a-journey-step-anchors-and-campaigns) |
+| `anchors` | no | `[{ "name", "step", "description"?, "probes"?, "region"? }]`: named states worth exploring from — the state after `step` top-level steps (1-based). `name` is letters, digits, `.`, `_`, `-` and never all digits; `probes` are suggested adversarial attacks there; `region` is a [scope region](./exploration.md#scope-regions) descriptor. See [Explore from a Journey step](#explore-from-a-journey-step-anchors-and-campaigns) |
 | `mutationPairs` | no | `[{ "check", "mustFailWhen" }]`: declared negative-proof pairs for `journey verify --mutate` — the assertion at `check` (`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail under `mustFailWhen` (`skip:`/`block-write:`/`stale-value:` + a step number or anchor). An unknown site, step or anchor is refused at load. See [Proving assertions can fail](#proving-assertions-can-fail) |
 
 `recording` holds `version`, `site` (the origin it runs on), optional `intent`, and `pages[]`, each
@@ -608,10 +648,17 @@ jevitate journey anchor add checkout --name payment --step 4 --probe "double sub
 jevitate journey anchor remove checkout --name payment
 jevitate journey lint checkout --fix        # stamps each number-only anchor with its step's id
 jevitate journey anchors checkout --suggest # advisory; writes nothing
+jevitate journey anchor add import --name wizard --step 2 --region testId=import-view   # #519
 ```
 
 Over MCP the same edits are `journey_anchor_add` / `journey_anchor_remove`, `lint_journey` with
 `fix: true` and `journey_anchors` with `suggest: true`; the add/remove results carry `needsReapproval` and `reapproveCommand` there too.
+
+`--region <descriptor>` (#519) records the page region a mission at that anchor attacks (the
+`--success` descriptor syntax) as `anchors[].region`, so its control coverage is scoped to it (see
+[scope regions](./exploration.md#scope-regions)). It is authoritative: `--from-journey --at-step`
+uses it, and `--scope-region` beside it is refused. Changing it is a content change, so it makes a
+promoted Journey's approval stale like any anchor edit. Over MCP: `journey_anchor_add.region`.
 
 `anchor add` writes the step's stable id at once and prints the anchor issues that remain (name
 rule `[a-z0-9][a-z0-9._-]{0,63}`, duplicates, unknown steps are refused, exit 64).

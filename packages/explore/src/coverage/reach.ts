@@ -2,7 +2,7 @@ import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import type { Snapshot } from "../snapshot.js";
-import { seedRedirectReason } from "../seed-redirect.js";
+import { drainBlockedDeparture, seedLandingReason } from "../blocked-navigation.js";
 import { stateFingerprint } from "./fingerprint.js";
 import type { FrontierItem } from "./frontier.js";
 import { clock } from "@jevitate/domain";
@@ -115,7 +115,8 @@ async function reach(params: {
   const interpreter = new RecordingInterpreter({ targetTimeoutMs: REACH_TARGET_TIMEOUT_MS });
   const seedLanding = (): ReachResult | null => {
     if (params.homeUrl === undefined || params.currentUrl === undefined) return null;
-    const redirect = seedRedirectReason(params.homeUrl, params.currentUrl());
+    // #521: a seed navigation the opt-in guard stopped is where the seed went (the page stayed put).
+    const redirect = seedLandingReason(params.homeUrl, params.currentUrl(), drainBlockedDeparture(params.actor));
     return redirect === null ? null : { ok: false, reason: "seed-unreachable", detail: redirect.reason };
   };
   const stepCount = params.item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);

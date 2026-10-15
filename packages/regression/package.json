@@ -16,9 +16,5 @@
     "@jevitate/interpreter": "workspace:*",
     "@jevitate/recording": "workspace:*",
     "@jevitate/screenplay": "workspace:*"
-  },
-  "devDependencies": {
-    "@jevitate/playwright": "workspace:*",
-    "zod": "^4.6.5"
   }
 }

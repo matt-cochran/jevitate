@@ -64,4 +64,31 @@ describe("JourneySchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // #519: an anchor's optional region descriptor.
+  function anchoring(region?: string) {
+    return {
+      metadata: {
+        id: "login", name: "Log in", promoted: false, params: [], createdAtIso: "2026-09-19T00:00:00Z",
+        anchors: [{ name: "import-open", step: 1, ...(region === undefined ? {} : { region }) }],
+      },
+      recording: {
+        version: "1",
+        site: "example",
+        pages: [{ url: "/", steps: [{ stepId: "s-one", step: { kind: "navigate", url: "/", expect: { kind: "urlIncludes", text: "/" } } }] }],
+      },
+    };
+  }
+
+  it("accepts an anchor region in the --success descriptor syntax", () => {
+    expect(JourneySchema.safeParse(anchoring("testId=import-view")).success).toBe(true);
+  });
+
+  it("rejects an anchor region that is empty", () => {
+    expect(JourneySchema.safeParse(anchoring("")).success).toBe(false);
+  });
+
+  it("rejects an anchor region longer than 200 characters", () => {
+    expect(JourneySchema.safeParse(anchoring("x".repeat(201))).success).toBe(false);
+  });
 });

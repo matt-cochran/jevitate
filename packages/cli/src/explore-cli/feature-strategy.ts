@@ -27,6 +27,7 @@ export async function runFeatureStrategy(ctx: ExploreRunContext): Promise<void> 
       seedUrl: o.url,
       allowlist: featAllowlist,
       capability: o.feature,
+      ...(o.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       routeGlobs: o.route ?? [],
       bounds: Object.keys(featBounds).length > 0 ? featBounds : undefined,
       outDir: o.out,

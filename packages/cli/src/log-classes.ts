@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isRecord } from "@jevitate/domain";
 import type { LogLevel, LogLine } from "./log-lines.js";
 import { findProjectDir, type LayoutDeps } from "./project-dir.js";
 
@@ -77,9 +78,6 @@ export class LogClassesError extends Error {
   }
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 function compile(value: unknown, where: string): RegExp {
   if (typeof value !== "string" || value === "") throw new LogClassesError(`${where} must be a non-empty regex string`);

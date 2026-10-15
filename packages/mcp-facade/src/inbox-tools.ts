@@ -11,7 +11,7 @@ import {
   type ThreadEntry,
   type Finding,
 } from "@jevitate/inbox";
-import { clock } from "@jevitate/domain";
+import { clock, isPlainObject } from "@jevitate/domain";
 
 /**
  * The 8 HITL inbox tools MCP will expose (see `tools.ts` `ALLOWED_TOOLS`):
@@ -83,9 +83,6 @@ export interface QueuedResult {
 
 const DEFAULT_TTL_SEC = 3600;
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parseIdArgs(args: unknown): { ok: true; id: string } | { ok: false; message: string } {
   if (!isPlainObject(args)) return { ok: false, message: "expected an object with a string 'id'" };

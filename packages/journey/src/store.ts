@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { isNodeError } from "@jevitate/domain";
 import { ensureStepIds } from "@jevitate/recording";
 import type { Journey, JourneyMetadata } from "./journey.js";
 import { JourneySchema } from "./journey.js";
@@ -39,14 +40,6 @@ function withNamespace(j: Journey, ns: string | null, base: string): Journey {
   return ns === null ? j : { ...j, metadata: { ...j.metadata, id: `${ns}/${base}` } };
 }
 
-function isNodeError(err: unknown, code: string): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === code
-  );
-}
 
 /**
  * Filesystem-backed Journey store. Keeps `@jevitate/journey` a leaf package

@@ -7,6 +7,7 @@ import { emulationContextOptions, resolveEmulation } from "./emulation.js";
 import { probeReachable } from "./reachability.js";
 import { ExtensionLoadError, extensionLaunchArgs, extensionOrigin, type UnpackedExtension } from "./extensions.js";
 import { ownerMarkerArg } from "./browser-processes.js";
+import { NavigationGuard, type BlockedNavigation } from "./nav-guard.js";
 import { sharedResourceGovernor, type GovernorTicket, type ResourceGovernor, type ResourceLimits } from "./resource-governor.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -208,6 +209,17 @@ async function grantGeolocation(context: BrowserContext, opts: OpenOptions): Pro
   for (const origin of origins) await context.grantPermissions(["geolocation"], { origin });
 }
 
+/**
+ * #521: with `blockOffAllowlistNavigation`, the navigation guard is armed on the context before its
+ * first page navigates (so every page, popups included, is covered); otherwise none (undefined).
+ */
+async function armNavigationGuard(context: BrowserContext, opts: OpenOptions): Promise<NavigationGuard | undefined> {
+  if (opts.blockOffAllowlistNavigation !== true) return undefined;
+  const guard = new NavigationGuard(opts.allowedOrigins, opts.baseUrl);
+  await guard.arm(context);
+  return guard;
+}
+
 export class PlaywrightBrowserPort implements BrowserPort {
   readonly #launch: Launch;
   readonly #launchPersistent: LaunchPersistentContext;
@@ -230,9 +242,10 @@ export class PlaywrightBrowserPort implements BrowserPort {
   }
 
   async open(opts: OpenOptions): Promise<BrowserSession> {
-    // TODO(M3): allowedOrigins is not enforced here (no route interception): subresource requests to
-    // any origin load. The acting origin is checked by the missions after each settle, and writes are
-    // blocked by their own guards (read-only find-out goals, adversarial misuse #403) — docs/safety.md.
+    // allowedOrigins are the session's authorized origins: they scope the geolocation grant; they are
+    // not a network guard unless `blockOffAllowlistNavigation` (#521) arms the navigation guard, and
+    // even then subresources load from any origin. The acting origin is checked by the caller after
+    // each settle (redirects cannot be intercepted), and writes by `ReadOnlyGuard` — docs/safety.md.
     // Refused BEFORE any browser opens: an unregistered --device name, or --viewport + --device together.
     const emulation = resolveEmulation({ viewport: opts.viewport, device: opts.device });
     // #205: admitted by the resource governor (machine-wide browser cap, throttling) before anything
@@ -288,8 +301,10 @@ export class PlaywrightBrowserPort implements BrowserPort {
       },
     );
     let page: Page;
+    let navGuard: NavigationGuard | undefined;
     try {
       await grantGeolocation(lease.context, opts);
+      navGuard = await armNavigationGuard(lease.context, opts);
       page = await withOpenDeadline(
         lease.context.newPage(),
         this.#openTimeoutMs,
@@ -302,7 +317,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
       await lease.release().catch(() => undefined);
       throw err;
     }
-    return pooledSession(lease, page, this.#watch(page), this.#probe, await videoPathOf(page));
+    return pooledSession(lease, page, this.#watch(page), this.#probe, await videoPathOf(page), navGuard);
   }
 
   /**
@@ -335,8 +350,10 @@ export class PlaywrightBrowserPort implements BrowserPort {
     } catch (err) {
       throw explainLaunchFailure(err, { executablePath: opts.executablePath, channel });
     }
+    let navGuard: NavigationGuard | undefined;
     try {
       await grantGeolocation(context, opts);
+      navGuard = await armNavigationGuard(context, opts);
       if (opts.storageState !== undefined) await context.setStorageState(opts.storageState);
       await confirmExtensionsLoaded(context, extensions, this.#openTimeoutMs);
     } catch (err) {
@@ -364,6 +381,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
         return JSON.stringify(await context.storageState());
       },
       probeReachable: this.#probe,
+      drainBlockedNavigations: () => navGuard?.drain() ?? [],
       async close() {
         watchdog?.stop();
         try {
@@ -477,6 +495,7 @@ function pooledSession(
   watchdog: PageLivenessWatchdog | undefined,
   probe: (url: string) => Promise<string | null>,
   videoPath: string | undefined,
+  navGuard: NavigationGuard | undefined,
 ): BrowserSession {
   const context = lease.context;
   /** After a browser crash every session operation surfaces the crash, not a vague "target closed". */
@@ -504,6 +523,7 @@ function pooledSession(
       return JSON.stringify(await context.storageState());
     },
     probeReachable: probe,
+    drainBlockedNavigations: (): readonly BlockedNavigation[] => navGuard?.drain() ?? [],
     async close() {
       watchdog?.stop();
       await lease.release();

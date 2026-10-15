@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isRecord } from "@jevitate/domain";
 import { Command, Option } from "commander";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { emitEnvelope } from "./cli-output.js";
@@ -39,9 +40,6 @@ function withInboxFlags(cmd: Command): Command {
   return cmd.option("--inbox-dir <path>", INBOX_DIR_HELP).option("--json", "emit a JSON envelope");
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 function ageText(sec: unknown): string {
   const s = typeof sec === "number" && Number.isFinite(sec) ? sec : 0;

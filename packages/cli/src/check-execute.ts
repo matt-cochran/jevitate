@@ -350,6 +350,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
         ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
         ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
+        ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
         allowlist: item.t.allowlist,
         judge,
         gen,
@@ -410,6 +411,8 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     // #293: a journey-anchored mission replays its Journey's prefix first and starts where it lands.
     const prefix = item.t.prefixes?.get(m);
     const withPrefix = prefix === undefined ? {} : { journeyPrefix: prefix };
+    // #519: the scope region (the anchor's or the item's `scopeRegion`), resolved at preflight.
+    const withScopeRegion = setup?.scopeRegion === undefined ? {} : { scopeRegions: setup.scopeRegion.descriptors, scopeRegionSpec: setup.scopeRegion.spec };
     // The prefix types its secret params into the page the mission perceives: redacted like the item's own.
     const anchoredSecrets = prefix === undefined || prefix.secrets.length === 0 ? withSecrets : { secrets: [...(setup?.secrets ?? []), ...prefix.secrets] };
     const url = prefix?.startUrl ?? m.url ?? t.url;
@@ -424,6 +427,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         seedUrl: url,
         allowlist: item.t.allowlist,
         capability: m.feature ?? m.name,
+        ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
         routeGlobs: resolveRouteScope(url, m.routes).routeGlobs,
         bounds: b,
         ...withStall,
@@ -449,8 +453,10 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...withStall,
         ...withOverflow,
         ...(m.routes === undefined && x.scope === undefined ? {} : { routeGlobs: [...(m.routes ?? []), ...(x.scope === "app" ? ["/**"] : [])] }),
+        ...withScopeRegion,
         ...withPrefix,
         ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
+        ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
@@ -466,6 +472,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         allowlist: item.t.allowlist,
         strategies: CLI_ADVERSARIAL_STRATEGIES,
         ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
+        ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
         judgment: judge,
         generation: gen,
         usage,
@@ -475,6 +482,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...withHangReplays,
         ...withOverflow,
         ...(setup?.coverageThresholds === undefined ? {} : { coverageThresholds: setup.coverageThresholds }),
+        ...withScopeRegion,
         ...withPrefix,
       });
       stampResultFile(r.resultPath, stamp);
@@ -506,6 +514,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       ...(m.successWhen === undefined ? {} : { successWhen: m.successWhen }),
       ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
       ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
+      ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       judge,
       gen,
       usage,

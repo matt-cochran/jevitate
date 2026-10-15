@@ -277,6 +277,32 @@ jevitate catalog analyze [options]
 | `--max-pairs <n>` | the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped |  |  |  |  |
 | `--real` | #435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only |  |  |  |  |
 
+### catalog draft
+
+```
+jevitate catalog draft [options] <kind> <id>
+```
+
+#523: add a DRAFT persona or job to the catalog (kind: persona | job) — personas.json / jobs.json, created when missing — so a Journey can link it now. Never approves (a person runs `persona|job approve` after review); an id the catalog already has is refused
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `kind` |  | yes |  |  |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--description <text>` | a persona: its description; a job: its goal |  |  |  |  |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--name <text>` | a persona: who they are (written as its role); a job: what the user wants to do (its motivation, "I want to …") |  |  | yes |  |
+| `--outcome <text>` | a job: what doing it lets them do ("so I can …"); default: a placeholder to write before approving |  |  |  |  |
+| `--trigger <text>` | a job: when it comes up ("When …"); default: a placeholder to write before approving |  |  |  |  |
+
 ### catalog export
 
 ```
@@ -312,6 +338,7 @@ the jobs × personas matrix (which have a promoted Journey), approved jobs with 
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
 | `--require-approvals` | #437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels) |  |  |  |  |
+| `--strict` | #523: exit 1 when a persona/job approval is stale, or a promoted Journey links a catalog entry that is not approved (a draft) or links no job / no persona — the repo-wide gate on what the review sheet flags |  |  |  |  |
 
 ## check
 
@@ -558,6 +585,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--auth-check <mode>` | #427 pre-flight auth check before a run that starts from a session (--storage-state, --persona/--personas, --actor's primary): load the session, open --url and end the run fast (inconclusive, failure.kind auth-expired, exit 2) when it lands on a sign-in page — the login page is never explored. auto (default): a login-like URL (/login, /signin, /sign-in, /auth, …) or a visible password field, unless --url is itself such a route; urlExcludes:<text>: expired when the landed URL includes <text>; selector:<css>: alive only when this signed-in marker is visible; off. A persona with login parameters (a personas file entry's `login`, or .jevitate/personas.json) is signed in again once instead |  |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
+| `--block-off-allowlist-navigation` | goal/usability/adversarial/coverage/exploratory/--feature: stop an off-allowlist page navigation in the mission's browser before it loads (answered 204, the page stays put) and treat it as a departure; server redirects still pass and the after-settle check stays the guard; turns off the HTTP cache for the run (#521) |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
@@ -631,6 +659,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--route <glob>` | in-scope route glob (repeatable), e.g. /thread/** — for --feature it replaces the default scope (the start URL's route and everything under it); it widens --strategy adversarial/coverage/exploratory beyond the start URL's route | `[]` |  |  |  |
 | `--save-storage-state <file>` | write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run. Written on every exit path -- a crash or a SIGTERM/SIGINT kill included (#159), not only a clean end -- but never over a good file with a session that already looks lost/logged-out; the last known-good state is used instead, or nothing is written if none was ever captured. |  |  |  |  |
 | `--scope <mode>` | --strategy coverage/exploratory: 'app' widens containment to the whole app (same as --route '/**'); default: the start URL's route plus --route globs |  |  |  |  |
+| `--scope-region <descriptor>` | adversarial/coverage/exploratory: measure and hunt only the controls inside this page region (repeatable; the --success descriptor syntax, e.g. testId=import-view or role=region;name=Import); a Journey anchor's own region is used by default and cannot be overridden (#519) | `[]` |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--secret <value|env:VAR>` | REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable); env:VAR reads it from the environment (preferred: a literal is visible in the process list and shell history). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state) | `[]` |  |  |  |
 | `--secret-cmd-attempts <n>` | #359: how many times one cmd: secret field's command may run in this run (default 3); past it, typing that field fails without running the command again (read-the-code commands usually have side effects) |  |  |  |  |
@@ -1082,6 +1111,7 @@ add an anchor to a Journey: --step takes a 1-based step number or a step id and 
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--name <name>` | the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit |  |  | yes |  |
 | `--probe <text>` | a suggested adversarial probe at this state (repeatable) | `[]` |  |  |  |
+| `--region <descriptor>` | the page region missions at this anchor attack (the --success descriptor syntax, e.g. testId=import-view); scopes control coverage to it (#519) |  |  |  |  |
 | `--step <n|stepId>` | the step the anchor follows: a 1-based step number or a step id |  |  | yes |  |
 
 #### journey anchor remove
@@ -1241,6 +1271,31 @@ jevitate journey find [options] <query>
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
+### journey link
+
+```
+jevitate journey link [options] <id>
+```
+
+#523: link a Journey to a catalog job and/or persona (metadata.job / metadata.persona), or clear a link — an id the catalog does not have is refused (listing its ids); a draft entry may be linked and still needs a person's approval; on a promoted Journey the approval goes stale (#507). Never approves
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project's .jevitate directory (catalog files, journeys under journeys/); default: the repo's |  |  |  |  |
+| `--job <jobId>` | link this job (an id in .jevitate/jobs.json) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--persona <personaId>` | link this persona (an id in .jevitate/personas.json) |  |  |  |  |
+| `--unlink-job` | clear metadata.job |  |  |  |  |
+| `--unlink-persona` | clear metadata.persona |  |  |  |  |
+
 ### journey lint
 
 ```
@@ -1389,6 +1444,7 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 | `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 | `--stale` | #467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids |  |  |  |  |
+| `--strict` | #523: exit 1 (defects) when the sheet has any ⚠ attention item, and run the code-only readiness link checks (missing job / persona) even without --readiness; advisory ○ items and Jev never fail it. With --json the envelope also carries strict: { passed, warnings } |  |  |  |  |
 
 ### journey run
 

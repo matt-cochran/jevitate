@@ -1,4 +1,4 @@
-import { type InvariantSpec } from "@jevitate/recording";
+import { type InvariantSpec, type TargetDescriptor } from "@jevitate/recording";
 import { type SecretField, type TypeFixture } from "@jevitate/explore";
 import { secretCommandRunner } from "../secret-command.js";
 import { type JsonEnvelope } from "../envelope.js";
@@ -84,6 +84,10 @@ export type ExploreOpts = {
     actionDeltas?: boolean;
     feature?: string;
     route: string[];
+    /** #519: `--scope-region` descriptors (repeatable). */
+    scopeRegion: string[];
+    /** #521: `--block-off-allowlist-navigation` (opt-in). */
+    blockOffAllowlistNavigation?: boolean;
     scope?: string;
     allow: string[];
     secret: string[];
@@ -144,6 +148,8 @@ export interface ExploreRunContext<S extends string = string> {
   serverLog: ServerLogOptions | undefined;
   withServerLog: { serverLog?: ServerLogOptions };
   withPrefix: { journeyPrefix?: JourneyPrefix };
+  /** #519: the run's scope region (the anchor's, or `--scope-region`'s); empty when the run has none. */
+  withScopeRegion: { scopeRegions?: TargetDescriptor[]; scopeRegionSpec?: string };
   emitJourneyFailure: (err: unknown) => boolean;
   withEvidence: <R extends object>(result: R) => Promise<R>;
   runFiling: FilingConfig | undefined;

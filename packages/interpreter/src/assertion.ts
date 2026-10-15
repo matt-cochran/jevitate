@@ -48,7 +48,7 @@ export async function pollUntil(
   for (;;) {
     if (await sample()) return true;
     if (clock.now() >= deadline) return false;
-    await sleep(pollMs);
+    await clock.sleep(pollMs);
   }
 }
 
@@ -164,9 +164,6 @@ export async function readAssertionEvidence(actor: Actor, a: Assertion): Promise
   return (await evaluateVisual(a, (d) => descriptorToTarget(d).resolve(page))).detail;
 }
 
-function sleep(ms: number): Promise<void> {
-  return clock.sleep(ms);
-}
 
 /**
  * Thrown when a step's postcondition (`expect`/`check`) evaluates false.

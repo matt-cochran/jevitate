@@ -16,7 +16,7 @@
 import { deltaStatsOf, type ActionDelta, type ActionDeltaStats } from "../action-delta.js";
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
-import type { InvariantSpec, Recording } from "@jevitate/recording";
+import type { InvariantSpec, Recording, TargetDescriptor } from "@jevitate/recording";
 import { type GenerationPort, type JudgmentPort } from "@jevitate/ai-core";
 import {
   InvariantDefectLog,
@@ -137,6 +137,8 @@ export interface CoverageScope {
   readonly outOfScopeTransitions: number;
   /** The first departures (up to 50), in order. */
   readonly departures: CoverageScopeDeparture[];
+  /** #519: present only when a scope region was declared. */
+  readonly region?: { readonly spec: string; readonly outOfRegionControls: number; readonly stepsWithoutRegion: number };
 }
 
 export interface CoverageReport {
@@ -248,6 +250,14 @@ export interface InductionMissionParams {
    * add to it. Pass `["/**"]` (CLI `--scope app`) to widen containment to the whole app.
    */
   readonly routeGlobs?: readonly string[];
+  /**
+   * #519: the declared scope region(s) (`--scope-region`, or the Journey anchor's `region`). Only
+   * in-region controls are enqueued on the frontier; the rest are counted in `scope.region`. A seed
+   * (or reset landing) without the region ends `scope-unreachable`. Sufficiency rules are unchanged.
+   */
+  readonly scopeRegions?: readonly TargetDescriptor[];
+  /** #519: the region's descriptor spec as the operator wrote it — named in the report and the failure. */
+  readonly scopeRegionSpec?: string;
   /** App-declared invariants (#86): evaluated around every frontier action; a violation is a hard defect. */
   readonly invariants?: InvariantSpec;
   /** Registered secrets: redacted out of invariant values and evidence. */

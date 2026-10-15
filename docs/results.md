@@ -134,7 +134,7 @@ them no meaning across strategies. For example:
 
 - goal runs have `checks`, `answer`, `runOutcome`, `stop`, `finalUrl` and `depth` (#424: distinct states and pages, actions, decisions, forms submitted, and the minimum effort with `met`); a find-out that ended without a grounded answer also has `partialReport` (per page: its own grounded text, controls, and what was tried; see [find-out goals](./success-checks.md#open-ended-find-outs-minimum-effort-depth-and-partial-reports));
 - coverage runs have `coverage`, and feature runs have their own `coverage`;
-- adversarial runs have `advisories`, `scope` and `coverage` (an advisory is a console error
+- adversarial runs have `advisories`, `scope` and `coverage`; with a [scope region](./exploration.md#scope-regions) (#519) `coverage.controls` is the region's, `coverage.pageControls` the route-wide numbers, `coverage.region` its spec and step counts, and `scope.region` its `lostResets`; coverage/exploratory runs carry `scope.region` (`outOfRegionControls`, `stepsWithoutRegion`) (an advisory is a console error
   correlated with a 4xx (`status`), or one raised inside a third-party iframe (`thirdPartyFrame`,
   the frame's origin; `frameUrl`): reported, never a defect);
 - usability runs have `report`, `reportPath` and `screenshots`. Since 0.3.0 the report also

@@ -3,6 +3,7 @@ import { READINESS_FLAG_HELP, REAL_JEV_FLAG_HELP, jevSetupFor } from "../catalog
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
 import { MissingCredentialError } from "@jevitate/ai-core";
+import { EXIT_CODES } from "../exit-codes.js";
 import { ok, fail } from "../envelope.js";
 import { UnknownJourneyError } from "../journey-api.js";
 import { reviewRenderOptions } from "../review-render-options.js";
@@ -31,18 +32,19 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
     .option("--readiness", READINESS_FLAG_HELP)
     .option("--real", REAL_JEV_FLAG_HELP)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
+    .option("--strict", "#523: exit 1 (defects) when the sheet has any ⚠ attention item, and run the code-only readiness link checks (missing job / persona) even without --readiness; advisory ○ items and Jev never fail it. With --json the envelope also carries strict: { passed, warnings }")
     .option("--stale", "#467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids")
     .option("--json", "emit a JSON envelope (the schema-checked sheet)")
     .action(async function (this: Command, id: string | undefined) {
-      const { dir, json, markdown, full, out: outFile, readiness, real, jevProvider, stale } = this.opts<{ dir?: string; json?: boolean; full?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string; stale?: boolean }>();
+      const { dir, json, markdown, full, out: outFile, readiness, real, jevProvider, stale, strict } = this.opts<{ dir?: string; json?: boolean; full?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string; stale?: boolean; strict?: boolean }>();
       if (json === true && markdown === true) {
         emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--json and --markdown are exclusive: pick one rendering"));
         return;
       }
       if (stale === true) {
         // #467: the stale list — read-only; one sheet's flags do not apply to it.
-        if (id !== undefined || markdown === true || full === true || outFile !== undefined || readiness === true || real === true || jevProvider !== undefined) {
-          emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--stale lists every stale Journey: it takes no <id> and none of --markdown/--full/--out/--readiness/--real/--jev-provider"));
+        if (id !== undefined || markdown === true || full === true || outFile !== undefined || readiness === true || real === true || jevProvider !== undefined || strict === true) {
+          emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--stale lists every stale Journey: it takes no <id> and none of --markdown/--full/--out/--readiness/--real/--jev-provider/--strict"));
           return;
         }
         try {
@@ -61,20 +63,23 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
       }
       try {
         const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { real, jevProvider });
-        const { review } = await reviewJourneyById(resolveJourneysDir(deps, dir), id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: readiness === true, jev });
+        const { review } = await reviewJourneyById(resolveJourneysDir(deps, dir), id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: readiness === true, strict: strict === true, jev });
+        const warnings = (review.attention ?? []).filter((a) => a.severity === "warn").length;
+        const strictVerdict = { passed: warnings === 0, warnings };
         const renderOpts = reviewRenderOptions({ full: full === true, toFile: outFile !== undefined });
         const rendered = json ? `${JSON.stringify(review, null, 2)}\n` : markdown ? renderReviewMarkdown(review, renderOpts) : renderReviewText(review, renderOpts);
         if (outFile !== undefined) await writeFile(outFile, rendered, { mode: 0o600 });
         if (json) {
-          emitJson(program, ok(review));
+          emitJson(program, strict === true ? Object.assign(ok(review), { strict: strictVerdict }) : ok(review));
         } else if (outFile !== undefined) {
           program.configureOutput().writeOut?.(`review sheet for journey '${review.id}' written to ${outFile} (content hash ${review.contentHash})\n`);
         } else {
           program.configureOutput().writeOut?.(rendered);
         }
         emitUsageLine(program, review.jev);
-        // #434: a review never fails on its findings (readiness and Jev answers are advice).
-        process.exitCode = 0;
+        // #434: a plain review never fails on its findings (readiness and Jev answers are advice).
+        // #523: --strict fails (defects) on any ⚠ attention item; ○ items never do.
+        process.exitCode = strict === true && !strictVerdict.passed ? EXIT_CODES.defects : 0;
       } catch (err) {
         if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));

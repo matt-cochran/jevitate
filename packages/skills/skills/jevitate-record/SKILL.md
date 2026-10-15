@@ -86,6 +86,9 @@ headed browser demonstration a human performs — you launch it and they drive.
   Journey to a distributed source, use `jevitate journey publish <id> --to
   <source>` (see `jevitate-sources`).
 
+Before handing a Journey made from a Recording to its owner, follow
+`jevitate-promotion-ready`: done means `jevitate journey review <id> --strict` passes.
+
 ## Known gaps
 
 - There is no single-command "postdoc result -> promoted local Journey" verb: a

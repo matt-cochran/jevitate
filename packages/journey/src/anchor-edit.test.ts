@@ -41,6 +41,14 @@ describe("addAnchor", () => {
     ]);
   });
 
+  it("writes the region when one is given", () => {
+    expect(addAnchor(draft(), { name: "cart", step: 1, region: "testId=import-view" }).metadata.anchors?.[0]?.region).toBe("testId=import-view");
+  });
+
+  it("leaves the region key off the anchor when none is given", () => {
+    expect(Object.prototype.hasOwnProperty.call(addAnchor(draft(), { name: "cart", step: 1 }).metadata.anchors?.[0], "region")).toBe(false);
+  });
+
   it("refuses a name outside the anchor name rule", () => {
     expect(() => addAnchor(draft(), { name: "Cart Open", step: 1 })).toThrow(/cart-open/);
   });

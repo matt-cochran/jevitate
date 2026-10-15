@@ -5,7 +5,7 @@ import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { assertNoSecretInPayload, redactText, redactUrl } from "@jevitate/ai-core";
-import { fileDraft, fingerprintMarkers, targetsFor, type FilingConfig, type FilingOutcome, type IssueDraft, type IssueFilerPort, clock } from "@jevitate/domain";
+import { fileDraft, fingerprintMarkers, isRecord, targetsFor, type FilingConfig, type FilingOutcome, type IssueDraft, type IssueFilerPort, clock } from "@jevitate/domain";
 import {
   DemoOverlay,
   PageSignalCollector,
@@ -99,7 +99,6 @@ export interface EvidenceReplayInput {
   readonly finalCard?: (reproduced: boolean | undefined) => { readonly text: string; readonly ok: boolean };
 }
 
-const sleep = (ms: number): Promise<void> => clock.sleep(ms);
 
 function oneLine(s: string): string {
   return s.replace(/\s+/g, " ").trim();
@@ -114,9 +113,6 @@ function errText(e: unknown): string {
   return (e instanceof Error ? e.message : String(e)).split("\n")[0] ?? "unknown error";
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v !== "" ? v : undefined;
@@ -270,7 +266,7 @@ export async function replayWithEvidence(input: EvidenceReplayInput): Promise<De
         { head: `step ${index + 1} of ${total}${index === idx ? " · the failing step" : ""}`, text: caption },
         targetOf(recorded),
       );
-      await sleep(pace);
+      await clock.sleep(pace);
     },
     afterStep: async ({ index, outcome }) => {
       await overlay.refresh(page);
@@ -293,7 +289,7 @@ export async function replayWithEvidence(input: EvidenceReplayInput): Promise<De
           ok: reproduced === false,
         };
         await overlay.card(page, card.text, card.ok ? "ok" : "bad");
-        await sleep(pace);
+        await clock.sleep(pace);
         await proveMask();
       }
       await input.screenshots?.capture(page, {
@@ -318,7 +314,7 @@ export async function replayWithEvidence(input: EvidenceReplayInput): Promise<De
           };
     if (r.outcome !== "completed" && r.at < idx) {
       await overlay.card(page, `The replay stopped at step ${r.at + 1} of ${total}: the recorded path no longer reproduces`, "bad");
-      await sleep(pace);
+      await clock.sleep(pace);
     }
     await proveMask();
   } catch (e) {

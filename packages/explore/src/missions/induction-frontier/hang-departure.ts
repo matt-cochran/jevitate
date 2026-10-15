@@ -7,6 +7,7 @@
 
 import { redactUrl } from "@jevitate/ai-core";
 import { isAuthorizedExploreTarget } from "../../authorized-targets.js";
+import { blockedDepartureReason, drainBlockedDeparture } from "../../blocked-navigation.js";
 import type { FrontierItem } from "../../coverage/frontier.js";
 import { recordCoverageHang } from "../../hang-repro.js";
 import { outOfScopeHangNote } from "../../hang.js";
@@ -27,7 +28,9 @@ export async function handleHangOrDeparture(ctx: FrontierState, item: FrontierIt
   // like every other out-of-scope page — it is never judged; its hang signal is noted on the
   // departure below as advisory, never a finding, and never part of the mission outcome.
   const hang = ctx.seenHang.last;
-  if (hang !== null && ctx.inScope(ctx.snap.url)) {
+  // #521: a navigation the opt-in guard stopped (the page stayed put) is a departure all the same.
+  const blocked = drainBlockedDeparture(ctx.sessions.actor);
+  if (blocked === undefined && hang !== null && ctx.inScope(ctx.snap.url)) {
     ctx.transcript.record({
       op: item.op,
       control: liveControl,
@@ -84,9 +87,9 @@ export async function handleHangOrDeparture(ctx: FrontierState, item: FrontierIt
   // it is never judged, so the frontier stays prioritized on the in-scope target instead of
   // wandering into the rest of the app. The next frontier pop (necessarily sourced from an
   // in-scope state, since only those are ever enqueued) resets and replays back into scope.
-  if (!ctx.inScope(ctx.snap.url)) {
+  if (blocked !== undefined || !ctx.inScope(ctx.snap.url)) {
     ctx.outOfScopeTransitions += 1;
-    const landed = redactUrl(ctx.snap.url);
+    const landed = redactUrl(blocked ?? ctx.snap.url);
     ctx.departures.push({ fromFingerprint: ctx.currentFingerprint, url: landed, action: liveControl.name || item.op });
     ctx.transcript.record({
       op: item.op,
@@ -96,7 +99,7 @@ export async function handleHangOrDeparture(ctx: FrontierState, item: FrontierIt
       strategy: ctx.strategyLabel,
       actOk: true,
       reason: joinReasons([
-        `left the target scope (landed on ${landed}); not expanded`,
+        blocked === undefined ? `left the target scope (landed on ${landed}); not expanded` : `left the target scope (${blockedDepartureReason(blocked)}); not expanded`,
         hang === null ? undefined : outOfScopeHangNote(hang),
       ]),
       snapshot: decidedOn,

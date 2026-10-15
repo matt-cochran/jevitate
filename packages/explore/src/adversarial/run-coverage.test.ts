@@ -25,6 +25,89 @@ const OUT = control("Home", "link", "a", { href: "https://app.test/", form: null
 const snap = (url: string, controls: Control[]): Snapshot => ({ url, controls, truncated: false, signature: url });
 const inScope = (url: string): boolean => new URL(url).pathname.startsWith("/profile");
 
+describe("CoverageTracker region mode (#519)", () => {
+  const T = { minControlRatio: 0.25, requireFormSubmit: false };
+  const URL = "https://app.test/profile";
+  const rsnap = (url: string, controls: Control[], matched: number): Snapshot => ({
+    ...snap(url, controls),
+    region: { matched },
+  });
+  const regionRun = (): CoverageTracker => {
+    const t = new CoverageTracker(inScope, { region: "testId=import-view" });
+    const inR = [
+      control("Upload", "button", "button", { inRegion: true }),
+      control("Continue", "button", "button", { inRegion: true }),
+    ];
+    const outR = Array.from({ length: 8 }, (_, i) => control(`Row ${i}`, "button", "button", { inRegion: false }));
+    t.observe(rsnap(URL, [...inR, ...outR], 1));
+    t.acted(URL, inR[0]);
+    return t;
+  };
+  const unmatched = (): CoverageTracker => {
+    const t = new CoverageTracker(inScope, { region: "testId=typo" });
+    t.observe(rsnap(URL, [control("Row", "button", "button", { inRegion: false })], 0));
+    return t;
+  };
+
+  it("counts only in-region controls in controls.total", () => {
+    expect(regionRun().report(T, 0).controls.total).toBe(2);
+  });
+  it("counts only the exercised in-region control", () => {
+    expect(regionRun().report(T, 0).controls.exercised).toBe(1);
+  });
+  it("computes the region ratio over in-region controls", () => {
+    expect(regionRun().report(T, 0).controls.ratio).toBe(0.5);
+  });
+  it("reports the route-wide control total in pageControls", () => {
+    expect(regionRun().report(T, 0).pageControls?.total).toBe(10);
+  });
+  it("reports the region spec", () => {
+    expect(regionRun().report(T, 0).region?.spec).toBe("testId=import-view");
+  });
+  it("counts steps whose snapshot matched the region", () => {
+    expect(regionRun().report(T, 0).region?.stepsMatched).toBe(1);
+  });
+  it("counts steps with no region match", () => {
+    expect(regionRun().report(T, 0).region?.stepsWithoutRegion).toBe(0);
+  });
+  it("counts controls excluded from the region", () => {
+    expect(regionRun().report(T, 0).region?.outOfRegion).toBe(8);
+  });
+  it("is sufficient at a 25% threshold", () => {
+    expect(regionRun().report(T, 0).sufficient).toBe(true);
+  });
+
+  it("an out-of-region action never raises controls.exercised", () => {
+    const t = new CoverageTracker(inScope, { region: "testId=x" });
+    const a = control("A", "button", "button", { inRegion: true });
+    const shell = control("Assistant", "button", "button", { inRegion: false });
+    t.observe(rsnap(URL, [a, shell], 1));
+    t.acted(URL, shell);
+    expect(t.report(T, 0).controls.exercised).toBe(0);
+  });
+
+  it("a region that never matched is not sufficient", () => {
+    expect(unmatched().report(T, 1).sufficient).toBe(false);
+  });
+  it("a region that never matched names the spec first", () => {
+    expect(unmatched().report(T, 1).shortfalls[0]).toMatch(/scope region testId=typo never appeared/);
+  });
+  it("a region that never matched counts the region-less step", () => {
+    expect(unmatched().report(T, 1).region?.stepsWithoutRegion).toBe(1);
+  });
+
+  it("without a region, the report has no pageControls", () => {
+    const t = new CoverageTracker(inScope);
+    t.observe(snap(URL, [control("A", "button", "button")]));
+    expect(t.report(T, 0).pageControls).toBeUndefined();
+  });
+  it("without a region, the report has no region", () => {
+    const t = new CoverageTracker(inScope);
+    t.observe(snap(URL, [control("A", "button", "button")]));
+    expect(t.report(T, 0).region).toBeUndefined();
+  });
+});
+
 describe("CoverageTracker", () => {
   it("counts the target's exercisable controls and forms; out-of-scope pages and links never count", () => {
     const t = new CoverageTracker(inScope);

@@ -83,7 +83,7 @@ export async function judgeState(ctx: FrontierState, item: FrontierItem, acted: 
   if (!ctx.visited.has(newFingerprint)) {
     ctx.visited.add(newFingerprint);
     ctx.statePaths.set(newFingerprint, branch);
-    enqueueFrom(ctx.frontier, newFingerprint, branch, ctx.snap.controls, (c) => ctx.withheld(c, ctx.snap));
+    enqueueFrom(ctx.frontier, newFingerprint, branch, ctx.snap.controls, (c) => ctx.withheld(c, ctx.snap), ctx.regionDeclared, ctx.outOfRegionSeen);
   }
   ctx.currentFingerprint = newFingerprint;
   return "next";

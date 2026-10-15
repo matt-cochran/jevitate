@@ -69,6 +69,8 @@ export const SUITE_EXPLORE_OPTIONS = {
   probeGuards: { shape: "boolean", appliesTo: ["usability"] },
   // containment
   scope: { shape: "string", appliesTo: ["coverage", "exploratory"], oneOf: ["app"] },
+  // #519: measure and hunt only the controls inside these page regions (descriptors); a Journey anchor's own region wins and cannot be overridden
+  scopeRegion: { shape: "strings", appliesTo: ["adversarial", "coverage", "exploratory"] },
   // secrets and sessions
   secret: { shape: "env-refs", appliesTo: ["goal", "adversarial", "usability"] },
   totp: { shape: "env-bindings", appliesTo: GOAL_UX },
@@ -130,6 +132,8 @@ export const SUITE_EXPLORE_OPTIONS = {
   allowVacuousChecks: { shape: "boolean", appliesTo: GOAL_UX },
   // #303: opt-in action deltas (every explore item kind but feature)
   actionDeltas: { shape: "boolean", appliesTo: ["goal", "usability", "coverage", "exploratory", "adversarial"] },
+  // #521: stop an off-allowlist page navigation in the mission's browser (opt-in); a departure, as after a settle
+  blockOffAllowlistNavigation: { shape: "boolean", appliesTo: ALL_KINDS },
   // #245 demo mode: opt-in per item (a check stays headless by default, CI included)
   headed: { shape: "boolean", appliesTo: ALL_KINDS },
   slowMo: { shape: "count", appliesTo: ALL_KINDS },

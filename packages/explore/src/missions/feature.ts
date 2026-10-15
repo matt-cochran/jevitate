@@ -38,6 +38,7 @@ import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, 
 import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
 import { seedRedirectReason } from "../seed-redirect.js";
+import { blockedDepartureReason, drainBlockedDeparture, peekBlockedDeparture, seedLandingReason } from "../blocked-navigation.js";
 import { MissionSafety } from "../mission-safety.js";
 import type { SafetyConfig, SafetyOverride } from "../safety.js";
 import type { SideEffect } from "../side-effects.js";
@@ -411,13 +412,17 @@ async function runFeatureFrontier(
       await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
-      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
-      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
-      // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
-      return endRun("scope-unreachable", {
-        kind: "target-unreachable",
-        message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
-      });
+      // #521: a seed load cut short by a navigation the opt-in guard stopped is no unreachable target —
+      // the page stayed on the seed; the seed check below reads where it tried to go.
+      if (peekBlockedDeparture(sessions.actor) === undefined) {
+        if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+        // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
+        // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
+        return endRun("scope-unreachable", {
+          kind: "target-unreachable",
+          message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
+        });
+      }
     } finally {
       sessions.page.off("requestfailed", onFirstNavRequestFailed);
     }
@@ -425,7 +430,8 @@ async function runFeatureFrontier(
 
     // The seed redirected elsewhere — most often a lost/expired `--storage-state` session bounced
     // to a login page (#82): the run cannot exercise the capability it was asked to.
-    const redirect = seedRedirectReason(params.seedUrl, snap.url);
+    // #521: a seed navigation the opt-in guard stopped is where the seed went (the page stayed put).
+    const redirect = seedLandingReason(params.seedUrl, snap.url, drainBlockedDeparture(sessions.actor));
     if (redirect !== null) return endRun("scope-unreachable", { kind: "target-unreachable", message: redirect.reason });
     chrome.observe(pathnameOf(snap.url), snap.controls);
     let currentFingerprint = stateFingerprint(snap);
@@ -612,6 +618,8 @@ async function runFeatureFrontier(
       }
 
       snap = await guard(snapshotNow());
+      // #521: a navigation the opt-in guard stopped (the page stayed put) is a departure all the same.
+      const blockedTo = drainBlockedDeparture(sessions.actor);
       chrome.observe(pathnameOf(snap.url), snap.controls);
       const navigatedToPath = toPath(beforeUrl) !== toPath(snap.url) ? toPath(snap.url) : null;
       const newFingerprint = stateFingerprint(snap);
@@ -653,7 +661,7 @@ async function runFeatureFrontier(
       // A hang: record it (reproduced from the path that led here), reset to a known state and keep
       // exploring the rest of the frontier. The hung state is never expanded.
       const hang = seenHang.last;
-      if (hang !== null) {
+      if (hang !== null && blockedTo === undefined) {
         transcript.record({
           op: item.op,
           control: item.control,
@@ -690,7 +698,7 @@ async function runFeatureFrontier(
         continue;
       }
 
-      const landedInScope = inScope(snap.url);
+      const landedInScope = blockedTo === undefined && inScope(snap.url);
       transcript.record({
         op: item.op,
         control: item.control,
@@ -698,14 +706,14 @@ async function runFeatureFrontier(
         chosenBy: "strategy",
         strategy: "feature-frontier",
         actOk: true,
-        reason: `${rankReason}; inScope=${landedInScope}`,
+        reason: `${rankReason}; inScope=${landedInScope}${blockedTo === undefined ? "" : `; ${blockedDepartureReason(blockedTo)}`}`,
         snapshot: decidedOn,
       });
 
       if (!landedInScope) {
         // Out of scope — recorded as a boundary edge (deduplicated), never
         // expanded (guardrail #4). Never counted as a discovered feature path.
-        boundaryEdgeSet.add(snap.url);
+        boundaryEdgeSet.add(blockedTo ?? snap.url);
         leaves.set(newFingerprint, branch);
         currentFingerprint = newFingerprint;
         departed = true;

@@ -47,3 +47,16 @@ describe("FsMissionTargetStore", () => {
     expect(list.map((t) => t.id)).toEqual(["good-target"]);
   });
 });
+
+describe("FsMissionTargetStore id guard (#520)", () => {
+  const unsafe = ["", "..", "../x", "a/b", "a\\\\b", "a\\u0000b", "C:x"];
+  it.each(unsafe)("get refuses unsafe id %j", async (id) => {
+    const store = new FsMissionTargetStore(mkdtempSync(join(tmpdir(), "mts-guard-")));
+    await expect(store.get(id)).rejects.toThrow(/invalid/i);
+  });
+  it("accepts a dotted, dashed id", async () => {
+    const store = new FsMissionTargetStore(mkdtempSync(join(tmpdir(), "mts-guard-")));
+    await store.put(mkTarget("demo-shop.v2_a", true));
+    expect((await store.get("demo-shop.v2_a"))?.id).toBe("demo-shop.v2_a");
+  });
+});

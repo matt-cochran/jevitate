@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { redactText, redactUrl } from "@jevitate/ai-core";
 import { isAuthorizedExploreTarget } from "@jevitate/explore";
 import { authHeaders, type AuthSources, type RequestAuth } from "./fixture-auth.js";
-import { clock } from "@jevitate/domain";
+import { clock, isRecord, sha256 } from "@jevitate/domain";
 
 /**
  * Mission fixtures (#140 declarative app setup, #144 setup/restore around missions and replays) —
@@ -109,9 +108,6 @@ export interface FixtureBounds {
   readonly baseUrl: string;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 /** Every `${setup.x}` name referenced in `text`. */
 export function referencedNames(text: string): string[] {
@@ -517,9 +513,6 @@ export interface PersistedFixtures {
   readonly identities?: Readonly<Record<string, string>>;
 }
 
-function sha256(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
 
 function canonical(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;

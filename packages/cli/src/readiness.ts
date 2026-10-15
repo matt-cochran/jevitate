@@ -112,12 +112,12 @@ async function journeyChecks(j: CatalogJourney, catalog: Catalog): Promise<Findi
   if (links.job === undefined || links.persona === undefined) {
     out.push(
       check("readiness.links", "warn", `it links ${links.job === undefined && links.persona === undefined ? "no job and no persona" : links.job === undefined ? "no job" : "no persona"}`, {
-        fix: "set metadata.job and metadata.persona to catalog ids (.jevitate/jobs.json, .jevitate/personas.json)",
+        fix: "`jevitate journey link <id> --job <job-id> --persona <persona-id>` (ids from .jevitate/jobs.json and personas.json; add missing ones with `jevitate catalog draft job|persona`)",
       }),
     );
   } else if (links.job.status === "unknown" || links.persona.status === "unknown") {
     const dangling = [...(links.job.status === "unknown" ? [`job:${links.job.id}`] : []), ...(links.persona.status === "unknown" ? [`persona:${links.persona.id}`] : [])];
-    out.push(check("readiness.links", "fail", `it links item(s) the catalog does not declare: ${dangling.join(", ")}`, { fix: "fix metadata.job / metadata.persona, or declare them", items: dangling }));
+    out.push(check("readiness.links", "fail", `it links item(s) the catalog does not declare: ${dangling.join(", ")}`, { fix: "`jevitate journey link <id> --job/--persona` with declared ids, or add them with `jevitate catalog draft job|persona`", items: dangling }));
   } else {
     out.push(check("readiness.links", "info", `it links job '${links.job.id}' and persona '${links.persona.id}'`));
     // 2. both are approved

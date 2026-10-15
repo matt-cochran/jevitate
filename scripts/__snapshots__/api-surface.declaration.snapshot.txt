@@ -190,7 +190,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (146 exports)
+# @jevitate/domain (150 exports)
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
@@ -252,6 +252,9 @@
   isBrokenRun: function
   isExternalSchemeUrl: function
   isGoalOutcome: function
+  isNodeError: function
+  isPlainObject: function
+  isRecord: function
   IssueDraft: interface
   IssueFilerPort: interface
   IssueRef: interface
@@ -321,6 +324,7 @@
   SecretMode: type-alias
   seedFrom: function
   SelfHealMode: type-alias
+  sha256: function
   simulateTiming: function
   SitePolicy: type-alias
   SitePolicySchema: variable
@@ -338,7 +342,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (669 exports)
+# @jevitate/explore (676 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -394,6 +398,7 @@
   BLOCKED_FETCH_ERROR: variable
   blockedCauseOf: function
   BlockedConsequence: interface
+  blockedDepartureReason: function
   BlockedRoot: interface
   BlockedWrite: interface
   BlockedWriteCause: interface
@@ -457,6 +462,7 @@
   CoverageSufficiencyThresholds: interface
   CoverageThresholds: interface
   CoverageTracker: class
+  CoverageTrackerOptions: interface
   coveredByInterceptors: function
   CrashReport: interface
   CrashSignals: interface
@@ -540,6 +546,8 @@
   draftForCrash: function
   draftForDefect: function
   draftForHang: function
+  drainBlockedDeparture: function
+  drainBlockedDepartures: function
   echoesGoal: function
   editCandidates: function
   effectiveStatus: function
@@ -784,6 +792,7 @@
   PartialReportAction: interface
   PartialReportState: interface
   pathGlob: function
+  peekBlockedDeparture: function
   pendingEvidence: function
   PendingRequestEvidence: interface
   perceive: function
@@ -814,6 +823,7 @@
   redactText: other
   redactUrl: other
   refusalNote: function
+  REGION_LOST_RESET_AFTER: other
   REJECTED_AGAIN_REASON: variable
   RELOAD_TIMEOUT_MS: variable
   reloadPage: function
@@ -897,6 +907,7 @@
   secretFieldValue: function
   secretPlaceholder: function
   SecretSourceError: class
+  seedLandingReason: function
   seedPath: function
   SeedRedirect: interface
   seedRedirectReason: function
@@ -1157,7 +1168,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (224 exports)
+# @jevitate/journey (225 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1288,6 +1299,7 @@
   JourneyParameter: interface
   JourneyPrecondition: interface
   journeyPrefix: function
+  journeyProofHash: function
   JourneyProposal: type-alias
   JourneyProposalSchema: variable
   JourneyRegistry: class
@@ -1466,10 +1478,11 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (159 exports)
+# @jevitate/playwright (161 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
+  BlockedNavigation: interface
   BrowserCrashedError: class
   BrowserFs: interface
   BrowserLaunchOptions: interface
@@ -1557,6 +1570,7 @@
   MemMetric: type-alias
   MemoryMetric: type-alias
   MemoryWatchedPage: interface
+  NavigationGuard: class
   OpenOptions: interface
   OrphanCleanup: interface
   orphanReason: function

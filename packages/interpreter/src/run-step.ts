@@ -335,7 +335,7 @@ function resolveInRoot(root: Page | Locator, d: TargetDescriptor): Locator {
     return root.getByTestId(d.testId);
   }
   if (d.role && d.name) {
-    return root.getByRole(d.role as any, { name: d.name });
+    return root.getByRole(d.role as Parameters<Page["getByRole"]>[0], { name: d.name });
   }
   if (d.label) {
     return root.getByLabel(d.label);

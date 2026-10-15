@@ -1,4 +1,4 @@
-import { JOURNEY_MISSION_OUTCOME, JOURNEY_RUN_OUTCOMES, MISSION_EXIT_CODES, MISSION_OUTCOMES, type MissionOutcome } from "@jevitate/domain";
+import { JOURNEY_MISSION_OUTCOME, JOURNEY_RUN_OUTCOMES, MISSION_EXIT_CODES, MISSION_OUTCOMES, isRecord, type MissionOutcome } from "@jevitate/domain";
 import { flatJourneySteps, SECRET_PARAM_NAME_RE, type CatalogApproval, type Journey } from "@jevitate/journey";
 import { CatalogInputError, findJob, findPersona, type Catalog, type CatalogJourney } from "./catalog.js";
 import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } from "./catalog-refs.js";
@@ -354,9 +354,6 @@ export function isRouteTemplate(route: string): boolean {
   return route.length >= 1 && route.length <= 256 && ROUTE_TEMPLATE_RE.test(route) && !RECORD_ID_RES.some((re) => re.test(route));
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 /** A deep copy through JSON — exactly what the reader sees (and hashes). */
 function asJson<T>(v: T): T {

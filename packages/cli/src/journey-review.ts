@@ -4,6 +4,7 @@ import {
   SECRET_PARAM_NAME_RE,
   describeStep,
   flatJourneySteps,
+  journeyProofHash,
   isNoClaimExpect,
   isOwnTargetVisible,
   journeyAssertions,
@@ -50,8 +51,6 @@ import {
   type Style,
 } from "./journey-review/render.js";
 
-export { humanTime, stepRanges } from "./journey-review/render.js";
-
 /**
  * #432 — `jevitate journey review <id>`: one human-readable review sheet for promotion sign-off.
  * `buildJourneyReview` is PURE (no I/O, no clock): the CLI loads what it needs (the targets.json
@@ -81,6 +80,12 @@ export interface JourneyVerifyRecord {
   readonly journeyId: string;
   /** `journeyReviewHash` of the Journey the proof ran on. */
   readonly contentHash: string;
+  /**
+   * #523: `journeyProofHash` (executable content only) of the Journey the proof ran on — staleness is
+   * decided on it, so approving wording does not stale a proof. Absent on records written before
+   * 0.14.0: those fall back to comparing `contentHash`.
+   */
+  readonly proofHash?: string;
   readonly verdict: string;
   readonly reason?: string;
   readonly summary: Readonly<Record<string, number>>;
@@ -421,7 +426,8 @@ function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | 
     status: "recorded",
     verdict: rec.verdict,
     at: rec.at,
-    stale: rec.contentHash !== hash,
+    // #523: an executable-content change stales the proof; an old record without it compares the full hash.
+    stale: rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHash(journey),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     summary: { ...rec.summary },
   };

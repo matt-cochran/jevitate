@@ -8,7 +8,7 @@ import type { ExploreRunContext } from "./shared.js";
 
 /** `--strategy coverage|exploratory` (moved verbatim out of registerExploreCommands). */
 export async function runCoverageStrategy(ctx: ExploreRunContext<"coverage" | "exploratory">): Promise<void> {
-  const { deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withPrefix, emitJourneyFailure, withEvidence } = ctx;
+  const { deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence } = ctx;
   if (!o.url) {
     emitExplore(fail("E_EXPLORE_ARGS", "--url is required"));
     return;
@@ -52,6 +52,7 @@ export async function runCoverageStrategy(ctx: ExploreRunContext<"coverage" | "e
     const result = await runCoverageMission({
       ...(target === undefined ? {} : { target }),
       ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
+      ...(o.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       url: o.url,
       allowlist: covAllowlist,
       judge: covJudge,
@@ -72,6 +73,7 @@ export async function runCoverageStrategy(ctx: ExploreRunContext<"coverage" | "e
       ...withInvariants,
       ...triagedServerLog(serverLog, covJudge, o.real === true),
       ...withPrefix,
+      ...withScopeRegion,
     });
     // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see exit-codes.ts).
     emitExplore(ok(await withEvidence(result)), result.exitCode);

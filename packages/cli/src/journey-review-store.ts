@@ -83,6 +83,7 @@ function isVerifyRecord(v: unknown): v is JourneyVerifyRecord {
   return (
     typeof o.journeyId === "string" &&
     typeof o.contentHash === "string" &&
+    (o.proofHash === undefined || typeof o.proofHash === "string") &&
     typeof o.verdict === "string" &&
     typeof o.at === "string" &&
     (o.reason === undefined || typeof o.reason === "string") &&
