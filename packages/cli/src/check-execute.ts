@@ -350,6 +350,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
         ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
         ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
+        ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
         allowlist: item.t.allowlist,
         judge,
         gen,
@@ -426,6 +427,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         seedUrl: url,
         allowlist: item.t.allowlist,
         capability: m.feature ?? m.name,
+        ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
         routeGlobs: resolveRouteScope(url, m.routes).routeGlobs,
         bounds: b,
         ...withStall,
@@ -454,6 +456,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...withScopeRegion,
         ...withPrefix,
         ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
+        ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
@@ -469,6 +472,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         allowlist: item.t.allowlist,
         strategies: CLI_ADVERSARIAL_STRATEGIES,
         ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
+        ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
         judgment: judge,
         generation: gen,
         usage,
@@ -510,6 +514,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       ...(m.successWhen === undefined ? {} : { successWhen: m.successWhen }),
       ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
       ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
+      ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       judge,
       gen,
       usage,

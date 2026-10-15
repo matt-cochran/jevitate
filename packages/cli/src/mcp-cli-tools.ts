@@ -445,6 +445,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         feature: s("--feature"),
         route: many("--route"),
         scopeRegion: many("--scope-region"),
+        blockOffAllowlistNavigation: b("--block-off-allowlist-navigation"),
         scope: s("--scope", { enum: ["app"] }),
         maxActions: n("--max-actions"),
         maxDecisions: n("--max-decisions"),

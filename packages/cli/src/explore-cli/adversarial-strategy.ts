@@ -49,6 +49,7 @@ export async function runAdversarialStrategy(ctx: ExploreRunContext): Promise<vo
     const result = await runAdversarialCliMission({
       ...(target === undefined ? {} : { target }),
       ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
+      ...(o.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       seedUrl: o.url,
       allowlist: advAllowlist,
       usage: advUsage,

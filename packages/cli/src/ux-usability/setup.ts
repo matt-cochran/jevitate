@@ -92,6 +92,7 @@ export async function setUpUsabilityMission(opts: RunUsabilityMissionOptions) {
   const launch = {
     ...sessionLaunchOptions(opts.browser, videoDir),
     allowedOrigins: [...opts.allowlist],
+    ...(opts.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
     baseUrl: origin,
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),

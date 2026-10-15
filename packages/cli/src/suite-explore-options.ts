@@ -132,6 +132,8 @@ export const SUITE_EXPLORE_OPTIONS = {
   allowVacuousChecks: { shape: "boolean", appliesTo: GOAL_UX },
   // #303: opt-in action deltas (every explore item kind but feature)
   actionDeltas: { shape: "boolean", appliesTo: ["goal", "usability", "coverage", "exploratory", "adversarial"] },
+  // #521: stop an off-allowlist page navigation in the mission's browser (opt-in); a departure, as after a settle
+  blockOffAllowlistNavigation: { shape: "boolean", appliesTo: ALL_KINDS },
   // #245 demo mode: opt-in per item (a check stays headless by default, CI included)
   headed: { shape: "boolean", appliesTo: ALL_KINDS },
   slowMo: { shape: "count", appliesTo: ALL_KINDS },

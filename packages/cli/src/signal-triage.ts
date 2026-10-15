@@ -142,6 +142,10 @@ export function observeBrowserSignals(page: unknown, sink: RawBrowserSignal[], n
     // request (headless Chromium aborts it for want of a handler).
     if (isExternalSchemeUrl(url)) return;
     const why = typeof failure?.errorText === "string" ? failure.errorText : "failed";
+    // #521: a page navigation the browser abandoned (net::ERR_ABORTED) is no app error — it is what
+    // the opt-in navigation guard's `204` answer to an off-allowlist navigation emits (the page stays
+    // put; the mission records the departure), and what a navigation superseded by the next one emits.
+    if (why === "net::ERR_ABORTED" && call(req, "isNavigationRequest") === true) return;
     push({ source: "requestfailed", level: "error", text: `${typeof method === "string" ? method : "GET"} ${redactUrl(url)} — ${why}` });
   });
 }

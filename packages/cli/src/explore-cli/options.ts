@@ -104,6 +104,10 @@ export function declareExploreCommand(program: Command): Command {
       [] as string[],
     )
     .option(
+      "--block-off-allowlist-navigation",
+      "goal/usability/adversarial/coverage/exploratory/--feature: stop an off-allowlist page navigation in the mission's browser before it loads (answered 204, the page stays put) and treat it as a departure; server redirects still pass and the after-settle check stays the guard; turns off the HTTP cache for the run (#521)",
+    )
+    .option(
       "--scope <mode>",
       "--strategy coverage/exploratory: 'app' widens containment to the whole app (same as --route '/**'); default: the start URL's route plus --route globs",
     )

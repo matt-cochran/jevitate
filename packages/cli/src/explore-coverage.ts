@@ -143,6 +143,12 @@ export interface RunCoverageMissionOptions {
    * starts on the live page it left (never a fresh navigation). `url` is only the expected landing.
    */
   readonly journeyPrefix?: JourneyPrefix;
+  /**
+   * #521 `--block-off-allowlist-navigation` (opt-in, off by default): arm the navigation guard on this
+   * run's mission session (and its fresh/hang-replay sessions) — an off-allowlist page navigation is
+   * stopped in place and the mission treats it as a departure. Never on login, Journey or demo sessions.
+   */
+  readonly blockOffAllowlistNavigation?: boolean;
   /** #303 `--action-deltas` (opt-in): record what each action changed (code verdict) — evidence only. */
   readonly actionDeltas?: boolean;
 }
@@ -256,6 +262,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const launch = {
     ...sessionLaunchOptions(opts.browser, videoDir),
     allowedOrigins: [...opts.allowlist],
+    ...(opts.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
     baseUrl: origin,
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
