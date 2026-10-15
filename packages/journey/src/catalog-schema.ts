@@ -395,6 +395,14 @@ export const CatalogStatusSchema = z
     approvals: ApprovalsReportSchema.optional(),
     /** #465: every catalog reference problem (warnings: nothing here blocks a load or a run). */
     refIssues: z.array(CatalogRefIssueSchema).optional(),
+    /**
+     * #523: with `--strict`, what fails it — a stale persona/job approval, or a promoted Journey that
+     * links a catalog entry that is not approved, or links no job / no persona.
+     */
+    strict: z
+      .object({ violations: z.array(z.object({ kind: z.enum(["persona", "job", "journey"]), id: z.string(), reason: z.string() }).strict()) })
+      .strict()
+      .optional(),
   })
   .strict();
 export type CatalogStatusReport = z.infer<typeof CatalogStatusSchema>;

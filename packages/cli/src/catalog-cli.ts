@@ -11,9 +11,9 @@ import { JOURNEEZE_DEFAULT_URL, connectJourneeze, publishToJourneeze, renderPubl
 import { JourneezeError } from "./journeeze-connect.js";
 import { buildJevSetup, jevCacheDir, type JevSetup } from "./jev-advisor.js";
 import { analyzeCatalog, renderCatalogAnalysis, ANALYZE_PAIR_CAP } from "./catalog-analysis.js";
-import { CatalogInputError, UnknownCatalogItemError } from "./catalog.js";
+import { CatalogDraftArgsError, CatalogDraftExistsError, CatalogInputError, UnknownCatalogItemError, writeCatalogDraft } from "./catalog.js";
 import { StaleCatalogReviewError, approveCatalogItem, catalogJourneysDir, loadCatalog, resolveCatalogDir } from "./catalog-api.js";
-import { buildCatalogStatus, buildJobReview, buildPersonaReview, renderCatalogStatus, renderJobReview, renderPersonaReview } from "./catalog-review.js";
+import { strictCatalogViolations, buildCatalogStatus, buildJobReview, buildPersonaReview, renderCatalogStatus, renderJobReview, renderPersonaReview } from "./catalog-review.js";
 import { ApprovalFindingsError } from "./pre-approval.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import {
@@ -72,7 +72,7 @@ function refuse(program: Command, err: unknown, fallbackCode: string): void {
     emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
   } else if (err instanceof UnknownCatalogItemError) {
     emitJson(program, fail(err.code, err.message));
-  } else if (err instanceof CatalogInputError || err instanceof StaleCatalogReviewError) {
+  } else if (err instanceof CatalogInputError || err instanceof StaleCatalogReviewError || err instanceof CatalogDraftArgsError || err instanceof CatalogDraftExistsError) {
     emitJson(program, fail(err.code, err.message));
   } else if (err instanceof ApprovalFindingsError) {
     // #433: a refusal on the item's findings — exit 1 (a gating finding), like E_JOURNEY_WEAK.
@@ -266,9 +266,13 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
     .option("--dir <path>", DIR_HELP)
     .option("--require-approvals", "#437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels)")
     .option("--allow-channels <list>", ALLOW_CHANNELS_HELP)
+    .option(
+      "--strict",
+      "#523: exit 1 when a persona/job approval is stale, or a promoted Journey links a catalog entry that is not approved (a draft) or links no job / no persona — the repo-wide gate on what the review sheet flags",
+    )
     .option("--json", "emit a JSON envelope (the schema-checked report)")
     .action(async function (this: Command) {
-      const { dir, json, requireApprovals, allowChannels } = this.opts<{ dir?: string; json?: boolean; requireApprovals?: boolean; allowChannels?: string }>();
+      const { dir, json, requireApprovals, allowChannels, strict } = this.opts<{ dir?: string; json?: boolean; requireApprovals?: boolean; allowChannels?: string; strict?: boolean }>();
       try {
         if (allowChannels !== undefined && requireApprovals !== true) throw new ApprovalArgsError("--allow-channels needs --require-approvals");
         const allowed = requireApprovals === true ? parseAllowedChannels(allowChannels) : undefined;
@@ -276,13 +280,57 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
         // #437: every recorded approval and how it was made; with --require-approvals, the violations.
         // #469: with pr-review allowed, each recorded pr-review approval is re-verified through the forge.
         const approvals = await approvalsReportVerified([catalog], allowed, { ...(deps.approval ?? {}), catalogDir: catalog.dir });
-        const report = { ...buildCatalogStatus(catalog), approvals };
-        const failed = (approvals.requirement?.violations.length ?? 0) > 0;
+        const strictReport = strict === true ? { strict: { violations: strictCatalogViolations(catalog) } } : {};
+        const report = { ...buildCatalogStatus(catalog), approvals, ...strictReport };
+        const failed = (approvals.requirement?.violations.length ?? 0) > 0 || (strictReport.strict?.violations.length ?? 0) > 0;
         if (json) emitJson(program, ok(report));
         else program.configureOutput().writeOut?.(`${renderCatalogStatus(report)}${renderApprovals(approvals)}`);
         process.exitCode = failed ? EXIT_CODES.defects : 0;
       } catch (err) {
         refuse(program, err, "E_CATALOG_STATUS");
+      }
+    });
+
+  // #523: a DRAFT persona or job (never an approval) — so a Journey can link one before a person vets it.
+  catalog
+    .command("draft <kind> <id>")
+    .description(
+      "#523: add a DRAFT persona or job to the catalog (kind: persona | job) — personas.json / jobs.json, created when missing — so a Journey can link it now. Never approves (a person runs `persona|job approve` after review); an id the catalog already has is refused",
+    )
+    .requiredOption("--name <text>", "a persona: who they are (written as its role); a job: what the user wants to do (its motivation, \"I want to …\")")
+    .option("--description <text>", "a persona: its description; a job: its goal")
+    .option("--trigger <text>", "a job: when it comes up (\"When …\"); default: a placeholder to write before approving")
+    .option("--outcome <text>", "a job: what doing it lets them do (\"so I can …\"); default: a placeholder to write before approving")
+    .option("--dir <path>", DIR_HELP)
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, kind: string, id: string) {
+      const { dir, json, name, description, trigger, outcome } = this.opts<{ dir?: string; json?: boolean; name: string; description?: string; trigger?: string; outcome?: string }>();
+      if (kind !== "persona" && kind !== "job") {
+        emitJson(program, fail("E_CATALOG_DRAFT_ARGS", `<kind> must be persona or job, got ${JSON.stringify(kind)}`));
+        return;
+      }
+      if (kind === "persona" && (trigger !== undefined || outcome !== undefined)) {
+        emitJson(program, fail("E_CATALOG_DRAFT_ARGS", "--trigger and --outcome are a job's story parts: a persona takes --name and --description"));
+        return;
+      }
+      try {
+        const result = await writeCatalogDraft(resolveCatalogDir(deps.catalogDir, dir), {
+          kind,
+          id,
+          name,
+          ...(description === undefined ? {} : { description }),
+          ...(trigger === undefined ? {} : { trigger }),
+          ...(outcome === undefined ? {} : { outcome }),
+        });
+        if (json) emitJson(program, ok(result));
+        else {
+          program.configureOutput().writeOut?.(
+            `drafted ${kind} '${id}' in ${result.file} (status draft, content hash ${result.contentHash})\n  link it: ${result.next.link}\n  review it: ${result.next.review}\n  a person approves it: ${result.next.approve}\n`,
+          );
+        }
+        process.exitCode = 0;
+      } catch (err) {
+        refuse(program, err, "E_CATALOG_DRAFT");
       }
     });
 

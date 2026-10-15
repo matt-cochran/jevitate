@@ -81,6 +81,7 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_JOURNEY_PROPOSAL_STALE", // #453: `journey promote --proposal`: the Journey changed since the proposal was made; re-run the self-heal
   "E_JOURNEY_PROPOSAL_PROOF", // #453: the proposal file touches the Journey's proof fields
   "E_JOURNEY_PROPOSAL_INVALID", // #453: the proposal file is not valid
+  "E_CATALOG_DRAFT_EXISTS", // #523: `catalog draft` of an id the catalog already has — link it, or pick another id
   "E_CATALOG_REVIEW_STALE", // #433: `persona|job approve --reviewed-hash`: the item changed since the sheet was read; review again // #432: `journey promote --reviewed-hash`: the Journey changed since the sheet was read; review again
   "E_DEMO_PRODUCTION_ENV", // #249: `demo` refuses an environment flagged production: true
   "E_DEMO_EXISTS", // #249: `demo` would overwrite an existing Journey / pending demo draft

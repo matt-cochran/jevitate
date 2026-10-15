@@ -28,6 +28,9 @@ const RULES: ReadonlyArray<{ id: JourneyLintRule; level: "error" | "warning" }> 
   ...ANCHOR_RULE_CODES.map((id) => ({ id, level: "warning" as const })),
   { id: "anchor-job-step", level: "warning" },
   { id: "serves-outcome", level: "warning" },
+  // #523: no job / no catalog persona link (journey lint adds them from the catalog).
+  { id: "missing-job", level: "warning" },
+  { id: "missing-persona", level: "warning" },
 ];
 
 export interface JourneyLintSarifLog {

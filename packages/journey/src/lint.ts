@@ -23,7 +23,10 @@ export type JourneyLintRule =
   | "upload-sensitive-file"
   | AnchorRuleCode
   | "anchor-job-step"
-  | "serves-outcome";
+  | "serves-outcome"
+  /** #523: the catalog link warnings the CLI adds (journey-link-hints.ts). */
+  | "missing-job"
+  | "missing-persona";
 
 /** #401: one weak assertion in a Journey, with the 1-based step it belongs to when it has one. */
 export interface JourneyLintFinding {
