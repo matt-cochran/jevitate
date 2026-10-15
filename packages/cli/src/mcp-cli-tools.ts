@@ -268,10 +268,11 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, a pending self-heal proposal (#453: per-step before/after, hypothesis, evidence, staleness, proposedHash), and its content hash. " +
       "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
       "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed. " +
+      "#523: strict: true exits 1 (defects) when the sheet has any ⚠ attention item (and runs the code-only readiness link checks — missing job / persona — even without readiness); ○ items and Jev never fail it. " +
       "#467: stale: true (and no id) instead lists every promoted Journey whose approval is stale — each with its approved and current hash and stepIdOnly: true when the only change is minted step ids — for a person to re-approve; it never approves.",
     command: {
       path: "journey review",
-      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), ...JEV_ADVICE },
+      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), strict: b("--strict"), ...JEV_ADVICE },
       omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
     },
   },
