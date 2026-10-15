@@ -52,6 +52,7 @@ export async function runCoverageStrategy(ctx: ExploreRunContext<"coverage" | "e
     const result = await runCoverageMission({
       ...(target === undefined ? {} : { target }),
       ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
+      ...(o.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       url: o.url,
       allowlist: covAllowlist,
       judge: covJudge,

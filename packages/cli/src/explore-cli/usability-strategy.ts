@@ -97,6 +97,7 @@ export async function runUsabilityStrategy(ctx: ExploreRunContext): Promise<void
       ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
       ...withPrefix,
       ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
+      ...(o.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
     });
     // UX findings are advisory (0); a failed --success check (#225) is 1, as on a goal run; a
     // broken run or an unavailable analysis is 2.

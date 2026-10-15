@@ -86,6 +86,8 @@ export type ExploreOpts = {
     route: string[];
     /** #519: `--scope-region` descriptors (repeatable). */
     scopeRegion: string[];
+    /** #521: `--block-off-allowlist-navigation` (opt-in). */
+    blockOffAllowlistNavigation?: boolean;
     scope?: string;
     allow: string[];
     secret: string[];

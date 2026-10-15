@@ -66,6 +66,12 @@ export interface RunFeatureCliMissionOptions {
   readonly allowlist: readonly string[];
   readonly capability: string;
   /**
+   * #521 `--block-off-allowlist-navigation` (opt-in, off by default): arm the navigation guard on this
+   * run's mission session (and its fresh/hang-replay sessions) — an off-allowlist page navigation is
+   * stopped in place and the mission treats it as a departure. Never on login, Journey or demo sessions.
+   */
+  readonly blockOffAllowlistNavigation?: boolean;
+  /**
    * The `--route` globs, used exactly as given. Empty/absent (#224): the start URL's route and
    * everything under it — the default every strategy shares (`resolveRouteScope`), stated in the
    * result's `scope`. A start URL no default can be derived from is refused up front
@@ -206,6 +212,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const launch = {
     ...sessionLaunchOptions(opts.browser, videoDir),
     allowedOrigins: [...opts.allowlist],
+    ...(opts.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
     baseUrl: origin,
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
