@@ -217,7 +217,7 @@ function jobFindings(id: string, catalog: Catalog): Finding[] {
 function journeyFindings(j: CatalogJourney, catalog: Catalog): Finding[] {
   const links = journeyLinks(catalog, j);
   if (!links.linked) {
-    return [finding("journey.unlinked", "info", `not linked to a job/persona — it promotes as before (opt-in: `jevitate journey link <id> --job <job-id> --persona <persona-id>`)`)];
+    return [finding("journey.unlinked", "info", `not linked to a job/persona — it promotes as before (opt-in: jevitate journey link <id> --job <job-id> --persona <persona-id>)`)];
   }
   const out: Finding[] = [];
   if (links.job?.status === "unknown") out.push(finding("journey.unknown-job", "fail", `links job '${links.job.id}', which the catalog does not declare`, { fix: "`jevitate journey link <id> --job <job-id>` with a declared job, or add one with `jevitate catalog draft job <job-id> --name <text>`", items: [`job:${links.job.id}`] }));
