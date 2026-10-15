@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# Manual release (the current release path; see RELEASING.md) — publishes the
+# Manual release (the FALLBACK path; normally pushing a vX.Y.Z tag publishes
+# through the Release workflow, see RELEASING.md) — publishes the
 # two public packages to npm:
 #   1. @jevitate/cli   (the real CLI; dist + bundled skills)
 #   2. jevitate        (the bare-name alias; depends on @jevitate/cli)
 #
-# Why manual: npm OIDC Trusted Publishing from GitHub Actions is blocked for this
-# repo by npm/cli#9969, and no long-lived NPM_TOKEN is stored (by decision). npm
-# prompts for your 2FA one-time password interactively instead.
+# Use it when the workflow's OIDC publish fails (npm/cli#9969 returns E404 for
+# repos with immutable OIDC subject claims). No long-lived NPM_TOKEN is stored
+# (by decision); npm prompts for your 2FA one-time password interactively.
 #
 # After publishing it waits (bounded) until the registry serves the new
 # versions, creates the release tags LOCALLY (`@jevitate/cli@x.y.z`,

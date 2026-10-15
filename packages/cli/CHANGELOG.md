@@ -1,5 +1,11 @@
 # @jevitate/cli
 
+## 0.14.1
+
+### Patch Changes
+
+- f524100: Released from GitHub Actions through npm Trusted Publishing, with a provenance attestation on both packages. The CLI is unchanged from 0.14.0. The release script now builds every package with `pnpm -r build`, so the cli's build-info step runs on a clean checkout.
+
 ## 0.14.0
 
 ### Minor Changes

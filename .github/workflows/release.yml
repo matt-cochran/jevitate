@@ -1,23 +1,26 @@
 name: Release
 
-# Versions @jevitate/cli + jevitate with changesets, and keeps the npm OIDC
-# Trusted Publishing path ready. See RELEASING.md.
+# Versions @jevitate/cli + jevitate with changesets and publishes them to npm
+# through OIDC Trusted Publishing (no NPM_TOKEN, by decision). See RELEASING.md.
 #
-# CURRENT STATE (manual publishing): npm rejects this repo's GitHub OIDC tokens
-# (immutable subject claims; npm/cli#9969), and by decision no NPM_TOKEN is
-# stored. Releases are published BY HAND with `bash scripts/release.sh`.
-# This workflow therefore:
-#   - on every push to `main`, picks a mode in plain shell (`plan` job):
+#   - push to `main`: a `plan` job picks a mode in plain shell:
 #       version  - pending .changeset/*.md: run `changeset version` and push the
 #                  `changeset-release/main` branch. Actions may not open PRs in
 #                  this repo (setting intentionally off), so the run prints the
 #                  compare URL and the `gh pr create` command instead of failing.
-#       publish  - main's version is NOT on npm yet: print a notice to publish
-#                  by hand. A push never publishes.
+#       publish  - main's version is NOT on npm yet: print a notice to push the
+#                  `vX.Y.Z` tag. A push to main never publishes.
 #       none     - nothing pending, and main's version is already on npm.
-#   - publishes ONLY from a manual run (Actions -> Release -> Run workflow, with
-#     `publish` checked). Use that once npm fixes npm/cli#9969; until then the
-#     npm PUT fails (E404) and `scripts/release.sh` is the path.
+#   - push of a `vX.Y.Z` tag: PUBLISHES. The tag must equal both packages'
+#     version, point at a commit on `main`, and have no pending changesets.
+#     Builds, publishes @jevitate/cli then jevitate (a version already on npm is
+#     skipped, so a rerun is safe), pushes the package tags and creates the
+#     "Jevitate vX.Y.Z" GitHub release from the root CHANGELOG section.
+#   - manual run with `publish` checked: the same publish for main's version
+#     (a retry path; it also creates the `vX.Y.Z` tag if missing).
+#
+# Fallback when OIDC publishing fails (npm/cli#9969: E404 on the PUT for repos
+# with immutable OIDC subject claims): `bash scripts/release.sh` by hand.
 #
 # Actions are pinned to commit SHAs (version in the trailing comment). npm is
 # pinned to 11: OIDC needs npm >= 11.5.1, and npm 12 rejects the --git-checks
@@ -25,10 +28,11 @@ name: Release
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish to npm via OIDC (works only once npm/cli#9969 is fixed; else use scripts/release.sh)"
+        description: "Publish main's version to npm via OIDC (retry path; normally push the vX.Y.Z tag)"
         type: boolean
         default: false
 
@@ -47,6 +51,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -57,24 +63,34 @@ jobs:
         id: mode
         run: |
           version=$(node -p "require('./packages/cli/package.json').version")
+          alias_version=$(node -p "require('./packages/jevitate-cli-alias/package.json').version")
           pending=$(find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md' | wc -l)
+          on_npm=$(npm view "@jevitate/cli@${version}" version 2>/dev/null || true)
+          alias_on_npm=$(npm view "jevitate@${alias_version}" version 2>/dev/null || true)
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            fail() { echo "::error title=Tag ${GITHUB_REF_NAME} not published::$1"; exit 1; }
+            [ "${GITHUB_REF_NAME}" = "v${version}" ] || fail "the tag must be v${version} (packages/cli version)."
+            [ "${alias_version}" = "${version}" ] || fail "jevitate is ${alias_version} but @jevitate/cli is ${version}."
+            [ "$pending" -eq 0 ] || fail "${pending} changeset(s) still pending; merge the version PR first."
+            git merge-base --is-ancestor "${GITHUB_SHA}" origin/main || fail "the tagged commit is not on main."
+          fi
           if [ "$pending" -gt 0 ]; then
             mode=version
-          elif [ -z "$(npm view "@jevitate/cli@${version}" version 2>/dev/null || true)" ]; then
+          elif [ -z "$on_npm" ] || [ -z "$alias_on_npm" ]; then
             mode=publish
           else
             mode=none
           fi
           echo "mode=${mode}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "mode=${mode} (pending changesets: ${pending}; main is at ${version})"
+          echo "mode=${mode} (event: ${GITHUB_EVENT_NAME} ${GITHUB_REF_NAME}; pending changesets: ${pending}; version ${version})"
 
-      - name: Publishing is manual (npm/cli#9969)
-        if: steps.mode.outputs.mode == 'publish' && !(github.event_name == 'workflow_dispatch' && inputs.publish)
+      - name: Ready to publish (push the tag)
+        if: steps.mode.outputs.mode == 'publish' && github.ref_type != 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.publish)
         env:
           VERSION: ${{ steps.mode.outputs.version }}
         run: |
-          msg="@jevitate/cli@${VERSION} is not on npm yet. Publish it by hand from an up-to-date main: bash scripts/release.sh (see RELEASING.md)."
+          msg="${VERSION} is not on npm yet. Publish it by tagging main: git tag -a v${VERSION} -m v${VERSION} origin/main && git push origin v${VERSION} (see RELEASING.md)."
           echo "::notice title=Release ${VERSION} is ready to publish::${msg}"
           {
             echo "### Release ${VERSION} is ready to publish"
@@ -145,14 +161,16 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
-    # Manual only. Ready for OIDC Trusted Publishing once npm/cli#9969 is fixed.
+    # A pushed vX.Y.Z tag (validated by plan), or a manual run with `publish`.
     needs: plan
-    if: needs.plan.outputs.mode == 'publish' && github.event_name == 'workflow_dispatch' && inputs.publish
+    if: needs.plan.outputs.mode == 'publish' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish))
     runs-on: ubuntu-latest
     timeout-minutes: 30  # #417: never GitHub's 6 h default
     permissions:
-      contents: write # tags + GitHub releases
+      contents: write # tags + GitHub release
       id-token: write # npm OIDC Trusted Publishing (+ provenance)
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -176,13 +194,44 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Publish to npm (changeset publish)
-        # `pnpm release` builds, bundles @jevitate/cli and runs `changeset publish`,
-        # which publishes only versions not yet on npm and tags them; the action
-        # pushes the tags and creates the GitHub releases.
-        uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
-        with:
-          script: pnpm release
+      - name: Build and bundle
+        # pnpm -r build runs packages/cli's build-info pre-step (root tsc --build does not).
+        run: |
+          pnpm -r build
+          pnpm --filter @jevitate/cli run bundle
+
+      - name: Publish to npm (OIDC, provenance)
+        # Order matters: jevitate depends on @jevitate/cli (workspace:* is rewritten
+        # at pack time), so the cli must be live first. A version already on npm
+        # is skipped, so rerunning after a partial publish is safe.
         env:
-          # No NPM_TOKEN: OIDC provides publish auth. Provenance is attached.
-          NPM_CONFIG_PROVENANCE: "true"
+          NPM_CONFIG_PROVENANCE: "true" # No NPM_TOKEN: OIDC provides publish auth.
+        run: |
+          for pkg in @jevitate/cli jevitate; do
+            if [ -n "$(npm view "${pkg}@${VERSION}" version 2>/dev/null || true)" ]; then
+              echo "${pkg}@${VERSION} is already on npm; skipping."
+              continue
+            fi
+            pnpm --filter "${pkg}" publish --access public --no-git-checks
+          done
+
+      - name: Tags and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for tag in "@jevitate/cli@${VERSION}" "jevitate@${VERSION}" "v${VERSION}"; do
+            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+              echo "${tag} already exists."
+            else
+              git tag -a "${tag}" -m "${tag}" "${GITHUB_SHA}"
+              git push origin "refs/tags/${tag}"
+            fi
+          done
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "GitHub release v${VERSION} already exists."
+          else
+            awk -v v="${VERSION}" 'index($0, "## [" v "]")==1{p=1;next} /^## \[/{if(p)exit} p' CHANGELOG.md > "${RUNNER_TEMP}/notes.md"
+            gh release create "v${VERSION}" --verify-tag --title "Jevitate v${VERSION}" --notes-file "${RUNNER_TEMP}/notes.md"
+          fi
