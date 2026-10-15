@@ -25,6 +25,7 @@ import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js"
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig, type TargetFlags } from "./target-config.js";
 import { emulationFromFlags, type EmulationFlags, type ScreenshotsFlags } from "./cli-shared.js";
 import type { SecretCommandRunner } from "@jevitate/explore";
+import type { ServerLogOptions } from "./explore-shared.js";
 
 const collect = (v: string, prev: string[]): string[] => [...prev, v];
 
@@ -149,6 +150,12 @@ export const GOAL_RUN_OPTIONS = {
     new Option(
       "--allow-destructive",
       "let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for",
+    ),
+  allowWrites: () =>
+    new Option(
+      "--allow-writes",
+      "let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow " +
+        "(checkout, upgrade, create, save, submit…) are refused and the write requests an action fires are blocked, unless the goal itself asks for a change",
     ),
   dialogs: () =>
     new Option(
@@ -341,6 +348,8 @@ export interface GoalRunShaping {
   readonly target?: TargetConfig;
   readonly hangReplays?: number;
   readonly conversation?: ConversationOptions;
+  /** #142/#544: the run's backend-log sources, built by `serverLogOptionsFromFlags` (triaged with the judge on a live run). */
+  readonly serverLog?: ServerLogOptions;
 }
 
 export interface ResolveGoalRunDeps {

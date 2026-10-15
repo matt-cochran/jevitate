@@ -92,7 +92,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariantAuthTokens: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
     journeyPrefix: NO_ANCHORED_HERE,
     minEffort: "#424: every take is checked by --success and stops at the first verified path; a minimum effort would only delay it (`explore --min-actions`)",
-    serverLog: "backend log sources are operator-declared `explore --log-source`; authoring needs only the goal's checks",
     blockOffAllowlistNavigation: "#521: an authored Journey may cross to an IdP or checkout like any Journey; the navigation guard is `explore --block-off-allowlist-navigation`'s",
   },
   "coverage-strategy.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
