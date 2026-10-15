@@ -490,7 +490,7 @@ key is refused when the file is read.
 | `preconditions` | no | `[{ "description", "fixture"?, "hook"?, "login"? }]`: the seed data and login it needs, linked to the `--fixtures` file and `--before` hook that set it up |
 | `successCriteria` | no | `[{ "description", "check"? }]`: the end state that shows it worked; `check` is any [assertion](./success-checks.md) that checks it in code |
 | `parameters` | no | `[{ "name", "description"?, "secret"? }]`: its inputs. `secret: true` marks a value (a password, a token) that is redacted wherever it is shown. A declared parameter never carries a value |
-| `anchors` | no | `[{ "name", "step", "description"?, "probes"? }]`: named states worth exploring from — the state after `step` top-level steps (1-based). `name` is letters, digits, `.`, `_`, `-` and never all digits; `probes` are suggested adversarial attacks there. See [Explore from a Journey step](#explore-from-a-journey-step-anchors-and-campaigns) |
+| `anchors` | no | `[{ "name", "step", "description"?, "probes"?, "region"? }]`: named states worth exploring from — the state after `step` top-level steps (1-based). `name` is letters, digits, `.`, `_`, `-` and never all digits; `probes` are suggested adversarial attacks there; `region` is a [scope region](./exploration.md#scope-regions) descriptor. See [Explore from a Journey step](#explore-from-a-journey-step-anchors-and-campaigns) |
 | `mutationPairs` | no | `[{ "check", "mustFailWhen" }]`: declared negative-proof pairs for `journey verify --mutate` — the assertion at `check` (`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail under `mustFailWhen` (`skip:`/`block-write:`/`stale-value:` + a step number or anchor). An unknown site, step or anchor is refused at load. See [Proving assertions can fail](#proving-assertions-can-fail) |
 
 `recording` holds `version`, `site` (the origin it runs on), optional `intent`, and `pages[]`, each
@@ -608,10 +608,17 @@ jevitate journey anchor add checkout --name payment --step 4 --probe "double sub
 jevitate journey anchor remove checkout --name payment
 jevitate journey lint checkout --fix        # stamps each number-only anchor with its step's id
 jevitate journey anchors checkout --suggest # advisory; writes nothing
+jevitate journey anchor add import --name wizard --step 2 --region testId=import-view   # #519
 ```
 
 Over MCP the same edits are `journey_anchor_add` / `journey_anchor_remove`, `lint_journey` with
 `fix: true` and `journey_anchors` with `suggest: true`; the add/remove results carry `needsReapproval` and `reapproveCommand` there too.
+
+`--region <descriptor>` (#519) records the page region a mission at that anchor attacks (the
+`--success` descriptor syntax) as `anchors[].region`, so its control coverage is scoped to it (see
+[scope regions](./exploration.md#scope-regions)). It is authoritative: `--from-journey --at-step`
+uses it, and `--scope-region` beside it is refused. Changing it is a content change, so it makes a
+promoted Journey's approval stale like any anchor edit. Over MCP: `journey_anchor_add.region`.
 
 `anchor add` writes the step's stable id at once and prints the anchor issues that remain (name
 rule `[a-z0-9][a-z0-9._-]{0,63}`, duplicates, unknown steps are refused, exit 64).

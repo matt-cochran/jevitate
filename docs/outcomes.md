@@ -174,7 +174,7 @@ above, so it needs no separate exit-code mapping):
 | `strategies-exhausted` | every misuse strategy was tried with nothing left to do |
 | `targets-refused` | every target control on the page was refused by the safety policy (paid, destructive, session-ending or `--deny`'d) and none could be exercised, so the hunt stopped at once — `inconclusive`, `failure.kind: "insufficient-coverage"`, its message naming the refused controls and how to permit them (`--allow-destructive`; remove the `--deny`; reclassify with `--paid`/`--deny`) |
 | `not-rendered` | the target page never rendered. When the start page itself answered 5xx, that is an `http-5xx` defect and the run is `defects-found`. |
-| `scope-unreachable` | the start URL did not stay in scope (e.g. it redirected to a login page) |
+| `scope-unreachable` | the start URL did not stay in scope (e.g. it redirected to a login page), or a declared [scope region](./exploration.md#scope-regions) never matched the start page (or the page after a reset): `inconclusive`, `failure.kind: "target-unreachable"`, never `clean` |
 | `target-unresponsive` | the app stopped answering mid-run (e.g. its server froze): a navigation got no response — `inconclusive`, `failure.kind: "target-unresponsive"`, `failure.message` in plain words (`the app stopped responding to navigation to /app (timed out before any response)`), never `crashed` and never a stack trace |
 | `identity-changed` | an action switched the signed-in identity (#300, listed in `identityChanges`) and the original identity could not be restored: no fresh session could be opened from the original storage state, or the fresh session was someone else. `inconclusive`, `failure.kind: "identity-changed"`. A defect found before still wins. A switch that was restored doesn't stop the run. |
 | `stalled` | the page's renderer stopped answering (frozen, starved or wedged) and the liveness watchdog closed it so the run could end — `inconclusive`, `failure.kind: "stalled"`, no stack trace; never `crashed`, and never attributed to jevitate (the same ending closes a goal run as `stop: "inconclusive"` and a coverage/feature run as `stalled`) |
@@ -312,6 +312,8 @@ exercised no in-scope, non-chrome control — or (#209) only controls unrelated 
 the feature: `inconclusive`, `failure.kind: "insufficient-coverage"` (`coverage.relevantActionsExercised`
 counts the relevant ones). Name the feature with the words its controls use, or point `--url`/`--route`
 at the page that has them.
+
+For `coverage`/`exploratory`, a declared [scope region](./exploration.md#scope-regions) that never matches ends `scope-unreachable` (`inconclusive`, `failure.kind: "target-unreachable"`); the frontier enqueues only in-region controls.
 
 | `outcome` | Meaning |
 |---|---|

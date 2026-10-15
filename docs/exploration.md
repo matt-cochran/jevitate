@@ -111,6 +111,44 @@ exercised no control at all is never clean. Below the thresholds the outcome is
 `inconclusive` (exit 2), with the coverage and the reasons in `coverage.shortfalls`.
 The CLI's JSON result and the MCP `get_mission_result` both carry `coverage`.
 
+### Scope regions
+
+The target is defined by route. A single-page app that renders a multi-step sub-flow **in place**
+(same URL, no `aria-modal`) puts the surrounding list, its filters and the app shell into the
+denominator, so a run that attacked the sub-flow thoroughly can still end `insufficient-coverage`.
+A **scope region** names the page element under test; the threshold then applies to the controls
+inside it.
+
+Don't lower `--min-control-coverage` for an in-place sub-flow — declare its region.
+
+```bash
+jevitate explore --url https://app.example.test/items --strategy adversarial \
+  --scope-region testId=import-view --scope-region 'role=region;name=Import'
+```
+
+- A region is a descriptor, in the same syntax as [`--success`](./success-checks.md)
+  (`testId=import-view`, `role=region;name=Import`). `--scope-region` is repeatable; a control
+  counts if it is inside any of them.
+- `--scope-region` applies to `--strategy adversarial`, `coverage` and `exploratory` only. Any
+  other strategy, an unparsable descriptor, or `--scope-region` beside an anchor that declares its
+  own region is refused with `E_EXPLORE_ARGS` (exit 64) before a browser opens.
+- A [Journey anchor](./journeys.md#explore-from-a-journey-step-anchors-and-campaigns) can carry the
+  region; a run from it uses that one and `--scope-region` cannot override it. Over MCP it is
+  `run_exploration.scopeRegion` (a list of descriptors); a suite item takes `scopeRegion` too.
+- **Adversarial** results: `coverage.controls` is the region's total and exercised controls and
+  decides `sufficient`; `coverage.pageControls` is the route-wide count the region excluded, for a
+  reviewer, never in the decision; `coverage.region` is `{ spec, stepsMatched, stepsWithoutRegion,
+  outOfRegion }`. Controls outside the region stay reachable but are tried last and are never coverage.
+- **Region lost.** A step whose page has no matching region counts in `outOfScopeSteps`. After 2
+  consecutive region-less steps the hunt goes back to its start (the anchor) and carries on;
+  `scope.region` is `{ spec, lostResets }`, the count of those resets.
+- **Coverage / exploratory** results carry `scope.region`: `{ spec, outOfRegionControls,
+  stepsWithoutRegion }`. `outOfRegionControls` counts distinct controls seen outside the region. The
+  frontier only enqueues in-region controls; sufficiency rules are unchanged.
+- A region that never matches (not on the start page, or after a reset) ends `inconclusive`, stop
+  `scope-unreachable`, `failure.kind: "target-unreachable"` — never `clean`.
+- Without a region nothing changes.
+
 ## Hangs
 
 A hung app is its own finding (`hang`), never folded into "no progress" or a
