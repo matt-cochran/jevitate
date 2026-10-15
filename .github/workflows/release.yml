@@ -23,8 +23,8 @@ name: Release
 # with immutable OIDC subject claims): `bash scripts/release.sh` by hand.
 #
 # Actions are pinned to commit SHAs (version in the trailing comment). npm is
-# pinned to 11: OIDC needs npm >= 11.5.1, and npm 12 rejects the --git-checks
-# flag pnpm 9's publish passes through (EUNKNOWNCONFIG, #262).
+# pinned to 11: OIDC needs npm >= 11.5.1. The publish runs `npm publish` on a
+# `pnpm pack` tarball: pnpm 9's own publish never completed npm's OIDC exchange.
 on:
   push:
     branches: [main]
@@ -201,18 +201,23 @@ jobs:
           pnpm --filter @jevitate/cli run bundle
 
       - name: Publish to npm (OIDC, provenance)
-        # Order matters: jevitate depends on @jevitate/cli (workspace:* is rewritten
-        # at pack time), so the cli must be live first. A version already on npm
-        # is skipped, so rerunning after a partial publish is safe.
-        env:
-          NPM_CONFIG_PROVENANCE: "true" # No NPM_TOKEN: OIDC provides publish auth.
+        # npm itself must publish: `pnpm publish` (pnpm 9) never completed npm's OIDC
+        # token exchange (E404 on the PUT, run 38794145639), while repos that call
+        # `npm publish` directly publish over OIDC fine. pnpm only packs here, which
+        # rewrites jevitate's `workspace:*` dependency to the real version.
+        # Order matters: jevitate depends on @jevitate/cli, so the cli goes first.
+        # A version already on npm is skipped, so rerunning after a partial publish is safe.
         run: |
-          for pkg in @jevitate/cli jevitate; do
+          for entry in "@jevitate/cli:packages/cli" "jevitate:packages/jevitate-cli-alias"; do
+            pkg=${entry%%:*}; dir=${entry#*:}
             if [ -n "$(npm view "${pkg}@${VERSION}" version 2>/dev/null || true)" ]; then
               echo "${pkg}@${VERSION} is already on npm; skipping."
               continue
             fi
-            pnpm --filter "${pkg}" publish --access public --no-git-checks
+            out="${RUNNER_TEMP}/pkgs/${dir##*/}"
+            mkdir -p "${out}"
+            (cd "${dir}" && pnpm pack --pack-destination "${out}")
+            npm publish "${out}"/*.tgz --provenance --access public --loglevel verbose
           done
 
       - name: Tags and GitHub release
