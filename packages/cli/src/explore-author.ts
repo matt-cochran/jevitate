@@ -18,6 +18,8 @@ import { screenshotsDirFor } from "./run-screenshots.js";
 import { FixtureSetupError, UnboundSetupRefError, substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
 import { fixtureSetupFailedResult, substituteUrlSetupRefs } from "./fixture-cli.js";
 import { parseSuccessSpec } from "./explore-specs.js";
+import { recordedFixturesFor } from "./journey-fixtures.js";
+import type { LayoutDeps } from "./project-dir.js";
 
 /**
  * Arguments handed to the authoring step of `runAuthorJourney`. Kept separate
@@ -110,6 +112,8 @@ export interface RunAuthorJourneyOptions {
   readonly successSpecs?: readonly string[];
   /** #544: the `--fixtures` file path, kept so a Journey can record the fixture it was authored under. */
   readonly fixturesFile?: string;
+  /** Test seam: where the project root (the `.jevitate/` parent a recorded fixtures path is relative to) is found. */
+  readonly layout?: LayoutDeps;
   /**
    * Test seam: override the authoring step. Defaults to `authorViaBrowser`,
    * which drives a real Playwright-backed actor through `authorJourney`.
@@ -161,10 +165,22 @@ export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<A
   if (result.outcome === "authored") {
     // #170: a Journey authored behind a login (--storage-state) declares it, so a run without a
     // storage state fails fast as a configuration error instead of a gating step-1 assertion.
-    const journey =
+    const withAuth =
       opts.storageState !== undefined && result.journey.metadata.requiresAuth !== true
         ? { ...result.journey, metadata: { ...result.journey.metadata, requiresAuth: true } }
         : result.journey;
+    // #544: a Journey authored under --fixtures records the file and spec hash, so a later run replays
+    // under the same fixtures. Shell hooks (--before/--after) are never recorded.
+    const journey =
+      opts.fixturesFile !== undefined
+        ? {
+            ...withAuth,
+            metadata: {
+              ...withAuth.metadata,
+              fixtures: recordedFixturesFor(opts.fixturesFile, { allowlist: opts.allowlist, baseUrl: origin }, opts.layout),
+            },
+          }
+        : withAuth;
     await new FsJourneyStore(opts.journeysDir).put(journey);
     return journey === result.journey ? result : { ...result, journey };
   }

@@ -17,6 +17,7 @@ import {
 import { withSiteGate } from "./site-gate-cli.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
+import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "./journey-fixtures.js";
 import { withEngine } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
@@ -150,6 +151,9 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
       }
 
       try {
+        // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
+        const recorded = await withRecordedFixtures(fixtureFlags, { dir: journeysDir, id });
+        let fixtureDrift: FixtureDrift | undefined;
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) =>
           annotateJourney({
             ...(siteGate === undefined ? {} : { siteGate }),
@@ -165,7 +169,8 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
             fixtures: (site) => {
-              const fx = buildMissionFixtures(fixtureFlags, {
+              fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: environment === undefined ? [site] : environment.allowedOrigins, baseUrl: site });
+              const fx = buildMissionFixtures(recorded.flags, {
                 allowlist: environment === undefined ? [site] : environment.allowedOrigins,
                 baseUrl: site,
                 ...(storageState !== undefined ? { storageState } : {}),
@@ -176,7 +181,8 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
             },
           }),
         );
-        const data = withEngine({ ...result, usage: gateway.usage.snapshot() });
+        const data = withEngine({ ...result, usage: gateway.usage.snapshot(), ...(fixtureDrift === undefined ? {} : { fixtureDrift }) });
+        if (fixtureDrift !== undefined && !json) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
         // A replay that stopped early drafted only the steps it reached: the command did not finish its work.
         const exit = result.replay.outcome === "completed" ? EXIT_CODES.ok : EXIT_CODES.inconclusive;
         if (json) {

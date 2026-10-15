@@ -19,6 +19,7 @@ import { withSiteGate } from "../site-gate-cli.js";
 import { journeyIntentCoverage } from "../journey-annotate-api.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "../fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
+import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { withEngine } from "../engine.js";
 import { type EmulationSpec } from "@jevitate/playwright";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
@@ -202,6 +203,9 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         // browser launch). The default policy stays `safeRunPolicy()`
         // (fail-closed secret mode) — only `selfHeal.mode` is threaded from
         // the flag; a `--secret-mode` override is a later slice's concern.
+        // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
+        const recorded = await withRecordedFixtures(fixtureFlags, { dir: resolveJourneysDir(deps, dir), id });
+        let fixtureDrift: FixtureDrift | undefined;
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
           ...(siteGate === undefined ? {} : { siteGate }),
           dir: resolveJourneysDir(deps, dir),
@@ -222,7 +226,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
           // #247: under an environment, its allowed origins.
           fixtures: (site) => {
-            const fx = buildMissionFixtures(fixtureFlags, {
+            fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: environment === undefined ? [site] : environment.allowedOrigins, baseUrl: site });
+            const fx = buildMissionFixtures(recorded.flags, {
               allowlist: environment === undefined ? [site] : environment.allowedOrigins,
               baseUrl: site,
               ...(storageState !== undefined ? { storageState } : {}),
@@ -232,6 +237,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
             return fx;
           },
         })).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
+        if (fixtureDrift !== undefined && !json) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
         // #246 (informational, never failing): how many steps say why — `journey annotate` drafts the rest.
         const intent = await journeyIntentCoverage(resolveJourneysDir(deps, dir), id);
         if (intent !== undefined && intent.withoutObjective > 0 && !json) {
@@ -239,7 +245,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
             `note: ${intent.withoutObjective} of ${intent.steps} step(s) have no objective — draft them with \`jevitate journey annotate ${id}\`\n`,
           );
         }
-        const envelope = ok(intent === undefined ? result : { ...result, intent });
+        const envelope = ok({ ...result, ...(intent === undefined ? {} : { intent }), ...(fixtureDrift === undefined ? {} : { fixtureDrift }) });
         if (json) {
           emitJson(program, envelope);
           // #453: ok → 0; healed-pending-review → 5 (a proposed revision, never a pass); else 1.
