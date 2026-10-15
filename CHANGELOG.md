@@ -7,6 +7,15 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.14.1] – 2026-10-15
+
+0.14.1 is the first release published by the Release workflow through npm Trusted Publishing, so both packages carry a provenance attestation. The CLI is unchanged from 0.14.0.
+
+### Changed
+
+- **Releases publish when a `vX.Y.Z` tag is pushed (#535).** The Release workflow checks the tag against both package versions, that it is on `main` and that no changesets are pending. It then builds, publishes `@jevitate/cli` and `jevitate` over OIDC with provenance, pushes the package tags and creates the GitHub release from this file. `scripts/release.sh` stays as the manual fallback.
+- **The root `release` script builds with `pnpm -r build`,** so the cli's build-info step runs on a clean checkout.
+
 ## [0.14.0] – 2026-10-15
 
 0.14.0 lets a mission measure the part of the page it was sent to attack, adds an opt-in browser guard for off-allowlist navigations, and makes "promotion-ready" machine-checkable, so an agent hands a Journey over only when the owner's review sheet is clean. Journey request checks now see the response to every request their own step sent. It also consolidates helpers, tightens store ids and adds knip.
