@@ -12,7 +12,7 @@ import { Frontier } from "../../coverage/frontier.js";
 import { targetCandidates, type Control, type Snapshot } from "../../index.js";
 import { assertSeedReachable, describeUnreachable, isUnreachableTarget } from "../../mission-failure.js";
 import { monitorFor } from "../../page-monitor.js";
-import { seedRedirectReason } from "../../seed-redirect.js";
+import { drainBlockedDeparture, peekBlockedDeparture, seedLandingReason } from "../../blocked-navigation.js";
 import { summarizeTimings } from "../../timing.js";
 import type { InductionRunResult } from "../induction.js";
 import type { FrontierState } from "./context.js";
@@ -39,13 +39,17 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
     }
   } catch (e) {
     const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
-    if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
-    // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
-    // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
-    return ctx.ended("scope-unreachable", {
-      kind: "target-unreachable",
-      message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
-    });
+    // #521: a seed load cut short by a navigation the opt-in guard stopped is no unreachable target —
+    // the page stayed on the seed; the seed check below reads where it tried to go.
+    if (peekBlockedDeparture(ctx.sessions.actor) === undefined) {
+      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
+      // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
+      return ctx.ended("scope-unreachable", {
+        kind: "target-unreachable",
+        message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
+      });
+    }
   } finally {
     ctx.sessions.page.off("requestfailed", onFirstNavRequestFailed);
   }
@@ -53,7 +57,8 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
 
   // The seed redirected elsewhere (a lost `--storage-state` session bounced to a login page, most
   // often) — the run cannot test what it was asked to, so it is never `clean` (#82).
-  const redirect = seedRedirectReason(params.seedUrl, ctx.snap.url);
+  // #521: a seed navigation the opt-in guard stopped is where the seed went (the page stayed put).
+  const redirect = seedLandingReason(params.seedUrl, ctx.snap.url, drainBlockedDeparture(ctx.sessions.actor));
   if (redirect !== null) {
     ctx.transcript.record({
       op: null,

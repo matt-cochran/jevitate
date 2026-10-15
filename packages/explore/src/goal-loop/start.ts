@@ -16,6 +16,7 @@ import { NO_DESTRUCTIVE_NOTE, READ_ONLY_NOTE } from "../read-only.js";
 import { installDialogPolicy } from "../native-dialogs.js";
 import type { RunContext } from "./context.js";
 import { FirstNavigationFailedSentinel, firstLine } from "./helpers.js";
+import { peekBlockedDeparture } from "../blocked-navigation.js";
 
 export async function openRun(ctx: RunContext): Promise<void> {
   const { cfg } = ctx;
@@ -35,6 +36,12 @@ export async function openRun(ctx: RunContext): Promise<void> {
     }
   } catch (e) {
     const message = firstLine(e);
+    // #521: a seed load cut short by a navigation the opt-in guard stopped is no unreachable target —
+    // the page stayed on the seed; the departure stops the run after the first settle.
+    if (peekBlockedDeparture(cfg.actor) !== undefined) {
+      await finishOpen(ctx);
+      return;
+    }
     if (!isUnreachableTarget(message) && !isUnreachableTarget(ctx.firstNavNetError ?? "")) throw e;
     // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
     // a configuration problem (a bad URL, the target not running). `inconclusive`, not `crashed`;
@@ -60,6 +67,13 @@ export async function openRun(ctx: RunContext): Promise<void> {
     ctx.page.off("requestfailed", ctx.onFirstNavRequestFailed);
   }
   if (ctx.firstNavFailed) throw new FirstNavigationFailedSentinel();
+  await finishOpen(ctx);
+}
+
+/** After the seed loaded: its Recording step, and the read-only guard armed. */
+async function finishOpen(ctx: RunContext): Promise<void> {
+  const { cfg } = ctx;
+  ctx.page.off("requestfailed", ctx.onFirstNavRequestFailed);
   ctx.recorder.navigate(cfg.startUrl, ctx.now());
   // #158 — from here on, a read-only run's write requests never leave the browser.
   if (ctx.readOnly !== null) {

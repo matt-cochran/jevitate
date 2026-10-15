@@ -9,7 +9,7 @@ import { Navigate } from "@jevitate/screenplay";
 import { readIdentity } from "../../adversarial/identity.js";
 import { assertSeedReachable, describeUnreachable, isUnreachableTarget } from "../../mission-failure.js";
 import { monitorFor } from "../../page-monitor.js";
-import { seedRedirectReason } from "../../seed-redirect.js";
+import { blockedDepartureReason, drainBlockedDeparture, peekBlockedDeparture, seedLandingReason } from "../../blocked-navigation.js";
 import type { AdversarialMissionParams, AdversarialOutcome } from "../adversarial.js";
 import type { HuntState } from "./context.js";
 
@@ -34,13 +34,17 @@ export async function loadSeed(ctx: HuntState, params: AdversarialMissionParams)
     }
   } catch (e) {
     const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
-    if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
-    // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
-    // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
-    return ctx.finish("inconclusive", "scope-unreachable", {
-      kind: "target-unreachable",
-      message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
-    });
+    // #521: a seed load cut short by a navigation the opt-in guard stopped is no unreachable target —
+    // the page stayed on the seed; the seed check below reads where it tried to go.
+    if (peekBlockedDeparture(ctx.sessions.actor) === undefined) {
+      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
+      // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
+      return ctx.finish("inconclusive", "scope-unreachable", {
+        kind: "target-unreachable",
+        message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
+      });
+    }
   } finally {
     ctx.sessions.page.off("requestfailed", onFirstNavRequestFailed);
   }
@@ -48,6 +52,8 @@ export async function loadSeed(ctx: HuntState, params: AdversarialMissionParams)
   ctx.started = ctx.now();
 
   const seed = await ctx.perceiveNow();
+  // #521: a seed navigation the opt-in guard stopped left the page on the seed; its target is where it went.
+  const seedBlocked = drainBlockedDeparture(ctx.sessions.actor);
   if (seed.hang !== null) {
     await ctx.recordHang(seed.hang, seed.snapshot, seed.timing);
     return ctx.finish(ctx.verdict(), "hang");
@@ -85,7 +91,7 @@ export async function loadSeed(ctx: HuntState, params: AdversarialMissionParams)
   // session (#82). Checked BEFORE the general scope check below (which already catches ANY
   // out-of-scope landing) so THIS specific, actionable cause gets its own reason; every other
   // departure keeps the existing generic "left the target scope" message unchanged.
-  const redirect = seedRedirectReason(params.seedUrl, seed.snapshot.url);
+  const redirect = seedLandingReason(params.seedUrl, seed.snapshot.url, seedBlocked);
   if (redirect !== null && redirect.loginLike) {
     ctx.transcript.record({
       op: null,
@@ -100,10 +106,10 @@ export async function loadSeed(ctx: HuntState, params: AdversarialMissionParams)
     });
     return ctx.finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message: redirect.reason });
   }
-  if (!ctx.inScope(seed.snapshot.url)) {
+  if (seedBlocked !== undefined || !ctx.inScope(seed.snapshot.url)) {
     // The start URL did not stay on the target (another route, off-allowlist): the run cannot
     // test what it was asked to — it proves nothing, so it is never `clean`.
-    const message = `the start URL left the target scope (landed on ${redactUrl(seed.snapshot.url)})`;
+    const message = `the start URL left the target scope (${seedBlocked === undefined ? `landed on ${redactUrl(seed.snapshot.url)}` : blockedDepartureReason(seedBlocked)})`;
     ctx.transcript.record({
       op: null,
       control: null,

@@ -10,10 +10,29 @@ import type { Flow, Perceived } from "./step.js";
 import { busyOverlay } from "../status.js";
 import { JOB_WAIT_SLICE_MS, waitOutJob } from "./helpers.js";
 import { clock } from "@jevitate/domain";
+import { blockedDepartureReason, drainBlockedDeparture } from "../blocked-navigation.js";
 
 export async function checkSettled(ctx: RunContext, step: Perceived): Promise<Flow> {
   const { cfg } = ctx;
   const { perception, snap } = step;
+  // #521: a navigation the opt-in guard stopped (the page stayed put) is a departure all the same —
+  // the run stops `blocked`, the transcript naming where the page tried to go.
+  const blocked = drainBlockedDeparture(cfg.actor);
+  if (blocked !== undefined) {
+    ctx.transcript.record({
+      op: null,
+      control: null,
+      confidence: null,
+      chosenBy: "strategy",
+      strategy: "origin-guard",
+      actOk: false,
+      reason: blockedDepartureReason(blocked),
+      snapshot: snap,
+      timing: perception.timing,
+    });
+    ctx.stop = "blocked";
+    return "stop";
+  }
   // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
   if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
     ctx.stop = "blocked";

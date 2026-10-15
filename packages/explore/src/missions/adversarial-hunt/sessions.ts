@@ -9,6 +9,7 @@ import { redactUrl } from "@jevitate/ai-core";
 import { Navigate } from "@jevitate/screenplay";
 import { clearAuthState, identityChange, readIdentity } from "../../adversarial/identity.js";
 import { isAuthorizedExploreTarget } from "../../authorized-targets.js";
+import { drainBlockedDeparture } from "../../blocked-navigation.js";
 import { sampleHeap } from "../../crash-report.js";
 import { NOT_REPLAYED, hangFinding, reproduceHang, type HangReproduction } from "../../hang-repro.js";
 import { hangFingerprint, type HangSignal } from "../../hang.js";
@@ -143,7 +144,8 @@ export function installSessions(ctx: HuntState, params: AdversarialMissionParams
       await ctx.recordHang(back.hang, back.snapshot, back.timing);
       return { ok: false, stop: "hang" };
     }
-    if (!ctx.inScope(back.snapshot.url)) return { ok: false, stop: "scope-unreachable" };
+    // #521: a restart the opt-in guard stopped off the allowlist cannot reach the start either.
+    if (drainBlockedDeparture(ctx.sessions.actor) !== undefined || !ctx.inScope(back.snapshot.url)) return { ok: false, stop: "scope-unreachable" };
     if (ctx.regionDeclared && (back.snapshot.region?.matched ?? 0) === 0) {
       // #519: the start (the anchor) no longer shows the scope region — the run cannot test it.
       ctx.cov.observe(back.snapshot);

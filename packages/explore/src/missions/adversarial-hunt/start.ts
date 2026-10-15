@@ -4,6 +4,7 @@
  * moved out of `runAdversarialHunt` unchanged (#232). Installed at the same point of the run.
  */
 
+import { blockedDepartureReason, drainBlockedDeparture } from "../../blocked-navigation.js";
 import { redactUrl } from "@jevitate/ai-core";
 import { Navigate } from "@jevitate/screenplay";
 import { act, type ActResult } from "../../act.js";
@@ -278,19 +279,21 @@ export function startHunt(ctx: HuntState, params: AdversarialMissionParams): voi
     );
     ctx.lastRecordedTarget = null;
     let restarted: Awaited<ReturnType<typeof ctx.restartAtSeed>>;
+    // #521: a navigation the opt-in guard stopped (the page stayed put) is a departure all the same.
+    const blocked = drainBlockedDeparture(ctx.sessions.actor);
     // Only IN-SCOPE pages are hang-checked (#193): a page reached by a departure is outside the
     // target, so its hang signal is advisory (noted on the departure), never a finding.
-    if (next.hang !== null && ctx.inScope(ctx.snap.url)) {
+    if (blocked === undefined && next.hang !== null && ctx.inScope(ctx.snap.url)) {
       await ctx.recordHang(next.hang, next.snapshot, next.timing);
       // Keep hunting: reset to a known state (a fresh page at the start URL) and go on, within
       // budget. The hung route is not followed again (visit-route remembers it).
       restarted = await ctx.resetAfterHang(next.hang);
-    } else if (!ctx.inScope(ctx.snap.url)) {
+    } else if (blocked !== undefined || !ctx.inScope(ctx.snap.url)) {
       // Scope containment (#64; guardrail #1 for another origin): the action left the target.
       // Record the departure, then reset to the start URL in a fresh page and hunt on there.
       // The step spent out of scope counts as out-of-scope, never as coverage.
       ctx.outOfScopeSteps += 1;
-      const landed = redactUrl(ctx.snap.url);
+      const landed = redactUrl(blocked ?? ctx.snap.url);
       ctx.departures.push({ step, url: landed, action });
       const fresh = params.openFreshSession !== undefined;
       ctx.transcript.record({
@@ -301,7 +304,9 @@ export function startHunt(ctx: HuntState, params: AdversarialMissionParams): voi
         strategy: "scope-reset",
         actOk: true,
         reason: joinReasons([
-          `left the target scope (landed on ${landed}); reset to the start URL${fresh ? " in a fresh page" : ""}`,
+          blocked === undefined
+            ? `left the target scope (landed on ${landed}); reset to the start URL${fresh ? " in a fresh page" : ""}`
+            : `left the target scope (${blockedDepartureReason(blocked)}); reset to the start URL${fresh ? " in a fresh page" : ""}`,
           next.hang === null ? undefined : outOfScopeHangNote(next.hang),
         ]),
         snapshot: ctx.snap,
