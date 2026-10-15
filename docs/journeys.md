@@ -281,6 +281,39 @@ Journey promotes as before. Every sheet also lists the **pre-approval findings**
 an acknowledgment, promotion is refused (`E_APPROVAL_FINDINGS`, exit 1) unless you pass
 `--accept-findings "<reason>"`, which is recorded in `metadata.approval.acceptedFindings`.
 
+**Promotion-ready (#523).** An agent hands a Journey over only when the sheet is clean:
+
+```bash
+jevitate journey review checkout --strict         # exit 1 on any ⚠ attention item
+jevitate journey review checkout --strict --json  # the envelope adds strict: { passed, warnings } next to data
+```
+
+`--strict` also runs the code-only job/persona link checks without `--readiness`. Advisory ○ items
+and Jev never fail it. `--stale --strict` is refused. MCP: `review_journey` with `strict: true`.
+
+- **Proof staleness.** `journey verify --mutate` records a `proofHash` over executable content only
+  (steps, targets, assertions, end state). Rewording the goal, a success criterion, a step objective
+  or an expected result, which is what `journey annotate --approve` writes, does not stale the proof;
+  an approval still binds to the full review hash, so annotating re-stales an approval. One
+  exception: annotating drops a success criterion's code `check` when that criterion is reworded,
+  which changes executable content and does stale the proof.
+- **Link warnings.** `journey lint` and `explore-author-journey` warn `missing-job` / `missing-persona`
+  with the fix: link a listed catalog id (`metadata.job`, `metadata.persona`) or run
+  `jevitate catalog draft …`. Warnings never change the exit code. `record` and `recording promote`
+  write only a Recording and do not warn.
+- **Draft catalog entries.** `jevitate catalog draft persona|job <id> --name <text> [--description]
+  [--trigger] [--outcome]` (MCP `catalog_draft`) adds a DRAFT entry and never approves it. A persona's
+  `--name` is its role; a job's `--name` is its motivation and `--description` its goal; `--trigger`
+  and `--outcome` default to visible `(draft: …)` placeholders to fill before approval. An existing id
+  is refused (exit 64).
+- **Repo-wide gate.** `jevitate catalog status --strict` (MCP `catalog_status` with `strict: true`)
+  exits 1 on a stale persona or job approval, or a promoted Journey that links an unapproved or
+  unknown catalog entry or no job/persona; `--json` carries `strict.violations`.
+
+The owner's order is persona approve, job approve, `journey annotate --approve`, then
+`journey promote --reviewed-hash` (the hash from the review after annotating). See the
+`jevitate-promotion-ready` skill.
+
 **Confirmation and provenance (#437).** `journey promote` and `demo approve` need an interactive
 terminal: after the sheet, type the Journey id (or the first 8 characters of its content hash),
 and once more for each waiver (`--accept-weak`, `--accept-unvetted`, `--accept-findings`). With no
