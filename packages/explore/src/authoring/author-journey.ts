@@ -116,6 +116,8 @@ export type AuthorJourneyResult =
       outcome: "not-reached";
       /** `discovery mission <outcome>: <the concrete reason>`. */
       reason: string;
+      /** #544: set when a take's fixture setup failed (a configuration error) — no take ran on unknown state. */
+      failure?: MissionFailure;
       /** #369: the discovery take's diagnostics — its stop reason and artifact paths. */
       discovery?: AuthorTakeDiagnostics;
       takes?: AuthorTakeCounts;

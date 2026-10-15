@@ -88,7 +88,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     evidenceVideo: "authoring files nothing: a take's issue drafts stay next to its result; `explore --evidence-video` attaches media",
     filing: "authoring files nothing: a take's issue drafts stay next to its result (drafts only)",
     issueFiler: "authoring files nothing: a take's issue drafts stay next to its result (drafts only)",
-    fixtures: "mission fixtures (--fixtures/--before/--after) run operator hooks around one mission; an author run starts from --storage-state",
     invariants: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
     invariantAuthTokens: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
     journeyPrefix: NO_ANCHORED_HERE,

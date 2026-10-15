@@ -8,6 +8,8 @@ import { ok, fail } from "./envelope.js";
 import { positiveIntArg } from "./cli-args.js";
 import { runAuthorJourney, parseSuccessSpec, resolveExploreAllowlist } from "./explore-api.js";
 import { allowWithExtensions } from "./browser-run-options.js";
+import { FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "./mission-fixtures.js";
+import { buildMissionFixtures, checkSetupRefs, checkUrlRefOrigin, setupRefFreeUrl, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import {
   type CliDeps,
   resolveJourneysDir,
@@ -122,7 +124,8 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
     .option("--json", "emit a JSON envelope");
   // #369: every take is `explore`'s goal run, so author takes its run-shaping flags too.
   for (const name of AUTHOR_GOAL_RUN_FLAGS) cmd.addOption(GOAL_RUN_OPTIONS[name]());
-  withScreenshotsFlag(withEmulationFlags(cmd))
+  // #544: the same mission fixtures `explore` takes: set up before, and restored after, every take.
+  withFixtureFlags(withScreenshotsFlag(withEmulationFlags(cmd)))
     .addHelpText(
       "after",
       [
@@ -153,7 +156,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         json?: boolean;
         storageState?: string;
         out?: string;
-      } & BrowserLaunchFlags & GoalRunFlags>();
+      } & BrowserLaunchFlags & GoalRunFlags & FixtureFlags>();
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
         emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
@@ -184,7 +187,27 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         return;
       }
       // #256: loaded extensions' chrome-extension://<id> origins are allowed too (only those ids).
-      const allowlist = allowWithExtensions(o.url, resolveExploreAllowlist(o.url, o.allow), browserLaunchFromFlags(o));
+      const allowlist = allowWithExtensions(o.url, resolveExploreAllowlist(setupRefFreeUrl(o.url), o.allow), browserLaunchFromFlags(o));
+      // #544: the fixture spec and every ${setup.x} reference are validated before any gateway or
+      // browser; setup itself runs around each take.
+      let fixtures: MissionFixtures | undefined;
+      try {
+        checkUrlRefOrigin(o.url);
+        fixtures = buildMissionFixtures(o, {
+          allowlist,
+          baseUrl: setupRefFreeUrl(o.url),
+          ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
+          secretFields: goalRun.secretFields ?? [],
+          secrets: goalRun.secrets,
+          ...(goalRun.target?.fixtures === undefined ? {} : { targetFixtures: goalRun.target.fixtures }),
+          ...(goalRun.target?.personas === undefined ? {} : { personas: goalRun.target.personas }),
+        });
+        checkSetupRefs({ "--url": o.url, "--goal": o.goal, "--success": o.success }, fixtures);
+      } catch (err) {
+        if (!(err instanceof FixtureSpecError || err instanceof UnboundSetupRefError)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
       const bounds: Record<string, number> = {};
       if (o.maxActions !== undefined) bounds.maxActions = Number(o.maxActions);
       if (o.maxDecisions !== undefined) bounds.maxDecisions = Number(o.maxDecisions);
@@ -220,6 +243,8 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
           browser: browserLaunchFromFlags(o),
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           goalRun,
+          ...(fixtures === undefined ? {} : { fixtures, successSpecs: o.success }),
+          ...(o.fixtures === undefined ? {} : { fixturesFile: o.fixtures }),
           ...(o.out === undefined ? {} : { outDir: o.out }),
           usage: authorUsage,
         })
