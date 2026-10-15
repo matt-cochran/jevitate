@@ -16,3 +16,4 @@ export * from "./proposal-schema.js";
 export * from "./anchor-rules.js";
 export * from "./anchor-edit.js";
 export * from "./anchor-suggest.js";
+export * from "./proof-hash.js";

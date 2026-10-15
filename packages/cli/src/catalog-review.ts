@@ -152,6 +152,31 @@ export function buildCatalogStatus(catalog: Catalog): CatalogStatusReport {
   });
 }
 
+/**
+ * #523: what `catalog status --strict` fails on — (a) a stale persona or job approval; (b) a promoted
+ * Journey that links a catalog entry that is not approved (draft, stale or undeclared), or links no
+ * job / no catalog persona. "Being promoted" has no state of its own (a Journey is a draft until
+ * `journey promote`; a pending self-heal proposal belongs to a Journey already promoted), so (b) covers
+ * promoted Journeys.
+ */
+export function strictCatalogViolations(catalog: Catalog): NonNullable<CatalogStatusReport["strict"]>["violations"] {
+  const items = [
+    ...catalog.personas.filter((p) => p.status === "stale").map((p) => ({ kind: "persona" as const, id: p.id, reason: "its approval is stale (edited since it was approved) — re-review and approve it" })),
+    ...catalog.jobs.filter((j) => j.status === "stale").map((j) => ({ kind: "job" as const, id: j.id, reason: "its approval is stale (edited since it was approved) — re-review and approve it" })),
+  ];
+  const journeys = catalog.journeys
+    .filter((j) => j.promoted)
+    .flatMap((j) => {
+      const links = journeyLinks(catalog, j);
+      const reasons = [
+        ...(links.job === undefined ? ["links no job"] : links.job.status === "approved" ? [] : [`links job '${links.job.id}', which is ${links.job.status === "draft" ? "a draft (not approved)" : links.job.status}`]),
+        ...(links.persona === undefined ? ["links no persona"] : links.persona.status === "approved" ? [] : [`links persona '${links.persona.id}', which is ${links.persona.status === "draft" ? "a draft (not approved)" : links.persona.status}`]),
+      ];
+      return reasons.map((reason) => ({ kind: "journey" as const, id: j.id, reason: `promoted, but ${reason}` }));
+    });
+  return [...items, ...journeys];
+}
+
 // ── Rendering ─────────────────────────────────────────────────────────────────────────────────
 
 type Style = "markdown" | "text";
@@ -384,5 +409,6 @@ export function renderCatalogStatus(r: CatalogStatusReport): string {
   section("Dangling links", r.danglingLinks.map((d) => `journey ${d.journey} → ${d.kind} '${d.id}' (not declared)`));
   section("Stale approvals (needs re-review)", r.stale.map((s) => `${s.kind} ${s.id}: ${s.reason}`));
   section("Reference checks (warnings; a structural one refuses job approve)", (r.refIssues ?? []).map(describeRefIssue));
+  if (r.strict !== undefined) section("--strict violations (exit 1 when any)", r.strict.violations.map((v) => `${v.kind} ${v.id}: ${v.reason}`));
   return `${out.join("\n")}\n`;
 }

@@ -224,6 +224,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "persona approve": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"], ["nope", "--accept-findings", " "]] },
   "job review": { cases: [["nope"], ["j", "--dir", badCatalog]] },
   "job approve": { cases: [["nope"], ["nope", "--reviewed-hash", "abc"], ["j", "--dir", badCatalog]] },
+  // #523: an unknown kind, an unsafe id, a missing --name.
+  "catalog draft": { base: ["widget", "x", "--name", "n"], cases: [["widget", "x", "--name", "n"], ["persona", "../x", "--name", "n"], ["job", "x"]] },
   "catalog status": { cases: [["--dir", badCatalog]] },
   // #435: an invalid catalog file, and a --max-pairs that is not a positive integer.
   "catalog analyze": { cases: [["--dir", badCatalog], ["--max-pairs", "0"]] },
@@ -235,6 +237,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
     base: ["nope", "--name", "a", "--step", "1"],
     cases: [["nope", "--name", "a", "--step", "1"], ["../x", "--name", "a", "--step", "1"], ["nope", "--name", "Bad Name", "--step", "1"], ["nope", "--name", "a", "--step", "zzz"], ["nope", "--name", "a", "--step", "1", "--region", "Import Wizard"]],
   },
+  // #523: no change requested, set+unlink of one field, an unknown Journey.
+  "journey link": { base: ["nope", "--job", "a"], cases: [["nope"], ["nope", "--job", "a", "--unlink-job"], ["nope", "--job", "a"]] },
   "journey anchor remove": { base: ["nope", "--name", "a"], cases: [["nope", "--name", "a"], ["../x", "--name", "a"]] },
   // #293: a missing/unreadable spec, and a campaign with no model gateway.
   "campaign run": { cases: [[missing, "--fake-ai"], [missing]] },

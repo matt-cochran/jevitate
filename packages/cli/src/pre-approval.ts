@@ -217,14 +217,14 @@ function jobFindings(id: string, catalog: Catalog): Finding[] {
 function journeyFindings(j: CatalogJourney, catalog: Catalog): Finding[] {
   const links = journeyLinks(catalog, j);
   if (!links.linked) {
-    return [finding("journey.unlinked", "info", `not linked to a job/persona — it promotes as before (opt-in: set metadata.job and metadata.persona to catalog ids)`)];
+    return [finding("journey.unlinked", "info", `not linked to a job/persona — it promotes as before (opt-in: jevitate journey link <id> --job <job-id> --persona <persona-id>)`)];
   }
   const out: Finding[] = [];
-  if (links.job?.status === "unknown") out.push(finding("journey.unknown-job", "fail", `links job '${links.job.id}', which the catalog does not declare`, { fix: "fix metadata.job, or declare the job in .jevitate/jobs.json", items: [`job:${links.job.id}`] }));
+  if (links.job?.status === "unknown") out.push(finding("journey.unknown-job", "fail", `links job '${links.job.id}', which the catalog does not declare`, { fix: "`jevitate journey link <id> --job <job-id>` with a declared job, or add one with `jevitate catalog draft job <job-id> --name <text>`", items: [`job:${links.job.id}`] }));
   if (links.persona?.status === "unknown") {
-    out.push(finding("journey.unknown-persona", "fail", `links persona '${links.persona.id}', which .jevitate/personas.json does not declare (a Journey with a job names a catalog persona id)`, { fix: "set metadata.persona to a persona id, or declare it", items: [`persona:${links.persona.id}`] }));
+    out.push(finding("journey.unknown-persona", "fail", `links persona '${links.persona.id}', which .jevitate/personas.json does not declare (a Journey with a job names a catalog persona id)`, { fix: "`jevitate journey link <id> --persona <persona-id>` with a declared persona, or add one with `jevitate catalog draft persona <persona-id> --name <role>`", items: [`persona:${links.persona.id}`] }));
   }
-  if (links.job !== undefined && links.persona === undefined) out.push(finding("journey.no-persona", "warn", `links job '${links.job.id}' but no persona`, { fix: "set metadata.persona to the id of the persona doing the job" }));
+  if (links.job !== undefined && links.persona === undefined) out.push(finding("journey.no-persona", "warn", `links job '${links.job.id}' but no persona`, { fix: "`jevitate journey link <id> --persona <persona-id>` (the persona doing the job)" }));
   if (links.unvetted.length > 0) {
     out.push(finding("journey.unvetted", "warn", `its links are not approved: ${links.unvetted.join(", ")} — promote needs them approved, or --accept-unvetted "<reason>"`, { items: links.unvetted.map((u) => u.replace(/ \(.*\)$/, "")) }));
   }

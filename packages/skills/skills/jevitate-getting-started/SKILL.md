@@ -37,6 +37,7 @@ Then pick the matching skill:
 | know what to test after a diff or PR | `jevitate-mission-scope` |
 | replay a known flow (a saved Journey) | `jevitate-run-journey` |
 | record a flow they click through | `jevitate-record` |
+| hand a Journey over for promotion (clean `journey review --strict`, owner's ordered approval commands) | `jevitate-promotion-ready` |
 | get a narrated demo video or a step-by-step guide | `jevitate-demo` |
 | reproduce a finding, prove a fix, attach evidence to a PR, or lock a bug in as a regression | `jevitate-verify-fix` |
 | gate CI (JUnit, SARIF, baselines, a defect report) | `jevitate-ci-check` |

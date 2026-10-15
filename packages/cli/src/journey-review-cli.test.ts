@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -223,5 +223,75 @@ describe("#432 MCP review_journey", () => {
     const hash = (await t.get("review_journey")!({ id: "strong" })).body.data.contentHash as string;
     await new FsJourneyStore(journeysDir).put(strongJourney("strong", { description: "edited after review" }));
     expect((await t.get("promote_journey")!({ id: "strong", reviewedHash: hash })).body.code).toBe("E_JOURNEY_REVIEW_STALE");
+  });
+});
+
+describe("#523 journey review --strict", () => {
+  let catalogDir: string;
+
+  async function strictCli(argv: readonly string[]): Promise<{ json: any; exitCode: number | string | undefined }> {
+    process.exitCode = undefined;
+    const lines: string[] = [];
+    const program = buildProgram({ ...deps(), catalogDir });
+    program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: () => {} });
+    program.exitOverride();
+    await program.parseAsync([...argv], { from: "user" });
+    let json: any;
+    try {
+      json = JSON.parse(lines.join(""));
+    } catch {
+      json = undefined;
+    }
+    return { json, exitCode: process.exitCode };
+  }
+
+  async function putJourney(id: string, overrides: Partial<Journey["metadata"]>): Promise<void> {
+    await new FsJourneyStore(journeysDir).put(strongJourney(id, overrides));
+  }
+
+  beforeEach(async () => {
+    catalogDir = join(root, ".jevitate");
+    await mkdir(catalogDir, { recursive: true });
+    await writeFile(join(catalogDir, "personas.json"), JSON.stringify([{ name: "editor", description: "writes and publishes posts", role: "editor" }]));
+    await writeFile(join(catalogDir, "jobs.json"), JSON.stringify([{ id: "publish-post", trigger: "a draft is ready", motivation: "publish it", outcome: "readers see it", personas: ["editor"] }]));
+    await putJourney("clean", { goal: "Publish a post", successCriteria: [{ description: "The post is live" }], job: "publish-post", persona: "editor", anchors: [{ name: "published", step: 2, stepId: "s-haxfhr" }] });
+    await strictCli(["persona", "approve", "editor", "--json", "--non-interactive-approval", "test"]);
+    await strictCli(["job", "approve", "publish-post", "--json", "--non-interactive-approval", "test"]);
+    await putJourney("unlinked", { goal: "Publish a post", successCriteria: [{ description: "The post is live" }] });
+  });
+
+  it("fails on a warning (no goal or success criteria)", async () => {
+    expect((await strictCli(["journey", "review", "strong", "--json", "--strict"])).exitCode).toBe(1);
+  });
+
+  it("fails on a missing job and persona without --readiness", async () => {
+    expect((await strictCli(["journey", "review", "unlinked", "--json", "--strict"])).json.data.attention.map((a: any) => a.text)).toContainEqual(expect.stringContaining("it links no job and no persona"));
+  });
+
+  it("exits 1 on a missing job and persona without --readiness", async () => {
+    expect((await strictCli(["journey", "review", "unlinked", "--json", "--strict"])).exitCode).toBe(1);
+  });
+
+  it("passes a clean Journey", async () => {
+    expect((await strictCli(["journey", "review", "clean", "--json", "--strict"])).exitCode).toBe(0);
+  });
+
+  it("ignores ○ items (not mutation-tested stays info)", async () => {
+    const { json } = await strictCli(["journey", "review", "clean", "--json", "--strict"]);
+    expect(json.data.attention).toContainEqual({ severity: "info", text: "Not mutation-tested", hint: "jevitate journey verify clean --mutate" });
+  });
+
+  it("reports the verdict in the --json envelope", async () => {
+    expect((await strictCli(["journey", "review", "clean", "--json", "--strict"])).json.strict).toEqual({ passed: true, warnings: 0 });
+  });
+
+  it("a plain review still exits 0 with a warning", async () => {
+    expect((await strictCli(["journey", "review", "strong", "--json"])).exitCode).toBe(0);
+  });
+
+  it("MCP review_journey strict surfaces the failure as exitCode 1", async () => {
+    const mcpDeps: McpApiDeps = { journeysDir, pathRoots: [root], runCli: makeInProcessCliRunner(() => buildProgram({ ...deps(), catalogDir })) };
+    const tool = buildMcpTools(mcpDeps).find((t) => t.name === "review_journey")!;
+    expect(JSON.parse((await tool.handler({ id: "strong", strict: true })).content[0]!.text).exitCode).toBe(1);
   });
 });

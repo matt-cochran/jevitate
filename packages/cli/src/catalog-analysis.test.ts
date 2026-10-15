@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { FAKE_CALL_USAGE, UsageTracker, type Answer, type JudgmentPort, type JudgmentState, type Question } from "@jevitate/ai-core";
-import { FsJourneyStore, type Finding, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, journeyProofHash, type Finding, type Journey } from "@jevitate/journey";
 import { buildProgram } from "./program.js";
 import { buildMcpTools, type McpApiDeps } from "./mcp-api.js";
 import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
 import { CatalogLoader } from "./catalog.js";
+import { journeyReviewHash } from "./journey-review.js";
+import { writeVerifyRecord } from "./journey-review-store.js";
 import { APPROVAL_PAIR_CAP, CONFLICT_ACK_THRESHOLD, candidatePairs, writeResource } from "./catalog-analysis.js";
 import type { CliDeps } from "./cli-shared.js";
 
@@ -293,6 +295,24 @@ describe("#435 catalog analyze", () => {
     await writeJobs(jobs.map((j) => (j.id === "read-post" ? { ...j, outcome: "learn the latest news" } : j)));
     const correct = (await cli(["catalog", "analyze", "--json"])).json.data.groups.find((g: { characteristic: string }) => g.characteristic === "correct");
     expect(correct.findings.map((f: Finding) => f.code)).toContain("update.stale:job:read-post");
+  });
+
+  it("#523: a proof is still on the current version after an annotation-only change", async () => {
+    const store = new FsJourneyStore(journeysDir);
+    await store.put(journey("publish-proof", { job: "keep-private", persona: "editor", promoted: true }));
+    const promoted = (await store.get("publish-proof")) as Journey;
+    await writeVerifyRecord(journeysDir, {
+      journeyId: "publish-proof",
+      contentHash: journeyReviewHash(promoted),
+      proofHash: journeyProofHash(promoted),
+      verdict: "insensitive",
+      summary: {},
+      at: "2026-10-15T00:00:00.000Z",
+    });
+    await store.put({ ...promoted, metadata: { ...promoted.metadata, goal: "Publish the post so readers see it" } });
+    const groups = (await cli(["catalog", "analyze", "--json"])).json.data.groups as Array<{ findings: Finding[] }>;
+    const proof = groups.flatMap((g) => g.findings).find((f) => f.code === "update.proof:publish-proof") as Finding;
+    expect(proof.message).not.toMatch(/older version/);
   });
 
   it("never writes a catalog file", async () => {

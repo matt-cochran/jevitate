@@ -223,10 +223,30 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description:
       "`jevitate catalog status --json` (#433): read-only. The catalog's coverage — the jobs × personas matrix (which pairs have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links, and stale approvals (edited personas/jobs and the Journeys linked to them: needs re-review). " +
       "#437: `approvals` lists every recorded approval and how it was made (provenance channel tty / non-interactive / mcp / ci / pr-review). requireApprovals (+ allowChannels: a comma list of tty, non-interactive, mcp, ci, pr-review; default tty): exit 1 when an approval is missing, stale or made over a channel not allowed. " +
+      "#523: strict: true exits 1 (listing `strict.violations`) when a persona/job approval is stale, or a promoted Journey links a catalog entry that is not approved (a draft) or links no job / no persona. " +
       "#469: pr-review is a channel you may ALLOW, never one a caller sets — jevitate records it only after verifying the merged PR's approving review through the forge API in CI.",
     command: {
       path: "catalog status",
-      params: { requireApprovals: b("--require-approvals"), allowChannels: s("--allow-channels") },
+      params: { requireApprovals: b("--require-approvals"), allowChannels: s("--allow-channels"), strict: b("--strict") },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "catalog_draft",
+    description:
+      "`jevitate catalog draft <kind> <id> --name <text> --json` (#523): add a DRAFT persona or job (kind: persona | job) to the catalog — personas.json / jobs.json, created when missing — so a Journey can link it (metadata.persona / metadata.job) before a person vets it. " +
+      "A persona's name is written as its role, its description as its description; a job's name is its motivation (\"I want to …\"), description its goal, and trigger / outcome its other story parts (absent: a placeholder to write before approving). " +
+      "An id the catalog already has is refused (E_CATALOG_DRAFT_EXISTS). It NEVER approves: approving stays a person's act on the CLI (`jevitate persona|job approve`) — there is no MCP tool for it.",
+    command: {
+      path: "catalog draft",
+      params: {
+        kind: pos("string", { enum: ["persona", "job"] }),
+        id: pos(),
+        name: s("--name", { required: true }),
+        description: s("--description"),
+        trigger: s("--trigger"),
+        outcome: s("--outcome"),
+      },
       omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
@@ -268,10 +288,11 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, a pending self-heal proposal (#453: per-step before/after, hypothesis, evidence, staleness, proposedHash), and its content hash. " +
       "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
       "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed. " +
+      "#523: strict: true exits 1 (defects) when the sheet has any ⚠ attention item (and runs the code-only readiness link checks — missing job / persona — even without readiness); ○ items and Jev never fail it. " +
       "#467: stale: true (and no id) instead lists every promoted Journey whose approval is stale — each with its approved and current hash and stepIdOnly: true when the only change is minted step ids — for a person to re-approve; it never approves.",
     command: {
       path: "journey review",
-      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), ...JEV_ADVICE },
+      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), strict: b("--strict"), ...JEV_ADVICE },
       omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
     },
   },
@@ -305,6 +326,18 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description:
       "`jevitate journey anchor remove <journeyId>` (#487): remove the named anchor from a Journey; returns the anchor lint issues that remain. On a promoted Journey (#507) the approval goes stale: it stays promoted, the old approval is kept for the review diff, and the result carries needsReapproval: true and reapproveCommand (jevitate journey promote <id> --reviewed-hash <new review hash>), which only a person runs.",
     command: { path: "journey anchor remove", params: { journeyId: pos(), name: s("--name", { required: true }) }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "journey_link",
+    description:
+      "`jevitate journey link <id> --json` (#523): link a Journey to a catalog job (job) and/or persona (persona) — metadata.job / metadata.persona — or clear a link (unlinkJob / unlinkPersona: true); at least one of the four. " +
+      "Each id is checked against the catalog: an unknown id is refused (E_JOURNEY_LINK_ARGS, the message lists the catalog's ids). A draft entry (catalog_draft) may be linked: the result's needsApproval says a person still approves it before promote. Linking is never an approval. " +
+      "On a promoted Journey the approval goes stale (#507): it stays promoted, the result carries needsReapproval: true and reapproveCommand, which only a person runs. A link is not executable content, so it never stales a mutation proof.",
+    command: {
+      path: "journey link",
+      params: { id: pos(), job: s("--job"), persona: s("--persona"), unlinkJob: b("--unlink-job"), unlinkPersona: b("--unlink-persona") },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
   },
   {
     name: "annotate_journey",

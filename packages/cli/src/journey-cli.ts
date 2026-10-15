@@ -11,10 +11,11 @@ import { registerJourneyVerify } from "./journey-cli/verify.js";
 import { registerJourneyAnchors } from "./journey-cli/anchors.js";
 import { registerJourneyPublish } from "./journey-cli/publish.js";
 import { registerJourneyAnchorCommands } from "./journey-anchor-cli.js";
+import { registerJourneyLinkCommand } from "./journey-link-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
 import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
 
-/** Registers `jevitate journey`: `list|find|run|promote|lint|verify|anchors|annotate|demo|publish`. */
+/** Registers `jevitate journey`: `list|find|run|promote|lint|verify|anchors|anchor|link|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
@@ -30,6 +31,9 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
 
   // #487 — add/remove a draft Journey's anchors with the step id written at once.
   registerJourneyAnchorCommands(journey, program, deps);
+
+  // #523 — link a Journey to a catalog job / persona (checked against the catalog; never an approval).
+  registerJourneyLinkCommand(journey, program, deps);
 
   // #246 — draft a Journey's intent on playback; `--approve` is the human gate that writes it.
   registerJourneyAnnotateCommand(journey, program, deps);

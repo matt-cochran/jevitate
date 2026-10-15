@@ -277,6 +277,32 @@ jevitate catalog analyze [options]
 | `--max-pairs <n>` | the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped |  |  |  |  |
 | `--real` | #435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only |  |  |  |  |
 
+### catalog draft
+
+```
+jevitate catalog draft [options] <kind> <id>
+```
+
+#523: add a DRAFT persona or job to the catalog (kind: persona | job) — personas.json / jobs.json, created when missing — so a Journey can link it now. Never approves (a person runs `persona|job approve` after review); an id the catalog already has is refused
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `kind` |  | yes |  |  |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--description <text>` | a persona: its description; a job: its goal |  |  |  |  |
+| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--name <text>` | a persona: who they are (written as its role); a job: what the user wants to do (its motivation, "I want to …") |  |  | yes |  |
+| `--outcome <text>` | a job: what doing it lets them do ("so I can …"); default: a placeholder to write before approving |  |  |  |  |
+| `--trigger <text>` | a job: when it comes up ("When …"); default: a placeholder to write before approving |  |  |  |  |
+
 ### catalog export
 
 ```
@@ -312,6 +338,7 @@ the jobs × personas matrix (which have a promoted Journey), approved jobs with 
 | `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
 | `--require-approvals` | #437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels) |  |  |  |  |
+| `--strict` | #523: exit 1 when a persona/job approval is stale, or a promoted Journey links a catalog entry that is not approved (a draft) or links no job / no persona — the repo-wide gate on what the review sheet flags |  |  |  |  |
 
 ## check
 
@@ -1244,6 +1271,31 @@ jevitate journey find [options] <query>
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
+### journey link
+
+```
+jevitate journey link [options] <id>
+```
+
+#523: link a Journey to a catalog job and/or persona (metadata.job / metadata.persona), or clear a link — an id the catalog does not have is refused (listing its ids); a draft entry may be linked and still needs a person's approval; on a promoted Journey the approval goes stale (#507). Never approves
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project's .jevitate directory (catalog files, journeys under journeys/); default: the repo's |  |  |  |  |
+| `--job <jobId>` | link this job (an id in .jevitate/jobs.json) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--persona <personaId>` | link this persona (an id in .jevitate/personas.json) |  |  |  |  |
+| `--unlink-job` | clear metadata.job |  |  |  |  |
+| `--unlink-persona` | clear metadata.persona |  |  |  |  |
+
 ### journey lint
 
 ```
@@ -1392,6 +1444,7 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 | `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 | `--stale` | #467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids |  |  |  |  |
+| `--strict` | #523: exit 1 (defects) when the sheet has any ⚠ attention item, and run the code-only readiness link checks (missing job / persona) even without --readiness; advisory ○ items and Jev never fail it. With --json the envelope also carries strict: { passed, warnings } |  |  |  |  |
 
 ### journey run
 
