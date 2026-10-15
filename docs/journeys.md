@@ -272,7 +272,7 @@ hash). The [assertion-strength gate](#assertion-strength) still applies: `--acce
 
 **Catalog links (#433).** A Journey can link the job it does and the persona doing it
 (`metadata.job`, `metadata.persona`: ids from `.jevitate/jobs.json` and `.jevitate/personas.json`,
-see [the catalog](./catalog.md)). The sheet then has a **Catalog** section: the linked job (its
+see [the catalog](./catalog.md); set them with `jevitate journey link`). The sheet then has a **Catalog** section: the linked job (its
 story) and persona with their approval state, and **needs re-review** when the Journey or a linked
 item changed since its approval. `journey promote` (and `demo approve`) refuses a Journey whose
 linked job or persona is not approved (`E_JOURNEY_UNVETTED`, exit 1) unless you pass
@@ -297,9 +297,16 @@ and Jev never fail it. `--stale --strict` is refused. MCP: `review_journey` with
   an approval still binds to the full review hash, so annotating re-stales an approval. One
   exception: annotating drops a success criterion's code `check` when that criterion is reworded,
   which changes executable content and does stale the proof.
+- **Linking.** `jevitate journey link <id> --job <jobId> --persona <personaId>` (MCP `journey_link`)
+  sets `metadata.job` / `metadata.persona` without hand-editing the file; `--unlink-job` /
+  `--unlink-persona` clear them. Each id is checked against the catalog: an unknown one is refused
+  (`E_JOURNEY_LINK_ARGS`, exit 64, listing the catalog's ids). A draft entry can be linked, and the
+  output says it still needs a person's approval. On a promoted Journey the approval goes stale and
+  the re-approve command is printed, as for an anchor edit. A link is not executable content, so it
+  never stales a mutation proof.
 - **Link warnings.** `journey lint` and `explore-author-journey` warn `missing-job` / `missing-persona`
-  with the fix: link a listed catalog id (`metadata.job`, `metadata.persona`) or run
-  `jevitate catalog draft …`. Warnings never change the exit code. `record` and `recording promote`
+  with the fix: `jevitate journey link <id> --job|--persona <id>` with the listed catalog ids, or
+  `jevitate catalog draft …` and then `journey link`. Warnings never change the exit code. `record` and `recording promote`
   write only a Recording and do not warn.
 - **Draft catalog entries.** `jevitate catalog draft persona|job <id> --name <text> [--description]
   [--trigger] [--outcome]` (MCP `catalog_draft`) adds a DRAFT entry and never approves it. A persona's

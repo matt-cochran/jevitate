@@ -724,6 +724,18 @@
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
+# journey link
+  description: #523: link a Journey to a catalog job and/or persona (metadata.job / metadata.persona), or clear a link — an id the catalog does not have is refused (listing its ids); a draft entry may be linked and still needs a person's approval; on a promoted Journey the approval goes stale (#507). Never approves
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=the project's .jevitate directory (catalog files, journeys under journeys/); default: the repo's
+    - flags=--job <jobId> required=true mandatory=false negate=false variadic=false default=null description=link this job (an id in .jevitate/jobs.json)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--persona <personaId> required=true mandatory=false negate=false variadic=false default=null description=link this persona (an id in .jevitate/personas.json)
+    - flags=--unlink-job required=false mandatory=false negate=false variadic=false default=null description=clear metadata.job
+    - flags=--unlink-persona required=false mandatory=false negate=false variadic=false default=null description=clear metadata.persona
+
 # journey lint
   description: report a Journey's weak assertions (writes without an asserted effect, visibility-only claims, nothing after the last write, …)
   arguments:

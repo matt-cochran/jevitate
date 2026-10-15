@@ -14,13 +14,17 @@ without `--readiness`. ○ items (such as a skipped Jev review) never fail it.
 
 1. **Author** the Journey (`explore-author-journey` in `jevitate-explore`, or
    `jevitate-record`). Read `journey lint <id>`; fix errors.
-2. **Link a job and a persona.** Set `metadata.job` / `metadata.persona` in the Journey file
-   to ids listed in `.jevitate/personas.json` / `.jevitate/jobs.json` (`jevitate catalog status` shows them). `journey lint` warns
-   `missing-job` / `missing-persona` with the fix. If none fits, add a DRAFT (never approved):
-   `jevitate catalog draft persona <id> --name "<who they are>" [--description "<text>"]` and
+2. **Link a job and a persona.** `jevitate journey link <id> --job <jobId> --persona <personaId>`
+   (MCP `journey_link`) with ids from the catalog (`jevitate catalog status` shows them); don't
+   hand-edit `metadata.job` / `metadata.persona`. An unknown id is refused (exit 64, listing the
+   catalog's ids); `--unlink-job` / `--unlink-persona` clear a link. `journey lint` warns
+   `missing-job` / `missing-persona` with the `journey link` command. If none fits, add a DRAFT
+   (never approved): `jevitate catalog draft persona <id> --name "<who they are>" [--description "<text>"]` and
    `jevitate catalog draft job <id> --name "I want to …" [--description "<goal>"]
-   [--trigger "When …"] [--outcome "so I can …"]` (MCP `catalog_draft`). Fill any
-   `(draft: …)` placeholder with real text. An existing id is refused (exit 64).
+   [--trigger "When …"] [--outcome "so I can …"]` (MCP `catalog_draft`), then `journey link` it;
+   the output says the draft still needs the owner's approval. Fill any `(draft: …)` placeholder
+   with real text. An existing id is refused (exit 64). Linking on a promoted Journey makes its
+   approval stale (the output prints the re-approve command for the owner).
 3. **Draft the annotation:** `jevitate journey annotate <id> --env <non-production> --real`
    (MCP `annotate_journey`) writes a draft only. Review it with the owner or edit the JSON;
    applying it (`--approve`) is the owner's step, listed below.
@@ -68,5 +72,5 @@ or no job/persona (`--json`: `strict.violations`). Use it in CI beside `jevitate
 ## MCP equivalents
 
 `review_journey` (`strict`), `lint_journey`, `annotate_journey`, `verify_journey`,
-`catalog_draft`, `catalog_status`. Approvals have no MCP form except `promote_journey`, which you
+`catalog_draft`, `journey_link`, `catalog_status`. Approvals have no MCP form except `promote_journey`, which you
 do not call on your own. For promotion details see `jevitate-run-journey` ("Promoting a Journey").

@@ -1271,6 +1271,31 @@ jevitate journey find [options] <query>
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
+### journey link
+
+```
+jevitate journey link [options] <id>
+```
+
+#523: link a Journey to a catalog job and/or persona (metadata.job / metadata.persona), or clear a link — an id the catalog does not have is refused (listing its ids); a draft entry may be linked and still needs a person's approval; on a promoted Journey the approval goes stale (#507). Never approves
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | the project's .jevitate directory (catalog files, journeys under journeys/); default: the repo's |  |  |  |  |
+| `--job <jobId>` | link this job (an id in .jevitate/jobs.json) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--persona <personaId>` | link this persona (an id in .jevitate/personas.json) |  |  |  |  |
+| `--unlink-job` | clear metadata.job |  |  |  |  |
+| `--unlink-persona` | clear metadata.persona |  |  |  |  |
+
 ### journey lint
 
 ```
