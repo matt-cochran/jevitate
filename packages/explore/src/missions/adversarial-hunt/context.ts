@@ -5,7 +5,7 @@
  */
 
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
-import type { BudgetDeclaration } from "@jevitate/recording";
+import type { BudgetDeclaration, TargetDescriptor } from "@jevitate/recording";
 import type { ActResult } from "../../act.js";
 import { ActionDeltas, PageDeltas, type ActionDelta } from "../../action-delta.js";
 import { PageSignalCollector, type DefectSignal } from "../../adversarial/defect-oracle.js";
@@ -49,6 +49,9 @@ import { installOracle } from "./oracle.js";
 import { installSessions } from "./sessions.js";
 import { clock } from "@jevitate/domain";
 
+/** #519: consecutive region-less steps after which the hunt goes back to its start (the anchor). */
+export const REGION_LOST_RESET_AFTER = 2;
+
 /** The adversarial hunt's run state (#232): every closure variable `runAdversarialHunt()` used to keep, one field each, names unchanged. */
 export interface HuntContext {
   readonly origin: string;
@@ -62,6 +65,13 @@ export interface HuntContext {
   outOfScopeSteps: number;
   readonly thresholds: CoverageThresholds;
   readonly cov: CoverageTracker;
+  /** #519: whether the run declared a scope region (`scopeRegions`), and its spec text for reports. */
+  readonly regionDeclared: boolean;
+  readonly regionSpec: string;
+  /** #519: in-scope steps in a row whose page had no scope region (reset after `REGION_LOST_RESET_AFTER`). */
+  regionLostStreak: number;
+  /** #519: times the run went back to its start because the scope region was gone. */
+  regionLostResets: number;
   readonly sessions: MissionSessions;
   collector: PageSignalCollector;
   crashWatch: CrashWatch;
@@ -109,7 +119,7 @@ export interface HuntContext {
   readonly hangs: Map<string, HangFinding>;
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   readonly timings: PageTiming[];
-  readonly perceiveOpts: { timingConfig?: TimingConfig | undefined; hangConfig?: HangConfig | undefined; settleConfig?: SettleConfig | undefined; requestBoundMs?: number | undefined; hangProbeMs?: number | undefined; renderWaitMs?: number | undefined; maxCandidates: number; secrets: readonly string[]; };
+  readonly perceiveOpts: { timingConfig?: TimingConfig | undefined; hangConfig?: HangConfig | undefined; settleConfig?: SettleConfig | undefined; requestBoundMs?: number | undefined; hangProbeMs?: number | undefined; renderWaitMs?: number | undefined; maxCandidates: number; secrets: readonly string[]; regions?: readonly TargetDescriptor[]; };
   /** #301: this run's inert canary tokens, and every one submitted (token → field, page, payload). */
   readonly canaries: CanaryTokens;
   readonly submittedCanaries: Map<string, { readonly field: string; readonly submittedOn: string; readonly payload: "html" | "attribute"; }>;
@@ -304,7 +314,12 @@ export function createHuntContext(params: AdversarialMissionParams): HuntContext
   ctx.departures = [];
   ctx.outOfScopeSteps = 0;
   ctx.thresholds = resolveCoverageThresholds(params.coverageThresholds);
-  ctx.cov = new CoverageTracker(ctx.inScope);
+  ctx.regionDeclared = (params.scopeRegions?.length ?? 0) > 0;
+  ctx.regionSpec = params.scopeRegionSpec ?? "(declared region)";
+  ctx.regionLostStreak = 0;
+  ctx.regionLostResets = 0;
+  // #519: with a region, coverage counts the region's own controls only.
+  ctx.cov = new CoverageTracker(ctx.inScope, ctx.regionDeclared ? { region: ctx.regionSpec } : {});
 
   // The live session; after a hang the mission resets to a fresh page and keeps hunting.
   ctx.sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
@@ -418,6 +433,8 @@ export function createHuntContext(params: AdversarialMissionParams): HuntContext
     ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
     ...(params.hangs === undefined ? {} : { hangConfig: params.hangs }),
     ...(params.timingConfig === undefined ? {} : { timingConfig: params.timingConfig }),
+    // #519: every perception tags controls `inRegion` and counts the region's matches.
+    ...(params.scopeRegions === undefined || params.scopeRegions.length === 0 ? {} : { regions: params.scopeRegions }),
   };
 
   /** #301: this run's inert canary tokens, and every one submitted (token → field, page, payload). */

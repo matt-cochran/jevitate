@@ -51,7 +51,7 @@ export function installFinish(ctx: HuntState): void {
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
       heap: ctx.heap.samples(),
       timing: summarizeTimings(ctx.timings),
-      scope: { routeGlobs: ctx.routeGlobs, outOfScopeSteps: ctx.outOfScopeSteps, departures: ctx.departures.slice(0, MAX_LISTED_DEPARTURES), resets: ctx.sessions.resets },
+      scope: { routeGlobs: ctx.routeGlobs, outOfScopeSteps: ctx.outOfScopeSteps, departures: ctx.departures.slice(0, MAX_LISTED_DEPARTURES), resets: ctx.sessions.resets, ...(ctx.regionDeclared ? { region: { spec: ctx.regionSpec, lostResets: ctx.regionLostResets } } : {}) },
       ...(ctx.declared === null ? {} : { invariants: ctx.declared.report() }),
       ...(ctx.budget === null ? {} : { budget: ctx.budget.trajectory() }),
       ...(ctx.identityChanges.length === 0 ? {} : { identityChanges: [...ctx.identityChanges] }),
