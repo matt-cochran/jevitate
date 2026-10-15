@@ -69,6 +69,8 @@ export const SUITE_EXPLORE_OPTIONS = {
   probeGuards: { shape: "boolean", appliesTo: ["usability"] },
   // containment
   scope: { shape: "string", appliesTo: ["coverage", "exploratory"], oneOf: ["app"] },
+  // #519: measure and hunt only the controls inside these page regions (descriptors); a Journey anchor's own region wins and cannot be overridden
+  scopeRegion: { shape: "strings", appliesTo: ["adversarial", "coverage", "exploratory"] },
   // secrets and sessions
   secret: { shape: "env-refs", appliesTo: ["goal", "adversarial", "usability"] },
   totp: { shape: "env-bindings", appliesTo: GOAL_UX },

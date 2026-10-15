@@ -109,6 +109,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     polish: { kind: "usability", set: true },
     probeGuards: { kind: "usability", set: true },
     scope: { kind: "coverage", set: "app" },
+    scopeRegion: { kind: "adversarial", set: ["testId=import-view"] },
     secret: { kind: "goal", set: ["env:SUITE_SECRET"] },
     totp: { kind: "goal", set: ["label=Code=env:SUITE_TOTP"] },
     fixture: { kind: "goal", set: "upload.csv" },

@@ -98,6 +98,12 @@ export function declareExploreCommand(program: Command): Command {
       [] as string[],
     )
     .option(
+      "--scope-region <descriptor>",
+      "adversarial/coverage/exploratory: measure and hunt only the controls inside this page region (repeatable; the --success descriptor syntax, e.g. testId=import-view or role=region;name=Import); a Journey anchor's own region is used by default and cannot be overridden (#519)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--scope <mode>",
       "--strategy coverage/exploratory: 'app' widens containment to the whole app (same as --route '/**'); default: the start URL's route plus --route globs",
     )

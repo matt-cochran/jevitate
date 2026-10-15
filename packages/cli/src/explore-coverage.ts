@@ -9,7 +9,7 @@ import { closeOnce, demoOverlayOf, extensionsStamp, finalizeVideos, runVideoDir,
 import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import { type InvariantSpec, type Recording } from "@jevitate/recording";
+import { type InvariantSpec, type Recording, type TargetDescriptor } from "@jevitate/recording";
 import type { DefectRecord, HostHealthSampler, InvariantDefect, InvariantReport, SafetyOverride, SideEffect } from "@jevitate/explore";
 import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import {
@@ -118,6 +118,9 @@ export interface RunCoverageMissionOptions {
    * to widen containment to the whole app.
    */
   readonly routeGlobs?: readonly string[];
+  /** #519: only the controls inside these page regions are measured and explored (`scopeRegionSpec` is how the report names them). */
+  readonly scopeRegions?: readonly TargetDescriptor[];
+  readonly scopeRegionSpec?: string;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
   /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
@@ -321,6 +324,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...(opts.actionDeltas === true ? { actionDeltas: true } : {}),
       onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
+      ...(opts.scopeRegions === undefined ? {} : { scopeRegions: opts.scopeRegions }),
+      ...(opts.scopeRegionSpec === undefined ? {} : { scopeRegionSpec: opts.scopeRegionSpec }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
       ...(opts.strategy === undefined ? {} : { strategy: opts.strategy }),

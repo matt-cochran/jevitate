@@ -410,6 +410,8 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     // #293: a journey-anchored mission replays its Journey's prefix first and starts where it lands.
     const prefix = item.t.prefixes?.get(m);
     const withPrefix = prefix === undefined ? {} : { journeyPrefix: prefix };
+    // #519: the scope region (the anchor's or the item's `scopeRegion`), resolved at preflight.
+    const withScopeRegion = setup?.scopeRegion === undefined ? {} : { scopeRegions: setup.scopeRegion.descriptors, scopeRegionSpec: setup.scopeRegion.spec };
     // The prefix types its secret params into the page the mission perceives: redacted like the item's own.
     const anchoredSecrets = prefix === undefined || prefix.secrets.length === 0 ? withSecrets : { secrets: [...(setup?.secrets ?? []), ...prefix.secrets] };
     const url = prefix?.startUrl ?? m.url ?? t.url;
@@ -449,6 +451,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...withStall,
         ...withOverflow,
         ...(m.routes === undefined && x.scope === undefined ? {} : { routeGlobs: [...(m.routes ?? []), ...(x.scope === "app" ? ["/**"] : [])] }),
+        ...withScopeRegion,
         ...withPrefix,
         ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
       });
@@ -475,6 +478,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...withHangReplays,
         ...withOverflow,
         ...(setup?.coverageThresholds === undefined ? {} : { coverageThresholds: setup.coverageThresholds }),
+        ...withScopeRegion,
         ...withPrefix,
       });
       stampResultFile(r.resultPath, stamp);
