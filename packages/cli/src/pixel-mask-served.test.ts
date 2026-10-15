@@ -11,8 +11,6 @@ import { DemoOverlay } from "@jevitate/explore";
 import { MaskUnavailableError, PIXEL_MASK_ATTR, SecretPixelMask, captureStepScreenshot, maskingPort } from "./demo-capture.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
-// #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
-useSkippingTime({ per: "all" });
 
 /**
  * #250/#251 hard requirement — secrets masked in PIXELS, in real Chromium: a served page shows a
@@ -95,6 +93,9 @@ async function open(recordDir?: string, secrets: readonly string[] = [SECRET]): 
 }
 
 describe("pixel masking of registered secrets (served, real Chromium)", () => {
+  // #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
+  useSkippingTime({ per: "all" });
+
   it(
     "masks the secret in a text node, an input value and a title — DOM-proven and pixel-proven in the screenshot; overlay hidden; page untouched",
     async () => {
@@ -186,6 +187,36 @@ describe("pixel masking of registered secrets (served, real Chromium)", () => {
   );
 
   it(
+    "fails closed: a secret in a top-layer modal cannot be proven masked — the screenshot is refused and no file is written",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "jev-mask-modal-"));
+      const { session, mask } = await open();
+      try {
+        await session.page.goto(`${origin}/modal`);
+        const check = await mask.verify(session.page);
+        expect(check.ok).toBe(false);
+        expect(check.reason).toMatch(/top-layer/);
+        expect(check.reason).not.toContain(SECRET);
+        const file = join(dir, "modal.png");
+        await expect(captureStepScreenshot(session.page, file, { step: 1 }, [mask.layer()])).rejects.toBeInstanceOf(MaskUnavailableError);
+        expect(existsSync(file)).toBe(false);
+      } finally {
+        await session.close();
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+});
+
+/**
+ * #540: the video is a record of real paints, so this suite keeps the browser's own clock. Under
+ * `page.clock` the page's requestAnimationFrame is a timer-driven fake that is not tied to paints,
+ * and the mask (which re-measures on requestAnimationFrame, before each paint) then lags the
+ * compositor: the first paint and the late secret's first frames were recorded unmasked.
+ */
+describe("[realtime] pixel masking in the recorded video (served, real Chromium)", () => {
+  it(
     "masks every video frame from the first paint: the recorded WebM's frames are the mask colour over every occurrence",
     async () => {
       const dir = await mkdtemp(join(tmpdir(), "jev-mask-video-"));
@@ -209,8 +240,8 @@ describe("pixel masking of registered secrets (served, real Chromium)", () => {
         expect(existsSync(videoPath!)).toBe(true);
         const webm = readFileSync(videoPath!).toString("base64");
         await reader.session.page.goto(`${origin}/secret`);
-        // Decode the video in the browser, seek near its end (the late secret is on screen), sample.
-        const shares = await reader.session.page.evaluate(
+        // Decode the video in the browser and sample EVERY frame (25 fps), from the first to the last.
+        const frames = await reader.session.page.evaluate(
           async ({ src, rects }) => {
             const v = document.createElement("video");
             v.muted = true;
@@ -225,19 +256,21 @@ describe("pixel masking of registered secrets (served, real Chromium)", () => {
               await new Promise((r) => (v.ontimeupdate = r));
             }
             const end = v.duration;
-            // Per rect: the share of mask-coloured pixels, near-white (unpainted) pixels, and anything
-            // else (page content — possibly the secret), so a failure says WHAT the frame showed.
-            const out: { t: number; mask: number; blank: number; other: number }[][] = [];
-            for (const t of [end - 0.3, end - 0.8]) {
-              v.currentTime = Math.max(0, t);
+            const c = document.createElement("canvas");
+            c.width = v.videoWidth;
+            c.height = v.videoHeight;
+            const g = c.getContext("2d", { willReadFrequently: true })!;
+            const sx = v.videoWidth / 800;
+            const sy = v.videoHeight / 600;
+            // Per rect: the share of mask-coloured pixels, near-white (unpainted page) pixels, near-black
+            // pixels (the encoder's pre-roll before the first screencast frame) and anything else (page
+            // content — possibly the secret), so a failure says WHAT the frame showed.
+            const out: { t: number; end: number; mask: number; blank: number; dark: number; other: number }[][] = [];
+            // Mid-frame times (a 25 fps frame lasts 0.04 s), so each seek lands inside one frame.
+            for (let t = 0.02; t < end; t += 0.04) {
+              v.currentTime = t;
               await new Promise((r) => (v.onseeked = r));
-              const c = document.createElement("canvas");
-              c.width = v.videoWidth;
-              c.height = v.videoHeight;
-              const g = c.getContext("2d")!;
               g.drawImage(v, 0, 0);
-              const sx = v.videoWidth / 800;
-              const sy = v.videoHeight / 600;
               out.push(
                 rects.map((r) => {
                   // The rect's interior (compression softens a box's edges).
@@ -248,12 +281,14 @@ describe("pixel masking of registered secrets (served, real Chromium)", () => {
                   const d = g.getImageData(x, y, w, h).data;
                   let mask = 0;
                   let blank = 0;
+                  let dark = 0;
                   for (let i = 0; i < d.length; i += 4) {
                     if (d[i]! > 180 && d[i + 1]! < 90 && d[i + 2]! > 180) mask++;
                     else if (d[i]! > 235 && d[i + 1]! > 235 && d[i + 2]! > 235) blank++;
+                    else if (d[i]! < 20 && d[i + 1]! < 20 && d[i + 2]! < 20) dark++;
                   }
                   const n = d.length / 4;
-                  return { t: v.currentTime, mask: mask / n, blank: blank / n, other: (n - mask - blank) / n };
+                  return { t: v.currentTime, end, mask: mask / n, blank: blank / n, dark: dark / n, other: (n - mask - blank - dark) / n };
                 }),
               );
             }
@@ -262,39 +297,25 @@ describe("pixel masking of registered secrets (served, real Chromium)", () => {
           { src: `data:video/webm;base64,${webm}`, rects: rects.map((r) => ({ ...r })) },
         );
         expect(rects.length).toBe(4);
-        for (const frame of shares) {
+        // A recording spans the load and a 1.2 s hold: dozens of frames, not a lucky one or two.
+        expect(frames.length).toBeGreaterThan(25);
+        const saw = (i: number, s: (typeof frames)[number][number]): string =>
+          `rect ${i} at t=${s.t.toFixed(2)}s of ${s.end.toFixed(2)}s: mask ${s.mask.toFixed(2)}, blank ${s.blank.toFixed(2)}, dark ${s.dark.toFixed(2)}, other ${s.other.toFixed(2)} (other = page content, possibly the secret)`;
+        // Every frame, every occurrence: the mask colour, or not painted yet (a whole rect of page
+        // white before the text appears, or of the encoder's black pre-roll). Never the page's content.
+        for (const frame of frames) {
           for (const [i, s] of frame.entries()) {
-            const saw = `rect ${i} at t=${s.t.toFixed(2)}s: mask ${s.mask.toFixed(2)}, blank ${s.blank.toFixed(2)}, other ${s.other.toFixed(2)} (other = page content, possibly the secret)`;
-            expect(s.mask, saw).toBeGreaterThan(0.9);
+            if (s.mask > 0.9) continue;
+            expect(s.blank > 0.95 || s.dark > 0.95, saw(i, s)).toBe(true);
           }
         }
+        // And the recording ends on every occurrence masked — the late secret included.
+        for (const [i, s] of frames[frames.length - 1]!.entries()) expect(s.mask, saw(i, s)).toBeGreaterThan(0.9);
       } finally {
         await reader.session.close();
         await rm(dir, { recursive: true, force: true });
       }
     },
     120_000,
-  );
-
-  it(
-    "fails closed: a secret in a top-layer modal cannot be proven masked — the screenshot is refused and no file is written",
-    async () => {
-      const dir = await mkdtemp(join(tmpdir(), "jev-mask-modal-"));
-      const { session, mask } = await open();
-      try {
-        await session.page.goto(`${origin}/modal`);
-        const check = await mask.verify(session.page);
-        expect(check.ok).toBe(false);
-        expect(check.reason).toMatch(/top-layer/);
-        expect(check.reason).not.toContain(SECRET);
-        const file = join(dir, "modal.png");
-        await expect(captureStepScreenshot(session.page, file, { step: 1 }, [mask.layer()])).rejects.toBeInstanceOf(MaskUnavailableError);
-        expect(existsSync(file)).toBe(false);
-      } finally {
-        await session.close();
-        await rm(dir, { recursive: true, force: true });
-      }
-    },
-    60_000,
   );
 });
