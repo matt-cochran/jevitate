@@ -14,11 +14,6 @@ export function collectTag(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }
 
-/** `--tag <key=value>` (repeatable) on a command that produces a run result. */
-export function withTagFlag(cmd: Command): Command {
-  return cmd.option(TAG_FLAG, TAG_HELP, collectTag, []);
-}
-
 /**
  * Wraps a command action (keeping its `this`): parses the command's `--tag`s — refused with
  * `E_TAG_ARGS` (exit 64) before anything runs — and runs the action inside their metadata scope.

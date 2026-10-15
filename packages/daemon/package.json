@@ -9,11 +9,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "@jevitate/application": "workspace:*",
     "@jevitate/domain": "workspace:*"
-  },
-  "devDependencies": {
-    "@jevitate/storage-sqlite": "workspace:*"
   },
   "scripts": {
     "build": "tsc --build"
