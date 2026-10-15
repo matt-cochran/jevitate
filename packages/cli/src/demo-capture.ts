@@ -143,12 +143,22 @@ export const PIXEL_MASK_ATTR = "data-jevitate-mask-layer";
  */
 export { REVEALED_SECRET_SELECTORS, REVEALED_SECRET_SHAPES, revealedSecretsIn };
 
+/**
+ * Why a mask is unavailable: `unproven` (it could not be installed, applied or proven at a capture)
+ * or `untrusted-primitive` (#547: a frame's requestAnimationFrame, MutationObserver or geometry
+ * built-in is not the browser's own — replaced before the mask loaded — so the mask cannot follow
+ * the page's paints and the capture is refused).
+ */
+export type MaskUnavailableReason = "unproven" | "untrusted-primitive";
+
 /** The mask could not be applied or proven: the capture is skipped (fail closed), never written. */
 export class MaskUnavailableError extends Error {
   readonly code = "E_PIXEL_MASK" as const;
-  constructor(message: string) {
+  readonly reason: MaskUnavailableReason;
+  constructor(message: string, reason: MaskUnavailableReason = "unproven") {
     super(message);
     this.name = "MaskUnavailableError";
+    this.reason = reason;
   }
 }
 
@@ -161,6 +171,8 @@ export interface MaskCheck {
   readonly masked: number;
   /** Why the proof failed (never contains a secret). */
   readonly reason?: string;
+  /** #547: set when a frame's mask fails closed on an untrusted built-in (see {@link MaskUnavailableReason}). */
+  readonly untrustedPrimitive?: true;
   /** The covered occurrences' viewport rects (top frame only) — what a pixel check can sample. */
   readonly rects: ReadonlyArray<{ readonly x: number; readonly y: number; readonly width: number; readonly height: number }>;
   /** #471: the jz-mask-v1 proof of the top document, when the mask enforces jz-mask-v1. */
@@ -191,7 +203,44 @@ export interface JzMaskCheck {
  * pre-empt or fake it). Secret values live only inside this closure.
  */
 const MASK_RUNTIME = String.raw`((cfg) => {
-  if (window[cfg.name]) return true;
+  if (window[cfg.name]) return window[cfg.name].unsound() || true;
+  // #547: the primitives the mask's correctness rests on, captured once, first thing — an init
+  // script runs before any page script, so a page that later replaces or wraps them (a polyfill, an
+  // animation library, a test hook) never reaches the mask, which calls only these references. A
+  // script that ran EARLIER (another init script, Playwright's page.clock, or page code before a
+  // late injection) may already have replaced them, so each is proven to be the browser's own:
+  // Function.prototype.toString of a built-in is exactly "function <name>() { [native code] }"; a
+  // JS shim prints its source, a bound function or a Proxy prints no name. A primitive that is not
+  // proven makes the mask UNSOUND, and it fails closed (see UNSOUND below). Not used, so not
+  // trusted: setTimeout, performance.now, ResizeObserver (nothing here schedules or measures by time).
+  const APPLY = Reflect.apply;
+  const FN_SRC = Function.prototype.toString;
+  const NATIVE = {
+    "Reflect.apply": [APPLY, "apply"],
+    "Function.prototype.toString": [FN_SRC, "toString"],
+    "requestAnimationFrame": [window.requestAnimationFrame, "requestAnimationFrame"],
+    "MutationObserver": [window.MutationObserver, "MutationObserver"],
+    "Element.prototype.getBoundingClientRect": [Element.prototype.getBoundingClientRect, "getBoundingClientRect"],
+    "Range.prototype.getClientRects": [Range.prototype.getClientRects, "getClientRects"],
+  };
+  const isNative = (fn, name) => {
+    if (typeof fn !== "function") return false;
+    try { return APPLY(FN_SRC, fn, []) === "function " + name + "() { [native code] }"; } catch (e) { return false; }
+  };
+  const replaced = Object.keys(NATIVE).filter((k) => !isNative(NATIVE[k][0], NATIVE[k][1]));
+  // Fail closed: an unsound mask cannot follow the page's paints, so it paints ONE opaque box over
+  // the whole viewport (a static fixed box needs no per-frame re-measuring; it is kept the last layer
+  // by the mutation observer), every verify() fails (a screenshot is refused, a defect clip voided,
+  // a jz-mask-v1 video unproven), and an install into a live frame is refused (MaskUnavailableError,
+  // reason "untrusted-primitive"). A frame is blank rather than possibly showing a secret.
+  const UNSOUND = replaced.length === 0 ? "" :
+    "the page's " + replaced.join(", ") + " is not the browser's own (replaced before the mask loaded), so the mask cannot follow its paints";
+  const RAF = NATIVE.requestAnimationFrame[0];
+  const MO = NATIVE.MutationObserver[0];
+  const BOX = NATIVE["Element.prototype.getBoundingClientRect"][0];
+  const RANGE_RECTS = NATIVE["Range.prototype.getClientRects"][0];
+  const boxOf = (el) => APPLY(BOX, el, []);
+  const rangeRects = (r) => Array.from(APPLY(RANGE_RECTS, r, []));
   const SECRETS = cfg.secrets.filter((s) => typeof s === "string" && s.trim().length > 0);
   // #298: secrets the app reveals mid-run — marked elements and credential-shaped values — are
   // learned into SECRETS (masked everywhere after) and reported to the run's mask via learned().
@@ -221,18 +270,19 @@ const MASK_RUNTIME = String.raw`((cfg) => {
   };
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const PAD = 2;
-  // Captured at install (an init script runs before any page script), so a page that later replaces
-  // requestAnimationFrame cannot stop the mask from re-measuring before each paint.
-  const raf = window.requestAnimationFrame.bind(window);
+  // The captured native (#547): re-measures before each real paint, whatever the page does to window.requestAnimationFrame.
+  const raf = (f) => { if (typeof RAF === "function") APPLY(RAF, window, [f]); };
   const CSS = ":host{all:initial}*{pointer-events:none !important;box-sizing:border-box}[hidden]{display:none !important}" +
     ".m{position:fixed;background:" + cfg.fill + ";border-radius:2px}" +
     ".jm{position:fixed;background:" + cfg.jzFill.mask + "}" +
     ".jp{position:fixed;background:" + cfg.jzFill.placeholder + "}" +
     ".jb{position:fixed;background:" + cfg.jzFill.block + "}" +
-    ".h{position:fixed;border:3px solid #f59e0b;border-radius:6px;box-shadow:0 0 0 4px rgba(245,158,11,.35)}";
+    ".h{position:fixed;border:3px solid #f59e0b;border-radius:6px;box-shadow:0 0 0 4px rgba(245,158,11,.35)}" +
+    ".c{position:fixed;left:0;top:0;right:0;bottom:0;background:" + cfg.fill + "}";
   let host = null;
   let layer = null;
   let hiBox = null;
+  let cover = null;
   let dirty = true;
   let targets = [];
   const boxes = [];
@@ -266,7 +316,11 @@ const MASK_RUNTIME = String.raw`((cfg) => {
       hiBox = document.createElement("div");
       hiBox.className = "h";
       hiBox.hidden = true;
-      shadow.append(layer, hiBox);
+      // #547: the fail-closed cover, above everything else of the mask's.
+      cover = document.createElement("div");
+      cover.className = "c";
+      cover.hidden = UNSOUND === "";
+      shadow.append(layer, hiBox, cover);
     }
     // The last child of <html>: painted after (above) every same-z-index page layer.
     if (host.parentNode !== root || root.lastElementChild !== host) root.appendChild(host);
@@ -435,7 +489,7 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     if (!node.isConnected) return null;
     const r = document.createRange();
     try { r.selectNodeContents(node); } catch (e) { return null; }
-    return Array.from(r.getClientRects());
+    return rangeRects(r);
   };
   // This frame's jz regions: [{ r, kind }] (a target that left the document has no box).
   const jzRegions = () => {
@@ -444,12 +498,12 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     for (const t of jzTargets) {
       let rs;
       if (t.node !== undefined) rs = nodeRects(t.node);
-      else rs = t.el.isConnected ? [t.el.getBoundingClientRect()] : null;
+      else rs = t.el.isConnected ? [boxOf(t.el)] : null;
       if (rs === null) continue;
       let within = null;
       if (t.within !== undefined) {
         within = rootBox.get(t.within);
-        if (within === undefined) { within = t.within.isConnected ? t.within.getBoundingClientRect() : null; rootBox.set(t.within, within); }
+        if (within === undefined) { within = t.within.isConnected ? boxOf(t.within) : null; rootBox.set(t.within, within); }
       }
       for (const r of rs) {
         if (!(r.width > 0 || r.height > 0)) continue;
@@ -511,6 +565,7 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     if (jzDrawn.length > 0 && topLayerOpen()) report("a top-layer element (modal dialog, popover or fullscreen) could paint over jz-mask-v1 regions");
     if (jzDrawn.length > 0 && animatedRegion()) report("an animation moved a jz-mask-v1 region");
     if (lastError !== "") report("the mask loop failed");
+    if (UNSOUND !== "") report(UNSOUND);
   };
   if (JZ) {
     window.addEventListener("scroll", (e) => {
@@ -524,10 +579,10 @@ const MASK_RUNTIME = String.raw`((cfg) => {
       if (!t.node.isConnected) return null;
       const r = document.createRange();
       try { r.setStart(t.node, t.start); r.setEnd(t.node, t.end); } catch (e) { return null; }
-      return Array.from(r.getClientRects());
+      return rangeRects(r);
     }
     if (!t.el.isConnected) return null;
-    return [t.el.getBoundingClientRect()];
+    return [boxOf(t.el)];
   };
   const fieldText = (el) => el.tagName === "SELECT" ? Array.from(el.selectedOptions || []).map((o) => o.text).join(" ") + " " + el.value : el.value;
   const shaped = (v) => typeof v === "string" && v.length >= 8 && SHAPES.some((re) => { re.lastIndex = 0; return re.test(v); });
@@ -579,7 +634,7 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     drawn = rects;
     jzDrawn = jz;
     if (highlightEl !== null && highlightEl.isConnected) {
-      place(hiBox, highlightEl.getBoundingClientRect(), 5);
+      place(hiBox, boxOf(highlightEl), 5);
       hiBox.hidden = false;
     } else hiBox.hidden = true;
   };
@@ -588,7 +643,11 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     try { jzWatch(); } catch (e) { report("the jz-mask-v1 watch failed"); }
     raf(tick);
   };
-  const mo = new MutationObserver((records) => {
+  // Unsound (#547): the observer (when it is the browser's own, it runs before the next paint) keeps
+  // the cover the last layer of <html> from the moment <html> exists; the tick below does the same.
+  const keepCover = () => { if (UNSOUND !== "") { try { ensureHost(); } catch (e) { /* re-tried at the next mutation or tick */ } } };
+  const observe = (records) => {
+    keepCover();
     for (const r of records) {
       if (r.type === "attributes" && (r.attributeName === "style" || r.attributeName === "class")) continue;
       if (r.type === "childList" && r.target === document.documentElement &&
@@ -596,14 +655,24 @@ const MASK_RUNTIME = String.raw`((cfg) => {
       dirty = true;
       return;
     }
-  });
-  mo.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+  };
+  try {
+    const mo = new MO(observe);
+    mo.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+  } catch (e) { lastError = "the mutation observer could not start"; }
+  keepCover();
+  if (UNSOUND !== "") for (const ev of ["readystatechange", "DOMContentLoaded", "load"]) document.addEventListener(ev, keepCover, true);
   const mark = () => { dirty = true; };
   window.addEventListener("input", mark, true);
   window.addEventListener("change", mark, true);
   const api = {
     verify() {
       dirty = true;
+      if (UNSOUND !== "") {
+        try { update(); } catch (e) { /* the cover is static: the proof fails either way */ }
+        return { ok: false, occurrences: 0, masked: 0, reason: UNSOUND, rects: [],
+          ...(JZ ? { jz: { ok: false, regions: 0, rects: [], reason: UNSOUND, breach: breach || UNSOUND, viewport: { width: window.innerWidth, height: window.innerHeight } } } : {}) };
+      }
       try { update(); } catch (e) {
         return { ok: false, occurrences: 0, masked: 0, reason: "the mask update failed: " + String((e && e.message) || e).slice(0, 200), rects: [],
           ...(JZ ? { jz: { ok: false, regions: 0, rects: [], reason: "the mask update failed", breach: breach || "the mask update failed", viewport: { width: window.innerWidth, height: window.innerHeight } } } : {}) };
@@ -621,7 +690,7 @@ const MASK_RUNTIME = String.raw`((cfg) => {
         problems.push("a top-layer element (modal dialog, popover or fullscreen) could paint over the mask");
       }
       let masked = 0;
-      const live = boxes.filter((d) => !d.hidden).map((d) => d.getBoundingClientRect());
+      const live = boxes.filter((d) => !d.hidden).map((d) => boxOf(d));
       for (const r of drawn) if (live.some((b) => covers(b, r))) masked++;
       if (masked < drawn.length) problems.push((drawn.length - masked) + " occurrence(s) not covered by a mask box");
       if (lastError !== "") problems.push("the mask loop failed: " + lastError);
@@ -651,12 +720,14 @@ const MASK_RUNTIME = String.raw`((cfg) => {
     // #360: a secret the run itself read mid-run (a cmd: secret source): masked from now on, whatever its length.
     add(values) { if (Array.isArray(values)) for (const v of values) if (typeof v === "string" && v.trim() !== "" && !SECRETS.includes(v)) SECRETS.push(v); dirty = true; return true; },
     learned() { return LEARNED.slice(); },
+    // #547: why this document's mask fails closed ("" when its primitives are the browser's own).
+    unsound() { return UNSOUND; },
     highlight(el) { highlightEl = el || null; try { update(); } catch (e) { /* presentation only */ } return highlightEl !== null; },
     clearHighlight() { highlightEl = null; try { update(); } catch (e) { /* presentation only */ } return true; },
   };
   Object.defineProperty(window, cfg.name, { value: Object.freeze(api), enumerable: false, configurable: false, writable: false });
   raf(tick);
-  return true;
+  return UNSOUND || true;
 })(__CFG__)`;
 
 /** #471: the jz-mask-v1 fills — masked, placeholder, left out (opaque, never a page colour by intent). */
@@ -697,6 +768,7 @@ type MaskApi = {
   learn(values: string[]): boolean;
   add(values: string[]): boolean;
   learned(): string[];
+  unsound(): string;
   highlight(e: Element): boolean;
   clearHighlight(): boolean;
 };
@@ -707,6 +779,10 @@ type MaskApi = {
  * it from an init script) keeps a VIDEO masked; `verify`/`layer()` prove it at each capture and
  * `assertMasked` throws {@link MaskUnavailableError} when it cannot be proven. With no secrets there
  * is nothing to mask: `verify` is trivially ok and nothing is injected for it.
+ * #547: the in-page mask runs only on the browser's own requestAnimationFrame, MutationObserver and
+ * geometry built-ins, captured before any page script; in a document where one was replaced before
+ * the mask loaded it fails closed (the whole viewport painted over, every proof failing, install and
+ * capture refused with reason `untrusted-primitive`) — see MASK_RUNTIME and docs/safety.md.
  */
 export class SecretPixelMask {
   readonly #source: string;
@@ -858,14 +934,18 @@ export class SecretPixelMask {
     for (const p of ctx.pages()) for (const f of p.frames()) await this.#inject(f);
   }
 
+  /** Applies the mask to `frame` (idempotent). Throws when it cannot, or when it runs unsound there (#547). */
   async #inject(frame: Frame): Promise<void> {
     if (frame.isDetached()) return;
+    let r: unknown;
     try {
-      await within(frame.evaluate(this.#source), "injecting the pixel mask");
+      r = await within(frame.evaluate(this.#source), "injecting the pixel mask");
     } catch (e) {
       if (frame.isDetached()) return;
       throw new MaskUnavailableError(`could not apply the pixel mask to a frame: ${errText(e)}`);
     }
+    // The runtime returns true, or why it fails closed in this document (never a secret).
+    if (typeof r === "string") throw new MaskUnavailableError(`the pixel mask cannot run in a frame: ${r.slice(0, 300)}`, "untrusted-primitive");
   }
 
   /**
@@ -950,6 +1030,7 @@ export class SecretPixelMask {
     let masked = 0;
     let rects: MaskCheck["rects"] = [];
     let jz: JzMaskCheck | undefined;
+    let untrusted = false;
     const reasons: string[] = [];
     for (const frame of page.frames()) {
       if (frame.isDetached()) continue;
@@ -977,19 +1058,28 @@ export class SecretPixelMask {
         await this.#sync(frame);
       } catch (e) {
         if (frame.isDetached()) continue;
+        if (e instanceof MaskUnavailableError && e.reason === "untrusted-primitive") untrusted = true;
         reasons.push(errText(e));
       }
     }
     if (this.jzMaskV1 && jz === undefined) {
       jz = { ok: false, regions: 0, rects: [], viewport: { width: 0, height: 0 }, reason: `the jz-mask-v1 layer is not running in the page${reasons.length === 0 ? "" : `: ${reasons.join("; ")}`}`, breach: "" };
     }
-    return { ok: reasons.length === 0, occurrences, masked, rects, ...(reasons.length === 0 ? {} : { reason: reasons.join("; ") }), ...(jz === undefined ? {} : { jz }) };
+    return {
+      ok: reasons.length === 0,
+      occurrences,
+      masked,
+      rects,
+      ...(reasons.length === 0 ? {} : { reason: reasons.join("; ") }),
+      ...(untrusted ? { untrustedPrimitive: true as const } : {}),
+      ...(jz === undefined ? {} : { jz }),
+    };
   }
 
   /** Throws {@link MaskUnavailableError} unless {@link verify} proves the mask. */
   async assertMasked(page: Page): Promise<MaskCheck> {
     const r = await this.verify(page);
-    if (!r.ok) throw new MaskUnavailableError(`secret masking could not be proven: ${r.reason ?? "unknown"}`);
+    if (!r.ok) throw new MaskUnavailableError(`secret masking could not be proven: ${r.reason ?? "unknown"}`, r.untrustedPrimitive === true ? "untrusted-primitive" : "unproven");
     return r;
   }
 
