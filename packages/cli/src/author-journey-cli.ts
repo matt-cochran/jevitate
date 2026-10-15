@@ -28,6 +28,12 @@ import { journeyLinkWarnings } from "./journey-link-hints.js";
 import { lintFindingLine } from "./journey-cli/shared.js";
 import type { JourneyLintFinding } from "@jevitate/journey";
 import { GOAL_RUN_OPTIONS, GoalRunFlagError, resolveGoalRunFlags, type GoalRunFlags, type GoalRunShaping } from "./goal-run-flags.js";
+import { triagedServerLog, type ServerLogOptions } from "./explore-shared.js";
+import { withServerLogFlags } from "./server-log-flags.js";
+import { serverLogOptionsFromFlags, type ServerLogFlags } from "./explore-cli/shared.js";
+import { LogSourceSpecError } from "./log-sources.js";
+import { LogSpecError } from "./log-lines.js";
+import { LogClassesError } from "./log-classes.js";
 
 /**
  * #369: the goal-run flags `explore-author-journey` shares with `explore` — every take is that goal
@@ -36,7 +42,7 @@ import { GOAL_RUN_OPTIONS, GoalRunFlagError, resolveGoalRunFlags, type GoalRunFl
 const AUTHOR_GOAL_RUN_FLAGS = [
   "successWhen", "allowVacuousChecks", "actionDeltas", "secret", "secretField", "totp", "typeFixture", "fixture",
   "saveStorageState", "replyWaitMs", "replyQuietMs", "replyCeilingMs", "replyMaxChars", "jobWaitMs", "deny", "paid", "allowControl",
-  "allowDestructive", "dialogs", "readRpc", "hangReplays", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
+  "allowDestructive", "allowWrites", "dialogs", "readRpc", "hangReplays", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
   "allowSecretCmd", "secretCmdAttempts",
 ] as const satisfies readonly (keyof typeof GOAL_RUN_OPTIONS)[];
 
@@ -87,10 +93,12 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
   // through RxD's diff/postdoc pipeline, and writes an UNPROMOTED,
   // parameterized Journey to the journeys store. The record-by-demonstration
   // authoring path is untouched.
-  const cmd = withBrowserLaunchFlags(
-    program
-      .command("explore-author-journey")
-      .description("Jev-driving authors a promotable Journey (authoring plane); never auto-promoted"),
+  const cmd = withServerLogFlags(
+    withBrowserLaunchFlags(
+      program
+        .command("explore-author-journey")
+        .description("Jev-driving authors a promotable Journey (authoring plane); never auto-promoted"),
+    ),
   )
     .option("--url <url>", "target URL (must be an authorized origin)")
     .option("--goal <text>", "natural-language goal")
@@ -156,7 +164,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         json?: boolean;
         storageState?: string;
         out?: string;
-      } & BrowserLaunchFlags & GoalRunFlags & FixtureFlags>();
+      } & BrowserLaunchFlags & GoalRunFlags & FixtureFlags & ServerLogFlags>();
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
         emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
@@ -185,6 +193,18 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         if (!(err instanceof GoalRunFlagError)) throw err;
         emitJson(program, fail(err.code, err.message));
         return;
+      }
+      // #142/#544: the backend-log flags are validated (spec shape, --allow-log-cmd gate, matcher
+      // regexes, --log-triage's source requirement) before any browser or gateway opens.
+      let serverLog: ServerLogOptions | undefined;
+      try {
+        serverLog = serverLogOptionsFromFlags(o);
+      } catch (err) {
+        if (err instanceof LogSourceSpecError || err instanceof LogSpecError || err instanceof LogClassesError || err instanceof GoalRunFlagError) {
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
+        throw err;
       }
       // #256: loaded extensions' chrome-extension://<id> origins are allowed too (only those ids).
       const allowlist = allowWithExtensions(o.url, resolveExploreAllowlist(setupRefFreeUrl(o.url), o.allow), browserLaunchFromFlags(o));
@@ -225,6 +245,8 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         }
         return;
       }
+      // #313: with --real the judge triages the signals; a fake gateway triages them by code.
+      const authorGoalRun: GoalRunShaping = { ...goalRun, ...triagedServerLog(serverLog, judge, o.real === true) };
 
       try {
         const result = await runAuthorJourney({
@@ -242,7 +264,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
-          goalRun,
+          goalRun: authorGoalRun,
           ...(fixtures === undefined ? {} : { fixtures, successSpecs: o.success }),
           ...(o.fixtures === undefined ? {} : { fixturesFile: o.fixtures }),
           ...(o.out === undefined ? {} : { outDir: o.out }),
