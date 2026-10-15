@@ -25,6 +25,7 @@ let suiteOffAllowlist: string;
 let suiteValid: string;
 let suiteUnknownFingerprint: string;
 let badCatalog: string;
+let regionJourneys: string;
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "jev-cli-refusal-"));
@@ -41,6 +42,16 @@ beforeAll(() => {
   // #198: a product facts file with a negative price and an unknown key.
   badProduct = join(dir, "product.json");
   writeFileSync(badProduct, JSON.stringify({ version: 1, plans: [{ name: "Pro", prices: [{ amount: -1, interval: "month" }] }], extra: true }));
+  // #519: a promoted Journey whose anchor declares a scope region.
+  regionJourneys = join(dir, "region-journeys");
+  mkdirSync(regionJourneys, { recursive: true });
+  writeFileSync(
+    join(regionJourneys, "wiz.json"),
+    JSON.stringify({
+      metadata: { id: "wiz", name: "wiz", promoted: true, params: [], createdAtIso: "2026-10-15T00:00:00Z", anchors: [{ name: "wizard", step: 1, stepId: "s-click1", region: "testId=import-view" }] },
+      recording: { version: "1", site: "https://shop.test", pages: [{ url: "/", steps: [{ step: { kind: "click", target: { testId: "go" }, expect: { kind: "visible", target: { testId: "ok" } } }, stepId: "s-click1" }] }] },
+    }),
+  );
   // #433: a catalog whose jobs.json holds a job without its story's trigger.
   badCatalog = join(dir, "bad-catalog");
   mkdirSync(badCatalog, { recursive: true });
@@ -222,7 +233,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   // #487: an unknown Journey (or traversal id), a bad or unknown step, a bad name; removing an unknown anchor.
   "journey anchor add": {
     base: ["nope", "--name", "a", "--step", "1"],
-    cases: [["nope", "--name", "a", "--step", "1"], ["../x", "--name", "a", "--step", "1"], ["nope", "--name", "Bad Name", "--step", "1"], ["nope", "--name", "a", "--step", "zzz"]],
+    cases: [["nope", "--name", "a", "--step", "1"], ["../x", "--name", "a", "--step", "1"], ["nope", "--name", "Bad Name", "--step", "1"], ["nope", "--name", "a", "--step", "zzz"], ["nope", "--name", "a", "--step", "1", "--region", "Import Wizard"]],
   },
   "journey anchor remove": { base: ["nope", "--name", "a"], cases: [["nope", "--name", "a"], ["../x", "--name", "a"]] },
   // #293: a missing/unreadable spec, and a campaign with no model gateway.
@@ -257,6 +268,12 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       // #198: --product is validated before a browser opens, and refused outside usability.
       ["--url", URL0, "--strategy", "usability", "--goal", "g", "--app-class", "consumer", "--fake-ai", "--product", badProduct],
       ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--product", badProduct],
+      // #519: --scope-region is refused (before any browser opens) on strategies with no coverage gate, when unparsable, and beside an anchor that declares a region.
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--scope-region", "testId=x"],
+      ["--url", URL0, "--strategy", "usability", "--goal", "g", "--app-class", "consumer", "--fake-ai", "--scope-region", "testId=x"],
+      ["--url", URL0, "--feature", "f", "--fake-ai", "--scope-region", "testId=x"],
+      ["--url", URL0, "--strategy", "adversarial", "--fake-ai", "--scope-region", "Import Wizard"],
+      ["--from-journey", "wiz", "--at-step", "wizard", "--journeys-dir", regionJourneys, "--strategy", "adversarial", "--fake-ai", "--scope-region", "testId=x"],
       ["--url", URL0, "--strategy", "coverage", "--fake-ai", "--polish"],
       ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--probe-guards"],
       // #225: a strategy that does not honour success checks refuses them — never silently ignored.

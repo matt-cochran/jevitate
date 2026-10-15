@@ -293,10 +293,10 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "journey_anchor_add",
     description:
       "`jevitate journey anchor add <journeyId>` (#487): add a named anchor to a Journey — step is a 1-based step number or a step id; the step's stable id is written at once. Returns the anchor lint issues that remain. " +
-      "On a promoted Journey (#507) the approval goes stale: it stays promoted, the old approval is kept for the review diff, and the result carries needsReapproval: true and reapproveCommand (jevitate journey promote <id> --reviewed-hash <new review hash>), which only a person runs.",
+      "On a promoted Journey (#507) the approval goes stale: it stays promoted, the old approval is kept for the review diff, and the result carries needsReapproval: true and reapproveCommand (jevitate journey promote <id> --reviewed-hash <new review hash>), which only a person runs. #519: region declares the page region missions at this anchor attack (a descriptor like testId=import-view); a run from this anchor scopes control coverage to it and --scope-region cannot override it.",
     command: {
       path: "journey anchor add",
-      params: { journeyId: pos(), name: s("--name", { required: true }), step: s("--step", { required: true }), description: s("--description"), probe: many("--probe") },
+      params: { journeyId: pos(), name: s("--name", { required: true }), step: s("--step", { required: true }), description: s("--description"), probe: many("--probe"), region: s("--region") },
       omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
@@ -444,6 +444,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         actionDeltas: b("--action-deltas"),
         feature: s("--feature"),
         route: many("--route"),
+        scopeRegion: many("--scope-region"),
         scope: s("--scope", { enum: ["app"] }),
         maxActions: n("--max-actions"),
         maxDecisions: n("--max-decisions"),

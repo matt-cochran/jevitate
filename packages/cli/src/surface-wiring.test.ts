@@ -236,6 +236,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runCoverageMission": {
+    scopeRegions: QUEUE_NARROW,
+    scopeRegionSpec: QUEUE_NARROW,
     actionDeltas: QUEUE_NARROW,
     hostHealth: SEAM,
     nowIso: SEAM,
@@ -245,6 +247,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runAdversarialCliMission": {
+    scopeRegions: QUEUE_NARROW,
+    scopeRegionSpec: QUEUE_NARROW,
     actionDeltas: QUEUE_NARROW,
     hostHealth: SEAM,
     secrets: "redaction comes from the target's secret fields",
