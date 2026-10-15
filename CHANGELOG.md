@@ -9,7 +9,7 @@ behaviour changes).
 
 ## [0.14.0] – 2026-10-15
 
-0.14.0 lets a mission measure the part of the page it was sent to attack, adds an opt-in browser guard for off-allowlist navigations, and makes "promotion-ready" machine-checkable, so an agent hands a Journey over only when the owner's review sheet is clean. It also consolidates helpers, tightens store ids and adds knip.
+0.14.0 lets a mission measure the part of the page it was sent to attack, adds an opt-in browser guard for off-allowlist navigations, and makes "promotion-ready" machine-checkable, so an agent hands a Journey over only when the owner's review sheet is clean. Journey request checks now see the response to every request their own step sent. It also consolidates helpers, tightens store ids and adds knip.
 
 ### Behaviour changes
 
@@ -44,6 +44,7 @@ behaviour changes).
 
 ### Fixed
 
+- **A step's request checks see their own responses (#526).** A second POST to the same endpoint on one page, or a Save followed by a navigation, no longer leaves a 2xx "still awaiting a response" and quarantines the Journey. Each step's request window closes when the step ends, and the step's checks are judged on the requests it sent, before the next step acts.
 - A guarded page that redirects by script while loading no longer stalls `page.goto` until its timeout (#521).
 - `catalog analyze` proof advice uses the new proof hash (#523).
 
