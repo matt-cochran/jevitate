@@ -23,6 +23,8 @@ export interface AddAnchorInput {
   readonly step: string | number;
   readonly description?: string;
   readonly probes?: readonly string[];
+  /** #519: the page region this state's missions attack (a `--success`-syntax descriptor). */
+  readonly region?: string;
 }
 
 function flatIds(journey: Journey): string[] {
@@ -67,11 +69,13 @@ export function addAnchor(journey: Journey, input: AddAnchorInput): Journey {
   const at = resolveAnchorStep(journey, input.step);
   const description = input.description?.trim() ?? "";
   const probes = (input.probes ?? []).map((p) => p.trim()).filter((p) => p !== "");
+  const region = input.region?.trim() ?? "";
   const anchor: JourneyAnchor = {
     name: input.name,
     step: at.step,
     stepId: at.stepId,
     ...(description === "" ? {} : { description }),
+    ...(region === "" ? {} : { region }),
     ...(probes.length === 0 ? {} : { probes }),
   };
   const stamped = withStepIds(journey);
