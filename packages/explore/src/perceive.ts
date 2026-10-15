@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import type { TargetDescriptor } from "@jevitate/recording";
 import { PageNavigatingError, snapshot, type Snapshot } from "./snapshot.js";
 import { monitorFor, SETTLE_QUIET_MS, type SettleResult } from "./page-monitor.js";
 import { measurePageTiming, unreadablePageTiming, type PageTiming } from "./timing.js";
@@ -57,6 +58,8 @@ export interface PerceiveOptions {
    * it is read (see `SnapshotOptions.secrets`). Default none.
    */
   readonly secrets?: readonly string[];
+  /** #519: the run's scope region(s) — see `SnapshotOptions.regions`. Default none. */
+  readonly regions?: readonly TargetDescriptor[];
   /** Ceiling on the render + settle wait (ms). Default `RENDER_WAIT_MS`; 0 disables waiting. */
   readonly renderWaitMs?: number;
   /**
@@ -157,6 +160,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     ...(opts.maxCandidates === undefined ? {} : { maxCandidates: opts.maxCandidates }),
     ...(opts.mentioned === undefined ? {} : { mentioned: opts.mentioned }),
     ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
+    ...(opts.regions === undefined ? {} : { regions: opts.regions }),
   };
   const hangProbeMs = opts.hangProbeMs ?? HANG_PROBE_MS;
   // Half the ceiling by default: a request that started a little AFTER this perception began (the

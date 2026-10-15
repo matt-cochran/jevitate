@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { GOAL_OUTCOME_FOLD, contentHash, isGoalOutcome, runTagsOf } from "@jevitate/domain";
+import { GOAL_OUTCOME_FOLD, contentHash, isGoalOutcome, isRecord, runTagsOf } from "@jevitate/domain";
 import {
   findingKey,
   requestIdentity,
@@ -259,9 +259,6 @@ function branchOf(v: unknown): RunBranch | undefined {
 
 type Json = Record<string, unknown>;
 
-function isRecord(v: unknown): v is Json {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v !== "" ? v : undefined;
 }

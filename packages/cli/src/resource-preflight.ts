@@ -109,8 +109,8 @@ function rootOf(cmd: Command): Command {
  */
 export function withResourcePreflight(cmd: Command, deps: PreflightDeps = {}): Command {
   const register = cmd.action.bind(cmd);
-  cmd.action = (fn: (...args: any[]) => void | Promise<void>): Command =>
-    register(async function (this: Command, ...args: any[]): Promise<void> {
+  cmd.action = <A extends unknown[], R>(fn: (...args: A) => R): Command =>
+    register(async function (this: Command, ...args: A): Promise<void> {
       const refusal = await resourcePreflight(this.opts<GovernanceFlags>(), deps);
       if (refusal !== null) {
         emitJsonOrRefusal(rootOf(this), refusal);

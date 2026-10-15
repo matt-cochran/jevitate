@@ -5,7 +5,7 @@ import { withIdLock } from "./lock.js";
 import { flushIfDurable } from "./durability.js";
 import type { Action, InboxItem, InboxSummary, ThreadEntry } from "./types.js";
 import { InboxItemSchema, SAFE_INBOX_ID_RE, assertSafeInboxId, asSecret, resolveTransition, toSummary } from "./types.js";
-import { clock } from "@jevitate/domain";
+import { clock, isNodeError } from "@jevitate/domain";
 
 export type Channel = "human" | "agent";
 
@@ -74,9 +74,6 @@ export class InboxIdConflictError extends Error {
   }
 }
 
-function isNodeError(err: unknown, code: string): boolean {
-  return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === code;
-}
 
 const TERMINAL_STATUSES = new Set(["approved", "rejected", "resolved", "expired"]);
 

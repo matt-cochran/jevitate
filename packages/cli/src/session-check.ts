@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { isLoginLikeUrl } from "@jevitate/explore";
+import { isRecord } from "@jevitate/domain";
 
 /**
  * #213: was a run's `--storage-state` (a persona's) session honoured? A dead session (an expired or
@@ -38,6 +39,3 @@ function pathOf(url: string): string {
   }
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}

@@ -65,3 +65,17 @@ describe("isTrusted", () => {
     expect(await isTrusted(store, "gmail", "read-inbox", "sha256:bbbb")).toBe(false);
   });
 });
+
+describe("FsTrustStore id guard (#520)", () => {
+  const unsafe = ["", "..", "../x", "a/b", "a\\\\b", "a\\u0000b", "C:x"];
+  const mk = () => new FsTrustStore(mkdtempSync(join(tmpdir(), "trust-guard-")));
+  it.each(unsafe)("get refuses unsafe sourceId %j", async (id) => {
+    await expect(mk().get(id, "ok")).rejects.toThrow(/invalid/i);
+  });
+  it.each(unsafe)("get refuses unsafe journeyId %j", async (id) => {
+    await expect(mk().get("gmail", id)).rejects.toThrow(/invalid/i);
+  });
+  it("accepts a source id with a space (legacy, still legal)", async () => {
+    expect(await mk().get("my source", "ok")).toBeNull();
+  });
+});

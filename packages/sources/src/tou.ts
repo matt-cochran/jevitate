@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JevitateManifest, SiteDeclaration } from "./manifest.js";
+import { isNodeError } from "@jevitate/domain";
 import { UndeclaredTouError } from "./errors.js";
 import { resolveDataDir } from "./data-dir.js";
 
@@ -28,14 +29,6 @@ function assertSafeName(name: string): void {
   }
 }
 
-function isNodeError(err: unknown, code: string): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === code
-  );
-}
 
 export class FsAckStore implements AckStore {
   constructor(private readonly dir: string) {}

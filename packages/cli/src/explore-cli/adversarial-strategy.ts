@@ -8,7 +8,7 @@ import type { ExploreRunContext } from "./shared.js";
 
 /** `--strategy adversarial` (moved verbatim out of registerExploreCommands). */
 export async function runAdversarialStrategy(ctx: ExploreRunContext): Promise<void> {
-  const { deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withPrefix, emitJourneyFailure, withEvidence, runFiling, issueFiler } = ctx;
+  const { deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler } = ctx;
   if (!o.url) {
     emitExplore(fail("E_EXPLORE_ARGS", "--url is required for --strategy adversarial"));
     return;
@@ -49,6 +49,7 @@ export async function runAdversarialStrategy(ctx: ExploreRunContext): Promise<vo
     const result = await runAdversarialCliMission({
       ...(target === undefined ? {} : { target }),
       ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
+      ...(o.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       seedUrl: o.url,
       allowlist: advAllowlist,
       usage: advUsage,
@@ -73,6 +74,7 @@ export async function runAdversarialStrategy(ctx: ExploreRunContext): Promise<vo
       ...withInvariants,
       ...triagedServerLog(serverLog, advJudge, o.real === true),
       ...withPrefix,
+      ...withScopeRegion,
     });
     // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
     // itself broke (inconclusive/crashed) — see exit-codes.ts.

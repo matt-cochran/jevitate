@@ -117,6 +117,7 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       ...(successWhen === undefined ? {} : { successWhen }),
       ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
       ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
+      ...(o.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
       allowlist,
       judge,
       gen,

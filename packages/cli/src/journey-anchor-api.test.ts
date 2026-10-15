@@ -53,6 +53,25 @@ describe("addJourneyAnchor", () => {
     await expect(addJourneyAnchor(dir, "nope", { name: "review", step: "2" })).rejects.toBeInstanceOf(UnknownJourneyError);
   });
 
+  it("#519: persists the anchor's region", async () => {
+    await seed(journey());
+    await addJourneyAnchor(dir, "draft", { name: "review", step: "2", region: "testId=import-view" });
+    expect((await stored()).metadata.anchors?.[0]?.region).toBe("testId=import-view");
+  });
+
+  it("#519: a region on a promoted Journey changes its review hash", async () => {
+    await seed(journey({ promoted: true }));
+    const before = journeyReviewHash(await stored());
+    await addJourneyAnchor(dir, "draft", { name: "review", step: "2", region: "testId=import-view" });
+    expect(journeyReviewHash(await stored())).not.toBe(before);
+  });
+
+  it("#519: a region on a promoted Journey names the re-approve command", async () => {
+    await seed(journey({ promoted: true }));
+    const result = await addJourneyAnchor(dir, "draft", { name: "review", step: "2", region: "testId=import-view" });
+    expect(result.reapproveCommand).toBe(`jevitate journey promote draft --reviewed-hash ${journeyReviewHash(await stored())}`);
+  });
+
   it("adds the anchor to a promoted Journey", async () => {
     await seed(journey({ promoted: true }));
     await addJourneyAnchor(dir, "draft", { name: "review", step: "2" });

@@ -3,7 +3,6 @@
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
   "references": [
     { "path": "../ai-core" },
-    { "path": "../application" },
     { "path": "../domain" },
     { "path": "../inbox" },
     { "path": "../journey" },

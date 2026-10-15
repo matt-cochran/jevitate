@@ -1,7 +1,7 @@
 import { taggedAction } from "../run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
-import { type InvariantSpec } from "@jevitate/recording";
+import { type InvariantSpec, type TargetDescriptor } from "@jevitate/recording";
 import { envCredentialStore } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "../credentials-file.js";
 import { UnauthorizedExploreTargetError, TypeFixtureSpecError, validateAllowControlPatterns, validateDenyPatterns, type DialogPolicy, type SecretField, type TypeFixture } from "@jevitate/explore";
@@ -45,6 +45,7 @@ import { CAMPAIGN_LIMITS, isSweepMode } from "@jevitate/journey";
 import { CampaignSpecError, runCampaign, validateCampaignSpec } from "../campaign-api.js";
 import { formatCampaignHuman } from "../campaign-cli.js";
 import { forwardedArgv } from "../multi-run-cli.js";
+import { resolveScopeRegions } from "./scope-region.js";
 import { ANCHORED_STRATEGIES, JourneyPrefixArgsError, JourneyPrefixStaleError, journeyStaleResult, resolveJourneyPrefix, type JourneyPrefix } from "../journey-prefix.js";
 import { clock } from "@jevitate/domain";
 import type { ConversationOptions } from "../conversation-options.js";
@@ -107,6 +108,14 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         }
       }
       const strategy = o.strategy ?? "goal";
+      // #519: --scope-region on a strategy without a coverage gate, or one that does not parse, is refused up front
+      // (also ahead of a --at-step sweep, whose per-stop runs would each refuse it).
+      try {
+        resolveScopeRegions({ scopeRegion: o.scopeRegion, strategy, ...(o.feature === undefined ? {} : { feature: o.feature }), ...(o.goal === undefined ? {} : { goal: o.goal }) });
+      } catch (err) {
+        emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
       // #293 journey-anchored exploration: the Journey, step, params and environment are resolved (and
       // refused, exit 64) before anything else — the start URL every later check uses is where the
       // Journey's prefix lands.
@@ -236,6 +245,15 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         if (o.allow.length === 0) o.allow = [...journeyPrefix.allowedOrigins];
       }
       const withPrefix = journeyPrefix === undefined ? {} : { journeyPrefix };
+      // #519: the scope region — the anchor's (authoritative) or --scope-region's — resolved and refused before any browser opens.
+      let withScopeRegion: { scopeRegions?: TargetDescriptor[]; scopeRegionSpec?: string };
+      try {
+        const region = resolveScopeRegions({ scopeRegion: o.scopeRegion, strategy, ...(o.feature === undefined ? {} : { feature: o.feature }), ...(o.goal === undefined ? {} : { goal: o.goal }) }, journeyPrefix);
+        withScopeRegion = region === undefined ? {} : { scopeRegions: region.descriptors, scopeRegionSpec: region.spec };
+      } catch (err) {
+        emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
       /** #293: a prefix that no longer replays, or a site policy that refused it — typed, handled once for every strategy. */
       const emitJourneyFailure = (err: unknown): boolean => {
         if (err instanceof JourneyPrefixStaleError) {
@@ -640,7 +658,7 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       }
 
       const ctx: ExploreRunContext = {
-        deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures,
+        deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures,
       };
 
       if (strategy === "coverage" || strategy === "exploratory") {

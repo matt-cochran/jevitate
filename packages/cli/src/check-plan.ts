@@ -20,10 +20,12 @@ import { serverLogFromTargetConfig } from "./mission-queue-runner.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { type EngineInfo } from "./engine.js";
 import { applyJourneyEnvironment, isEnvironmentError, resolveJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
+import { resolveScopeRegions } from "./explore-cli/scope-region.js";
 import { resolveJourneyPrefix, type JourneyPrefix } from "./journey-prefix.js";
 import { isSweepMode, splitBudget, sweepStops } from "@jevitate/journey";
 import type { SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
 import { CheckAiSetupError, CheckArgsError, CheckPreflightError, type ItemKind, type RunCheckOptions } from "./check-types.js";
+import { isRecord } from "@jevitate/domain";
 import type { HealBudget, SelfHealMode } from "@jevitate/domain";
 import type { ChangeScope } from "@jevitate/runtime";
 import { JourneyHealArgsError, journeyHealBudget, readJourneyChangeScope, validateJourneyHeal } from "./journey-heal.js";
@@ -64,9 +66,7 @@ function journeyRoutes(j: Journey): string[] {
 
 export type Json = Record<string, unknown>;
 
-export function isRecord(v: unknown): v is Json {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
+export { isRecord };
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -217,6 +217,8 @@ interface ItemSetup {
   readonly personas?: readonly Persona[];
   readonly fixtures?: FixtureSource;
   readonly coverageThresholds?: CoverageThresholds;
+  /** #519: the scope region — the anchor's, or the item's `scopeRegion` — resolved at preflight. */
+  readonly scopeRegion?: NonNullable<ReturnType<typeof resolveScopeRegions>>;
 }
 
 const TARGET_FLAG_KEYS = [
@@ -237,6 +239,8 @@ function itemSetup(
   opts: RunCheckOptions,
   /** A goal's start URL and the texts that may reference `${setup.x}`. */
   refs?: { readonly url: string; readonly texts: Readonly<Record<string, string | readonly string[] | undefined>> },
+  /** #519: the mission's resolved Journey prefix (its anchor may declare the scope region). */
+  prefix?: JourneyPrefix,
 ): ItemSetup {
   const t = p.target;
   const env = opts.env ?? process.env;
@@ -327,6 +331,7 @@ function itemSetup(
           ...(x.requireFormSubmit === undefined ? {} : { requireFormSubmit: x.requireFormSubmit }),
         })
       : undefined;
+  const scopeRegion = resolveScopeRegions({ scopeRegion: x.scopeRegion ?? [], strategy: kind }, prefix);
   return {
     x,
     ...(storageState === undefined ? {} : { storageState }),
@@ -338,6 +343,7 @@ function itemSetup(
     ...(personas.length === 0 ? {} : { personas }),
     ...(fixtures === undefined ? {} : { fixtures }),
     ...(coverageThresholds === undefined ? {} : { coverageThresholds }),
+    ...(scopeRegion === undefined ? {} : { scopeRegion }),
   };
 }
 
@@ -602,7 +608,7 @@ export function plan(prepared: readonly PreparedTarget[], changed: readonly stri
     const missions = t.missions.length === 0 && t.goals.length === 0 && p.invariants !== undefined ? [invariantSweep()] : t.missions;
     missions.forEach((m0, mi) => {
       for (const m of p.expanded?.get(m0) ?? [m0]) {
-        const setup = setupOrRefuse(`$.targets[${ti}].missions[${mi}]`, () => itemSetup(p, m, m.strategy, opts));
+        const setup = setupOrRefuse(`$.targets[${ti}].missions[${mi}]`, () => itemSetup(p, m, m.strategy, opts, undefined, p.prefixes?.get(m)));
         out.push(...perPersona({ t: p, kind: "mission", name: m.name, strategy: m.strategy, mission: m, needsAi: m.strategy !== "feature", setup }));
       }
     });

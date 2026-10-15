@@ -63,6 +63,7 @@ export * from "./mission-session.js";
 export * from "./host-pressure.js";
 export * from "./host-health.js";
 export * from "./seed-redirect.js";
+export * from "./blocked-navigation.js";
 export * from "./coverage/sufficiency.js";
 export * from "./coverage/nav.js";
 export * from "./declared-invariants.js";

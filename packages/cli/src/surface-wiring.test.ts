@@ -94,6 +94,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     journeyPrefix: NO_ANCHORED_HERE,
     minEffort: "#424: every take is checked by --success and stops at the first verified path; a minimum effort would only delay it (`explore --min-actions`)",
     serverLog: "backend log sources are operator-declared `explore --log-source`; authoring needs only the goal's checks",
+    blockOffAllowlistNavigation: "#521: an authored Journey may cross to an IdP or checkout like any Journey; the navigation guard is `explore --block-off-allowlist-navigation`'s",
   },
   "coverage-strategy.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
   "adversarial-strategy.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
@@ -216,6 +217,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
+    blockOffAllowlistNavigation: QUEUE_NARROW,
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
     secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
     hostHealth: SEAM,
@@ -236,6 +238,9 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runCoverageMission": {
+    blockOffAllowlistNavigation: QUEUE_NARROW,
+    scopeRegions: QUEUE_NARROW,
+    scopeRegionSpec: QUEUE_NARROW,
     actionDeltas: QUEUE_NARROW,
     hostHealth: SEAM,
     nowIso: SEAM,
@@ -245,6 +250,9 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runAdversarialCliMission": {
+    blockOffAllowlistNavigation: QUEUE_NARROW,
+    scopeRegions: QUEUE_NARROW,
+    scopeRegionSpec: QUEUE_NARROW,
     actionDeltas: QUEUE_NARROW,
     hostHealth: SEAM,
     secrets: "redaction comes from the target's secret fields",
@@ -258,6 +266,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runFeatureCliMission": {
+    blockOffAllowlistNavigation: QUEUE_NARROW,
     hostHealth: SEAM,
     stallTimeoutMs: QUEUE_NARROW,
     nowIso: SEAM,

@@ -275,7 +275,8 @@ export function parseSuccessSpec(spec: string): SuccessCheck {
   }
 }
 
-function parseDescriptorSpec(s: string): TargetDescriptor {
+/** A descriptor spec (`testId=x`, `role=region;name=Import`, a CSS selector) as a target; throws when it names no selector. */
+export function parseDescriptorSpec(s: string): TargetDescriptor {
   const raw = s.trim();
   if (/^[[#.]/.test(raw)) {
     // A CSS selector. The common test-id attribute form becomes a test-id descriptor (the most

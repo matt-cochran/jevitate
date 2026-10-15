@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { contentHash } from "@jevitate/domain";
+import { contentHash, isRecord } from "@jevitate/domain";
 import {
   CATALOG_ID_RE,
   CatalogApprovalSchema,
@@ -130,9 +130,6 @@ function statusOf(approval: CatalogApproval | undefined, hash: string): CatalogI
   return approval.contentHash === hash ? "approved" : "stale";
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 async function readJsonFile(path: string): Promise<unknown> {
   const raw = await readFile(path, "utf8");

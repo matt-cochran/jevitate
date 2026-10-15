@@ -7,7 +7,7 @@ import { closeOnce, demoOverlayOf, extensionsStamp, finalizeVideos, runVideoDir,
 import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import { type InvariantSpec } from "@jevitate/recording";
+import { type InvariantSpec, type TargetDescriptor } from "@jevitate/recording";
 import type { HostHealthSampler } from "@jevitate/explore";
 import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import {
@@ -132,6 +132,12 @@ export interface RunAdversarialCliMissionOptions {
   readonly saveStorageState?: string;
   /** Registered secret values (`--secret`): kept out of the transcript, Recording and issue drafts. */
   readonly secrets?: readonly string[];
+  /**
+   * #521 `--block-off-allowlist-navigation` (opt-in, off by default): arm the navigation guard on this
+   * run's mission session (and its fresh/hang-replay sessions) — an off-allowlist page navigation is
+   * stopped in place and the mission treats it as a departure. Never on login, Journey or demo sessions.
+   */
+  readonly blockOffAllowlistNavigation?: boolean;
   /** #303 `--action-deltas` (opt-in): record what each action changed (code verdict) — evidence only. */
   readonly actionDeltas?: boolean;
   /** Issue filing (off unless enabled + a repo is configured). Default: drafts only. */
@@ -148,6 +154,9 @@ export interface RunAdversarialCliMissionOptions {
   readonly target?: TargetConfig;
   /** Extra in-scope route globs (`--route`); the start URL's route is always in scope. */
   readonly routeGlobs?: readonly string[];
+  /** #519: only the controls inside these page regions are measured and hunted (`scopeRegionSpec` is how the report names them). */
+  readonly scopeRegions?: readonly TargetDescriptor[];
+  readonly scopeRegionSpec?: string;
   /** Coverage a silent run needs to be `clean` (`--min-control-coverage`, `--no-require-form-submit`). */
   readonly coverageThresholds?: Partial<CoverageThresholds>;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
@@ -241,6 +250,7 @@ export async function runAdversarialCliMission(
   const launch = {
     ...sessionLaunchOptions(opts.browser, videoDir),
     allowedOrigins: [...opts.allowlist],
+    ...(opts.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
     baseUrl: origin,
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
@@ -305,6 +315,8 @@ export async function runAdversarialCliMission(
       allowlist: opts.allowlist,
       strategies: opts.strategies,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
+      ...(opts.scopeRegions === undefined ? {} : { scopeRegions: opts.scopeRegions }),
+      ...(opts.scopeRegionSpec === undefined ? {} : { scopeRegionSpec: opts.scopeRegionSpec }),
       ...(opts.coverageThresholds === undefined ? {} : { coverageThresholds: opts.coverageThresholds }),
       site: origin,
       ...(opts.bounds === undefined ? {} : { bounds: opts.bounds }),

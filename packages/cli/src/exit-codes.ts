@@ -35,7 +35,6 @@ export const EXIT_CODES = {
   usage: 64,
 } as const;
 
-export type ExitClass = keyof typeof EXIT_CODES;
 
 /** A canonical mission outcome's exit code (the domain table; re-exported so commands import one module). */
 export function exitCodeForOutcome(outcome: MissionOutcome): number {
