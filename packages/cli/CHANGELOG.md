@@ -33,6 +33,10 @@
   - **Journey anchors:** `metadata.anchors[].region` and `journey anchor add --region` (MCP `journey_anchor_add.region`). A run from the anchor uses it and `--scope-region` cannot override it. Changing it makes a promoted Journey's approval stale, like any anchor edit.
   - **Results:** adversarial `coverage.controls` is the region's and decides `sufficient`; `coverage.pageControls` is the route-wide count, and `coverage.region` gives the spec and step counts. Coverage and exploratory runs carry `scope.region` (`outOfRegionControls`, `stepsWithoutRegion`). After 2 consecutive steps without the region an adversarial run goes back to its start (counted in `outOfScopeSteps` and `scope.region.lostResets`). A region that never matches ends `inconclusive`, stop `scope-unreachable`, `failure.kind: "target-unreachable"`, never `clean`. Without a region nothing changes.
 
+### Patch Changes
+
+- 5396bec: A step's `expectRequests` check is now judged on the requests that step sent, as the step ends (#526). Before, a step's request window stayed open for the rest of the replay, so a later step's request to the same endpoint counted for an earlier step. The replay also moved on before the step's write was answered, so a following navigation could drop the request: the check then said "still awaiting a response" even though the server had answered 2xx in under 100 ms, and a longer `--step-response-timeout` did not help. Now each step's window closes when the step ends. Before the next step runs, its checks wait for the network to settle and for the step's own requests to be answered, within `--step-response-timeout` (a late 2xx is still an advisory `slow-step`). Two Saves to the same cross-origin endpoint on one page, or a Save followed by a navigation, each get their own response.
+
 ## 0.13.0
 
 ### Minor Changes
