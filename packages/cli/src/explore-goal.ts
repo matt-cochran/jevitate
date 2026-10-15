@@ -1,5 +1,6 @@
 // explore-goal.ts — the goal-directed explore runner (`runExploration`) and its goal-only helpers (#231).
 import { sessionLostReason } from "./session-check.js";
+import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
@@ -401,6 +402,8 @@ export function withServerCause(reason: string | undefined, outcome: GoalBasedOu
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  // #543: every http success check's origin, too (the probe re-checks each request after substitution).
+  assertHttpChecksAllowed(opts.successChecks ?? [], opts.allowlist);
   assertSaveStorageStateOutsideProject(opts.saveStorageState);
   // Fail fast on a missing fixture BEFORE launching Chromium.
   const fixture = opts.fixture === undefined ? undefined : await resolveProjectMissionFixture(opts.fixture);
@@ -548,6 +551,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
       ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
       ...(opts.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+      // #543: http checks request through the allowlist-bound probe; `${setup.x}` from the fixtures.
+      ...((opts.successChecks ?? []).some((c) => c.kind === "http")
+        ? { httpProbe: createHttpProbe({ allowlist: opts.allowlist }), httpRefs: httpCheckRefs(fx === undefined ? {} : { bindings: fx.bindings() }) }
+        : {}),
       bounds: opts.bounds,
       ...(opts.minEffort === undefined ? {} : { minEffort: opts.minEffort }),
       secrets,

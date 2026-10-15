@@ -21,7 +21,9 @@ act. `--takes <n>` corroborates the flow over several takes.
 
 `--success` is repeatable (every check must hold) and takes every kind `explore --success` takes:
 page checks (`textIncludes`, `valueEquals`, `count`, `attr`, `flashed`, …), `reloadThen:<check>`
-(persistence), `requestMade` and `responseStatus`. Pass the job's outcome, not just the page it
+(persistence), `requestMade`, `responseStatus` and `http:GET <url>|…` (a write whose effect is off
+the UI, such as an email in a dev outbox; see [HTTP end-state checks](./success-checks.md#http-end-state-checks)).
+Pass the job's outcome, not just the page it
 ends on: a state-changing job checks its write and what persisted, for example
 `--success 'responseStatus:POST /portal.v1.Sites/PublishSiteEdits=2xx'
 --success 'reloadThen:textIncludes:testId=live|published'`.
@@ -31,7 +33,9 @@ ends on: a state-changing job checks its write and what persisted, for example
 - **End state** (`metadata.endState`): every `--success` check, in the order given, kept in the
   same shape the goal run judged it. `journey run` and `source run` judge them after the last step
   with the goal run's own evaluator: page checks on the final page, then one reload for the
-  `reloadThen` checks, then network checks over the requests the replay itself sent. A replay
+  `reloadThen` checks, then network checks over the requests the replay itself sent, then each
+  `http` check's request (its origin must be in the replay's allowlist, or the run is refused before
+  any browser opens with `E_HTTP_CHECK_OFF_ALLOWLIST`). A replay
   whose steps all pass but whose outcome is absent fails, naming each check that did not hold
   (`success check not met after the last step: …`).
 - **A step's request expectation** (`expectRequests` on the recorded step): a write the step sent
@@ -138,7 +142,9 @@ jevitate journey lint checkout --sarif lint.sarif
 | `write-without-effect` | error | A state-changing step (a write) has no assertion on its effect |
 | `visibility-only` | error | Every assertion is a bare `visible` (or the step's own target), so the Journey cannot fail for the wrong reason |
 | `nothing-after-last-write` | error | No effect assertion follows the last state-changing step |
-| `no-persistence-check` | warning | A write has no `reloadThen` end-state check, so persistence is unverified |
+| `no-persistence-check` | warning | A write has no `reloadThen` or `http` end-state check, so persistence is unverified |
+| `http-check-off-allowlist` | error | An `http` end-state check reads an origin that is neither the Journey's site nor in its `metadata.allowedOrigins` |
+| `http-check-without-reset` | warning | The Journey has an `http` end-state check but records no fixtures, so nothing resets its source (an earlier email can make it pass) |
 | `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion |
 | `upload-file-missing` | error | An `upload` step's literal fixture path does not exist. Relative paths resolve against the project root (the folder holding `.jevitate/`), never the working directory; the message shows the resolved path |
 | `upload-outside-project` | error | An `upload` step's fixture resolves (after symlinks) outside the project root: an absolute path, a `../` path or a symlink that escapes. A run refuses it (`fixture-outside-project`), `journey promote` refuses it (`E_JOURNEY_WEAK`) and `--accept-weak` does not waive it — move the fixture into the project. There is no override flag |
@@ -173,6 +179,7 @@ pass), then once per mutation, and checks that each mutation breaks the assertio
 jevitate journey verify checkout --mutate                 # one line per assertion, then a summary
 jevitate journey verify checkout --mutate --json          # the full report
 jevitate journey verify checkout --mutate --env staging --param sku=A1 --fixtures reset.json
+jevitate journey verify checkout --mutate --allow http://127.0.0.1:26110   # block a write to another origin
 ```
 
 | Mutation | What the replay does | Derived for |
@@ -217,7 +224,10 @@ Safe by construction: a mutation only leaves a step's action out, types an empty
 a write navigation is aborted too, never answered). It never sends, fabricates or answers a
 request. Every replay starts fresh, with the same fixtures and hooks as `journey run`; when the
 app keeps state between sessions, reset it with `--fixtures`/`--before`, or the replay after a
-blocked save can still find the base replay's saved data.
+blocked save can still find the base replay's saved data. Fixture setup runs before, and restore
+after, the unmutated replay and **every** mutated replay, so each starts from the same state.
+A Journey authored with `--fixtures` replays under them without the flag (see
+[Recorded fixtures](#recorded-fixtures)).
 
 ### Review and promotion sign-off
 
@@ -454,6 +464,29 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
 Over MCP, agents find and run promoted Journeys with `find_capabilities` and `run_journey`
 ([agents.md](./agents.md)).
 
+## Recorded fixtures
+
+`explore-author-journey --fixtures <file>` sets the fixtures up before, and restores them after,
+every take (see [fixtures](./fixtures.md)), and records the file and the spec's hash on the
+Journey as `metadata.fixtures`. `journey run`, `journey verify --mutate` and `journey annotate`
+then load that file themselves when you pass no `--fixtures`, exactly as if you had.
+
+- **Precedence:** `--fixtures` flag, then the Journey's recorded fixtures, then the
+  environment's fixtures (`--env`). `--fixture-identity` always comes from flags or personas
+  (identities are storage states and are not recorded).
+- **Reach:** a fixture step may reach the replay's allowlist: the Journey's site (or the
+  environment's origins), its `metadata.allowedOrigins` and `--allow`. So a fixture can empty a dev
+  outbox on another origin that an `http` end-state check reads.
+- **Hooks are never recorded.** `--before`/`--after` are operator commands: pass them, with
+  `--allow-shell-hooks`, on every run that needs them.
+- **Missing file:** the run is refused before any browser opens (`E_FIXTURE_SPEC`), naming the
+  recorded file; restore it or pass `--fixtures <file>` to use another.
+- **Drift:** if the file's spec no longer matches the recorded hash, the run proceeds with the
+  current file and warns (`warning: fixtures … changed since this Journey was authored`); the JSON
+  result carries `fixtureDrift` `{ file, recordedSpecHash, currentSpecHash, message }`.
+- **MCP:** `author_journey` takes `fixtures` and `fixtureIdentity`; replay tools use the recorded file
+  with no argument.
+
 ## Locator health
 
 `jevitate locator-health` (#470, MCP `locator_health`) reports how each recorded step finds its
@@ -524,6 +557,8 @@ key is refused when the file is read.
 | `authoredBy` | no | `human-demonstration` or `jev-driven` |
 | `createdAtIso` | yes | When it was written |
 | `requiresAuth` | no | `true`: refuses to start without `--storage-state` |
+| `allowedOrigins` | no | Origins (normalized) the Journey was authored against beyond its own site, e.g. a split-origin app's API (`explore-author-journey --allow …`). A replay's allowlist is the union of the recorded site (or the environment's origins), these, and `journey run\|verify --allow <origin>` (repeatable), so `journey verify --mutate` can block a step's cross-origin write. Not remapped under `--env`/`--base-url`: name the replacement origin with `--allow` or the environment's `allow`. Over MCP only this field applies (no `allow` argument) |
+| `fixtures` | no | `{ "file", "specHash" }`: the `--fixtures` file the Journey was authored under (`file` relative to the repository root, `/` separators) and the content hash of its spec. See [Recorded fixtures](#recorded-fixtures) |
 | `goal` | no | What the Journey achieves, in one sentence |
 | `persona` | no | Who does it |
 | `role` | no | The account role it runs as (which environment session it needs) |

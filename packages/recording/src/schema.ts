@@ -1,5 +1,6 @@
 import { z, ZodType } from "zod";
 import { navigateTemplateProblem } from "./navigate-params.js";
+import { jsonPathProblem } from "./json-path.js";
 
 // === Interfaces - TypeScript types matching the brief exactly ===
 
@@ -365,7 +366,43 @@ export type NetworkCheck =
 export type OutcomeCheck =
   | { kind: "page"; assertion: Assertion }
   | { kind: "reloadThen"; assertion: Assertion }
-  | NetworkCheck;
+  | NetworkCheck
+  | HttpCheck;
+
+/** #543: one `json` assertion of an `http` check: what `path` selects must satisfy `op`. */
+export interface HttpJsonAssertion {
+  /** A JSON path (`$.messages[*].Subject`): `[*]` fans out; the assertion holds when ANY selected value does. */
+  path: string;
+  op: "equals" | "includes" | "exists";
+  /** The expected value (`equals`/`includes`); absent for `exists`. */
+  value?: string;
+}
+
+/**
+ * #543: an `http` end-state check — a GET to an allow-listed origin (a dev mail outbox, an audit
+ * endpoint), polled until its response satisfies every assertion or `withinMs` passes. Proves a
+ * write whose durable effect is OFF the app's UI. Read-only by construction (GET only), no
+ * credentials, never follows a redirect; the response body is never persisted. `url` is a template:
+ * `${name}` placeholders come after a literal origin and are resolved (each value percent-encoded as
+ * one component) only when the check is evaluated.
+ */
+export interface HttpCheck {
+  kind: "http";
+  method: "GET";
+  url: string;
+  /** Absent: any 2xx. */
+  status?: StatusSpec;
+  json?: HttpJsonAssertion[];
+  /** Substrings of the raw response body. */
+  textIncludes?: string[];
+  /** Poll window (ms). Absent: `DEFAULT_HTTP_CHECK_WITHIN_MS`. */
+  withinMs?: number;
+}
+
+/** #543: the default poll window of an `http` check (ms) — the oracle's settle bound. */
+export const DEFAULT_HTTP_CHECK_WITHIN_MS = 10_000;
+/** #543: the longest poll window an `http` check may ask for (ms). */
+export const MAX_HTTP_CHECK_WITHIN_MS = 60_000;
 
 /** #303: one step's action delta as a Recording keeps it (see `RecordedStep.delta`). */
 export interface ActionDeltaRecord {
@@ -864,12 +901,68 @@ const ResponseStatusSchema = z
 /** #400: a `requestMade` / `responseStatus` check. */
 export const NetworkCheckSchema: ZodType<NetworkCheck> = z.discriminatedUnion("kind", [RequestMadeSchema, ResponseStatusSchema]);
 
-/** #400: any outcome check (page, reloadThen, requestMade, responseStatus). */
+const HTTP_CHECK_TEXT = z.string().min(1).max(2000);
+
+/** #543: an `http` check's URL — absolute http(s), a literal origin, `${name}` placeholders only after it. */
+const HttpCheckUrlSchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .refine((url) => /^https?:\/\//i.test(url), { message: "http check url must be an absolute http(s):// URL" })
+  .refine((url) => !/[\t\n\r\s]/.test(url), { message: "http check url must not contain whitespace" })
+  .superRefine((url, ctx) => {
+    const problem = navigateTemplateProblem(url);
+    if (problem !== undefined) {
+      ctx.addIssue({ code: "custom", message: problem.replace(/^navigate\.url/, "http check url") });
+      return;
+    }
+    try {
+      new URL(url.replace(/\$\{[^}]*\}/g, "x"));
+    } catch {
+      ctx.addIssue({ code: "custom", message: "http check url is not a valid URL" });
+    }
+  });
+
+const HttpJsonAssertionSchema = z
+  .object({
+    path: z.string().min(1).max(500),
+    op: z.enum(["equals", "includes", "exists"]),
+    value: HTTP_CHECK_TEXT.optional(),
+  })
+  .strict()
+  .superRefine((a, ctx) => {
+    const problem = jsonPathProblem(a.path);
+    if (problem !== undefined) ctx.addIssue({ code: "custom", message: `http check jsonPath: ${problem}` });
+    if (a.op === "exists" && a.value !== undefined) ctx.addIssue({ code: "custom", message: "http check jsonPath exists takes no value" });
+    if (a.op !== "exists" && a.value === undefined) ctx.addIssue({ code: "custom", message: `http check jsonPath ${a.op} needs a value` });
+  });
+
+/** #543: an `http` end-state check. */
+const HttpCheckObjectSchema = z
+  .object({
+    kind: z.literal("http"),
+    method: z.literal("GET"),
+    url: HttpCheckUrlSchema,
+    status: StatusSpecSchema.optional(),
+    json: z.array(HttpJsonAssertionSchema).min(1).max(10).optional(),
+    textIncludes: z.array(HTTP_CHECK_TEXT).min(1).max(10).optional(),
+    withinMs: z.number().int().min(0).max(MAX_HTTP_CHECK_WITHIN_MS).optional(),
+  })
+  .strict()
+  .refine((c) => c.status !== undefined || c.json !== undefined || c.textIncludes !== undefined, {
+    message: "http check needs at least one assertion (status, jsonPath or textIncludes)",
+  });
+
+/** #543: an `http` end-state check. */
+export const HttpCheckSchema: ZodType<HttpCheck> = HttpCheckObjectSchema as unknown as ZodType<HttpCheck>;
+
+/** #400: any outcome check (page, reloadThen, requestMade, responseStatus; #543 http). */
 export const OutcomeCheckSchema: ZodType<OutcomeCheck> = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("page"), assertion: AssertionSchema }).strict(),
   z.object({ kind: z.literal("reloadThen"), assertion: AssertionSchema }).strict(),
   RequestMadeSchema,
   ResponseStatusSchema,
+  HttpCheckObjectSchema,
 ]);
 
 const RecordedStepSchema = z

@@ -18,7 +18,9 @@ import { describeStatusWithRpc, effectiveStatus } from "./rpc-status.js";
  *                    just that the UI shows it;
  *  - `requestMade` — the run issued a request `METHOD <path-glob>` (catches a silent no-op save);
  *  - `responseStatus` — the run's matching requests all got the expected status (`2xx`, `4xx`,
- *                    or an exact code), and there was at least one.
+ *                    or an exact code), and there was at least one;
+ *  - `http`        — (#543) a GET to an allow-listed origin (a dev mail outbox) whose response
+ *                    satisfies every assertion, polled; proves a write whose effect is off the UI.
  *
  * Network checks are evaluated over the requests the run captured (never the oracle's own reload).
  * Paths use the route-glob syntax (`*` within a segment, `**` across segments), matched against
@@ -41,6 +43,11 @@ export interface SuccessCheckResult {
   readonly passed: boolean;
   /** What the oracle saw (e.g. "no PUT request matched /api/profile (3 requests captured)"). */
   readonly detail: string;
+  /**
+   * #543: the check could not be judged at all (an `http` check's transport error, timeout,
+   * over-cap body or refusal) — never a pass, and never proof a mutation broke it.
+   */
+  readonly unevaluable?: true;
 }
 
 function descriptorSpec(d: TargetDescriptor): string {
@@ -104,7 +111,27 @@ export function describeCheck(c: SuccessCheck): string {
       return `requestMade:${c.method} ${c.pathGlob}`;
     case "responseStatus":
       return `responseStatus:${c.method} ${c.pathGlob}=${describeStatus(c.status)}`;
+    case "http":
+      return describeHttpCheck(c);
   }
+}
+
+/** #543: an assertion value in the `http:` grammar — `\` and `|` escaped. */
+function escapeHttpValue(v: string): string {
+  return v.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+}
+
+/** #543: an `http` check in the `--success` grammar (`http:GET <url>|<assertion>…`), round-trippable. */
+export function describeHttpCheck(c: Extract<SuccessCheck, { kind: "http" }>): string {
+  const parts = [`http:${c.method} ${c.url}`];
+  if (c.status !== undefined) parts.push(`status=${describeStatus(c.status)}`);
+  for (const a of c.json ?? []) {
+    parts.push(`jsonPath=${escapeHttpValue(a.path)}`);
+    parts.push(a.op === "exists" ? "exists" : `${a.op}=${escapeHttpValue(a.value ?? "")}`);
+  }
+  for (const t of c.textIncludes ?? []) parts.push(`textIncludes=${escapeHttpValue(t)}`);
+  if (c.withinMs !== undefined) parts.push(`within=${c.withinMs}`);
+  return parts.join("|");
 }
 
 function statusMatches(status: number, spec: StatusSpec): boolean {

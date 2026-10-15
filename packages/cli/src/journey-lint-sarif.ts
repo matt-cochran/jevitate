@@ -17,6 +17,9 @@ const RULES: ReadonlyArray<{ id: JourneyLintRule; level: "error" | "warning" }> 
   { id: "visibility-only", level: "error" },
   { id: "nothing-after-last-write", level: "error" },
   { id: "no-persistence-check", level: "warning" },
+  // #543: an http end-state check off the Journey's allowlist; one with no fixture reset.
+  { id: "http-check-off-allowlist", level: "error" },
+  { id: "http-check-without-reset", level: "warning" },
   { id: "intent-uncovered", level: "warning" },
   // #488: a literal upload fixture that is not there, resolved against the project root.
   { id: "upload-file-missing", level: "error" },

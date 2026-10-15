@@ -7,6 +7,37 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.15.0] – unreleased
+
+0.15.0 makes split-origin apps and off-UI side effects first-class: a Journey can be replayed and mutation-proved across origins, an `http:` end-state check proves a write whose effect shows up outside the page (a dev mail outbox), and authored Journeys remember the fixtures they were authored under. Releases now build and test once per tree, publish `next` from staging, and reach `latest` only when the `vX.Y.Z` tag is pushed.
+
+### Added
+
+- **`http:` end-state check (#543).** `--success 'http:GET <url>|jsonPath=<expr>|includes=<text>'` (also `status=`, `equals=`, `exists`, `textIncludes=`, `within=`) on `explore`, `explore-author-journey` and MCP success strings proves a write whose effect is off the UI. It is a polled GET to an origin in the run's allowlist, with no credentials and no redirects; the body is capped at 1 MiB and never saved. It satisfies `no-persistence-check`, and `journey run` and `verify --mutate` judge it. A transport error is unevaluable, never mutation proof. See docs/success-checks.md.
+- **`journey run|verify --allow <origin>` (#542).** Journeys record `metadata.allowedOrigins` when authored. A replay's allowlist is the recorded site (or `--env` origins), plus `metadata.allowedOrigins`, plus `--allow`, so `verify --mutate` can block a cross-origin write and a split-origin Journey can reach a conclusive proof. MCP `run_journey` and `verify` take no `allow` argument; they use the recorded origins.
+- **Recorded fixtures (#544).** `explore-author-journey --fixtures` (and `--before`, `--after`, `--fixture-identity`) sets up before and restores after every take. The Journey records `metadata.fixtures` (`{ file, specHash }`); `journey run`, `verify` and `annotate` reuse it with no flag. Precedence is `--fixtures`, then the recorded file, then the environment's. A missing recorded file is refused with `E_FIXTURE_SPEC` before any browser opens; a changed spec runs with a warning and `fixtureDrift` in the result. MCP `author_journey` takes `fixtures` and `fixtureIdentity`.
+- **`explore-author-journey` takes the backend-log flags and `--allow-writes` (#544).** MCP `author_journey` maps `allowWrites` and omits the log flags, like `run_exploration`.
+- **Lint rules `http-check-off-allowlist` (error) and `http-check-without-reset` (warning)** for Journeys with an `http` check (#543).
+
+### Changed
+
+- **Build and test once per tree; staging publishes `next`; the tag push moves `latest` (#534).** A push to `dev` that passes the full suite uploads both packages as a release-candidate artifact named after the git tree. Promotion PRs into `staging` and `main` pass by reusing that run when their merge tree matches, and run the full suite otherwise. A merge to `staging` publishes the tested tarballs as `next`. A merge to `main` only reports "ready: push the tag"; prod is an explicit act. Pushing `vX.Y.Z` on `main` moves `latest` to the already-published version (no rebuild, no republish), pushes the package tags and creates the GitHub release. `staging` and `main` pushes no longer rerun CI. See RELEASING.md.
+- **`jevitate --version` prints the git tree hash** (`x.y.z (commit <sha>, tree <tree>, built <time>)`), so a build packed from a `dev` commit matches the `main` merge commit that released it (#534).
+
+### Fixed
+
+- **The pixel mask can't be fooled by a replaced `requestAnimationFrame` (#547).** It captures the browser's own `requestAnimationFrame`, `MutationObserver`, `getBoundingClientRect` and `Range.getClientRects` before any page script and uses only those, so a page that later swaps them (a polyfill, an animation library, its own test hooks) can't make a recorded frame show a secret unmasked. If a primitive was already replaced before the mask loaded, masking fails closed: the viewport is painted over, and screenshots and capture sessions are refused with `E_PIXEL_MASK` (reason `untrusted-primitive`).
+
+### Internal
+
+- Opt-in live smoke tests now call the production OpenRouter and Jev clients (#531). `docs/testing.md` lists every opt-in live suite, and `pnpm test:live` runs them (#532). The pixel-mask video test checks every recorded frame on the real clock (#540).
+
+### Upgrade notes
+
+- The npm trusted publisher for `@jevitate/cli` and `jevitate` needs the "manage dist-tags" permission, or the `latest` move fails.
+- `journey lint` has new rules `http-check-off-allowlist` (error) and `http-check-without-reset` (warning); an `http:` check on an origin outside the Journey's allowed origins is refused with `E_HTTP_CHECK_OFF_ALLOWLIST` (exit 64).
+- Recorded fixtures now run on replay automatically. Pass `--fixtures <file>` to override them.
+
 ## [0.14.1] – 2026-10-15
 
 0.14.1 is the first release published by the Release workflow through npm Trusted Publishing, so both packages carry a provenance attestation. The CLI is unchanged from 0.14.0.

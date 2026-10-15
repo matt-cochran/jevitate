@@ -129,7 +129,8 @@ function watermarkProbe(seen: string[]): CaptureLayer {
 
 describe("jevitate demo — served (#249)", () => {
   // #304: Node and page time skip idle waits (replay polling, minimization timeouts, settle windows).
-  useSkippingTime();
+  // #547: the page keeps the browser's own clock: page.clock replaces requestAnimationFrame before the pixel mask loads, and a capture then fails closed.
+  useSkippingTime({ pageClock: false });
   it(
     "explore with a detour → a minimized Journey without it that replays; DRAFT outputs; approve promotes and renders final outputs",
     async () => {

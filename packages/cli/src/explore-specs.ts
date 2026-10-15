@@ -1,11 +1,14 @@
 /** The compact `--success`/assertion/descriptor spec parsers and the explore allowlist resolution behind the explore CLI flags. */
 import {
   AssertionSchema,
+  HttpCheckSchema,
   STYLE_CHANNELS,
   STYLE_PROPERTIES,
   COMPARE_OPS,
   type Assertion,
   type CompareOp,
+  type HttpCheck,
+  type HttpJsonAssertion,
   type StyleChannel,
   type StyleProperty,
   type TargetDescriptor,
@@ -252,6 +255,7 @@ function parseStatusSpec(text: string): StatusSpec {
  *   reloadThen:<assertion>                     — reload the page, then check (persistence)
  *   requestMade:<METHOD> <path-glob>           — the run issued this request
  *   responseStatus:<METHOD> <path-glob>=<2xx|4xx|code> — and it got this status
+ *   http:GET <url>|<assertion>[|<assertion>…]  — (#543) a GET to an allow-listed origin answers so
  * `<path-glob>` uses the route-glob syntax (`*` within a segment, `**` across segments) against
  * the request's path; `*` as METHOD matches any method.
  */
@@ -265,6 +269,8 @@ export function parseSuccessSpec(spec: string): SuccessCheck {
       return { kind: "reloadThen", assertion: parseAssertionSpec(rest) };
     case "requestMade":
       return { kind: "requestMade", ...parseRequestSpec(kind, rest) };
+    case "http":
+      return parseHttpCheckSpec(rest);
     case "responseStatus": {
       const eq = rest.lastIndexOf("=");
       if (eq === -1) throw new Error('responseStatus requires "<METHOD> <path-glob>=<2xx|4xx|code>"');
@@ -273,6 +279,95 @@ export function parseSuccessSpec(spec: string): SuccessCheck {
     default:
       return { kind: "page", assertion: parseAssertionSpec(spec) };
   }
+}
+
+const HTTP_GRAMMAR =
+  'http:GET <url>|<assertion>[|…] — assertions: status=<2xx|code>, jsonPath=<$path>|equals=<v>, jsonPath=<$path>|includes=<v>, jsonPath=<$path>|exists, textIncludes=<text>, within=<ms>';
+
+/** Splits on every unescaped `|`; `\|` is a literal pipe and `\\` a backslash. */
+function splitHttpAssertions(text: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i] as string;
+    const next = text[i + 1];
+    if (ch === "\\" && (next === "|" || next === "\\")) {
+      cur += next;
+      i += 1;
+    } else if (ch === "|") {
+      out.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
+ * #543: `http:GET <url>|<assertion>[|<assertion>…]` — the URL runs to the first `|` (a literal pipe
+ * in a URL is `%7C`); each assertion splits at its first `=`; a `jsonPath=` takes exactly one
+ * operator next. Validated by the Journey schema (GET only, a literal origin, ≤ 60 s window).
+ */
+export function parseHttpCheckSpec(rest: string): HttpCheck {
+  const sp = rest.indexOf(" ");
+  const method = sp === -1 ? rest : rest.slice(0, sp);
+  if (method.toUpperCase() !== "GET") {
+    throw new Error(`http: only GET is supported — an end-state check reads, it never writes (${HTTP_GRAMMAR})`);
+  }
+  const afterMethod = sp === -1 ? "" : rest.slice(sp + 1).trim();
+  const bar = afterMethod.indexOf("|");
+  const url = (bar === -1 ? afterMethod : afterMethod.slice(0, bar)).trim();
+  if (url === "") throw new Error(`http: requires a URL (${HTTP_GRAMMAR})`);
+  if (bar === -1) throw new Error(`http: needs at least one assertion (${HTTP_GRAMMAR})`);
+  const parts = splitHttpAssertions(afterMethod.slice(bar + 1));
+  const check: { -readonly [K in keyof HttpCheck]: HttpCheck[K] } = { kind: "http", method: "GET", url };
+  const json: HttpJsonAssertion[] = [];
+  const text: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i] as string;
+    const eq = part.indexOf("=");
+    const key = eq === -1 ? part : part.slice(0, eq);
+    const value = eq === -1 ? undefined : part.slice(eq + 1);
+    switch (key) {
+      case "status":
+        if (value === undefined || !/^(?:[1-5]xx|[1-5]\d\d)$/i.test(value)) throw new Error(`http: status expects 2xx, 4xx … or a status code, got ${JSON.stringify(value ?? "")}`);
+        check.status = parseStatusSpec(value);
+        break;
+      case "within": {
+        if (value === undefined || !/^\d+$/.test(value)) throw new Error(`http: within expects milliseconds, got ${JSON.stringify(value ?? "")}`);
+        check.withinMs = Number(value);
+        break;
+      }
+      case "textIncludes":
+        if (value === undefined || value === "") throw new Error("http: textIncludes needs a text");
+        text.push(value);
+        break;
+      case "jsonPath": {
+        if (value === undefined || value === "") throw new Error("http: jsonPath needs a path ($.…)");
+        const opPart = parts[i + 1];
+        const opEq = opPart === undefined ? -1 : opPart.indexOf("=");
+        const op = opPart === undefined ? undefined : opEq === -1 ? opPart : opPart.slice(0, opEq);
+        if (op === "exists" && opEq === -1) json.push({ path: value, op: "exists" });
+        else if ((op === "equals" || op === "includes") && opEq !== -1) json.push({ path: value, op, value: (opPart as string).slice(opEq + 1) });
+        else throw new Error(`http: jsonPath=${value} must be followed by exactly one operator: |equals=<v>, |includes=<v> or |exists`);
+        i += 1;
+        break;
+      }
+      case "equals":
+      case "includes":
+      case "exists":
+        throw new Error(`http: ${key} must follow a jsonPath=<$path> (${HTTP_GRAMMAR})`);
+      default:
+        throw new Error(`http: unknown assertion ${JSON.stringify(part)} (${HTTP_GRAMMAR})`);
+    }
+  }
+  if (json.length > 0) check.json = json;
+  if (text.length > 0) check.textIncludes = text;
+  const parsed = HttpCheckSchema.safeParse(check);
+  if (!parsed.success) throw new Error(`invalid http spec: ${parsed.error.issues.map((x) => x.message).join("; ")}`);
+  return parsed.data;
 }
 
 /** A descriptor spec (`testId=x`, `role=region;name=Import`, a CSS selector) as a target; throws when it names no selector. */

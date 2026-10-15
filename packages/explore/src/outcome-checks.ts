@@ -6,6 +6,7 @@ import { reloadPage } from "./act.js";
 import { monitorFor, type CapturedRequest, type RequestCapture } from "./page-monitor.js";
 import { redactText } from "./redact.js";
 import { describeCheck, evaluateNetworkCheck, type SuccessCheck, type SuccessCheckResult } from "./success-checks.js";
+import { evaluateHttpCheck, type HttpCheckRefResolver, type HttpProbe } from "./http-check.js";
 
 /** How long the oracle lets the network settle before it reads requests or reloads (ms). */
 export const DEFAULT_ORACLE_SETTLE_MS = 10_000;
@@ -49,14 +50,21 @@ export interface OutcomeCheckContext {
   readonly settleMs?: number;
   /** Judges one network check (default: `evaluateNetworkCheck` over every captured request). */
   readonly judgeNetwork?: (check: NetworkSuccessCheck, requests: readonly CapturedRequest[], truncated: boolean) => SuccessCheckResult;
+  /**
+   * #543: makes an `http` check's request (allowlist re-checked, no redirect, capped body). Absent:
+   * every `http` check fails closed as unevaluable.
+   */
+  readonly httpProbe?: HttpProbe;
+  /** #543: resolves an `http` check's `${name}` placeholders (a secret one is refused). */
+  readonly resolveRef?: HttpCheckRefResolver;
 }
 
 /**
  * The success oracle (#65), shared by the goal mission's verdict and a Journey replay's end state
  * (#400) — one evaluator, never two. In order: let the page settle (a save still in flight lands
  * first), read the captured requests, check the page, then reload ONCE and check what persisted
- * (`reloadThen`). Network checks use the requests from BEFORE the oracle's own reload. Results keep
- * the order the checks were given in.
+ * (`reloadThen`), and last (#543) make each `http` check's request. Network checks use the requests
+ * from BEFORE the oracle's own reload. Results keep the order the checks were given in.
  */
 export async function evaluateOutcomeChecks(checks: readonly SuccessCheck[], ctx: OutcomeCheckContext): Promise<SuccessCheckResult[]> {
   const { actor, page, capture } = ctx;
@@ -114,6 +122,16 @@ export async function evaluateOutcomeChecks(checks: readonly SuccessCheck[], ctx
   }
   for (const [i, c] of checks.entries()) {
     if (c.kind === "requestMade" || c.kind === "responseStatus") results.set(i, judgeNetwork(c, requests, capture?.truncated ?? false));
+  }
+  // #543: `http` checks last — after the settle and the reload, the write has had every chance to land.
+  for (const [i, c] of checks.entries()) {
+    if (c.kind !== "http") continue;
+    const v = await evaluateHttpCheck(c, {
+      ...(ctx.httpProbe === undefined ? {} : { probe: ctx.httpProbe }),
+      ...(ctx.resolveRef === undefined ? {} : { resolveRef: ctx.resolveRef }),
+      secrets,
+    });
+    results.set(i, { check: describeCheck(c), passed: v.passed, detail: v.detail, ...(v.unevaluable === true ? { unevaluable: true as const } : {}) });
   }
   return checks.map((c, i) => results.get(i) ?? { check: describeCheck(c), passed: false, detail: "not evaluated" });
 }

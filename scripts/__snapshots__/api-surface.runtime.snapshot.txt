@@ -226,7 +226,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (444 exports)
+# @jevitate/explore (451 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -275,6 +275,7 @@
   DepthLog: class
   EMPTY_SETTLE_GRACE_MS: const (number)
   EXPLORE: const (string)
+  E_HTTP_CHECK_SECRET_REF: const (string)
   FORM_MISUSE_STRATEGIES: array
   FORM_TEXT_MAX_CHARS: const (number)
   FieldValueLog: class
@@ -295,6 +296,8 @@
   GRPC_CODE_NAMES: array
   HANG_PROBE_MS: const (number)
   HOST_SAMPLE_INTERVAL_MS: const (number)
+  HTTP_CHECK_POLL_MS: const (number)
+  HTTP_CHECK_REQUEST_TIMEOUT_MS: const (number)
   HeapLog: class
   HostHealthSampler: class
   Http5xxOracle: class
@@ -452,6 +455,7 @@
   describeCheck: function
   describeExpected: function
   describeFailure: function
+  describeHttpCheck: function
   describeStatus: function
   describeStatusWithRpc: function
   describeUnreachable: function
@@ -473,6 +477,7 @@
   emptyRecording: function
   endpointOf: function
   errorPageReason: function
+  evaluateHttpCheck: function
   evaluateNetworkCheck: function
   evaluateNetworkCheckAwaiting: function
   evaluateOutcomeChecks: function
@@ -539,6 +544,7 @@
   judgeAnswerFits: function
   judgeGoalCompletion: function
   judgeGoalMet: function
+  judgeHttpResponse: function
   looksDestructiveRequest: function
   markTypeFixtures: function
   markupCanary: function
@@ -602,6 +608,7 @@
   resolveBounds: function
   resolveCoverageSufficiencyThresholds: function
   resolveCoverageThresholds: function
+  resolveHttpCheck: function
   resolveMinEffort: function
   resolveMissionFixture: function
   resolveRouteScope: function
@@ -1077,7 +1084,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (106 exports)
+# @jevitate/recording (111 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -1086,8 +1093,10 @@
   AuthoringTakeSchema: object
   COMPARE_OPS: array
   CONFIDENT_VARIABLE_THRESHOLD: const (number)
+  DEFAULT_HTTP_CHECK_WITHIN_MS: const (number)
   FixturePathError: class
   FsRecordingStore: class
+  HttpCheckSchema: object
   INVARIANT_HTTP_METHODS: array
   INVARIANT_ID_RE: object
   InvariantExpressionError: class
@@ -1095,6 +1104,7 @@
   InvariantSpecSchema: object
   JSON_PATH_EACH: object
   MAX_BUDGETS: const (number)
+  MAX_HTTP_CHECK_WITHIN_MS: const (number)
   MAX_INVARIANTS: const (number)
   MAX_NAVIGATE_PARAM_LENGTH: const (number)
   MAX_OBSERVABLES: const (number)
@@ -1157,6 +1167,7 @@
   isInsideRoot: function
   isWriteRequest: function
   jsonPathHasEach: function
+  jsonPathProblem: function
   matchesPattern: function
   matchesResponseStatus: function
   mergeInvariantSpecs: function
@@ -1173,6 +1184,7 @@
   resolveHttpUrl: function
   resolveNavigateUrl: function
   rpcMethodOf: function
+  selectJsonValues: function
   spliceRecording: function
   stepIdsOf: function
   stepSignature: function

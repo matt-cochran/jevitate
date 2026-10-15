@@ -1,4 +1,5 @@
 import { type CliDeps, JEV_PROVIDER_FLAG_HELP, jevProviderArg, resolveDbPath, resolveJourneysDir, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, withDemoFlags, withScreenshotsFlag, type ScreenshotsFlags, type DemoFlags, type EmulationFlags, withEmulationFlags, emulationFromFlags, collectParam, emitJson, environmentSeams, writeRawResult, GatewaySelectionError, buildExploreGateways } from "../cli-shared.js";
+import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "../run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
@@ -19,13 +20,14 @@ import { withSiteGate } from "../site-gate-cli.js";
 import { journeyIntentCoverage } from "../journey-annotate-api.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "../fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
+import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { withEngine } from "../engine.js";
 import { type EmulationSpec } from "@jevitate/playwright";
-import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 
 /** Registers `jevitate journey run`. */
 export function registerJourneyRun(journey: Command, program: Command, deps: CliDeps): void {
-  withScreenshotsFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true })))
+  withScreenshotsFlag(withReplayAllowFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true }))))
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -57,7 +59,9 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where the Journey runs (unknown env / bad file → 64, nothing opened).
       let environment: ResolvedJourneyEnvironment | undefined;
+      let allow: string[];
       try {
+        allow = replayAllowFromFlags(this.opts<{ allow: string[] }>().allow);
         environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
       } catch (err) {
         if (!isEnvironmentError(err)) throw err;
@@ -200,6 +204,9 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         // browser launch). The default policy stays `safeRunPolicy()`
         // (fail-closed secret mode) — only `selfHeal.mode` is threaded from
         // the flag; a `--secret-mode` override is a later slice's concern.
+        // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
+        const recorded = await withRecordedFixtures(fixtureFlags, { dir: resolveJourneysDir(deps, dir), id });
+        let fixtureDrift: FixtureDrift | undefined;
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
           ...(siteGate === undefined ? {} : { siteGate }),
           dir: resolveJourneysDir(deps, dir),
@@ -216,11 +223,15 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           ...(actionDeltas === true ? { actionDeltas: true } : {}),
           ...(stepResponseTimeout === undefined ? {} : { stepResponseTimeoutMs: stepResponseTimeout }),
           ...(environment === undefined ? {} : { environment }),
-          // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
-          // #247: under an environment, its allowed origins.
-          fixtures: (site) => {
-            const fx = buildMissionFixtures(fixtureFlags, {
-              allowlist: environment === undefined ? [site] : environment.allowedOrigins,
+          ...(allow.length === 0 ? {} : { allow }),
+          // #140: fixture HTTP steps may only reach the replay's allowlist (authenticated from --storage-state):
+          // the journey's own site (#247: under an environment, its allowed origins), plus (#542/#543) its
+          // recorded metadata.allowedOrigins and --allow — so a fixture can reset an http check's outbox.
+          fixtures: (site, allowedOrigins) => {
+            // #543: the replay's effective allowlist (#542), so a fixture can reset an allowed outbox.
+            fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: [...allowedOrigins], baseUrl: site });
+            const fx = buildMissionFixtures(recorded.flags, {
+              allowlist: [...allowedOrigins],
               baseUrl: site,
               ...(storageState !== undefined ? { storageState } : {}),
               ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
@@ -229,6 +240,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
             return fx;
           },
         })).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
+        if (fixtureDrift !== undefined && !json) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
         // #246 (informational, never failing): how many steps say why — `journey annotate` drafts the rest.
         const intent = await journeyIntentCoverage(resolveJourneysDir(deps, dir), id);
         if (intent !== undefined && intent.withoutObjective > 0 && !json) {
@@ -236,7 +248,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
             `note: ${intent.withoutObjective} of ${intent.steps} step(s) have no objective — draft them with \`jevitate journey annotate ${id}\`\n`,
           );
         }
-        const envelope = ok(intent === undefined ? result : { ...result, intent });
+        const envelope = ok({ ...result, ...(intent === undefined ? {} : { intent }), ...(fixtureDrift === undefined ? {} : { fixtureDrift }) });
         if (json) {
           emitJson(program, envelope);
           // #453: ok → 0; healed-pending-review → 5 (a proposed revision, never a pass); else 1.
@@ -249,7 +261,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           process.exitCode = journeyExitCode(result.outcome);
         }
       } catch (err) {
-        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {
+        if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));

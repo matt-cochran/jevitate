@@ -73,6 +73,7 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_UX_NO_APP_CONTEXT",
   "E_JOURNEY_REQUIRES_AUTH",
   "E_ENV_ORIGIN_REFUSED", // #247: a Journey step on an origin the chosen environment does not allow
+  "E_HTTP_CHECK_OFF_ALLOWLIST", // #543: an http end-state check reads an origin outside the run's allowlist
   "E_PROFILE_UNKNOWN", // `profile status` named a profile that was never created
   "E_REGRESSION_EXISTS", // `regression capture --id` already exists; needs --force
   "E_REGRESSION_HARD_SIGNAL", // `regression capture --fingerprint` names a hard-signal defect; use the ledger instead

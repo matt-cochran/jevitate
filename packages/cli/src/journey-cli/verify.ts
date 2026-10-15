@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { Command } from "commander";
 import { ParamValidationError } from "@jevitate/journey";
 import { ok, fail } from "../envelope.js";
@@ -8,9 +9,10 @@ import { ExtensionMismatchError } from "../browser-run-options.js";
 import { withSiteGate } from "../site-gate-cli.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "../fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
+import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { withEngine } from "../engine.js";
 import { verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
-import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 import { type CliDeps, resolveDbPath, resolveJourneysDir, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, type DemoFlags, collectParam, emitJson, environmentSeams } from "../cli-shared.js";
 
 /** Registers `jevitate journey verify`. */
@@ -18,7 +20,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
   // #402 — the negative proof: replay the Journey once as recorded, then once per mutation (skip a
   // write step, abort its writes, type an empty value into a checked fill); each assertion must fail
   // under its paired mutation. `verify` is reserved for proofs: today only `--mutate` exists.
-  withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(journey.command("verify <id>"))))
+  withReplayAllowFlag(withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(journey.command("verify <id>")))))
     .description("prove each assertion of a Journey can fail: --mutate replays it with each write step skipped or blocked, and each checked fill emptied")
     .option("--mutate", "run the mutation proof (required)")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
@@ -34,7 +36,9 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         return;
       }
       let environment: ResolvedJourneyEnvironment | undefined;
+      let allow: string[];
       try {
+        allow = replayAllowFromFlags(this.opts<{ allow: string[] }>().allow);
         environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
       } catch (err) {
         if (!isEnvironmentError(err)) throw err;
@@ -60,6 +64,9 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         return;
       }
       try {
+        // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
+        const recorded = await withRecordedFixtures(fixtureFlags, { dir: resolveJourneysDir(deps, dir), id });
+        let fixtureDrift: FixtureDrift | undefined;
         const report = await withSiteGate(resolveDbPath(deps), (siteGate) =>
           verifyJourneyMutations({
             ...(siteGate === undefined ? {} : { siteGate }),
@@ -70,10 +77,13 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
             ...(browser === undefined ? {} : { browser }),
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
+            ...(allow.length === 0 ? {} : { allow }),
             // Fixtures run around EVERY replay, so each mutation starts from the same state as the base.
-            fixtures: (site) => {
-              const fx = buildMissionFixtures(fixtureFlags, {
-                allowlist: environment === undefined ? [site] : environment.allowedOrigins,
+            fixtures: (site, allowedOrigins) => {
+              // #543: the replay's effective allowlist (#542), so a fixture can reset an allowed outbox.
+              fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: [...allowedOrigins], baseUrl: site });
+              const fx = buildMissionFixtures(recorded.flags, {
+                allowlist: [...allowedOrigins],
                 baseUrl: site,
                 ...(storageState !== undefined ? { storageState } : {}),
                 ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
@@ -85,9 +95,10 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         );
         const code = verifyExitCode(report.verdict);
         if (json) {
-          emitJson(program, ok(withEngine(report)));
+          emitJson(program, ok(withEngine(fixtureDrift === undefined ? report : { ...report, fixtureDrift })));
         } else {
           const out = program.configureOutput().writeOut;
+          if (fixtureDrift !== undefined) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
           for (const a of report.assertions) out?.(`${verifyAssertionLine(a)}\n`);
           const s = report.summary;
           out?.(
@@ -97,7 +108,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         }
         process.exitCode = code;
       } catch (err) {
-        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {
+        if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));

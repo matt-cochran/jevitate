@@ -6,7 +6,7 @@ import { describeCheck } from "../../success-checks.js";
 import { explore, type ExploreRun } from "../../explore.js";
 import { hangFinding, type HangFinding } from "../../hang-repro.js";
 import type { GoalBasedResult } from "../goal-based.js";
-import { evaluateChecks, everyPageCheckHolds, isPageCheck, judgeNetworkCheck } from "./checks.js";
+import { evaluateChecks, everyPageCheckHolds, httpCheckHoldsNow, isDeferredCheck, isPageCheck, judgeNetworkCheck } from "./checks.js";
 import { hangResult, reproduceSeedHang } from "./hang.js";
 import type { Adjudication } from "./setup.js";
 
@@ -32,6 +32,7 @@ export async function runOnce(ctx: Adjudication): Promise<ExploreRun> {
     scope,
     stateChecks,
     holdsNow,
+    httpChecks,
     networkChecks,
     answerRequired,
     stopWhenHeld,
@@ -91,6 +92,9 @@ export async function runOnce(ctx: Adjudication): Promise<ExploreRun> {
       // (only those are re-read — a check that holds answers at once, so this stays cheap).
       if (state.settledSteps === 1) {
         for (const [i, c] of stateChecks) if (await holdsNow(c.assertion)) seedHeld.add(i);
+        // #543: an `http` check is probed ONCE here, before the first action — never per step, so
+        // one that holds now stays vacuous (a fixture reset is what makes it not hold).
+        if (state.firstActionAt === null) for (const [i, c] of httpChecks) if (await httpCheckHoldsNow(cfg, c)) seedHeld.add(i);
       } else {
         for (const [i, c] of stateChecks) {
           if (seedHeld.has(i) && !changedSinceSeed.has(i) && !(await holdsNow(c.assertion))) changedSinceSeed.add(i);
@@ -152,28 +156,30 @@ export async function runOnce(ctx: Adjudication): Promise<ExploreRun> {
             const pending: string[] = [];
             const reloads = checks.filter((c) => c.kind === "reloadThen").map((c) => `'${describeCheck(c)}'`);
             if (reloads.length > 0) pending.push(`${reloads.join(", ")} is judged after the run (it reloads the page)`);
+            const https = httpChecks.map(([, c]) => `'${describeCheck(c)}'`);
+            if (https.length > 0) pending.push(`${https.join(", ")} is judged after the run (an HTTP request off the page)`);
             if (!allowVacuous) {
-              const since = stateChecks.filter(([i]) => seedHeld.has(i) && !changedSinceSeed.has(i)).map(([, c]) => `'${describeCheck(c)}'`);
+              const since = [...stateChecks, ...httpChecks].filter(([i]) => seedHeld.has(i) && !changedSinceSeed.has(i)).map(([, c]) => `'${describeCheck(c)}'`);
               if (since.length > 0) pending.push(`${since.join(", ")} has held since before any action (vacuous unless it changes)`);
             }
             return pending.length === 0 ? null : pending.join("; ");
           },
           ...(answerRequired ? { requireAnswer: true } : {}),
-          // #235: only `reloadThen` checks — the in-run check below evaluates none of them.
-          ...(checks.every((c) => c.kind === "reloadThen") ? { successCheckDeferred: true } : {}),
+          // #235: only deferred (`reloadThen`, #543 `http`) checks — the in-run check below evaluates none of them.
+          ...(checks.every(isDeferredCheck) ? { successCheckDeferred: true } : {}),
           // #377: the checks as they read now (no held/each transition rule) — a `blocked` while
           // they hold is not refused as "nothing tried yet".
-          ...(checks.every((c) => c.kind === "reloadThen")
+          ...(checks.every(isDeferredCheck)
             ? {}
             : {
                 successChecksHoldNow: () =>
-                  evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
+                  evaluateChecks(cfg, checks.filter((c) => !isDeferredCheck(c)), page, capture, scope()).then(
                     (rs) => rs.every((r) => r.passed),
                     () => false,
                   ),
               }),
           successCheck: () =>
-            evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
+            evaluateChecks(cfg, checks.filter((c) => !isDeferredCheck(c)), page, capture, scope()).then(
               (rs) =>
                 rs.every((r) =>
                   each && isPageCheck(r, pageChecks)
