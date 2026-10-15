@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Recording } from "./schema.js";
 import { RecordingSchema } from "./schema.js";
-import { clock } from "@jevitate/domain";
+import { clock, isNodeError, safeChildPath } from "@jevitate/domain";
 
 export interface RecordingStore {
   put(id: string, rec: Recording): Promise<void>;
@@ -32,26 +32,6 @@ interface StoredEnvelope {
 }
 
 /**
- * Rejects an `id` containing a path separator or `..` segment, since `id`
- * may originate from external/less-trusted callers and is used to build a
- * filesystem path.
- */
-function assertSafeId(id: string): void {
-  if (id.includes("/") || id.includes("\\") || id.includes("..")) {
-    throw new Error(`Invalid recording id (path traversal risk): ${id}`);
-  }
-}
-
-function isNodeError(err: unknown, code: string): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === code
-  );
-}
-
-/**
  * Filesystem-backed `RecordingStore`. Keeps `@jevitate/recording` a leaf package
  * (Node's built-in `fs`/`path` only, no sqlite or other new dependency).
  *
@@ -71,14 +51,13 @@ export class FsRecordingStore implements RecordingStore {
   }
 
   private pathFor(id: string): string {
-    return join(this.dir, `${id}.json`);
+    return safeChildPath(this.dir, id, { what: "recording id", suffix: ".json" });
   }
 
   async put(id: string, rec: Recording): Promise<void> {
     // Fail-closed: validate BEFORE any I/O, so an invalid Recording is never
     // written to disk.
     const validated = RecordingSchema.parse(rec);
-    assertSafeId(id);
 
     const envelope: StoredEnvelope = {
       savedAtIso: clock.nowIso(),
@@ -97,7 +76,6 @@ export class FsRecordingStore implements RecordingStore {
   }
 
   async get(id: string): Promise<Recording | null> {
-    assertSafeId(id);
     let raw: string;
     try {
       raw = await readFile(this.pathFor(id), "utf8");
@@ -114,7 +92,6 @@ export class FsRecordingStore implements RecordingStore {
   }
 
   async prune(id: string): Promise<void> {
-    assertSafeId(id);
     try {
       await rm(this.pathFor(id));
     } catch (err) {

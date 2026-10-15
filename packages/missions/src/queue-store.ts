@@ -1,6 +1,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { isNodeError, safeChildPath } from "@jevitate/domain";
 import type { QueuedMission } from "./schema.js";
 import { QueuedMissionSchema } from "./schema.js";
 
@@ -37,26 +38,6 @@ export interface DrainableMissionQueueStore extends MissionQueueStore {
 }
 
 /**
- * Rejects an `id` containing a path separator or `..` segment, since `id`
- * is used to build a filesystem path. Mirrors `FsJourneyStore`'s
- * `assertSafeId`.
- */
-function assertSafeId(id: string): void {
-  if (id.includes("/") || id.includes("\\") || id.includes("..")) {
-    throw new Error(`Invalid mission id (path traversal risk): ${id}`);
-  }
-}
-
-function isNodeError(err: unknown, code: string): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === code
-  );
-}
-
-/**
  * Filesystem-backed mission queue. Same shape as `FsMissionTargetStore`/
  * `FsJourneyStore` — validates fully-resolved records BEFORE any disk I/O
  * (fail-closed, no partial writes).
@@ -65,12 +46,11 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
   constructor(private readonly dir: string) {}
 
   private pathFor(id: string): string {
-    return join(this.dir, `${id}.json`);
+    return safeChildPath(this.dir, id, { what: "mission id", suffix: ".json" });
   }
 
   async enqueue(m: QueuedMission): Promise<void> {
     const validated = QueuedMissionSchema.parse(m);
-    assertSafeId(validated.id);
 
     const serialized = JSON.stringify(validated);
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
@@ -83,10 +63,9 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
    * records its owner, so a later drain can tell a mission whose drain died from one still running.
    */
   async claim(id: string, owner: ClaimOwner): Promise<boolean> {
-    assertSafeId(id);
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
     try {
-      const fh = await open(join(this.dir, `${id}.claim`), "wx", 0o600);
+      const fh = await open(safeChildPath(this.dir, id, { what: "mission id", suffix: ".claim" }), "wx", 0o600);
       try {
         await fh.writeFile(JSON.stringify(owner));
       } finally {
@@ -100,10 +79,9 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
   }
 
   async claimOwner(id: string): Promise<ClaimOwner | null> {
-    assertSafeId(id);
     let raw: string;
     try {
-      raw = await readFile(join(this.dir, `${id}.claim`), "utf8");
+      raw = await readFile(safeChildPath(this.dir, id, { what: "mission id", suffix: ".claim" }), "utf8");
     } catch (err) {
       if (isNodeError(err, "ENOENT")) return null;
       throw err;
@@ -120,7 +98,6 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
 
   async update(m: QueuedMission): Promise<void> {
     const validated = QueuedMissionSchema.parse(m);
-    assertSafeId(validated.id);
     if ((await this.get(validated.id)) === null) {
       throw new Error(`cannot update unknown mission '${validated.id}'`);
     }
@@ -129,7 +106,6 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
 
   updateSync(m: QueuedMission): void {
     const validated = QueuedMissionSchema.parse(m);
-    assertSafeId(validated.id);
     if (!existsSync(this.pathFor(validated.id))) {
       throw new Error(`cannot update unknown mission '${validated.id}'`);
     }
@@ -137,7 +113,6 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
   }
 
   async get(id: string): Promise<QueuedMission | null> {
-    assertSafeId(id);
     let raw: string;
     try {
       raw = await readFile(this.pathFor(id), "utf8");

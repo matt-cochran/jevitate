@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { assertInsideRoot, assertSafeName, isNodeError } from "@jevitate/domain";
 import { resolveDataDir } from "./data-dir.js";
 
 export interface TrustRecord {
@@ -21,22 +22,12 @@ export interface TrustStore {
  * something a teammate's lock can grant (FMECA #2/#5; §9.9 flat sources). */
 export const DEFAULT_TRUST_DIR = resolveDataDir(["trust"]);
 
-/** Rejects a `sourceId`/`journeyId` containing a path separator or `..`
- * segment — mirrors `@jevitate/journey`'s `assertSafeId` — since both are used
- * to build the on-disk key filename. */
-function assertSafeId(id: string, label: string): void {
-  if (id.includes("/") || id.includes("\\") || id.includes("..") || id.length === 0) {
-    throw new Error(`Invalid ${label} (path traversal risk): ${id}`);
+/** A source id is a user-chosen source NAME not otherwise constrained, so it keeps the old rule
+ * (no `/`, `\\`, `..`) PLUS non-empty, no NUL and no `:` (drive prefix) — never looser (#520). */
+function assertSafeSourceId(id: string): void {
+  if (typeof id !== "string" || id.length === 0 || id.includes("/") || id.includes("\\") || id.includes("..") || id.includes("\u0000") || id.includes(":")) {
+    throw new Error(`Invalid sourceId (path traversal risk): ${JSON.stringify(id)}`);
   }
-}
-
-function isNodeError(err: unknown, code: string): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === code
-  );
 }
 
 /** Filesystem-backed, content-hash-bound trust store (spec §5, FMECA #2).
@@ -45,13 +36,13 @@ export class FsTrustStore implements TrustStore {
   constructor(private readonly dir: string) {}
 
   private keyFor(sourceId: string, journeyId: string): string {
-    assertSafeId(sourceId, "sourceId");
-    assertSafeId(journeyId, "journeyId");
-    return `${sourceId}__${journeyId}.json`;
+    assertSafeSourceId(sourceId);
+    assertSafeName(journeyId, "journeyId");
+    return assertInsideRoot(this.dir, `${sourceId}__${journeyId}.json`, "trust key");
   }
 
   async get(sourceId: string, journeyId: string): Promise<TrustRecord | null> {
-    const path = join(this.dir, this.keyFor(sourceId, journeyId));
+    const path = this.keyFor(sourceId, journeyId);
     let raw: string;
     try {
       raw = await readFile(path, "utf8");
@@ -63,7 +54,7 @@ export class FsTrustStore implements TrustStore {
   }
 
   async put(record: TrustRecord): Promise<void> {
-    const path = join(this.dir, this.keyFor(record.sourceId, record.journeyId));
+    const path = this.keyFor(record.sourceId, record.journeyId);
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
     await writeFile(path, JSON.stringify(record), { mode: 0o600 });
   }
