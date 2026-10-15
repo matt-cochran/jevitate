@@ -7,6 +7,11 @@ behaviour changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **Build and test once per tree; staging publishes `next`, main moves `latest` (#534).** A push to `dev` that passes the full suite uploads both packages as a release-candidate artifact named after the git tree. Promotion PRs into `staging` and `main` pass by reusing that run when their merge tree matches, and run the full suite otherwise. A merge to `staging` publishes the tested tarballs as `next`; a merge to `main` (or a `vX.Y.Z` tag) moves `latest` to them and creates the tags and GitHub release. `staging` and `main` pushes no longer rerun CI. See RELEASING.md.
+- **`jevitate --version` prints the git tree hash** (`x.y.z (commit <sha>, tree <tree>, built <time>)`), so a build packed from a `dev` commit matches the `main` merge commit that released it.
+
 ## [0.14.1] – 2026-10-15
 
 0.14.1 is the first release published by the Release workflow through npm Trusted Publishing, so both packages carry a provenance attestation. The CLI is unchanged from 0.14.0.

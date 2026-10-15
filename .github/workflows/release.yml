@@ -1,38 +1,38 @@
 name: Release
 
-# Versions @jevitate/cli + jevitate with changesets and publishes them to npm
-# through OIDC Trusted Publishing (no NPM_TOKEN, by decision). See RELEASING.md.
+# Promotes the release candidate that CI built and tested on dev (#534) to npm through OIDC
+# Trusted Publishing (no NPM_TOKEN, by decision). See RELEASING.md.
 #
-#   - push to `main`: a `plan` job picks a mode in plain shell:
-#       version  - pending .changeset/*.md: run `changeset version` and push the
-#                  `changeset-release/main` branch. Actions may not open PRs in
-#                  this repo (setting intentionally off), so the run prints the
-#                  compare URL and the `gh pr create` command instead of failing.
-#       publish  - main's version is NOT on npm yet: print a notice to push the
-#                  `vX.Y.Z` tag. A push to main never publishes.
-#       none     - nothing pending, and main's version is already on npm.
-#   - push of a `vX.Y.Z` tag: PUBLISHES. The tag must equal both packages'
-#     version, point at a commit on `main`, and have no pending changesets.
-#     Builds, publishes @jevitate/cli then jevitate (a version already on npm is
-#     skipped, so a rerun is safe), pushes the package tags and creates the
-#     "Jevitate vX.Y.Z" GitHub release from the root CHANGELOG section.
-#   - manual run with `publish` checked: the same publish for main's version
-#     (a retry path; it also creates the `vX.Y.Z` tag if missing).
+# A dev push that passes CI uploads `jevitate-<git tree hash>`: both packages as `pnpm pack`
+# tarballs + manifest.json + SHA256SUMS (ci.yml `package`). The staging and main merge commits that
+# promote it carry the SAME tree, so this workflow publishes those exact bytes; it never rebuilds
+# unless no tested artifact exists. `plan` picks a mode (scripts/ci/release-plan.mjs):
 #
-# Fallback when OIDC publishing fails (npm/cli#9969: E404 on the PUT for repos
-# with immutable OIDC subject claims): `bash scripts/release.sh` by hand.
+#   push to staging   next    - the version is not on npm: verify the tree's artifact and
+#                               `npm publish <tgz> --provenance --tag next` (cli, then jevitate).
+#   push to main,     latest  - `npm dist-tag add <pkg>@<v> latest` for both (published as next
+#   vX.Y.Z tag, or                from staging). If npm lacks the version (staging skipped or
+#   manual `publish`              failed) it publishes the artifact with tag latest instead. Then
+#                               the package tags, vX.Y.Z and the "Jevitate vX.Y.Z" GitHub release.
+#   push to main      version - changesets pending: `changeset version`, push changeset-release/main.
+#   otherwise         none
 #
-# Actions are pinned to commit SHAs (version in the trailing comment). npm is
-# pinned to 11: OIDC needs npm >= 11.5.1. The publish runs `npm publish` on a
-# `pnpm pack` tarball: pnpm 9's own publish never completed npm's OIDC exchange.
+# Every step is idempotent (a version on npm is not republished, an existing dist-tag, tag or
+# release is left alone), so a rerun or a manual run with `publish` is the retry path. When no
+# green artifact exists for the tree, `build` runs CI's full gate + pack in this run (fallback).
+# Fallback when the OIDC publish itself fails: `bash scripts/release.sh` by hand.
+#
+# Actions are pinned to commit SHAs (version in the trailing comment). npm is pinned to 11
+# (OIDC needs >= 11.5.1). npm, not pnpm, publishes: pnpm 9's publish never completed npm's OIDC
+# exchange (#541).
 on:
   push:
-    branches: [main]
+    branches: [staging, main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish main's version to npm via OIDC (retry path; normally push the vX.Y.Z tag)"
+        description: "Retry the release for this branch's version (staging: next; main: latest)"
         type: boolean
         default: false
 
@@ -45,9 +45,16 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # #417: never GitHub's 6 h default
+    permissions:
+      contents: read
+      actions: read # find the tree's artifact
     outputs:
-      mode: ${{ steps.mode.outputs.mode }}
-      version: ${{ steps.mode.outputs.version }}
+      mode: ${{ steps.plan.outputs.mode }}
+      version: ${{ steps.plan.outputs.version }}
+      needs_artifact: ${{ steps.plan.outputs.needs_artifact }}
+      tree: ${{ steps.tree.outputs.tree }}
+      artifact_found: ${{ steps.find.outputs.found == 'true' }}
+      artifact_run_id: ${{ steps.find.outputs.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,116 +66,158 @@ jobs:
         with:
           node-version: 22
 
-      - name: Select mode (version | publish | none)
-        id: mode
+      - name: Validate the vX.Y.Z tag
+        if: github.ref_type == 'tag'
         run: |
+          fail() { echo "::error title=Tag ${GITHUB_REF_NAME} not released::$1"; exit 1; }
           version=$(node -p "require('./packages/cli/package.json').version")
           alias_version=$(node -p "require('./packages/jevitate-cli-alias/package.json').version")
           pending=$(find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md' | wc -l)
-          on_npm=$(npm view "@jevitate/cli@${version}" version 2>/dev/null || true)
-          alias_on_npm=$(npm view "jevitate@${alias_version}" version 2>/dev/null || true)
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            fail() { echo "::error title=Tag ${GITHUB_REF_NAME} not published::$1"; exit 1; }
-            [ "${GITHUB_REF_NAME}" = "v${version}" ] || fail "the tag must be v${version} (packages/cli version)."
-            [ "${alias_version}" = "${version}" ] || fail "jevitate is ${alias_version} but @jevitate/cli is ${version}."
-            [ "$pending" -eq 0 ] || fail "${pending} changeset(s) still pending; merge the version PR first."
-            git merge-base --is-ancestor "${GITHUB_SHA}" origin/main || fail "the tagged commit is not on main."
-          fi
-          if [ "$pending" -gt 0 ]; then
-            mode=version
-          elif [ -z "$on_npm" ] || [ -z "$alias_on_npm" ]; then
-            mode=publish
-          else
-            mode=none
-          fi
-          echo "mode=${mode}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "mode=${mode} (event: ${GITHUB_EVENT_NAME} ${GITHUB_REF_NAME}; pending changesets: ${pending}; version ${version})"
+          [ "${GITHUB_REF_NAME}" = "v${version}" ] || fail "the tag must be v${version} (packages/cli version)."
+          [ "${alias_version}" = "${version}" ] || fail "jevitate is ${alias_version} but @jevitate/cli is ${version}."
+          [ "$pending" -eq 0 ] || fail "${pending} changeset(s) still pending; merge the version PR first."
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main || fail "the tagged commit is not on main."
 
-      - name: Ready to publish (push the tag)
-        if: steps.mode.outputs.mode == 'publish' && github.ref_type != 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.publish)
+      - name: Select mode (next | latest | version | none)
+        id: plan
         env:
-          VERSION: ${{ steps.mode.outputs.version }}
-        run: |
-          msg="${VERSION} is not on npm yet. Publish it by tagging main: git tag -a v${VERSION} -m v${VERSION} origin/main && git push origin v${VERSION} (see RELEASING.md)."
-          echo "::notice title=Release ${VERSION} is ready to publish::${msg}"
-          {
-            echo "### Release ${VERSION} is ready to publish"
-            echo
-            echo "${msg}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          PUBLISH_INPUT: ${{ inputs.publish }}
+        run: node scripts/ci/release-plan.mjs
 
-  version:
+      - name: Resolve the tree
+        id: tree
+        run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+      - name: Find the tree's tested artifact
+        id: find
+        if: steps.plan.outputs.needs_artifact == 'true'
+        # An API failure is treated as "not found": the fallback build then runs the gate here.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TREE: ${{ steps.tree.outputs.tree }}
+        run: node scripts/ci/find-tree-artifact.mjs "${TREE}"
+
+      - name: Report the artifact source
+        if: steps.plan.outputs.needs_artifact == 'true'
+        env:
+          FOUND: ${{ steps.find.outputs.found }}
+          RUN_ID: ${{ steps.find.outputs.run_id }}
+          TREE: ${{ steps.tree.outputs.tree }}
+        run: |
+          if [ "${FOUND}" = "true" ]; then
+            msg="Publishing tree ${TREE} as built and tested by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}."
+            echo "::notice title=Release candidate::${msg}"
+          else
+            msg="No green CI artifact for tree ${TREE} (dev push run missing, failed or expired). Fallback: running the full gate and packing in this run."
+            echo "::warning title=No tested artifact for this tree::${msg}"
+          fi
+          echo "${msg}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Fallback only: no green artifact for this tree, so run CI's full gate and pack here.
+  build:
     needs: plan
-    if: needs.plan.outputs.mode == 'version'
+    if: needs.plan.outputs.needs_artifact == 'true' && needs.plan.outputs.artifact_found != 'true'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      package: true
+
+  npm:
+    needs: [plan, build]
+    # `build` is skipped when the dev artifact exists (the usual case).
+    if: >-
+      !cancelled() && needs.plan.result == 'success' &&
+      (needs.plan.outputs.mode == 'next' || needs.plan.outputs.mode == 'latest') &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 30  # #417: never GitHub's 6 h default
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      actions: read # download the artifact from the dev run
+      id-token: write # npm OIDC Trusted Publishing (+ provenance)
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TREE: ${{ needs.plan.outputs.tree }}
+      DIST_TAG: ${{ needs.plan.outputs.mode }}
     steps:
-      - name: Checkout
+      - name: Checkout (scripts only)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: pnpm
+          registry-url: https://registry.npmjs.org
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Ensure OIDC-capable npm
+        # npm >= 11.5.1 for OIDC.
+        run: npm install -g npm@11
 
-      - name: Version packages (push changeset-release/main)
-        id: version
-        # The action pushes the branch, then tries to open the PR. Opening it is
-        # refused in this repo, so that error is tolerated here; the next step
-        # fails the job if the branch itself wasn't pushed.
-        continue-on-error: true
-        uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+      - name: Download the tested artifact (dev run)
+        if: needs.plan.outputs.needs_artifact == 'true' && needs.plan.outputs.artifact_found == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          script: pnpm version-packages
-          commit-message: "chore: version packages"
-          pr-title: "chore: version packages"
+          name: jevitate-${{ needs.plan.outputs.tree }}
+          path: ${{ runner.temp }}/release
+          run-id: ${{ needs.plan.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
 
-      - name: Open the version PR by hand
-        env:
-          PR_NUMBER: ${{ steps.version.outputs.pr-number }}
+      - name: Download the fallback artifact (this run)
+        if: needs.plan.outputs.needs_artifact == 'true' && needs.plan.outputs.artifact_found != 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: jevitate-${{ needs.plan.outputs.tree }}
+          path: ${{ runner.temp }}/release
+
+      - name: Verify checksums, tree and versions
+        if: needs.plan.outputs.needs_artifact == 'true'
+        run: node scripts/ci/release-artifact.mjs verify "${RUNNER_TEMP}/release" --tree "${TREE}" --version "${VERSION}"
+
+      - name: Publish (${{ needs.plan.outputs.mode }}) and set dist-tags
+        # Order matters: jevitate depends on @jevitate/cli, so the cli goes first. A version already
+        # on npm is never republished; under `latest` its dist-tag is moved instead (no rebuild, no
+        # republish). Moving a dist-tag over OIDC needs the Trusted Publisher's dist-tag permission
+        # on npmjs.com for BOTH packages (RELEASING.md).
         run: |
-          if ! git ls-remote --exit-code --heads origin changeset-release/main >/dev/null; then
-            echo "::error::changeset-release/main was not pushed; see the 'Version packages' step log."
-            exit 1
-          fi
-          if [ -n "$PR_NUMBER" ]; then
-            echo "Version PR: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
-            exit 0
-          fi
-          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...changeset-release/main?expand=1"
-          cmd='gh pr create --head changeset-release/main --base main --title "chore: version packages" --fill'
-          echo "::notice title=Open the version PR by hand::${url} or run: ${cmd}"
+          PKGS="${RUNNER_TEMP}/release"
+          for pkg in "@jevitate/cli" "jevitate"; do
+            if [ -z "$(npm view "${pkg}@${VERSION}" version 2>/dev/null || true)" ]; then
+              if [ ! -f "${PKGS}/manifest.json" ]; then
+                echo "::error::${pkg}@${VERSION} is not on npm and no verified artifact was downloaded; rerun with 'publish' checked."
+                exit 1
+              fi
+              file=$(node -p "require(process.argv[1]).files[process.argv[2]]" "${PKGS}/manifest.json" "${pkg}")
+              echo "Publishing ${file} as ${pkg}@${VERSION} (tag ${DIST_TAG})"
+              npm publish "${PKGS}/${file}" --provenance --access public --tag "${DIST_TAG}" --loglevel verbose
+            elif [ "${DIST_TAG}" = "latest" ]; then
+              current=$(npm view "${pkg}" dist-tags.latest 2>/dev/null || true)
+              if [ "${current}" = "${VERSION}" ]; then
+                echo "${pkg}: latest is already ${VERSION}."
+              elif ! npm dist-tag add "${pkg}@${VERSION}" latest --loglevel verbose; then
+                echo "::error title=Could not move latest for ${pkg}::Enable the Trusted Publisher's dist-tag permission for ${pkg} on npmjs.com, then rerun; or by hand: npm dist-tag add ${pkg}@${VERSION} latest (RELEASING.md)."
+                exit 1
+              fi
+            else
+              echo "${pkg}@${VERSION} is already on npm; skipping."
+            fi
+          done
           {
-            echo "### Open the version PR by hand"
-            echo
-            echo "Actions may not create pull requests in this repo. \`changeset-release/main\` is pushed; open its PR:"
-            echo
-            echo "- ${url}"
-            echo "- \`${cmd}\`"
+            echo "### npm"
+            for pkg in "@jevitate/cli" "jevitate"; do
+              echo "- \`${pkg}\` dist-tags: \`$(npm view "${pkg}" dist-tags --json 2>/dev/null | tr -d '\n ')\`"
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
-  publish:
-    # A pushed vX.Y.Z tag (validated by plan), or a manual run with `publish`.
-    needs: plan
-    if: needs.plan.outputs.mode == 'publish' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+  github-release:
+    needs: [plan, npm]
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'latest' && needs.npm.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30  # #417: never GitHub's 6 h default
     permissions:
       contents: write # tags + GitHub release
-      id-token: write # npm OIDC Trusted Publishing (+ provenance)
     env:
       VERSION: ${{ needs.plan.outputs.version }}
     steps:
@@ -176,49 +225,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
-
-      - name: Ensure OIDC-capable npm
-        # npm >= 11.5.1 for OIDC; not 12 (rejects pnpm 9's --git-checks, #262).
-        run: npm install -g npm@11
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build and bundle
-        # pnpm -r build runs packages/cli's build-info pre-step (root tsc --build does not).
-        run: |
-          pnpm -r build
-          pnpm --filter @jevitate/cli run bundle
-
-      - name: Publish to npm (OIDC, provenance)
-        # npm itself must publish: `pnpm publish` (pnpm 9) never completed npm's OIDC
-        # token exchange (E404 on the PUT, run 38794145639), while repos that call
-        # `npm publish` directly publish over OIDC fine. pnpm only packs here, which
-        # rewrites jevitate's `workspace:*` dependency to the real version.
-        # Order matters: jevitate depends on @jevitate/cli, so the cli goes first.
-        # A version already on npm is skipped, so rerunning after a partial publish is safe.
-        run: |
-          for entry in "@jevitate/cli:packages/cli" "jevitate:packages/jevitate-cli-alias"; do
-            pkg=${entry%%:*}; dir=${entry#*:}
-            if [ -n "$(npm view "${pkg}@${VERSION}" version 2>/dev/null || true)" ]; then
-              echo "${pkg}@${VERSION} is already on npm; skipping."
-              continue
-            fi
-            out="${RUNNER_TEMP}/pkgs/${dir##*/}"
-            mkdir -p "${out}"
-            (cd "${dir}" && pnpm pack --pack-destination "${out}")
-            npm publish "${out}"/*.tgz --provenance --access public --loglevel verbose
-          done
 
       - name: Tags and GitHub release
         env:
