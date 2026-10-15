@@ -701,12 +701,16 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         longPollMs: n("--long-poll-ms"),
         apiPrefix: many("--api-prefix"),
         ignoreNoProgress: many("--ignore-no-progress"),
+        // #544: mission fixtures set up before / restored after every take; the Journey records the file.
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
         screenshots: { kind: "screenshots", flag: "--screenshots" },
         ...EMULATION,
         ...JEV_AI,
       },
       omitted: {
         "--journeys-dir": OMIT.storeDir,
+        ...HOOK_FLAGS,
         ...BROWSER_FLAGS,
         ...JSON_FLAG,
         "--secret": OMIT.envSecret,

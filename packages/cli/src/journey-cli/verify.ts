@@ -8,6 +8,7 @@ import { ExtensionMismatchError } from "../browser-run-options.js";
 import { withSiteGate } from "../site-gate-cli.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "../fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
+import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { withEngine } from "../engine.js";
 import { verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
@@ -62,6 +63,9 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         return;
       }
       try {
+        // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
+        const recorded = await withRecordedFixtures(fixtureFlags, { dir: resolveJourneysDir(deps, dir), id });
+        let fixtureDrift: FixtureDrift | undefined;
         const report = await withSiteGate(resolveDbPath(deps), (siteGate) =>
           verifyJourneyMutations({
             ...(siteGate === undefined ? {} : { siteGate }),
@@ -75,7 +79,8 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
             ...(allow.length === 0 ? {} : { allow }),
             // Fixtures run around EVERY replay, so each mutation starts from the same state as the base.
             fixtures: (site) => {
-              const fx = buildMissionFixtures(fixtureFlags, {
+              fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: environment === undefined ? [site] : environment.allowedOrigins, baseUrl: site });
+              const fx = buildMissionFixtures(recorded.flags, {
                 allowlist: environment === undefined ? [site] : environment.allowedOrigins,
                 baseUrl: site,
                 ...(storageState !== undefined ? { storageState } : {}),
@@ -88,9 +93,10 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         );
         const code = verifyExitCode(report.verdict);
         if (json) {
-          emitJson(program, ok(withEngine(report)));
+          emitJson(program, ok(withEngine(fixtureDrift === undefined ? report : { ...report, fixtureDrift })));
         } else {
           const out = program.configureOutput().writeOut;
+          if (fixtureDrift !== undefined) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
           for (const a of report.assertions) out?.(`${verifyAssertionLine(a)}\n`);
           const s = report.summary;
           out?.(

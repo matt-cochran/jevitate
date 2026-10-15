@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
@@ -22,6 +22,7 @@ useSkippingTime({ per: "all" });
  */
 
 const sessions = new Map<string, string>();
+const fxLog: string[] = [];
 let nextSid = 0;
 
 function page(saved: string | undefined): string {
@@ -47,6 +48,11 @@ let origin: string;
 let dir: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
+    if (req.method === "POST" && req.url?.startsWith("/fx/")) {
+      fxLog.push(req.url.slice(4));
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      return;
+    }
     const sid = /sid=(\d+)/.exec(req.headers.cookie ?? "")?.[1];
     if (req.method === "POST" && req.url === "/api/save") {
       let body = "";
@@ -168,6 +174,16 @@ describe("journey verify --mutate (#402, served)", () => {
     expect(report.journeyHash).toMatch(/^[0-9a-f]{16,}$/);
     expect(exitCode).toBe(1);
   }, 180_000);
+
+  it("runs fixture setup before and restore after the base replay and every mutated replay (#544)", async () => {
+    const file = join(dir, "verify-fixtures.json");
+    await writeFile(file, JSON.stringify({ setup: [{ method: "POST", url: `${origin}/fx/setup` }], restore: [{ method: "POST", url: `${origin}/fx/restore` }] }));
+    fxLog.length = 0;
+    const { report } = await verify(weak("weak-fx"), ["--json", "--fixtures", file]);
+    // base + skip:3 + block-write:3
+    expect(report.mutations).toHaveLength(2);
+    expect(fxLog).toEqual(["setup", "restore", "setup", "restore", "setup", "restore"]);
+  }, 240_000);
 
   it("a strengthened Journey: the step-request status and the reloadThen are sensitive under skip and block-write; the valueEquals under stale-value — exit 0", async () => {
     const { exitCode, report } = await verify(strong("strong"), ["--json"]);

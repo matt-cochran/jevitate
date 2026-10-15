@@ -218,7 +218,10 @@ Safe by construction: a mutation only leaves a step's action out, types an empty
 a write navigation is aborted too, never answered). It never sends, fabricates or answers a
 request. Every replay starts fresh, with the same fixtures and hooks as `journey run`; when the
 app keeps state between sessions, reset it with `--fixtures`/`--before`, or the replay after a
-blocked save can still find the base replay's saved data.
+blocked save can still find the base replay's saved data. Fixture setup runs before, and restore
+after, the unmutated replay and **every** mutated replay, so each starts from the same state.
+A Journey authored with `--fixtures` replays under them without the flag (see
+[Recorded fixtures](#recorded-fixtures)).
 
 ### Review and promotion sign-off
 
@@ -455,6 +458,26 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
 Over MCP, agents find and run promoted Journeys with `find_capabilities` and `run_journey`
 ([agents.md](./agents.md)).
 
+## Recorded fixtures
+
+`explore-author-journey --fixtures <file>` sets the fixtures up before, and restores them after,
+every take (see [fixtures](./fixtures.md)), and records the file and the spec's hash on the
+Journey as `metadata.fixtures`. `journey run`, `journey verify --mutate` and `journey annotate`
+then load that file themselves when you pass no `--fixtures`, exactly as if you had.
+
+- **Precedence:** `--fixtures` flag, then the Journey's recorded fixtures, then the
+  environment's fixtures (`--env`). `--fixture-identity` always comes from flags or personas
+  (identities are storage states and are not recorded).
+- **Hooks are never recorded.** `--before`/`--after` are operator commands: pass them, with
+  `--allow-shell-hooks`, on every run that needs them.
+- **Missing file:** the run is refused before any browser opens (`E_FIXTURE_SPEC`), naming the
+  recorded file; restore it or pass `--fixtures <file>` to use another.
+- **Drift:** if the file's spec no longer matches the recorded hash, the run proceeds with the
+  current file and warns (`warning: fixtures … changed since this Journey was authored`); the JSON
+  result carries `fixtureDrift` `{ file, recordedSpecHash, currentSpecHash, message }`.
+- **MCP:** `author_journey` takes `fixtures` and `fixtureIdentity`; replay tools use the recorded file
+  with no argument.
+
 ## Locator health
 
 `jevitate locator-health` (#470, MCP `locator_health`) reports how each recorded step finds its
@@ -526,6 +549,7 @@ key is refused when the file is read.
 | `createdAtIso` | yes | When it was written |
 | `requiresAuth` | no | `true`: refuses to start without `--storage-state` |
 | `allowedOrigins` | no | Origins (normalized) the Journey was authored against beyond its own site, e.g. a split-origin app's API (`explore-author-journey --allow …`). A replay's allowlist is the union of the recorded site (or the environment's origins), these, and `journey run\|verify --allow <origin>` (repeatable), so `journey verify --mutate` can block a step's cross-origin write. Not remapped under `--env`/`--base-url`: name the replacement origin with `--allow` or the environment's `allow`. Over MCP only this field applies (no `allow` argument) |
+| `fixtures` | no | `{ "file", "specHash" }`: the `--fixtures` file the Journey was authored under (`file` relative to the repository root, `/` separators) and the content hash of its spec. See [Recorded fixtures](#recorded-fixtures) |
 | `goal` | no | What the Journey achieves, in one sentence |
 | `persona` | no | Who does it |
 | `role` | no | The account role it runs as (which environment session it needs) |

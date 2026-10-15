@@ -44,6 +44,13 @@ export interface JourneyMetadata {
    * allowlist was only the site's own origin. Under `--env`/`--base-url` these are NOT remapped.
    */
   allowedOrigins?: string[];
+  /**
+   * #544: the mission-fixtures file the Journey was authored under (`explore-author-journey
+   * --fixtures`) — `file` relative to the repository root (POSIX separators), `specHash` the content
+   * hash of the spec. `journey run`/`verify`/`annotate` load it when no `--fixtures` flag is given.
+   * Shell hooks (`--before`/`--after`) are never recorded: they need an explicit opt-in per run.
+   */
+  fixtures?: { file: string; specHash: string };
   /*
    * #246 intent — every field optional and additive: a Journey without them validates and runs
    * exactly as before. Documentation for people, demos and models; nothing here changes a replay.
@@ -324,6 +331,7 @@ export const JourneySchema: ZodType<Journey> = z.object({
     createdAtIso: z.string(),
     requiresAuth: z.boolean().optional(),
     allowedOrigins: z.array(z.string().max(2048)).max(50).optional(),
+    fixtures: z.object({ file: z.string().min(1).max(1024), specHash: z.string().min(1).max(128) }).strict().optional(),
     goal: TEXT.optional(),
     persona: z.string().max(500).optional(),
     role: z.string().max(200).optional(),
