@@ -21,6 +21,10 @@ import {
   withEmulationFlags,
   withScreenshotsFlag,
 } from "./cli-shared.js";
+import { resolveCatalogDir } from "./catalog-api.js";
+import { journeyLinkWarnings } from "./journey-link-hints.js";
+import { lintFindingLine } from "./journey-cli/shared.js";
+import type { JourneyLintFinding } from "@jevitate/journey";
 import { GOAL_RUN_OPTIONS, GoalRunFlagError, resolveGoalRunFlags, type GoalRunFlags, type GoalRunShaping } from "./goal-run-flags.js";
 
 /**
@@ -47,8 +51,18 @@ function takeLines(label: string, d: AuthorTakeDiagnostics): string[] {
 }
 
 /** #369: the human summary of `explore-author-journey` (the JSON is the same data with `--json`). */
+/**
+ * #523: an authored Journey's catalog link warnings (no job / no persona link, each with its fix) —
+ * advisory: they never change the outcome or the exit code.
+ */
+export async function withLinkWarnings<R extends AuthorJourneyResult>(result: R, catalogDir: string | null): Promise<R & { linkWarnings?: JourneyLintFinding[] }> {
+  if (result.outcome !== "authored") return result;
+  const linkWarnings = await journeyLinkWarnings(catalogDir, result.journey);
+  return linkWarnings.length === 0 ? result : { ...result, linkWarnings };
+}
+
 export function formatAuthorJourneyHuman(data: unknown): string {
-  const r = data as AuthorJourneyResult;
+  const r = data as AuthorJourneyResult & { linkWarnings?: JourneyLintFinding[] };
   const lines: string[] = [];
   if (r.outcome === "authored") {
     const m = r.journey.metadata;
@@ -60,6 +74,7 @@ export function formatAuthorJourneyHuman(data: unknown): string {
   if (r.takes !== undefined) lines.push(`  takes: ${r.takes.succeeded}/${r.takes.run} reached the goal (${r.takes.requested} requested)`);
   if (r.discovery !== undefined) lines.push(...takeLines("discovery", r.discovery));
   if (r.outcome === "authored") (r.corroboratingTakes ?? []).forEach((d, i) => lines.push(...takeLines(`take ${i + 2}`, d)));
+  for (const w of r.linkWarnings ?? []) lines.push(`  ${lintFindingLine(w)}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -207,7 +222,9 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
           goalRun,
           ...(o.out === undefined ? {} : { outDir: o.out }),
           usage: authorUsage,
-        }).then((r) => ({ ...r, usage: authorUsage.snapshot() }));
+        })
+          .then((r) => withLinkWarnings(r, resolveCatalogDir(deps.catalogDir)))
+          .then((r) => ({ ...r, usage: authorUsage.snapshot() }));
         const envelope = ok(result);
         if (o.json) {
           emitJson(program, envelope);

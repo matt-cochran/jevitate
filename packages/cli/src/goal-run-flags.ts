@@ -194,7 +194,6 @@ export const GOAL_RUN_OPTIONS = {
     ).argParser(positiveIntArg),
 } as const;
 
-export type GoalRunOptionName = keyof typeof GOAL_RUN_OPTIONS;
 
 /** The flags (commander-parsed) the resolvers below read. */
 export interface GoalRunFlags extends EmulationFlags, ScreenshotsFlags {

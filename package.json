@@ -9,7 +9,8 @@
   "scripts": {
     "build": "tsc --build",
     "test": "vitest run",
-    "lint": "eslint . && node scripts/check-clock.mjs",
+    "lint": "eslint . && node scripts/check-clock.mjs && knip",
+    "knip": "knip",
     "docs:cli": "pnpm --filter @jevitate/cli run build && node packages/cli/scripts/generate-cli-reference.mjs",
     "check:no-fallback": "node scripts/check-no-permissive-fallback.mjs",
     "demo:render": "node scripts/render-demo.mjs",
@@ -22,6 +23,7 @@
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
+    "knip": "^6.41.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
   },

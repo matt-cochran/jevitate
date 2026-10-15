@@ -36,7 +36,7 @@ import {
 import { verifyServerLogDefect } from "./server-log-verify.js";
 import { defectSignalText, persistedDefect, replayWithEvidence, signalCheckable, type DefectEvidence } from "./defect-evidence.js";
 import { RunScreenshots, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
-import { clock } from "@jevitate/domain";
+import { clock, isRecord } from "@jevitate/domain";
 
 /**
  * The programmatic surface behind `jevitate verify-fix` and the MCP `verify_fix` tool: loads a
@@ -302,9 +302,6 @@ function asPersistedFixtures(v: unknown): PersistedMissionFixtures | undefined {
   };
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 /** A persisted `server-log` defect's re-check spec (#142), validated just enough to replay it. */
 function asServerLog(v: unknown): PersistedFinding["serverLog"] | null {

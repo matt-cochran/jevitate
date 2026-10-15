@@ -382,10 +382,6 @@ function flatWithRoute(rec: Recording): Array<{ recorded: RecordedStep; route: s
   return rec.pages.flatMap((p) => p.steps.map((recorded) => ({ recorded, route: routeOf(p.url) })));
 }
 
-export function emptyLevels(): LocatorLevels {
-  return { high: 0, medium: 0, low: 0 };
-}
-
 /** `7/9 steps on stable locators; 2 brittle (high 7 · medium 1 · low 1)`. */
 export function healthLine(h: { readonly stable: number; readonly brittle: number; readonly levels: LocatorLevels }): string {
   const total = h.stable + h.brittle;

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { fingerprintMarkers, isExternalSchemeUrl } from "@jevitate/domain";
+import { fingerprintMarkers, isExternalSchemeUrl, isRecord } from "@jevitate/domain";
 import { assertNoSecretInPayload, redactCredentialShapes, redactText, redactUrl, type JudgmentPort, type JudgmentState, type Question } from "@jevitate/ai-core";
 import { normalizeLogMessage } from "./log-lines.js";
 
@@ -142,6 +142,10 @@ export function observeBrowserSignals(page: unknown, sink: RawBrowserSignal[], n
     // request (headless Chromium aborts it for want of a handler).
     if (isExternalSchemeUrl(url)) return;
     const why = typeof failure?.errorText === "string" ? failure.errorText : "failed";
+    // #521: a page navigation the browser abandoned (net::ERR_ABORTED) is no app error — it is what
+    // the opt-in navigation guard's `204` answer to an off-allowlist navigation emits (the page stays
+    // put; the mission records the departure), and what a navigation superseded by the next one emits.
+    if (why === "net::ERR_ABORTED" && call(req, "isNavigationRequest") === true) return;
     push({ source: "requestfailed", level: "error", text: `${typeof method === "string" ? method : "GET"} ${redactUrl(url)} — ${why}` });
   });
 }
@@ -287,7 +291,6 @@ export async function triageDefects(
   return { byFingerprint, triage: { mode: opts.judge === undefined ? "code" : "jev", defects: defects.length, candidates: candidatesTotal, kept, jevCalls, capped } };
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const asDefect = (v: unknown): DefectLike | undefined =>
   isRecord(v) && typeof v.fingerprint === "string" && typeof v.kind === "string" ? (v as unknown as DefectLike) : undefined;
 

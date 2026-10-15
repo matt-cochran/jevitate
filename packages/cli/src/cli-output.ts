@@ -1,4 +1,5 @@
 import type { Feature } from "@jevitate/ai-core";
+import { isRecord } from "@jevitate/domain";
 import { featureKeysBody, type KeySourceReport, type KeyVerificationReport } from "./key-report.js";
 import type { Command } from "commander";
 import type { JsonEnvelope } from "./envelope.js";
@@ -64,9 +65,6 @@ interface DefectLike {
   readonly advisory?: boolean;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 function arr(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];

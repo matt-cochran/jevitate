@@ -5,9 +5,11 @@
  * on `ctx` as the same closures.
  */
 
+import { redactUrl } from "@jevitate/ai-core";
 import { Navigate } from "@jevitate/screenplay";
 import { clearAuthState, identityChange, readIdentity } from "../../adversarial/identity.js";
 import { isAuthorizedExploreTarget } from "../../authorized-targets.js";
+import { drainBlockedDeparture } from "../../blocked-navigation.js";
 import { sampleHeap } from "../../crash-report.js";
 import { NOT_REPLAYED, hangFinding, reproduceHang, type HangReproduction } from "../../hang-repro.js";
 import { hangFingerprint, type HangSignal } from "../../hang.js";
@@ -142,7 +144,18 @@ export function installSessions(ctx: HuntState, params: AdversarialMissionParams
       await ctx.recordHang(back.hang, back.snapshot, back.timing);
       return { ok: false, stop: "hang" };
     }
-    if (!ctx.inScope(back.snapshot.url)) return { ok: false, stop: "scope-unreachable" };
+    // #521: a restart the opt-in guard stopped off the allowlist cannot reach the start either.
+    if (drainBlockedDeparture(ctx.sessions.actor) !== undefined || !ctx.inScope(back.snapshot.url)) return { ok: false, stop: "scope-unreachable" };
+    if (ctx.regionDeclared && (back.snapshot.region?.matched ?? 0) === 0) {
+      // #519: the start (the anchor) no longer shows the scope region — the run cannot test it.
+      ctx.cov.observe(back.snapshot);
+      ctx.stopFailure = {
+        kind: "target-unreachable",
+        message: `the scope region ${ctx.regionSpec} is not on the start page after a reset (${redactUrl(back.snapshot.url)}) — check the descriptor, or the Journey anchor it came from`,
+      };
+      return { ok: false, stop: "scope-unreachable" };
+    }
+    ctx.regionLostStreak = 0;
     return { ok: true, snapshot: back.snapshot, timing: back.timing };
   };
 

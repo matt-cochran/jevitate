@@ -109,6 +109,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     polish: { kind: "usability", set: true },
     probeGuards: { kind: "usability", set: true },
     scope: { kind: "coverage", set: "app" },
+    scopeRegion: { kind: "adversarial", set: ["testId=import-view"] },
     secret: { kind: "goal", set: ["env:SUITE_SECRET"] },
     totp: { kind: "goal", set: ["label=Code=env:SUITE_TOTP"] },
     fixture: { kind: "goal", set: "upload.csv" },
@@ -162,6 +163,8 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     minActions: { kind: "goal", set: 4 },
     minDistinctStates: { kind: "goal", set: 3 },
     actionDeltas: { kind: "goal", set: true },
+    // #521: the navigation guard reaches every mission runner (feature included) as `blockOffAllowlistNavigation`
+    blockOffAllowlistNavigation: { kind: "feature", set: true },
     // #245: demo mode reaches the runner's `browser` option
     headed: { kind: "coverage", set: true },
     slowMo: { kind: "feature", set: 100 },

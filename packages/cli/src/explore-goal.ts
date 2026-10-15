@@ -69,6 +69,12 @@ export interface RunExplorationOptions {
    * (code's verdict per action) — attached to every transcript and Recording step, summarised in the
    * result (`actionDeltas`), told to the model and used by the no-progress check. Off: no capture.
    */
+  /**
+   * #521 `--block-off-allowlist-navigation` (opt-in, off by default): arm the navigation guard on this
+   * run's mission session (and its fresh/hang-replay sessions) — an off-allowlist page navigation is
+   * stopped in place and the mission treats it as a departure. Never on login, Journey or demo sessions.
+   */
+  readonly blockOffAllowlistNavigation?: boolean;
   readonly actionDeltas?: boolean;
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
@@ -455,6 +461,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const launch = {
     ...shown,
     allowedOrigins: [...opts.allowlist],
+    ...(opts.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
     baseUrl: origin,
     ...opts.emulation,
     ...(primaryState !== undefined ? { storageState: primaryState } : {}),

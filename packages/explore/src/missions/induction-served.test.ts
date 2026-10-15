@@ -36,6 +36,14 @@ beforeAll(async () => {
           ),
         );
         return;
+      case "/region":
+        res.writeHead(200, { "content-type": "text/html" }).end(
+          html(
+            `<button onclick="this.textContent='out-clicked'">Outside action</button>` +
+              `<section data-testid="panel"><button onclick="this.textContent='in-clicked'">Inside action</button></section>`,
+          ),
+        );
+        return;
       case "/a":
         res.writeHead(200, { "content-type": "text/html" }).end(html(`<h1>A</h1>`));
         return;
@@ -131,6 +139,75 @@ describe("runInductionMission — a visually-hidden skip link never burns the bu
       } finally {
         await session.close();
       }
+    },
+    30_000,
+  );
+});
+
+describe("runInductionMission — a declared scope region filters the frontier (#519)", () => {
+  const run = async (regions: Array<{ testId: string }>, spec: string) => {
+    const browserPort = new PlaywrightBrowserPort();
+    const session: BrowserSession = await browserPort.open({ headless: true, allowedOrigins: [origin], baseUrl: origin });
+    try {
+      const actor = CastActor.named("coverage-region").whoCan(new BrowseTheWeb(session, [origin]));
+      return await runInductionMission({
+        page: session.page,
+        actor,
+        judgment: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${origin}/region`,
+        allowlist: [origin],
+        bounds: { maxActions: 20, maxDecisions: 40, maxCandidates: 250 },
+        scopeRegions: regions,
+        scopeRegionSpec: spec,
+      });
+    } finally {
+      await session.close();
+    }
+  };
+
+  it(
+    "never acts on a control outside the region",
+    async () => {
+      const result = await run([{ testId: "panel" }], "testId=panel");
+      expect(result.transcript.some((e) => e.target?.includes("Outside action") === true)).toBe(false);
+    },
+    30_000,
+  );
+
+  it(
+    "exercises the in-region control",
+    async () => {
+      const result = await run([{ testId: "panel" }], "testId=panel");
+      expect(result.transcript.some((e) => e.target?.includes("Inside action") === true && e.actOk)).toBe(true);
+    },
+    30_000,
+  );
+
+  it(
+    "reports the out-of-region controls it skipped",
+    async () => {
+      const result = await run([{ testId: "panel" }], "testId=panel");
+      // Distinct controls: the one outside button, however many states it was skipped on.
+      expect(result.coverage.scope.region?.outOfRegionControls).toBe(1);
+    },
+    30_000,
+  );
+
+  it(
+    "a region that is not on the start page ends scope-unreachable, never clean",
+    async () => {
+      const result = await run([{ testId: "no-such-panel" }], "testId=no-such-panel");
+      expect(result.outcome).toBe("scope-unreachable");
+    },
+    30_000,
+  );
+
+  it(
+    "names the missing region in the failure",
+    async () => {
+      const result = await run([{ testId: "no-such-panel" }], "testId=no-such-panel");
+      expect(result.failure).toMatchObject({ kind: "target-unreachable", message: expect.stringContaining("the scope region testId=no-such-panel is not on the start page") });
     },
     30_000,
   );

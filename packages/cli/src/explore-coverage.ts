@@ -9,7 +9,7 @@ import { closeOnce, demoOverlayOf, extensionsStamp, finalizeVideos, runVideoDir,
 import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import { type InvariantSpec, type Recording } from "@jevitate/recording";
+import { type InvariantSpec, type Recording, type TargetDescriptor } from "@jevitate/recording";
 import type { DefectRecord, HostHealthSampler, InvariantDefect, InvariantReport, SafetyOverride, SideEffect } from "@jevitate/explore";
 import type { DefectOutcome, EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import {
@@ -118,6 +118,9 @@ export interface RunCoverageMissionOptions {
    * to widen containment to the whole app.
    */
   readonly routeGlobs?: readonly string[];
+  /** #519: only the controls inside these page regions are measured and explored (`scopeRegionSpec` is how the report names them). */
+  readonly scopeRegions?: readonly TargetDescriptor[];
+  readonly scopeRegionSpec?: string;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
   /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
@@ -140,6 +143,12 @@ export interface RunCoverageMissionOptions {
    * starts on the live page it left (never a fresh navigation). `url` is only the expected landing.
    */
   readonly journeyPrefix?: JourneyPrefix;
+  /**
+   * #521 `--block-off-allowlist-navigation` (opt-in, off by default): arm the navigation guard on this
+   * run's mission session (and its fresh/hang-replay sessions) — an off-allowlist page navigation is
+   * stopped in place and the mission treats it as a departure. Never on login, Journey or demo sessions.
+   */
+  readonly blockOffAllowlistNavigation?: boolean;
   /** #303 `--action-deltas` (opt-in): record what each action changed (code verdict) — evidence only. */
   readonly actionDeltas?: boolean;
 }
@@ -253,6 +262,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const launch = {
     ...sessionLaunchOptions(opts.browser, videoDir),
     allowedOrigins: [...opts.allowlist],
+    ...(opts.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),
     baseUrl: origin,
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
@@ -321,6 +331,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...(opts.actionDeltas === true ? { actionDeltas: true } : {}),
       onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
+      ...(opts.scopeRegions === undefined ? {} : { scopeRegions: opts.scopeRegions }),
+      ...(opts.scopeRegionSpec === undefined ? {} : { scopeRegionSpec: opts.scopeRegionSpec }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
       ...(opts.strategy === undefined ? {} : { strategy: opts.strategy }),

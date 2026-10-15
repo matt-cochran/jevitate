@@ -4,6 +4,7 @@
  * way the run can end before its first action. Moved out of `runInductionFrontier` unchanged (#232).
  */
 
+import { redactUrl } from "@jevitate/ai-core";
 import { Navigate } from "@jevitate/screenplay";
 import { chromeClassifier } from "../../coverage/chrome.js";
 import { stateFingerprint } from "../../coverage/fingerprint.js";
@@ -11,7 +12,7 @@ import { Frontier } from "../../coverage/frontier.js";
 import { targetCandidates, type Control, type Snapshot } from "../../index.js";
 import { assertSeedReachable, describeUnreachable, isUnreachableTarget } from "../../mission-failure.js";
 import { monitorFor } from "../../page-monitor.js";
-import { seedRedirectReason } from "../../seed-redirect.js";
+import { drainBlockedDeparture, peekBlockedDeparture, seedLandingReason } from "../../blocked-navigation.js";
 import { summarizeTimings } from "../../timing.js";
 import type { InductionRunResult } from "../induction.js";
 import type { FrontierState } from "./context.js";
@@ -38,13 +39,17 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
     }
   } catch (e) {
     const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
-    if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
-    // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
-    // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
-    return ctx.ended("scope-unreachable", {
-      kind: "target-unreachable",
-      message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
-    });
+    // #521: a seed load cut short by a navigation the opt-in guard stopped is no unreachable target —
+    // the page stayed on the seed; the seed check below reads where it tried to go.
+    if (peekBlockedDeparture(ctx.sessions.actor) === undefined) {
+      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
+      // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
+      return ctx.ended("scope-unreachable", {
+        kind: "target-unreachable",
+        message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
+      });
+    }
   } finally {
     ctx.sessions.page.off("requestfailed", onFirstNavRequestFailed);
   }
@@ -52,7 +57,8 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
 
   // The seed redirected elsewhere (a lost `--storage-state` session bounced to a login page, most
   // often) — the run cannot test what it was asked to, so it is never `clean` (#82).
-  const redirect = seedRedirectReason(params.seedUrl, ctx.snap.url);
+  // #521: a seed navigation the opt-in guard stopped is where the seed went (the page stayed put).
+  const redirect = seedLandingReason(params.seedUrl, ctx.snap.url, drainBlockedDeparture(ctx.sessions.actor));
   if (redirect !== null) {
     ctx.transcript.record({
       op: null,
@@ -73,6 +79,15 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
       hangs: [...ctx.hangs.values()],
       failure: { kind: "target-unreachable", message: redirect.reason },
     };
+  }
+
+  // #519: a declared region that is not on the start page — a typo, or the wrong anchor — cannot be
+  // tested; never `clean`, and the budget is not burnt first.
+  if (ctx.regionDeclared && ctx.snap.region?.matched === 0) {
+    return ctx.ended("scope-unreachable", {
+      kind: "target-unreachable",
+      message: `the scope region ${ctx.regionSpec} is not on the start page (${redactUrl(ctx.snap.url)}) — check the descriptor, or the Journey anchor it came from`,
+    });
   }
 
   ctx.currentFingerprint = stateFingerprint(ctx.snap);
@@ -136,7 +151,7 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
   ctx.seedRecording = { version: "1", site: ctx.site, pages: [] };
   ctx.statePaths.set(ctx.currentFingerprint, ctx.seedRecording);
   ctx.seedCandidates = targetCandidates(ctx.snap.controls, { ops: FRONTIER_OPS, enabledOnly: true }).length;
-  enqueueFrom(ctx.frontier, ctx.currentFingerprint, ctx.seedRecording, ctx.snap.controls, (c) => ctx.withheld(c, ctx.snap));
+  enqueueFrom(ctx.frontier, ctx.currentFingerprint, ctx.seedRecording, ctx.snap.controls, (c) => ctx.withheld(c, ctx.snap), ctx.regionDeclared, ctx.outOfRegionSeen);
   // #149: checked on the seed page too — a defect that only shows up on first paint, never revisited.
   await ctx.guard(ctx.checkOverflow(ctx.currentFingerprint, ctx.snap.url, withSeed(ctx.seedRecording, params.seedUrl)));
   return null;

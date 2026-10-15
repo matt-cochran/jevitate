@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { isRecord } from "@jevitate/domain";
 import { copyFile, lstat, mkdir, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { CatalogInputError, CatalogLoader, PERSONAS_FILE } from "./catalog.js";
@@ -92,9 +93,6 @@ export const BUNDLE_FILE = "bundle.json";
 export const MEDIA_DIR = "media";
 export const DEFAULT_CHECK_FILE = join("jevitate-check", "check.json");
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 async function readJson(path: string, what: string): Promise<unknown> {
   const raw = await readFile(path, "utf8");

@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { isNodeError } from "@jevitate/domain";
 
 /**
  * Rejects a `name` containing a path separator or `..` segment — mirrors
@@ -45,14 +46,6 @@ export function DEFAULT_LOCK_PATH(cwd?: string): string {
   return join(cwd ?? process.cwd(), "jevitate.lock");
 }
 
-function isNodeError(err: unknown, code: string): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === code
-  );
-}
 
 /**
  * Missing lock file ⇒ empty lock (a fresh project has no sources yet).

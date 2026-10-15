@@ -45,7 +45,7 @@ import { loadTargetsFile, TargetConfigError, type TargetConfig } from "./target-
  * origin the environment does not allow — before any browser opens.
  */
 
-export { ENVIRONMENTS_FILE, ENVIRONMENTS_SCAFFOLD, scaffoldEnvironmentsFile } from "./project-dir.js";
+export { ENVIRONMENTS_SCAFFOLD } from "./project-dir.js";
 
 /** One environment, as declared in `.jevitate/environments.json` (paths resolved absolute). */
 export interface EnvironmentDef {

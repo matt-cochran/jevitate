@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { assertSafeName } from "@jevitate/domain";
 import type { Journey } from "@jevitate/journey";
 import type { GitSourceManager } from "./git.js";
 import { SharedJourneyFileSchema, type SharedJourneyFile } from "./manifest.js";
@@ -29,19 +30,6 @@ export type GhPort = {
   createPr(cwd: string, branch: string, title: string): Promise<string>;
 };
 
-/** Rejects an `id` containing a path separator or `..` segment before it is
- * ever used to build a filesystem path — mirrors `@jevitate/journey`'s
- * `assertSafeId` and this package's own `FsTrustStore`/`GitSourceManager`/
- * `FsAckStore` guards. Applied to the RESOLVED id (covers both an explicit
- * `asId` and the `metadata.id` fallback), so a hostile
- * `asId: "../../evil"` (or a `..`-containing `metadata.id`) can never write
- * a file outside the source clone's `journeys/` directory. */
-function assertSafeId(id: string): void {
-  if (id.includes("/") || id.includes("\\") || id.includes("..") || id.length === 0) {
-    throw new Error(`Invalid journey id (path traversal risk): ${id}`);
-  }
-}
-
 /**
  * Validates a `PublishRequest` into a ready-to-write `SharedJourneyFile`.
  * Throws unless:
@@ -58,7 +46,7 @@ export function validateForPublish(req: PublishRequest): SharedJourneyFile {
   const id = req.asId ?? req.journey.metadata.id;
   // Fail-closed BEFORE any schema parse or path construction — a
   // path-traversal id must never reach `publishJourney`'s file write.
-  assertSafeId(id);
+  assertSafeName(id, "journey id");
   const candidate = {
     ...req.journey,
     metadata: { ...req.journey.metadata, id },

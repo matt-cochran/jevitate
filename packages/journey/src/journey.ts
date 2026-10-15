@@ -193,6 +193,13 @@ export interface JourneyAnchor {
   boundary?: AnchorBoundary;
   /** What this state is, in words. */
   description?: string;
+  /**
+   * #519 (optional): the page region this state's missions attack - a descriptor in the `--success` syntax
+   * (`testId=import-view`, `role=region;name=Import`). `--from-journey --at-step <this anchor>` scopes control
+   * coverage to it; a per-run `--scope-region` cannot override it. Part of the reviewed content: changing it
+   * stales the approval.
+   */
+  region?: string;
   /** Suggested adversarial probes at this state (e.g. "double submit", "swap the tenant id"). */
   probes?: string[];
 }
@@ -272,6 +279,7 @@ const JourneyAnchorSchema = z.object({
   jobStep: CatalogRefSchema.optional(),
   boundary: z.enum(ANCHOR_BOUNDARIES).optional(),
   description: z.string().max(2000).optional(),
+  region: z.string().min(1).max(200).optional(),
   probes: z.array(z.string().min(1).max(500)).max(20).optional(),
 }).strict()
   .refine((a) => a.boundary === undefined || a.jobStep !== undefined, { message: "anchor boundary: needs a jobStep (the job step it bounds)", path: ["boundary"] });

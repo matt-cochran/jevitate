@@ -79,12 +79,14 @@ mission takes over on the live page:
 ```bash
 jevitate journey anchors <journey-id> --json   # the named states worth exploring from, with suggested probes
 jevitate journey anchors <journey-id> --suggest --json   # advisory: where the flow changes state (writes nothing)
-jevitate journey anchor add <journey-id> --name <name> --step <n|stepId> --json   # a DRAFT Journey only
+jevitate journey anchor add <journey-id> --name <name> --step <n|stepId> [--region <descriptor>] --json
 ```
 
 Over MCP: `journey_anchors` (`suggest: true`), `journey_anchor_add`, `journey_anchor_remove`, and
-`lint_journey` with `fix: true` (stamps number-only anchors with their step id). Anchor edits refuse a
-promoted Journey: its approval binds to the content hash, so edit a draft and a person re-promotes it.
+`lint_journey` with `fix: true` (stamps number-only anchors with their step id). Editing a promoted
+Journey's anchors makes its approval stale (it binds to the content hash): the command prints the
+re-approve step, and a person re-approves it. Give an anchor whose sub-flow renders in place (same
+URL) a `region` so its missions measure coverage on that region, not the whole page (#519).
 
 ```bash
 jevitate explore --from-journey <journey-id> --at-step <anchor|n> --param <k=v> --env <env> --strategy adversarial --storage-state <persona-file> --max-actions 60 --evidence-video --real --json

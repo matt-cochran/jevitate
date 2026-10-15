@@ -19,9 +19,7 @@
     "@jevitate/secrets": "workspace:*"
   },
   "devDependencies": {
-    "@jevitate/example-site": "workspace:*",
-    "@jevitate/storage-sqlite": "workspace:*",
-    "zod": "^4.6.5"
+    "@jevitate/example-site": "workspace:*"
   },
   "scripts": {
     "build": "tsc --build"

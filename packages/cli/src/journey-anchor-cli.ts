@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { UnknownJourneyError } from "./journey-api.js";
 import { AnchorEditError, addJourneyAnchor, removeJourneyAnchor, suggestJourneyAnchors, type AnchorEditResult } from "./journey-anchor-api.js";
+import { parseDescriptorSpec } from "./explore-specs.js";
 import { type CliDeps, emitJson, resolveJourneysDir } from "./cli-shared.js";
 
 function collect(value: string, prev: string[]): string[] {
@@ -39,12 +40,20 @@ export function registerJourneyAnchorCommands(journey: Command, program: Command
     .requiredOption("--step <n|stepId>", "the step the anchor follows: a 1-based step number or a step id")
     .option("--description <text>", "what this state is, in words")
     .option("--probe <text>", "a suggested adversarial probe at this state (repeatable)", collect, [] as string[])
+    .option("--region <descriptor>", "the page region missions at this anchor attack (the --success descriptor syntax, e.g. testId=import-view); scopes control coverage to it (#519)")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, journeyId: string) {
-      const { name, step, description, probe, dir, json } = this.opts<{ name: string; step: string; description?: string; probe: string[]; dir?: string; json?: boolean }>();
+      const { name, step, description, probe, region, dir, json } = this.opts<{ name: string; step: string; description?: string; probe: string[]; region?: string; dir?: string; json?: boolean }>();
       try {
-        const result = await addJourneyAnchor(resolveJourneysDir(deps, dir), journeyId, { name, step, ...(description === undefined ? {} : { description }), probes: probe });
+        if (region !== undefined) parseDescriptorSpec(region);
+        const result = await addJourneyAnchor(resolveJourneysDir(deps, dir), journeyId, {
+          name,
+          step,
+          ...(description === undefined ? {} : { description }),
+          ...(region === undefined ? {} : { region }),
+          probes: probe,
+        });
         if (json) emitJson(program, ok(result));
         else {
           const out = program.configureOutput().writeOut;

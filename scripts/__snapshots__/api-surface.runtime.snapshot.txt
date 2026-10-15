@@ -130,7 +130,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (90 exports)
+# @jevitate/domain (94 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEFECT_OUTCOME_STATUSES: array
@@ -196,6 +196,9 @@
   isBrokenRun: function
   isExternalSchemeUrl: function
   isGoalOutcome: function
+  isNodeError: function
+  isPlainObject: function
+  isRecord: function
   isUnboundedHeapGrowth: function
   isWithinQuietHours: function
   journeezeFingerprintMarker: function
@@ -215,6 +218,7 @@
   safeChildPath: function
   safeRunPolicy: function
   seedFrom: function
+  sha256: function
   simulateTiming: function
   startedOutcome: function
   targetsFor: function
@@ -222,7 +226,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (438 exports)
+# @jevitate/explore (444 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -337,6 +341,7 @@
   RECURRING_MIN_COMPLETIONS: const (number)
   RECURRING_WINDOW_MS: const (number)
   REDACTION_MASK: const (string)
+  REGION_LOST_RESET_AFTER: const (number)
   REJECTED_AGAIN_REASON: const (string)
   RELOAD_TIMEOUT_MS: const (number)
   RENDER_BASELINE_RENDERS: const (number)
@@ -402,6 +407,7 @@
   autoDecidePostdoc: function
   awaitWrites: function
   blockedCauseOf: function
+  blockedDepartureReason: function
   blockedWriteCauses: function
   boundSecretField: function
   boundTypeFixture: function
@@ -459,6 +465,8 @@
   draftForCrash: function
   draftForDefect: function
   draftForHang: function
+  drainBlockedDeparture: function
+  drainBlockedDepartures: function
   echoesGoal: function
   editCandidates: function
   effectiveStatus: function
@@ -561,6 +569,7 @@
   parseSecretField: function
   parseTypeFixtureSpec: function
   pathGlob: function
+  peekBlockedDeparture: function
   pendingEvidence: function
   perceive: function
   pickMisuseAction: function
@@ -619,6 +628,7 @@
   secretFieldValue: function
   secretFieldsToFill: function
   secretPlaceholder: function
+  seedLandingReason: function
   seedPath: function
   seedRedirectReason: function
   sendCandidates: function
@@ -749,7 +759,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (129 exports)
+# @jevitate/journey (130 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -852,6 +862,7 @@
   journeyBranchPoint: function
   journeyEndState: function
   journeyPrefix: function
+  journeyProofHash: function
   journeyRunParams: function
   journeyStepCount: function
   journeyWriteSteps: function
@@ -933,7 +944,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (98 exports)
+# @jevitate/playwright (99 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -959,6 +970,7 @@
   InvalidGeolocationError: class
   LinuxResourceSignals: class
   MachineBrowserSlots: class
+  NavigationGuard: class
   OWNER_MARKER_SWITCH: const (string)
   PageLivenessWatchdog: class
   PlaywrightBrowserPort: class

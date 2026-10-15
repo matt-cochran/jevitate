@@ -5,6 +5,7 @@ import { UnknownJourneyError } from "./journey-api.js";
 import { loadCatalog, resolveCatalogDir } from "./catalog-api.js";
 import { catalogJourney, journeyLinks } from "./catalog.js";
 import { preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
+import { readinessAnalyzer } from "./readiness.js";
 import { jevLayerOf, type JevSetup } from "./jev-advisor.js";
 import { checkProposal, readJourneyProposal } from "./journey-proposal-store.js";
 import { journeyAnchorIssues } from "./journey-anchor-gate.js";
@@ -22,7 +23,7 @@ import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 export async function reviewJourneyById(
   journeysDir: string,
   id: string,
-  opts: { readonly targetsFile?: string; readonly catalogDir?: string | null; readonly readiness?: boolean; readonly jev?: JevSetup; readonly action?: ApprovalAction } = {},
+  opts: { readonly targetsFile?: string; readonly catalogDir?: string | null; readonly readiness?: boolean; readonly strict?: boolean; readonly jev?: JevSetup; readonly action?: ApprovalAction } = {},
 ): Promise<{ journey: Journey; review: JourneyReview }> {
   const journey = await new FsJourneyStore(journeysDir).get(id);
   if (journey === null) throw new UnknownJourneyError(`unknown journey '${id}'`);
@@ -42,6 +43,12 @@ export async function reviewJourneyById(
     ...(opts.readiness === true ? { readiness: true } : {}),
     ...(opts.jev === undefined ? {} : { jev: opts.jev }),
   });
+  // #523 --strict: the code-only readiness link checks (missing job / persona) run even without --readiness,
+  // so "done" matches what the owner sees; the rest of readiness (and Jev) stays opt-in and advisory.
+  if (opts.strict === true && opts.readiness !== true) {
+    const linkFindings = await preApprovalFindings({ kind: "journey", id: journey.metadata.id }, catalog, { action: opts.action ?? "review", journey, readiness: true }, [readinessAnalyzer]);
+    findings.push(...linkFindings.filter((f) => f.code === "readiness.links" && f.severity !== "info"));
+  }
   // #453: a pending self-heal proposal, re-checked against the stored Journey (stale, or its proof touched).
   const pending = await readJourneyProposal(journeysDir, id);
   const proposalProblem = pending === null ? null : checkProposal(journey, pending);

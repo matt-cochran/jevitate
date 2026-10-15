@@ -640,6 +640,8 @@ Outcomes, stop reasons and exit codes:
     | crashed
     (identity-changed: an action switched the signed-in identity and the original one could not be
     restored — inconclusive; every switch is listed in "identityChanges")
+    With a scope region (--scope-region, or the Journey anchor's own): coverage.controls is the region's,
+    coverage.pageControls the route-wide numbers; a region never seen ends scope-unreachable (#519).
   --strategy coverage/exploratory's own "outcome" (folds into missionOutcome above):
     exhausted | insufficient-coverage | cap | scope-unreachable | stalled | crashed | hang
   A run that proved nothing is inconclusive with failure.kind insufficient-coverage (the same word as

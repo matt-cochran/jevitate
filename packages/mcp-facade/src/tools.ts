@@ -37,6 +37,13 @@ export const ALLOWED_TOOLS = [
   // #487 — add/remove a DRAFT Journey's anchors (the step id written at once). A promoted Journey is
   // refused (its approval binds to the content hash): never an approval, never a promoted-Journey edit.
   "journey_anchor_add", "journey_anchor_remove",
+  // #523 — add a DRAFT persona or job (status draft, never approved) so a Journey can link it.
+  // Approving stays a person's act on the CLI: approve_persona / approve_job stay FORBIDDEN.
+  "catalog_draft",
+  // #523 — set/clear a Journey's catalog job/persona link (ids checked against the catalog). Linking
+  // is not an approval: a draft entry stays a draft, and a promoted Journey's approval goes stale
+  // (a person re-approves), exactly like journey_anchor_add.
+  "journey_link",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [
