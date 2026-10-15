@@ -1,4 +1,4 @@
-import type { Assertion, TargetDescriptor } from "@jevitate/recording";
+import { describeNavigateUrl, type Assertion, type TargetDescriptor } from "@jevitate/recording";
 import type { SuccessCheck } from "./success-checks.js";
 
 /** The longest a text/value is shown before it is cut (with a trailing `…`). */
@@ -86,6 +86,14 @@ export function explainCheck(c: SuccessCheck): { text: string; weak: boolean } {
     case "responseStatus": {
       const status = "class" in c.status ? `${c.status.class}xx` : String(c.status.code);
       return { text: `${c.method.toUpperCase()} ${c.pathGlob} answers ${status}`, weak: false };
+    }
+    case "http": {
+      const what = [
+        ...(c.json ?? []).map((a) => (a.op === "exists" ? `${a.path} exists` : `${a.path} ${a.op === "equals" ? "equals" : "includes"} "${a.value ?? ""}"`)),
+        ...(c.textIncludes ?? []).map((t) => `the body includes "${t}"`),
+        ...(c.status === undefined ? [] : [`it answers ${"class" in c.status ? `${c.status.class}xx` : String(c.status.code)}`]),
+      ];
+      return { text: `GET ${describeNavigateUrl(c.url)}: ${what.join(", ")}`, weak: false };
     }
   }
 }

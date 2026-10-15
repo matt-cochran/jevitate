@@ -1,5 +1,6 @@
 /** Journey authoring behind `jevitate explore-author-journey`: a model-driven run that authors a promotable Journey. */
 import type { JudgmentPort, GenerationPort, UsageTracker } from "@jevitate/ai-core";
+import { parseSuccessSpecUnderSetup } from "./http-probe.js";
 import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
 import { type Assertion } from "@jevitate/recording";
 import type { SafetyConfig, SuccessCheck } from "@jevitate/explore";
@@ -226,7 +227,7 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
           const b = fx.bindings();
           url = substituteUrlSetupRefs(args.url, b);
           goal = substituteSetupRefs(takeGoal, b, { where: "--goal" });
-          if (args.successSpecs !== undefined) successChecks = args.successSpecs.map((spec) => parseSuccessSpec(substituteSetupRefs(spec, b, { where: "--success" })));
+          if (args.successSpecs !== undefined) successChecks = args.successSpecs.map((spec) => parseSuccessSpecUnderSetup(spec, b, "--success"));
         } catch (err) {
           await fx.restore();
           if (err instanceof FixtureSetupError || err instanceof UnboundSetupRefError) throw new AuthorFixtureSetupError(fixtureSetupFailedResult(err, fx));

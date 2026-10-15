@@ -13,7 +13,7 @@ import { goalAsksForReport } from "../../answer.js";
 import { resolveMinEffort } from "../../run-depth.js";
 import { resolveBounds } from "../../bounds.js";
 import type { GoalBasedMissionConfig } from "../goal-based.js";
-import { HELD_CHECK_TIMEOUT_MS, type NetworkScope } from "./checks.js";
+import { HELD_CHECK_TIMEOUT_MS, isDeferredCheck, type NetworkScope } from "./checks.js";
 import type { DeclaredHooks } from "./declared-hooks.js";
 
 /** The run's mutable tracking state: reset at the start of every attempt (#126), read by the verdict. */
@@ -54,6 +54,8 @@ export interface Adjudication {
   readonly scope: () => NetworkScope;
   readonly stateChecks: Array<[number, Extract<SuccessCheck, { kind: "page" | "reloadThen" }>]>;
   readonly holdsNow: (a: Assertion) => Promise<boolean>;
+  /** #543: the `http` checks (by index): deferred to the final oracle, probed once before the first action. */
+  readonly httpChecks: Array<[number, Extract<SuccessCheck, { kind: "http" }>]>;
   readonly networkChecks: Array<Extract<SuccessCheck, { kind: "requestMade" | "responseStatus" }>>;
   readonly answerRequired: boolean;
   readonly stopWhenHeld: boolean;
@@ -96,16 +98,17 @@ export function setupAdjudication(
   const stateChecks = [...checks.entries()].filter(
     (e): e is [number, Extract<SuccessCheck, { kind: "page" | "reloadThen" }>] => e[1].kind === "page" || e[1].kind === "reloadThen",
   );
+  const httpChecks = [...checks.entries()].filter((e): e is [number, Extract<SuccessCheck, { kind: "http" }>] => e[1].kind === "http");
   const holdsNow = (a: Assertion): Promise<boolean> =>
     checkAssertion(cfg.actor, a, { timeoutMs: HELD_CHECK_TIMEOUT_MS }).catch(() => false);
   const networkChecks = checks.filter(
     (c): c is Extract<SuccessCheck, { kind: "requestMade" | "responseStatus" }> => c.kind === "requestMade" || c.kind === "responseStatus",
   );
   // #174: under `held`, once every check has held the run stops — it never keeps acting (or writing)
-  // past a met goal. `reloadThen` is final-only, so a run that declares one keeps the model's `done`.
+  // past a met goal. `reloadThen` (and #543 `http`) is final-only, so a run that declares one keeps the model's `done`.
   // #286: a goal that also asks for a report needs its grounded answer — checks holding never stop it.
   const answerRequired = checks.length > 0 && goalAsksForReport(cfg.goal);
-  const stopWhenHeld = (cfg.successWhen === "held" || cfg.successWhen === "each") && checks.length > 0 && !checks.some((c) => c.kind === "reloadThen") && !answerRequired;
+  const stopWhenHeld = (cfg.successWhen === "held" || cfg.successWhen === "each") && checks.length > 0 && !checks.some(isDeferredCheck) && !answerRequired;
   // A find-out goal (#130d) has no page/network check to independently ground `done` with: it is
   // verified instead by a grounded `report` (#101), which `explore()` grounds on its own regardless
   // of `successCheck`. Leaving `successCheck` unset here (rather than wiring one that vacuously
@@ -151,6 +154,7 @@ export function setupAdjudication(
     scope,
     stateChecks,
     holdsNow,
+    httpChecks,
     networkChecks,
     answerRequired,
     stopWhenHeld,

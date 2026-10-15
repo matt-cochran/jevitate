@@ -11,6 +11,7 @@ import {
   type SuccessCheckResult,
 } from "../../success-checks.js";
 import type { ExploreRun } from "../../explore.js";
+import { evaluateHttpCheck } from "../../http-check.js";
 import type { GoalBasedMissionConfig } from "../goal-based.js";
 
 /** #286: the pseudo-check a goal that asks for a report adds to its `--success` checks. */
@@ -105,5 +106,29 @@ export async function evaluateChecks(
     timeoutMs: cfg.oracleTimeoutMs ?? 3000,
     settleMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS,
     judgeNetwork: (c, requests, truncated) => judgeNetworkCheck(c, requests, truncated, scope, onVacuous),
+    ...(cfg.httpProbe === undefined ? {} : { httpProbe: cfg.httpProbe }),
+    ...(cfg.httpRefs === undefined ? {} : { resolveRef: cfg.httpRefs }),
   });
+}
+
+/**
+ * #543: a check judged only by the final oracle — `reloadThen` (a mid-run reload would throw away
+ * the state the run is building) and `http` (a request per step would hammer the outbox).
+ */
+export function isDeferredCheck(c: SuccessCheck): boolean {
+  return c.kind === "reloadThen" || c.kind === "http";
+}
+
+/**
+ * #543: the goal mission's pre-action vacuity probe — ONE attempt (no poll) of an `http` check
+ * before the run acts. Holding already, it cannot verify the goal (#202's rule).
+ */
+export async function httpCheckHoldsNow(cfg: GoalBasedMissionConfig, c: Extract<SuccessCheck, { kind: "http" }>): Promise<boolean> {
+  const v = await evaluateHttpCheck(c, {
+    ...(cfg.httpProbe === undefined ? {} : { probe: cfg.httpProbe }),
+    ...(cfg.httpRefs === undefined ? {} : { resolveRef: cfg.httpRefs }),
+    ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
+    once: true,
+  }).catch(() => ({ passed: false }));
+  return v.passed;
 }

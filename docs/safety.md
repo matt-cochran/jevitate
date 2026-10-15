@@ -28,6 +28,12 @@ security bug, and how to report one.
     not loaded but is not a departure; the session runs with the HTTP cache off. It is never armed on
     `login`/persona sign-in, `journey run`, `source run`, `load`, `record` or `demo` sessions, which may
     legitimately cross to an IdP or checkout. Off by default.
+  - **`http:` end-state checks (#543).** A success or end-state check that reads an outbox or
+    another endpoint makes its own GET from jevitate (not the browser). Its origin must be in the
+    run's allowlist — checked before anything opens (`E_HTTP_CHECK_OFF_ALLOWLIST`), by `journey lint`
+    (`http-check-off-allowlist`), and again on every request after `${…}` substitution. It sends no
+    cookies or auth headers, never follows a redirect, reads at most 1 MiB, and never saves the body;
+    a secret param or setup output in its URL is refused.
   - **First-party writes in find-out goals.** A find-out goal's write requests are blocked at the
     network (below).
   - **Adversarial misuse writes (#403).** During an adversarial run, a write request (anything but

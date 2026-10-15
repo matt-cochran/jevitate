@@ -4,6 +4,7 @@ import { BrowseTheWebToken } from "@jevitate/screenplay";
 import type { Page } from "playwright";
 import type { MissionFailure } from "@jevitate/domain";
 import { DEFAULT_ORACLE_SETTLE_MS } from "../outcome-checks.js";
+import type { HttpCheckRefResolver, HttpProbe } from "../http-check.js";
 import { monitorFor, type RequestCapture } from "../page-monitor.js";
 import {
   type SuccessCheck,
@@ -127,6 +128,13 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
   readonly oracleTimeoutMs?: number;
   /** Bound (ms) on waiting for the page to settle before network / reload checks. Default 10000. */
   readonly oracleSettleMs?: number;
+  /**
+   * #543: makes an `http` success check's request (the CLI's probe: allowlist re-checked, no
+   * redirect, capped body). Absent: an `http` check fails closed as unevaluable.
+   */
+  readonly httpProbe?: HttpProbe;
+  /** #543: resolves an `http` check's `${name}` placeholders (`setup.x`); a secret one is refused. */
+  readonly httpRefs?: HttpCheckRefResolver;
   /**
    * Opens a FRESH browser session — used to reproduce a hang by replaying its steps. Without it a
    * hang cannot be confirmed and is reported `intermittent` (0 replays), never dropped.

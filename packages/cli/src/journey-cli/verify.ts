@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { Command } from "commander";
 import { ParamValidationError } from "@jevitate/journey";
 import { ok, fail } from "../envelope.js";
@@ -78,10 +79,11 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
             ...(environment === undefined ? {} : { environment }),
             ...(allow.length === 0 ? {} : { allow }),
             // Fixtures run around EVERY replay, so each mutation starts from the same state as the base.
-            fixtures: (site) => {
-              fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: environment === undefined ? [site] : environment.allowedOrigins, baseUrl: site });
+            fixtures: (site, allowedOrigins) => {
+              // #543: the replay's effective allowlist (#542), so a fixture can reset an allowed outbox.
+              fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: [...allowedOrigins], baseUrl: site });
               const fx = buildMissionFixtures(recorded.flags, {
-                allowlist: environment === undefined ? [site] : environment.allowedOrigins,
+                allowlist: [...allowedOrigins],
                 baseUrl: site,
                 ...(storageState !== undefined ? { storageState } : {}),
                 ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
@@ -106,7 +108,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         }
         process.exitCode = code;
       } catch (err) {
-        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {
+        if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));

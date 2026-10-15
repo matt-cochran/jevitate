@@ -34,6 +34,7 @@ export function adjudicate(ctx: Adjudication, run: ExploreRun, evaluated: Succes
     seedHeld,
     changedSinceSeed,
     stateChecks,
+    httpChecks,
     answerRequired,
     effort,
   } = ctx;
@@ -89,7 +90,8 @@ export function adjudicate(ctx: Adjudication, run: ExploreRun, evaluated: Succes
   // holding, or a network check matched only before the first action, cannot verify the goal. It
   // fails (a run that proved nothing is never clean) unless --allow-vacuous-checks downgrades it to
   // a warning. Named in `warnings` either way.
-  const vacuousState = stateChecks.filter(([i]) => seedHeld.has(i) && !changedSinceSeed.has(i)).map(([i]) => i);
+  // #543: an `http` check that held on its one pre-action probe is vacuous the same way.
+  const vacuousState = [...stateChecks, ...httpChecks].filter(([i]) => seedHeld.has(i) && !changedSinceSeed.has(i)).map(([i]) => i);
   for (const i of vacuousState) {
     const r = results[i];
     // Failed on the final verdict anyway (it changed after the last settled step, or #174 failed it).
