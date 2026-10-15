@@ -1,5 +1,45 @@
 # jevitate
 
+## 0.14.0
+
+### Minor Changes
+
+- 578e4dd: Opt-in navigation guard, stricter store ids, and housekeeping (#520, #521, #522).
+  - **`--block-off-allowlist-navigation` (#521):** opt-in for mission runs (goal, usability, adversarial, coverage, exploratory, `--feature`). Also on MCP as `run_exploration.blockOffAllowlistNavigation` and as a suite option. In the mission's own browser session, a page navigation to an origin outside the allowlist (a link, `location.href`, a form GET or a popup) is stopped before it loads: the browser answers it 204 and the page stays put.
+    - The run treats it as a departure. A goal run stops `blocked` with the URL in the transcript. Adversarial lists it in `scope.departures` and resets. Coverage, exploratory and feature runs record it and never expand it.
+    - Server redirects still pass, so the check after each settle is still the guard. Subresources and fetch/XHR load as usual. The HTTP cache is off for a guarded run.
+    - It never applies to login, `journey run`, `source run`, `load`, `record` or `demo` sessions.
+    - Without the flag nothing changes. `allowedOrigins` is now documented as what it is: the session's authorized origins, which scope the geolocation grant. It is not a network guard (docs/design/allowed-origins.md).
+  - **Store ids (#520):** recording, mission, mission-target and publish ids now go through the shared safe-name rule:
+    - letters, digits, `.`, `_` and `-`, starting with a letter or digit, at most 128 characters;
+    - every path is resolved inside its store.
+  
+    An empty id, `..`, a slash or backslash, NUL, `:` or a drive prefix is refused with `E_INVALID_NAME` (exit 64) instead of the old "path traversal risk" error. Source-trust ids keep their wider rule (a source name may contain a space), now also refusing empty, NUL and `:`. Every id jevitate generates already fits.
+  - **Housekeeping (#520, #522):**
+    - The small helpers (`isRecord`, `isPlainObject`, `isNodeError`, `sha256`) now live once in the shared domain package, replacing the ~35 private copies.
+    - The last `any` types are gone.
+    - `knip` now runs in `pnpm lint`, and the unused code it found is removed.
+- 257b492: Promotion-ready workflow (#523): an agent hands a Journey over only when the owner's review sheet is clean.
+  - **`journey review --strict`:** exits 1 on any ⚠ attention item and runs the job/persona link checks without `--readiness`; ○ items and Jev never fail it. `--json` adds `strict: { passed, warnings }`; `--stale --strict` is refused. MCP `review_journey` takes `strict`.
+  - **Mutation proofs:** `journey verify --mutate` records a `proofHash` over executable content only, so `journey annotate --approve` rewording goal, success criteria, objectives or expected results no longer stales the proof (an approval still goes stale).
+  - **Link warnings:** `journey lint` and `explore-author-journey` warn `missing-job` / `missing-persona` with fix commands; the exit code is unchanged.
+  - **`catalog draft persona|job <id> --name …`:** adds a DRAFT catalog entry, never approves it (MCP `catalog_draft`).
+  - **`journey link <id> --job|--persona|--unlink-job|--unlink-persona`:** sets or clears a Journey's catalog links, refusing an unknown id (exit 64, listing the catalog's ids); a draft entry is linkable and flagged as still needing approval; on a promoted Journey the approval goes stale with the re-approve command printed; the mutation proof stays fresh (MCP `journey_link`). The lint fix hints now print `journey link` first.
+  - **`catalog status --strict`:** exits 1 on a stale persona/job approval or a promoted Journey linking an unapproved/unknown entry or no job/persona (MCP `catalog_status.strict`).
+  - **Skill:** new `jevitate-promotion-ready`, with the ordered owner approval commands; `jevitate-record` and `jevitate-run-journey` link to it.
+- c8ce3fe: Scope regions for adversarial, coverage and exploratory runs (#519). A multi-step sub-flow rendered in place (same URL, no `aria-modal`) no longer has the whole page and app shell in its coverage denominator.
+  - **`--scope-region <descriptor>`:** repeatable, the `--success` descriptor syntax (`testId=import-view`, `role=region;name=Import`). Only controls inside a match count toward `coverage.controls` and are enqueued or hunted; the rest stay reachable but are never coverage. It applies to `--strategy adversarial`, `coverage` and `exploratory`; any other strategy, a bad descriptor, or `--scope-region` beside an anchor region is refused with `E_EXPLORE_ARGS` (exit 64). Don't lower `--min-control-coverage` for an in-place sub-flow; declare its region.
+  - **MCP and suites:** `run_exploration` takes `scopeRegion` (a list of descriptors) and a suite item takes the `scopeRegion` option, with the same strategy limits.
+  - **Journey anchors:** `metadata.anchors[].region` and `journey anchor add --region` (MCP `journey_anchor_add.region`). A run from the anchor uses it and `--scope-region` cannot override it. Changing it makes a promoted Journey's approval stale, like any anchor edit.
+  - **Results:** adversarial `coverage.controls` is the region's and decides `sufficient`; `coverage.pageControls` is the route-wide count, and `coverage.region` gives the spec and step counts. Coverage and exploratory runs carry `scope.region` (`outOfRegionControls`, `stepsWithoutRegion`). After 2 consecutive steps without the region an adversarial run goes back to its start (counted in `outOfScopeSteps` and `scope.region.lostResets`). A region that never matches ends `inconclusive`, stop `scope-unreachable`, `failure.kind: "target-unreachable"`, never `clean`. Without a region nothing changes.
+
+### Patch Changes
+
+- Updated dependencies [578e4dd]
+- Updated dependencies [257b492]
+- Updated dependencies [c8ce3fe]
+  - @jevitate/cli@0.14.0
+
 ## 0.13.0
 
 ### Minor Changes
