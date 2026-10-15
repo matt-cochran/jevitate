@@ -11,7 +11,8 @@ import { decodePng, type DecodedPng } from "./png-pixels.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
 // #304: Node and page time skip idle waits; assertions unchanged.
-useSkippingTime({ per: "all" });
+// #547: the page keeps the browser's own clock: page.clock replaces requestAnimationFrame before the pixel mask loads, and a capture then fails closed.
+useSkippingTime({ per: "all", pageClock: false });
 
 /**
  * #471 — jz-mask-v1 in real Chromium: every region kind the policy names is painted over in the

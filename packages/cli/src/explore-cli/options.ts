@@ -3,14 +3,15 @@ import { TAG_FLAG, TAG_HELP, TARGET_FLAG, TARGET_HELP, collectTag } from "../run
 import { Command } from "commander";
 import { ok, fail } from "../envelope.js";
 import { withFixtureFlags } from "../fixture-cli.js";
-import { positiveNumberArg, nonNegativeIntArg, positiveIntArg, ratioArg } from "../cli-args.js";
+import { positiveNumberArg, positiveIntArg, ratioArg } from "../cli-args.js";
 import { withBrowserLaunchFlags, withDemoFlags, withScreenshotsFlag, withEmulationFlags, collectParam, EXPLORE_OUTCOME_HELP } from "../cli-shared.js";
 import { withEnvironmentFlags } from "../environments.js";
 import { GOAL_RUN_OPTIONS } from "../goal-run-flags.js";
+import { withServerLogFlags } from "../server-log-flags.js";
 
 /** The `jevitate explore` command and every flag it takes (moved verbatim out of registerExploreCommands). */
 export function declareExploreCommand(program: Command): Command {
-  return withEnvironmentFlags(withScreenshotsFlag(withEmulationFlags(
+  return withServerLogFlags(withEnvironmentFlags(withScreenshotsFlag(withEmulationFlags(
     withFixtureFlags(
       withDemoFlags(
         withBrowserLaunchFlags(
@@ -77,7 +78,10 @@ export function declareExploreCommand(program: Command): Command {
         "| inViewport:<d>[|min=<ratio>] (visible fraction, default 0.5) | box:<d>|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n>",
         "| overlaps:<d>|<d2> | noOverlap:<d>|<d2> | attr:<d>|<name>=<value> (or <name> present, !<name> absent)",
         "| flashed:<d>|class=<cls> (or attr=<name>, animation)[|withinMs=<n>] (a transient state gained after the last user input)",
-        "| requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>.",
+        "| requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>",
+        "| http:GET <url>|<assertion>[|…] (#543: a GET to an --allow'ed origin, e.g. a dev mail outbox, polled after the run;",
+        "assertions: status=<2xx|code>, jsonPath=<$path>|equals=<v> / |includes=<v> / |exists, textIncludes=<t>, within=<ms> (default 10000, max 60000);",
+        "no credentials, no redirects followed; ${setup.x} placeholders go after the origin).",
         "<d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x].",
         "<path-glob> must start with \"/\" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method.",
         "e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'.",
@@ -171,11 +175,7 @@ export function declareExploreCommand(program: Command): Command {
     .addOption(GOAL_RUN_OPTIONS.allowControl())
     .addOption(GOAL_RUN_OPTIONS.allowDestructive())
     .addOption(GOAL_RUN_OPTIONS.dialogs())
-    .option(
-      "--allow-writes",
-      "let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow " +
-        "(checkout, upgrade, create, save, submit…) are refused and the write requests an action fires are blocked, unless the goal itself asks for a change",
-    )
+    .addOption(GOAL_RUN_OPTIONS.allowWrites())
     .option(
       "--allow-write <glob>",
       "a write-request path a read-only find-out goal never blocks (repeatable; ** spans segments; a glob starting with https:// matches " +
@@ -219,66 +219,8 @@ export function declareExploreCommand(program: Command): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option(
-      "--log-source <spec>",
-      "backend log source (repeatable; every strategy, incl. usability): file:<path> (tailed from its current end) | docker:<container> (docker logs -f --since 0s) | cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
     .addOption(GOAL_RUN_OPTIONS.allowSecretCmd())
     .addOption(GOAL_RUN_OPTIONS.secretCmdAttempts())
-    .option(
-      "--allow-log-cmd",
-      "opt-in: a --log-source cmd:<command> may run as a subprocess (operator-declared only; refused otherwise)",
-      false,
-    )
-    .option(
-      "--log-defect <level|/regex/>",
-      "backend log lines matching this (repeatable) become a server-log defect: a level (error|warn|info|debug, matched as level>=this) or a /regex/flags/ over the raw line. Its fingerprint is the normalized message (ids/numbers/uuids/timestamps stripped) plus the correlated route; verify-fix re-checks it by re-tailing the same --log-source(s)",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--log-quiet-ok <spec>",
-      "compatibility only since 0.8.0 (#420): a --log-source that opens and reads zero lines is now always a healthy oracle (the silence is recorded as serverLogs.quietSources), so this flag no longer changes any outcome. Kept so existing invocations keep working",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--log-ignore <regex|substring>",
-      "excludes known-noise backend log lines (repeatable, /regex/flags/ over the raw line or a plain substring) from BOTH correlation and the --log-defect oracle (#169 item 3) — e.g. a periodic background job's own expected error. Counted separately as serverLogs.ignoredLines; never makes --log-quiet-ok unnecessary, since an ignored line still proves the source is being tailed",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--log-scope <regex|substring>",
-      "attributes only backend log lines matching this (repeatable, /regex/flags/ or a plain substring, e.g. a tenant id) to the run (#282); the rest count as serverLogs.ignoredLines. For concurrent runs tailing one log. A line carrying one of the run's own correlation ids is in scope",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--log-correlation-header <name>",
-      "another request/response header that carries a correlation id (repeatable; built in: traceparent, x-request-id, x-correlation-id, request-id, x-amzn-trace-id, x-b3-traceid, x-cloud-trace-context). A log line carrying a request's id is attached to that exact request and the step that sent it, not by time (#204)",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--log-id-pattern </regex/>",
-      "how a correlation id is written in your log lines, when not as trace_id=/request_id=/correlation_id= or a traceparent (repeatable; the first capture group is the id). Once ids correlate, a line with another request's id is never attributed to the run (#204)",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option(
-      "--log-triage",
-      "#313: record the run's whole signal timeline (backend lines at every level, the browser's console, page errors, failed requests) to <run>.signals.jsonl, " +
-        "and attach to each defect only the lines that relate to it (defects[].relatedLogs): code keeps the lines correlated to its request and prefilters its step's window, " +
-        "then, with --real, Jev scores each remaining line's relevance (log text goes to the judgment model, redacted — operator opt-in, never an MCP argument). Needs --log-source",
-    )
-    .option(
-      "--server-log-drain-ms <ms>",
-      "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
-      nonNegativeIntArg,
-    )
     .option(
       "--repeat <n>",
       "run the mission N times, one after another, each in a fresh browser context, and vote (#141): findings seen in fewer than --min-agreement runs are reported as flaky, not counted",
@@ -338,5 +280,5 @@ export function declareExploreCommand(program: Command): Command {
       ].join("\n"),
     )
     .addHelpText("after", EXPLORE_OUTCOME_HELP)
-    .option(TAG_FLAG, TAG_HELP, collectTag, []);
+    .option(TAG_FLAG, TAG_HELP, collectTag, []));
 }

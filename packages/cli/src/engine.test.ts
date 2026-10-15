@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { currentEngineInfo, withEngine } from "./engine.js";
+import { currentBuildTree, currentEngineInfo, formatVersion, withEngine } from "./engine.js";
 import { readCliVersion } from "./version.js";
 
 describe("currentEngineInfo", () => {
@@ -34,5 +34,23 @@ describe("withEngine (#112)", () => {
   test("takes an explicit identity as data", () => {
     const engine = { version: "9.9.9", commit: "abc1234", builtAt: "2026-09-24T00:00:00Z" };
     expect(withEngine({ a: 1 }, engine)).toEqual({ a: 1, engine });
+  });
+});
+
+describe("build tree and --version (#534)", () => {
+  test("in this checkout (a real git repo), the tree is resolved to a short hash, not 'unknown'", () => {
+    const tree = currentBuildTree();
+    expect(/^[0-9a-f]{4,40}$/.test(tree)).toBe(true);
+  });
+
+  test("--version names commit, tree and build time", () => {
+    const engine = { version: "1.2.3", commit: "abc1234", builtAt: "2026-10-15T00:00:00Z" };
+    expect(formatVersion(engine, "def5678")).toBe("1.2.3 (commit abc1234, tree def5678, built 2026-10-15T00:00:00Z)");
+  });
+
+  test("an unknown tree is omitted, never fabricated; an unknown build is the bare version", () => {
+    const engine = { version: "1.2.3", commit: "abc1234", builtAt: "2026-10-15T00:00:00Z" };
+    expect(formatVersion(engine, "unknown")).toBe("1.2.3 (commit abc1234, built 2026-10-15T00:00:00Z)");
+    expect(formatVersion({ version: "1.2.3", commit: "unknown", builtAt: "unknown" }, "def5678")).toBe("1.2.3");
   });
 });

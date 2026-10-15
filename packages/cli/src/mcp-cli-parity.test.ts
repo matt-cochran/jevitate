@@ -232,6 +232,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       stepResponseTimeoutMs: "--step-response-timeout",
     },
     omitted: {
+      "--allow": OMIT.mcpOrigins,
       "--ignore-host-load": OMIT.hostLoad,
       "--dir": OMIT.storeDir,
       "--json": OMIT.json,
@@ -334,5 +335,21 @@ describe("#281: run_exploration's typeFixture confines each bound file like ever
     expect(argv).toContain(`--type-fixture=label=Paste your text=${root}/fixtures/import.txt`);
     expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["label=Body=/etc/passwd"] }, [root])).toThrow(/typeFixture\[0\]/);
     expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["no-file"] }, [root])).toThrow(/descriptor>=<file path>/);
+  });
+});
+
+describe("#544: author_journey maps the fixture arguments", () => {
+  it("passes fixtures as a confined --fixtures path", async () => {
+    const { buildCliArgv } = await import("./mcp-cli-tools.js");
+    const spec = CLI_TOOL_SPECS.find((t) => t.name === "author_journey")!;
+    const root = process.cwd();
+    const argv = buildCliArgv(spec, { url: "http://127.0.0.1:1/", fixtures: "fixtures/seed.json" }, [root]);
+    expect(argv).toContain(`--fixtures=${root}/fixtures/seed.json`);
+  });
+
+  it("refuses a fixtures path outside the roots", async () => {
+    const { buildCliArgv } = await import("./mcp-cli-tools.js");
+    const spec = CLI_TOOL_SPECS.find((t) => t.name === "author_journey")!;
+    expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", fixtures: "/etc/passwd" }, [process.cwd()])).toThrow(/fixtures/);
   });
 });

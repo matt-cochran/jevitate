@@ -17,6 +17,10 @@ export type JourneyLintRule =
   | "visibility-only"
   | "nothing-after-last-write"
   | "no-persistence-check"
+  /** #543: an `http` end-state check whose origin is not the Journey's site or a recorded allowed origin. */
+  | "http-check-off-allowlist"
+  /** #543: an `http` end-state check on a Journey with no recorded fixtures (nothing resets its source). */
+  | "http-check-without-reset"
   | "intent-uncovered"
   | "upload-file-missing"
   | "upload-outside-project"
@@ -170,6 +174,15 @@ function isEffectSite(site: JourneyAssertionSite, step: Step | undefined): boole
   return site.check.assertion.kind !== "visible";
 }
 
+function originOf(url: string): string | undefined {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function globMatch(glob: string, value: string): boolean {
   const src = glob
     .split("*")
@@ -188,6 +201,7 @@ function endStateCovers(requests: readonly WriteRequest[], endEffects: readonly 
     if (site.where !== "end-state") return false;
     const check = site.check;
     if (check.kind === "page" || check.kind === "reloadThen") return true; // an on-page outcome of the write
+    if (check.kind === "http") return true; // #543: the write's off-UI outcome (an email in an outbox)
     return requests.some((req) => sameMethod(check.method, req.method) && globMatch(check.pathGlob, req.path));
   });
 }
@@ -272,11 +286,34 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
     });
   }
 
-  if (lastWrite > 0 && !sites.some((site) => site.where === "end-state" && site.check.kind === "reloadThen")) {
+  if (lastWrite > 0 && !sites.some((site) => site.where === "end-state" && (site.check.kind === "reloadThen" || site.check.kind === "http"))) {
     findings.push({
       rule: "no-persistence-check",
       level: "warning",
-      message: `write step (step ${lastWrite}) has no reloadThen end-state check — persistence is unverified`,
+      message: `write step (step ${lastWrite}) has no reloadThen or http end-state check — persistence is unverified`,
+    });
+  }
+
+  // #543: an `http` end-state check reads only an origin the Journey itself allows, and needs a reset.
+  const httpChecks = (journey.metadata.endState ?? []).flatMap((c, index) => (c.kind === "http" ? [{ c, index }] : []));
+  const allowed = new Set([journey.recording.site, ...(journey.metadata.allowedOrigins ?? [])].map(originOf).filter((o): o is string => o !== undefined));
+  for (const { c, index } of httpChecks) {
+    const origin = originOf(c.url.replace(/\$\{[^}]*\}/g, "x"));
+    if (origin === undefined || !allowed.has(origin)) {
+      findings.push({
+        rule: "http-check-off-allowlist",
+        level: "error",
+        message: `end-state check ${index} (http) reads ${origin ?? "an unparseable URL"}, which is not the Journey's site or one of its metadata.allowedOrigins`,
+        fix: "author with --allow <that origin> (it is recorded in metadata.allowedOrigins), or remove the check",
+      });
+    }
+  }
+  if (httpChecks.length > 0 && journey.metadata.fixtures === undefined) {
+    findings.push({
+      rule: "http-check-without-reset",
+      level: "warning",
+      message: "the Journey has an http end-state check but records no fixtures — nothing resets its source, so an earlier run's effect (a previous email) can make it pass",
+      fix: "author with --fixtures whose setup resets the source (e.g. empties the outbox)",
     });
   }
 

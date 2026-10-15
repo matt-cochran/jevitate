@@ -44,6 +44,7 @@ full flag list, or see the generated [CLI reference](./cli.md).
 
 **Other surfaces**
 
+- [Testing](./testing.md): everyday test commands and the opt-in live suites (paid APIs).
 - [Journeys](./journeys.md): author, record, replay, self-heal, load-test and share flows.
 - [Coding agents and MCP](./agents.md): skills, the MCP server and its tool allowlist, queued
   missions.

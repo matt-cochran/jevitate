@@ -514,6 +514,11 @@ export interface PersistedFixtures {
 }
 
 
+/** The content hash of a fixture spec (and its hooks, when any) — recordings and Journeys record it. */
+export function fixtureSpecHash(spec: FixtureSpec | undefined, hooks?: PersistedFixtures["hooks"]): string {
+  return sha256(canonical({ spec: spec ?? null, hooks: hooks ?? null })).slice(0, 16);
+}
+
 function canonical(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
   if (isRecord(v)) {
@@ -636,7 +641,7 @@ export class MissionFixtures {
       }
     }
     this.#opts = opts;
-    this.#specHash = sha256(canonical({ spec: opts.spec ?? null, hooks: this.hookHashes() ?? null })).slice(0, 16);
+    this.#specHash = fixtureSpecHash(opts.spec, this.hookHashes());
   }
 
   hookHashes(): PersistedFixtures["hooks"] | undefined {

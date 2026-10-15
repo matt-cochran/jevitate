@@ -76,6 +76,9 @@ const STEP_RESPONSE_DEFAULT =
 /** #484: replaying under another allow list is an explicit, per-finding `verify-fix --allow/--env` decision. */
 const STORED_ALLOWLIST = { allow: "#484: replays with the result's stored allow list; overriding it is an explicit verify-fix --allow/--env", env: "#484: replays with the result's stored allow list; overriding it is an explicit verify-fix --allow/--env", environmentsFile: "#484: only read for an explicit verify-fix --env" };
 
+/** #542: the extra-origins override is `journey run|verify --allow`; elsewhere a replay uses the Journey's own `metadata.allowedOrigins`. */
+const REPLAY_ALLOW = "#542: replays with the recorded site and the Journey's metadata.allowedOrigins; the per-run override is `journey run|verify --allow` (not an MCP/campaign argument, #484)";
+
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
   "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
@@ -88,12 +91,10 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     evidenceVideo: "authoring files nothing: a take's issue drafts stay next to its result; `explore --evidence-video` attaches media",
     filing: "authoring files nothing: a take's issue drafts stay next to its result (drafts only)",
     issueFiler: "authoring files nothing: a take's issue drafts stay next to its result (drafts only)",
-    fixtures: "mission fixtures (--fixtures/--before/--after) run operator hooks around one mission; an author run starts from --storage-state",
     invariants: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
     invariantAuthTokens: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
     journeyPrefix: NO_ANCHORED_HERE,
     minEffort: "#424: every take is checked by --success and stops at the first verified path; a minimum effort would only delay it (`explore --min-actions`)",
-    serverLog: "backend log sources are operator-declared `explore --log-source`; authoring needs only the goal's checks",
     blockOffAllowlistNavigation: "#521: an authored Journey may cross to an IdP or checkout like any Journey; the navigation guard is `explore --block-off-allowlist-navigation`'s",
   },
   "coverage-strategy.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
@@ -151,6 +152,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: OBSERVER_NOT_INTERPRETER },
   "run.ts runJourneyProgrammatically": { fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
+    allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
     account: SITE_ACCOUNT,
@@ -178,6 +180,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
+    allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
     actionDeltas: NO_DELTAS_HERE,
@@ -194,6 +197,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
+    allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     mask: MASK_INTERNAL,
     observer: OBSERVER_INTERNAL,
@@ -204,6 +208,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     stopAfterStep: WHOLE_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
+    allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
     actionDeltas: NO_DELTAS_HERE,

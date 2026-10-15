@@ -23,6 +23,60 @@ decides it. `--success` can be repeated, and every check must hold:
 | `reloadThen:<check>` | the page is reloaded first, then the check holds (proves the value persisted) |
 | `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing). A request counts once it is sent, even when its response has not arrived (a long-running RPC the server holds open) |
 | `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status (requests still awaiting a response are not judged; the check fails if none has answered) |
+| `http:GET <url>\|<assertion>[\|…]` | a GET to an allow-listed origin (a dev mail outbox, an audit endpoint) answers so that every assertion holds — polled, judged after the run. See [HTTP end-state checks](#http-end-state-checks) |
+
+## HTTP end-state checks
+
+Some writes have no effect on the app's own UI: a password reset sends an email. When a dev
+outbox (Mailpit, MailHog) exposes sent mail as JSON on another origin, an `http:` check proves the
+write by reading it:
+
+```bash
+jevitate explore-author-journey --url http://localhost:3000/forgot --goal "send me a password reset link" \
+  --allow http://localhost:3000 --allow http://localhost:8025 --fixtures reset-outbox.json \
+  --success 'http:GET http://localhost:8025/api/v1/search?query=to:${setup.email}|jsonPath=$.messages[*].Subject|includes=Reset your password' \
+  --id reset --name "Password reset"
+```
+
+Grammar: `http:GET <url>|<assertion>[|<assertion>…]`.
+
+| Assertion | Holds when |
+|---|---|
+| `status=<2xx\|code>` | the response status matches (absent: any 2xx) |
+| `jsonPath=<$path>\|equals=<v>` | a value the path selects, as text, equals `v` |
+| `jsonPath=<$path>\|includes=<v>` | a selected string contains `v`, or a selected array has an element equal to `v` |
+| `jsonPath=<$path>\|exists` | the path selects a value that is not null |
+| `textIncludes=<t>` | the raw body contains `t` |
+| `within=<ms>` | the poll window (default 10000, max 60000) |
+
+- **Paths** use `$`, `.key`, `[n]`, `["key"]` and `[*]` (every element of an array). A `[*]` path
+  selects many values; the assertion holds when **any** of them satisfies it. A body that is not
+  JSON fails every `jsonPath` assertion ("response is not JSON").
+- **Escapes:** the URL runs to the first `|` (write a literal pipe in a URL as `%7C`). In an
+  assertion value, `\|` is a pipe and `\\` a backslash.
+- **Placeholders:** `${name}` (a Journey param, or `${setup.x}` from the fixtures) may appear only
+  after the URL's origin. Each value is percent-encoded as one URL component, and the check is
+  stored as the template, so the value is never baked into the Journey. A **secret** param or setup
+  output is refused (`E_HTTP_CHECK_SECRET_REF`): the URL and the result are model-visible.
+- **Timing:** the check runs after every page and `reloadThen` check. It is retried every 500 ms
+  until it holds or the window ends. A goal run judges it only in its final verdict (like
+  `reloadThen`) and probes it once before the first action: a check that already holds then is
+  vacuous (see below). The mutation proof pays the window once per mutated replay; lower it with
+  `within=`.
+- **Safety:** GET only. The URL's origin must be in the run's allowlist (`--allow`; for a
+  Journey, its site, `metadata.allowedOrigins` and `--allow`), checked before anything opens
+  (`E_HTTP_CHECK_OFF_ALLOWLIST`, exit 64) and again on every request. No cookies or auth headers
+  are sent (an outbox that needs credentials is not supported yet). A redirect is never followed:
+  a 3xx is the answer, which fails the default 2xx. The body is read up to 1 MiB (past it the check
+  is unevaluable) and is never saved: a failed check quotes at most 200 characters, with registered
+  secrets redacted.
+- **Unevaluable:** no answer at all (connection refused, timeout, over 1 MiB, a refused origin or
+  placeholder) fails the check as `unevaluable`. The mutation proof counts it as a cascade, never
+  as proof.
+- **Reset the source.** Record `--fixtures` whose setup empties the outbox, so an earlier email
+  cannot make the check pass. `journey run` and `verify --mutate` run that setup before every
+  replay, and a fixture may reach the Journey's allowed origins. `journey lint` warns
+  (`http-check-without-reset`) when the Journey records no fixtures.
 
 **gRPC-web and Connect calls.** gRPC-web answers HTTP 200 even for an RPC that failed: the real
 result is `grpc-status`, in a response header (a trailers-only response) or in the trailer frame at
