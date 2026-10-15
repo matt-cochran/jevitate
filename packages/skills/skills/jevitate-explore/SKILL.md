@@ -57,6 +57,14 @@ mission and reading the result honestly.
   `--allow-shell-hooks`) restores state around it with any strategy. A Journey that no longer replays ends the
   run `inconclusive` (`failure.kind: "journey-stale"`). Many anchors at once: `jevitate campaign run
   <spec.json>` (see `jevitate-test-campaign`).
+- Scoping coverage to a part of the page (#519): when the flow renders a sub-flow in place (a wizard
+  or panel on the same URL), adversarial/coverage/exploratory runs count the whole page's controls,
+  so a thorough attack can still end `insufficient-coverage`. Declare the region instead:
+  `--scope-region <descriptor>` (the `--success` syntax, e.g. `testId=import-view`; repeatable), or
+  better, the anchor's own `region` (`jevitate journey anchor add <id> --name <n> --step <s> --region
+  <descriptor>`), which `--at-step <anchor>` uses and `--scope-region` cannot override. Never lower
+  `--min-control-coverage` to get past this. The result shows `coverage.controls` (the region) beside
+  `coverage.pageControls` (the whole route); a region that never appears ends `scope-unreachable`.
 - Behind a login: `--storage-state <file>` (a Playwright storageState path; `--save-storage-state
   <file>` writes the rotated one back). Pass real secrets with `--secret env:VAR` or
   `--secret-field 'label=Password=env:APP_PASSWORD'` so they stay out of every model call. Never
@@ -111,7 +119,7 @@ mission and reading the result honestly.
   got, not a success.
 - `inconclusive` with `failure.kind` `insufficient-coverage`, `vacuous-check`,
   `target-unresponsive` or `job-incomplete` means the run proved nothing. Say so and suggest a
-  fix: a bigger budget, a session, or a better check.
+  fix: a bigger budget, a session, a better check, or (for an in-place sub-flow) a scope region.
 - Each defect has a `fingerprint`. To reproduce it, prove a fix, or keep it as a regression, go to
   `jevitate-verify-fix`. Redacted issue drafts are written under `<run>.issues/`.
 - Chat pages: messages are typed and sent, and each reply is awaited (`--reply-wait-ms`, default
