@@ -1,5 +1,11 @@
 # @jevitate/cli
 
+## 0.15.1
+
+### Patch Changes
+
+- 3221ba2: `journey verify --mutate` no longer reports a write Journey as inconclusive when the write step's own postcondition fails first (#554). The mutation is replayed once more with that postcondition left out, so the step's `expectRequests` and the end-state checks are judged on their own.
+
 ## 0.15.0
 
 ### Minor Changes
