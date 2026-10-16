@@ -59,6 +59,12 @@ export type MutationFailedSite =
 export interface MutationRunResult {
   readonly outcome: "passed" | "failed" | "not-applied" | "error";
   readonly failedSites: readonly MutationFailedSite[];
+  /**
+   * #554 — the same mutation replayed with the mutated step's own postcondition relaxed (its action
+   * still skipped/blocked/emptied, but its `expect`/`waitFor` left out), so a replay that failed
+   * first at that postcondition can still say whether each LATER site is broken or vacuous.
+   */
+  readonly relaxed?: { readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] };
 }
 
 /** sensitive: broke for the right reason · insensitive: still passed (vacuous) · cascade: broke elsewhere. */
@@ -274,11 +280,68 @@ export function mutationReplay(
 }
 
 /**
+ * #554: the same mutation with the mutated step's OWN postcondition relaxed. `skip` skips the step
+ * in place without turning its `expect` into an assert step; `block-write` and `stale-value` apply
+ * the same action mutation but drop the step's `expect` and `waitFor` (its `expectRequests` stay).
+ * The input Journey is never modified and no step is removed, so it replays with the same indices.
+ */
+export function relaxedMutationReplay(
+  journey: Journey,
+  m: JourneyMutation,
+  opts: JourneyLintOptions = {},
+): { readonly journey: Journey; readonly skipIndex?: number; readonly blockIndex?: number; readonly blockRequests?: readonly string[] } {
+  const index = m.step - 1;
+  if (m.kind === "skip") return { journey, skipIndex: index };
+  if (m.kind === "block-write") {
+    const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
+    const copy = structuredClone(journey);
+    const target = flat(copy)[index]!;
+    const step: Record<string, unknown> = { ...target.step };
+    delete step.expect;
+    delete step.waitFor;
+    target.step = step as Step;
+    return { journey: copy, blockIndex: index, blockRequests: [...requests] };
+  }
+  const copy = structuredClone(journey);
+  const target = flat(copy)[index]!;
+  if (target.step.kind === "fill") {
+    const step: Record<string, unknown> = { ...target.step, value: { redacted: false, value: "" } };
+    delete step.expect;
+    delete step.waitFor;
+    target.step = step as Step;
+  }
+  return { journey: copy };
+}
+
+/**
+ * #554: does this failed result need a relaxed replay? Only when it failed first at the mutated
+ * step's OWN postcondition (`{where:'step', step: m.step, postcondition: true}`) and `plan.pairs`
+ * pairs `m` with at least one site other than the step's own (`step:<m.step>`) — otherwise the
+ * failure is the whole story and there is nothing later to judge.
+ */
+export function needsRelaxedReplay(plan: MutationPlan, m: JourneyMutation, result: MutationRunResult): boolean {
+  if (result.outcome !== "failed") return false;
+  if (!result.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition)) return false;
+  const own = `step:${m.step}`;
+  return plan.pairs.some((p) => p.mutation === m.id && p.site !== own);
+}
+
+/**
  * #402: one assertion against one mutated replay. Sensitive only when the replay failed AT that
  * assertion and nothing failed before the mutated step — a failure anywhere else is a cascade,
  * never counted as proof.
  */
 export function classifyMutation(site: JourneyAssertionSite, m: JourneyMutation, result: MutationRunResult): MutationVerdict {
+  // #554: the mutated step's own postcondition failed, so a later site is judged on the relaxed
+  // replay (same rules, no further relaxed level). The step's own step site keeps the original
+  // result, so its own failure stays the sensitive verdict.
+  if (
+    result.relaxed !== undefined &&
+    result.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition) &&
+    !(site.where === "step" && site.step === m.step)
+  ) {
+    return classifyMutation(site, m, { outcome: result.relaxed.outcome, failedSites: result.relaxed.failedSites });
+  }
   if (result.outcome === "passed") return "insensitive";
   if (result.outcome === "not-applied") return "not-applied";
   if (result.outcome === "error") return "error";
