@@ -766,7 +766,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (130 exports)
+# @jevitate/journey (132 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -881,8 +881,10 @@
   mutationProofVerdict: function
   mutationReplay: function
   mutationWait: function
+  needsRelaxedReplay: function
   planJourneyMutations: function
   prefixLandingPath: function
+  relaxedMutationReplay: function
   removeAnchor: function
   renderJobStory: function
   resolveAnchorStep: function
