@@ -7,6 +7,12 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.15.1] – unreleased
+
+### Fixed
+
+- **`journey verify --mutate` proves a write step that asserts its own outcome (#554).** When a mutated replay first fails at the mutated step's own postcondition (a save step that expects its redirect or status line), the mutation is replayed once more with that postcondition left out, so the step's `expectRequests` and the end-state checks (including `http:` checks) are judged on their own instead of as `cascade`. The report carries it as `mutations[].relaxed`. Such Journeys were `inconclusive` (exit 2); they now come out `proven` when every check breaks.
+
 ## [0.15.0] – 2026-10-15
 
 0.15.0 makes split-origin apps and off-UI side effects first-class: a Journey can be replayed and mutation-proved across origins, an `http:` end-state check proves a write whose effect shows up outside the page (a dev mail outbox), and authored Journeys remember the fixtures they were authored under. Releases now build and test once per tree, publish `next` from staging, and reach `latest` only when the `vX.Y.Z` tag is pushed.
