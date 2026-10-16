@@ -191,13 +191,18 @@ jevitate journey verify checkout --mutate --allow http://127.0.0.1:26110   # blo
 A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`; the
 **last** write step's mutations are also paired with every end-state check; a `stale-value` is also
 paired with every assertion that checks the typed value. An explicit no-claim `expect` (`count … min
-0`) claims nothing and is never paired. Each assertion gets one verdict:
+0`) claims nothing and is never paired. When a mutated replay first fails at the mutated step's own
+postcondition (`expect`/`waitFor`), that step's assertion is sensitive, but the failure can mask what
+follows it. The proof then replays that mutation once more with that postcondition left out, so the
+step's `expectRequests` and the end-state checks are judged on the relaxed replay instead of as
+cascade. The JSON report carries it as `mutations[].relaxed` (`{ outcome, failedSites, reason? }`).
+`metadata.mutationPairs` still exists for explicit pairs. Each assertion gets one verdict:
 
 | Verdict | Meaning |
 |---|---|
 | `sensitive` | a paired mutation made the replay fail AT this assertion, with nothing failing before the mutated step (`provedBy` names it) |
 | `insensitive` | the replay still passed under a paired mutation: the assertion is vacuous |
-| `cascade` | the replay failed somewhere else first; never counted as proof |
+| `cascade` | the replay failed somewhere else first, after any relaxed replay; never counted as proof |
 | `not-applied` | `block-write` blocked nothing the step recorded (its own write was not aborted) |
 | `error` | the mutated replay could not run (or the base replay failed) |
 | `unpaired` | no mutation is paired with it |

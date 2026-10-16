@@ -1182,7 +1182,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (225 exports)
+# @jevitate/journey (227 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1357,6 +1357,7 @@
   MutationRunResult: interface
   MutationVerdict: type-alias
   mutationWait: function
+  needsRelaxedReplay: function
   OUTCOME_DIRECTIONS: variable
   OUTCOME_GULFS: variable
   OUTCOME_MEASURES: variable
@@ -1377,6 +1378,7 @@
   QualityFinding: interface
   RejectedProposal: type-alias
   RejectedProposalSchema: variable
+  relaxedMutationReplay: function
   removeAnchor: function
   renderJobStory: function
   resolveAnchorStep: function
