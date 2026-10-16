@@ -202,6 +202,19 @@ describe("journey verify --mutate (#402, served)", () => {
     expect((JSON.parse(review.out) as { data: { proof: { verify: unknown } } }).data.proof.verify).toMatchObject({ status: "recorded", verdict: "proven", stale: false });
   }, 240_000);
 
+  it("a save step that asserts its own outcome is proven through the relaxed replay (#554)", async () => {
+    const selfAsserting = journey("self-asserting", {
+      fillExpect: { kind: "valueEquals", target: textField, value: "hello" },
+      save: {
+        step: { kind: "click", target: saveButton, expect: { kind: "textIncludes", target: { testId: "status" }, text: "Saved: hello" } },
+        expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/save", status: { class: 2 } }],
+      },
+      endState: [{ kind: "reloadThen", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "Saved: hello" } }],
+    });
+    const { exitCode, report } = await verify(selfAsserting, ["--json"]);
+    expect({ verdict: report.verdict, exitCode }).toEqual({ verdict: "proven", exitCode: 0 });
+  }, 240_000);
+
   it("block-write that did not block the step's own recorded write is not-applied, never a proof", async () => {
     const j = weak("not-applied");
     j.recording.pages[0]!.steps[2]!.delta = { ...saveDelta, requests: ["POST /api/other → 200"] };

@@ -18,7 +18,9 @@ import {
   judgeAssertions,
   mutationProofVerdict,
   mutationReplay,
+  needsRelaxedReplay,
   planJourneyMutations,
+  relaxedMutationReplay,
   type AssertionVerdict,
   type JourneyMutation,
   type MutationFailedSite,
@@ -52,6 +54,16 @@ export interface JourneyVerifyMutation {
   readonly blockedWrites?: readonly string[];
   /** Why the replay failed, was not applied, or errored. */
   readonly reason?: string;
+  /**
+   * #554 — the same mutation replayed with the mutated step's own postcondition relaxed, present
+   * only when the first replay failed at that postcondition and a later site is paired with it.
+   */
+  readonly relaxed?: {
+    readonly outcome: MutationRunResult["outcome"];
+    readonly failedSites: readonly MutationFailedSite[];
+    readonly blockedWrites?: readonly string[];
+    readonly reason?: string;
+  };
 }
 
 export interface JourneyVerifyAssertion {
@@ -128,43 +140,49 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
 
   const mutations: JourneyVerifyMutation[] = [];
   if (base.outcome === "ok") {
-    for (const m of plan.mutations) {
-      const how = mutationReplay(journey, m, lintOpts);
-      const fields = { kind: m.kind, step: m.step, id: m.id };
+    // One mutated replay, as `mutationReplay` (or #554's `relaxedMutationReplay`) describes it.
+    type Replayed = NonNullable<JourneyVerifyMutation["relaxed"]>;
+    const replay = async (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => {
+      const how = describe(journey, m, lintOpts);
       try {
         const r = await run(runOpts, {
           structuredFailures: true,
-          ...(how.journey === journey ? {} : { mutateJourney: (j) => mutationReplay(j, m, lintOpts).journey }),
+          ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j, m, lintOpts).journey }),
           ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
           ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
         });
         const blocked = r.blockedWrites ?? [];
         const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
         if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], blocked)) {
-          mutations.push({
-            ...fields,
+          return {
             outcome: "not-applied",
             failedSites: [],
             ...blockedFields,
             reason: `step ${m.step}'s own write was not blocked${(how.blockRequests ?? []).length === 0 ? "" : ` (recorded: ${(how.blockRequests ?? []).join(", ")})`}`,
-          });
-          continue;
+          };
         }
-        const failedSites = failedSitesOf(r, r.outcomeFailures ?? []);
-        mutations.push({
-          ...fields,
+        return {
           outcome: r.outcome === "quarantined" ? "failed" : "passed",
-          failedSites,
+          failedSites: failedSitesOf(r, r.outcomeFailures ?? []),
           ...blockedFields,
           ...(r.outcome === "quarantined" ? { reason: r.reason } : {}),
-        });
+        };
       } catch (err) {
-        mutations.push({ ...fields, outcome: "error", failedSites: [], reason: err instanceof Error ? err.message : String(err) });
+        return { outcome: "error", failedSites: [], reason: err instanceof Error ? err.message : String(err) };
       }
+    };
+    for (const m of plan.mutations) {
+      const first = await replay(m, mutationReplay);
+      // #554: a first failure at the mutated step's own postcondition hides the LATER paired sites
+      // behind it; one relaxed replay (same action, the step's own expect/waitFor left out) judges them.
+      const relaxed = needsRelaxedReplay(plan, m, first) ? await replay(m, relaxedMutationReplay) : undefined;
+      mutations.push({ kind: m.kind, step: m.step, id: m.id, ...first, ...(relaxed === undefined ? {} : { relaxed }) });
     }
   }
 
-  const results = new Map<string, MutationRunResult>(mutations.map((m) => [m.id, { outcome: m.outcome, failedSites: m.failedSites }]));
+  const results = new Map<string, MutationRunResult>(
+    mutations.map((m) => [m.id, { outcome: m.outcome, failedSites: m.failedSites, ...(m.relaxed === undefined ? {} : { relaxed: m.relaxed }) }]),
+  );
   // Base failed: nothing ran, so every paired assertion is an `error` (no proof either way).
   const judged = judgeAssertions(journey, plan, results);
   const assertions: JourneyVerifyAssertion[] = judged.map((a) => ({ site: a.site, check: checkOf.get(a.site) ?? a.site, verdict: a.verdict, ...(a.provedBy === undefined ? {} : { provedBy: a.provedBy }) }));
