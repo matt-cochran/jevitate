@@ -23,7 +23,7 @@ import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mi
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { withEngine } from "../engine.js";
 import { type EmulationSpec } from "@jevitate/playwright";
-import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
+import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 
 /** Registers `jevitate journey run`. */
 export function registerJourneyRun(journey: Command, program: Command, deps: CliDeps): void {
@@ -227,12 +227,15 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           // #140: fixture HTTP steps may only reach the replay's allowlist (authenticated from --storage-state):
           // the journey's own site (#247: under an environment, its allowed origins), plus (#542/#543) its
           // recorded metadata.allowedOrigins and --allow — so a fixture can reset an http check's outbox.
-          fixtures: (site, allowedOrigins) => {
+          fixtures: (site, allowedOrigins, sourceSite) => {
             // #543: the replay's effective allowlist (#542), so a fixture can reset an allowed outbox.
             fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: [...allowedOrigins], baseUrl: site });
+            // #561: fixture step URLs on a named secondary origin move with the environment's origins.
+            const rebaseUrl = fixtureRebaseUrl(environment, sourceSite);
             const fx = buildMissionFixtures(recorded.flags, {
               allowlist: [...allowedOrigins],
               baseUrl: site,
+              ...(rebaseUrl === undefined ? {} : { rebaseUrl }),
               ...(storageState !== undefined ? { storageState } : {}),
               ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
             });

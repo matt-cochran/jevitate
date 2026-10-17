@@ -18,7 +18,7 @@ import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFla
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
 import { withEngine } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
-import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
+import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
   resolveDbPath,
@@ -132,10 +132,13 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
             ...(video === undefined ? {} : { video }),
             ...(guide === undefined ? {} : { guide }),
             ...(pace === undefined ? {} : { paceMs: pace }),
-            fixtures: (site) => {
+            fixtures: (site, _allowedOrigins, sourceSite) => {
+              // #561: fixture step URLs on a named secondary origin move with the environment's origins.
+              const rebaseUrl = fixtureRebaseUrl(environment, sourceSite);
               const fx = buildMissionFixtures(fixtureFlags, {
                 allowlist: environment === undefined ? [site] : environment.allowedOrigins,
                 baseUrl: site,
+                ...(rebaseUrl === undefined ? {} : { rebaseUrl }),
                 ...(storageState !== undefined ? { storageState } : {}),
                 ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
               });
