@@ -37,6 +37,8 @@ interface RecorderWindow {
   __jevitateRecorderArmed?: boolean;
   __jevitateEidCounter?: number;
   __jevitateRecord?: (payload: Record<string, unknown>) => void;
+  /** #564: elements ever seen secret — secrecy is sticky for the document's life. */
+  __jevitateSecretEls?: WeakSet<Element>;
 }
 
 /**
@@ -215,7 +217,29 @@ export function installRecorderListener(isSecret: SecretFieldPredicate): void {
       // secret). It arrives as this function's argument because browser code
       // cannot import; `Recorder.install` splices its source into the init
       // script.
-      const secret = isSecret(tag === "input" ? inputType : null, el.getAttribute("autocomplete"));
+      //
+      // #564: the field's naming hints (name, id, aria-label, placeholder,
+      // label text) are checked too, so an `apiKey`/`cvv`/`PIN` field is a
+      // secret; and secrecy is STICKY per element — a field once seen secret
+      // stays secret, so a "show password" toggle on a field with no
+      // autocomplete marker never lets its value be read after the flip.
+      let secretEls = w.__jevitateSecretEls;
+      if (secretEls === undefined) {
+        secretEls = new WeakSet<Element>();
+        w.__jevitateSecretEls = secretEls;
+      }
+      const ownLabels = (el as unknown as { labels?: NodeListOf<HTMLLabelElement> | null }).labels;
+      const labelHint = ownLabels !== undefined && ownLabels !== null && ownLabels.length > 0 ? ownLabels[0]!.textContent : null;
+      const secret =
+        secretEls.has(el) ||
+        isSecret(tag === "input" ? inputType : null, el.getAttribute("autocomplete"), [
+          el.getAttribute("name"),
+          el.getAttribute("id"),
+          el.getAttribute("aria-label"),
+          el.getAttribute("placeholder"),
+          labelHint,
+        ]);
+      if (secret) secretEls.add(el);
 
       if (event.type === "click" || event.type === "submit") {
         payload.rawText = (el.textContent || "").trim();
