@@ -9,6 +9,14 @@ import type { Assertion, AssertionOperand } from "./schema.js";
  * that names the reference — never the value.
  */
 
+/**
+ * A binding NAME that reads as a credential (a parameter, an `extract` output, a fixture output).
+ * Defense in depth: a parameter so named is redacted as if it were `secret: true`, and (#564) an
+ * assertion may never reference a value so named — its text would be model-visible and persisted.
+ * Re-exported by `@jevitate/journey`.
+ */
+export const SECRET_PARAM_NAME_RE = /pass(word|code|phrase)?|secret|token|api[_-]?key|otp|pin\b|credential|session|cookie/i;
+
 /** A `${name}` placeholder (the grammar the `http` check's URL and assertions use, #543). */
 export const PLACEHOLDER_RE = /\$\{([^}]*)\}/g;
 

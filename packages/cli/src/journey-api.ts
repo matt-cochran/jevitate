@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyEndState, journeyPrefix, lintJourney, lintUploadFixtures, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyEndState, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
@@ -239,6 +239,15 @@ export function redactSecretParams<T>(result: T, journey: Journey, params: Recor
 }
 
 /** Every string in `result` (deeply) with each secret, in each of its URL forms, masked. */
+/**
+ * #564: a run's full secret set — its secret-param values plus every value the run bound under a
+ * credential-like name (an `extract as: "apiKey"` output, read from the result's `output`).
+ */
+export function runSecretValues(secrets: readonly string[], result: unknown): string[] {
+  const output = result !== null && typeof result === "object" && "output" in result ? (result as { output: unknown }).output : undefined;
+  return [...new Set([...secrets, ...secretNamedValues(output)])];
+}
+
 export function redactSecretValues<T>(result: T, secrets: readonly string[]): T {
   if (secrets.length === 0) return result;
   const scrub = (v: unknown): unknown =>
@@ -653,12 +662,13 @@ export async function runJourneyProgrammatically(
           : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, observe: healObserver(healDir, mask) };
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
       let result: JourneyRunResult;
+      // #564: the run's secrets also cover every value it bound under a credential-like name (an
+      // `extract as: "apiKey"`), so the output, failures and artifacts below never carry it.
+      let runSecrets: readonly string[] = secrets;
       try {
-        result = redactSecretParams(
-          await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params, policy })),
-          journey,
-          params,
-        );
+        const raw = await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params, policy }));
+        runSecrets = runSecretValues(secrets, raw);
+        result = redactSecretValues(raw, runSecrets);
       } finally {
         await gate.done();
         await blocker?.guard.disarm();
@@ -671,25 +681,25 @@ export async function runJourneyProgrammatically(
       let healFields: Partial<Awaited<ReturnType<typeof persistHealRun>>["fields"]> = {};
       if (policy.selfHeal.mode !== "fail-closed") {
         const unwritable = journey !== full ? "only a prefix of the Journey ran" : mutation.mutateJourney !== undefined ? "a mutated copy of the Journey ran" : undefined;
-        const persisted = await persistHealRun({ result, stored, params, secrets, opts, stampBase, startedAt, ...(unwritable === undefined ? {} : { unwritable }) });
+        const persisted = await persistHealRun({ result, stored, params, secrets: runSecrets, opts, stampBase, startedAt, ...(unwritable === undefined ? {} : { unwritable }) });
         result = persisted.result;
         healFields = persisted.fields;
       }
       const mutationFields: MutationReplayFields = {
-        ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretParams([...outcomeChecks.lastFailures], journey, params) } : {}),
+        ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretValues([...outcomeChecks.lastFailures], runSecrets) } : {}),
         ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
       };
       const slowFields = outcomeChecks.slowSteps.length === 0 ? {} : { slowSteps: [...outcomeChecks.slowSteps] };
       const writeOrigins = offAllowlist.stop();
-      const originFields = writeOrigins.length === 0 ? {} : { offAllowlistWrites: redactSecretValues(writeOrigins, secrets) };
+      const originFields = writeOrigins.length === 0 ? {} : { offAllowlistWrites: redactSecretValues(writeOrigins, runSecrets) };
       const shotFields = shots === undefined ? {} : await shots.finish();
-      const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretParams(replayDeltaSummary(replayDeltas), journey, params) };
+      const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretValues(replayDeltaSummary(replayDeltas), runSecrets) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
       if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields };
       await fx.restore();
       // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
-      return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields, fixtures: redactSecretParams(fx.record(), journey, params) };
+      return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields, fixtures: redactSecretValues(fx.record(), runSecrets) };
     } finally {
       offAllowlist.stop();
       await closeSession();

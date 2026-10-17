@@ -769,7 +769,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (133 exports)
+# @jevitate/journey (134 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -893,6 +893,7 @@
   renderJobStory: function
   resolveAnchorStep: function
   resolveJourneyStep: function
+  secretNamedValues: function
   secretParamNames: function
   secretParamValues: function
   splitBudget: function
@@ -1090,7 +1091,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (122 exports)
+# @jevitate/recording (123 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -1130,6 +1131,7 @@
   PostdocDecisionsSchema: object
   READ_RPC_VERB: object
   RecordingSchema: object
+  SECRET_PARAM_NAME_RE: object
   STEP_ID_RE: object
   STYLE_CHANNELS: array
   STYLE_PROPERTIES: array

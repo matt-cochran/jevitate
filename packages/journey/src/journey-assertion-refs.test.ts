@@ -51,6 +51,20 @@ describe("Journey assertion references", () => {
     expect(parses(journey({ parameters: [{ name: "pin", secret: true }], steps: [open, clickExpecting({ kind: "textIncludes", target, text: "${pin}" })] }))).toBe(false);
   });
 
+  // #562/#565 follow-up: an extract output whose name reads as a credential is a secret.
+  it("refuses a step expect naming a credential-named extract output", () => {
+    const extractKey: RecordedStep = { step: { kind: "extract", target, as: "apiKey", expect: { kind: "visible", target } } };
+    expect(parses(journey({ steps: [open, extractKey, clickExpecting({ kind: "textIncludes", target, text: "${apiKey}" })] }))).toBe(false);
+  });
+
+  it("refuses an end-state check naming a credential-named extract output", () => {
+    const extractToken: RecordedStep = { step: { kind: "extract", target, as: "sessionToken", expect: { kind: "visible", target } } };
+    const j = journey({ steps: [open, extractToken], endState: [{ kind: "page", assertion: { kind: "valueEquals", target, value: { var: "sessionToken" } } }] });
+    const r = JourneySchema.safeParse(j);
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).toContain("E_ASSERTION_REF_SECRET");
+  });
+
   it("accepts an end-state check naming a setup output", () => {
     expect(parses(journey({ steps: [open], endState: [{ kind: "page", assertion: { kind: "textIncludes", target, text: "${setup.user}" } }] }))).toBe(true);
   });
