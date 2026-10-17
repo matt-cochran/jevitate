@@ -1204,14 +1204,14 @@
     - flags=--product-name <name> required=true mandatory=false negate=false variadic=false default=null description=the bundle's product.name (default: the connected Journeeze product's name)
 
 # record
-  description: record a demonstrated flow into a Recording (authoring plane)
+  description: record a demonstrated flow into a `{recording, values}` take file (authoring plane)
   options:
     - flags=--allow <origin> required=true mandatory=false negate=false variadic=false default=[] description=authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it
     - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json); its chrome-extension://<id> origin is allowed
     - flags=--headless required=false mandatory=false negate=false variadic=false default=false description=run headless (default: headed — a record session is a live demonstration)
     - flags=--intent <text> required=true mandatory=false negate=false variadic=false default=null description=your framing of the journey (carried to Recording.intent)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
-    - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=directory to write the emitted Recording (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date>)
+    - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=directory to write the take file `{recording, values}` for 'recording diff'/'postdoc'/'promote' (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date>)
     - flags=--retro <text> required=true mandatory=false negate=false variadic=false default=null description=optional retrospective note (carried to Recording.retro)
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=start URL to demonstrate from (must be an authorized origin)
 
@@ -1252,6 +1252,19 @@
     - flags=--page <n> required=true mandatory=true negate=false variadic=false default=null description=page index
     - flags=--step <n> required=true mandatory=true negate=false variadic=false default=null description=step index within the page
     - flags=--var <name> required=true mandatory=true negate=false variadic=false default=null description=variable name to bind
+
+# recording propose
+  description: propose parameters, outputs, {var} checks, credential handbacks and where to stop from two or more takes of the same flow (#566); saves an UNPROMOTED draft Journey for review — ambiguities stay for a person to decide
+  arguments:
+    - name=take required=true variadic=false default=null
+    - name=more required=false variadic=true default=null
+  options:
+    - flags=--id <id> required=true mandatory=false negate=false variadic=false default=null description=the draft Journey's id (default: proposed-draft)
+    - flags=--journeys-dir <dir> required=true mandatory=false negate=false variadic=false default=null description=journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--name <name> required=true mandatory=false negate=false variadic=false default=null description=the draft Journey's name (default: the first take's intent)
+    - flags=--no-draft required=false mandatory=false negate=true variadic=false default=null description=propose only: build and save no draft Journey
+    - flags=--out <file> required=true mandatory=false negate=false variadic=false default=null description=write the draft Journey JSON to this file instead of saving it in the journeys store
 
 # regression
   description: capture, run and manage regression tests from discovered failures

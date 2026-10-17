@@ -123,6 +123,32 @@ waits at most its hang threshold plus 5 s (`stallMs`, default 30 s) instead of `
 started (or its writes were aborted), so the claim must fail, and the proof does not wait out the
 budget to show it. Waits on other steps, and under `stale-value`, keep their `maxMs`.
 
+### Parameter-relative assertions
+
+An assertion's expected text can follow a run's input. `textIncludes.text`, `valueEquals.value`
+and `attr.value` take either `{ "var": "name" }` or `${name}` inside the string, and
+`urlIncludes.text` takes `${name}` inside the string:
+
+```json
+{ "kind": "textIncludes", "target": { "testId": "welcome" }, "text": "Welcome, ${name}" }
+{ "kind": "valueEquals", "target": { "label": "Email" }, "value": { "var": "email" } }
+{ "kind": "urlIncludes", "text": "/threads/${thread}" }
+```
+
+In `urlIncludes`, each value is inserted percent-encoded exactly as a
+[`navigate` URL placeholder](#parameters-in-a-navigate-url) is, so the check compares like with like
+against the page's URL. A navigate to `/threads/${thread}` that expects `/threads/${thread}` fails
+closed when the app redirects to another thread.
+
+- `name` is a declared parameter, the output of an `extract` step **earlier** in the Journey (in
+  the end state, any `extract` output), or a `setup.x` fixture output.
+- Fails closed, at load and at run: an unbound name is `E_ASSERTION_REF_UNBOUND`, a secret
+  parameter is `E_ASSERTION_REF_SECRET` (refused at load and at run, since the expected text is
+  model-visible and persisted), a non-string value is `E_ASSERTION_REF_TYPE`.
+- A persisted result keeps the template (`Welcome, ${name}`), never the substituted value.
+- Behaviour change: a literal `${...}` in existing assertion text is now a reference. There is no
+  escape syntax, so avoid a literal `${` in expected text.
+
 ### Assertion strength
 
 A green replay only proves something when its assertions can fail for the wrong reason. `journey
@@ -186,16 +212,37 @@ jevitate journey verify checkout --mutate --allow http://127.0.0.1:26110   # blo
 |---|---|---|
 | `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits at most its hang threshold plus 5 s) | each write step (the lint's rule) |
 | `block-write:<n>` | aborts the write requests step n sends, from its start until the network settled after it | each write step |
-| `stale-value:<n>` | types `""` into fill step n | each fill whose value a `valueEquals`/`textIncludes` checks |
+| `stale-value:<n>` | types `""` into fill step n — or, for a `{ "var": name }` fill whose non-secret parameter an assertion names, an altered value of it (stale text in the composer) | each fill whose value a `valueEquals`/`textIncludes` checks, or whose variable an assertion names |
+| `swap-param:<name>` | replays with parameter `name` swapped for a different plausible value (another supplied parameter of the same shape, else the value with its last letter or digit changed), where the app receives it (a fill, a navigate URL); every assertion naming `${name}` still expects the supplied value | each non-secret `--param` an assertion names and an action reads |
+| `truncate-param:<name>` | the same, with the value's tail dropped (its first half kept) | the same, for a value of 2+ characters |
+
+Which parameters get a `swap-param`/`truncate-param`: a declared, non-secret parameter that you
+supply with `--param` (non-blank, with no `${…}` of its own), that an action reads (a `fill`
+value or a `navigate` URL placeholder), and that an assertion names (`{ "var": name }`, or
+`${name}` in `textIncludes`, `valueEquals`, `attr` or `urlIncludes`). These parameters get none:
+
+- a secret parameter. Its value is never altered, compared or reported.
+- a parameter that only assertions read. If no action receives it, changing it changes only what
+  the check expects, which proves nothing about the app.
+- a parameter you did not supply.
+
+A `{ "var": name }` fill whose parameter an assertion names gets a `stale-value` that types an
+**altered** value of the parameter instead of `""`. This is the stale text a composer can keep
+from an earlier reply.
 
 A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`; the
 **last** write step's mutations are also paired with every end-state check; a `stale-value` is also
-paired with every assertion that checks the typed value. An explicit no-claim `expect` (`count … min
+paired with every assertion that checks the typed value (or names its variable); a `swap-param`/
+`truncate-param` is paired with every assertion that names the parameter, so a parameter-relative
+check (`valueEquals { "var": "reply" }`, `textIncludes "Sent to ${email}"`) is proven to catch a
+swapped identifier, stale context or truncated text. A secret parameter is never mutated, and the
+report names parameters, never their values. An explicit no-claim `expect` (`count … min
 0`) claims nothing and is never paired. When a mutated replay first fails at the mutated step's own
 postcondition (`expect`/`waitFor`), that step's assertion is sensitive, but the failure can mask what
 follows it. The proof then replays that mutation once more with that postcondition left out, so the
 step's `expectRequests` and the end-state checks are judged on the relaxed replay instead of as
-cascade. The JSON report carries it as `mutations[].relaxed` (`{ outcome, failedSites, reason? }`).
+cascade. The relaxed replay keeps a weak `visible` postcondition on the mutated step so it stays
+schema-valid. The JSON report carries it as `mutations[].relaxed` (`{ outcome, failedSites, reason? }`).
 `metadata.mutationPairs` still exists for explicit pairs. Each assertion gets one verdict:
 
 | Verdict | Meaning |
@@ -216,7 +263,7 @@ to exactly that content), `base.outcome`, each mutation's `outcome`, `failedSite
 
 Pin a pairing the derivation would not make with `metadata.mutationPairs` — the assertion `check`
 (`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail when `mustFailWhen`
-(`skip:<n|anchor>`, `block-write:<n|anchor>`, `stale-value:<n|anchor>`; [anchors](#explore-from-a-journey-step-anchors-and-campaigns) by name)
+(`skip:<n|anchor>`, `block-write:<n|anchor>`, `stale-value:<n|anchor>`, `swap-param:<param>`, `truncate-param:<param>`; [anchors](#explore-from-a-journey-step-anchors-and-campaigns) by name)
 is applied. A pair naming a site, step or anchor the Journey does not have is refused when the
 Journey loads.
 
@@ -402,12 +449,101 @@ it. The take can then be post-processed:
 - `jevitate recording postdoc take.json --decisions decisions.json --out recording.json` marks
   values as constants, variables or human hand-backs.
 - `jevitate recording promote take.json --page 0 --step 2 --var email` turns one value into a
-  variable.
+  variable (see below).
 - `jevitate recording fit take.json` derives a timing policy from your pacing.
 
-A recorded take is a Recording, one step short of a Journey: there is no single command yet that
-turns a post-processed take into a promoted Journey (see the `jevitate-record` skill's "Known
-gaps"). `explore-author-journey` is the direct path today.
+`record` writes a **take file**, `{ "recording": <Recording>, "values": {...} }`, and prints its
+path (`recordingPath`). Feed that file straight to `recording diff`, `postdoc`, `promote` and `fit`;
+there is nothing to wrap. `values` holds the non-secret captured text and select values only
+(a secret, credential or one-time-code field never gets a value). It stays local, so treat the logs
+directory like other local run output and do not commit or share it.
+
+**Parameterizing a non-secret value.** `explore-author-journey` parameterizes secret fields only;
+a non-secret value (an email, a SKU) is recorded as a literal. To make one a parameter, promote it
+from a take:
+
+```bash
+jevitate recording promote take.json --page 0 --step 2 --var email
+```
+
+This sets that step's `variableName` (the `{var}` binding), and the Journey then takes `--param
+email=…`.
+
+### Proposing bindings from takes
+
+Record the same flow two or more times, varying what a user would vary: another thread, another
+reply, another account. Then let jevitate propose how to bind the takes:
+
+```bash
+jevitate record --url http://localhost:3000/threads/T-1001 --intent "reply to a support thread"
+jevitate record --url http://localhost:3000/threads/T-2002 --intent "reply to a support thread"
+jevitate recording propose take-a.json take-b.json --id reply-to-thread
+```
+
+`recording propose` is deterministic: it uses no model and touches no browser. From the aligned
+steps, each take's captured values and the steps' recorded expectations, it decides:
+
+| It proposes | From |
+|---|---|
+| **params** | a typed or selected value that varies across takes (`reply`, `account`), and a `navigate` path segment that varies (`/threads/${thread}`) |
+| **constants** | a value equal in every take. A credential is never a constant |
+| **handbacks** | a credential field (password, one-time code, token, PIN, …), and a username or email field on the same page as one. A person types it at replay. It is never a value, a constant or a parameter |
+| **outputs** | an identifier the page shows **before** the first write that matches exactly one parameter in every take, for example `data-thread-id`. It becomes an `extract` step |
+| **checks** | a `pre-write` identity check. The page must show the supplied identifier, or still be at the supplied thread's URL, so a changed source context fails before anything is typed. Also a `post-write` `valueEquals { "var": … }` on each filled or selected parameter |
+| **stopBefore** | the first send/submit/post/publish click after the first write, else the last click after the last write. The draft ends **before** it |
+| **ambiguities** | everything the evidence cannot decide (see below) |
+
+**Ambiguities are left for a person.** jevitate never resolves them for you. Each one has a `kind`
+and the step ids it concerns:
+
+- `identical-param-columns`: two parameters took the same value in every take. Are they one input
+  or two?
+- `untied-observation`: the page showed something different in each take that matches no
+  parameter. Is it an output?
+- `multiply-tied-observation`: one observation matches several parameters.
+- `identity-after-write`: the identifier shows only after the first write, so it cannot fail
+  closed in time.
+- `unclassified-value`: a value could not be classified. It stays a handback.
+- `varying-target`: the step acted on a differently named element in each take.
+- `varying-url`: a URL varies in more than its path segments.
+- `no-submit-step`: no stop step was found, so the draft replays **every** step. The command also
+  prints a warning. Mark the stop yourself before you run the draft.
+
+The human output lists the ambiguities first. With `--json` you get the envelope with
+`params`, `constants`, `handbacks`, `outputs`, `checks`, `firstWriteStepId`, `stopBefore`,
+`ambiguities`, `draft` (`id`, `path`, `savedTo`, `promoted: false`, `steps`) and `nextSteps`.
+Evidence is redacted: each value appears only as its length, shape and word count. A short sample
+appears only for a value the app defined, such as a select option, a URL segment or displayed
+text. Typed text and credentials never appear as samples.
+
+**The draft is unpromoted.** By default, `propose` saves the draft as a Journey in the project's
+journeys store (`--id`, default `proposed-draft`). Its replay ends before `stopBefore`. It has no
+approval, and the command never promotes or approves anything. A draft never replaces an existing
+Journey: when the id exists, the command refuses with `E_PROPOSAL_DRAFT_EXISTS`. Choose another
+`--id`, or use `--out <file>` to write the draft somewhere else. `--no-draft` proposes only. Fewer
+than two takes (`E_PROPOSAL_TOO_FEW_TAKES`), an unreadable take (`E_INVALID_TAKE`,
+`E_PROPOSAL_INVALID_TAKE`) and takes that did not record the same steps (`E_PROPOSAL_MISALIGNED`)
+are usage errors (exit 64).
+
+Before anyone promotes the draft, decide every ambiguity, then run both of these:
+
+```bash
+jevitate journey review reply-to-thread --strict
+jevitate journey verify reply-to-thread --mutate --param thread=T-3003 --param reply="We escalated this." --param account=acct-billing
+```
+
+`verify --mutate` proves the proposed `{var}` checks catch a swapped or truncated thread and reply
+(see [Proving assertions can fail](#proving-assertions-can-fail)). Only a person promotes:
+`jevitate journey promote reply-to-thread`. Over MCP, the same command is the `recordings` tool's
+`propose` action. It takes confined take paths, returns the same redacted proposal, and saves the
+draft in the server's journeys store or to `out`, a file inside the project.
+
+Over MCP, the `recordings` tool never returns a captured value to the model. `diff` returns each
+value as a hint (length, shape, word count), and `postdoc` returns a constant's value redacted. The
+CLI shows values, because there a person decides on them.
+
+`explore-author-journey` is the other path to a Journey, for when you want jevitate to find the
+flow instead of demonstrating it yourself.
 
 ## Run, heal, share and load-test
 
@@ -904,6 +1040,29 @@ jevitate load run checkout --env staging --authorized-origin https://staging.exa
   Journey runs on its recorded site, exactly as before.
 - Check suites take the same choice per Journey item: `{ "id": "checkout", "env": "staging" }`
   ([ci](./ci.md)).
+
+### Named origins (split-origin apps)
+
+When the app talks to an API on a different origin, name it in each environment with `origins`:
+
+```json
+{
+  "local":   { "baseUrl": "http://127.0.0.1:3000", "origins": { "api": "http://127.0.0.1:6310" } },
+  "preview": { "baseUrl": "http://127.0.0.1:3001", "origins": { "api": "http://127.0.0.1:26310" } }
+}
+```
+
+```bash
+jevitate journey run checkout --env preview   # recorded on :3000, so :6310 becomes :26310
+```
+
+- The **source environment** is the one whose `baseUrl` is the Journey's recorded site; if none
+  matches, the one named `default`, if declared. With neither, nothing is mapped.
+- Each origin the source environment names is mapped onto the target's same-named origin in
+  end-state `http` checks, recording URLs and fixture step URLs (`run`, `verify`, `check`, `demo`,
+  `annotate`). The target's named origins join the run's allowed origins.
+- `--base-url` alone maps nothing; use `--env`.
+- A name matches `[a-z][a-z0-9_-]{0,31}`; a value is an `http(s)` origin with no path.
 
 The file is committed with your code, so it **never** holds a secret or a session: a
 `storageState`, `secret`, `password`, `token`, `cookie`, `credential` or `apiKey` key anywhere in it

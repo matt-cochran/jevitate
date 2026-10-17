@@ -20,7 +20,7 @@ import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mis
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "./journey-fixtures.js";
 import { withEngine } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
-import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
+import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
   resolveDbPath,
@@ -168,11 +168,14 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
             ...(actionDeltas === true ? { actionDeltas: true } : {}),
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
-            fixtures: (site) => {
+            fixtures: (site, _allowedOrigins, sourceSite) => {
               fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: environment === undefined ? [site] : environment.allowedOrigins, baseUrl: site });
+              // #561: fixture step URLs on a named secondary origin move with the environment's origins.
+              const rebaseUrl = fixtureRebaseUrl(environment, sourceSite);
               const fx = buildMissionFixtures(recorded.flags, {
                 allowlist: environment === undefined ? [site] : environment.allowedOrigins,
                 baseUrl: site,
+                ...(rebaseUrl === undefined ? {} : { rebaseUrl }),
                 ...(storageState !== undefined ? { storageState } : {}),
                 ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
               });

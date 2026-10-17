@@ -67,8 +67,6 @@ export function displayNameOf(facts: ElementFacts): string | undefined {
 
 /** The human recorder's display for an acted element (see `targetDisplay`). */
 export function displayFromFacts(facts: ElementFacts, role: string | undefined): TargetDisplay | undefined {
-  return targetDisplay(
-    { role: role ?? null, name: displayNameOf(facts) ?? null },
-    { secretField: isSecretField(facts.inputType, facts.autocomplete ?? null) },
-  );
+  const name = displayNameOf(facts) ?? null;
+  return targetDisplay({ role: role ?? null, name }, { secretField: isSecretField(facts.inputType, facts.autocomplete ?? null, [name]) });
 }

@@ -1,4 +1,5 @@
 import type { Assertion, TargetDescriptor } from "@jevitate/recording";
+import { literalOperand } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, CountOf, IsVisible, TextOf, ValueOf } from "@jevitate/screenplay";
 import { descriptorToTarget } from "./descriptor.js";
@@ -67,7 +68,8 @@ export async function pollUntil(
  * polling wrapper; none is special-cased as one-shot.
  *
  * Returns a boolean rather than throwing — callers (e.g. `runStep`) decide
- * whether a `false` result is fatal.
+ * whether a `false` result is fatal. The one exception (#565): a `{ var }` operand that was never
+ * resolved (`resolveAssertionRefs`) throws an `AssertionRefError` — it is not text to compare.
  */
 export async function checkAssertion(
   actor: Actor,
@@ -102,13 +104,13 @@ async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolea
       return page.url().includes(a.text);
     }
     case "textIncludes":
-      return textIncludesOnAnyMatch(actor, a.target, a.text);
+      return textIncludesOnAnyMatch(actor, a.target, literalOperand(a.text));
     case "count": {
       const n = await actor.asks(CountOf.target(descriptorToTarget(a.target)));
       return (a.min === undefined || n >= a.min) && (a.max === undefined || n <= a.max);
     }
     case "valueEquals":
-      return (await actor.asks(ValueOf.target(descriptorToTarget(a.target)))) === a.value;
+      return (await actor.asks(ValueOf.target(descriptorToTarget(a.target)))) === literalOperand(a.value);
   }
 }
 

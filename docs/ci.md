@@ -288,6 +288,11 @@ relative paths resolve against the suite file):
   `journey run --env`/`--base-url` ([environments](./journeys.md#environments---env)); the
   environment's origin must be on the target's allowlist. An unknown environment, or a step on an
   origin the environment does not allow, refuses the suite before anything runs.
+  A param value may be `{ "unique": "inv-{run}@example.test" }`: the template must contain `{run}`,
+  and each suite run substitutes a fresh short token, different per run and per Journey entry, so
+  repeat runs do not collide on data the app keeps (an invite email, a project name). The result
+  record stores the resolved value (secret params redacted); the suite keeps the template, so its
+  identity does not change between runs.
 - `invariants`: checked around every action of every goal and mission of the target. A target that
   has invariants but no goals and no missions gets a model-free invariant sweep: the feature
   frontier from `url`. To lint the files themselves in an earlier, browser-free CI step, run

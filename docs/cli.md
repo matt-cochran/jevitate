@@ -40,7 +40,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`persona`](#persona): #433: catalog personas (.jevitate/personas.json) — review a persona's sheet, approve it (a person's sign-off, bound to its content hash)
 - [`profile`](#profile): manage jevitate profiles (isolated credential/data sets)
 - [`publish`](#publish): #464: publish this project's catalog to a connected service
-- [`record`](#record): record a demonstrated flow into a Recording (authoring plane)
+- [`record`](#record): record a demonstrated flow into a `{recording, values}` take file (authoring plane)
 - [`recording`](#recording): inspect and edit recorded takes (promote, edit steps, diff, postdoc)
 - [`regression`](#regression): capture, run and manage regression tests from discovered failures
 - [`report`](#report): one deduped defect list for a target across every mode and run (markdown + JSON envelope)
@@ -2128,7 +2128,7 @@ jevitate publish journeeze [options]
 jevitate record [options]
 ```
 
-record a demonstrated flow into a Recording (authoring plane)
+record a demonstrated flow into a `{recording, values}` take file (authoring plane)
 
 **Options**
 
@@ -2139,7 +2139,7 @@ record a demonstrated flow into a Recording (authoring plane)
 | `--headless` | run headless (default: headed — a record session is a live demonstration) | `false` |  |  |  |
 | `--intent <text>` | your framing of the journey (carried to Recording.intent) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
-| `--out <dir>` | directory to write the emitted Recording (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date>) |  |  |  |  |
+| `--out <dir>` | directory to write the take file `{recording, values}` for 'recording diff'/'postdoc'/'promote' (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date>) |  |  |  |  |
 | `--retro <text>` | optional retrospective note (carried to Recording.retro) |  |  |  |  |
 | `--url <url>` | start URL to demonstrate from (must be an authorized origin) |  |  |  |  |
 
@@ -2229,6 +2229,32 @@ jevitate recording promote [options] <file>
 | `--page <n>` | page index |  |  | yes |  |
 | `--step <n>` | step index within the page |  |  | yes |  |
 | `--var <name>` | variable name to bind |  |  | yes |  |
+
+### recording propose
+
+```
+jevitate recording propose [options] <take> [more...]
+```
+
+propose parameters, outputs, {var} checks, credential handbacks and where to stop from two or more takes of the same flow (#566); saves an UNPROMOTED draft Journey for review — ambiguities stay for a person to decide
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `take` |  | yes |  |  |
+| `more...` |  | no |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--id <id>` | the draft Journey's id (default: proposed-draft) |  |  |  |  |
+| `--journeys-dir <dir>` | journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--name <name>` | the draft Journey's name (default: the first take's intent) |  |  |  |  |
+| `--no-draft` | propose only: build and save no draft Journey |  |  |  |  |
+| `--out <file>` | write the draft Journey JSON to this file instead of saving it in the journeys store |  |  |  |  |
 
 ## regression
 

@@ -226,7 +226,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (451 exports)
+# @jevitate/explore (455 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -237,6 +237,7 @@
   ActionDeltas: class
   BLOCKED_CONSEQUENCE_STEPS: const (number)
   BLOCKED_FETCH_ERROR: object
+  BindingProposalError: class
   BoundsTracker: class
   BudgetMonitor: class
   CANARY_ATTRIBUTE: const (string)
@@ -336,6 +337,7 @@
   PAID: object
   PROMPT_INJECTION_GUARD: const (string)
   PROMPT_PAGE_TEXT_CHARS: const (number)
+  PROPOSAL_SAMPLE_MAX: const (number)
   PageDeltas: class
   PageMonitor: class
   PageNavigatingError: class
@@ -582,6 +584,7 @@
   planMisuseEpisode: function
   playwrightLivenessProbe: function
   probeResponsive: function
+  proposeBindings: function
   quoteIsOnlyControlNames: function
   quoteSpanAt: function
   quoteSpans: function
@@ -669,6 +672,7 @@
   validateAllowControlPatterns: function
   validateDenyPatterns: function
   valueFor: function
+  valueHint: function
   valueStatedInGoal: function
   valuesStatedInGoal: function
   verifyFix: function
@@ -766,7 +770,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (132 exports)
+# @jevitate/journey (134 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -852,6 +856,7 @@
   anchorLintIssues: function
   anchorRuleIssues: function
   applyAnnotationDraft: function
+  assertionRefsBound: function
   assertionSiteKey: function
   checkJobStory: function
   checkPersona: function
@@ -889,6 +894,7 @@
   renderJobStory: function
   resolveAnchorStep: function
   resolveJourneyStep: function
+  secretNamedValues: function
   secretParamNames: function
   secretParamValues: function
   splitBudget: function
@@ -1086,16 +1092,20 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (111 exports)
+# @jevitate/recording (123 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
   AUTH_SECRET_REF_RE: object
+  AssertionRefError: class
   AssertionSchema: object
   AuthoringTakeSchema: object
   COMPARE_OPS: array
   CONFIDENT_VARIABLE_THRESHOLD: const (number)
   DEFAULT_HTTP_CHECK_WITHIN_MS: const (number)
+  E_ASSERTION_REF_SECRET: const (string)
+  E_ASSERTION_REF_TYPE: const (string)
+  E_ASSERTION_REF_UNBOUND: const (string)
   FixturePathError: class
   FsRecordingStore: class
   HttpCheckSchema: object
@@ -1117,10 +1127,12 @@
   OBSERVABLE_NAME_RE: object
   OutcomeCheckSchema: object
   OutcomeWaitSchema: object
+  PLACEHOLDER_RE: object
   PostdocDecisionSchema: object
   PostdocDecisionsSchema: object
   READ_RPC_VERB: object
   RecordingSchema: object
+  SECRET_PARAM_NAME_RE: object
   STEP_ID_RE: object
   STYLE_CHANNELS: array
   STYLE_PROPERTIES: array
@@ -1137,17 +1149,20 @@
   alignTraces: function
   applyDiff: function
   applyPostdoc: function
+  assertionRefs: function
   boundVariables: function
   captureRefs: function
   classifyColumns: function
   confineFixture: function
   describeNavigateUrl: function
+  describeOperand: function
   diffColumns: function
   diffRecordings: function
   diffTakes: function
   encodeUrlParamValue: function
   ensureStepIds: function
   evaluateInvariantExpression: function
+  expandPlaceholders: function
   expressionObservables: function
   fitInteractionPolicy: function
   fixtureCandidatePath: function
@@ -1170,6 +1185,7 @@
   isWriteRequest: function
   jsonPathHasEach: function
   jsonPathProblem: function
+  literalOperand: function
   matchesPattern: function
   matchesResponseStatus: function
   mergeInvariantSpecs: function
@@ -1179,10 +1195,12 @@
   parseInvariantExpression: function
   parseJsonPath: function
   patternRegex: function
+  placeholderNames: function
   probeUrl: function
   promoteToVariable: function
   readJsonPath: function
   readJsonPathList: function
+  resolveAssertionRefs: function
   resolveHttpUrl: function
   resolveNavigateUrl: function
   rpcMethodOf: function

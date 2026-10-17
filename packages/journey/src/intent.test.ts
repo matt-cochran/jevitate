@@ -10,6 +10,7 @@ import {
   formatAnnotationChanges,
   intentCoverage,
   secretParamNames,
+  secretNamedValues,
   secretParamValues,
   type AnnotationDraft,
   type Journey,
@@ -107,5 +108,15 @@ describe("#246 applyAnnotationDraft", () => {
   it("refuses a draft naming a step the Journey does not have (never a partial apply)", () => {
     const j = JourneySchema.parse(PRE_INTENT);
     expect(() => applyAnnotationDraft(j, draftFor(j, { steps: [{ index: 9, step: "x", objective: "y" }] }))).toThrow(AnnotationDraftMismatchError);
+  });
+});
+
+describe("secretNamedValues (#564)", () => {
+  it("returns the values bound under a credential-like name, never an ordinary one", () => {
+    expect(secretNamedValues({ apiKey: "k1", authToken: "t1", orderId: "o1", password: " " })).toEqual(["k1", "t1"]);
+  });
+
+  it("is empty for a non-object", () => {
+    expect(secretNamedValues(undefined)).toEqual([]);
   });
 });

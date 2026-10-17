@@ -82,13 +82,21 @@ export type RedactedValue =
 
 export type ValueOrVar = RedactedValue | { var: string };
 
+/**
+ * #562/#565: an assertion's expected text or value — a literal (which may carry `${name}`
+ * placeholders), or `{ var: name }`: exactly the value bound to a Journey parameter, an earlier
+ * `extract` step's output, or (end state) a `setup.x` fixture output. Resolved before the check runs
+ * (`resolveAssertionRefs`); an unbound or secret name fails closed.
+ */
+export type AssertionOperand = string | { var: string };
+
 export type Assertion =
   | { kind: "visible"; target: TargetDescriptor }
   | { kind: "urlIncludes"; text: string }
-  | { kind: "textIncludes"; target: TargetDescriptor; text: string }
+  | { kind: "textIncludes"; target: TargetDescriptor; text: AssertionOperand }
   | { kind: "count"; target: TargetDescriptor; min?: number; max?: number }
   /** A form control's current VALUE (input, textarea, select) equals `value` exactly — never its text content. */
-  | { kind: "valueEquals"; target: TargetDescriptor; value: string }
+  | { kind: "valueEquals"; target: TargetDescriptor; value: AssertionOperand }
   /**
    * Visual state (#148), read by fixed built-in page functions — never evaluated as JS. `style`: the
    * COMPUTED value of an allowlisted CSS property (optionally one channel of it: a color's
@@ -107,7 +115,7 @@ export type Assertion =
    * `absent: true`, is not present. Element state such as `data-state`, `aria-expanded`, a minimap
    * cell's `data-active`.
    */
-  | { kind: "attr"; target: TargetDescriptor; name: string; value?: string; absent?: boolean }
+  | { kind: "attr"; target: TargetDescriptor; name: string; value?: AssertionOperand; absent?: boolean }
   /**
    * A TRANSIENT state (#148): a matching element GAINED `className` (or attribute `attr`, or started a
    * CSS animation) after the page's last user input, within `withinMs` of it when given. Needs the
@@ -573,6 +581,9 @@ const ValueOrVarSchema = z.union([
   z.object({ var: z.string() }).strict(),
 ]);
 
+/** #565: a literal (possibly with `${name}` placeholders) or `{ var: name }`. */
+const AssertionOperandSchema = z.union([z.string(), z.object({ var: z.string().min(1) }).strict()]);
+
 export const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind", [
   z
     .object({
@@ -590,7 +601,7 @@ export const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind"
     .object({
       kind: z.literal("textIncludes"),
       target: TargetDescriptorSchema,
-      text: z.string(),
+      text: AssertionOperandSchema,
     })
     .strict(),
   z
@@ -605,7 +616,7 @@ export const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind"
     .object({
       kind: z.literal("valueEquals"),
       target: TargetDescriptorSchema,
-      value: z.string(),
+      value: AssertionOperandSchema,
     })
     .strict(),
   z
@@ -648,7 +659,7 @@ export const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind"
       kind: z.literal("attr"),
       target: TargetDescriptorSchema,
       name: z.string().regex(ATTR_NAME_RE),
-      value: z.string().optional(),
+      value: AssertionOperandSchema.optional(),
       absent: z.boolean().optional(),
     })
     .strict()

@@ -1,5 +1,6 @@
 import { clock } from "@jevitate/domain";
 import type { Assertion, OutcomeCheck, StatusSpec as RecordingStatusSpec, TargetDescriptor } from "@jevitate/recording";
+import { describeOperand } from "@jevitate/recording";
 import { matchGlob } from "./feature/capability-scope.js";
 import type { CapturedRequest } from "./page-monitor.js";
 import { classifyRequest } from "./timing.js";
@@ -67,7 +68,7 @@ export function describeAssertionSpec(a: Assertion): string {
     case "visible":
       return `visible:${descriptorSpec(a.target)}`;
     case "textIncludes":
-      return `textIncludes:${descriptorSpec(a.target)}|${a.text}`;
+      return `textIncludes:${descriptorSpec(a.target)}|${describeOperand(a.text)}`;
     case "count": {
       const bounds = [a.min === undefined ? null : `min=${a.min}`, a.max === undefined ? null : `max=${a.max}`].filter(
         (b): b is string => b !== null,
@@ -75,7 +76,7 @@ export function describeAssertionSpec(a: Assertion): string {
       return `count:${descriptorSpec(a.target)}${bounds.length === 0 ? "" : `|${bounds.join(",")}`}`;
     }
     case "valueEquals":
-      return `valueEquals:${descriptorSpec(a.target)}|${a.value}`;
+      return `valueEquals:${descriptorSpec(a.target)}|${describeOperand(a.value)}`;
     case "style":
       return `style:${descriptorSpec(a.target)}|${a.channel === undefined ? a.property : `${a.channel}(${a.property})`}${a.op}${a.value}`;
     case "inViewport":
@@ -88,7 +89,7 @@ export function describeAssertionSpec(a: Assertion): string {
     case "overlap":
       return `${a.overlapping ? "overlaps" : "noOverlap"}:${descriptorSpec(a.target)}|${descriptorSpec(a.other)}`;
     case "attr":
-      return `attr:${descriptorSpec(a.target)}|${a.absent === true ? `!${a.name}` : a.value === undefined ? a.name : `${a.name}=${a.value}`}`;
+      return `attr:${descriptorSpec(a.target)}|${a.absent === true ? `!${a.name}` : a.value === undefined ? a.name : `${a.name}=${describeOperand(a.value)}`}`;
     case "flashed": {
       const what = a.className !== undefined ? `class=${a.className}` : a.attr !== undefined ? `attr=${a.attr}` : "animation";
       return `flashed:${descriptorSpec(a.target)}|${what}${a.withinMs === undefined ? "" : `|withinMs=${a.withinMs}`}`;

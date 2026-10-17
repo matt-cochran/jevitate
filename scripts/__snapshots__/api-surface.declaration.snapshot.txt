@@ -342,7 +342,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (690 exports)
+# @jevitate/explore (707 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -369,6 +369,7 @@
   AllowOriginMismatch: interface
   AllowOriginMismatchKind: type-alias
   ALREADY_VETOED_REASON: variable
+  AmbiguityKind: type-alias
   ANSWER_FITS_INSTRUCTIONS: variable
   ANSWER_FITS_QUESTION: variable
   ANSWER_PAGES_CHARS: variable
@@ -384,6 +385,7 @@
   assertTargetAnswering: function
   assessCoverageSufficiency: function
   attributeCanary: function
+  AuthoringTake: interface
   authorJourney: function
   AuthorJourneyRequest: interface
   AuthorJourneyResult: type-alias
@@ -394,6 +396,9 @@
   autoDecidePostdoc: function
   AwaitedNetworkCheck: interface
   awaitWrites: function
+  BindingProposal: interface
+  BindingProposalError: class
+  BindingProposalErrorCode: type-alias
   BLOCKED_CONSEQUENCE_STEPS: variable
   BLOCKED_FETCH_ERROR: variable
   blockedCauseOf: function
@@ -817,6 +822,16 @@
   probeResponsive: function
   PROMPT_INJECTION_GUARD: variable
   PROMPT_PAGE_TEXT_CHARS: variable
+  PROPOSAL_SAMPLE_MAX: variable
+  ProposalAmbiguity: interface
+  proposeBindings: function
+  ProposeBindingsOptions: interface
+  ProposedCheck: interface
+  ProposedConstant: interface
+  ProposedHandback: interface
+  ProposedOutput: interface
+  ProposedParam: interface
+  ProposedParamKind: type-alias
   quoteIsOnlyControlNames: function
   quoteSpanAt: function
   quoteSpans: function
@@ -1013,6 +1028,8 @@
   validateDenyPatterns: function
   ValueCapturingGenerationPort: class
   valueFor: function
+  valueHint: function
+  ValueHint: interface
   valuesStatedInGoal: function
   valueStatedInGoal: function
   verifyFix: function
@@ -1182,7 +1199,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (227 exports)
+# @jevitate/journey (231 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1226,6 +1243,7 @@
   ApprovalViolation: type-alias
   ApprovalViolationSchema: variable
   AssertionProof: interface
+  assertionRefsBound: function
   assertionSiteKey: function
   AssertionVerdict: type-alias
   CAMPAIGN_LIMITS: variable
@@ -1354,6 +1372,8 @@
   mutationProofVerdict: function
   MutationProofVerdict: type-alias
   mutationReplay: function
+  MutationReplay: interface
+  MutationReplayOptions: type-alias
   MutationRunResult: interface
   MutationVerdict: type-alias
   mutationWait: function
@@ -1394,6 +1414,7 @@
   ReviewVerifySchema: variable
   ReviewWriteRequestSchema: variable
   SECRET_PARAM_NAME_RE: variable
+  secretNamedValues: function
   secretParamNames: function
   secretParamValues: function
   SecretRef: interface
@@ -1709,7 +1730,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (181 exports)
+# @jevitate/recording (197 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1719,6 +1740,12 @@
   applyDiff: function
   applyPostdoc: function
   Assertion: type-alias
+  AssertionOperand: type-alias
+  AssertionRefBinding: interface
+  AssertionRefError: class
+  AssertionRefErrorCode: type-alias
+  AssertionRefLookup: type-alias
+  assertionRefs: function
   AssertionSchema: variable
   ATTR_NAME_RE: variable
   AUTH_SECRET_REF_RE: variable
@@ -1742,16 +1769,21 @@
   DEFAULT_HTTP_CHECK_WITHIN_MS: variable
   DeniedAsSpec: interface
   describeNavigateUrl: function
+  describeOperand: function
   diffColumns: function
   diffRecordings: function
   DiffResult: interface
   diffTakes: function
   DomObservable: interface
   DomRead: type-alias
+  E_ASSERTION_REF_SECRET: variable
+  E_ASSERTION_REF_TYPE: variable
+  E_ASSERTION_REF_UNBOUND: variable
   encodeUrlParamValue: function
   ensureStepIds: function
   evaluateInvariantExpression: function
   EvalValue: type-alias
+  expandPlaceholders: function
   ExpressionEnv: interface
   expressionObservables: function
   ExprNode: type-alias
@@ -1794,6 +1826,7 @@
   jsonPathHasEach: function
   jsonPathProblem: function
   JsonPathSegment: type-alias
+  literalOperand: function
   matchesPattern: function
   matchesResponseStatus: function
   MAX_BUDGETS: variable
@@ -1825,6 +1858,8 @@
   parseInvariantExpression: function
   parseJsonPath: function
   patternRegex: function
+  PLACEHOLDER_RE: variable
+  placeholderNames: function
   PostdocDecision: type-alias
   PostdocDecisionSchema: variable
   PostdocDecisionsSchema: variable
@@ -1845,9 +1880,11 @@
   RedactedValue: type-alias
   ReferenceDiffResult: interface
   RequestShape: interface
+  resolveAssertionRefs: function
   resolveHttpUrl: function
   resolveNavigateUrl: function
   rpcMethodOf: function
+  SECRET_PARAM_NAME_RE: variable
   SecretMaterializationError: class
   selectJsonValues: function
   SpliceAt: interface

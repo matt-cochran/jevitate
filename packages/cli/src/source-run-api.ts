@@ -90,12 +90,14 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     const actor = CastActor.named("source-runner").whoCan(new BrowseTheWeb(session, allowedOrigins), ...gate.abilities);
     // #322/#400: a trusted remote Journey's end state and step request checks hold for its replay too.
     // #543: its http end-state checks request only origins in this same allowlist.
+    const refs = httpCheckRefs({ params, secretParams: secretParamNames(file, params) });
     const outcomeChecks = new JourneyOutcomeChecks(session.page, file, {
       httpProbe: createHttpProbe({ allowlist: allowedOrigins }),
-      resolveRef: httpCheckRefs({ params, secretParams: secretParamNames(file, params) }),
+      resolveRef: refs,
     });
     const observer = outcomeChecks.observer();
-    const runner = new JourneyRunner(actor, new RecordingInterpreter({ ...(observer === undefined ? {} : { observer }), fixtureBaseDir: journeyFixtureBaseDir() }));
+    // #565: a step expectation's references resolve from the same names (a secret one refused).
+    const runner = new JourneyRunner(actor, new RecordingInterpreter({ ...(observer === undefined ? {} : { observer }), fixtureBaseDir: journeyFixtureBaseDir(), refLookup: refs }));
     try {
       return await outcomeChecks.run(actor, () => runner.run({ journey: file, params, policy }));
     } finally {

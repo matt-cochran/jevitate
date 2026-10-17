@@ -28,6 +28,7 @@ import {
   type JourneyReviewAnchorWarning,
   type JourneyReviewLocatorHealth,
   type JourneyReviewAttention,
+  assertionRefsBound,
 } from "@jevitate/journey";
 import type { LocatorHealthDetail } from "./locator-health.js";
 import { SafetyPolicy, describeCheck, explainCheck, type SafetyConfig } from "@jevitate/explore";
@@ -458,11 +459,18 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
     if (site.where === "step-request") return [{ step: site.step, check: describeCheck(site.check), weak: explained.weak, text: explained.text }];
     const step = flat[site.step - 1]?.recorded.step;
     const weak =
-      explained.weak || site.check.assertion.kind === "visible" || (site.field === "expect" && step !== undefined && (isOwnTargetVisible(step) || isNoClaimExpect(step)));
+      explained.weak ||
+      site.check.assertion.kind === "visible" ||
+      // #565: a check naming a secret or unbound reference can never pass; a bound one is as strong as a literal.
+      !assertionRefsBound(journey, site.check.assertion) ||
+      (site.field === "expect" && step !== undefined && (isOwnTargetVisible(step) || isNoClaimExpect(step)));
     return [{ step: site.step, check: describeCheck(site.check), weak, text: explained.text }];
   });
   const endStateChecks = journeyEndState(journey);
-  const endStateExplained = endStateChecks.map(explainCheck);
+  const endStateExplained = endStateChecks.map((c) => {
+    const e = explainCheck(c);
+    return (c.kind === "page" || c.kind === "reloadThen") && !assertionRefsBound(journey, c.assertion) ? { ...e, weak: true } : e;
+  });
   const anchors = (m.anchors ?? []).map((a) => ({ name: a.name, step: a.step }));
   const writeRequests = buildWriteRequests(journey);
   const enriched = steps.map((st) => {

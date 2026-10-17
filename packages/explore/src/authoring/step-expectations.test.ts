@@ -8,6 +8,7 @@ const click = (target = publish): Step => ({ kind: "click", target, expect: { ki
 const delta = (d: Partial<ActionDeltaRecord>): ActionDeltaRecord => ({ verdict: "inconclusive", why: "", changes: [], overheadMs: 1, ...d });
 const rec = (...steps: RecordedStep[]): Recording => ({ version: "1", site: "https://app.test", pages: [{ url: "/editor", steps }] });
 const only = (r: Recording): RecordedStep => r.pages[0]!.steps[0]!;
+const titleFill = (value: ValueOrVar): Step => ({ kind: "fill", target: { label: "Title" }, value, expect: { kind: "visible", target: { label: "Title" } } });
 
 describe("#400 deriveStepExpectations: a step's expect comes from what it changed, never its own target", () => {
   it("a write step gets responseStatus:<METHOD> <path>=2xx from the request its delta recorded", () => {
@@ -95,12 +96,28 @@ describe("#400 deriveStepExpectations: a step's expect comes from what it change
     expect(out.step).toMatchObject({ expect: { kind: "count", min: 0 } });
   });
 
-  it("a fill of a constant asserts the value it typed; a parameter fill claims nothing", () => {
-    const fill = (value: ValueOrVar): Step => ({ kind: "fill", target: { label: "Title" }, value, expect: { kind: "visible", target: { label: "Title" } } });
-    expect(only(deriveStepExpectations(rec({ step: fill({ redacted: false, value: "Hello" }) }))).step).toMatchObject({
+  it("a fill of a constant asserts the value it typed", () => {
+    expect(only(deriveStepExpectations(rec({ step: titleFill({ redacted: false, value: "Hello" }) }))).step).toMatchObject({
       expect: { kind: "valueEquals", target: { label: "Title" }, value: "Hello" },
     });
-    expect(only(deriveStepExpectations(rec({ step: fill({ var: "title" }) }))).step).toMatchObject({ expect: { kind: "count", target: { label: "Title" }, min: 0 } });
+  });
+
+  it("#565: a fill of a non-secret parameter asserts the field holds exactly that parameter", () => {
+    expect(only(deriveStepExpectations(rec({ step: titleFill({ var: "title" }) }))).step).toMatchObject({
+      expect: { kind: "valueEquals", target: { label: "Title" }, value: { var: "title" } },
+    });
+  });
+
+  it("#565: a fill of a declared secret variable claims nothing", () => {
+    expect(only(deriveStepExpectations(rec({ step: titleFill({ var: "secret1" }) }), { secretVars: ["secret1"] })).step).toMatchObject({
+      expect: { kind: "count", target: { label: "Title" }, min: 0 },
+    });
+  });
+
+  it("#565: a fill of a variable whose name reads as a secret claims nothing", () => {
+    expect(only(deriveStepExpectations(rec({ step: titleFill({ var: "password" }) }))).step).toMatchObject({
+      expect: { kind: "count", target: { label: "Title" }, min: 0 },
+    });
   });
 
   it("fills a step's expectedResult from the delta it recorded", () => {
