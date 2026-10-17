@@ -123,6 +123,25 @@ waits at most its hang threshold plus 5 s (`stallMs`, default 30 s) instead of `
 started (or its writes were aborted), so the claim must fail, and the proof does not wait out the
 budget to show it. Waits on other steps, and under `stale-value`, keep their `maxMs`.
 
+### Parameter-relative assertions
+
+An assertion's expected text can follow a run's input. `textIncludes.text`, `valueEquals.value`
+and `attr.value` take either `{ "var": "name" }` or `${name}` inside the string:
+
+```json
+{ "kind": "textIncludes", "target": { "testId": "welcome" }, "text": "Welcome, ${name}" }
+{ "kind": "valueEquals", "target": { "label": "Email" }, "value": { "var": "email" } }
+```
+
+- `name` is a declared parameter, the output of an `extract` step **earlier** in the Journey (in
+  the end state, any `extract` output), or a `setup.x` fixture output.
+- Fails closed, at load and at run: an unbound name is `E_ASSERTION_REF_UNBOUND`, a secret
+  parameter is `E_ASSERTION_REF_SECRET` (refused at load and at run, since the expected text is
+  model-visible and persisted), a non-string value is `E_ASSERTION_REF_TYPE`.
+- A persisted result keeps the template (`Welcome, ${name}`), never the substituted value.
+- Behaviour change: a literal `${...}` in existing assertion text is now a reference. There is no
+  escape syntax, so avoid a literal `${` in expected text.
+
 ### Assertion strength
 
 A green replay only proves something when its assertions can fail for the wrong reason. `journey
@@ -195,7 +214,8 @@ paired with every assertion that checks the typed value. An explicit no-claim `e
 postcondition (`expect`/`waitFor`), that step's assertion is sensitive, but the failure can mask what
 follows it. The proof then replays that mutation once more with that postcondition left out, so the
 step's `expectRequests` and the end-state checks are judged on the relaxed replay instead of as
-cascade. The JSON report carries it as `mutations[].relaxed` (`{ outcome, failedSites, reason? }`).
+cascade. The relaxed replay keeps a weak `visible` postcondition on the mutated step so it stays
+schema-valid. The JSON report carries it as `mutations[].relaxed` (`{ outcome, failedSites, reason? }`).
 `metadata.mutationPairs` still exists for explicit pairs. Each assertion gets one verdict:
 
 | Verdict | Meaning |
@@ -402,8 +422,25 @@ it. The take can then be post-processed:
 - `jevitate recording postdoc take.json --decisions decisions.json --out recording.json` marks
   values as constants, variables or human hand-backs.
 - `jevitate recording promote take.json --page 0 --step 2 --var email` turns one value into a
-  variable.
+  variable (see below).
 - `jevitate recording fit take.json` derives a timing policy from your pacing.
+
+`record` writes a **take file**, `{ "recording": <Recording>, "values": {...} }`, and prints its
+path (`recordingPath`). Feed that file straight to `recording diff`, `postdoc`, `promote` and `fit`;
+there is nothing to wrap. `values` holds the non-secret captured text and select values only
+(a secret, credential or one-time-code field never gets a value). It stays local, so treat the logs
+directory like other local run output and do not commit or share it.
+
+**Parameterizing a non-secret value.** `explore-author-journey` parameterizes secret fields only;
+a non-secret value (an email, a SKU) is recorded as a literal. To make one a parameter, promote it
+from a take:
+
+```bash
+jevitate recording promote take.json --page 0 --step 2 --var email
+```
+
+This sets that step's `variableName` (the `{var}` binding), and the Journey then takes `--param
+email=…`.
 
 A recorded take is a Recording, one step short of a Journey: there is no single command yet that
 turns a post-processed take into a promoted Journey (see the `jevitate-record` skill's "Known
@@ -904,6 +941,29 @@ jevitate load run checkout --env staging --authorized-origin https://staging.exa
   Journey runs on its recorded site, exactly as before.
 - Check suites take the same choice per Journey item: `{ "id": "checkout", "env": "staging" }`
   ([ci](./ci.md)).
+
+### Named origins (split-origin apps)
+
+When the app talks to an API on a different origin, name it in each environment with `origins`:
+
+```json
+{
+  "local":   { "baseUrl": "http://127.0.0.1:3000", "origins": { "api": "http://127.0.0.1:6310" } },
+  "preview": { "baseUrl": "http://127.0.0.1:3001", "origins": { "api": "http://127.0.0.1:26310" } }
+}
+```
+
+```bash
+jevitate journey run checkout --env preview   # recorded on :3000, so :6310 becomes :26310
+```
+
+- The **source environment** is the one whose `baseUrl` is the Journey's recorded site; if none
+  matches, the one named `default`, if declared. With neither, nothing is mapped.
+- Each origin the source environment names is mapped onto the target's same-named origin in
+  end-state `http` checks, recording URLs and fixture step URLs (`run`, `verify`, `check`, `demo`,
+  `annotate`). The target's named origins join the run's allowed origins.
+- `--base-url` alone maps nothing; use `--env`.
+- A name matches `[a-z][a-z0-9_-]{0,31}`; a value is an `http(s)` origin with no path.
 
 The file is committed with your code, so it **never** holds a secret or a session: a
 `storageState`, `secret`, `password`, `token`, `cookie`, `credential` or `apiKey` key anywhere in it

@@ -13,7 +13,7 @@ headed browser demonstration a human performs — you launch it and they drive.
 - `jevitate record --url <authorized-url> [--intent "<framing>"] [--retro
   "<note>"] [--allow <origin>] [--out <dir>] --json` opens a headed browser at
   an authorized origin and records the human's demonstrated flow into a
-  `Recording` JSON file (default `.jevitate/logs/<date>/` in the repo, else
+  take file `{ "recording": <Recording>, "values": {...} }` (default `.jevitate/logs/<date>/` in the repo, else
   `~/.jevitate/logs/<date>/`). The session is
   headed by design — a record session IS a live human demonstration; add
   `--headless` only when a caller explicitly asks. The target must be
@@ -26,8 +26,10 @@ headed browser demonstration a human performs — you launch it and they drive.
   disk). This matters most for `--headless`, where there is no visible
   window to interact with: Ctrl-C is the way to end a headless take, and it
   saves the take rather than killing the process and losing it.
-- The emitted `recordingPath` is the take you then feed into the diff/postdoc
-  flow below. Capture two or more takes of the same flow (varying the data each
+- The emitted `recordingPath` is the take file: feed it straight to `recording
+  diff`/`postdoc`/`promote`/`fit`. `values` holds non-secret captured text/select
+  values only (a secret, credential or OTP field never gets one) and stays local,
+  so treat the logs dir accordingly: do not commit or share it. Capture two or more takes of the same flow (varying the data each
   time) when you want `diff` to classify which values are variables.
 
 - `record` is never an MCP tool (a person does the clicking). As an agent, give the human the
@@ -41,13 +43,10 @@ headed browser demonstration a human performs — you launch it and they drive.
   (constant vs. likely-variable) with a confidence score. Read the confidences;
   do not treat a low-confidence classification as settled — surface it to the
   human via `postdoc` instead of deciding for them.
-- **Input shape**: `diff`/`postdoc` accept ONLY a `jevitate record`-produced
-  take file — `{ "recording": <Recording>, "values": {...} }`. A raw
-  `Recording` (what `explore`, `explore-author-journey`, or a usability run
-  write directly — `{version, site, pages, ...}` with no `recording`/`values`
-  wrapper) is refused with a clear `E_INVALID_TAKE` message naming the
-  mismatch, not a zod dump. Wrap a raw Recording as `{ "recording": <it>,
-  "values": {} }` first if you need to diff/postdoc one.
+- **Input shape**: `diff`/`postdoc`/`promote`/`fit` take the `{ "recording",
+  "values" }` take file `jevitate record` writes. A raw `Recording` (what
+  `explore` or `explore-author-journey` write) has no `values` and is refused with
+  `E_INVALID_TAKE`; diff takes made by `jevitate record`.
 
 ## Review and classify (postdoc)
 
@@ -74,7 +73,10 @@ headed browser demonstration a human performs — you launch it and they drive.
 
 - `jevitate recording promote <file.json> --page <n> --step <n> --var <name>` —
   for the simple case of a single take with one known value to parameterize,
-  skipping the full diff/postdoc review flow.
+  skipping the full diff/postdoc review flow. This is how a NON-secret value
+  (an email, a SKU) becomes a Journey parameter: it sets the step's `variableName`
+  (the `{var}` binding). `explore-author-journey` only auto-parameterizes secret
+  fields.
 
 ## Publishing the result
 
