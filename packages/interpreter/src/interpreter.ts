@@ -1,4 +1,4 @@
-import type { Assertion, Recording, RecordedStep, Step, StepTiming } from "@jevitate/recording";
+import type { Assertion, AssertionRefLookup, Recording, RecordedStep, Step, StepTiming } from "@jevitate/recording";
 import { RecordingSchema } from "@jevitate/recording";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { installFlashRecorder } from "./flash-recorder.js";
@@ -79,6 +79,11 @@ export class RecordingInterpreter {
        * never the process cwd. Absent: a relative path is used as-is (the historical behavior).
        */
       readonly fixtureBaseDir?: string;
+      /**
+       * #565: what a step expectation's `${name}` / `{ var }` may refer to beyond the run's vars
+       * (`setup.x`), and which names are secret (refused, never expanded). Absent: the vars only.
+       */
+      readonly refLookup?: AssertionRefLookup;
     } = {},
   ) {}
 
@@ -86,12 +91,14 @@ export class RecordingInterpreter {
     observer?: StepObserver;
     skipStep?: (index: number, recorded: RecordedStep) => boolean;
     fixtureBaseDir?: string;
+    refLookup?: AssertionRefLookup;
   } {
     return {
       ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
       ...(this.options.observer === undefined ? {} : { observer: this.options.observer }),
       ...(this.options.skipStep === undefined ? {} : { skipStep: this.options.skipStep }),
       ...(this.options.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: this.options.fixtureBaseDir }),
+      ...(this.options.refLookup === undefined ? {} : { refLookup: this.options.refLookup }),
     };
   }
 
@@ -289,6 +296,7 @@ async function runFlat(
     observer?: StepObserver;
     skipStep?: (index: number, recorded: RecordedStep) => boolean;
     fixtureBaseDir?: string;
+    refLookup?: AssertionRefLookup;
   },
   sink?: RecordingSink,
   startIndex = 0,

@@ -139,10 +139,13 @@ export function mutationPairIssues(journey: Journey): { readonly index: number; 
   return out;
 }
 
-/** The text a `valueEquals`/`textIncludes` assertion expects, else null. */
+/**
+ * The literal text a `valueEquals`/`textIncludes` assertion expects, else null. A `{ var }` operand
+ * (#565) is not a literal: it derives no stale-value pair here.
+ */
 function expectedText(a: Assertion): { kind: "valueEquals" | "textIncludes"; text: string } | null {
-  if (a.kind === "valueEquals") return { kind: a.kind, text: a.value };
-  if (a.kind === "textIncludes") return { kind: a.kind, text: a.text };
+  if (a.kind === "valueEquals") return typeof a.value === "string" ? { kind: a.kind, text: a.value } : null;
+  if (a.kind === "textIncludes") return typeof a.text === "string" ? { kind: a.kind, text: a.text } : null;
   return null;
 }
 

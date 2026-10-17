@@ -617,12 +617,14 @@ export async function runJourneyProgrammatically(
       const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
       // #322/#400: a full replay (never an anchored prefix) must also satisfy the Journey's end state
       // and each step's request expectations.
+      // #543: `${name}` from the run's params (a secret param refused) and `${setup.x}` from the
+      // fixture bindings — for the end state's checks and (#565) every step expectation's references.
+      const refs = httpCheckRefs({ params, secretParams: secretParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) });
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, {
         secrets,
-        // #543: the end state's http checks: allowlist-bound requests; `${name}` from the run's params
-        // (a secret param refused) and `${setup.x}` from the fixture bindings.
+        // #543: the end state's http checks: allowlist-bound requests.
         httpProbe: createHttpProbe({ allowlist: allowedOrigins }),
-        resolveRef: httpCheckRefs({ params, secretParams: secretParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) }),
+        resolveRef: refs,
         ...(opts.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: opts.stepResponseTimeoutMs }),
       });
       const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins);
@@ -641,8 +643,8 @@ export async function runJourneyProgrammatically(
       const interpreter =
         opts.interpreter ??
         (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined
-          ? new RecordingInterpreter({ fixtureBaseDir })
-          : new RecordingInterpreter({ observer, fixtureBaseDir, ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }) }));
+          ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs })
+          : new RecordingInterpreter({ observer, fixtureBaseDir, refLookup: refs, ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }) }));
       const heal: JourneyHealOptions | undefined =
         opts.heal === undefined || healGuard === undefined
           ? undefined

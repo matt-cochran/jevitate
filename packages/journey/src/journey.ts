@@ -1,6 +1,7 @@
 import { z, type ZodType } from "zod";
 import {
   AssertionSchema,
+  assertionRefs,
   navigateUrlParams,
   NetworkCheckSchema,
   OutcomeCheckSchema,
@@ -10,9 +11,11 @@ import {
   type NetworkCheck,
   type OutcomeCheck,
   type Recording,
+  type Step,
   type StatusSpec,
 } from "@jevitate/recording";
 import { mutationPairIssues } from "./mutation-proof.js";
+import { secretParamNames } from "./intent.js";
 import { ApprovalProposalSchema } from "./proposal-schema.js";
 import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
 import { anchorRuleIssues } from "./anchor-rules.js";
@@ -399,4 +402,60 @@ export const JourneySchema: ZodType<Journey> = z.object({
       }
     }),
   );
+  // #562/#565: an assertion's `${name}` / `{ var }` must name something the run binds when it is checked.
+  for (const issue of assertionRefIssues(j as Journey)) ctx.addIssue({ code: "custom", path: [...issue.path], message: issue.message });
 });
+
+/** A step's own assertions with their field names (a `forEach`'s children are walked separately). */
+function ownAssertions(step: Step): { field: string; assertion: Assertion }[] {
+  if (step.kind === "assert") return [{ field: "check", assertion: step.check }];
+  if (step.kind === "handback") return [{ field: "resume", assertion: step.resume }];
+  return "expect" in step ? [{ field: "expect", assertion: step.expect }] : [];
+}
+
+/**
+ * #562/#565: every assertion reference that is not bound where it is checked. A step's expectation
+ * may name a declared parameter (`params` / `parameters`), an `extract` output bound by an EARLIER
+ * step (or by the step itself, which binds before it checks), or a `setup.x` fixture output; the end
+ * state may name a parameter, any step's `extract` output, or `setup.x`. A secret parameter is never
+ * allowed: its value would be expanded into model-visible text.
+ */
+function assertionRefIssues(j: Journey): { path: (string | number)[]; message: string }[] {
+  const declared = new Set([...j.metadata.params, ...(j.metadata.parameters ?? []).map((p) => p.name)]);
+  const secret = new Set(secretParamNames(j));
+  const extracted = new Set<string>();
+  const out: { path: (string | number)[]; message: string }[] = [];
+  const check = (a: Assertion, path: (string | number)[], where: "step" | "end-state"): void => {
+    for (const name of assertionRefs(a)) {
+      if (secret.has(name)) {
+        out.push({ path, message: `assertion reference \${${name}} names a secret parameter — an assertion's expected text is model-visible and persisted, so it may not use one` });
+      } else if (!declared.has(name) && !extracted.has(name) && !(name.startsWith("setup.") && name.length > "setup.".length)) {
+        out.push({
+          path,
+          message:
+            where === "step"
+              ? `assertion reference \${${name}} is not bound here — declare it in metadata.params / metadata.parameters, or extract it in an earlier step`
+              : `end-state reference \${${name}} is not bound — declare it in metadata.params / metadata.parameters, or extract it in a step`,
+        });
+      }
+    }
+  };
+  j.recording.pages.forEach((page, pi) =>
+    page.steps.forEach((rs, si) => {
+      const base = ["recording", "pages", pi, "steps", si, "step"];
+      const step = rs.step;
+      if (step.kind === "extract") extracted.add(step.as);
+      for (const { field, assertion } of ownAssertions(step)) check(assertion, [...base, field], "step");
+      if (step.kind === "forEach") {
+        step.steps.forEach((child, ci) => {
+          if (child.kind === "extract") extracted.add(child.as);
+          for (const { field, assertion } of ownAssertions(child)) check(assertion, [...base, "steps", ci, field], "step");
+        });
+      }
+    }),
+  );
+  (j.metadata.endState ?? []).forEach((c, i) => {
+    if (c.kind === "page" || c.kind === "reloadThen") check(c.assertion, ["metadata", "endState", i, "assertion"], "end-state");
+  });
+  return out;
+}

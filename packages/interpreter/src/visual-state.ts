@@ -1,5 +1,6 @@
 import type { Locator } from "playwright";
 import type { Assertion, TargetDescriptor } from "@jevitate/recording";
+import { literalOperand } from "@jevitate/recording";
 import { compareStyle, type Comparison } from "./css-values.js";
 import { boxesOverlap, intersectionRatio, round, sizeViolation, type Box } from "./geometry.js";
 import { readFlashes } from "./flash-recorder.js";
@@ -145,7 +146,7 @@ async function evaluateVisualUnsafe(a: VisualAssertion, locate: (d: TargetDescri
       const seen = value === null ? `${a.name} absent` : `${a.name}=${JSON.stringify(value)}`;
       if (a.absent === true) return { held: value === null, detail: seen };
       if (a.value === undefined) return { held: value !== null, detail: seen };
-      return { held: value === a.value, detail: seen };
+      return { held: value === literalOperand(a.value), detail: seen };
     }
     case "flashed": {
       const kind = a.className !== undefined ? "class" : a.attr !== undefined ? "attr" : "animation";
