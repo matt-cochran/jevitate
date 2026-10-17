@@ -109,8 +109,10 @@ export interface RunJourneyProgrammaticallyOptions {
    * `allowedOrigins` (#543): the replay's effective allowlist (site/environment ∪ the Journey's
    * `metadata.allowedOrigins` ∪ `--allow`) — what `journey run`/`verify` let a fixture reach, so a
    * fixture can reset an `http` check's source (a dev outbox) on an origin the human allowed.
+   * `sourceSite` is the Journey's RECORDED site (before any environment rebase), from which
+   * `fixtureRebaseUrl` finds the source environment's named origins (#561).
    */
-  fixtures?: (site: string, allowedOrigins: readonly string[]) => MissionFixtures | undefined;
+  fixtures?: (site: string, allowedOrigins: readonly string[], sourceSite: string) => MissionFixtures | undefined;
   /**
    * Playwright storageState JSON to seed the session from (CLI/MCP `--storage-state`, #118) —
    * the deterministic authenticated pre-step a Journey authored behind a login needs to
@@ -552,7 +554,7 @@ export async function runJourneyProgrammatically(
   // decided before any fixture or browser; a refusal says why and when to retry.
   const gate = await gateJourney(opts.siteGate, journey.recording, { ...(opts.account === undefined ? {} : { account: opts.account }), enforceLimits: true });
 
-  const fx = opts.fixtures?.(journey.recording.site, allowedOrigins);
+  const fx = opts.fixtures?.(journey.recording.site, allowedOrigins, stored.recording.site);
   let params = inputParams;
   try {
     if (fx !== undefined) {

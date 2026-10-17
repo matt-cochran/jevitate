@@ -28,7 +28,7 @@ import { redactSecretValues, type RunJourneyProgrammaticallyOptions } from "./jo
 import { journeyResultRecord, type JourneyResultProposal } from "./journey-result-record.js";
 import { secretParamValues } from "@jevitate/journey";
 import { resolveJourneyParams } from "./check-suite.js";
-import { applyJourneyEnvironment } from "./environments.js";
+import { applyJourneyEnvironment, fixtureRebaseUrl } from "./environments.js";
 import type { StepObserver } from "@jevitate/interpreter";
 import { journeyReviewHash } from "./journey-review.js";
 import { anchorBaseline, type BaselineRunStep } from "./anchor-baselines.js";
@@ -259,7 +259,12 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
       // #170: the item's session (default: the target's), exactly as `journey run --storage-state` (#118), and its fixtures.
       ...(journeySession === undefined ? {} : { storageState: journeySession }),
-      ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(targetFixtures(item.t, journeySession), site) }),
+      ...(item.t.fixturesFile === undefined
+        ? {}
+        : {
+            // #561: the item's environment maps named secondary origins back from its recorded site.
+            fixtures: (site: string) => fixturesFor(targetFixtures(item.t, journeySession), site, fixtureRebaseUrl(environment, stored.recording.site)),
+          }),
       ...(environment === undefined ? {} : { environment }),
     };
     // Only what a self-heal re-run adds (named, so the surface-wiring check sees what is passed).
