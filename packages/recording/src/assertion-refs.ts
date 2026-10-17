@@ -1,4 +1,5 @@
 import type { Assertion, AssertionOperand } from "./schema.js";
+import { encodeUrlParamValue } from "./navigate-params.js";
 
 /**
  * #562/#565 — parameter-relative assertion operands. An assertion's expected text or value
@@ -7,6 +8,11 @@ import type { Assertion, AssertionOperand } from "./schema.js";
  * bound to `name` in this run (a Journey parameter, an earlier `extract` step's output, a `setup.x`
  * fixture output). Fails closed: an unbound name, a secret one, or a non-string value is an error
  * that names the reference — never the value.
+ *
+ * #566: `urlIncludes.text` may carry `${name}` placeholders too (the URL a templated `navigate`
+ * reaches, e.g. `/threads/${thread}`). Each value is inserted percent-encoded exactly as a navigate
+ * URL placeholder is (`encodeUrlParamValue`), so the check compares like with like against the
+ * page's (encoded) URL.
  */
 
 /** A `${name}` placeholder (the grammar the `http` check's URL and assertions use, #543). */
@@ -61,6 +67,8 @@ function operands(a: Assertion): AssertionOperand[] {
       return [a.value];
     case "attr":
       return a.value === undefined ? [] : [a.value];
+    case "urlIncludes":
+      return [a.text];
     default:
       return [];
   }
@@ -115,6 +123,8 @@ export function resolveAssertionRefs(a: Assertion, lookup: AssertionRefLookup): 
       return { ...a, value: resolveOperand(a.value, lookup) };
     case "attr":
       return a.value === undefined ? a : { ...a, value: resolveOperand(a.value, lookup) };
+    case "urlIncludes":
+      return { ...a, text: expandPlaceholders(a.text, (n) => encodeUrlParamValue(bound(n, lookup))) };
     default:
       return a;
   }

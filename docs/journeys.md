@@ -126,12 +126,19 @@ budget to show it. Waits on other steps, and under `stale-value`, keep their `ma
 ### Parameter-relative assertions
 
 An assertion's expected text can follow a run's input. `textIncludes.text`, `valueEquals.value`
-and `attr.value` take either `{ "var": "name" }` or `${name}` inside the string:
+and `attr.value` take either `{ "var": "name" }` or `${name}` inside the string, and
+`urlIncludes.text` takes `${name}` inside the string:
 
 ```json
 { "kind": "textIncludes", "target": { "testId": "welcome" }, "text": "Welcome, ${name}" }
 { "kind": "valueEquals", "target": { "label": "Email" }, "value": { "var": "email" } }
+{ "kind": "urlIncludes", "text": "/threads/${thread}" }
 ```
+
+In `urlIncludes`, each value is inserted percent-encoded exactly as a
+[`navigate` URL placeholder](#parameters-in-a-navigate-url) is, so the check compares like with like
+against the page's URL. A navigate to `/threads/${thread}` that expects `/threads/${thread}` fails
+closed when the app redirects to another thread.
 
 - `name` is a declared parameter, the output of an `extract` step **earlier** in the Journey (in
   the end state, any `extract` output), or a `setup.x` fixture output.
@@ -208,6 +215,20 @@ jevitate journey verify checkout --mutate --allow http://127.0.0.1:26110   # blo
 | `stale-value:<n>` | types `""` into fill step n — or, for a `{ "var": name }` fill whose non-secret parameter an assertion names, an altered value of it (stale text in the composer) | each fill whose value a `valueEquals`/`textIncludes` checks, or whose variable an assertion names |
 | `swap-param:<name>` | replays with parameter `name` swapped for a different plausible value (another supplied parameter of the same shape, else the value with its last letter or digit changed), where the app receives it (a fill, a navigate URL); every assertion naming `${name}` still expects the supplied value | each non-secret `--param` an assertion names and an action reads |
 | `truncate-param:<name>` | the same, with the value's tail dropped (its first half kept) | the same, for a value of 2+ characters |
+
+Which parameters get a `swap-param`/`truncate-param`: a declared, non-secret parameter that you
+supply with `--param` (non-blank, with no `${…}` of its own), that an action reads (a `fill`
+value or a `navigate` URL placeholder), and that an assertion names (`{ "var": name }`, or
+`${name}` in `textIncludes`, `valueEquals`, `attr` or `urlIncludes`). These parameters get none:
+
+- a secret parameter. Its value is never altered, compared or reported.
+- a parameter that only assertions read. If no action receives it, changing it changes only what
+  the check expects, which proves nothing about the app.
+- a parameter you did not supply.
+
+A `{ "var": name }` fill whose parameter an assertion names gets a `stale-value` that types an
+**altered** value of the parameter instead of `""`. This is the stale text a composer can keep
+from an earlier reply.
 
 A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`; the
 **last** write step's mutations are also paired with every end-state check; a `stale-value` is also
@@ -448,9 +469,81 @@ jevitate recording promote take.json --page 0 --step 2 --var email
 This sets that step's `variableName` (the `{var}` binding), and the Journey then takes `--param
 email=…`.
 
-A recorded take is a Recording, one step short of a Journey: there is no single command yet that
-turns a post-processed take into a promoted Journey (see the `jevitate-record` skill's "Known
-gaps"). `explore-author-journey` is the direct path today.
+### Proposing bindings from takes
+
+Record the same flow two or more times, varying what a user would vary: another thread, another
+reply, another account. Then let jevitate propose how to bind the takes:
+
+```bash
+jevitate record --url http://localhost:3000/threads/T-1001 --intent "reply to a support thread"
+jevitate record --url http://localhost:3000/threads/T-2002 --intent "reply to a support thread"
+jevitate recording propose take-a.json take-b.json --id reply-to-thread
+```
+
+`recording propose` is deterministic: it uses no model and touches no browser. From the aligned
+steps, each take's captured values and the steps' recorded expectations, it decides:
+
+| It proposes | From |
+|---|---|
+| **params** | a typed or selected value that varies across takes (`reply`, `account`), and a `navigate` path segment that varies (`/threads/${thread}`) |
+| **constants** | a value equal in every take. A credential is never a constant |
+| **handbacks** | a credential field (password, one-time code, token, PIN, …), and a username or email field on the same page as one. A person types it at replay. It is never a value, a constant or a parameter |
+| **outputs** | an identifier the page shows **before** the first write that matches exactly one parameter in every take, for example `data-thread-id`. It becomes an `extract` step |
+| **checks** | a `pre-write` identity check. The page must show the supplied identifier, or still be at the supplied thread's URL, so a changed source context fails before anything is typed. Also a `post-write` `valueEquals { "var": … }` on each filled or selected parameter |
+| **stopBefore** | the first send/submit/post/publish click after the first write, else the last click after the last write. The draft ends **before** it |
+| **ambiguities** | everything the evidence cannot decide (see below) |
+
+**Ambiguities are left for a person.** jevitate never resolves them for you. Each one has a `kind`
+and the step ids it concerns:
+
+- `identical-param-columns`: two parameters took the same value in every take. Are they one input
+  or two?
+- `untied-observation`: the page showed something different in each take that matches no
+  parameter. Is it an output?
+- `multiply-tied-observation`: one observation matches several parameters.
+- `identity-after-write`: the identifier shows only after the first write, so it cannot fail
+  closed in time.
+- `unclassified-value`: a value could not be classified. It stays a handback.
+- `varying-target`: the step acted on a differently named element in each take.
+- `varying-url`: a URL varies in more than its path segments.
+- `no-submit-step`: no stop step was found, so the draft replays **every** step. The command also
+  prints a warning. Mark the stop yourself before you run the draft.
+
+The human output lists the ambiguities first. With `--json` you get the envelope with
+`params`, `constants`, `handbacks`, `outputs`, `checks`, `firstWriteStepId`, `stopBefore`,
+`ambiguities`, `draft` (`id`, `path`, `savedTo`, `promoted: false`, `steps`) and `nextSteps`.
+Evidence is redacted: each value appears only as its length, shape and word count. A short sample
+appears only for a value the app defined, such as a select option, a URL segment or displayed
+text. Typed text and credentials never appear as samples.
+
+**The draft is unpromoted.** By default, `propose` saves the draft as a Journey in the project's
+journeys store (`--id`, default `proposed-draft`). Its replay ends before `stopBefore`. It has no
+approval, and the command never promotes or approves anything. A draft never replaces an existing
+Journey: when the id exists, the command refuses with `E_PROPOSAL_DRAFT_EXISTS`. Choose another
+`--id`, or use `--out <file>` to write the draft somewhere else. `--no-draft` proposes only. Fewer
+than two takes (`E_PROPOSAL_TOO_FEW_TAKES`), an unreadable take (`E_INVALID_TAKE`,
+`E_PROPOSAL_INVALID_TAKE`) and takes that did not record the same steps (`E_PROPOSAL_MISALIGNED`)
+are usage errors (exit 64).
+
+Before anyone promotes the draft, decide every ambiguity, then run both of these:
+
+```bash
+jevitate journey review reply-to-thread --strict
+jevitate journey verify reply-to-thread --mutate --param thread=T-3003 --param reply="We escalated this." --param account=acct-billing
+```
+
+`verify --mutate` proves the proposed `{var}` checks catch a swapped or truncated thread and reply
+(see [Proving assertions can fail](#proving-assertions-can-fail)). Only a person promotes:
+`jevitate journey promote reply-to-thread`. Over MCP, the same command is the `recordings` tool's
+`propose` action. It takes confined take paths, returns the same redacted proposal, and saves the
+draft in the server's journeys store or to `out`, a file inside the project.
+
+Over MCP, the `recordings` tool never returns a captured value to the model. `diff` returns each
+value as a hint (length, shape, word count), and `postdoc` returns a constant's value redacted. The
+CLI shows values, because there a person decides on them.
+
+`explore-author-journey` is the other path to a Journey, for when you want jevitate to find the
+flow instead of demonstrating it yourself.
 
 ## Run, heal, share and load-test
 

@@ -342,7 +342,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (706 exports)
+# @jevitate/explore (707 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -1028,6 +1028,7 @@
   validateDenyPatterns: function
   ValueCapturingGenerationPort: class
   valueFor: function
+  valueHint: function
   ValueHint: interface
   valuesStatedInGoal: function
   valueStatedInGoal: function

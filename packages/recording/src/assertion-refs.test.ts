@@ -51,6 +51,16 @@ describe("resolveAssertionRefs", () => {
     expect(resolveAssertionRefs(a, lookup)).toEqual({ kind: "attr", target, name: "data-owner", value: "a@example.test" });
   });
 
+  it("expands a ${name} placeholder in a urlIncludes text percent-encoded like a navigate URL", () => {
+    const a: Assertion = { kind: "urlIncludes", text: "/people/${email}" };
+    expect(resolveAssertionRefs(a, lookup)).toEqual({ kind: "urlIncludes", text: "/people/a%40example.test" });
+  });
+
+  it("refuses a secret reference in a urlIncludes text with E_ASSERTION_REF_SECRET", () => {
+    const a: Assertion = { kind: "urlIncludes", text: "/reset/${password}" };
+    expect(errorOf(() => resolveAssertionRefs(a, lookup)).code).toBe(E_ASSERTION_REF_SECRET);
+  });
+
   it("leaves an assertion without references untouched", () => {
     const a: Assertion = { kind: "textIncludes", target, text: "Saved" };
     expect(resolveAssertionRefs(a, lookup)).toBe(a);

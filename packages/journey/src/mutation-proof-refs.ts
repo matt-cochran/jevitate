@@ -1,4 +1,4 @@
-import { PLACEHOLDER_RE, assertionRefs, navigateUrlParams, type Assertion, type AssertionOperand, type Step } from "@jevitate/recording";
+import { PLACEHOLDER_RE, assertionRefs, encodeUrlParamValue, navigateUrlParams, type Assertion, type AssertionOperand, type Step } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 import type { JourneyAssertionSite } from "./assertions.js";
 import { secretParamNames } from "./intent.js";
@@ -121,6 +121,10 @@ function pinAssertion(a: Assertion, name: string, value: string): Assertion {
       return { ...a, value: pinOperand(a.value, name, value) };
     case "attr":
       return a.value === undefined ? a : { ...a, value: pinOperand(a.value, name, value) };
+    case "urlIncludes": {
+      const pinned = pinOperand(a.text, name, encodeUrlParamValue(value));
+      return { ...a, text: typeof pinned === "string" ? pinned : a.text };
+    }
     default:
       return a;
   }

@@ -226,7 +226,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (454 exports)
+# @jevitate/explore (455 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -672,6 +672,7 @@
   validateAllowControlPatterns: function
   validateDenyPatterns: function
   valueFor: function
+  valueHint: function
   valueStatedInGoal: function
   valuesStatedInGoal: function
   verifyFix: function

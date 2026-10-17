@@ -31,6 +31,11 @@ without `--readiness`. ○ items (such as a skipped Jev review) never fail it.
 4. **Run it on a non-production environment:** `jevitate journey run <id> --env <name>`.
    Never prove or annotate against production.
 5. **`jevitate journey verify <id> --mutate --env <name>` LAST** (MCP `verify_journey`).
+   Pass `--param name=value` for each parameter. Each supplied non-secret parameter that an action
+   reads and an assertion names gets `swap-param`/`truncate-param` mutations, and a `{var}` fill gets
+   a `stale-value` that types an altered value. Secrets are never mutated. A parameter that only
+   assertions read gets no parameter mutation. A `recording propose` draft depends on this proof
+   for its `{var}` checks.
    The proof is keyed on executable content only (steps, targets, assertions, end state), so
    rewording goal, success criteria, objectives or expected results (what `annotate --approve`
    writes) does not stale it. Exception: annotating drops a success criterion's code `check`

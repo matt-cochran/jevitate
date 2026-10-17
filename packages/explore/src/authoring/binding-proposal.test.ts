@@ -185,3 +185,24 @@ describe("proposeBindings refusals and ambiguity", () => {
     expect(p.ambiguities).toContainEqual(expect.objectContaining({ kind: "identical-param-columns", stepIds: ["s-reply", "s-summary"] }));
   });
 });
+
+/** The same takes as recorded by the real recorder: the thread navigate expects only its own URL. */
+function urlOnlyTake(t: TakeSpec): AuthoringTake {
+  const tk = take(t);
+  const open = tk.recording.pages[1].steps[0];
+  open.step = { kind: "navigate", url: `/threads/${t.thread}`, expect: { kind: "urlIncludes", text: `/threads/${t.thread}` } };
+  return tk;
+}
+
+describe("proposeBindings over takes whose thread navigate expects only its URL", () => {
+  const p = proposeBindings([urlOnlyTake(TAKE_A), urlOnlyTake(TAKE_B)]);
+
+  test("checks the thread URL against the thread parameter before the first write", () => {
+    expect(p.checks).toContainEqual({ phase: "pre-write", stepId: "s-open", reason: "identity", param: "thread", assertion: { kind: "urlIncludes", text: "/threads/${thread}" } });
+  });
+
+  test("keeps the templated URL check on the draft's thread navigate", () => {
+    const step = (p.draft?.recording.pages ?? []).flatMap((pg) => pg.steps).find((s) => s.stepId === "s-open")?.step;
+    expect(step).toMatchObject({ expect: { kind: "urlIncludes", text: "/threads/${thread}" } });
+  });
+});
