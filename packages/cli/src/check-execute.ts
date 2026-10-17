@@ -6,6 +6,7 @@ import { stampRunMetadata } from "./run-metadata.js";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
 import { writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import { parseScreenshotsArg } from "./run-screenshots.js";
 import { resolveRouteScope } from "@jevitate/explore";
@@ -23,8 +24,10 @@ import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { type Json, type Planned, type PreparedHeal, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
 import type { JourneyRunResult } from "@jevitate/runtime";
-import type { RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { redactSecretValues, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { journeyResultRecord, type JourneyResultProposal } from "./journey-result-record.js";
+import { secretParamValues } from "@jevitate/journey";
+import { resolveJourneyParams } from "./check-suite.js";
 import { applyJourneyEnvironment } from "./environments.js";
 import type { StepObserver } from "@jevitate/interpreter";
 import { journeyReviewHash } from "./journey-review.js";
@@ -76,6 +79,26 @@ export interface ExecContext {
   readonly healer?: () => Promise<SelfHealer>;
   /** #470: the project's test-id convention (resolved once at preflight); default: the project's, else the defaults. */
   readonly testIdAttributes?: readonly string[];
+}
+
+/** #563: the run id of a check run (stable across its items, fresh per `runCheck`). */
+const RUN_IDS = new WeakMap<ExecContext, string>();
+
+function runId(ctx: ExecContext): string {
+  let id = RUN_IDS.get(ctx);
+  if (id === undefined) {
+    id = randomUUID();
+    RUN_IDS.set(ctx, id);
+  }
+  return id;
+}
+
+/**
+ * #563: the per-run token a `{ unique }` param resolves to — short, lowercase alphanumeric, unique
+ * per suite run and per Journey entry (derived from the run id, the entry index and its target).
+ */
+function uniqueRunToken(runId: string, target: string, entryIndex: number): string {
+  return createHash("sha256").update(`${runId}:${target}:${entryIndex}`).digest("hex").slice(0, 10);
 }
 
 /**
@@ -222,11 +245,15 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     // #247: the item's environment (resolved and checked at preflight); its session when the item and target name none.
     const environment = item.t.environments?.get(sj);
     const j = applyJourneyEnvironment(stored, environment);
+    // #563: resolve a `{ unique }` param once, so the run and its result record carry the same value.
+    const entryIndex = item.t.target.journeys.indexOf(sj);
+    const resolvedParams = resolveJourneyParams(sj.params, uniqueRunToken(runId(ctx), item.t.target.name, entryIndex < 0 ? 0 : entryIndex));
+    const recordedParams = redactSecretValues(resolvedParams, secretParamValues(j, resolvedParams));
     const journeySession = session ?? (sj.storageState === null ? undefined : environment?.storageState);
     const runOptions = {
       dir: t.journeysDir ?? opts.journeysDir,
       id: sj.id,
-      params: { ...sj.params },
+      params: { ...resolvedParams },
       ...emulationFor(sj.emulation),
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
@@ -273,7 +300,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       const proposal = (r as { proposal?: JourneyResultProposal }).proposal;
       const record = journeyResultRecord(r, {
         journey: j,
-        params: sj.params,
+        params: resolvedParams,
         startedAt,
         engine: ctx.engine,
         suite: stamp.suite,
@@ -291,7 +318,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
 
     // Fail closed first (no healer, no change context): a plain pass or failure never involves a model.
     const first = await runOnce({});
-    const firstRecord = await writeRecord(first, "", {});
+    const firstRecord = await writeRecord(first, "", { params: recordedParams });
     const heal = ctx.heal;
     if (heal === undefined || ctx.healer === undefined || first.outcome !== "quarantined") {
       return { status: "ran", resultPath: firstRecord.path, outcome: first.outcome, actions: firstRecord.actions, ...measured(first, firstRecord.locatorHealth) };
@@ -308,7 +335,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     const proposalId = typeof proposal?.id === "string" ? proposal.id : undefined;
     const proposalPath = typeof proposal?.path === "string" ? proposal.path : undefined;
     const healAttempts = r.heal?.attempts.length ?? 0;
-    const rerun = await writeRecord(r, ".heal", { healOf: basename(firstRecord.path) }, (r as { resultPath?: string }).resultPath !== undefined);
+    const rerun = await writeRecord(r, ".heal", { healOf: basename(firstRecord.path), params: recordedParams }, (r as { resultPath?: string }).resultPath !== undefined);
     return {
       status: "ran",
       resultPath: rerun.path,
