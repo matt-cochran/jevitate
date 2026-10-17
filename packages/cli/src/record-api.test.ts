@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { ProfileManager } from "@jevitate/daemon";
-import { RecordingSchema, type Recording } from "@jevitate/recording";
+import { AuthoringTakeSchema, type Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import type { BrowserPort, BrowserSession, OpenOptions } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
@@ -13,8 +13,8 @@ import { runRecording, resolveRecordAllowlist, waitForEnterKey, type RecorderLik
 /**
  * A schema-valid demonstrated Recording the fake recorder hands back — a real
  * `Recorder.stop()` produces exactly this shape (navigate to the start URL,
- * then a click), so asserting it against `RecordingSchema` proves the wiring
- * emits something the interpreter can replay.
+ * then a click), so asserting it against `AuthoringTakeSchema`'s nested `RecordingSchema` proves the
+ * wiring emits something the interpreter can replay.
  */
 const DEMO_RECORDING: Recording = {
   version: "1.0",
@@ -83,6 +83,10 @@ function fakeRecorder(recording: Recording): { recorder: RecorderLike; calls: st
       calls.push(`stop:${retro ?? ""}`);
       return recording;
     },
+    async stopAuthoring(retro) {
+      calls.push(`stopAuthoring:${retro ?? ""}`);
+      return { recording, values: new Map() };
+    },
   };
   return { recorder, calls };
 }
@@ -136,17 +140,17 @@ describe("runRecording", () => {
       nowIso: () => "2026-09-21T12:00:00.000Z",
     });
 
-    // Recorder lifecycle ran in order: install -> start(intent) -> stop.
-    expect(calls).toEqual(["install", "start:sign in", "stop:"]);
+    // Recorder lifecycle ran in order: install -> start(intent) -> stopAuthoring.
+    expect(calls).toEqual(["install", "start:sign in", "stopAuthoring:"]);
     // The session was pointed at the start URL.
     expect(goneTo()).toEqual(["https://fixture.test/login"]);
 
-    // The Recording was written to disk under outDir, and it parses.
+    // The take file was written to disk under outDir, and it parses as {recording, values}.
     const files = await readdir(outDir);
     expect(files).toHaveLength(1);
     expect(result.recordingPath).toBe(join(outDir, files[0]));
     const onDisk = JSON.parse(await readFile(result.recordingPath, "utf8"));
-    const parsed = RecordingSchema.parse(onDisk);
+    const parsed = AuthoringTakeSchema.parse(onDisk).recording;
     expect(parsed.site).toBe("https://fixture.test");
 
     // It is replayable by the existing interpreter (constructs + flattens it).
@@ -164,12 +168,15 @@ describe("runRecording", () => {
     expect(capturedOpen?.persistentProfile).toBeUndefined();
   });
 
-  it("still closes the session when stop() throws", async () => {
+  it("still closes the session when stopAuthoring() throws", async () => {
     const { session, closed } = fakeSession("https://fixture.test/inbox");
     const recorder: RecorderLike = {
       async install() {},
       async start() {},
       async stop() {
+        throw new Error("assembly failed");
+      },
+      async stopAuthoring() {
         throw new Error("assembly failed");
       },
     };
@@ -240,7 +247,7 @@ describe("record command — wiring (no real browser)", () => {
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ ok: true, data: { steps: 2, pages: 1, finalUrl: "https://fixture.test/inbox" } });
     const onDisk = JSON.parse(await readFile(parsed.data.recordingPath, "utf8"));
-    expect(RecordingSchema.parse(onDisk).site).toBe("https://fixture.test");
+    expect(AuthoringTakeSchema.parse(onDisk).recording.site).toBe("https://fixture.test");
   });
 });
 

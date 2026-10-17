@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { assertAuthorizedExploreTarget, normalizeAllowlist } from "@jevitate/explore";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type UnpackedExtension } from "@jevitate/playwright";
 import { extensionsStamp } from "./browser-run-options.js";
-import type { Recording } from "@jevitate/recording";
+import { AuthoringTakeSchema, type AuthoringRecording, type Recording } from "@jevitate/recording";
 import { Recorder } from "@jevitate/recorder";
 import { resolveDataDir } from "./data-dir.js";
 import { clock } from "@jevitate/domain";
@@ -32,6 +32,8 @@ export interface RecorderLike {
   install(): Promise<void>;
   start(intent?: string): Promise<void>;
   stop(retro?: string): Promise<Recording>;
+  /** #564: the take-file surface — redacted `Recording` plus local-only captured values. */
+  stopAuthoring(retro?: string): Promise<AuthoringRecording>;
 }
 
 export interface RunRecordingOptions {
@@ -98,14 +100,29 @@ export async function runRecording(opts: RunRecordingOptions): Promise<RunRecord
     // The demonstration: the user drives the browser until they signal done.
     await (opts.waitForStop ?? waitForEnterKey)();
 
-    const recording = { ...(await recorder.stop(opts.retro)), ...extensionsStamp({ ...(opts.extensions === undefined ? {} : { extensions: opts.extensions }) }) };
+    // #564: `stopAuthoring` (same retro option as `stop`) — its `.recording` is
+    // built by the same assembly pass `stop()` uses, and its local-only `.values`
+    // is the non-secret captured value side-channel the take file carries.
+    const authoring = await recorder.stopAuthoring(opts.retro);
+    const recording = { ...authoring.recording, ...extensionsStamp({ ...(opts.extensions === undefined ? {} : { extensions: opts.extensions }) }) };
     const finalUrl = session.page.url();
+
+    // The take file is `{recording, values}` so `recording diff`/`postdoc`/`promote`
+    // accept it directly. `values` is a plain JSON record (JSON has no Map literal).
+    const values = Object.fromEntries(authoring.values);
+    // Defensive, fail-closed validation before anything reaches disk: the written
+    // take must be exactly the canonical `AuthoringTakeSchema` shape. No secret
+    // material is available to compare against here by construction — the recorder
+    // never reads a secret field's value (it becomes a `handback`, and `values`
+    // gets no entry for it), so the omission is the guarantee, proven end-to-end by
+    // record-take-served.test.ts grepping the written file for the typed secrets.
+    const take = AuthoringTakeSchema.parse({ recording, values });
 
     const outDir = opts.outDir ?? logsDirFor();
     await mkdir(outDir, { recursive: true });
     const iso = (opts.nowIso ?? (() => clock.nowIso()))();
     const recordingPath = join(outDir, `record-${iso.replace(/[:.]/g, "-")}.json`);
-    await writeFile(recordingPath, `${JSON.stringify(recording, null, 2)}\n`, "utf8");
+    await writeFile(recordingPath, `${JSON.stringify(take, null, 2)}\n`, "utf8");
 
     const steps = recording.pages.reduce((n, p) => n + p.steps.length, 0);
     return { recording, recordingPath, steps, pages: recording.pages.length, finalUrl };
