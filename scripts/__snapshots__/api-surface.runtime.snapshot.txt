@@ -226,7 +226,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (451 exports)
+# @jevitate/explore (454 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -237,6 +237,7 @@
   ActionDeltas: class
   BLOCKED_CONSEQUENCE_STEPS: const (number)
   BLOCKED_FETCH_ERROR: object
+  BindingProposalError: class
   BoundsTracker: class
   BudgetMonitor: class
   CANARY_ATTRIBUTE: const (string)
@@ -336,6 +337,7 @@
   PAID: object
   PROMPT_INJECTION_GUARD: const (string)
   PROMPT_PAGE_TEXT_CHARS: const (number)
+  PROPOSAL_SAMPLE_MAX: const (number)
   PageDeltas: class
   PageMonitor: class
   PageNavigatingError: class
@@ -582,6 +584,7 @@
   planMisuseEpisode: function
   playwrightLivenessProbe: function
   probeResponsive: function
+  proposeBindings: function
   quoteIsOnlyControlNames: function
   quoteSpanAt: function
   quoteSpans: function
