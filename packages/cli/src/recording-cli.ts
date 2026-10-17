@@ -52,6 +52,22 @@ export function registerRecordingCommands(program: Command, deps: CliDeps): void
     return { recording: parsed.recording, values: new Map(Object.entries(parsed.values)) };
   }
 
+  /**
+   * Reads one Recording for `recording promote`/`recording fit` (#564): accepts EITHER a raw
+   * `Recording` (as before) OR the `{recording, values}` take file `jevitate record` writes —
+   * unwrapping `.recording` in the latter case, so a take recorded for `diff`/`postdoc` can also be
+   * promoted/fitted without hand-editing. The `values` side-channel is deliberately discarded: these
+   * two commands operate on the persisted artifact only.
+   */
+  async function readRecordingOrTake(file: string): Promise<Recording> {
+    const raw = await readFile(file, "utf8");
+    const json: unknown = JSON.parse(raw);
+    if (json !== null && typeof json === "object" && !Array.isArray(json) && "recording" in json) {
+      return AuthoringTakeSchema.parse(json).recording;
+    }
+    return RecordingSchema.parse(json);
+  }
+
   const recording = program.command("recording").description("inspect and edit recorded takes (promote, edit steps, diff, postdoc)");
 
   recording
@@ -62,8 +78,7 @@ export function registerRecordingCommands(program: Command, deps: CliDeps): void
     .action(async function (this: Command, file: string) {
       const { page, step, var: varName } = this.opts<{ page: string; step: string; var: string }>();
       try {
-        const raw = await readFile(file, "utf8");
-        const rec: Recording = RecordingSchema.parse(JSON.parse(raw));
+        const rec = await readRecordingOrTake(file);
         const result = promoteToVariable(rec, { page: Number(page), step: Number(step) }, varName);
         program.configureOutput().writeOut?.(`${JSON.stringify(result, null, 2)}\n`);
         process.exitCode = 0;
@@ -105,8 +120,7 @@ export function registerRecordingCommands(program: Command, deps: CliDeps): void
     .action(async function (this: Command, file: string) {
       const { json } = this.opts<{ json?: boolean }>();
       try {
-        const raw = await readFile(file, "utf8");
-        const rec: Recording = RecordingSchema.parse(JSON.parse(raw));
+        const rec = await readRecordingOrTake(file);
         const interaction = fitInteractionPolicy(rec);
         const policy: SitePolicy = { version: "1.0.0", interaction };
         if (json) {

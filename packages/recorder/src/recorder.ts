@@ -153,11 +153,14 @@ export type CaptureEvent = ActionCaptureEvent | NavigationCaptureEvent;
  * `assembleWithValues` in `assemble.ts` for the exact contract, including
  * what does and does not get an entry.
  *
- * **This object is local-authoring-only.** `.values` must never be
- * persisted (it never touches `RecordingStore`), never serialized into a
- * `Recording`, and never sent to a model — treat it exactly the way
- * `.recording` already treats a secret field's value: as something that does
- * not leave this process.
+ * **This object is local-authoring-only.** `.values` may be persisted to the
+ * local take file `{recording, values}` (the shape `jevitate record` writes,
+ * consumed by `recording diff`/`postdoc`/`promote`) — non-secret values ONLY,
+ * since a secret field never gets an entry — but must never be serialized
+ * into a `Recording`, never touch `RecordingStore`, and never be sent to a
+ * model. Treat it exactly the way `.recording` already treats a secret field's
+ * value: as something that does not leave this process except into the local
+ * take file.
  */
 export interface AuthoringRecording {
   readonly recording: Recording;
@@ -310,9 +313,10 @@ export class Recorder {
    * buffer, and there is no separate re-derivation of page/step segmentation
    * to drift out of sync with it.
    *
-   * Local-authoring-only: see `AuthoringRecording`'s doc comment for what must
-   * never happen to `.values` (never persisted, never sent to a model, never
-   * touches `RecordingStore`).
+   * Local-authoring-only: `.values` may be persisted to the local take file
+   * (`{recording, values}`, non-secret only — a secret field never gets an
+   * entry) but is never sent to a model and never touches `RecordingStore` —
+   * see `AuthoringRecording`'s doc comment.
    */
   async stopAuthoring(retro?: string): Promise<AuthoringRecording> {
     await this.finalize();
