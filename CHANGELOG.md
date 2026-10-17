@@ -21,7 +21,14 @@ behaviour changes).
 ### Changed
 
 - **`jevitate record` writes a take file `{ recording, values }` (#564)** that `recording diff`, `postdoc`, `promote` and `fit` accept directly. `values` holds the non-secret text and select values the take captured (secret, credential and one-time-code fields never get one) and stays local; `promote` and `fit` also still accept a bare Recording.
-- **A literal `${...}` in assertion text is now a reference (#562).** Journeys whose expected text contained `${` must declare that name or reword the text.
+- **A literal `${...}` in assertion text, including `urlIncludes`, is now a reference (#562, #566).** Journeys whose expected text contained `${` must declare that name or reword the text. `urlIncludes` encodes the value the way navigate URLs do, so a proposed draft checks the templated page URL before its first write.
+- **Wider secret-field detection (#564).** A field is secret when its type or autocomplete says so (now including `cc-number`/`cc-csc`) or when its name, id, label, aria-label or placeholder names a credential (password, token, API key, secret, PIN, OTP, CVV, card number, SSN, security code; whole words, so `pinned` or `spinner` do not match). Such fields are recorded as handbacks, never get a take value, never contribute a value to an exploration snapshot, and are handbacks in a binding proposal.
+
+### Security
+
+- **A revealed password never reaches the take file (#564).** A password field switched to `type=text` by a "show password" toggle (with no `autocomplete`) stays a handback for the rest of the take, and a field that becomes secret mid-take loses its value; secrecy is sticky per element in the page.
+- **MCP `recordings diff`/`postdoc` return value hints, not values (#564).** Through MCP a take value is a length/shape hint and postdoc constants are redacted, so typed text never reaches the model; the CLI still shows values to the person running it.
+- **Secret-named extract outputs are secrets (#565).** An `extract` whose output name looks like a credential (`apiKey`, `token`, …) cannot be referenced by an assertion (`E_ASSERTION_REF_SECRET`, at load and at run), and its value joins the run's redaction set.
 
 ### Fixed
 
