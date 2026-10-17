@@ -1709,7 +1709,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (181 exports)
+# @jevitate/recording (196 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1719,6 +1719,12 @@
   applyDiff: function
   applyPostdoc: function
   Assertion: type-alias
+  AssertionOperand: type-alias
+  AssertionRefBinding: interface
+  AssertionRefError: class
+  AssertionRefErrorCode: type-alias
+  AssertionRefLookup: type-alias
+  assertionRefs: function
   AssertionSchema: variable
   ATTR_NAME_RE: variable
   AUTH_SECRET_REF_RE: variable
@@ -1742,16 +1748,21 @@
   DEFAULT_HTTP_CHECK_WITHIN_MS: variable
   DeniedAsSpec: interface
   describeNavigateUrl: function
+  describeOperand: function
   diffColumns: function
   diffRecordings: function
   DiffResult: interface
   diffTakes: function
   DomObservable: interface
   DomRead: type-alias
+  E_ASSERTION_REF_SECRET: variable
+  E_ASSERTION_REF_TYPE: variable
+  E_ASSERTION_REF_UNBOUND: variable
   encodeUrlParamValue: function
   ensureStepIds: function
   evaluateInvariantExpression: function
   EvalValue: type-alias
+  expandPlaceholders: function
   ExpressionEnv: interface
   expressionObservables: function
   ExprNode: type-alias
@@ -1794,6 +1805,7 @@
   jsonPathHasEach: function
   jsonPathProblem: function
   JsonPathSegment: type-alias
+  literalOperand: function
   matchesPattern: function
   matchesResponseStatus: function
   MAX_BUDGETS: variable
@@ -1825,6 +1837,8 @@
   parseInvariantExpression: function
   parseJsonPath: function
   patternRegex: function
+  PLACEHOLDER_RE: variable
+  placeholderNames: function
   PostdocDecision: type-alias
   PostdocDecisionSchema: variable
   PostdocDecisionsSchema: variable
@@ -1845,6 +1859,7 @@
   RedactedValue: type-alias
   ReferenceDiffResult: interface
   RequestShape: interface
+  resolveAssertionRefs: function
   resolveHttpUrl: function
   resolveNavigateUrl: function
   rpcMethodOf: function

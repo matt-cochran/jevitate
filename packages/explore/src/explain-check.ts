@@ -1,4 +1,4 @@
-import { describeNavigateUrl, type Assertion, type TargetDescriptor } from "@jevitate/recording";
+import { describeNavigateUrl, type Assertion, type AssertionOperand, type TargetDescriptor } from "@jevitate/recording";
 import type { SuccessCheck } from "./success-checks.js";
 
 /** The longest a text/value is shown before it is cut (with a trailing `…`). */
@@ -6,6 +6,11 @@ const MAX_VALUE_CHARS = 80;
 
 function cut(value: string): string {
   return value.length > MAX_VALUE_CHARS ? `${value.slice(0, MAX_VALUE_CHARS)}…` : value;
+}
+
+/** #565: an expected text or value — a literal quoted, a `{ var }` reference named (never a value). */
+function shown(op: AssertionOperand): string {
+  return typeof op === "string" ? `"${cut(op)}"` : `the value of ${op.var}`;
 }
 
 /**
@@ -32,7 +37,7 @@ function explainAssertion(a: Assertion): { text: string; weak: boolean } {
     case "visible":
       return { text: `${explainTarget(a.target)} is visible`, weak: false };
     case "textIncludes":
-      return { text: `${explainTarget(a.target)} shows "${cut(a.text)}"`, weak: false };
+      return { text: `${explainTarget(a.target)} shows ${shown(a.text)}`, weak: false };
     case "count": {
       const target = explainTarget(a.target);
       if (a.max === undefined && (a.min === undefined || a.min === 0)) {
@@ -43,12 +48,12 @@ function explainAssertion(a: Assertion): { text: string; weak: boolean } {
       return { text: `between ${a.min} and ${a.max} ${target}`, weak: false };
     }
     case "valueEquals":
-      return { text: `${explainTarget(a.target)} has the value "${cut(a.value)}"`, weak: false };
+      return { text: `${explainTarget(a.target)} has the value ${shown(a.value)}`, weak: false };
     case "attr": {
       const target = explainTarget(a.target);
       if (a.absent === true) return { text: `${target} has no ${a.name}`, weak: false };
       if (a.value === undefined) return { text: `${target} has ${a.name}`, weak: false };
-      return { text: `${target} has ${a.name}="${cut(a.value)}"`, weak: false };
+      return { text: `${target} has ${a.name}=${shown(a.value)}`, weak: false };
     }
     case "style": {
       const channel = a.channel === undefined ? "" : ` (${a.channel})`;

@@ -13,6 +13,7 @@ import {
   DEFAULT_HTTP_CHECK_WITHIN_MS,
   NavigateUrlParamError,
   describeNavigateUrl,
+  expandPlaceholders,
   navigateUrlParams,
   resolveNavigateUrl,
   selectJsonValues,
@@ -145,8 +146,6 @@ export interface EvaluateHttpCheckOptions {
 
 class HttpCheckRefError extends Error {}
 
-const PLACEHOLDER = /\$\{([^}]*)\}/g;
-
 /** The check with every `${name}` resolved: the URL strictly encoded (origin kept), values verbatim. */
 export function resolveHttpCheck(check: HttpCheck, resolveRef: HttpCheckRefResolver | undefined): HttpCheck {
   const lookup = (name: string): string => {
@@ -155,7 +154,7 @@ export function resolveHttpCheck(check: HttpCheck, resolveRef: HttpCheckRefResol
     if (ref.secret) throw new HttpCheckRefError(`${E_HTTP_CHECK_SECRET_REF}: \${${name}} is a secret — an http check's URL and details are model-visible and persisted, so it may not use one`);
     return ref.value;
   };
-  const sub = (text: string): string => text.replace(PLACEHOLDER, (_m, name: string) => lookup(name));
+  const sub = (text: string): string => expandPlaceholders(text, lookup);
   const vars = new Map(navigateUrlParams(check.url).map((n) => [n, lookup(n)] as const));
   const url = resolveNavigateUrl(check.url, vars);
   return {

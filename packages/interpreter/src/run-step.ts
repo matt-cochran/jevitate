@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
-import { confineFixture, describeNavigateUrl, encodeUrlParamValue, navigateUrlParams, resolveNavigateUrl } from "@jevitate/recording";
+import type { AssertionRefLookup } from "@jevitate/recording";
+import { confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
@@ -87,6 +88,28 @@ export interface StepWaitHooks {
 }
 
 /**
+ * #565: how a step's expectation resolves its references beyond the run's `vars`. `refLookup` names
+ * the run's other bindings (`setup.x`) and, for every name, whether it is a secret — a secret is
+ * refused, never expanded into an expectation (its text is model-visible and persisted).
+ */
+export interface StepRefOptions {
+  readonly refLookup?: AssertionRefLookup;
+}
+
+/**
+ * #565: the references a step's expectation may use — the run's `vars` (its params, and every
+ * earlier `extract` output) first, then `refLookup`; a name `refLookup` marks secret stays secret.
+ */
+function stepRefs(vars: Map<string, string>, lookup: AssertionRefLookup | undefined): AssertionRefLookup {
+  return (name) => {
+    const other = lookup?.(name);
+    const v = vars.get(name);
+    if (v !== undefined) return { value: v, secret: other?.secret === true };
+    return other;
+  };
+}
+
+/**
  * A step's postcondition: without `waitFor`, exactly the bounded `checkAssertion` it always was; with
  * it (#409), the outcome wait (`waitForOutcome`) — reported through `hooks.onWait` whatever its
  * ending, and a `PostconditionFailed` naming how it ended when the expectation never held.
@@ -140,9 +163,17 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions & StepWaitHooks & { readonly fixtureBaseDir?: string } = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string } = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
+  // #562/#565: an expectation's `${name}` / `{ var }` operands resolve as it is checked — after this
+  // step's own `extract` bound its output. The recorded step itself is never rewritten.
+  const refs = stepRefs(vars, targetOpts.refLookup);
+  const expected = (a: Assertion): Assertion => resolveAssertionRefs(a, refs);
+  // Fail closed BEFORE acting: a reference that cannot resolve never lets the step's action run
+  // (an `extract`'s own output is bound by the step itself, so it is taken as bound here).
+  const own = step.kind === "assert" ? step.check : step.kind === "handback" ? step.resume : "expect" in step ? step.expect : undefined;
+  if (own !== undefined) resolveAssertionRefs(own, step.kind === "extract" ? (n) => (n === step.as ? { value: "", secret: false } : refs(n)) : refs);
   switch (step.kind) {
     case "navigate": {
       // #399: `${param}` placeholders resolve from the vars (strictly encoded, origin kept); a
@@ -153,18 +184,18 @@ export async function runStep(
       } catch (err) {
         throw url === step.url ? err : withoutNavigateValues(err, step.url, vars);
       }
-      await postcondition(actor, step.expect, step.waitFor, `navigate to ${describeNavigateUrl(step.url)}`, index, targetOpts);
+      await postcondition(actor, expected(step.expect), step.waitFor, `navigate to ${describeNavigateUrl(step.url)}`, index, targetOpts);
       return { kind: "done" };
     }
     case "click": {
       await Click.on(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
-      await postcondition(actor, step.expect, step.waitFor, "click", index, targetOpts);
+      await postcondition(actor, expected(step.expect), step.waitFor, "click", index, targetOpts);
       return { kind: "done" };
     }
     case "fill": {
       const text = resolveValue(step.value, vars);
       await Enter.theText(text).into(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
-      await postcondition(actor, step.expect, step.waitFor, "fill", index, targetOpts);
+      await postcondition(actor, expected(step.expect), step.waitFor, "fill", index, targetOpts);
       return { kind: "done" };
     }
     case "waitFor": {
@@ -173,7 +204,7 @@ export async function runStep(
       return { kind: "done" };
     }
     case "assert": {
-      await postcondition(actor, step.check, step.waitFor, "assert", index, targetOpts);
+      await postcondition(actor, expected(step.check), step.waitFor, "assert", index, targetOpts);
       return { kind: "done" };
     }
     case "extract": {
@@ -184,14 +215,14 @@ export async function runStep(
         throw new Error(`extract: attribute "${step.attr}" not found on target`);
       }
       vars.set(step.as, value);
-      await postcondition(actor, step.expect, step.waitFor, "extract", index, targetOpts);
+      await postcondition(actor, expected(step.expect), step.waitFor, "extract", index, targetOpts);
       return { kind: "done" };
     }
     case "select": {
       const value = resolveValue(step.value, vars);
       const page = actor.ability(BrowseTheWebToken).session.page;
       await (await resolveTarget(page, step.target, targetOpts)).selectOption(value);
-      await postcondition(actor, step.expect, step.waitFor, "select", index, targetOpts);
+      await postcondition(actor, expected(step.expect), step.waitFor, "select", index, targetOpts);
       return { kind: "done" };
     }
     case "upload": {
@@ -208,13 +239,13 @@ export async function runStep(
       const page = actor.ability(BrowseTheWebToken).session.page;
       // Residual risk (accepted): the file could be swapped between confineFixture and setInputFiles (TOCTOU).
       await (await resolveTarget(page, step.target, targetOpts)).setInputFiles(file);
-      await postcondition(actor, step.expect, step.waitFor, "upload", index, targetOpts);
+      await postcondition(actor, expected(step.expect), step.waitFor, "upload", index, targetOpts);
       return { kind: "done" };
     }
     case "press": {
       const page = actor.ability(BrowseTheWebToken).session.page;
       await page.keyboard.press(step.key);
-      await postcondition(actor, step.expect, step.waitFor, "press", index, targetOpts);
+      await postcondition(actor, expected(step.expect), step.waitFor, "press", index, targetOpts);
       return { kind: "done" };
     }
     case "editText": {
@@ -228,7 +259,7 @@ export async function runStep(
         ...(value === undefined ? {} : { value }),
         ...(step.format === undefined ? {} : { format: step.format }),
       });
-      await postcondition(actor, step.expect, step.waitFor, "editText", index, targetOpts);
+      await postcondition(actor, expected(step.expect), step.waitFor, "editText", index, targetOpts);
       return { kind: "done" };
     }
     case "forEach": {
@@ -256,7 +287,7 @@ export async function runStep(
         const rowLocator = itemsLocator.nth(i);
         vars.set(`${step.as}.__index`, String(i));
         for (const childStep of step.steps) {
-          await runRowScopedChildStep(actor, childStep, rowLocator, vars);
+          await runRowScopedChildStep(actor, childStep, rowLocator, vars, expected);
         }
       }
       return { kind: "done" };
@@ -268,7 +299,7 @@ export async function runStep(
       // acts; a future HITL runner drives the human and re-checks `resume`
       // itself before resuming. Auto-satisfying `resume` here would defeat
       // that.
-      return { kind: "awaiting_human", prompt: step.prompt, resume: step.resume, index };
+      return { kind: "awaiting_human", prompt: step.prompt, resume: expected(step.resume), index };
     }
     default: {
       const _exhaustive: never = step;
@@ -289,12 +320,14 @@ async function runRowScopedChildStep(
   childStep: Step,
   rowLocator: Locator,
   vars: Map<string, string>,
+  expected: (a: Assertion) => Assertion,
 ): Promise<void> {
   switch (childStep.kind) {
     case "click": {
       await resolveInRoot(rowLocator, childStep.target).click();
-      if (!(await checkAssertionInRow(actor, childStep.expect, rowLocator))) {
-        throw new PostconditionFailed(childStep.expect, "forEach click");
+      const expect = expected(childStep.expect);
+      if (!(await checkAssertionInRow(actor, expect, rowLocator))) {
+        throw new PostconditionFailed(expect, "forEach click");
       }
       return;
     }
@@ -305,8 +338,9 @@ async function runRowScopedChildStep(
         throw new Error(`extract: attribute "${childStep.attr}" not found on target`);
       }
       vars.set(childStep.as, value);
-      if (!(await checkAssertionInRow(actor, childStep.expect, rowLocator))) {
-        throw new PostconditionFailed(childStep.expect, "forEach extract");
+      const expect = expected(childStep.expect);
+      if (!(await checkAssertionInRow(actor, expect, rowLocator))) {
+        throw new PostconditionFailed(expect, "forEach extract");
       }
       return;
     }
@@ -381,7 +415,7 @@ async function evaluateAssertionInRowOnce(
     }
     case "textIncludes": {
       const text = await resolveInRoot(rowLocator, a.target).innerText();
-      return textIncludesCI(text, a.text);
+      return textIncludesCI(text, literalOperand(a.text));
     }
     case "count": {
       const n = await resolveInRoot(rowLocator, a.target).count();
@@ -394,7 +428,7 @@ async function evaluateAssertionInRowOnce(
         (v) => v,
         () => null,
       );
-      return value === a.value;
+      return value === literalOperand(a.value);
     }
   }
 }
