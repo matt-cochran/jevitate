@@ -131,6 +131,15 @@ report then carries `allowlistOverride` (`source`, `origins`, `recorded`, `added
 MCP only `env` is accepted (`verify_fix`'s `env` argument, the same `allowlistOverride` in the
 result): an MCP caller never names origins, so `--allow` is CLI-only; `ledger verify` and `check` suites always replay the stored list.
 
+## Relaxed mutation replays
+
+`journey verify --mutate` ([proving assertions can fail](./journeys.md#proving-assertions-can-fail))
+replays a mutation once more without the mutated step's own postcondition when it first failed
+there. That replay is a real Journey, so the step cannot go without an `expect`: it keeps a weak
+`visible` postcondition (on the step's own target, or a trivially true `urlIncludes` for a step with
+no target). The weak check cannot prove the mutated value, and it keeps the replay schema-valid, so
+the step's `expectRequests` and the end-state checks are still judged instead of the replay erroring.
+
 ## Replay finds the recorded element exactly
 
 A replay (a Journey, `verify-fix`, a hang reproduction) never clicks a guess:
