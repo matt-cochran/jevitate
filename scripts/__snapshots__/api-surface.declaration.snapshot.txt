@@ -342,7 +342,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (690 exports)
+# @jevitate/explore (706 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -369,6 +369,7 @@
   AllowOriginMismatch: interface
   AllowOriginMismatchKind: type-alias
   ALREADY_VETOED_REASON: variable
+  AmbiguityKind: type-alias
   ANSWER_FITS_INSTRUCTIONS: variable
   ANSWER_FITS_QUESTION: variable
   ANSWER_PAGES_CHARS: variable
@@ -384,6 +385,7 @@
   assertTargetAnswering: function
   assessCoverageSufficiency: function
   attributeCanary: function
+  AuthoringTake: interface
   authorJourney: function
   AuthorJourneyRequest: interface
   AuthorJourneyResult: type-alias
@@ -394,6 +396,9 @@
   autoDecidePostdoc: function
   AwaitedNetworkCheck: interface
   awaitWrites: function
+  BindingProposal: interface
+  BindingProposalError: class
+  BindingProposalErrorCode: type-alias
   BLOCKED_CONSEQUENCE_STEPS: variable
   BLOCKED_FETCH_ERROR: variable
   blockedCauseOf: function
@@ -817,6 +822,16 @@
   probeResponsive: function
   PROMPT_INJECTION_GUARD: variable
   PROMPT_PAGE_TEXT_CHARS: variable
+  PROPOSAL_SAMPLE_MAX: variable
+  ProposalAmbiguity: interface
+  proposeBindings: function
+  ProposeBindingsOptions: interface
+  ProposedCheck: interface
+  ProposedConstant: interface
+  ProposedHandback: interface
+  ProposedOutput: interface
+  ProposedParam: interface
+  ProposedParamKind: type-alias
   quoteIsOnlyControlNames: function
   quoteSpanAt: function
   quoteSpans: function
@@ -1013,6 +1028,7 @@
   validateDenyPatterns: function
   ValueCapturingGenerationPort: class
   valueFor: function
+  ValueHint: interface
   valuesStatedInGoal: function
   valueStatedInGoal: function
   verifyFix: function
