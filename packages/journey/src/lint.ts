@@ -1,10 +1,11 @@
 import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import type { RecordedStep, Step } from "@jevitate/recording";
-import { fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason, writeClassifier, type WriteClassifier } from "@jevitate/recording";
+import type { Assertion, RecordedStep, Step } from "@jevitate/recording";
+import { assertionRefs, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason, writeClassifier, type WriteClassifier } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, isOwnTargetVisible, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { anchorLintIssues, type AnchorRuleCode } from "./anchor-rules.js";
+import { secretParamNames } from "./intent.js";
 
 /**
  * #401: the assertion-strength rules this lint reports; #466: the 0.10 anchor rules (`AnchorRuleCode`,
@@ -164,14 +165,34 @@ function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests
  * `expect` that only restates the step's own target (`isOwnTargetVisible`), an explicit "no claim"
  * (`isNoClaimExpect`), or a bare `visible` page check.
  */
-function isEffectSite(site: JourneyAssertionSite, step: Step | undefined): boolean {
+function isEffectSite(site: JourneyAssertionSite, step: Step | undefined, refsBound: (a: Assertion) => boolean): boolean {
   if (site.where === "step-request") return true;
   if (site.where === "end-state") {
-    if (site.check.kind === "page" || site.check.kind === "reloadThen") return site.check.assertion.kind !== "visible";
+    if (site.check.kind === "page" || site.check.kind === "reloadThen") return site.check.assertion.kind !== "visible" && refsBound(site.check.assertion);
     return true;
   }
   if (site.field === "expect" && step !== undefined && (isOwnTargetVisible(step) || isNoClaimExpect(step))) return false;
-  return site.check.assertion.kind !== "visible";
+  return site.check.assertion.kind !== "visible" && refsBound(site.check.assertion);
+}
+
+/**
+ * #565: does every reference in this assertion's operands (`{ var }` / `${name}`, `assertionRefs`)
+ * name a declared NON-SECRET parameter, an `extract` output or a `setup.x` output? Such a
+ * parameter-relative check is as strong as the same check on a literal; one naming a secret or an
+ * unbound name can never pass, so it proves nothing. An assertion without references is bound.
+ */
+export function assertionRefsBound(journey: Journey, a: Assertion): boolean {
+  const refs = assertionRefs(a);
+  if (refs.length === 0) return true;
+  const secret = new Set(secretParamNames(journey));
+  const bound = new Set([...journey.metadata.params, ...(journey.metadata.parameters ?? []).map((p) => p.name)].filter((n) => !secret.has(n)));
+  for (const page of journey.recording.pages) {
+    for (const r of page.steps) {
+      if (r.step.kind === "extract") bound.add(r.step.as);
+      if (r.step.kind === "forEach") for (const c of r.step.steps) if (c.kind === "extract") bound.add(c.as);
+    }
+  }
+  return refs.every((n) => bound.has(n) || (n.startsWith("setup.") && n.length > "setup.".length));
 }
 
 function originOf(url: string): string | undefined {
@@ -234,7 +255,8 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
   const recorded = flattenSteps(journey);
   const sites = journeyAssertions(journey);
   const stepOf = (n: number): Step => recorded[n - 1]!.step;
-  const effects = sites.filter((site) => isEffectSite(site, site.where === "step" ? stepOf(site.step) : undefined));
+  const refsBound = (a: Assertion): boolean => assertionRefsBound(journey, a);
+  const effects = sites.filter((site) => isEffectSite(site, site.where === "step" ? stepOf(site.step) : undefined, refsBound));
   const endEffects = effects.filter((site) => site.where === "end-state");
   const effectAt = (n: number): boolean => effects.some((site) => (site.where === "step" || site.where === "step-request") && site.step === n);
 

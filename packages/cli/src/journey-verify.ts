@@ -1,8 +1,8 @@
 /**
  * #402 — `journey verify --mutate`: a built-in negative proof that each of a Journey's assertions
  * FAILS when its outcome is absent. The Journey is replayed once as recorded (it must pass), then
- * once per mutation (`planJourneyMutations`: skip a write step, abort its writes, or type an empty
- * value into a checked fill); each assertion is sensitive only when its paired mutation broke it, at
+ * once per mutation (`planJourneyMutations`: skip a write step, abort its writes, type an empty or
+ * stale value into a checked fill, or — #565 — swap or truncate a checked non-secret parameter); each assertion is sensitive only when its paired mutation broke it, at
  * that assertion, with nothing failing before the mutated step.
  *
  * Every replay goes through `runJourneyProgrammatically` — the same path, gate, fixtures and
@@ -48,6 +48,8 @@ export interface JourneyVerifyMutation {
   readonly kind: JourneyMutation["kind"];
   readonly step: number;
   readonly id: string;
+  /** #565: the parameter a `swap-param`/`truncate-param` altered (its name, never a value). */
+  readonly param?: string;
   readonly outcome: MutationRunResult["outcome"];
   readonly failedSites: readonly MutationFailedSite[];
   /** block-write: what was aborted (`METHOD path`). */
@@ -142,12 +144,14 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   if (base.outcome === "ok") {
     // One mutated replay, as `mutationReplay` (or #554's `relaxedMutationReplay`) describes it.
     type Replayed = NonNullable<JourneyVerifyMutation["relaxed"]>;
+    // #565: a param mutation's replay runs with altered params (never a secret's), so it needs them.
+    const replayOpts = { ...lintOpts, params: opts.params };
     const replay = async (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => {
-      const how = describe(journey, m, lintOpts);
       try {
-        const r = await run(runOpts, {
+        const how = describe(journey, m, replayOpts);
+        const r = await run(how.params === undefined ? runOpts : { ...runOpts, params: { ...how.params } }, {
           structuredFailures: true,
-          ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j, m, lintOpts).journey }),
+          ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j, m, replayOpts).journey }),
           ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
           ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
         });
@@ -176,7 +180,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       // #554: a first failure at the mutated step's own postcondition hides the LATER paired sites
       // behind it; one relaxed replay (same action, the step's own expect/waitFor left out) judges them.
       const relaxed = needsRelaxedReplay(plan, m, first) ? await replay(m, relaxedMutationReplay) : undefined;
-      mutations.push({ kind: m.kind, step: m.step, id: m.id, ...first, ...(relaxed === undefined ? {} : { relaxed }) });
+      mutations.push({ kind: m.kind, step: m.step, id: m.id, ...(m.param === undefined ? {} : { param: m.param }), ...first, ...(relaxed === undefined ? {} : { relaxed }) });
     }
   }
 

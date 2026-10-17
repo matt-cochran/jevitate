@@ -48,7 +48,7 @@ function explainAssertion(a: Assertion): { text: string; weak: boolean } {
       return { text: `between ${a.min} and ${a.max} ${target}`, weak: false };
     }
     case "valueEquals":
-      return { text: `${explainTarget(a.target)} has the value ${shown(a.value)}`, weak: false };
+      return { text: `${explainTarget(a.target)} has ${typeof a.value === "string" ? "the value " : ""}${shown(a.value)}`, weak: false };
     case "attr": {
       const target = explainTarget(a.target);
       if (a.absent === true) return { text: `${target} has no ${a.name}`, weak: false };
