@@ -197,8 +197,7 @@ jevitate explore --url https://app.example.test/profile --goal "set the last nam
 
 A Journey's own `textIncludes`, `valueEquals` and `attr` assertions can also refer to a parameter
 or extracted value (`${name}` or `{ "var": "name" }`); see
-[parameter-relative assertions](./journeys.md#parameter-relative-assertions). This applies to
-assertions stored in a Journey, not to a `--success` flag you type.
+[parameter-relative assertions](./journeys.md#parameter-relative-assertions).
 
 ## Typing a file's exact text (`--type-fixture`)
 
