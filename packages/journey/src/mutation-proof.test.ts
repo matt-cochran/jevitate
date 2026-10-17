@@ -310,21 +310,22 @@ describe("#554 relaxed replay", () => {
     expect(relaxedMutationReplay(journey, skip3)).toEqual({ journey, skipIndex: 2 });
   });
 
-  it("relaxedMutationReplay block-write drops the step's expect and waitFor but keeps its expectRequests", () => {
+  it("relaxedMutationReplay block-write keeps a weak expect on the step's own target and drops waitFor", () => {
     const journey = saveJourney({ stepRequests: true });
     journey.recording.pages[0]!.steps[2]!.step = { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "visible", target: { role: "button", name: "Save" } }, waitFor: { maxMs: 30_000 } };
     expect(relaxedMutationReplay(journey, blockWrite3).journey.recording.pages[0]!.steps[2]).toEqual({
-      step: { kind: "click", target: { role: "button", name: "Save" } },
+      step: { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "visible", target: { role: "button", name: "Save" } } },
       delta: saveWrite,
       expectRequests: [status2xx],
     });
   });
 
-  it("relaxedMutationReplay stale-value types an empty value and drops the step's expect", () => {
+  it("relaxedMutationReplay stale-value types an empty value and keeps a weak expect on the fill target", () => {
     expect(relaxedMutationReplay(saveJourney(), { kind: "stale-value", step: 2, id: "stale-value:2" }).journey.recording.pages[0]!.steps[1]!.step).toEqual({
       kind: "fill",
       target: { label: "Text" },
       value: { redacted: false, value: "" },
+      expect: { kind: "visible", target: { label: "Text" } },
     });
   });
 
