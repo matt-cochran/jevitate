@@ -179,3 +179,36 @@ describe("#565 classification and verdict of parameter-relative checks", () => {
     expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("insensitive");
   });
 });
+
+describe("#566 a URL parameter a navigate's urlIncludes check names", () => {
+  /** navigate to /threads/${thread}, expecting that same URL; fill the reply. */
+  function threadJourney(): Journey {
+    return JourneySchema.parse({
+      metadata: { id: "thread", name: "Reply on a thread", promoted: false, params: ["thread"], createdAtIso: "2026-10-17T00:00:00Z" },
+      recording: {
+        version: "1",
+        site: "http://localhost:3000",
+        pages: [
+          {
+            url: "/threads",
+            steps: [
+              { step: { kind: "navigate", url: "/threads/${thread}", expect: { kind: "urlIncludes", text: "/threads/${thread}" } } },
+              { step: { kind: "fill", target: { label: "Reply" }, value: { redacted: true, length: 5 }, expect: { kind: "visible", target: { label: "Reply" } } } },
+            ],
+          },
+        ],
+      },
+    });
+  }
+  const threadParams = { thread: "T-1042" };
+
+  it("gets a swap-param mutation", () => {
+    expect(planJourneyMutations(threadJourney(), { params: threadParams }).mutations.map((m) => m.id)).toContain("swap-param:thread");
+  });
+
+  it("the swapped replay still expects the supplied thread's URL", () => {
+    const j = threadJourney();
+    const m = planJourneyMutations(j, { params: threadParams }).mutations.find((x) => x.id === "swap-param:thread")!;
+    expect(stepAt(mutationReplay(j, m, { params: threadParams }).journey, 1)).toMatchObject({ expect: { text: "/threads/T-1042" } });
+  });
+});

@@ -2230,6 +2230,32 @@ jevitate recording promote [options] <file>
 | `--step <n>` | step index within the page |  |  | yes |  |
 | `--var <name>` | variable name to bind |  |  | yes |  |
 
+### recording propose
+
+```
+jevitate recording propose [options] <take> [more...]
+```
+
+propose parameters, outputs, {var} checks, credential handbacks and where to stop from two or more takes of the same flow (#566); saves an UNPROMOTED draft Journey for review — ambiguities stay for a person to decide
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `take` |  | yes |  |  |
+| `more...` |  | no |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--id <id>` | the draft Journey's id (default: proposed-draft) |  |  |  |  |
+| `--journeys-dir <dir>` | journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--name <name>` | the draft Journey's name (default: the first take's intent) |  |  |  |  |
+| `--no-draft` | propose only: build and save no draft Journey |  |  |  |  |
+| `--out <file>` | write the draft Journey JSON to this file instead of saving it in the journeys store |  |  |  |  |
+
 ## regression
 
 ```

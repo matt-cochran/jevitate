@@ -31,6 +31,8 @@ import { JourneySchema } from "@jevitate/journey";
  *   step that observed it.
  * - `checks` — `{var}` assertions: a `pre-write` identity check for each output (the page must show
  *   the supplied identifier, so a changed source context fails closed before anything is filled),
+ *   a `pre-write` `urlIncludes` identity check on a navigate whose expected URL is its own templated
+ *   URL (`/threads/${thread}` — a redirect to another record fails closed),
  *   and a `post-write` `valueEquals {var}` on each filled/selected parameter (the exact supplied text).
  * - `stopBefore` — the first submit-like click (send/submit/post/publish) after the first write, else
  *   the last click after the last write: the draft replay ends before it.
@@ -180,6 +182,15 @@ const ID_LIKE_RE = /^(?=.*\d)[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const MIN_TIE_LENGTH = 3;
 
 const WRITE_KINDS = new Set<Step["kind"]>(["fill", "select", "upload", "editText"]);
+
+/**
+ * A redacted hint for one captured value — length, shape and word count, never the text (no
+ * sample). For surfaces that must describe a typed value without revealing it (the MCP `recordings`
+ * tool's diff results).
+ */
+export function valueHint(value: string): ValueHint {
+  return hint(value, false);
+}
 
 function hint(value: string, allowSample: boolean): ValueHint {
   const trimmed = value.trim();
@@ -505,6 +516,17 @@ export function proposeBindings(takes: readonly AuthoringTake[], opts: ProposeBi
 
     if (a0.kind === "urlIncludes") {
       const t = urlTemplates.get(col.index);
+      // A navigate whose expected URL is the URL it went to, templated by URL parameters: the page
+      // must still be at the supplied context (`/threads/${thread}`) — a redirect to another record
+      // fails closed before anything is written. Every other varying URL keeps only the shared prefix.
+      const navUrls = col.cells.map((c) => (c.step.kind === "navigate" ? c.step.url : undefined));
+      const urlParams = params.filter((p) => p.kind === "url" && p.stepIds.includes(col.stepId)).map((p) => p.name);
+      if (t !== undefined && urlParams.length > 0 && navUrls.every((u, k) => u === obs[k]) && (firstWriteCol === undefined || col.index < firstWriteCol)) {
+        const check: Assertion = { kind: "urlIncludes", text: t.url };
+        replacedAssertion.set(col.index, check);
+        for (const param of urlParams) checks.push({ phase: "pre-write", stepId: col.stepId, reason: "identity", param, assertion: check });
+        continue;
+      }
       replacedAssertion.set(col.index, { kind: "urlIncludes", text: t?.prefix ?? commonPrefix(obs) });
       if (t === undefined) {
         ambiguities.push({ kind: "untied-observation", stepIds: [col.stepId], message: "the URL this step expects differs across takes and is tied to no parameter — the draft keeps only the shared prefix" });

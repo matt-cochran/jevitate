@@ -140,6 +140,19 @@ there. That replay is a real Journey, so the step cannot go without an `expect`:
 no target). The weak check cannot prove the mutated value, and it keeps the replay schema-valid, so
 the step's `expectRequests` and the end-state checks are still judged instead of the replay erroring.
 
+## Parameter mutations
+
+`journey verify --mutate` also proves parameter-relative checks. Each non-secret parameter that you
+supply, that an action reads (a fill, or a navigate URL), and that an assertion names gets a
+`swap-param:<name>` (another plausible value) and a `truncate-param:<name>` (the first half kept).
+The paired assertions still expect the supplied value, so a check that ignores the parameter is
+reported `insensitive`. A `{ "var": name }` fill also gets a `stale-value` that types an altered
+value of the parameter. A secret is never mutated, and a parameter that only assertions read gets
+no parameter mutation. A draft from `recording propose` has these checks (an identity check
+before the first write, an exact-value check after each fill), and this is how you prove them
+before promotion. See [Proving assertions can fail](./journeys.md#proving-assertions-can-fail) and
+[Proposing bindings from takes](./journeys.md#proposing-bindings-from-takes).
+
 ## Replay finds the recorded element exactly
 
 A replay (a Journey, `verify-fix`, a hang reproduction) never clicks a guess:
