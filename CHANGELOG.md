@@ -7,6 +7,26 @@ behaviour changes).
 
 ## [Unreleased]
 
+0.16.0 makes create-style and parameterized Journeys repeatable and provable: assertions can check the values a run was given or read, fixtures can undo what a Journey created, environments move split-origin Journeys, and manual recordings flow into a reviewable binding proposal.
+
+### Added
+
+- **Parameter-relative assertions (#562, #565).** `textIncludes.text`, `valueEquals.value` and `attr.value` accept `{ "var": "name" }`, and any assertion string may carry `${name}`. A name is a declared param, an extract output of an earlier step (any extract output in the end state) or a fixture `setup.x` output. Step expects and page end-state checks resolve them at run time, as `http:` checks already did. An unbound name fails closed (`E_ASSERTION_REF_UNBOUND`); a secret param is refused at load and at run (`E_ASSERTION_REF_SECRET`); a non-string value is `E_ASSERTION_REF_TYPE`. Results keep the template, never the resolved value. Authored Journeys give a non-secret `{var}` fill an exact `valueEquals {var}` postcondition, and lint and `journey review` count a check on a declared non-secret name as strong.
+- **`verify --mutate` proves parameter-relative checks (#565).** Each non-secret `--param` that a fill or navigate URL reads and an assertion names gets `swap-param:<name>` (another plausible value) and `truncate-param:<name>` mutations, paired with every assertion that names it; a `{var}` fill's `stale-value` mutation types an altered value. Secret params are never mutated, and reports name params only.
+- **Fixture restore outputs (#560).** A `restore` step may bind `outputs`, which later restore steps use as `${restore.<name>}` (find the item a Journey created, then delete it). They are cleared before every restore pass, so each replay of `verify --mutate`, a regression or a check suite looks the resource up again. They never join setup bindings, are never persisted, and cannot choose a URL origin; a lookup that matches nothing sends no request.
+- **Named origins in environments (#561).** An environment may declare `"origins": { "api": "http://127.0.0.1:26310" }`. Under `--env`, each named origin of the Journey's source environment (the one whose `baseUrl` is the recorded site, else a declared `default`) moves to the target's same-named origin, in end-state `http:` checks, recording URLs and fixture step URLs; the target's named origins join the allowed origins. `--base-url` alone maps nothing.
+- **Per-run unique suite params (#563).** A check suite's Journey param may be `{ "unique": "inv-{run}@example.test" }`; each run substitutes a fresh token per entry, passes it to the run and records it in the result. The suite's identity keeps the template.
+- **`jevitate recording propose <take...>` and the MCP `recordings` `propose` action (#566).** From two or more take files it proposes named params, constants, handbacks (credentials are never constants), extract outputs, pre-write identity checks and post-write exact-text checks, citing step ids, and lists every ambiguity for human review. Its draft is an unpromoted Journey that stops before the first submit step; it still needs `journey review --strict` and `verify --mutate`. Evidence is redacted, typed text never appears, and no model is called.
+
+### Changed
+
+- **`jevitate record` writes a take file `{ recording, values }` (#564)** that `recording diff`, `postdoc`, `promote` and `fit` accept directly. `values` holds the non-secret text and select values the take captured (secret, credential and one-time-code fields never get one) and stays local; `promote` and `fit` also still accept a bare Recording.
+- **A literal `${...}` in assertion text is now a reference (#562).** Journeys whose expected text contained `${` must declare that name or reword the text.
+
+### Fixed
+
+- **Relaxed mutation replays stay schema-valid (#567).** The relaxed replay added in 0.15.1 deleted the mutated step's required `expect`, so it failed schema validation and later checks came out as errors (`inconclusive`). The step now keeps a weak `visible` postcondition on its own target (`urlIncludes ""` for a step without one).
+
 ## [0.15.1] – 2026-10-16
 
 ### Fixed
