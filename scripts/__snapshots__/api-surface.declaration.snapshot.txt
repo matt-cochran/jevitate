@@ -1199,7 +1199,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (230 exports)
+# @jevitate/journey (231 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1414,6 +1414,7 @@
   ReviewVerifySchema: variable
   ReviewWriteRequestSchema: variable
   SECRET_PARAM_NAME_RE: variable
+  secretNamedValues: function
   secretParamNames: function
   secretParamValues: function
   SecretRef: interface
@@ -1729,7 +1730,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (196 exports)
+# @jevitate/recording (197 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1883,6 +1884,7 @@
   resolveHttpUrl: function
   resolveNavigateUrl: function
   rpcMethodOf: function
+  SECRET_PARAM_NAME_RE: variable
   SecretMaterializationError: class
   selectJsonValues: function
   SpliceAt: interface

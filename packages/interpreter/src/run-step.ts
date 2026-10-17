@@ -1,7 +1,7 @@
 import type { Locator, Page } from "playwright";
 import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import type { AssertionRefLookup } from "@jevitate/recording";
-import { confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
+import { SECRET_PARAM_NAME_RE, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
@@ -104,7 +104,8 @@ function stepRefs(vars: Map<string, string>, lookup: AssertionRefLookup | undefi
   return (name) => {
     const other = lookup?.(name);
     const v = vars.get(name);
-    if (v !== undefined) return { value: v, secret: other?.secret === true };
+    // #564: a binding whose name reads as a credential (`extract as: "apiKey"`) is a secret too.
+    if (v !== undefined) return { value: v, secret: other?.secret === true || SECRET_PARAM_NAME_RE.test(name) };
     return other;
   };
 }

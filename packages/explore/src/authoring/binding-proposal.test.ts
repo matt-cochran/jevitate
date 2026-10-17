@@ -206,3 +206,24 @@ describe("proposeBindings over takes whose thread navigate expects only its URL"
     expect(step).toMatchObject({ expect: { kind: "urlIncludes", text: "/threads/${thread}" } });
   });
 });
+
+// #564: the proposal's credential test is the recorder's shared `isSecretField` pattern.
+describe("proposeBindings — the shared credential pattern (#564)", () => {
+  function relabel(t: AuthoringTake, label: string): AuthoringTake {
+    const recording = structuredClone(t.recording);
+    for (const s of recording.pages.flatMap((p) => p.steps)) {
+      if (s.stepId === "s-pass" && s.step.kind === "fill") s.step.target = { label };
+    }
+    return { recording, values: t.values };
+  }
+
+  test("a 'Security code' field is a credential handback", () => {
+    const p = proposeBindings([relabel(take(TAKE_A), "Security code"), relabel(take(TAKE_B), "Security code")]);
+    expect(p.handbacks).toContainEqual({ stepId: "s-pass", reason: "credential-field" });
+  });
+
+  test("a look-alike ('Pinned note') is not", () => {
+    const p = proposeBindings([relabel(take(TAKE_A), "Pinned note"), relabel(take(TAKE_B), "Pinned note")]);
+    expect(p.handbacks).not.toContainEqual({ stepId: "s-pass", reason: "credential-field" });
+  });
+});

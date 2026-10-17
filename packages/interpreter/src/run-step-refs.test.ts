@@ -56,4 +56,13 @@ describe("runStep assertion references", () => {
     const refLookup = (name: string) => (name === "invitee" ? { value: "s3cret", secret: true } : undefined);
     expect(await codeOf(runStep(actorOn(locator) as never, clickExpectingInvitee, new Map([["invitee", "s3cret"]]), 0, { refLookup }))).toBe(E_ASSERTION_REF_SECRET);
   });
+
+  it("refuses a credential-named extract output (apiKey) even when nothing marks it secret", async () => {
+    const locator = fakeLocator();
+    const step: RecordedStep = {
+      step: { kind: "click", target: { testId: "invite" }, expect: { kind: "textIncludes", target: { testId: "email" }, text: "key ${apiKey}" } },
+    };
+    expect(await codeOf(runStep(actorOn(locator) as never, step, new Map([["apiKey", "sk-live-123"]])))).toBe(E_ASSERTION_REF_SECRET);
+    expect(locator.click).not.toHaveBeenCalled();
+  });
 });

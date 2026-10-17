@@ -10,6 +10,7 @@ import {
 } from "@jevitate/recording";
 import type { Journey } from "@jevitate/journey";
 import { JourneySchema } from "@jevitate/journey";
+import { isSecretField } from "@jevitate/recorder";
 
 /**
  * #566 — a reviewable authoring proposal built from two or more takes of the same flow (`jevitate
@@ -172,8 +173,11 @@ export class BindingProposalError extends Error {
 
 // === Heuristics ===
 
-const CREDENTIAL_RE =
-  /pass(?:word|code|phrase)?|\bpwd\b|secret|token|\botp\b|one[-_ ]?time|\b2fa\b|\bmfa\b|\bpin\b|api[-_ ]?key|credential|\bcvv\b|\bcvc\b|card[-_ ]?number|\bssn\b/i;
+/**
+ * A credential-named field or value: the ONE shared pattern, `@jevitate/recorder`'s `isSecretField`
+ * (#564), so the recorder (which never captures such a value) and the proposal agree.
+ */
+const isCredentialText = (text: string): boolean => isSecretField(null, null, text);
 const LOGIN_ID_RE = /\b(?:user(?:[-_ ]?name)?|login|e-?mail|sign[-_ ]?in)\b/i;
 const SUBMIT_RE = /\b(?:send|submit|post|publish)\b/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -203,7 +207,7 @@ function hint(value: string, allowSample: boolean): ValueHint {
         : "text";
   const words = trimmed === "" ? 0 : trimmed.split(/\s+/).length;
   const out: ValueHint = { length: value.length, shape, words };
-  if (allowSample && value.length <= PROPOSAL_SAMPLE_MAX && !CREDENTIAL_RE.test(value)) out.sample = value;
+  if (allowSample && value.length <= PROPOSAL_SAMPLE_MAX && !isCredentialText(value)) out.sample = value;
   return out;
 }
 
@@ -374,7 +378,7 @@ export function proposeBindings(takes: readonly AuthoringTake[], opts: ProposeBi
     if (col.cells.some((c) => c.step.kind === "handback")) {
       roles[col.index] = { kind: "handback", reason: "recorded-handback" };
       credentialPages.add(col.pageIndex);
-    } else if (WRITE_KINDS.has(step.kind) && col.cells.some((c) => CREDENTIAL_RE.test(descriptorWords(c.step)))) {
+    } else if (WRITE_KINDS.has(step.kind) && col.cells.some((c) => isCredentialText(descriptorWords(c.step)))) {
       roles[col.index] = { kind: "handback", reason: "credential-field" };
       credentialPages.add(col.pageIndex);
     }
