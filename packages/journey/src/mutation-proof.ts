@@ -279,10 +279,21 @@ export function mutationReplay(
   return { journey: copy };
 }
 
+/** #567: the schema-valid weak postcondition a relaxed mutated step keeps in place of its own
+ * `expect` — the Recording schema REQUIRES `expect` for fill/click/etc, so it cannot be dropped. A
+ * step with a `target` gets `visible` on its OWN target (the per-step vacuous claim #400 names: it
+ * holds before AND after the action, so it cannot prove the mutated value); a target-less step kind
+ * (e.g. `navigate`) gets the explicit no-claim `urlIncludes ""` used elsewhere. */
+function relaxedExpect(step: Step): Assertion {
+  if ("target" in step && step.target !== undefined) return { kind: "visible", target: step.target };
+  return { kind: "urlIncludes", text: "" };
+}
+
 /**
  * #554: the same mutation with the mutated step's OWN postcondition relaxed. `skip` skips the step
  * in place without turning its `expect` into an assert step; `block-write` and `stale-value` apply
- * the same action mutation but drop the step's `expect` and `waitFor` (its `expectRequests` stay).
+ * the same action mutation but replace the step's `expect` with a schema-valid weak one (#567) and
+ * drop `waitFor` (its `expectRequests` stay).
  * The input Journey is never modified and no step is removed, so it replays with the same indices.
  */
 export function relaxedMutationReplay(
@@ -296,8 +307,7 @@ export function relaxedMutationReplay(
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const copy = structuredClone(journey);
     const target = flat(copy)[index]!;
-    const step: Record<string, unknown> = { ...target.step };
-    delete step.expect;
+    const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
     delete step.waitFor;
     target.step = step as Step;
     return { journey: copy, blockIndex: index, blockRequests: [...requests] };
@@ -305,8 +315,7 @@ export function relaxedMutationReplay(
   const copy = structuredClone(journey);
   const target = flat(copy)[index]!;
   if (target.step.kind === "fill") {
-    const step: Record<string, unknown> = { ...target.step, value: { redacted: false, value: "" } };
-    delete step.expect;
+    const step: Record<string, unknown> = { ...target.step, value: { redacted: false, value: "" }, expect: relaxedExpect(target.step) };
     delete step.waitFor;
     target.step = step as Step;
   }
