@@ -383,3 +383,34 @@ describe("#498 lintJourney: upload fixtures outside the project root", () => {
     expect(findings.some((f) => f.rule === "upload-outside-project")).toBe(true);
   });
 });
+
+describe("#565 lintJourney: parameter-relative checks", () => {
+  const publishWith = (text: string, metadata: Partial<Journey["metadata"]> = {}): Journey =>
+    j(
+      [
+        {
+          step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status" }, text } },
+          delta: { verdict: "relevant-change", why: "", changes: [], requests: publishWrite, overheadMs: 1 },
+        },
+      ],
+      metadata,
+    );
+
+  it("a check naming a declared non-secret parameter is an effect assertion", () => {
+    expect(lintJourney(publishWith("Published ${title}", { params: ["title"] })).map((f) => f.rule)).not.toContain("write-without-effect");
+  });
+
+  it("a check naming an extract output is an effect assertion", () => {
+    const journey = publishWith("Code ${code}");
+    journey.recording.pages[0]!.steps.unshift({ step: { kind: "extract", target: { testId: "code" }, as: "code", expect: { kind: "visible", target: { testId: "code" } } } });
+    expect(lintJourney(journey).map((f) => f.rule)).not.toContain("write-without-effect");
+  });
+
+  it("a check naming a secret parameter proves nothing", () => {
+    expect(lintJourney(publishWith("Published ${apiToken}", { params: [], parameters: [{ name: "apiToken", secret: true }] })).map((f) => f.rule)).toContain("write-without-effect");
+  });
+
+  it("a check naming an unbound reference proves nothing", () => {
+    expect(lintJourney(publishWith("Published ${nobody}")).map((f) => f.rule)).toContain("write-without-effect");
+  });
+});

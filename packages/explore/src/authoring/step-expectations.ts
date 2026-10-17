@@ -1,6 +1,6 @@
 import type { Assertion, NetworkCheck, RecordedStep, Recording, Step, StatusSpec, TargetDescriptor } from "@jevitate/recording";
 import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
-import { isOwnTargetVisible } from "@jevitate/journey";
+import { SECRET_PARAM_NAME_RE, isOwnTargetVisible } from "@jevitate/journey";
 import { REDACTION_MASK } from "@jevitate/ai-core";
 import { normalizeRoute } from "../adversarial/defect-fingerprint.js";
 import { expectedResultFromDelta } from "../replay-deltas.js";
@@ -15,7 +15,9 @@ import { expectedResultFromDelta } from "../replay-deltas.js";
  *  - a `relevant-change` delta (#303) → `expect` on what it added or changed on the page: a named
  *    element (`visible role+name`) or the new text (`visible textContains`), skipping volatile
  *    (digit-bearing), redacted and summarised lines and the target's own name;
- *  - a fill of a constant value → `valueEquals` of that value (a parameter fill has no fixed value);
+ *  - a fill of a constant value → `valueEquals` of that value; #565: a fill of a NON-SECRET variable
+ *    → `valueEquals { var }` (the field holds exactly the supplied text). A secret fill (a name in
+ *    `secretVars`, or one that reads as a secret) claims no value: it would be model-visible;
  *  - a navigation postcondition (`urlIncludes`, set by the recorder) is kept as is.
  *
  * A click/type/select step left with nothing to claim gets the explicit "no claim" `count … min 0`
@@ -25,17 +27,21 @@ import { expectedResultFromDelta } from "../replay-deltas.js";
  * #400: when the step has a delta, its blank `expectedResult` (RecordedStep, #246) is filled from
  * `expectedResultFromDelta` so the reviewer sees, in words, what the step is supposed to prove.
  */
-export function deriveStepExpectations(recording: Recording, opts: { readonly readRequests?: readonly string[] } = {}): Recording {
+export function deriveStepExpectations(
+  recording: Recording,
+  opts: { readonly readRequests?: readonly string[]; readonly secretVars?: readonly string[] } = {},
+): Recording {
   const isWrite = writeClassifier(opts.readRequests === undefined ? {} : { readRequests: opts.readRequests });
+  const secret = new Set(opts.secretVars ?? []);
   return {
     ...recording,
-    pages: recording.pages.map((page) => ({ ...page, steps: page.steps.map((r) => deriveOne(r, isWrite)) })),
+    pages: recording.pages.map((page) => ({ ...page, steps: page.steps.map((r) => deriveOne(r, isWrite, secret)) })),
   };
 }
 
-function deriveOne(recorded: RecordedStep, isWrite: WriteClassifier): RecordedStep {
+function deriveOne(recorded: RecordedStep, isWrite: WriteClassifier, secret: ReadonlySet<string>): RecordedStep {
   const writes = writeChecks(recorded, isWrite);
-  const step = withDerivedExpect(recorded);
+  const step = withDerivedExpect(recorded, secret);
   const expectedResult = derivedExpectedResult(recorded);
   return {
     ...recorded,
@@ -113,19 +119,24 @@ function noClaim(target: TargetDescriptor): Assertion {
   return { kind: "count", target: { ...target }, min: 0 };
 }
 
-function withDerivedExpect(recorded: RecordedStep): Step {
+function withDerivedExpect(recorded: RecordedStep, secret: ReadonlySet<string>): Step {
   const step = recorded.step;
   if (!("expect" in step) || !("target" in step)) return step;
   // The recorder already replaced a provisional postcondition with what held (a navigation).
   if (step.expect.kind === "urlIncludes" && step.expect.text !== "") return step;
-  const derived = step.kind === "fill" ? fillExpect(step) : recorded.delta?.verdict === "relevant-change" ? fromDelta(recorded.delta.changes, step.target) : null;
+  const derived = step.kind === "fill" ? fillExpect(step, secret) : recorded.delta?.verdict === "relevant-change" ? fromDelta(recorded.delta.changes, step.target) : null;
   if (derived !== null) return { ...step, expect: derived };
   return isOwnTargetVisible(step) ? { ...step, expect: noClaim(step.target) } : step;
 }
 
-function fillExpect(step: Extract<Step, { kind: "fill" }>): Assertion | null {
+function fillExpect(step: Extract<Step, { kind: "fill" }>, secret: ReadonlySet<string>): Assertion | null {
   const v = step.value;
-  if ("var" in v || v.redacted) return null;
+  if ("var" in v) {
+    // #565: the exact supplied text, by reference — never a secret (it would be model-visible).
+    if (secret.has(v.var) || SECRET_PARAM_NAME_RE.test(v.var)) return null;
+    return { kind: "valueEquals", target: { ...step.target }, value: { var: v.var } };
+  }
+  if (v.redacted) return null;
   return { kind: "valueEquals", target: { ...step.target }, value: v.value };
 }
 

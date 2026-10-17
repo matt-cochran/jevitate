@@ -766,7 +766,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (132 exports)
+# @jevitate/journey (133 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -852,6 +852,7 @@
   anchorLintIssues: function
   anchorRuleIssues: function
   applyAnnotationDraft: function
+  assertionRefsBound: function
   assertionSiteKey: function
   checkJobStory: function
   checkPersona: function

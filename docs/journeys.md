@@ -205,11 +205,17 @@ jevitate journey verify checkout --mutate --allow http://127.0.0.1:26110   # blo
 |---|---|---|
 | `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits at most its hang threshold plus 5 s) | each write step (the lint's rule) |
 | `block-write:<n>` | aborts the write requests step n sends, from its start until the network settled after it | each write step |
-| `stale-value:<n>` | types `""` into fill step n | each fill whose value a `valueEquals`/`textIncludes` checks |
+| `stale-value:<n>` | types `""` into fill step n — or, for a `{ "var": name }` fill whose non-secret parameter an assertion names, an altered value of it (stale text in the composer) | each fill whose value a `valueEquals`/`textIncludes` checks, or whose variable an assertion names |
+| `swap-param:<name>` | replays with parameter `name` swapped for a different plausible value (another supplied parameter of the same shape, else the value with its last letter or digit changed), where the app receives it (a fill, a navigate URL); every assertion naming `${name}` still expects the supplied value | each non-secret `--param` an assertion names and an action reads |
+| `truncate-param:<name>` | the same, with the value's tail dropped (its first half kept) | the same, for a value of 2+ characters |
 
 A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`; the
 **last** write step's mutations are also paired with every end-state check; a `stale-value` is also
-paired with every assertion that checks the typed value. An explicit no-claim `expect` (`count … min
+paired with every assertion that checks the typed value (or names its variable); a `swap-param`/
+`truncate-param` is paired with every assertion that names the parameter, so a parameter-relative
+check (`valueEquals { "var": "reply" }`, `textIncludes "Sent to ${email}"`) is proven to catch a
+swapped identifier, stale context or truncated text. A secret parameter is never mutated, and the
+report names parameters, never their values. An explicit no-claim `expect` (`count … min
 0`) claims nothing and is never paired. When a mutated replay first fails at the mutated step's own
 postcondition (`expect`/`waitFor`), that step's assertion is sensitive, but the failure can mask what
 follows it. The proof then replays that mutation once more with that postcondition left out, so the
@@ -236,7 +242,7 @@ to exactly that content), `base.outcome`, each mutation's `outcome`, `failedSite
 
 Pin a pairing the derivation would not make with `metadata.mutationPairs` — the assertion `check`
 (`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail when `mustFailWhen`
-(`skip:<n|anchor>`, `block-write:<n|anchor>`, `stale-value:<n|anchor>`; [anchors](#explore-from-a-journey-step-anchors-and-campaigns) by name)
+(`skip:<n|anchor>`, `block-write:<n|anchor>`, `stale-value:<n|anchor>`, `swap-param:<param>`, `truncate-param:<param>`; [anchors](#explore-from-a-journey-step-anchors-and-campaigns) by name)
 is applied. A pair naming a site, step or anchor the Journey does not have is refused when the
 Journey loads.
 

@@ -219,6 +219,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
   // #400: each step's `expect` comes from what it changed (its write's status, the text it added),
   // never from its own target.
   const parameterizedRecording = deriveStepExpectations(materializedRecording, {
+    secretVars: secretParams.map((p) => p.name),
     ...(req.safety?.readRequests === undefined ? {} : { readRequests: req.safety.readRequests }),
   });
   const endState: OutcomeCheck[] = checks.map((c) => structuredClone(c));
