@@ -204,6 +204,23 @@ secret fields per environment live in `~/.jevitate/targets.json`, never in the r
 an environment flagged `production: true`. Details: [Journeys](./docs/journeys.md#annotate-a-journey-draft-its-intent-then-approve-it),
 [environments](./docs/journeys.md#environments---env), [demos](./docs/journeys.md#demo-a-journey-video-subtitles-and-a-step-by-step-guide).
 
+## From verified journeys to in-app help: Journeeze
+
+Jevitate is the **MIT-licensed, open-source journey foundation** for
+[Journeeze](https://journeeze.dev). Jevitate verifies that a flow works in a real browser and
+produces replayable journeys, demos and step-by-step guides. Journeeze brings those journeys
+into the live product as help and gathers what only people can tell you: what made sense,
+what confused them and where they got stuck.
+
+Journeeze imports your `.jevitate/` personas, jobs and journeys. Your team reviews and publishes
+guides, then adds the [Journeeze SDK](https://www.npmjs.com/package/@journeeze/sdk) to the app.
+People can follow guides or opt into element-anchored comments and reactions; your team can
+triage related reports into clusters and file them as GitHub issues.
+
+Jevitate works independently of Journeeze. Journeeze is a separate hosted service in early access,
+with its own account, site key and service terms. See [journeeze.dev](https://journeeze.dev) for
+product details and early access.
+
 ## Why Jevitate?
 
 Hand-written E2E tests check the paths someone thought of. The bugs that reach users tend to sit
