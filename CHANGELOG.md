@@ -11,6 +11,8 @@ behaviour changes).
 
 ### Fixed
 
+- **`handback.evidence.failedAt` names the step a person counts (#583).** It reported the 0-based step index, one less than the step that failed (`journey run`'s line read "at step 1" for a failure at step 2).
+
 - **`publish journeeze` honours the server's upload limit (#596).** The limit is read from `whoami`'s `limits.maxUploadBytes` on every publish (one extra key check for a saved connection), with a 95,000,000-byte default when the server reports none (Journeeze lowered its limit from 256 MiB to stay under Cloudflare's 100 MB body cap). An oversized bundle, JSON or ZIP, is refused with `E_JOURNEEZE_BUNDLE` before anything is sent.
 
 ## [0.18.0] – unreleased

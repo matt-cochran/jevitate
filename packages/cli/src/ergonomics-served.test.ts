@@ -105,13 +105,13 @@ function recordParams(commentId: string, replyText: string, overrides: Readonly<
   };
 }
 
-/** The prepare-reply Journey's own reply-text fill step (0-based, matching `handback.evidence.failedAt`). */
-async function replyTextFillIndex(journeysDir: string): Promise<number> {
+/** A prepare-reply step's number as a person counts it (1-based, matching `handback.evidence.failedAt`). */
+async function stepNumber(journeysDir: string, stepId: string): Promise<number> {
   const journey = await new JourneyRegistry(new FsJourneyStore(journeysDir)).get("prepare-reply");
   if (journey === null) throw new Error("prepare-reply is not in the fixture journeys");
-  const fill = flatJourneySteps(journey).find((s) => s.recorded.stepId === "s-reply-text");
-  if (fill === undefined) throw new Error("prepare-reply has no s-reply-text step");
-  return fill.index;
+  const step = flatJourneySteps(journey).find((s) => s.recorded.stepId === stepId);
+  if (step === undefined) throw new Error(`prepare-reply has no ${stepId} step`);
+  return step.index + 1;
 }
 
 function checkOf(receipt: ReadinessReceipt, check: string, id: string): ReadinessCheck | undefined {
@@ -123,10 +123,10 @@ function checkOf(receipt: ReadinessReceipt, check: string, id: string): Readines
 describe("#583 prepare-reply ends at a prepared handback (served)", () => {
   let correct: Awaited<ReturnType<typeof runJourneyProgrammatically>>;
   let wrong: Awaited<ReturnType<typeof runJourneyProgrammatically>>;
-  let fillIndex = 0;
+  let commentCheckStep = 0;
 
   beforeAll(async () => {
-    fillIndex = await replyTextFillIndex(served.journeysDir);
+    commentCheckStep = await stepNumber(served.journeysDir, "s-source-comment");
     correct = await runJourneyProgrammatically({
       dir: served.journeysDir,
       id: "prepare-reply",
@@ -159,8 +159,8 @@ describe("#583 prepare-reply ends at a prepared handback (served)", () => {
     expect(wrong.handback?.state).toBe("verification-failed");
   });
 
-  it("pins the failed_commentid verification before the reply-text fill", () => {
-    expect(wrong.handback?.evidence.failedAt).toBeLessThan(fillIndex);
+  it("names the comment-id check as the failed step, before the reply-text fill", () => {
+    expect(wrong.handback?.evidence.failedAt).toBe(commentCheckStep);
   });
 
   it("submits nothing to the community site throughout", () => {
