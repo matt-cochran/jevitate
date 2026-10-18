@@ -19,6 +19,7 @@ import { SECRET_PARAM_NAME_RE, secretParamNames } from "./intent.js";
 import { ApprovalProposalSchema } from "./proposal-schema.js";
 import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
 import { anchorRuleIssues } from "./anchor-rules.js";
+import { handoffSchemaIssues, JourneyInputsSchema, JourneyOutputsSchema, type HandoffInputsDecl, type HandoffOutputsDecl } from "./handoff.js";
 
 export { ANCHOR_NAME_RE } from "./anchor-rules.js";
 
@@ -135,6 +136,17 @@ export interface JourneyMetadata {
    * namespace (`journeeze`, …), carried verbatim. It counts toward the content hash.
    */
   extensions?: Extensions;
+  /**
+   * #582: the typed handoff this Journey PRODUCES (docs/contracts/journey-handoff.md §2). Optional and
+   * additive: a Journey without it validates, hashes and chains exactly as in 0.17.0. Its fields are
+   * `extract` outputs of this Journey and its `contract` is the record a consuming Journey accepts.
+   */
+  outputs?: HandoffOutputsDecl;
+  /**
+   * #582: the typed handoff this Journey CONSUMES (§3) — the contract it accepts, the caller's request
+   * and how both bind to its params. Optional and additive.
+   */
+  inputs?: HandoffInputsDecl;
 }
 
 /** #465: namespaced tool-specific fields (`{ "<namespace>": … }`), carried verbatim and hashed. */
@@ -390,6 +402,9 @@ export const JourneySchema: ZodType<Journey> = z.object({
       .refine((ss) => new Set(ss).size === ss.length, { message: "serves: duplicate id" })
       .optional(),
     extensions: ExtensionsSchema.optional(),
+    // #582: the optional typed handoff blocks (§2 producing, §3 consuming).
+    outputs: JourneyOutputsSchema.optional(),
+    inputs: JourneyInputsSchema.optional(),
   }).strict(),
   recording: RecordingSchema,
 }).superRefine((j, ctx) => {
@@ -416,6 +431,8 @@ export const JourneySchema: ZodType<Journey> = z.object({
   );
   // #562/#565: an assertion's `${name}` / `{ var }` must name something the run binds when it is checked.
   for (const issue of assertionRefIssues(j as Journey)) ctx.addIssue({ code: "custom", path: [...issue.path], message: issue.message });
+  // #582: handoff outputs/inputs load-time refusals (§2-§3), reported as E_HANDOFF_SCHEMA issues.
+  for (const issue of handoffSchemaIssues(j as Journey)) ctx.addIssue({ code: "custom", path: [...issue.path], message: issue.message });
   // #579: mutationValues are reviewed, non-secret values — never a credential.
   (j.metadata.parameters ?? []).forEach((p, i) => {
     if (p.mutationValues === undefined) return;

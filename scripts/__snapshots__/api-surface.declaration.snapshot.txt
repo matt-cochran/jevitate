@@ -1201,7 +1201,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (234 exports)
+# @jevitate/journey (261 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1248,6 +1248,7 @@
   assertionRefsBound: function
   assertionSiteKey: function
   AssertionVerdict: type-alias
+  bindParams: function
   CAMPAIGN_LIMITS: variable
   CampaignSpec: type-alias
   CampaignSpecSchema: variable
@@ -1266,6 +1267,7 @@
   CatalogStatusValueSchema: variable
   ChangeEvidenceRefData: type-alias
   ChangeEvidenceRefSchema: variable
+  checkCompatibility: function
   checkJobStory: function
   checkPersona: function
   checkStatement: function
@@ -1289,6 +1291,23 @@
   GtwrCharacteristic: type-alias
   GtwrRule: interface
   GtwrSetCharacteristic: type-alias
+  HANDOFF_CONTRACT_RE: variable
+  HANDOFF_FIELD_TYPES: variable
+  HandoffBinding: type-alias
+  HandoffContext: interface
+  HandoffFieldDecl: interface
+  HandoffFieldError: interface
+  HandoffFields: type-alias
+  HandoffFieldType: type-alias
+  HandoffInputsDecl: interface
+  HandoffIssue: interface
+  handoffKey: function
+  HandoffOutputsDecl: interface
+  HandoffRecord: type-alias
+  HandoffRejection: interface
+  handoffSchemaIssues: function
+  HandoffValidation: interface
+  HandoffValueError: interface
   HEAL_REJECTION_CODES: variable
   HealAttemptSchema: variable
   intentCoverage: function
@@ -1323,6 +1342,7 @@
   JourneyCatalogLinks: type-alias
   JourneyCatalogLinksSchema: variable
   journeyEndState: function
+  JourneyInputsSchema: variable
   JourneyLintFinding: interface
   JourneyLintOptions: interface
   JourneyLintRule: type-alias
@@ -1330,6 +1350,7 @@
   JourneyMutation: interface
   JourneyMutationPair: interface
   JourneyNetworkCheck: type-alias
+  JourneyOutputsSchema: variable
   JourneyParameter: interface
   journeyParamSchema: function
   JourneyPrecondition: interface
@@ -1386,6 +1407,7 @@
   OUTCOME_MEASURES: variable
   OutcomeTarget: type-alias
   OutcomeTargetSchema: variable
+  outputKeyFields: function
   ownAssertions: function
   PAIR_RELATIONS: variable
   PairRelation: type-alias
@@ -1400,6 +1422,8 @@
   PrReview: type-alias
   PrReviewSchema: variable
   QualityFinding: interface
+  readRecords: function
+  recordFingerprint: function
   RejectedProposal: type-alias
   RejectedProposalSchema: variable
   relaxedMutationReplay: function
@@ -1435,7 +1459,10 @@
   sweepStops: function
   TARGET_OPS: variable
   TARGET_UNITS: variable
+  validateFieldValue: function
   validateParams: function
+  validateRecords: function
+  validateRequests: function
 
 # @jevitate/load (16 exports)
   assertAuthorizedTarget: function

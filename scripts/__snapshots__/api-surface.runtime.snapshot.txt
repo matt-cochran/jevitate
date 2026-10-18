@@ -771,7 +771,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (136 exports)
+# @jevitate/journey (150 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -809,6 +809,8 @@
   FsJourneyStore: class
   GTWR_RULES: array
   GTWR_SET_CHARACTERISTICS: array
+  HANDOFF_CONTRACT_RE: object
+  HANDOFF_FIELD_TYPES: array
   HEAL_REJECTION_CODES: array
   HealAttemptSchema: object
   JOB_KINDS: array
@@ -820,6 +822,8 @@
   JobSchema: object
   JobStepSchema: object
   JourneyCatalogLinksSchema: object
+  JourneyInputsSchema: object
+  JourneyOutputsSchema: object
   JourneyProposalSchema: object
   JourneyRegistry: class
   JourneyReviewSchema: object
@@ -859,6 +863,8 @@
   applyAnnotationDraft: function
   assertionRefsBound: function
   assertionSiteKey: function
+  bindParams: function
+  checkCompatibility: function
   checkJobStory: function
   checkPersona: function
   checkStatement: function
@@ -867,6 +873,8 @@
   describeStep: function
   flatJourneySteps: function
   formatAnnotationChanges: function
+  handoffKey: function
+  handoffSchemaIssues: function
   intentCoverage: function
   isNoClaimExpect: function
   isOwnTargetVisible: function
@@ -889,9 +897,12 @@
   mutationReplay: function
   mutationWait: function
   needsRelaxedReplay: function
+  outputKeyFields: function
   ownAssertions: function
   planJourneyMutations: function
   prefixLandingPath: function
+  readRecords: function
+  recordFingerprint: function
   relaxedMutationReplay: function
   removeAnchor: function
   renderJobStory: function
@@ -907,7 +918,10 @@
   suggestAnchorName: function
   suggestAnchors: function
   sweepStops: function
+  validateFieldValue: function
   validateParams: function
+  validateRecords: function
+  validateRequests: function
 
 # @jevitate/load (8 exports)
   LoadHarnessSetupError: class
