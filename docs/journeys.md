@@ -150,6 +150,8 @@ closed when the app redirects to another thread.
   parameter is `E_ASSERTION_REF_SECRET` (refused at load and at run, since the expected text is
   model-visible and persisted), a non-string value is `E_ASSERTION_REF_TYPE`.
 - A persisted result keeps the template (`Welcome, ${name}`), never the substituted value.
+- A worked, two-Journey example (discover records, then prepare an approved reply and stop before
+  Send, with every input check proven): [bizops-workflow.md](bizops-workflow.md).
 - Behaviour change: a literal `${...}` in existing assertion text is now a reference. There is no
   escape syntax, so avoid a literal `${` in expected text.
 
