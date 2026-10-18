@@ -1,5 +1,16 @@
 # jevitate
 
+## 0.17.0
+
+### Minor Changes
+
+- 5c1252a: Two-Journey workflows: `journey chain` / MCP `chain_journeys` (discover once, prepare an approved reply per matched request, never send) and indexed `forEach` outputs (#580); option-aware select mutations and reviewed `mutationValues` (#579); `guard-param` proves input checks before the action, and action `{var}` reads are run inputs (#580).
+
+### Patch Changes
+
+- Updated dependencies [5c1252a]
+  - @jevitate/cli@0.17.0
+
 ## 0.16.2
 
 ### Patch Changes

@@ -7,7 +7,7 @@ behaviour changes).
 
 ## [Unreleased]
 
-## [0.17.0] – unreleased
+## [0.17.0] – 2026-10-18
 
 0.17.0 makes a two-Journey workflow (discover records, then prepare an approved reply without sending it) runnable end to end and provable: select mutations pick real options, input guards are proven, and one command chains the Journeys over CLI and MCP.
 
