@@ -539,11 +539,16 @@ sent only to `https://app.journeeze.dev`, `https://app.staging.journeeze.dev` or
 only in the `Authorization` header, and never after a redirect to another origin.
 
 `publish journeeze` exports the bundle, uploads it (as `application/json` without media, else as a
-ZIP of `bundle.json` and every listed file, each re-checked against its sha256 first; at most 256
-MiB), and polls until Journeeze reports it
+ZIP of `bundle.json` and every listed file, each re-checked against its sha256 first), and polls
+until Journeeze reports it
 `imported` (exit 0) or `refused` (exit 1, with the server's errors). It never approves. MCP:
 `publish_to_journeeze` (`dryRun`, `productName`), which never takes or returns the key. A refusal
 carries its specific code.
+
+The upload size limit comes from Journeeze: `publish journeeze` reads `limits.maxUploadBytes` from
+the key check (`whoami`) on every publish, and uses 95,000,000 bytes (under the 100 MB request cap in
+front of Journeeze) when the server reports none (#596). A bundle over the limit is refused
+(`E_JOURNEEZE_BUNDLE`) before anything is sent; publish fewer demos with media, or none.
 
 The bundle's `product.name` is the **connected product's** name — resolved from the saved
 connection, or from `whoami` when the key comes from `JOURNEEZE_UPLOAD_KEY` — not the project's
