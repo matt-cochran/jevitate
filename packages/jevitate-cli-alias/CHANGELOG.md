@@ -1,5 +1,14 @@
 # jevitate
 
+## 0.16.2
+
+### Patch Changes
+
+- c5bc6df: Expand npm setup and next-step documentation, link the public websites, and explain how the
+  open-source Jevitate journey tool connects to Journeeze's hosted help and feedback service.
+- Updated dependencies [c5bc6df]
+  - @jevitate/cli@0.16.2
+
 ## 0.16.1
 
 ### Patch Changes
