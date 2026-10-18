@@ -54,6 +54,8 @@ export interface EnvironmentDef {
   readonly baseUrl: string;
   /** Other origins a Journey step may be on, normalized. */
   readonly allow: readonly string[];
+  /** #561: named secondary origins (`api`, `mail`, …), each an origin with no path. */
+  readonly origins?: Readonly<Record<string, string>>;
   /** Mission fixtures file, absolute. */
   readonly fixtures?: string;
   /** Operator shell hooks (still gated by `--allow-shell-hooks`). */
@@ -123,7 +125,9 @@ export function isEnvironmentError(err: unknown): err is EnvironmentError {
 }
 
 const ENV_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const ENV_KEYS = new Set(["baseUrl", "allow", "fixtures", "hooks", "production", "synthetic"]);
+/** #561: a named secondary origin — lower-case, starts with a letter, at most 32 chars. */
+const NAMED_ORIGIN_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
+const ENV_KEYS = new Set(["baseUrl", "allow", "origins", "fixtures", "hooks", "production", "synthetic"]);
 const HOOK_KEYS = new Set(["before", "after"]);
 /** A key that would put a secret or a session into a committed file. */
 const SECRET_KEY = /storage.?state|secret|passw(or)?d|token|cookie|credential|api.?key|session|auth(orization)?$/i;
@@ -168,7 +172,7 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
   refuseSecretKeys(v, where);
   const o = v as Record<string, unknown>;
   for (const k of Object.keys(o)) {
-    if (!ENV_KEYS.has(k) && !k.startsWith("$")) throw new EnvironmentConfigError(`${where}.${k}: unknown key (allowed: baseUrl, allow, fixtures, hooks, production, synthetic)`);
+    if (!ENV_KEYS.has(k) && !k.startsWith("$")) throw new EnvironmentConfigError(`${where}.${k}: unknown key (allowed: baseUrl, allow, origins, fixtures, hooks, production, synthetic)`);
   }
   if (o.baseUrl === undefined) throw new EnvironmentConfigError(`${where}.baseUrl is required`);
   const base = originOf(o.baseUrl);
@@ -181,6 +185,21 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
       if ("reason" in r) throw new EnvironmentConfigError(`${where}.allow[${i}] ${r.reason}`);
       if (!allow.includes(r.origin)) allow.push(r.origin);
     });
+  }
+  let origins: Record<string, string> | undefined;
+  if (o.origins !== undefined) {
+    if (o.origins === null || typeof o.origins !== "object" || Array.isArray(o.origins)) {
+      throw new EnvironmentConfigError(`${where}.origins must be an object of named http(s) origins ({ "api": "http://127.0.0.1:6310" })`);
+    }
+    origins = {};
+    for (const [k, v] of Object.entries(o.origins as Record<string, unknown>)) {
+      if (!NAMED_ORIGIN_NAME.test(k)) {
+        throw new EnvironmentConfigError(`${where}.origins.${k}: an origin name is 1-32 of [a-z][a-z0-9_-] (lower-case, starting with a letter)`);
+      }
+      const r = originOf(v);
+      if ("reason" in r) throw new EnvironmentConfigError(`${where}.origins.${k} ${r.reason}`);
+      origins[k] = r.origin;
+    }
   }
   let fixtures: string | undefined;
   if (o.fixtures !== undefined) {
@@ -204,6 +223,7 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
   return {
     baseUrl: base.origin,
     allow: allow.filter((a) => a !== base.origin),
+    ...(origins === undefined ? {} : { origins }),
     ...(fixtures === undefined ? {} : { fixtures }),
     ...(hooks === undefined ? {} : { hooks }),
     ...(o.production === true ? { production: true } : {}),
@@ -257,8 +277,12 @@ export interface ResolvedJourneyEnvironment {
   readonly name?: string;
   /** The origin the Journey's paths are moved onto. */
   readonly baseUrl: string;
-  /** Every origin a step may be on: `baseUrl`, then the environment's `allow`. */
+  /** Every origin a step may be on: `baseUrl`, then the environment's `allow`, then its named `origins`. */
   readonly allowedOrigins: readonly string[];
+  /** #561: the target environment's named secondary origins (`api` -> its origin). */
+  readonly origins?: Readonly<Record<string, string>>;
+  /** #561: every declared environment's baseUrl + named origins, default first; set with `--env`. */
+  readonly sourceOrigins?: readonly { readonly baseUrl: string; readonly origins: Readonly<Record<string, string>>; readonly isDefault?: true }[];
   readonly fixtures?: string;
   readonly hooks?: { readonly before?: string; readonly after?: string };
   /** From `~/.jevitate/targets.json[baseUrl]` (or its `personas[persona]`): the default session. */
@@ -289,11 +313,56 @@ export interface JourneyEnvironmentRequest {
   readonly layout?: LayoutDeps;
 }
 
+/** The project's conventional default environment name, when declared. */
+const DEFAULT_ENV_NAME = "default";
+
+/**
+ * #561: the named origins both a Journey's source environment and its target environment declare.
+ * PURE: `site` is the recording's original site (not the rebased one). The source environment is the
+ * one whose baseUrl is that origin, else the declared `default` environment (kept first in
+ * `sourceOrigins`). No match, no name in common, or no target environment: `{}`.
+ */
+export function namedOriginMap(env: ResolvedJourneyEnvironment | undefined, site: string): Record<string, string> {
+  const target = env?.origins;
+  if (env === undefined || target === undefined) return {};
+  const recorded = absoluteUrl(site)?.origin;
+  // Fall back only to an explicitly declared `default` environment, never to an arbitrary one.
+  const source = env.sourceOrigins?.find((e) => e.baseUrl === recorded) ?? env.sourceOrigins?.find((e) => e.isDefault === true);
+  if (source === undefined) return {};
+  const map: Record<string, string> = {};
+  for (const [name, targetOrigin] of Object.entries(target)) {
+    const sourceOrigin = source.origins[name];
+    if (sourceOrigin !== undefined) map[sourceOrigin] = targetOrigin;
+  }
+  return map;
+}
+
+/** #561: rewrite an absolute URL whose origin is in `map`; app-relative URLs are untouched. */
+function moveNamedOrigin(raw: string, map: Readonly<Record<string, string>>): string {
+  const u = absoluteUrl(raw);
+  if (u === null) return raw;
+  const target = map[u.origin];
+  if (target === undefined) return raw;
+  if (raw.includes("${")) return `${target}${raw.replace(/^https?:\/\/[^/?#]*/i, "")}`;
+  return `${target}${u.pathname}${u.search}${u.hash}`;
+}
+
+/**
+ * #561: a `FixtureBounds.rebaseUrl` for fixture step URLs, or `undefined` when the named-origin map
+ * is empty. `site` is the recording's original site.
+ */
+export function fixtureRebaseUrl(env: ResolvedJourneyEnvironment | undefined, site: string): ((absoluteUrl: string) => string) | undefined {
+  const map = namedOriginMap(env, site);
+  if (Object.keys(map).length === 0) return undefined;
+  return (absoluteUrl: string): string => moveNamedOrigin(absoluteUrl, map);
+}
+
 /**
  * THE environment resolver (#247). `undefined` when neither `env` nor `baseUrl` is given — the
  * caller then runs exactly as before, on the Journey's recorded site. Throws `UnknownEnvironmentError`
  * (listing the known names), `EnvironmentConfigError` (a bad file, path-precise; a persona the
  * origin does not declare), or `EnvironmentArgsError` (a `baseUrl` that is not an origin).
+ * #561: `sourceOrigins` is plain data; `namedOriginMap` maps it against the recording's site.
  */
 export function resolveJourneyEnvironment(req: JourneyEnvironmentRequest): ResolvedJourneyEnvironment | undefined {
   if (req.env === undefined && req.baseUrl === undefined) {
@@ -301,10 +370,11 @@ export function resolveJourneyEnvironment(req: JourneyEnvironmentRequest): Resol
     return undefined;
   }
   let def: EnvironmentDef | undefined;
+  let envs: Readonly<Record<string, EnvironmentDef>> = {};
   let source = "--base-url";
   if (req.env !== undefined) {
     const file = req.environmentsFile ?? environmentsFilePath(req.layout);
-    const envs = file === null ? {} : loadEnvironmentsFile(file);
+    envs = file === null ? {} : loadEnvironmentsFile(file);
     def = Object.prototype.hasOwnProperty.call(envs, req.env) ? envs[req.env] : undefined;
     if (def === undefined) throw new UnknownEnvironmentError(req.env, Object.keys(envs).sort(), file !== null && existsSync(file) ? file : null);
     source = `${file}[${req.env}]`;
@@ -336,10 +406,22 @@ export function resolveJourneyEnvironment(req: JourneyEnvironmentRequest): Resol
       );
     }
   }
-  return {
+  const namedOrigins = def?.origins === undefined ? {} : { ...def.origins };
+  // #561: plain data only — every environment's named origins, with `default` first when declared,
+  // so a pure mapping can find the recording's source environment later.
+  const sourceOrigins = req.env === undefined
+    ? undefined
+    : Object.freeze(
+        Object.entries(envs)
+          .sort(([a], [b]) => (a === DEFAULT_ENV_NAME ? -1 : b === DEFAULT_ENV_NAME ? 1 : 0))
+          .map(([n, d]) => Object.freeze({ baseUrl: d.baseUrl, origins: Object.freeze({ ...(d.origins ?? {}) }), ...(n === DEFAULT_ENV_NAME ? { isDefault: true as const } : {}) })),
+      );
+  const resolved: ResolvedJourneyEnvironment = {
     ...(req.env === undefined ? {} : { name: req.env }),
     baseUrl,
-    allowedOrigins: [baseUrl, ...allow],
+    allowedOrigins: Object.freeze([baseUrl, ...allow, ...Object.values(namedOrigins).filter((o) => o !== baseUrl && !allow.includes(o))]),
+    ...(def?.origins === undefined ? {} : { origins: Object.freeze({ ...def.origins }) }),
+    ...(sourceOrigins === undefined ? {} : { sourceOrigins }),
     ...(def?.fixtures === undefined ? {} : { fixtures: def.fixtures }),
     ...(def?.hooks === undefined ? {} : { hooks: def.hooks }),
     ...(session?.storageState === undefined ? {} : { storageState: session.storageState }),
@@ -350,6 +432,7 @@ export function resolveJourneyEnvironment(req: JourneyEnvironmentRequest): Resol
     // pointing elsewhere is not what the file vouches for.
     ...(def?.synthetic === true && baseUrl === def.baseUrl ? { synthetic: true as const } : {}),
   };
+  return Object.freeze(resolved);
 }
 
 function absoluteUrl(s: string): URL | null {
@@ -371,6 +454,7 @@ function absoluteUrl(s: string): URL | null {
  */
 export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnvironment): Recording {
   const recordedOrigin = absoluteUrl(recording.site)?.origin;
+  const named = namedOriginMap(env, recording.site);
   const refusals: string[] = [];
   const move = (raw: string, where: string, mustBeAllowed: boolean): string => {
     const u = absoluteUrl(raw);
@@ -381,6 +465,9 @@ export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnviro
       if (raw.includes("${")) return `${env.baseUrl}${raw.replace(/^https?:\/\/[^/?#]*/i, "")}`;
       return `${env.baseUrl}${u.pathname}${u.search}${u.hash}`;
     }
+    // #561: a named secondary origin moves to the target environment's same-named origin.
+    const moved = moveNamedOrigin(raw, named);
+    if (moved !== raw) return moved;
     if (mustBeAllowed && !env.allowedOrigins.includes(u.origin)) refusals.push(`${where} is on ${u.origin}`);
     return raw;
   };
@@ -407,10 +494,20 @@ export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnviro
   return { ...recording, site: env.baseUrl, pages };
 }
 
-/** `rebaseRecording` for a whole Journey (its metadata, incl. origin-bound secretRefs, is untouched: fail closed). */
+/**
+ * `rebaseRecording` for a whole Journey; #561 also rewrites the end-state `http` check URLs through
+ * the same named-origin map (every other metadata field, incl. origin-bound secretRefs, is untouched:
+ * fail closed).
+ */
 export function applyJourneyEnvironment(journey: Journey, env: ResolvedJourneyEnvironment | undefined): Journey {
   if (env === undefined) return journey;
-  return { ...journey, recording: rebaseRecording(journey.recording, env) };
+  const recording = rebaseRecording(journey.recording, env);
+  const named = namedOriginMap(env, journey.recording.site);
+  if (Object.keys(named).length === 0 || journey.metadata.endState === undefined) return { ...journey, recording };
+  const endState = journey.metadata.endState.map((check) =>
+    check.kind === "http" ? { ...check, url: moveNamedOrigin(check.url, named) } : check,
+  );
+  return { ...journey, recording, metadata: { ...journey.metadata, endState } };
 }
 
 /** Raw commander values of `--env` / `--base-url`. */

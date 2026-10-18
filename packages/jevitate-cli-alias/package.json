@@ -1,6 +1,6 @@
 {
   "name": "jevitate",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "description": "Bare-name alias for @jevitate/cli, autonomous browser testing that turns discovered bugs into deterministic regression tests. Installs the `jevitate` command.",
   "type": "module",
   "license": "MIT",

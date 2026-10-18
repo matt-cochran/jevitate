@@ -270,3 +270,26 @@ describe("#432 rendering", () => {
     expect(() => reviewSheetHash("# nothing here")).toThrow(/names no content hash/);
   });
 });
+
+describe("#565 review sheet: parameter-relative checks", () => {
+  const withEmailCheck = (): Journey => {
+    const j = fixtureJourney();
+    j.recording.pages[0]!.steps[1]!.step = { kind: "fill", target: { label: "Email" }, value: { var: "email" }, expect: { kind: "valueEquals", target: { label: "Email" }, value: { var: "email" } } };
+    return j;
+  };
+  const emailCheck = (j: Journey) => buildJourneyReview(j).proof.stepAssertions.find((a) => a.step === 2)!;
+
+  it("a check naming a non-secret parameter is not weak", () => {
+    expect(emailCheck(withEmailCheck()).weak).toBe(false);
+  });
+
+  it("a check naming a parameter shows the reference, not a value", () => {
+    expect(emailCheck(withEmailCheck()).text).toBe('"Email" has the value of email');
+  });
+
+  it("a check naming a secret parameter is weak", () => {
+    const j = withEmailCheck();
+    j.recording.pages[0]!.steps[1]!.step = { kind: "fill", target: { label: "Email" }, value: { var: "email" }, expect: { kind: "valueEquals", target: { label: "Email" }, value: { var: "password" } } };
+    expect(emailCheck(j).weak).toBe(true);
+  });
+});

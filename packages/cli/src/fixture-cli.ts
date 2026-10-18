@@ -61,6 +61,8 @@ export function withFixtureFlags(cmd: Command): Command {
 export interface FixtureContext {
   readonly allowlist: readonly string[];
   readonly baseUrl: string;
+  /** #561: rewrites a resolved fixture step URL (named secondary origins) before the allowlist check. */
+  readonly rebaseUrl?: (absoluteUrl: string) => string;
   readonly storageState?: string;
   readonly secretFields?: readonly SecretField[];
   readonly secrets?: readonly string[];
@@ -124,7 +126,7 @@ function hooksOf(flags: FixtureFlags): ShellHooks | undefined {
 export function buildMissionFixtures(flags: FixtureFlags, ctx: FixtureContext): MissionFixtures | undefined {
   const hooks = hooksOf(flags);
   const file = flags.fixtures ?? ctx.targetFixtures;
-  const bounds = { allowlist: ctx.allowlist, baseUrl: ctx.baseUrl };
+  const bounds = { allowlist: ctx.allowlist, baseUrl: ctx.baseUrl, ...(ctx.rebaseUrl === undefined ? {} : { rebaseUrl: ctx.rebaseUrl }) };
   const spec = file !== undefined ? loadFixtureFile(file, bounds, { openRefs: hooks?.before !== undefined }) : ctx.spec;
   const flagged = (flags.fixtureIdentity ?? []).map((x) => x.slice(0, Math.max(0, x.indexOf("="))));
   if (spec === undefined && hooks === undefined) {

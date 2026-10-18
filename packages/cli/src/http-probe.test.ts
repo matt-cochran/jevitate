@@ -84,6 +84,10 @@ describe("assertHttpChecksAllowed (#543)", () => {
 });
 
 describe("httpCheckRefs (#543)", () => {
+  it("#564: marks a credential-named param secret even when it was not declared secret", () => {
+    expect(httpCheckRefs({ params: { apiKey: "k" } })("apiKey")).toEqual({ value: "k", secret: true });
+  });
+
   it("marks a secret param secret", () => {
     expect(httpCheckRefs({ params: { token: "t" }, secretParams: ["token"] })("token")).toEqual({ value: "t", secret: true });
   });

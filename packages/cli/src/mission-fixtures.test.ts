@@ -77,7 +77,6 @@ describe("parseFixtureSpec — validation (fail closed, before any request)", ()
     expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/items/${setup.nope}" }] }, BOUNDS)).toThrow(/no earlier setup step outputs/);
     expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/x", outputs: { id: "id" } }] }, BOUNDS)).toThrow(FixtureSpecError);
     expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/x", outputs: { id: "$.a" }, secretOutputs: ["other"] }] }, BOUNDS)).toThrow(/secretOutputs/);
-    expect(() => parseFixtureSpec({ restore: [{ method: "GET", url: "/x", outputs: { id: "$.a" } }] }, BOUNDS)).toThrow(/only setup steps/);
   });
 
   it("rejects unknown keys, a bad method and an empty spec", () => {
@@ -562,5 +561,136 @@ describe("replay rebinding", () => {
     await s.page.goto(`${ORIGIN}/items/item-1xyz`);
     expect(gotos).toEqual([`${ORIGIN}/items/item-2xyz`]);
     expect(fx.record().log.map((l) => l.phase)).toEqual(["setup", "restore", "setup"]);
+  });
+});
+
+describe("#560: restore steps bind their own outputs", () => {
+  const find = { name: "find", method: "GET", url: "/items?name=demo", outputs: { id: "$.items[0].id" } };
+  const del = { name: "del", method: "DELETE", url: "/items/${restore.id}" };
+
+  it("accepts a restore step that binds outputs and a later restore step that references them", () => {
+    const spec = parseFixtureSpec({ restore: [find, del] }, BOUNDS);
+    expect(spec.restore[1]).toMatchObject({ method: "DELETE", url: "/items/${restore.id}" });
+  });
+
+  it("refuses a ${restore.x} that no earlier restore step outputs", () => {
+    expect(() => parseFixtureSpec({ restore: [del] }, BOUNDS)).toThrow(/no earlier restore step outputs/);
+  });
+
+  it("refuses duplicate restore output names", () => {
+    expect(() => parseFixtureSpec({ restore: [find, { ...find, url: "/items" }] }, BOUNDS)).toThrow(/bound twice/);
+  });
+
+  it("refuses ${restore.x} in a setup step", () => {
+    expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/items/${restore.id}" }] }, BOUNDS)).toThrow(/only usable inside the restore phase/);
+  });
+
+  it("refuses a ${restore.x} that would choose the URL origin", () => {
+    expect(() => parseFixtureSpec({ restore: [find, { method: "GET", url: "http://${restore.id}/x" }] }, BOUNDS)).toThrow(FixtureSpecError);
+  });
+
+  it("refuses ${restore.x} in a --param value", () => {
+    const fx = new MissionFixtures({ ...BOUNDS, spec: parseFixtureSpec({ restore: [find, del] }, BOUNDS), auth: {} });
+    expect(() => checkSetupRefs({ "--param": ["${restore.id}"] }, fx)).toThrow(UnboundSetupRefError);
+  });
+
+  it("sends the dependent restore request to the id the earlier restore step bound", async () => {
+    const calls: Call[] = [];
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ restore: [find, del] }, BOUNDS),
+      auth: {},
+      fetchImpl: fakeFetch(calls, (c) => (c.method === "GET" ? Response.json({ items: [{ id: "item-fresh" }] }) : new Response(null, { status: 204 }))),
+    });
+    await fx.setup();
+    await fx.restore();
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual([`${ORIGIN}/items/item-fresh`]);
+  });
+
+  it("re-reads the restore output on a second restore instead of reusing the stale binding", async () => {
+    const calls: Call[] = [];
+    let n = 0;
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ restore: [find, del] }, BOUNDS),
+      auth: {},
+      fetchImpl: fakeFetch(calls, (c) => (c.method === "GET" ? Response.json({ items: [{ id: `item-${++n}` }] }) : new Response(null, { status: 204 }))),
+    });
+    await fx.setup();
+    await fx.restore();
+    await fx.setup();
+    await fx.restore();
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual([`${ORIGIN}/items/item-1`, `${ORIGIN}/items/item-2`]);
+  });
+
+  it("names the step and output when a restore output matches nothing", async () => {
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ restore: [find, del] }, BOUNDS),
+      auth: {},
+      fetchImpl: (async () => Response.json({ items: [] })) as unknown as typeof fetch,
+    });
+    await fx.setup();
+    await fx.restore();
+    expect(fx.record().log.find((l) => !l.ok)?.detail).toMatch(/find: output id \(\$\.items\[0\]\.id\) is missing/);
+  });
+
+  it("never sends the dependent restore request when its output is unbound", async () => {
+    const calls: Call[] = [];
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ restore: [find, del] }, BOUNDS),
+      auth: {},
+      fetchImpl: fakeFetch(calls, () => Response.json({ items: [] })),
+    });
+    await fx.setup();
+    await fx.restore();
+    expect(calls.map((c) => c.method)).toEqual(["GET"]);
+  });
+
+  it("keeps restore outputs out of bindings, public outputs and persisted records", async () => {
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ restore: [find, del] }, BOUNDS),
+      auth: {},
+      fetchImpl: fakeFetch([], (c) => (c.method === "GET" ? Response.json({ items: [{ id: "item-private" }] }) : new Response(null, { status: 204 }))),
+    });
+    await fx.setup();
+    await fx.restore();
+    expect(`${JSON.stringify(fx.bindings())}${JSON.stringify(fx.publicOutputs())}${JSON.stringify(fx.persisted())}`).not.toContain("item-private");
+  });
+
+  it("redacts a secret restore output from the record", async () => {
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ restore: [{ ...find, secretOutputs: ["id"] }, del] }, BOUNDS),
+      auth: {},
+      fetchImpl: fakeFetch([], (c) => (c.method === "GET" ? Response.json({ items: [{ id: "tok-RESTORE-SECRET" }] }) : new Response(null, { status: 204 }))),
+    });
+    await fx.setup();
+    await fx.restore();
+    expect(JSON.stringify(fx.record())).not.toContain("tok-RESTORE-SECRET");
+  });
+});
+
+describe("#560/#561: rebaseUrl rewrites every resolved step URL", () => {
+  const REBASE = (u: string): string => u.replace("http://127.0.0.1:6310", ORIGIN);
+  const bounds = { ...BOUNDS, rebaseUrl: REBASE };
+
+  it("sends a setup step to the rebased origin before the allowlist check and fetch", async () => {
+    const calls: Call[] = [];
+    const spec = parseFixtureSpec({ setup: [{ method: "GET", url: "http://127.0.0.1:6310/api/x" }] }, bounds);
+    const fx = new MissionFixtures({ ...bounds, spec, auth: {}, fetchImpl: fakeFetch(calls, () => new Response(null, { status: 204 })) });
+    await fx.setup();
+    expect(calls.map((c) => c.url)).toEqual([`${ORIGIN}/api/x`]);
+  });
+
+  it("sends a restore step to the rebased origin", async () => {
+    const calls: Call[] = [];
+    const spec = parseFixtureSpec({ restore: [{ method: "DELETE", url: "http://127.0.0.1:6310/api/x" }] }, bounds);
+    const fx = new MissionFixtures({ ...bounds, spec, auth: {}, fetchImpl: fakeFetch(calls, () => new Response(null, { status: 204 })) });
+    await fx.setup();
+    await fx.restore();
+    expect(calls.map((c) => c.url)).toEqual([`${ORIGIN}/api/x`]);
   });
 });

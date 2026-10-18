@@ -928,10 +928,11 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
         continue;
       }
       // The value leaves the page only for a control the shared predicate says
-      // is NOT a secret (type=password, or a password/one-time-code
-      // autocomplete — which catches a revealed "show password" field).
+      // is NOT a secret (type=password, a password/one-time-code autocomplete —
+      // which catches a revealed "show password" field — or a credential-named
+      // control such as "API key" or "Card number", #564).
       const value =
-        raw.valueBearing && !isSecretField(raw.inputType, raw.autocomplete)
+        raw.valueBearing && !isSecretField(raw.inputType, raw.autocomplete, [raw.name])
           ? await handle.evaluate(readControlValue)
           : null;
       const facts: DescribedFacts = { ...raw, value };
@@ -986,7 +987,7 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
       // credential field's, never one holding a secret (`targetDisplay` refuses both).
       const display = targetDisplay(
         { role: facts.role === "file-input" ? null : facts.role, name: facts.name },
-        { secretField: isSecretField(raw.inputType, raw.autocomplete) || isCredentialField(control), secrets: opts?.secrets ?? [] },
+        { secretField: isSecretField(raw.inputType, raw.autocomplete, [raw.name]) || isCredentialField(control), secrets: opts?.secrets ?? [] },
       );
       if (display !== undefined) CONTROL_DISPLAY.set(kept.descriptor, display);
       controls.push(kept);

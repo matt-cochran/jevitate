@@ -1,4 +1,5 @@
 import type { Assertion } from "@jevitate/recording";
+import { AssertionRefError, assertionRefs, resolveAssertionRefs } from "@jevitate/recording";
 import { checkAssertion, readAssertionEvidence, readAssertionText } from "@jevitate/interpreter";
 import type { Actor } from "@jevitate/screenplay";
 import type { Page } from "playwright";
@@ -55,7 +56,10 @@ export interface OutcomeCheckContext {
    * every `http` check fails closed as unevaluable.
    */
   readonly httpProbe?: HttpProbe;
-  /** #543: resolves an `http` check's `${name}` placeholders (a secret one is refused). */
+  /**
+   * #543: resolves an `http` check's `${name}` placeholders (a secret one is refused). #562/#565: and
+   * a page / `reloadThen` assertion's `${name}` and `{ var }` operands, from the same names.
+   */
   readonly resolveRef?: HttpCheckRefResolver;
 }
 
@@ -77,7 +81,16 @@ export async function evaluateOutcomeChecks(checks: readonly SuccessCheck[], ctx
   if (needsSettle) await monitorFor(page).waitSettled({ ceilingMs });
   const requests = capture?.sent() ?? [];
 
-  const assertOn = async (assertion: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
+  const assertOn = async (template: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
+    // #562/#565: an operand naming a param or `setup.x` resolves first. An unbound, secret or
+    // non-string reference fails closed as unevaluable — it is never compared as literal text.
+    let assertion: Assertion;
+    try {
+      assertion = assertionRefs(template).length === 0 ? template : resolveAssertionRefs(template, ctx.resolveRef ?? (() => undefined));
+    } catch (e) {
+      if (!(e instanceof AssertionRefError)) throw e;
+      return { check: describeCheck(check), passed: false, unevaluable: true, detail: `unevaluable: ${redactText(e.message, secrets)}` };
+    }
     const passed = await checkAssertion(actor, assertion, { timeoutMs });
     // A visual-state check (#148) always says what it observed — the ratio, the computed values, the
     // flash timing — pass or fail (bounded, redacted: it is page-derived).

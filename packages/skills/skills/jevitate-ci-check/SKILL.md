@@ -34,6 +34,9 @@ Relative paths resolve against the suite file.
 - `journeys` must be promoted, and their origin must be on the target's allowlist. Journeys,
   `feature` missions and `verifyFix` are model-free. Goals and `coverage`/`exploratory`/
   `adversarial`/`usability` missions need `"ai": "real"` (or `--real`) and keys.
+- A Journey param may be `{ "unique": "inv-{run}@example.test" }` (the template must contain
+  `{run}`): each run and each entry gets a fresh token, the result record stores the value used,
+  and the suite keeps the template. Use it for data the app refuses to repeat.
 - `"ai": "fake"` (`--fake-ai`) is a pipeline smoke. It never gates a goal on the fake judge's
   verdict (such an item is an error, exit 2), but hard signals still gate.
 - `storageState` holds live cookies. Keep it outside the repo (under `~/.jevitate/`, or generate

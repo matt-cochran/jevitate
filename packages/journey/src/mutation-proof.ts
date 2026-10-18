@@ -4,6 +4,8 @@ import type { Journey } from "./journey.js";
 import { isNoClaimExpect, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { journeyWriteSteps, type JourneyLintOptions } from "./lint.js";
 import { resolveJourneyStep } from "./anchors.js";
+import { secretParamNames } from "./intent.js";
+import { actionRefs, alteredValue, mutableParamValue, pinAssertionRefs, sitePageAssertion, siteRefs, swappedValue, truncatedValue } from "./mutation-proof-refs.js";
 
 /**
  * #402 — the pure half of `journey verify --mutate`, a built-in negative proof: an assertion is only
@@ -20,17 +22,27 @@ import { resolveJourneyStep } from "./anchors.js";
  *    browser (`mutationReplay` names the step's recorded writes; one of them must be blocked, or the
  *    mutation was not applied);
  *  - `stale-value:<n>` — a fill whose value an assertion checks (`valueEquals`/`textIncludes`)
- *    types `""` instead.
+ *    types `""` instead — or, #565, for a `{ var }` fill whose parameter an assertion names, an
+ *    altered value of that parameter (the composer holds stale text, not the approved reply);
+ *  - `swap-param:<name>` / `truncate-param:<name>` (#565) — the replay runs with one non-secret
+ *    parameter swapped for a different plausible value, or with its tail dropped, where the app
+ *    receives it (a fill, a navigate URL), while every assertion naming it still expects the
+ *    supplied value: a check that cannot tell them apart is vacuous. A secret is never mutated.
  */
 
-export type MutationKind = "skip" | "block-write" | "stale-value";
+export type MutationKind = "skip" | "block-write" | "stale-value" | "swap-param" | "truncate-param";
 
 export interface JourneyMutation {
   readonly kind: MutationKind;
-  /** 1-based, the way `--at-step` counts. */
+  /**
+   * 1-based, the way `--at-step` counts. For a param mutation: the first step whose action reads
+   * the parameter (where the mutation takes effect).
+   */
   readonly step: number;
-  /** `<kind>:<step>`, e.g. `skip:3` — what a report and `provedBy` name. */
+  /** `<kind>:<step>` (e.g. `skip:3`), or `<kind>:<param>` for a param mutation — what a report and `provedBy` name. */
   readonly id: string;
+  /** #565: the parameter a `swap-param`/`truncate-param` alters (a name, never a value). */
+  readonly param?: string;
 }
 
 /** One (assertion site, mutation) pair: the mutation must make that assertion fail. */
@@ -85,7 +97,7 @@ export function assertionSiteKey(site: JourneyAssertionSite): string {
   return `end-state:${site.index}`;
 }
 
-const MUTATION_RE = /^(skip|block-write|stale-value):(.+)$/;
+const MUTATION_RE = /^(skip|block-write|stale-value|swap-param|truncate-param):(.+)$/;
 const SITE_RE = /^(?:step:[1-9][0-9]*|step-request:[1-9][0-9]*:(?:0|[1-9][0-9]*)|end-state:(?:0|[1-9][0-9]*))$/;
 
 function flat(journey: Journey): RecordedStep[] {
@@ -96,11 +108,32 @@ function mutation(kind: MutationKind, step: number): JourneyMutation {
   return { kind, step, id: `${kind}:${step}` };
 }
 
+/** The first (1-based) step whose action reads `name`, or null when no action does. */
+function firstActionStep(journey: Journey, name: string): number | null {
+  const i = flat(journey).findIndex((r) => actionRefs(r.step).includes(name));
+  return i < 0 ? null : i + 1;
+}
+
+function paramMutation(kind: "swap-param" | "truncate-param", step: number, param: string): JourneyMutation {
+  return { kind, step, id: `${kind}:${param}`, param };
+}
+
+/** A declared `swap-param:<name>` / `truncate-param:<name>`: a non-secret parameter an action reads. */
+function paramMutationRef(journey: Journey, kind: "swap-param" | "truncate-param", name: string, value: string): JourneyMutation {
+  const declared = [...journey.metadata.params, ...(journey.metadata.parameters ?? []).map((p) => p.name)];
+  if (!declared.includes(name)) throw new Error(`${JSON.stringify(value)}: ${JSON.stringify(name)} is not a declared parameter`);
+  if (secretParamNames(journey).includes(name)) throw new Error(`${JSON.stringify(value)}: ${name} is a secret parameter — a secret is never mutated`);
+  const step = firstActionStep(journey, name);
+  if (step === null) throw new Error(`${JSON.stringify(value)}: no step's action reads ${name} (a fill or a navigate URL)`);
+  return paramMutation(kind, step, name);
+}
+
 /** Resolves a `mustFailWhen` (`skip:<n|anchor>`, …) against the Journey; throws a readable Error. */
 function resolveMutationRef(journey: Journey, value: string): JourneyMutation {
   const m = MUTATION_RE.exec(value.trim());
-  if (m === null) throw new Error(`${JSON.stringify(value)} is not a mutation — expected skip:<step>, block-write:<step> or stale-value:<step> (a step number or an anchor name)`);
+  if (m === null) throw new Error(`${JSON.stringify(value)} is not a mutation — expected skip:<step>, block-write:<step> or stale-value:<step> (a step number or an anchor name), or swap-param:<param> / truncate-param:<param>`);
   const ref = m[2]!;
+  if (m[1] === "swap-param" || m[1] === "truncate-param") return paramMutationRef(journey, m[1], ref, value);
   let step: number;
   try {
     step = resolveJourneyStep(journey, ref).step;
@@ -139,25 +172,41 @@ export function mutationPairIssues(journey: Journey): { readonly index: number; 
   return out;
 }
 
-/** The text a `valueEquals`/`textIncludes` assertion expects, else null. */
+/**
+ * The literal text a `valueEquals`/`textIncludes` assertion expects, else null. A `{ var }` operand
+ * (#565) is not a literal: it derives no stale-value pair here.
+ */
 function expectedText(a: Assertion): { kind: "valueEquals" | "textIncludes"; text: string } | null {
-  if (a.kind === "valueEquals") return { kind: a.kind, text: a.value };
-  if (a.kind === "textIncludes") return { kind: a.kind, text: a.text };
-  return null;
-}
-
-function siteAssertion(site: JourneyAssertionSite): Assertion | null {
-  if (site.where === "step") return site.check.assertion;
-  if (site.where === "end-state" && (site.check.kind === "page" || site.check.kind === "reloadThen")) return site.check.assertion;
+  if (a.kind === "valueEquals") return typeof a.value === "string" ? { kind: a.kind, text: a.value } : null;
+  if (a.kind === "textIncludes") return typeof a.text === "string" ? { kind: a.kind, text: a.text } : null;
   return null;
 }
 
 /** Does this assertion check the value `v` a fill typed? */
 function checksValue(site: JourneyAssertionSite, v: string): boolean {
-  const a = siteAssertion(site);
+  const a = sitePageAssertion(site);
   const e = a === null ? null : expectedText(a);
   if (e === null) return false;
   return e.kind === "valueEquals" ? e.text === v : e.text.includes(v);
+}
+
+/**
+ * #565: the variable a `{ var }` fill types, when it is not secret and some assertion names it — the
+ * stale-value mutation of such a fill types an altered value (when the value is known) instead of "".
+ */
+function varFillRef(journey: Journey, step: Step, params: Readonly<Record<string, string>>): string | null {
+  if (step.kind !== "fill" || !("var" in step.value)) return null;
+  const name = step.value.var;
+  if (secretParamNames(journey, params).includes(name)) return null;
+  return journeyAssertions(journey).some((s) => siteRefs(s).includes(name)) ? name : null;
+}
+
+/** What a stale-value mutation types into fill `step`: an altered non-secret param value, else "". */
+function staleValue(journey: Journey, step: Step, params: Readonly<Record<string, string>>): string {
+  const name = varFillRef(journey, step, params);
+  if (name === null) return "";
+  const v = mutableParamValue(journey, name, params);
+  return v === null ? "" : alteredValue(v);
 }
 
 /** A fill's typed value, when it is known here (a literal, or a param given in `params`). */
@@ -203,14 +252,35 @@ export function planJourneyMutations(
 
   steps.forEach((recorded, i) => {
     const v = fillValue(recorded.step, opts.params ?? {});
-    if (v === null || v === "") return;
-    const checking = sites.filter((s) => checksValue(s, v));
+    const ref = varFillRef(journey, recorded.step, opts.params ?? {});
+    if ((v === null || v === "") && ref === null) return;
+    // #565: a `{ var }` fill is also checked by every assertion that names its (non-secret) variable.
+    const checking = sites.filter((s) => (v !== null && v !== "" && checksValue(s, v)) || (ref !== null && siteRefs(s).includes(ref)));
     if (checking.length === 0) return;
     const m = mutation("stale-value", i + 1);
     mutations.push(m);
     for (const s of ownSites(i + 1)) pair(s, m);
     for (const s of checking) pair(s, m);
   });
+
+  // #565: each non-secret parameter an assertion names, and an action reads, is swapped and truncated
+  // where the app receives it — paired with every assertion that names it.
+  const params = opts.params ?? {};
+  const names = [...new Set(sites.flatMap(siteRefs))];
+  for (const name of names) {
+    const at = firstActionStep(journey, name);
+    if (at === null) continue;
+    const naming = sites.filter((s) => siteRefs(s).includes(name));
+    for (const [kind, value] of [
+      ["swap-param", swappedValue(journey, name, params)],
+      ["truncate-param", truncatedValue(journey, name, params)],
+    ] as const) {
+      if (value === null) continue;
+      const m = paramMutation(kind, at, name);
+      mutations.push(m);
+      for (const s of naming) pair(s, m);
+    }
+  }
 
   for (const declared of journey.metadata.mutationPairs ?? []) {
     const m = resolveMutationRef(journey, declared.mustFailWhen);
@@ -243,12 +313,9 @@ const MUTATION_WAIT_MARGIN_MS = 5_000;
  * `skipIndex` (0-based) is a step the interpreter leaves out; `blockIndex` (0-based) is the step
  * whose window has its writes aborted, `blockRequests` its recorded write request lines.
  */
-export function mutationReplay(
-  journey: Journey,
-  m: JourneyMutation,
-  opts: JourneyLintOptions = {},
-): { readonly journey: Journey; readonly skipIndex?: number; readonly blockIndex?: number; readonly blockRequests?: readonly string[] } {
+export function mutationReplay(journey: Journey, m: JourneyMutation, opts: MutationReplayOptions = {}): MutationReplay {
   const index = m.step - 1;
+  if (m.kind === "swap-param" || m.kind === "truncate-param") return paramReplay(journey, m, opts.params ?? {});
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const step = flat(journey)[index]?.step;
@@ -274,30 +341,75 @@ export function mutationReplay(
       ...(step.waitFor === undefined ? {} : { waitFor: mutationWait(step.waitFor) }),
     };
   } else if (m.kind === "stale-value" && target.step.kind === "fill") {
-    target.step = { ...target.step, value: { redacted: false, value: "" } };
+    target.step = { ...target.step, value: { redacted: false, value: staleValue(journey, step, opts.params ?? {}) } };
   }
   return { journey: copy };
+}
+
+/** #565: what `mutationReplay` takes — the lint options, and the params the proof runs with. */
+export type MutationReplayOptions = JourneyLintOptions & { readonly params?: Readonly<Record<string, string>> };
+
+/**
+ * One mutated replay. `params`, when set, are the params the replay runs with in place of the
+ * supplied ones (a param mutation; never a secret's value altered).
+ */
+export interface MutationReplay {
+  readonly journey: Journey;
+  readonly skipIndex?: number;
+  readonly blockIndex?: number;
+  readonly blockRequests?: readonly string[];
+  readonly params?: Readonly<Record<string, string>>;
+}
+
+/**
+ * #565: a param mutation's replay — the params with `m.param` swapped or truncated, and a copy of the
+ * Journey whose assertions naming it are pinned to the SUPPLIED value. Throws when the parameter has
+ * no mutable value (not supplied, blank, or secret).
+ */
+function paramReplay(journey: Journey, m: JourneyMutation, params: Readonly<Record<string, string>>): MutationReplay {
+  const name = m.param ?? "";
+  const supplied = mutableParamValue(journey, name, params);
+  const altered = m.kind === "swap-param" ? swappedValue(journey, name, params) : truncatedValue(journey, name, params);
+  if (supplied === null || altered === null) throw new Error(`${m.id}: parameter ${name} has no value this proof may alter (not supplied, blank, too short, or secret)`);
+  return { journey: pinAssertionRefs(journey, name, supplied), params: { ...params, [name]: altered } };
+}
+
+/** #567: the schema-valid weak postcondition a relaxed mutated step keeps in place of its own
+ * `expect` — the Recording schema REQUIRES `expect` for fill/click/etc, so it cannot be dropped. A
+ * step with a `target` gets `visible` on its OWN target (the per-step vacuous claim #400 names: it
+ * holds before AND after the action, so it cannot prove the mutated value); a target-less step kind
+ * (e.g. `navigate`) gets the explicit no-claim `urlIncludes ""` used elsewhere. */
+function relaxedExpect(step: Step): Assertion {
+  if ("target" in step && step.target !== undefined) return { kind: "visible", target: step.target };
+  return { kind: "urlIncludes", text: "" };
 }
 
 /**
  * #554: the same mutation with the mutated step's OWN postcondition relaxed. `skip` skips the step
  * in place without turning its `expect` into an assert step; `block-write` and `stale-value` apply
- * the same action mutation but drop the step's `expect` and `waitFor` (its `expectRequests` stay).
+ * the same action mutation but replace the step's `expect` with a schema-valid weak one (#567) and
+ * drop `waitFor` (its `expectRequests` stay).
  * The input Journey is never modified and no step is removed, so it replays with the same indices.
  */
-export function relaxedMutationReplay(
-  journey: Journey,
-  m: JourneyMutation,
-  opts: JourneyLintOptions = {},
-): { readonly journey: Journey; readonly skipIndex?: number; readonly blockIndex?: number; readonly blockRequests?: readonly string[] } {
+export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts: MutationReplayOptions = {}): MutationReplay {
   const index = m.step - 1;
   if (m.kind === "skip") return { journey, skipIndex: index };
+  if (m.kind === "swap-param" || m.kind === "truncate-param") {
+    // #565: the same altered params; the step that first reads the parameter keeps a weak claim.
+    const how = paramReplay(journey, m, opts.params ?? {});
+    const target = flat(how.journey)[index];
+    if (target !== undefined && "expect" in target.step) {
+      const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
+      delete step.waitFor;
+      target.step = step as Step;
+    }
+    return how;
+  }
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const copy = structuredClone(journey);
     const target = flat(copy)[index]!;
-    const step: Record<string, unknown> = { ...target.step };
-    delete step.expect;
+    const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
     delete step.waitFor;
     target.step = step as Step;
     return { journey: copy, blockIndex: index, blockRequests: [...requests] };
@@ -305,8 +417,11 @@ export function relaxedMutationReplay(
   const copy = structuredClone(journey);
   const target = flat(copy)[index]!;
   if (target.step.kind === "fill") {
-    const step: Record<string, unknown> = { ...target.step, value: { redacted: false, value: "" } };
-    delete step.expect;
+    const step: Record<string, unknown> = {
+      ...target.step,
+      value: { redacted: false, value: staleValue(journey, target.step, opts.params ?? {}) },
+      expect: relaxedExpect(target.step),
+    };
     delete step.waitFor;
     target.step = step as Step;
   }
@@ -400,7 +515,7 @@ export function mutationProofVerdict(input: {
     return { verdict: "inconclusive", reason: "every mutated replay errored" };
   }
   const paired = input.assertions.filter((a) => a.verdict !== "unpaired");
-  if (paired.length === 0) return { verdict: "inconclusive", reason: "no assertion is paired with a mutation (no write step, no checked fill, no mutationPairs)" };
+  if (paired.length === 0) return { verdict: "inconclusive", reason: "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs)" };
   if (paired.some((a) => a.verdict === "insensitive")) return { verdict: "insensitive" };
   if (paired.every((a) => a.verdict === "sensitive")) return { verdict: "proven" };
   return { verdict: "inconclusive", reason: "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error)" };

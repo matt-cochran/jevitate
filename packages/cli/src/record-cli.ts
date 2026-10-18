@@ -10,12 +10,13 @@ import type { UnpackedExtension } from "@jevitate/playwright";
 export function registerRecordCommands(program: Command, deps: CliDeps): void {
   // Additive: `jevitate record` — record-by-demonstration (Ticket #22). Opens a
   // real browser on an authorized origin, lets the user demonstrate a flow, and
-  // captures it into a schema-valid, replayable Recording written to disk. The
+  // captures it into a schema-valid, replayable Recording plus the local-only
+  // captured values, writing the `{recording, values}` take file to disk. The
   // authorized-origin guard is enforced FIRST (fail-closed) inside runRecording,
   // before any browser is opened; the temp profile dir is always cleaned up.
   program
     .command("record")
-    .description("record a demonstrated flow into a Recording (authoring plane)")
+    .description("record a demonstrated flow into a `{recording, values}` take file (authoring plane)")
     .option("--url <url>", "start URL to demonstrate from (must be an authorized origin)")
     .option("--intent <text>", "your framing of the journey (carried to Recording.intent)")
     .option("--retro <text>", "optional retrospective note (carried to Recording.retro)")
@@ -32,7 +33,7 @@ export function registerRecordCommands(program: Command, deps: CliDeps): void {
       [] as UnpackedExtension[],
     )
     .option("--headless", "run headless (default: headed — a record session is a live demonstration)", false)
-    .option("--out <dir>", "directory to write the emitted Recording (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date>)")
+    .option("--out <dir>", "directory to write the take file `{recording, values}` for 'recording diff'/'postdoc'/'promote' (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date>)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<{

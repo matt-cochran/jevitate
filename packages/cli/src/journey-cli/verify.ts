@@ -12,7 +12,7 @@ import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mi
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { withEngine } from "../engine.js";
 import { verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
-import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
+import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 import { type CliDeps, resolveDbPath, resolveJourneysDir, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, type DemoFlags, collectParam, emitJson, environmentSeams } from "../cli-shared.js";
 
 /** Registers `jevitate journey verify`. */
@@ -79,12 +79,15 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
             ...(environment === undefined ? {} : { environment }),
             ...(allow.length === 0 ? {} : { allow }),
             // Fixtures run around EVERY replay, so each mutation starts from the same state as the base.
-            fixtures: (site, allowedOrigins) => {
+            fixtures: (site, allowedOrigins, sourceSite) => {
               // #543: the replay's effective allowlist (#542), so a fixture can reset an allowed outbox.
               fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: [...allowedOrigins], baseUrl: site });
+              // #561: fixture step URLs on a named secondary origin move with the environment's origins.
+              const rebaseUrl = fixtureRebaseUrl(environment, sourceSite);
               const fx = buildMissionFixtures(recorded.flags, {
                 allowlist: [...allowedOrigins],
                 baseUrl: site,
+                ...(rebaseUrl === undefined ? {} : { rebaseUrl }),
                 ...(storageState !== undefined ? { storageState } : {}),
                 ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
               });

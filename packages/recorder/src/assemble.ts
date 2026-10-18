@@ -299,10 +299,24 @@ export function assembleWithValues(
           ...existing.recorded.timing!,
           durationMs: Math.max(0, payload.ts - existing.firstTime),
         };
-        // Side-channel only, mirroring `updateValue`'s own "last value wins":
-        // absent `rawText` (a secret field) never creates or overwrites an
-        // entry, matching `buildStep`'s redaction of the same payload.
-        if (payload.rawText !== undefined) values.set(existing.stepKey, payload.rawText);
+        // #564: secrecy is sticky and fails closed in both directions. A field
+        // whose first event was secret is a `handback` for good — a "show
+        // password" toggle that flips `type` to `text` (with no autocomplete
+        // marker) makes later events carry `rawText`, and that text is the
+        // password: it never becomes a values entry. And a field that turns
+        // secret later (text → password) is demoted to a `handback` and its
+        // entry dropped, so no step is ever part-secret.
+        const step = existing.recorded.step;
+        if (payload.rawText === undefined && (step.kind === "fill" || step.kind === "select")) {
+          existing.recorded.step = { kind: "handback", prompt: SECRET_PROMPT, resume: step.expect };
+          values.delete(existing.stepKey);
+          return;
+        }
+        // Side-channel only, mirroring `updateValue`'s own "last value wins",
+        // and only ever for a non-secret `fill`/`select` step.
+        if (payload.rawText !== undefined && (step.kind === "fill" || step.kind === "select")) {
+          values.set(existing.stepKey, payload.rawText);
+        }
         return;
       }
     }
@@ -319,7 +333,10 @@ export function assembleWithValues(
     if (isValue) {
       const stepKey = `${currentPageIndex}:${current.steps.length - 1}`;
       valueSteps.set(payload.eid, { recorded, firstTime: payload.ts, stepKey });
-      if (payload.rawText !== undefined) values.set(stepKey, payload.rawText);
+      // Only a `fill`/`select` step gets an entry: a `handback` (a secret
+      // field, or an element that could not be described) never does.
+      const kind = recorded.step.kind;
+      if (payload.rawText !== undefined && (kind === "fill" || kind === "select")) values.set(stepKey, payload.rawText);
     }
   };
 

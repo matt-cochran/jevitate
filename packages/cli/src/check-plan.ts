@@ -175,8 +175,9 @@ interface FixtureSource {
  * An item's fixture lifecycle (#170/#195), authenticated like the item's session: its storage
  * state and `secretFields`. `undefined` when it declares no fixtures file and no hooks.
  */
-export function fixturesFor(f: FixtureSource, baseUrl: string): MissionFixtures | undefined {
+export function fixturesFor(f: FixtureSource, baseUrl: string, rebaseUrl?: (absoluteUrl: string) => string): MissionFixtures | undefined {
   return buildMissionFixtures(f.flags, {
+    ...(rebaseUrl === undefined ? {} : { rebaseUrl }),
     allowlist: f.allowlist,
     baseUrl: baseUrl.replace(SETUP_REF, "0"),
     ...(f.storageState === undefined ? {} : { storageState: f.storageState }),
