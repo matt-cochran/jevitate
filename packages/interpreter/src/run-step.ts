@@ -327,8 +327,18 @@ export async function runStep(
         vars.set(`${step.as}.__index`, String(i));
         for (const childStep of step.steps) {
           await runRowScopedChildStep(actor, childStep, rowLocator, vars, expected);
+          // #580: an `extract` inside a `forEach` also publishes its value under the row's indexed
+          // binding (`<as>.<i>.<field>`), alongside the row-scoped `<field>` (last row wins) it has
+          // always bound. Copied per row, while `<field>` still holds THIS row's value.
+          if (childStep.kind === "extract") {
+            const value = vars.get(childStep.as);
+            if (value !== undefined) vars.set(`${step.as}.${i}.${childStep.as}`, value);
+          }
         }
       }
+      // #580: the run's `output` carries the row count as a decimal string, so a chained
+      // prepare-only Journey can be driven once per discovered record.
+      vars.set(`${step.as}.count`, String(count));
       return { kind: "done" };
     }
     case "handback": {
