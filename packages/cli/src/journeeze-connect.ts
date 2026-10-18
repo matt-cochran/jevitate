@@ -331,6 +331,8 @@ export interface Whoami {
   readonly product: { readonly id: string; readonly name: string };
   readonly tenant: string;
   readonly keyPrefix: string;
+  /** #596: the server's upload body limit (`limits.maxUploadBytes`), when it reports a valid one. */
+  readonly maxUploadBytes?: number;
 }
 
 /** Verifies a key with `GET /whoami` — the only call `connect` makes with it. */
@@ -351,7 +353,15 @@ export async function whoami(http: JourneezeHttp, origin: string, key: string): 
   }
   const tenant = (body.tenant as { name?: unknown } | undefined)?.name;
   const prefix = typeof body.keyPrefix === "string" && /^jzu_[a-z2-7]{4}$/.test(body.keyPrefix) ? body.keyPrefix : key.slice(0, 8);
-  return { product: { id: product.id, name: product.name }, tenant: typeof tenant === "string" ? tenant : "", keyPrefix: prefix };
+  // #596: only a positive safe integer is a limit; anything else is ignored (the caller's default applies).
+  const max = (body.limits as { maxUploadBytes?: unknown } | undefined)?.maxUploadBytes;
+  const maxUploadBytes = typeof max === "number" && Number.isSafeInteger(max) && max > 0 ? max : undefined;
+  return {
+    product: { id: product.id, name: product.name },
+    tenant: typeof tenant === "string" ? tenant : "",
+    keyPrefix: prefix,
+    ...(maxUploadBytes === undefined ? {} : { maxUploadBytes }),
+  };
 }
 
 // ── The interactive connect flow ───────────────────────────────────────────────────────────────

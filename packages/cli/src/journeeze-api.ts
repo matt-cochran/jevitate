@@ -29,6 +29,7 @@ import {
   type ConnectDeps,
   type JourneezeHttp,
   type JourneezeHttpResponse,
+  type Whoami,
   type KeySources,
 } from "./journeeze-connect.js";
 
@@ -178,8 +179,11 @@ interface BuiltBundle {
   readonly contentType: "application/json" | "application/zip";
 }
 
-/** Contract §4.2: the upload body limit (`whoami.limits.maxUploadBytes`). */
-const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
+/**
+ * Contract §4.2 / #596: the upload body limit when `whoami` reports none (`limits.maxUploadBytes`):
+ * 95 MB, under Cloudflare's 100 MB request body cap in front of Journeeze.
+ */
+export const DEFAULT_MAX_UPLOAD_BYTES = 95_000_000;
 /** Contract §2: the media paths a bundle may list. */
 const MEDIA_PATH_RE = /^media\/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/(?:step-[0-9]{2,3}\.(?:png|webp)|demo\.webm|demo\.vtt)|findings\/[0-9a-f]{16}\.(?:png|webp))$/u;
 
@@ -227,9 +231,6 @@ async function zipBundle(outDir: string, bundleJson: Uint8Array, files: readonly
   const unlisted = (await filesUnder(join(outDir, "media"), outDir)).filter((p) => !listed.has(p));
   if (unlisted.length > 0) throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the export wrote media the bundle does not list (${unlisted.slice(0, 3).join(", ")}) — refusing to send it`);
   const body = zipStore(entries);
-  if (body.byteLength > MAX_UPLOAD_BYTES) {
-    throw new JourneezeError("E_JOURNEEZE_BUNDLE", `the bundle with its media is ${body.byteLength} bytes — over Journeeze's ${MAX_UPLOAD_BYTES}-byte upload limit`);
-  }
   return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
 }
 
@@ -239,7 +240,7 @@ async function zipBundle(outDir: string, bundleJson: Uint8Array, files: readonly
  * every dry run and whenever the key came from the environment; a verified name that contradicts the
  * named one refuses before exporting.
  */
-async function resolveProductName(req: PublishJourneezeRequest, resolved: ResolvedKey, deps: PublishDeps): Promise<string> {
+async function resolveProductName(req: PublishJourneezeRequest, resolved: ResolvedKey, deps: PublishDeps): Promise<{ readonly productName: string; readonly verified: Whoami | undefined }> {
   const verify = req.dryRun || (!resolved.fromSaved && req.productName === undefined);
   const verified = verify ? await whoami(deps.http ?? fetchJourneezeHttp, resolved.origin, resolved.key) : undefined;
   if (verified !== undefined) {
@@ -251,9 +252,27 @@ async function resolveProductName(req: PublishJourneezeRequest, resolved: Resolv
       );
     }
   }
-  if (req.productName !== undefined) return req.productName;
-  if (resolved.fromSaved) return resolved.savedProductName as string;
-  return (verified as NonNullable<typeof verified>).product.name;
+  if (req.productName !== undefined) return { productName: req.productName, verified };
+  if (resolved.fromSaved) return { productName: resolved.savedProductName as string, verified };
+  return { productName: (verified as NonNullable<typeof verified>).product.name, verified };
+}
+
+/**
+ * #596: the upload body limit for this publish — the server's `whoami.limits.maxUploadBytes` (a
+ * `whoami` the product check already made, else one more), or `DEFAULT_MAX_UPLOAD_BYTES`.
+ */
+async function uploadLimit(verified: Whoami | undefined, resolved: ResolvedKey, deps: PublishDeps): Promise<number> {
+  const info = verified ?? (await whoami(deps.http ?? fetchJourneezeHttp, resolved.origin, resolved.key));
+  return info.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES;
+}
+
+/** #596: refuses a body over the upload limit before anything is sent (the server would reject it). */
+function assertUploadSize(bundle: BuiltBundle, maxUploadBytes: number): void {
+  if (bundle.body.byteLength <= maxUploadBytes) return;
+  throw new JourneezeError(
+    "E_JOURNEEZE_BUNDLE",
+    `the bundle${bundle.contentType === "application/zip" ? " with its media" : ""} is ${bundle.body.byteLength} bytes — over Journeeze's ${maxUploadBytes}-byte upload limit; nothing was sent (approve fewer demos with media, or publish without them)`,
+  );
 }
 
 /** Exports the bundle into a temp dir and checks what the contract checks before `202` (§4.2). */
@@ -442,8 +461,9 @@ export async function publishToJourneeze(req: PublishJourneezeRequest, deps: Pub
   try {
     const resolved = await resolvePublishKey(req, deps);
     key = resolved.key;
-    const productName = await resolveProductName(req, resolved, deps);
+    const { productName, verified } = await resolveProductName(req, resolved, deps);
     const bundle = await buildBundle(req, deps, key, productName);
+    assertUploadSize(bundle, await uploadLimit(verified, resolved, deps));
     const result: PublishJourneezeResult = req.dryRun
       ? { dryRun: true, baseUrl: resolved.origin, productName, idempotencyKey: bundle.idempotencyKey, status: "dry-run", warnings: [], errors: [] }
       : await upload(resolved.origin, key, bundle, productName, deps);
