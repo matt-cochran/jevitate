@@ -1,5 +1,13 @@
 # jevitate
 
+## 0.16.1
+
+### Patch Changes
+
+- 84a66b9: `journey run` (and verify, prefix, campaign, load and `source run`) accepts a declared parameter that only an assertion names, requires it when missing and still refuses an undeclared one (#573).
+- Updated dependencies [84a66b9]
+  - @jevitate/cli@0.16.1
+
 ## 0.16.0
 
 ### Minor Changes
