@@ -7,6 +7,8 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.16.2] – 2026-10-18
+
 ### Changed
 
 - **Package documentation:** expanded the npm quick start and next steps, linked the public websites, and documented Jevitate's open-source journey foundation for Journeeze's hosted help and feedback service.
