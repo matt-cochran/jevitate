@@ -15,7 +15,7 @@ import { ReviewSidecarError } from "../journey-review-store.js";
 import { resolveCatalogDir } from "../catalog-api.js";
 import { CatalogInputError } from "../catalog.js";
 import { TargetConfigError } from "../target-config.js";
-import { FULL_FLAG_HELP, DEPRECATED_DIR_HELP, journeyLayout, targetsOpts } from "./shared.js";
+import { FULL_FLAG_HELP, DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, targetsOpts } from "./shared.js";
 
 /** Registers `jevitate journey review`. */
 export function registerJourneyReview(journey: Command, program: Command, deps: CliDeps): void {
@@ -53,7 +53,7 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
           return;
         }
         try {
-          const result = await listStaleJourneys({ journeysDir: reviewJourneysDir, catalogDir: resolveCatalogDir(deps.catalogDir) });
+          const result = await listStaleJourneys({ journeysDir: reviewJourneysDir, catalogDir: resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)) });
           if (json) emitJson(program, ok(result));
           else program.configureOutput().writeOut?.(renderStaleJourneys(result));
           process.exitCode = 0;
@@ -67,8 +67,8 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
         return;
       }
       try {
-        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { real, jevProvider });
-        const { review } = await reviewJourneyById(reviewJourneysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: readiness === true, strict: strict === true, jev });
+        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)), { real, jevProvider });
+        const { review } = await reviewJourneyById(reviewJourneysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)), readiness: readiness === true, strict: strict === true, jev });
         const warnings = (review.attention ?? []).filter((a) => a.severity === "warn").length;
         const strictVerdict = { passed: warnings === 0, warnings };
         const renderOpts = reviewRenderOptions({ full: full === true, toFile: outFile !== undefined });

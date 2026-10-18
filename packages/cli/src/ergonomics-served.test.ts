@@ -241,12 +241,13 @@ describe("#581 readiness report over the committed pair (served)", () => {
     expect(checkOf(receipt, "boundary", "prepare-reply")?.state).toBe("pass");
   });
 
-  it("lists the draft persona under awaitingHuman", () => {
-    expect(receipt.awaitingHuman.some((a) => a.item === "persona:bizops-operator (draft)")).toBe(true);
+  // The committed pair was signed off by a person (#580): nothing is left for one.
+  it("lists nothing under awaitingHuman for the signed-off pair", () => {
+    expect(receipt.awaitingHuman).toEqual([]);
   });
 
-  it("lists the draft job under awaitingHuman", () => {
-    expect(receipt.awaitingHuman.some((a) => a.item === "job:answer-community-comments (draft)")).toBe(true);
+  it("reports the signed-off pair's promotion check pass", () => {
+    expect(checkOf(receipt, "promotion", "prepare-reply")?.state).toBe("pass");
   });
 
   it("opens no browser in report mode", () => {
@@ -328,14 +329,12 @@ describe("#584 the local review bundle over the committed pair (served)", () => 
     expect(existsSync(join(outDir, "manifest.json"))).toBe(true);
   });
 
-  it("lists the promote commands after the blockers under the blockers heading", () => {
-    const after = md.slice(md.indexOf("## After the blockers are fixed"));
-    expect(after).toContain("- jevitate journey promote discover-conversations\n");
+  it("lists nothing for a person once the pair is signed off", () => {
+    expect(md).toContain("Nothing is waiting for a person");
   });
 
-  it("omits a reviewed hash from the blocked promote commands", () => {
-    const after = md.slice(md.indexOf("## After the blockers are fixed"));
-    expect(after).not.toContain("--reviewed-hash");
+  it("repeats no approval a person already gave", () => {
+    expect(md).not.toMatch(/jevitate (persona|job) approve|jevitate journey promote/);
   });
 
   it("passes on the freshly built bundle", async () => {

@@ -64,13 +64,13 @@ interface Fixture {
   readonly ready: ReadinessReceipt;
 }
 
-function fixture(overrides: Partial<Journey["metadata"]> = {}, receiptOf?: (id: string) => ReadinessReceipt): Fixture {
+function fixture(overrides: Partial<Journey["metadata"]> = {}, receiptOf?: (id: string) => ReadinessReceipt, reviewOverrides: Partial<JourneyReview> = {}): Fixture {
   const journeys = new Map<string, Journey>([["prepare", journey("prepare", { persona: "editor", job: "answer", goal: "Prepare a reply", ...overrides })]]);
   const deps: JourneyBundleDeps = {
     review: (async (_dir: string, id: string) => {
       const j = journeys.get(id);
       if (j === undefined) throw new Error(`unknown journey '${id}'`);
-      return { journey: j, review: reviewOf(j) };
+      return { journey: j, review: reviewOf(j, reviewOverrides) };
     }) as unknown as JourneyBundleDeps["review"],
     readiness: (async () => receiptOf?.("prepare") ?? receipt("prepare", "technically-ready")) as unknown as JourneyBundleDeps["readiness"],
     loadCatalog: (async () => ({ dir: null, personasFile: null, jobsFile: null, personas: [], jobs: [], journeys: [] })) as unknown as JourneyBundleDeps["loadCatalog"],
@@ -114,6 +114,21 @@ describe("buildJourneyBundle (#584)", () => {
     const f = fixture({}, () => receipt("prepare", "blocked", [{ check: "lint", journey: "prepare", why: "1 lint error", next: "jevitate journey lint prepare" }]));
     const { md } = await built(f);
     expect(md).toContain("## After the blockers are fixed\n\n- jevitate journey promote prepare\n");
+  });
+
+  it("lists no approve command for a persona that is already approved", async () => {
+    const { md } = await built(fixture());
+    expect(md).not.toContain("jevitate persona approve editor");
+  });
+
+  it("lists nothing for a person when every link is approved and the Journey is promoted and current", async () => {
+    const approved = { contentHash: CONTENT_HASH, at: "2026-01-01T00:00:00Z" } as NonNullable<Journey["metadata"]["approval"]>;
+    const f = fixture({ promoted: true, approval: approved }, undefined, {
+      catalog: { linked: true, job: { id: "answer", status: "approved" }, persona: { id: "editor", status: "approved" }, unvetted: [], needsReReview: [] },
+      changeSinceApproval: { kind: "diff", changed: false } as JourneyReview["changeSinceApproval"],
+    });
+    const { md } = await built(f);
+    expect(md).toContain("Nothing is waiting for a person");
   });
 
   it("labels draft and current catalog approvals distinctly", async () => {

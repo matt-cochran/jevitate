@@ -4,13 +4,23 @@
     "trigger": "a community member posts a comment that needs an answer",
     "motivation": "prepare a reply that the separate Bizops approval step has approved",
     "outcome": "answer community comments without ever sending text a separate approval step has not approved",
-    "personas": ["bizops-operator"],
+    "personas": [
+      "bizops-operator"
+    ],
     "priority": "high",
     "kind": "core",
     "provenance": "team_hypothesis",
     "steps": [
-      { "id": "discover", "name": "Discover the open community conversations", "stage": "locate" },
-      { "id": "prepare", "name": "Prepare the approved reply in the composer", "stage": "prepare" }
+      {
+        "id": "discover",
+        "name": "Discover the open community conversations",
+        "stage": "locate"
+      },
+      {
+        "id": "prepare",
+        "name": "Prepare the approved reply in the composer",
+        "stage": "prepare"
+      }
     ],
     "desiredOutcomes": [
       {
@@ -20,8 +30,15 @@
         "measure": "likelihood",
         "object": "the likelihood of preparing reply text that the separate Bizops approval step has not approved",
         "gulf": "execution",
-        "metric": { "kind": "error", "at": "job_end" },
-        "target": { "op": "<=", "value": 0, "unit": "count" },
+        "metric": {
+          "kind": "error",
+          "at": "job_end"
+        },
+        "target": {
+          "op": "<=",
+          "value": 0,
+          "unit": "count"
+        },
         "guardrail": true
       },
       {
@@ -30,9 +47,26 @@
         "direction": "maximize",
         "measure": "count",
         "object": "the number of open conversations discovered with the context a reply needs",
-        "metric": { "kind": "completion", "from": "job_start", "to": "job_end" },
-        "target": { "op": ">=", "value": 100, "unit": "percent" }
+        "metric": {
+          "kind": "completion",
+          "from": "job_start",
+          "to": "job_end"
+        },
+        "target": {
+          "op": ">=",
+          "value": 100,
+          "unit": "percent"
+        }
       }
-    ]
+    ],
+    "approval": {
+      "contentHash": "854c1c171a19a295b098215c71a660172b7e5be9ff72c8557d6359ee8afe689d",
+      "at": "2026-10-18T21:55:13.534Z",
+      "provenance": {
+        "channel": "tty",
+        "agentSignals": [],
+        "user": "mc"
+      }
+    }
   }
 ]

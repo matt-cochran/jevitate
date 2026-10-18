@@ -46,11 +46,12 @@ describe("#580 the Bizops community catalog", () => {
     expect(danglingLinks(catalog, "prepare-reply")).toEqual([]);
   });
 
-  it("leaves the persona unapproved", () => {
-    expect(findPersona(catalog, "bizops-operator")?.status).toBe("draft");
+  // A person approved both at a terminal (#580 sign-off); the tests only read that state.
+  it("carries a person's current approval of the persona", () => {
+    expect(findPersona(catalog, "bizops-operator")?.status).toBe("approved");
   });
 
-  it("leaves the job unapproved", () => {
-    expect(findJob(catalog, "answer-community-comments")?.status).toBe("draft");
+  it("carries a person's current approval of the job", () => {
+    expect(findJob(catalog, "answer-community-comments")?.status).toBe("approved");
   });
 });

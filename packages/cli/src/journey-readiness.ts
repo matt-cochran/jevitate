@@ -2,6 +2,7 @@ import { relative, sep } from "node:path";
 import {
   checkCompatibility,
   journeyParamSchema,
+  journeyWriteSteps,
   lintJourney,
   type HandbackOutcome,
   type Journey,
@@ -300,7 +301,20 @@ function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { ch
       blocker: { check: "proof", journey: ctx.id, why: verify.reason ?? "some checks cannot fail", next: `jevitate journey verify ${ctx.id} --mutate` },
     };
   }
+  // A read-only Journey that takes no input has nothing a mutation could break: no write to skip or
+  // block, no typed value, no parameter. Its proof can never conclude, and that is not a doubt about
+  // its checks — only this case passes; any other inconclusive proof stays inconclusive (#579).
+  if (nothingToMutate(ctx.journey, verify.summary)) {
+    return { check: { check: "proof", journey: ctx.id, state: "pass", detail: "read-only with no inputs: nothing a mutation could break", evidence } };
+  }
   return { check: { check: "proof", journey: ctx.id, state: "inconclusive", detail: verify.reason ?? `proof verdict ${verify.verdict}`, evidence } };
+}
+
+/** No mutation was paired at all (only unpaired checks), the Journey writes nothing and takes no param. */
+function nothingToMutate(journey: Journey, summary: Readonly<Record<string, number>>): boolean {
+  const paired = Object.entries(summary).filter(([k]) => k !== "unpaired").reduce((n, [, v]) => n + v, 0);
+  // At least one check was looked at and none could be paired (a proof with no counts proves nothing).
+  return (summary.unpaired ?? 0) > 0 && paired === 0 && journeyWriteSteps(journey).length === 0 && journeyParamSchema(journey).required.length === 0;
 }
 
 function relativeEvidence(cwd: string, path: string): string {

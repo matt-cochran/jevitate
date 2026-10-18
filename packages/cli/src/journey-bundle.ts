@@ -140,22 +140,25 @@ function inputsLines(inputs: HandoffInputsDecl): string[] {
 }
 
 /** §4: a person runs these, in order (persona approve, job approve, annotations approve, journey promote). */
-function humanCommands(entry: JourneyEntry, catalog: Catalog, draft: boolean, ready: boolean): string[] {
-  const commands: string[] = [];
-  const personaId = entry.review.catalog?.persona?.id;
-  const jobId = entry.review.catalog?.job?.id;
-  if (personaId !== undefined) {
-    const hash = catalog.personas.find((p) => p.id === personaId)?.contentHash;
-    commands.push(`jevitate persona approve ${personaId}${hash === undefined ? "" : ` --reviewed-hash ${hash}`}`);
+/**
+ * §4: what is still a person's to do for one Journey — an approve for each linked persona/job that is
+ * not approved, annotations to approve when drafts exist, and promote when the Journey has no current
+ * authorization (`promote` is null when it is already current). Nothing already authorized is listed.
+ */
+function pendingHumanSteps(entry: JourneyEntry, catalog: Catalog, draft: boolean): { approvals: string[]; promote: string | null } {
+  const approvals: string[] = [];
+  const persona = entry.review.catalog?.persona;
+  const job = entry.review.catalog?.job;
+  if (persona !== undefined && persona.status !== "approved") {
+    const hash = catalog.personas.find((p) => p.id === persona.id)?.contentHash;
+    approvals.push(`jevitate persona approve ${persona.id}${hash === undefined ? "" : ` --reviewed-hash ${hash}`}`);
   }
-  if (jobId !== undefined) {
-    const hash = catalog.jobs.find((j) => j.id === jobId)?.contentHash;
-    commands.push(`jevitate job approve ${jobId}${hash === undefined ? "" : ` --reviewed-hash ${hash}`}`);
+  if (job !== undefined && job.status !== "approved") {
+    const hash = catalog.jobs.find((j) => j.id === job.id)?.contentHash;
+    approvals.push(`jevitate job approve ${job.id}${hash === undefined ? "" : ` --reviewed-hash ${hash}`}`);
   }
-  if (draft) commands.push(`jevitate journey annotate ${entry.id} --approve`);
-  // §4: while any technical blocker remains, promote moves under "After the blockers are fixed" without a hash.
-  if (ready) commands.push(`jevitate journey promote ${entry.id} --reviewed-hash ${entry.review.contentHash}`);
-  return commands;
+  if (draft) approvals.push(`jevitate journey annotate ${entry.id} --approve`);
+  return { approvals, promote: journeyApprovalLabel(entry) === "current authorization" ? null : entry.id };
 }
 
 function journeySection(entry: JourneyEntry, receipt: ReadinessReceipt): string[] {
@@ -208,14 +211,23 @@ export function renderJourneyBundle(receipt: ReadinessReceipt, entries: readonly
     lines.push(...journeySection(entry, receipt), "");
   }
   const ready = receipt.verdict === "technically-ready";
-  lines.push("## Human-only commands", "");
+  // §4: each pending step once, in order (a persona/job two Journeys share is approved once); promote
+  // carries the review hash only when technically ready, else it waits for the blockers without one.
+  const approvals: string[] = [];
+  const promotes: JourneyEntry[] = [];
   for (const entry of entries) {
-    for (const command of humanCommands(entry, catalog, drafts.has(entry.id), ready)) lines.push(`- ${command}`);
+    const pending = pendingHumanSteps(entry, catalog, drafts.has(entry.id));
+    for (const command of pending.approvals) if (!approvals.includes(command)) approvals.push(command);
+    if (pending.promote !== null) promotes.push(entry);
   }
-  if (!ready) {
+  lines.push("## Human-only commands", "");
+  const now = [...approvals, ...(ready ? promotes.map((e) => `jevitate journey promote ${e.id} --reviewed-hash ${e.review.contentHash}`) : [])];
+  if (now.length === 0 && (ready || promotes.length === 0)) lines.push("Nothing is waiting for a person: every linked persona and job is approved and every Journey is promoted with a current approval.");
+  for (const command of now) lines.push(`- ${command}`);
+  if (!ready && promotes.length > 0) {
     lines.push("");
     lines.push("## After the blockers are fixed", "");
-    for (const entry of entries) lines.push(`- jevitate journey promote ${entry.id}`);
+    for (const entry of promotes) lines.push(`- jevitate journey promote ${entry.id}`);
   }
   lines.push("");
   return `${lines.join("\n")}\n`;

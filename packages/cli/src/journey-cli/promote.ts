@@ -17,7 +17,7 @@ import { UnvettedLinksError, resolveCatalogDir } from "../catalog-api.js";
 import { CatalogInputError } from "../catalog.js";
 import { ApprovalFindingsError } from "../pre-approval.js";
 import { TargetConfigError } from "../target-config.js";
-import { FULL_FLAG_HELP, DEPRECATED_DIR_HELP, journeyLayout, lintFindingLine, targetsOpts } from "./shared.js";
+import { FULL_FLAG_HELP, DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, lintFindingLine, targetsOpts } from "./shared.js";
 
 /** Registers `jevitate journey promote`. */
 export function registerJourneyPromote(journey: Command, program: Command, deps: CliDeps): void {
@@ -126,11 +126,11 @@ export function registerJourneyPromote(journey: Command, program: Command, deps:
           reviewedHash = fromSheet;
         }
         // #434/#435: the readiness checks and the catalog analysis run before every approval; Jev only with --real.
-        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { real, jevProvider });
+        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)), { real, jevProvider });
         let attention: readonly JourneyReviewAttention[] | undefined;
         if (!json) {
           // Human mode: the sheet is shown before promoting, and the approval binds to what was shown.
-          const { review } = await reviewJourneyById(journeysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: true, jev, action: "journey promote" });
+          const { review } = await reviewJourneyById(journeysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)), readiness: true, jev, action: "journey promote" });
           program.configureOutput().writeOut?.(`${renderReviewText(review, reviewRenderOptions({ full: full === true }))}\n`);
           attention = review.attention;
           reviewedHash ??= proposal === undefined ? review.contentHash : review.proposal?.proposedHash;
@@ -142,7 +142,7 @@ export function registerJourneyPromote(journey: Command, program: Command, deps:
           ...(reviewedHash === undefined ? {} : { reviewedHash }),
           ...(acceptUnvetted === undefined ? {} : { acceptUnvetted }),
           ...(acceptFindings === undefined ? {} : { acceptFindings }),
-          catalogDir: resolveCatalogDir(deps.catalogDir),
+          catalogDir: resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)),
           // #437: a typed confirmation on a TTY (or the escape hatch, or the MCP channel), recorded as provenance.
           confirm: ((confirm) => (request: Parameters<typeof confirm>[0]) => confirm(attention === undefined ? request : { ...request, attention }))(
             makeApprovalConfirm(deps.approval, nonInteractiveApproval === undefined ? {} : { nonInteractiveReason: nonInteractiveApproval }),
