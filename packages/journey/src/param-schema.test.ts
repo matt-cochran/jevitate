@@ -61,3 +61,16 @@ describe("journeyParamSchema (#573)", () => {
     expect(journeyRunParams(replyJourney(["replyIdentity", "expected_commentid", "expected_sourcetext"]) as any)).toEqual(["replyIdentity", "expected_commentid", "expected_sourcetext"]);
   });
 });
+
+// #580: a declared parameter an action reads through `{ var }` is required even without a variableName tag.
+describe("journeyParamSchema action reads (#580)", () => {
+  it("requires a declared param a select reads without a variableName", () => {
+    const j = {
+      metadata: { id: "s", name: "s", promoted: false, params: ["who"], createdAtIso: "2026-01-01T00:00:00Z" },
+      recording: { version: "1", site: "example", pages: [{ url: "/", steps: [
+        { step: { kind: "select", target: { css: "#w" }, value: { var: "who" }, expect: { kind: "visible", target: { css: "#w" } } } },
+      ] }] },
+    };
+    expect(journeyParamSchema(j as any).required).toEqual(["who"]);
+  });
+});

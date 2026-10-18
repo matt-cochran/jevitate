@@ -4,7 +4,7 @@ import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { installFlashRecorder } from "./flash-recorder.js";
 import type { InterpretResult, StepResolution } from "./interpret-result.js";
 import type { StepWait } from "./outcome-wait.js";
-import { runStep } from "./run-step.js";
+import { runStep, type SelectAlternative } from "./run-step.js";
 import { ReplayTargetError, type ResolveTargetOptions, type ResolvedTarget } from "./resolve-target.js";
 import type { RecordingSink } from "./sink.js";
 import { clock } from "@jevitate/domain";
@@ -75,6 +75,12 @@ export class RecordingInterpreter {
        */
       readonly skipStep?: (index: number, recorded: RecordedStep) => boolean;
       /**
+       * #579: a swap-param feeding a `select` picks a DIFFERENT enabled live option instead of the
+       * recorded `{var}` value. `selectAlternative` names, by flat step index, the value to avoid;
+       * absent by default, so behavior is unchanged.
+       */
+      readonly selectAlternative?: (index: number) => SelectAlternative | undefined;
+      /**
        * #488: the directory a relative `upload` fixture path resolves against — the project root,
        * never the process cwd. Absent: a relative path is used as-is (the historical behavior).
        */
@@ -90,6 +96,7 @@ export class RecordingInterpreter {
   #targetOpts(): ResolveTargetOptions & {
     observer?: StepObserver;
     skipStep?: (index: number, recorded: RecordedStep) => boolean;
+    selectAlternative?: (index: number) => SelectAlternative | undefined;
     fixtureBaseDir?: string;
     refLookup?: AssertionRefLookup;
   } {
@@ -97,6 +104,7 @@ export class RecordingInterpreter {
       ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
       ...(this.options.observer === undefined ? {} : { observer: this.options.observer }),
       ...(this.options.skipStep === undefined ? {} : { skipStep: this.options.skipStep }),
+      ...(this.options.selectAlternative === undefined ? {} : { selectAlternative: this.options.selectAlternative }),
       ...(this.options.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: this.options.fixtureBaseDir }),
       ...(this.options.refLookup === undefined ? {} : { refLookup: this.options.refLookup }),
     };
@@ -295,6 +303,7 @@ async function runFlat(
   runOpts: ResolveTargetOptions & {
     observer?: StepObserver;
     skipStep?: (index: number, recorded: RecordedStep) => boolean;
+    selectAlternative?: (index: number) => SelectAlternative | undefined;
     fixtureBaseDir?: string;
     refLookup?: AssertionRefLookup;
   },

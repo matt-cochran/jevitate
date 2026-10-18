@@ -1,5 +1,6 @@
 import { assertionRefs, boundVariables, navigateUrlParams, type Assertion, type Recording } from "@jevitate/recording";
 import { ownAssertions, type Journey } from "./journey.js";
+import { actionRefs } from "./mutation-proof-refs.js";
 
 export interface ParamSchema { required: string[] }
 export class ParamValidationError extends Error {}
@@ -18,7 +19,7 @@ export function deriveParamSchema(rec: Recording): ParamSchema {
 
 /**
  * #573: the params a Journey RUN takes — its Recording's (`deriveParamSchema`), then every declared
- * parameter (`params` / `parameters`) only an assertion names: a step expectation or an end-state
+ * parameter (`params` / `parameters`) an action reads through `{ var }` (#580) or only an assertion names: a step expectation or an end-state
  * check comparing against `{ var: x }` / `${x}`. Such a value is expected context, not an action
  * input, so nothing in the Recording binds it; a name an earlier `extract` binds is not a param.
  */
@@ -33,6 +34,9 @@ export function journeyParamSchema(journey: Journey): ParamSchema {
   };
   for (const page of journey.recording.pages) {
     for (const { step } of page.steps) {
+      // #580: a declared parameter an action reads through `{ var }` is an input even when its step
+      // carries no `variableName` tag (a hand-written select or fill).
+      for (const name of actionRefs(step)) if (declared.has(name) && !extracted.has(name) && !required.includes(name)) required.push(name);
       if (step.kind === "extract") extracted.add(step.as);
       for (const { assertion } of ownAssertions(step)) add(assertion);
       if (step.kind === "forEach") {
