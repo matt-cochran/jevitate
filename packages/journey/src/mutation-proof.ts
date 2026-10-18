@@ -154,10 +154,12 @@ function paramMutation(kind: "swap-param" | "truncate-param" | "guard-param", st
  * reads it (or naming one no action reads, like an `expected_*` context check). They compare the
  * page with the run's input, so only a wrong INPUT can break them — a `guard-param` mutation.
  */
-function guardSites(journey: Journey, sites: readonly JourneyAssertionSite[], name: string): JourneyAssertionSite[] {
+function guardSites(journey: Journey, sites: readonly JourneyAssertionSite[], name: string): StepAssertionSite[] {
   const action = firstActionStep(journey, name);
-  return sites.filter((s) => s.where === "step" && siteRefs(s).includes(name) && (action === null || s.step < action));
+  return sites.filter((s): s is StepAssertionSite => s.where === "step" && siteRefs(s).includes(name) && (action === null || s.step < action));
 }
+
+type StepAssertionSite = Extract<JourneyAssertionSite, { readonly where: "step" }>;
 
 /** A declared `swap-param:<name>` / `truncate-param:<name>`: a non-secret parameter an action reads. */
 function paramMutationRef(journey: Journey, kind: "swap-param" | "truncate-param" | "guard-param", name: string, value: string): JourneyMutation {
@@ -166,7 +168,7 @@ function paramMutationRef(journey: Journey, kind: "swap-param" | "truncate-param
   if (secretParamNames(journey).includes(name)) throw new Error(`${JSON.stringify(value)}: ${name} is a secret parameter — a secret is never mutated`);
   if (kind === "guard-param") {
     const first = guardSites(journey, journeyAssertions(journey), name)[0];
-    if (first === undefined || first.where !== "step") throw new Error(`${JSON.stringify(value)}: no step assertion checks ${name} before an action reads it`);
+    if (first === undefined) throw new Error(`${JSON.stringify(value)}: no step assertion checks ${name} before an action reads it`);
     return paramMutation(kind, first.step, name);
   }
   const step = firstActionStep(journey, name);
@@ -329,7 +331,7 @@ export function planJourneyMutations(
     if (at === null) continue;
     // A guard compares the page with the input before the action, so a swap pinned to the supplied
     // value can never break it: the swap proves only the checks at or after the action.
-    const naming = sites.filter((s) => siteRefs(s).includes(name) && !guards.includes(s));
+    const naming = sites.filter((s) => siteRefs(s).includes(name) && !(guards as readonly JourneyAssertionSite[]).includes(s));
     if (naming.length === 0) continue;
     // #579: a select-fed parameter is proven by choosing another enabled live option, never by a
     // truncated value (not a valid selection). Every other parameter still gets both mutations.

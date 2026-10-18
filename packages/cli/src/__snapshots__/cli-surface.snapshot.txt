@@ -698,6 +698,30 @@
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the replay authenticated; must exist
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
+# journey chain
+  description: 
+  options:
+    - flags=--allow <origin> required=true mandatory=false negate=false variadic=false default=[] description=an extra origin the replay may reach, e.g. the API of a split-origin app (repeatable; added to the recorded site, the environment's origins and the Journey's metadata.allowedOrigins)
+    - flags=--allow-draft required=false mandatory=false negate=false variadic=false default=null description=also run Journeys that are not promoted (authoring); without it both must be promoted
+    - flags=--base-url <origin> required=true mandatory=false negate=false variadic=false default=null description=run against this origin (an ad-hoc environment; with --env, replaces its baseUrl)
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
+    - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
+    - flags=--from <id> required=true mandatory=true negate=false variadic=false default=null description=the discover Journey, run once to produce the records
+    - flags=--geolocation <lat,lng> required=true mandatory=false negate=false variadic=false default=null description=place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only
+    - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
+    - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
+    - flags=--requests <file> required=true mandatory=true negate=false variadic=false default=null description=JSON Lines file of approved requests ({commentId, account, replyText})
+    - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start each run authenticated; must exist
+    - flags=--to <id> required=true mandatory=true negate=false variadic=false default=null description=the prepare-only reply Journey, run once per matched request
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
 # journey demo
   description: replay a Journey as a narrated demo (goal, step objectives as captions, target highlights) → a WebM video with .vtt subtitles and/or a Markdown step-by-step guide with screenshots; a Journey that no longer replays fails (exit 1)
   arguments:
