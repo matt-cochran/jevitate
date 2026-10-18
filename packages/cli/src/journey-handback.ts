@@ -154,3 +154,21 @@ export function attachHandback(
   const facts = handbackFacts({ result, steps: flatJourneySteps(journey).length, counts });
   return { ...result, handback: classifyHandback(facts, boundary) };
 }
+
+/**
+ * #583 §4: a run's exit with its handback state applied — `prepared` keeps the run's own code,
+ * `submitted` and a failed or incomplete handback are 1 (never a pass), `inconclusive` is 2.
+ */
+export function handbackExitCode(runCode: number, handback: HandbackOutcome | undefined): number {
+  if (handback === undefined || handback.state === "prepared") return runCode;
+  if (handback.state === "inconclusive") return Math.max(runCode, 2);
+  return runCode === 0 ? 1 : runCode;
+}
+
+/** #583 §4: the one human line a run with a boundary ends with — the next step only when prepared. */
+export function handbackLine(handback: HandbackOutcome): string {
+  if (handback.state === "prepared") return `handback: prepared — next: ${handback.nextStep ?? `${handback.stopBefore} is yours`}`;
+  const at = handback.evidence.failedAt === undefined ? "" : ` at step ${handback.evidence.failedAt}`;
+  if (handback.state === "submitted") return `handback: submitted — ${handback.evidence.writes + handback.evidence.writesBlocked} write(s) were sent during the run; nothing is prepared for a person`;
+  return `handback: ${handback.state}${at} — nothing is ready for ${handback.stopBefore}`;
+}

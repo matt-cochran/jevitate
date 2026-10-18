@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Page } from "playwright";
 import { flatJourneySteps, type Journey } from "@jevitate/journey";
-import { BoundaryNoHealError, HandbackWriteObserver, assertHandbackNoHeal, attachHandback } from "./journey-handback.js";
+import { BoundaryNoHealError, HandbackWriteObserver, assertHandbackNoHeal, attachHandback, handbackExitCode, handbackLine } from "./journey-handback.js";
 
 // #583: the CLI wiring — heal refusal, the typed handback attached only with a boundary, and the
 // whole-run write observer's counts reaching the classifier. No real browser: a fake page captures
@@ -106,5 +106,24 @@ describe("HandbackWriteObserver (#583 §3)", () => {
     await observer.arm(page);
     await handlers.get("**/*")!({ fallback: async () => {} }, request("POST", "https://example.test/api/reply", { "content-type": "application/json" }));
     expect(attachHandback({ outcome: "ok", output: {} }, journey({ boundary }), observer.counts()).handback?.state).toBe("submitted");
+  });
+});
+
+describe("handbackExitCode / handbackLine (#583 §4)", () => {
+  const base = { boundary: "prepare-only" as const, stopBefore: "Send", evidence: { steps: 3, checksPassed: 3, writes: 0, writesBlocked: 0 } };
+  it("keeps the run's code for prepared", () => {
+    expect(handbackExitCode(0, { ...base, state: "prepared", nextStep: "Click Send yourself." })).toBe(0);
+  });
+  it("never passes a submitted run", () => {
+    expect(handbackExitCode(0, { ...base, state: "submitted", evidence: { ...base.evidence, writes: 1 } })).toBe(1);
+  });
+  it("makes an inconclusive handback exit 2", () => {
+    expect(handbackExitCode(0, { ...base, state: "inconclusive" })).toBe(2);
+  });
+  it("shows the next step only when prepared", () => {
+    expect(handbackLine({ ...base, state: "prepared", nextStep: "Click Send yourself." })).toBe("handback: prepared — next: Click Send yourself.");
+  });
+  it("names the failed step without a next step", () => {
+    expect(handbackLine({ ...base, state: "verification-failed", evidence: { ...base.evidence, failedAt: 2 } })).toBe("handback: verification-failed at step 2 — nothing is ready for Send");
   });
 });

@@ -24,6 +24,7 @@ import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFla
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { withEngine } from "../engine.js";
+import { BoundaryNoHealError, handbackExitCode, handbackLine } from "../journey-handback.js";
 import { type EmulationSpec } from "@jevitate/playwright";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 
@@ -256,16 +257,19 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           );
         }
         const envelope = ok({ ...result, ...(intent === undefined ? {} : { intent }), ...(fixtureDrift === undefined ? {} : { fixtureDrift }) });
+        // #583: a declared prepare-only boundary decides the exit too — a run that sent a write is never
+        // a pass (`submitted`), and only `prepared` keeps the run's own code.
+        const code = handbackExitCode(journeyExitCode(result.outcome), result.handback);
         if (json) {
           emitJson(program, envelope);
           // #453: ok → 0; healed-pending-review → 5 (a proposed revision, never a pass); else 1.
-          const code = journeyExitCode(result.outcome);
           if (code !== 0) process.exitCode = code;
         } else {
           writeRawResult(program, envelope.data);
           // #453: a self-heal run also says, in words, what happened and what a person does next.
           if (selfHealMode !== "fail-closed") program.configureOutput().writeErr?.(journeyRunSummary(id, result));
-          process.exitCode = journeyExitCode(result.outcome);
+          if (result.handback !== undefined) program.configureOutput().writeOut?.(`${handbackLine(result.handback)}\n`);
+          process.exitCode = code;
         }
       } catch (err) {
         if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
@@ -284,6 +288,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           );
           process.exitCode = 2;
         } else if (err instanceof FixtureSpecError || err instanceof UnboundSetupRefError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof BoundaryNoHealError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof ParamValidationError) {
           emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
