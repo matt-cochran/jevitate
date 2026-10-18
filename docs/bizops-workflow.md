@@ -133,6 +133,20 @@ jevitate journey promote discover-conversations --reviewed-hash <hash from its s
 jevitate journey promote prepare-reply --reviewed-hash <hash from its sheet>
 ```
 
+## Since 0.18.0
+
+Both Journeys now declare their typed handoff (`outputs` on discover, `inputs` with bindings on
+prepare-reply) and prepare-reply declares a prepare-only boundary. So:
+
+- `journey chain` validates every record and request against the contract before any reply run;
+- each prepare run reports `handback: prepared` (or why not) and exits non-zero if anything was sent;
+- `jevitate journey readiness discover-conversations --with prepare-reply` gives one receipt for the
+  pair;
+- `jevitate journey bundle discover-conversations --with prepare-reply --out review/` writes the
+  human review bundle.
+
+See [linked-journeys.md](linked-journeys.md).
+
 ## Scope
 
 Everything here is local and fictional. Real provider comment selectors, ids and permalinks are

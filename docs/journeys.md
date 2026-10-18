@@ -150,6 +150,8 @@ closed when the app redirects to another thread.
   parameter is `E_ASSERTION_REF_SECRET` (refused at load and at run, since the expected text is
   model-visible and persisted), a non-string value is `E_ASSERTION_REF_TYPE`.
 - A persisted result keeps the template (`Welcome, ${name}`), never the substituted value.
+- Linking Journeys (typed handoffs, a prepare-only boundary, one readiness receipt, the review
+  bundle, and the `--project` / `--journeys-dir` flags): [linked-journeys.md](linked-journeys.md).
 - A worked, two-Journey example (discover records, then prepare an approved reply and stop before
   Send, with every input check proven): [bizops-workflow.md](bizops-workflow.md).
 - Behaviour change: a literal `${...}` in existing assertion text is now a reference. There is no
