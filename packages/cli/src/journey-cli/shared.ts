@@ -51,3 +51,12 @@ export function journeyLayout(program: Command, deps: CliDeps, flags: JourneyLay
     return null;
   }
 }
+
+/**
+ * #585: the catalog dir an explicit location flag chose (`--project`, or a project-meaning `--dir`),
+ * else undefined — so `resolveCatalogDir(deps.catalogDir, …)` keeps the host's injected catalog (the
+ * MCP server's) and cwd discovery when no flag was given.
+ */
+export function flaggedCatalogDir(layout: ResolvedLayout): string | undefined {
+  return layout.from.project === "flag" || layout.from.project === "dir" ? (layout.catalogDir ?? undefined) : undefined;
+}

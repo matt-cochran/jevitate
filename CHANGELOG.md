@@ -7,6 +7,16 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.18.1] – 2026-10-18
+
+### Fixed
+
+- **The review bundle lists only what a person still has to do (#584).** It repeated approve and promote commands for links and Journeys that already had a current approval (and listed a persona or job once per Journey). It now lists each pending step once and says when nothing is waiting for a person.
+- **Readiness passes a read-only Journey with nothing to mutate (#581).** A Journey that writes nothing and takes no input has no mutation that could break it, so its proof (which can never conclude) no longer keeps a linked pair from `technically-ready`. Any other inconclusive proof still does.
+- **Journey commands read the catalog of `--project` (#585).** `journey review`, `promote`, `lint`, `migrate`, `readiness` and `bundle` took the Journey store from `--project` but read the catalog from the working directory's project, so links to a declared job or persona looked undeclared. They now read the catalog `--project` (or a project `--dir`) names; without one, the host's catalog and discovery apply as before.
+- **`publish journeeze` honours the server's upload limit (#596).** The limit is read from `whoami`'s `limits.maxUploadBytes` on every publish (one extra key check for a saved connection), with a 95,000,000-byte default when the server reports none (Journeeze lowered its limit from 256 MiB to stay under Cloudflare's 100 MB body cap). An oversized bundle, JSON or ZIP, is refused with `E_JOURNEEZE_BUNDLE` before anything is sent.
+- **`handback.evidence.failedAt` names the step a person counts (#583).** It reported the 0-based step index, one less than the step that failed (`journey run`'s line read "at step 1" for a failure at step 2).
+
 ## [0.18.0] – 2026-10-18
 
 0.18.0 makes a linked pair of Journeys easy to check and hand over: one location model, typed handoffs between Journeys, a verified prepare-only handback, one readiness receipt and a local review bundle. Nothing here approves, promotes or sends: every human step stays a person's.

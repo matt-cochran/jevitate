@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command, CommanderError } from "commander";
@@ -139,6 +139,19 @@ describe("journey commands resolve the project store (#585 §2)", () => {
   it("journey list with a missing --journeys-dir exits 64", async () => {
     const { code } = await runFrom(elsewhere, ["journey", "list", "--journeys-dir", missing, "--json"]);
     expect(code).toBe(64);
+  });
+
+  // 0.18.1: the journey commands read the catalog of --project, not of the working directory's project.
+  it("journey review --project reads that project's catalog from an unrelated cwd", async () => {
+    // A job link is checked against the catalog (a bare persona would be free text): use the fixture's.
+    for (const f of ["personas.json", "jobs.json"]) copyFileSync(join("test/fixtures/bizops-community/.jevitate", f), join(projectDir, f));
+    const linked = journey("linked") as { metadata: Record<string, unknown> };
+    linked.metadata.persona = "bizops-operator";
+    linked.metadata.job = "answer-community-comments";
+    writeFileSync(join(journeys, "linked.json"), JSON.stringify(linked));
+    const viaFlag = await runFrom(elsewhere, ["journey", "review", "linked", "--project", project, "--json"]);
+    const attention = (JSON.parse(viaFlag.out).data.attention ?? []) as { text: string }[];
+    expect(attention.some((a) => /does not declare/.test(a.text))).toBe(false);
   });
 
   it("journey review --json content hash is identical from the project dir and an unrelated cwd", async () => {

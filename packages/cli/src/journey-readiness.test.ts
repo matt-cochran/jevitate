@@ -206,6 +206,21 @@ describe("journey readiness", () => {
     expect(r.verdict).toBe("inconclusive");
   });
 
+  // A read-only Journey with no inputs has nothing a mutation could break: its unconcludable proof passes.
+  const nothingPaired = { status: "recorded" as const, verdict: "inconclusive", at: "2026-01-01T00:00:00Z", stale: false, reason: "no assertion is paired with a mutation", summary: { sensitive: 0, insensitive: 0, cascade: 0, notApplied: 0, error: 0, unpaired: 1 } };
+
+  it("passes the proof of a read-only Journey with no inputs that has nothing to mutate", async () => {
+    await store.put(journey("discover"));
+    const r = await receipt({ id: "discover", journeysDir }, { review: reviewDep({ verify: nothingPaired }) });
+    expect(checkOf(r, "proof", "discover")?.state).toBe("pass");
+  });
+
+  it("keeps that proof inconclusive when the Journey takes an input", async () => {
+    await store.put(paramJourney("discover"));
+    const r = await receipt({ id: "discover", journeysDir }, { review: reviewDep({ verify: nothingPaired }) });
+    expect(checkOf(r, "proof", "discover")?.state).toBe("inconclusive");
+  });
+
   it("a pair replay runs the chain", async () => {
     await store.put(journey("producer"));
     await store.put(journey("consumer"));

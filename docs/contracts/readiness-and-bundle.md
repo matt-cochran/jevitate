@@ -53,7 +53,7 @@ Each check is reported per Journey with one state:
 | `review-strict` | `journey review --strict` attention items (each one is a blocker) | yes |
 | `annotations` | every step has an objective; a pending draft is `awaiting-human` | yes |
 | `catalog` | the job/persona links resolve; `draft`/`stale` approvals are `awaiting-human` | yes |
-| `proof` | `.verify/<id>.json`: `proven` passes, `insensitive` fails, `inconclusive` stays inconclusive, a hash mismatch is `stale`, none is `not-run` | reads |
+| `proof` | `.verify/<id>.json`: `proven` passes, `insensitive` fails, `inconclusive` stays inconclusive, a hash mismatch is `stale`, none is `not-run`. One exception: a read-only Journey that takes no input, whose proof paired nothing (only unpaired checks), passes — nothing a mutation could break | reads |
 | `replay` | the run (or chain) outcome, plus the #583 handback state when declared (`prepared` passes; `submitted` fails) | `replay`/`prove` only |
 | `promotion` | promoted with a current approval passes; a draft or stale approval is `awaiting-human` | yes |
 

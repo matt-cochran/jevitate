@@ -131,7 +131,7 @@ Each check reports one state:
 
 The verdict is computed in this order: `blocked` (any fail), then `inconclusive`, then `incomplete`
 (the proof is stale or missing, or the replay did not run in `replay`/`prove`), then
-`technically-ready`. A passing replay never hides an inconclusive proof. Approvals are listed under
+`technically-ready`. A passing replay never hides an inconclusive proof. One case is not inconclusive: a read-only Journey that takes no input (like a discover Journey) has nothing a mutation could break, so its proof check passes with that note. Approvals are listed under
 `awaitingHuman` and are never acted on.
 
 `report` mode opens no browser and sends nothing. `replay` and `prove` refuse three things before

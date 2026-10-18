@@ -11,7 +11,7 @@ import { withProjectFlags } from "./project-layout.js";
 import { UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { ReadinessError, runJourneyReadiness, type ReadinessMode, type ReadinessReceipt } from "./journey-readiness.js";
 import { EXIT_CODES } from "./exit-codes.js";
-import { journeyLayout } from "./journey-cli/shared.js";
+import { flaggedCatalogDir, journeyLayout } from "./journey-cli/shared.js";
 
 /**
  * #581 — `jevitate journey readiness <id> [--with <toId>] --mode report|replay|prove`
@@ -140,7 +140,7 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
             ...(browser === undefined ? {} : { browser }),
             browserPortFactory: deps.explore?.browserPortFactory,
             journeysDir: layout.journeysDir,
-            catalogDir: resolveCatalogDir(deps.catalogDir, layout.catalogDir ?? undefined),
+            catalogDir: resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)),
             ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath }),
             ...(layout.projectDir === null ? {} : { projectDir: layout.projectDir }),
             ...(mode === "report" ? {} : { fixtures }),

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExportCatalogBundleRequest, ExportCatalogBundleResult } from "./catalog-bundle-api.js";
 import { runAsMcpInvocation } from "./approval-provenance.js";
-import { connectJourneeze, publishToJourneeze, type PublishDeps, type PublishJourneezeResult } from "./journeeze-api.js";
+import { DEFAULT_MAX_UPLOAD_BYTES, connectJourneeze, publishToJourneeze, type PublishDeps, type PublishJourneezeResult } from "./journeeze-api.js";
 import {
   connectionsPath,
   loadConnection,
@@ -48,7 +48,9 @@ function fakeJourneeze(routes: Record<string, Reply[]>): { http: JourneezeHttp; 
   const requests: JourneezeHttpRequest[] = [];
   const http: JourneezeHttp = async (req) => {
     requests.push(req);
-    const queue = routes[`${req.method} ${new URL(req.url).pathname}`] ?? [];
+    // #596: like a real Journeeze, whoami answers unless a test scripts it (a publish asks it for the upload limit).
+    const route = `${req.method} ${new URL(req.url).pathname}`;
+    const queue = routes[route] ?? (route === "GET /api/upload/v1/whoami" ? [{ status: 200, body: WHOAMI }] : []);
     const reply = queue.length > 1 ? queue.shift()! : (queue[0] ?? { status: 404, body: { code: "not_found" } });
     const headers = new Map(Object.entries(reply.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
     return { status: reply.status, headers: { get: (n: string) => headers.get(n.toLowerCase()) ?? null }, text: async () => JSON.stringify(reply.body ?? {}) };
@@ -247,13 +249,13 @@ describe("publish journeeze", () => {
   it("POSTs the bundle to the pinned upload endpoint", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await publish(http);
-    expect(requests[0]!.url).toBe(`${PROD}/api/upload/v1/bundles`);
+    expect(requests.find((r) => r.method === "POST")!.url).toBe(`${PROD}/api/upload/v1/bundles`);
   });
 
   it("sends the contract's headers: Bearer key, JSON body, digest and idempotency key", async () => {
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await publish(http);
-    const h = requests[0]!.headers;
+    const h = requests.find((r) => r.method === "POST")!.headers;
     expect([h.Authorization, h["Content-Type"], h["Content-Length"], h["Content-Digest"], h["Idempotency-Key"]]).toEqual([
       `Bearer ${KEY}`,
       "application/json",
@@ -332,7 +334,7 @@ describe("publish journeeze", () => {
   it("a redirect to another origin is refused and the key is not sent there", async () => {
     const { http, requests } = fakeJourneeze({ "POST /api/upload/v1/bundles": [{ status: 307, headers: { Location: "https://evil.example/api/upload/v1/bundles" } }] });
     const err = await errorOf(publish(http));
-    expect([err.code, requests.map((r) => new URL(r.url).origin)]).toEqual(["E_JOURNEEZE_REDIRECT", [PROD]]);
+    expect([err.code, [...new Set(requests.map((r) => new URL(r.url).origin))]]).toEqual(["E_JOURNEEZE_REDIRECT", [PROD]]);
   });
 
   it("a statusUrl on another origin is never polled with the key", async () => {
@@ -582,11 +584,11 @@ describe("publish journeeze product name (#477)", () => {
     expect(seen.productName).toBe("Explicit product");
   });
 
-  it("does not check whoami when the key comes from the saved connection", async () => {
+  it("checks whoami once, for the upload limit (#596), when the key comes from the saved connection", async () => {
     await withSaved(SAVED_PRODUCT);
     const { http, requests } = fakeJourneeze(OK_ROUTES());
     await run(http, recording().exportBundle, { MY_JZ_KEY: KEY });
-    expect(requests.some((r) => new URL(r.url).pathname.endsWith("/whoami"))).toBe(false);
+    expect(requests.filter((r) => new URL(r.url).pathname.endsWith("/whoami")).length).toBe(1);
   });
 
   it("a dry run with a saved connection verifies the key with whoami once and sends no bundle", async () => {
@@ -626,5 +628,43 @@ describe("publish journeeze product name (#477)", () => {
     const { seen, exportBundle } = recording();
     const r = await run(http, exportBundle, { JOURNEEZE_UPLOAD_KEY: KEY }, { dryRun: true });
     expect(r.productName).toBe(seen.productName);
+  });
+});
+
+/**
+ * #596: the upload limit is the server's (`whoami.limits.maxUploadBytes`), else 95 MB (under
+ * Cloudflare's 100 MB body cap); an oversized bundle is refused before anything is sent.
+ */
+describe("publish journeeze upload limit (#596)", () => {
+  const publish = (http: JourneezeHttp): Promise<PublishJourneezeResult> =>
+    publishToJourneeze(
+      { catalogDir: project, journeysDir: join(project, "journeys"), dryRun: false, productName: "Ledgerly" },
+      { homedir, env: { JOURNEEZE_UPLOAD_KEY: KEY }, http, exportBundle: fakeExport, sleep: async () => {}, sources: sources({ JOURNEEZE_UPLOAD_KEY: KEY }) },
+    );
+  const withLimit = (maxUploadBytes: unknown): Record<string, Reply[]> => ({ ...OK_ROUTES(), "GET /api/upload/v1/whoami": [{ status: 200, body: { ...WHOAMI, limits: { maxUploadBytes } } }] });
+
+  it("defaults to 95,000,000 bytes", () => {
+    expect(DEFAULT_MAX_UPLOAD_BYTES).toBe(95_000_000);
+  });
+
+  it("refuses a bundle over the server's limit", async () => {
+    const { http } = fakeJourneeze(withLimit(Buffer.byteLength(BUNDLE) - 1));
+    expect((await errorOf(publish(http))).code).toBe("E_JOURNEEZE_BUNDLE");
+  });
+
+  it("sends nothing when the bundle is over the server's limit", async () => {
+    const { http, requests } = fakeJourneeze(withLimit(Buffer.byteLength(BUNDLE) - 1));
+    await errorOf(publish(http));
+    expect(requests.some((r) => r.method === "POST")).toBe(false);
+  });
+
+  it("uploads a bundle exactly at the server's limit", async () => {
+    const { http } = fakeJourneeze(withLimit(Buffer.byteLength(BUNDLE)));
+    expect((await publish(http)).status).toBe("imported");
+  });
+
+  it("ignores a limit that is not a positive integer (the default applies)", async () => {
+    const { http } = fakeJourneeze(withLimit("1"));
+    expect((await publish(http)).status).toBe("imported");
   });
 });
