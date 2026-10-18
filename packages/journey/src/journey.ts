@@ -247,11 +247,16 @@ export interface JourneySuccessCriterion {
  * A declared input (#246). `secret: true` marks a value (a password, a token) that is redacted
  * wherever it is shown: `journey run` output, `journey annotate` evidence and drafts, and anything
  * sent to a model. A declared parameter never carries a value — values arrive only as `--param`.
+ *
+ * #579: `mutationValues` are alternative values a human reviewed as valid but WRONG for this
+ * parameter. They are non-secret, are persisted in the Journey file and are never a credential;
+ * `journey verify --mutate` may substitute one when proving an assertion on the parameter can fail.
  */
 export interface JourneyParameter {
   name: string;
   description?: string;
   secret?: boolean;
+  mutationValues?: string[];
 }
 
 export interface Journey { metadata: JourneyMetadata; recording: Recording }
@@ -274,6 +279,13 @@ const JourneyParameterSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
   secret: z.boolean().optional(),
+  // #579: reviewed, non-secret alternative values — at most 20 distinct 1..2000-char strings.
+  mutationValues: z
+    .array(TEXT)
+    .min(1)
+    .max(20)
+    .refine((vs) => new Set(vs).size === vs.length, { message: "mutationValues: duplicate value" })
+    .optional(),
 }).strict();
 
 /** #465: a catalog id (job, job step, desired outcome) — the catalog's id rule (`CATALOG_ID_RE`). */
@@ -404,6 +416,17 @@ export const JourneySchema: ZodType<Journey> = z.object({
   );
   // #562/#565: an assertion's `${name}` / `{ var }` must name something the run binds when it is checked.
   for (const issue of assertionRefIssues(j as Journey)) ctx.addIssue({ code: "custom", path: [...issue.path], message: issue.message });
+  // #579: mutationValues are reviewed, non-secret values — never a credential.
+  (j.metadata.parameters ?? []).forEach((p, i) => {
+    if (p.mutationValues === undefined) return;
+    if (p.secret === true || SECRET_PARAM_NAME_RE.test(p.name)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["metadata", "parameters", i, "mutationValues"],
+        message: `E_MUTATION_VALUES_SECRET: parameter "${p.name}" is a secret (secret: true or a credential-like name) — mutationValues are reviewed, non-secret values and may never carry a credential`,
+      });
+    }
+  });
 });
 
 /** A step's own assertions with their field names (a `forEach`'s children are walked separately). */
