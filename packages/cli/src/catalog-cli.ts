@@ -12,10 +12,11 @@ import { JourneezeError } from "./journeeze-connect.js";
 import { buildJevSetup, jevCacheDir, type JevSetup } from "./jev-advisor.js";
 import { analyzeCatalog, renderCatalogAnalysis, ANALYZE_PAIR_CAP } from "./catalog-analysis.js";
 import { CatalogDraftArgsError, CatalogDraftExistsError, CatalogInputError, UnknownCatalogItemError, writeCatalogDraft } from "./catalog.js";
-import { StaleCatalogReviewError, approveCatalogItem, catalogJourneysDir, loadCatalog, resolveCatalogDir } from "./catalog-api.js";
+import { StaleCatalogReviewError, approveCatalogItem, catalogJourneysDir, catalogLayout, loadCatalog, resolveCatalogDir, DEPRECATED_PROJECT_DIR_HELP } from "./catalog-api.js";
 import { strictCatalogViolations, buildCatalogStatus, buildJobReview, buildPersonaReview, renderCatalogStatus, renderJobReview, renderPersonaReview } from "./catalog-review.js";
 import { ApprovalFindingsError } from "./pre-approval.js";
 import { EXIT_CODES } from "./exit-codes.js";
+import { withProjectFlags, type ResolvedLayout } from "./project-layout.js";
 import {
   ApprovalArgsError,
   approvalRefusal,
@@ -94,9 +95,9 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
   const code = kind === "persona" ? "E_PERSONA" : "E_JOB";
   const argsCode = kind === "persona" ? "E_PERSONA_REVIEW_ARGS" : "E_JOB_REVIEW_ARGS";
 
-  const load = (dir: string | undefined) => loadCatalog(resolveCatalogDir(deps.catalogDir, dir), catalogJourneysDir(dir, resolveJourneysDir(deps)));
-  const sheet = async (dir: string | undefined, id: string, action: "review" | "persona approve" | "job approve", opts: { readiness: boolean; jev: JevSetup }) => {
-    const catalog = await load(dir);
+  const load = (layout: ResolvedLayout) => loadCatalog(layout.catalogDir, layout.journeysDir);
+  const sheet = async (layout: ResolvedLayout, id: string, action: "review" | "persona approve" | "job approve", opts: { readiness: boolean; jev: JevSetup }) => {
+    const catalog = await load(layout);
     if (kind === "persona") {
       const review = await buildPersonaReview(catalog, id, action, opts);
       return { catalog, review, render: (style: "markdown" | "text") => renderPersonaReview(review, style) };
@@ -105,14 +106,16 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
     return { catalog, review, render: (style: "markdown" | "text") => renderJobReview(review, style) };
   };
 
-  group
-    .command("review <id>")
-    .description(
-      kind === "persona"
-        ? "a persona's review sheet: who it is, the jobs it serves, the Journeys linked to it, its approval state (stale = needs re-review), the pre-approval findings, its content hash"
-        : "a job's review sheet: its story, its personas and which have a promoted Journey for it, the gaps, its Journeys, its approval state, the pre-approval findings, its content hash",
-    )
-    .option("--dir <path>", DIR_HELP)
+  withProjectFlags(
+    group
+      .command("review <id>")
+      .description(
+        kind === "persona"
+          ? "a persona's review sheet: who it is, the jobs it serves, the Journeys linked to it, its approval state (stale = needs re-review), the pre-approval findings, its content hash"
+          : "a job's review sheet: its story, its personas and which have a promoted Journey for it, the gaps, its Journeys, its approval state, the pre-approval findings, its content hash",
+      )
+      .option("--dir <path>", DEPRECATED_PROJECT_DIR_HELP),
+  )
     .option("--markdown", "render the sheet as Markdown")
     .option("--out <file>", "write the sheet (JSON with --json, Markdown with --markdown, else text) to this file")
     .option("--readiness", READINESS_FLAG_HELP)
@@ -120,14 +123,16 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit a JSON envelope (the schema-checked sheet)")
     .action(async function (this: Command, id: string) {
-      const { dir, json, markdown, out: outFile, readiness, real, jevProvider } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string }>();
+      const { dir, project, journeysDir, json, markdown, out: outFile, readiness, real, jevProvider } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string }>();
       if (json === true && markdown === true) {
         emitJson(program, fail(argsCode, "--json and --markdown are exclusive: pick one rendering"));
         return;
       }
+      const layout = catalogLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
       try {
-        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir, dir), { real, jevProvider });
-        const { review, render } = await sheet(dir, id, "review", { readiness: readiness === true, jev });
+        const jev = await jevSetupFor(deps, layout.catalogDir, { real, jevProvider });
+        const { review, render } = await sheet(layout, id, "review", { readiness: readiness === true, jev });
         const rendered = json ? `${JSON.stringify(review, null, 2)}\n` : render(markdown ? "markdown" : "text");
         if (outFile !== undefined) await writeFile(outFile, rendered, { mode: 0o600 });
         if (json) emitJson(program, ok(review));
@@ -141,12 +146,14 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
       }
     });
 
-  group
-    .command("approve <id>")
-    .description(
-      `approve a ${kind} (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in ${kind === "persona" ? "personas.json" : "its jobs file"}. Editing it later makes it — and its Journeys — "needs re-review"`,
-    )
-    .option("--dir <path>", DIR_HELP)
+  withProjectFlags(
+    group
+      .command("approve <id>")
+      .description(
+        `approve a ${kind} (a person's sign-off; CLI only, never an MCP tool): shows its review sheet, runs the pre-approval findings, then records {contentHash, at} in ${kind === "persona" ? "personas.json" : "its jobs file"}. Editing it later makes it — and its Journeys — "needs re-review"`,
+      )
+      .option("--dir <path>", DEPRECATED_PROJECT_DIR_HELP),
+  )
     .option("--reviewed-hash <hash>", `the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the ${kind} changed since`)
     .option("--accept-findings <reason>", "approve although pre-approval findings need an acknowledgment, recording the reason with the approval")
     .option("--real", `${REAL_JEV_FLAG_HELP}; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings`)
@@ -157,8 +164,10 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
     )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, reviewedHash: hashFlag, acceptFindings, real, jevProvider, nonInteractiveApproval } = this.opts<{
+      const { dir, project, journeysDir, json, reviewedHash: hashFlag, acceptFindings, real, jevProvider, nonInteractiveApproval } = this.opts<{
         dir?: string;
+        project?: string;
+        journeysDir?: string;
         json?: boolean;
         reviewedHash?: string;
         acceptFindings?: string;
@@ -175,12 +184,14 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
         emitJson(program, fail(argsCode, "--accept-findings needs a reason"));
         return;
       }
+      const layout = catalogLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
       try {
         checkNonInteractiveReason(nonInteractiveApproval);
         const action = kind === "persona" ? "persona approve" : "job approve";
         // #434/#435: every approval shows readiness and the catalog analysis; Jev only with --real.
-        const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir, dir), { real, jevProvider });
-        const { catalog, review, render } = await sheet(dir, id, action, { readiness: true, jev });
+        const jev = await jevSetupFor(deps, layout.catalogDir, { real, jevProvider });
+        const { catalog, review, render } = await sheet(layout, id, action, { readiness: true, jev });
         if (!json) {
           // Human mode: the sheet (with its findings) is shown before approving; the approval binds to what was shown.
           program.configureOutput().writeOut?.(`${render("text")}\n`);
@@ -215,18 +226,20 @@ function registerItemCommands(program: Command, deps: CliDeps, kind: "persona" |
  * (MCP `draft_job_outcomes` mirrors it; approving stays `job approve`, CLI only).
  */
 function registerJobDraftOutcomes(group: Command, program: Command, deps: CliDeps): void {
-  group
-    .command("draft-outcomes <jobId>")
-    .description(
-      `#465: draft ${DRAFT_OUTCOMES_MIN}–${DRAFT_OUTCOMES_MAX} desired outcomes for a job with the generation model and write them into its jobs file marked provenance ai_draft, for the team to review. Never approves: an approved job becomes "needs re-review"`,
-    )
-    .option("--dir <path>", DIR_HELP)
+  withProjectFlags(
+    group
+      .command("draft-outcomes <jobId>")
+      .description(
+        `#465: draft ${DRAFT_OUTCOMES_MIN}–${DRAFT_OUTCOMES_MAX} desired outcomes for a job with the generation model and write them into its jobs file marked provenance ai_draft, for the team to review. Never approves: an approved job becomes "needs re-review"`,
+      )
+      .option("--dir <path>", DEPRECATED_PROJECT_DIR_HELP),
+  )
     .option("--count <n>", `how many outcomes to draft (${DRAFT_OUTCOMES_MIN}-${DRAFT_OUTCOMES_MAX}, default ${DRAFT_OUTCOMES_DEFAULT})`, intArg({ min: DRAFT_OUTCOMES_MIN, max: DRAFT_OUTCOMES_MAX }))
     .option("--real", "draft with the live OpenRouter generation gateway (requires keys)", false)
     .option("--fake-ai", "draft with the deterministic fake generator (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, jobId: string) {
-      const { dir, json, count, real, fakeAi } = this.opts<{ dir?: string; json?: boolean; count?: number; real?: boolean; fakeAi?: boolean }>();
+      const { dir, project, journeysDir, json, count, real, fakeAi } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean; count?: number; real?: boolean; fakeAi?: boolean }>();
       if (!CATALOG_ID_RE.test(jobId)) {
         emitJson(program, fail("E_JOB_DRAFT_ARGS", `<jobId> must be a catalog id (1-64 of [A-Za-z0-9._-], starting alphanumeric), got ${JSON.stringify(jobId)}`));
         return;
@@ -235,11 +248,13 @@ function registerJobDraftOutcomes(group: Command, program: Command, deps: CliDep
         emitJson(program, fail("E_JOB_DRAFT_ARGS", "drafting needs exactly one generation gateway: --real (live) or --fake-ai (deterministic)"));
         return;
       }
+      const layout = catalogLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
       try {
         const result = await draftJobOutcomes(
           {
-            catalogDir: resolveCatalogDir(deps.catalogDir, dir),
-            journeysDir: catalogJourneysDir(dir, resolveJourneysDir(deps)),
+            catalogDir: layout.catalogDir,
+            journeysDir: layout.journeysDir,
             jobId,
             count: count ?? DRAFT_OUTCOMES_DEFAULT,
             ai: { real: real === true, fakeAi: fakeAi === true },
@@ -260,10 +275,12 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
   registerItemCommands(program, deps, "job");
 
   const catalog = program.command("catalog").description("#433: the human-vetted catalog of personas, jobs and the Journeys linked to them");
-  catalog
-    .command("status")
-    .description("the jobs × personas matrix (which have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links and stale approvals")
-    .option("--dir <path>", DIR_HELP)
+  withProjectFlags(
+    catalog
+      .command("status")
+      .description("the jobs × personas matrix (which have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links and stale approvals")
+      .option("--dir <path>", DEPRECATED_PROJECT_DIR_HELP),
+  )
     .option("--require-approvals", "#437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels)")
     .option("--allow-channels <list>", ALLOW_CHANNELS_HELP)
     .option(
@@ -272,11 +289,13 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
     )
     .option("--json", "emit a JSON envelope (the schema-checked report)")
     .action(async function (this: Command) {
-      const { dir, json, requireApprovals, allowChannels, strict } = this.opts<{ dir?: string; json?: boolean; requireApprovals?: boolean; allowChannels?: string; strict?: boolean }>();
+      const { dir, project, journeysDir, json, requireApprovals, allowChannels, strict } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean; requireApprovals?: boolean; allowChannels?: string; strict?: boolean }>();
       try {
         if (allowChannels !== undefined && requireApprovals !== true) throw new ApprovalArgsError("--allow-channels needs --require-approvals");
+        const layout = catalogLayout(program, deps, { dir, project, journeysDir });
+        if (layout === null) return;
         const allowed = requireApprovals === true ? parseAllowedChannels(allowChannels) : undefined;
-        const catalog = await loadCatalog(resolveCatalogDir(deps.catalogDir, dir), catalogJourneysDir(dir, resolveJourneysDir(deps)));
+        const catalog = await loadCatalog(layout.catalogDir, layout.journeysDir);
         // #437: every recorded approval and how it was made; with --require-approvals, the violations.
         // #469: with pr-review allowed, each recorded pr-review approval is re-verified through the forge.
         const approvals = await approvalsReportVerified([catalog], allowed, { ...(deps.approval ?? {}), catalogDir: catalog.dir });
@@ -292,19 +311,21 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
     });
 
   // #523: a DRAFT persona or job (never an approval) — so a Journey can link one before a person vets it.
-  catalog
-    .command("draft <kind> <id>")
-    .description(
-      "#523: add a DRAFT persona or job to the catalog (kind: persona | job) — personas.json / jobs.json, created when missing — so a Journey can link it now. Never approves (a person runs `persona|job approve` after review); an id the catalog already has is refused",
-    )
-    .requiredOption("--name <text>", "a persona: who they are (written as its role); a job: what the user wants to do (its motivation, \"I want to …\")")
-    .option("--description <text>", "a persona: its description; a job: its goal")
-    .option("--trigger <text>", "a job: when it comes up (\"When …\"); default: a placeholder to write before approving")
-    .option("--outcome <text>", "a job: what doing it lets them do (\"so I can …\"); default: a placeholder to write before approving")
-    .option("--dir <path>", DIR_HELP)
+  withProjectFlags(
+    catalog
+      .command("draft <kind> <id>")
+      .description(
+        "#523: add a DRAFT persona or job to the catalog (kind: persona | job) — personas.json / jobs.json, created when missing — so a Journey can link it now. Never approves (a person runs `persona|job approve` after review); an id the catalog already has is refused",
+      )
+      .requiredOption("--name <text>", "a persona: who they are (written as its role); a job: what the user wants to do (its motivation, \"I want to …\")")
+      .option("--description <text>", "a persona: its description; a job: its goal")
+      .option("--trigger <text>", "a job: when it comes up (\"When …\"); default: a placeholder to write before approving")
+      .option("--outcome <text>", "a job: what doing it lets them do (\"so I can …\"); default: a placeholder to write before approving")
+      .option("--dir <path>", DEPRECATED_PROJECT_DIR_HELP),
+  )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, kind: string, id: string) {
-      const { dir, json, name, description, trigger, outcome } = this.opts<{ dir?: string; json?: boolean; name: string; description?: string; trigger?: string; outcome?: string }>();
+      const { dir, project, journeysDir, json, name, description, trigger, outcome } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean; name: string; description?: string; trigger?: string; outcome?: string }>();
       if (kind !== "persona" && kind !== "job") {
         emitJson(program, fail("E_CATALOG_DRAFT_ARGS", `<kind> must be persona or job, got ${JSON.stringify(kind)}`));
         return;
@@ -313,8 +334,10 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
         emitJson(program, fail("E_CATALOG_DRAFT_ARGS", "--trigger and --outcome are a job's story parts: a persona takes --name and --description"));
         return;
       }
+      const layout = catalogLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
       try {
-        const result = await writeCatalogDraft(resolveCatalogDir(deps.catalogDir, dir), {
+        const result = await writeCatalogDraft(layout.catalogDir, {
           kind,
           id,
           name,
@@ -334,27 +357,31 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
       }
     });
 
-  catalog
-    .command("analyze")
-    .description(
-      "#435: problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic — candidate pairs (paired by code: shared persona/terms, opposing writes, same role) classified by Jev (with --real) as compatible/duplicate/overlapping/conflicting/dependent, " +
-        "completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Read-only and advisory: it never changes the catalog and never gates",
-    )
-    .option("--dir <path>", DIR_HELP)
+  withProjectFlags(
+    catalog
+      .command("analyze")
+      .description(
+        "#435: problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic — candidate pairs (paired by code: shared persona/terms, opposing writes, same role) classified by Jev (with --real) as compatible/duplicate/overlapping/conflicting/dependent, " +
+          "completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Read-only and advisory: it never changes the catalog and never gates",
+      )
+      .option("--dir <path>", DEPRECATED_PROJECT_DIR_HELP),
+  )
     .option("--real", "#435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only")
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--max-pairs <n>", `the most candidate pairs to judge (default ${ANALYZE_PAIR_CAP}); the rest are listed as overflow, never dropped`, positiveIntArg)
     .option("--markdown", "render the report as Markdown")
     .option("--json", "emit a JSON envelope (the schema-checked report)")
     .action(async function (this: Command) {
-      const { dir, json, markdown, real, jevProvider, maxPairs } = this.opts<{ dir?: string; json?: boolean; markdown?: boolean; real?: boolean; jevProvider?: string; maxPairs?: number }>();
+      const { dir, project, journeysDir, json, markdown, real, jevProvider, maxPairs } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean; markdown?: boolean; real?: boolean; jevProvider?: string; maxPairs?: number }>();
       if (json === true && markdown === true) {
         emitJson(program, fail("E_CATALOG_ANALYZE_ARGS", "--json and --markdown are exclusive: pick one rendering"));
         return;
       }
+      const layout = catalogLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
       try {
-        const catalogDir = resolveCatalogDir(deps.catalogDir, dir);
-        const loaded = await loadCatalog(catalogDir, catalogJourneysDir(dir, resolveJourneysDir(deps)));
+        const catalogDir = layout.catalogDir;
+        const loaded = await loadCatalog(catalogDir, layout.journeysDir);
         const jev = await jevSetupFor(deps, catalogDir, { real, jevProvider });
         const { report } = await analyzeCatalog(loaded, { jev, ...(maxPairs === undefined ? {} : { pairCap: maxPairs }) });
         if (json) emitJson(program, ok(report));
@@ -368,19 +395,21 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
     });
 
   // #464: the Journeeze catalog bundle — written under --out; never uploads, never approves.
-  catalog
-    .command("export")
-    .description(
-      "#464: write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings; no media) as a Journeeze catalog bundle (bundle.json) under --out. Never uploads (publish journeeze) and never approves",
-    )
-    .requiredOption("--format <format>", `the bundle format (${CATALOG_EXPORT_FORMATS.join(" | ")})`)
-    .requiredOption("--out <dir>", "the directory bundle.json is written to (created if missing)")
-    .option("--check <file>", "a `jevitate check` record (check.json) to include; repeatable (default: <project>/jevitate-check/check.json when it exists)", collectRepeatable, [])
-    .option("--product-name <name>", "the bundle's product.name (default: the project's package.json name, else its folder name)")
-    .option("--dir <path>", DIR_HELP)
+  withProjectFlags(
+    catalog
+      .command("export")
+      .description(
+        "#464: write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings; no media) as a Journeeze catalog bundle (bundle.json) under --out. Never uploads (publish journeeze) and never approves",
+      )
+      .requiredOption("--format <format>", `the bundle format (${CATALOG_EXPORT_FORMATS.join(" | ")})`)
+      .requiredOption("--out <dir>", "the directory bundle.json is written to (created if missing)")
+      .option("--check <file>", "a `jevitate check` record (check.json) to include; repeatable (default: <project>/jevitate-check/check.json when it exists)", collectRepeatable, [])
+      .option("--product-name <name>", "the bundle's product.name (default: the project's package.json name, else its folder name)")
+      .option("--dir <path>", DEPRECATED_PROJECT_DIR_HELP),
+  )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { dir, json, format, out, check, productName } = this.opts<{ dir?: string; json?: boolean; format: string; out: string; check: string[]; productName?: string }>();
+      const { dir, project, journeysDir, json, format, out, check, productName } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean; format: string; out: string; check: string[]; productName?: string }>();
       if (!(CATALOG_EXPORT_FORMATS as readonly string[]).includes(format)) {
         emitJson(program, fail("E_CATALOG_EXPORT_ARGS", `--format must be one of ${CATALOG_EXPORT_FORMATS.join(" | ")} (got ${JSON.stringify(format)})`));
         return;
@@ -397,11 +426,13 @@ export function registerCatalogCommands(program: Command, deps: CliDeps): void {
         emitJson(program, fail("E_CATALOG_EXPORT_ARGS", "--product-name must be one plain line of 1-200 characters (no control characters, no e-mail address or other personal data)"));
         return;
       }
+      const layout = catalogLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
       try {
         const result = await exportCatalogBundle({
           format: format as CatalogExportFormat,
-          catalogDir: resolveCatalogDir(deps.catalogDir, dir),
-          journeysDir: catalogJourneysDir(dir, resolveJourneysDir(deps)),
+          catalogDir: layout.catalogDir,
+          journeysDir: layout.journeysDir,
           outDir: out,
           ...(check.length === 0 ? {} : { checkFiles: check }),
           ...(productName === undefined ? {} : { productName }),

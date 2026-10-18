@@ -109,6 +109,14 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_CONNECT_NEEDS_HUMAN", // `connect journeeze` inside an MCP call
   "E_CONNECT_DECLINED", // the person declined the product at the confirmation — nothing was saved
   "E_JOURNEY_ANCHOR_RULES", // #466: `journey promote` of a Journey breaking the 0.10 anchor rules — fix the Journey
+  // 0.18.0: refused before anything runs.
+  "E_PROJECT_DIR_MISSING", // #585: an explicit --project / --journeys-dir that does not exist
+  "E_PROJECT_LAYOUT", // #585: --project is neither a .jevitate dir nor contains one
+  "E_HANDOFF_INCOMPATIBLE", // #582: the reply Journey does not accept what the discover Journey outputs
+  "E_BOUNDARY_NO_HEAL", // #583: self-heal requested for a prepare-only Journey
+  "E_READINESS_TARGET", // #581: replay/prove without a target
+  "E_READINESS_PRODUCTION", // #581: replay/prove against an environment flagged production
+  "E_READINESS_PARAMS", // #581: replay/prove missing a required param (named, never valued)
 ]);
 
 /** True when a refused command's error code is a usage/input error (exit 64). */

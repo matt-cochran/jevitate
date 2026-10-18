@@ -1,5 +1,16 @@
 # jevitate
 
+## 0.18.0
+
+### Minor Changes
+
+- 03056c2: Linked-Journey ergonomics: `journey readiness` / MCP `journey_readiness` (#581), typed handoffs between Journeys (#582), a prepare-only boundary with a typed handback outcome (#583), `journey bundle` / MCP `journey_bundle` (#584), and `--project` / `--journeys-dir` with `jevitate where`, deprecating `--dir` (#585).
+
+### Patch Changes
+
+- Updated dependencies [03056c2]
+  - @jevitate/cli@0.18.0
+
 ## 0.17.0
 
 ### Minor Changes

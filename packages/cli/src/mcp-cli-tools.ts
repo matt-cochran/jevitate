@@ -127,6 +127,8 @@ export const OMIT = {
 const HOOK_FLAGS = { "--before": OMIT.hooks, "--after": OMIT.hooks, "--allow-shell-hooks": OMIT.hooks, "--hook-timeout-ms": OMIT.hooks } as const;
 const BROWSER_FLAGS = { "--browser-executable": OMIT.browserBin, "--browser-channel": OMIT.browserBin, "--browser-arg": OMIT.browserBin, "--ignore-host-load": OMIT.hostLoad } as const;
 const JSON_FLAG = { "--json": OMIT.json } as const;
+/** #585: --project / --journeys-dir pick a store, which over MCP is always the server's (as --dir). */
+const LOCATION_FLAGS = { "--project": OMIT.storeDir, "--journeys-dir": OMIT.storeDir } as const;
 
 /** #426: `--tag key=value` → a `tags` object (`{"feature": "checkout"}`); keys/values validated by the command. */
 const TAGS: CliParam = { kind: "params", flag: "--tag" };
@@ -164,7 +166,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "list_journeys",
     description: "`jevitate journey list`: every Journey in the store (promoted and not) — id, name, promoted, params. find_capabilities is the promoted-only search.",
-    command: { path: "journey list", params: {}, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "journey list", params: {}, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "promote_journey",
@@ -184,7 +186,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         reason: s("--reason"),
         ...JEV_ADVICE,
       },
-      omitted: {
+      omitted: { ...LOCATION_FLAGS, 
         "--dir": OMIT.storeDir,
         "--accept-weak": OMIT.acceptWeak,
         "--full": OMIT.reviewRendering,
@@ -201,7 +203,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate persona review <id> --json` (#433): read-only. A catalog persona's review sheet — description, account role, session presence (never a credential), the jobs it serves, the Journeys linked to it, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
       "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
       "Approving a persona is a person's act on the CLI (`jevitate persona approve`): there is no MCP tool for it.",
-    command: { path: "persona review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+    command: { path: "persona review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
   },
   {
     name: "review_job",
@@ -209,14 +211,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate job review <id> --json` (#433): read-only. A catalog job's review sheet — its job story (\"When …, I want to …, so I can ….\"), its personas and which of them have a promoted Journey for it, the gaps, its Journeys, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
       "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
       "Approving a job is a person's act on the CLI (`jevitate job approve`): there is no MCP tool for it.",
-    command: { path: "job review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+    command: { path: "job review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
   },
   {
     name: "draft_job_outcomes",
     description:
       "`jevitate job draft-outcomes <jobId> --json` (#465): draft 1–3 desired outcomes (count, default 3) for a catalog job with the generation model (real: true live, or fakeAi: true deterministic — exactly one) and write them into its jobs file marked provenance ai_draft for the team to review. " +
       "It NEVER approves: an approved job becomes stale (needs re-review), and approving stays a person's act on the CLI (`jevitate job approve`) — there is no MCP tool for it.",
-    command: { path: "job draft-outcomes", params: { jobId: pos(), count: n("--count"), ...AI }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "job draft-outcomes", params: { jobId: pos(), count: n("--count"), ...AI }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "catalog_status",
@@ -228,7 +230,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "catalog status",
       params: { requireApprovals: b("--require-approvals"), allowChannels: s("--allow-channels"), strict: b("--strict") },
-      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
   {
@@ -247,7 +249,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         trigger: s("--trigger"),
         outcome: s("--outcome"),
       },
-      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
   {
@@ -255,7 +257,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description:
       "`jevitate catalog analyze --json` (#435): read-only and advisory. Problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic (complete, consistent, feasible, comprehensible, able to be validated, correct): candidate pairs chosen by code (shared persona or trigger/outcome terms, opposing writes on one resource, same role), each with why it was paired and — with real: true — Jev's typed classification (compatible | duplicate | overlapping | conflicting | dependent, with a probability), " +
       "completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Pairs over maxPairs are listed as overflow, never dropped. It never changes the catalog and never gates.",
-    command: { path: "catalog analyze", params: { ...JEV_ADVICE, maxPairs: n("--max-pairs") }, omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, ...JSON_FLAG } },
+    command: { path: "catalog analyze", params: { ...JEV_ADVICE, maxPairs: n("--max-pairs") }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, ...JSON_FLAG } },
   },
   {
     name: "export_catalog_bundle",
@@ -271,7 +273,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         check: { kind: "path[]", flag: "--check" },
         productName: s("--product-name"),
       },
-      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
   {
@@ -293,7 +295,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "journey review",
       params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), strict: b("--strict"), ...JEV_ADVICE },
-      omitted: { "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
     },
   },
   {
@@ -301,14 +303,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description:
       "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding. " +
       "#487: fix: true stamps the step id of each anchor that references a step by number only and writes the Journey (#507: on a promoted Journey its approval goes stale; the result carries needsReapproval and reapproveCommand), reporting what was stamped.",
-    command: { path: "journey lint", params: { id: pos(), fix: b("--fix") }, omitted: { "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "journey lint", params: { id: pos(), fix: b("--fix") }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "journey_anchors",
     description:
       "`jevitate journey anchors <id>` (#293): a Journey's named anchors — states worth exploring from, each with the step it follows and its suggested adversarial probes. Branch a mission off one with run_exploration fromJourney + atStep. " +
       "#487: suggest: true instead proposes anchors where the recorded flow changes state (a new page, a form that became valid, a completed write) — advisory, writes nothing; accept one with journey_anchor_add.",
-    command: { path: "journey anchors", params: { id: pos(), suggest: b("--suggest") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "journey anchors", params: { id: pos(), suggest: b("--suggest") }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "journey_anchor_add",
@@ -318,14 +320,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "journey anchor add",
       params: { journeyId: pos(), name: s("--name", { required: true }), step: s("--step", { required: true }), description: s("--description"), probe: many("--probe"), region: s("--region") },
-      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
   {
     name: "journey_anchor_remove",
     description:
       "`jevitate journey anchor remove <journeyId>` (#487): remove the named anchor from a Journey; returns the anchor lint issues that remain. On a promoted Journey (#507) the approval goes stale: it stays promoted, the old approval is kept for the review diff, and the result carries needsReapproval: true and reapproveCommand (jevitate journey promote <id> --reviewed-hash <new review hash>), which only a person runs.",
-    command: { path: "journey anchor remove", params: { journeyId: pos(), name: s("--name", { required: true }) }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    command: { path: "journey anchor remove", params: { journeyId: pos(), name: s("--name", { required: true }) }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "journey_link",
@@ -336,7 +338,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "journey link",
       params: { id: pos(), job: s("--job"), persona: s("--persona"), unlinkJob: b("--unlink-job"), unlinkPersona: b("--unlink-persona") },
-      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
   {
@@ -347,7 +349,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "journey annotate",
       params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, screenshots: { kind: "screenshots", flag: "--screenshots" }, actionDeltas: b("--action-deltas"), ...ENVIRONMENT, ...EMULATION, ...AI },
-      omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -372,7 +374,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EMULATION,
         ...DEMO_SHOW,
       },
-      omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -391,7 +393,43 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         fixtureIdentity: FIXTURE_IDENTITY,
         ...ENVIRONMENT,
       },
-      omitted: { "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "journey_readiness",
+    description:
+      "`jevitate journey readiness <id> [--with <toId>] --json` (#581): one readiness receipt for a Journey or a linked pair — lint, schema, the #582 handoff, the #583 boundary, strict review, annotations, catalog links/approvals, the recorded mutation proof (fresh only while bound to the current review hash) and promotion, each pass / fail / inconclusive / stale / not-run / awaiting-human. mode: report (default; no browser, sends nothing) | replay (baseline run, or the chain for a pair with requests) | prove (replay plus verify --mutate). replay/prove need env or baseUrl, refuse an environment flagged production and refuse missing params by name, all before any browser. verdict: technically-ready (exit 0) | blocked (1) | inconclusive / incomplete (2); a passing replay never hides an inconclusive proof. Approvals are listed under awaitingHuman and never acted on; the receipt carries no param value, page text or secret.",
+    command: {
+      path: "journey readiness",
+      params: {
+        id: pos(),
+        with: s("--with"),
+        mode: s("--mode", { enum: ["report", "replay", "prove"] }),
+        params: { kind: "params", flag: "--param" },
+        requests: path("--requests"),
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        ...EXTENSION,
+        ...ENVIRONMENT,
+      },
+      omitted: { ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "journey_bundle",
+    description:
+      "`jevitate journey bundle <id> [--with <toId>] --out <dir> --json` (#584): write a local human review bundle (bundle.md + manifest.json) for a Journey or a linked pair from a report-mode readiness — verdict and blockers first, contracts, boundary, side effects, hashes, distinct approval states and the ordered human-only commands (promote carries the review hash only when technically ready). check: re-derive an existing bundle's hashes; a changed Journey or catalog entry fails closed with E_BUNDLE_STALE. out is a directory inside the project. It never uploads, approves or promotes.",
+    command: {
+      path: "journey bundle",
+      params: {
+        id: { kind: "string", positional: true },
+        with: s("--with"),
+        out: { kind: "project-path", flag: "--out" },
+        check: path("--check"),
+      },
+      omitted: { ...LOCATION_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -409,7 +447,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EMULATION,
         ...ENVIRONMENT,
       },
-      omitted: {
+      omitted: { ...LOCATION_FLAGS, 
         "--allow-draft": "#580: over MCP a chain runs promoted Journeys only, as run_journey does; running drafts is the operator's CLI call",
         "--dir": OMIT.storeDir,
         "--allow": OMIT.mcpOrigins,
@@ -424,7 +462,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "journey publish",
       params: { id: pos(), to: s("--to", { required: true }), declareOrigin: many("--declare-origin"), as: s("--as") },
-      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
     },
   },
   {
@@ -733,7 +771,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EMULATION,
         ...JEV_AI,
       },
-      omitted: {
+      omitted: { ...LOCATION_FLAGS, 
         "--journeys-dir": OMIT.storeDir,
         ...HOOK_FLAGS,
         ...BROWSER_FLAGS,

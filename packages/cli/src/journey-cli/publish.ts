@@ -3,7 +3,9 @@ import { ok, fail } from "../envelope.js";
 import { UnknownJourneyError } from "../journey-api.js";
 import { publishJourneyToSource, realGhPort, NotPromotedError, NoDeclaredOriginsError } from "../source-api.js";
 import { UnknownSourceError, EmbeddedSecretError, UndeclaredOriginError } from "@jevitate/sources";
-import { type CliDeps, resolveJourneysDir, resolveSourceApiDeps, emitJson } from "../cli-shared.js";
+import { type CliDeps, resolveSourceApiDeps, emitJson } from "../cli-shared.js";
+import { withProjectFlags } from "../project-layout.js";
+import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 
 /** Registers `jevitate journey publish`. */
 export function registerJourneyPublish(journey: Command, program: Command, deps: CliDeps): void {
@@ -11,17 +13,19 @@ export function registerJourneyPublish(journey: Command, program: Command, deps:
   // Preserves every publish-side guard in `@jevitate/sources` (promoted-only,
   // secret-references-only, declared-origin coverage); writes onto a NEW
   // `publish/<id>` branch and degrades gracefully when `gh` is absent.
-  journey
-    .command("publish <id>")
+  withProjectFlags(journey
+    .command("publish <id>"))
     .requiredOption("--to <source>", "registered source name to publish into")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--declare-origin <origin>", "origin this Journey is authorized for (repeatable; default: derived from navigate steps)", (v: string, prev: string[]) => [...prev, v], [] as string[])
     .option("--as <id>", "publish under a different id than the local one")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { to, dir, declareOrigin, as: asId, json } = this.opts<{
+      const locationFlags = this.opts<{ dir?: string; project?: string; journeysDir?: string }>();
+      const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
+      if (layout === null) return;
+      const { to, declareOrigin, as: asId, json } = this.opts<{
         to: string;
-        dir?: string;
         declareOrigin: string[];
         as?: string;
         json?: boolean;
@@ -32,7 +36,7 @@ export function registerJourneyPublish(journey: Command, program: Command, deps:
         const result = await publishJourneyToSource(
           { ...apiDeps, gh },
           {
-            journeysDir: resolveJourneysDir(deps, dir),
+            journeysDir: layout.journeysDir,
             id,
             toSource: to,
             declareOrigins: declareOrigin,

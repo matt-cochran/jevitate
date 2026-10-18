@@ -71,7 +71,7 @@ export async function linkJourney(journeysDir: string, catalogDir: string | null
   let jobs: readonly CatalogJob[] = [];
   let personas: readonly CatalogPersona[] = [];
   if (input.job !== undefined || input.persona !== undefined) {
-    if (catalogDir === null) throw new JourneyLinkArgsError("no .jevitate/ project was found — run inside a project (jevitate init), or pass --dir");
+    if (catalogDir === null) throw new JourneyLinkArgsError("no .jevitate/ project was found — run inside a project (jevitate init), or pass --project <dir>");
     const loader = new CatalogLoader({ catalogDir, journeysDir });
     [{ jobs }, { personas }] = await Promise.all([loader.loadJobs(), loader.loadPersonas()]);
   }

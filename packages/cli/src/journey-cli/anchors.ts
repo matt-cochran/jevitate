@@ -2,25 +2,29 @@ import { Command } from "commander";
 import { FsJourneyStore, JourneyRegistry, journeyStepCount, listJourneyAnchors } from "@jevitate/journey";
 import { ok, fail } from "../envelope.js";
 import { runAnchorSuggest } from "../journey-anchor-cli.js";
-import { type CliDeps, resolveJourneysDir, emitJson } from "../cli-shared.js";
+import { type CliDeps, emitJson } from "../cli-shared.js";
+import { withProjectFlags } from "../project-layout.js";
+import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 
 /** Registers `jevitate journey anchors`. */
 export function registerJourneyAnchors(journey: Command, program: Command, deps: CliDeps): void {
   // #293 — the named states worth exploring from (`explore --from-journey <id> --at-step <name>`).
-  journey
+  withProjectFlags(journey
     .command("anchors <id>")
     .description("list a Journey's anchors (#293): named steps to branch a mission off with `explore --from-journey <id> --at-step <name>`, and their suggested probes")
     .option("--suggest", "propose anchors where the recorded flow changes state (a new page, a form that became valid, a completed write), each with the `journey anchor add` command to accept it; advisory, writes nothing (#487)")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP))
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, suggest } = this.opts<{ dir?: string; json?: boolean; suggest?: boolean }>();
+      const { dir, project, journeysDir, json, suggest } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean; suggest?: boolean }>();
+      const layout = journeyLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
       if (suggest) {
-        await runAnchorSuggest(program, deps, id, { dir, json });
+        await runAnchorSuggest(program, deps, id, { dir: layout.journeysDir, json });
         return;
       }
       try {
-        const found = await new JourneyRegistry(new FsJourneyStore(resolveJourneysDir(deps, dir))).get(id);
+        const found = await new JourneyRegistry(new FsJourneyStore(layout.journeysDir)).get(id);
         if (found === null) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", `unknown journey '${id}'`));
           return;

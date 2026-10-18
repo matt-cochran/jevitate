@@ -4,6 +4,8 @@ import { UnknownJourneyError } from "./journey-api.js";
 import { AnchorEditError, addJourneyAnchor, removeJourneyAnchor, suggestJourneyAnchors, type AnchorEditResult } from "./journey-anchor-api.js";
 import { parseDescriptorSpec } from "./explore-specs.js";
 import { type CliDeps, emitJson, resolveJourneysDir } from "./cli-shared.js";
+import { journeyLayout, DEPRECATED_DIR_HELP } from "./journey-cli/shared.js";
+import { withProjectFlags } from "./project-layout.js";
 
 function collect(value: string, prev: string[]): string[] {
   return [...prev, value];
@@ -33,21 +35,25 @@ export function anchorEditFailure(program: Command, err: unknown): void {
 export function registerJourneyAnchorCommands(journey: Command, program: Command, deps: CliDeps): void {
   const anchor = journey.command("anchor").description("add or remove a Journey's anchors (#487): named steps to branch missions off, written with the step's stable id; on a promoted Journey the approval goes stale (#507)");
 
-  anchor
-    .command("add <journeyId>")
-    .description("add an anchor to a Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues")
-    .requiredOption("--name <name>", "the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit")
-    .requiredOption("--step <n|stepId>", "the step the anchor follows: a 1-based step number or a step id")
-    .option("--description <text>", "what this state is, in words")
-    .option("--probe <text>", "a suggested adversarial probe at this state (repeatable)", collect, [] as string[])
-    .option("--region <descriptor>", "the page region missions at this anchor attack (the --success descriptor syntax, e.g. testId=import-view); scopes control coverage to it (#519)")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+  withProjectFlags(
+    anchor
+      .command("add <journeyId>")
+      .description("add an anchor to a Journey: --step takes a 1-based step number or a step id and writes the step id at once; re-lints and prints the anchor issues")
+      .requiredOption("--name <name>", "the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit")
+      .requiredOption("--step <n|stepId>", "the step the anchor follows: a 1-based step number or a step id")
+      .option("--description <text>", "what this state is, in words")
+      .option("--probe <text>", "a suggested adversarial probe at this state (repeatable)", collect, [] as string[])
+      .option("--region <descriptor>", "the page region missions at this anchor attack (the --success descriptor syntax, e.g. testId=import-view); scopes control coverage to it (#519)")
+      .option("--dir <path>", DEPRECATED_DIR_HELP),
+  )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, journeyId: string) {
-      const { name, step, description, probe, region, dir, json } = this.opts<{ name: string; step: string; description?: string; probe: string[]; region?: string; dir?: string; json?: boolean }>();
+      const { name, step, description, probe, region, dir, project, journeysDir, json } = this.opts<{ name: string; step: string; description?: string; probe: string[]; region?: string; dir?: string; project?: string; journeysDir?: string; json?: boolean }>();
       try {
         if (region !== undefined) parseDescriptorSpec(region);
-        const result = await addJourneyAnchor(resolveJourneysDir(deps, dir), journeyId, {
+        const layout = journeyLayout(program, deps, { project, journeysDir, dir });
+        if (layout === null) return;
+        const result = await addJourneyAnchor(layout.journeysDir, journeyId, {
           name,
           step,
           ...(description === undefined ? {} : { description }),
@@ -66,16 +72,20 @@ export function registerJourneyAnchorCommands(journey: Command, program: Command
       }
     });
 
-  anchor
-    .command("remove <journeyId>")
-    .description("remove an anchor from a Journey; re-lints and prints the anchor issues")
-    .requiredOption("--name <name>", "the anchor to remove")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+  withProjectFlags(
+    anchor
+      .command("remove <journeyId>")
+      .description("remove an anchor from a Journey; re-lints and prints the anchor issues")
+      .requiredOption("--name <name>", "the anchor to remove")
+      .option("--dir <path>", DEPRECATED_DIR_HELP),
+  )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, journeyId: string) {
-      const { name, dir, json } = this.opts<{ name: string; dir?: string; json?: boolean }>();
+      const { name, dir, project, journeysDir, json } = this.opts<{ name: string; dir?: string; project?: string; journeysDir?: string; json?: boolean }>();
       try {
-        const result = await removeJourneyAnchor(resolveJourneysDir(deps, dir), journeyId, name);
+        const layout = journeyLayout(program, deps, { project, journeysDir, dir });
+        if (layout === null) return;
+        const result = await removeJourneyAnchor(layout.journeysDir, journeyId, name);
         if (json) emitJson(program, ok(result));
         else {
           const out = program.configureOutput().writeOut;

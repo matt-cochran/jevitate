@@ -1,7 +1,9 @@
 import { Command } from "commander";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { ok, fail } from "../envelope.js";
-import { type CliDeps, resolveJourneysDir, emitJson } from "../cli-shared.js";
+import { type CliDeps, emitJson } from "../cli-shared.js";
+import { withProjectFlags } from "../project-layout.js";
+import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 
 /** Registers `jevitate journey find`. */
 export function registerJourneyFind(journey: Command, program: Command, deps: CliDeps): void {
@@ -10,14 +12,16 @@ export function registerJourneyFind(journey: Command, program: Command, deps: Cl
   // depending on `@jevitate/mcp-facade`. `JourneyRegistry.find` is already
   // promoted-only, so this is the same promoted-only view without the
   // forbidden dependency.
-  journey
+  withProjectFlags(journey
     .command("find <query>")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP))
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, query: string) {
-      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      const { dir, project, journeysDir, json } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean }>();
+      const layout = journeyLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
       try {
-        const store = new FsJourneyStore(resolveJourneysDir(deps, dir));
+        const store = new FsJourneyStore(layout.journeysDir);
         const registry = new JourneyRegistry(store);
         const metas = await registry.find(query);
         const capabilities = metas.map((m) => ({

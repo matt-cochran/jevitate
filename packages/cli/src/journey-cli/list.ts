@@ -2,7 +2,9 @@ import { Command } from "commander";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { ok, fail } from "../envelope.js";
 import { describeProvenance } from "../approval-provenance.js";
-import { type CliDeps, resolveJourneysDir, emitJson } from "../cli-shared.js";
+import { type CliDeps, emitJson } from "../cli-shared.js";
+import { withProjectFlags } from "../project-layout.js";
+import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 
 /** Registers `jevitate journey list`. */
 export function registerJourneyList(journey: Command, program: Command, deps: CliDeps): void {
@@ -14,14 +16,16 @@ export function registerJourneyList(journey: Command, program: Command, deps: Cl
    * mcp-facade) see. Keeping these distinct means `list` is useful for
    * authoring/debugging while `find` genuinely reflects what's discoverable.
    */
-  journey
+  withProjectFlags(journey
     .command("list")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP))
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      const { dir, project, journeysDir, json } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean }>();
+      const layout = journeyLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
       try {
-        const store = new FsJourneyStore(resolveJourneysDir(deps, dir));
+        const store = new FsJourneyStore(layout.journeysDir);
         const metas = await store.list();
         const envelope = ok(metas);
         if (json) {
