@@ -22,6 +22,21 @@ describe("isSecretField — the one shared secret-control predicate", () => {
     expect(isSecretField(null, null)).toBe(false);
   });
 
+  it("#564: treats a credential-named field as secret by its name / id / label / placeholder", () => {
+    for (const hint of ["apiKey", "api_key", "API Key", "x-api-key", "accessToken", "Client secret", "user_password", "passcode", "CVV", "cvc", "Card number", "cardNumber", "SSN", "otp", "One-time code", "PIN", "credentials"]) {
+      expect(isSecretField("text", null, [null, hint])).toBe(true);
+    }
+    expect(isSecretField("text", "cc-number")).toBe(true);
+    expect(isSecretField("tel", "cc-csc")).toBe(true);
+    expect(isSecretField(null, null, "Enter your PIN")).toBe(true);
+  });
+
+  it("#564: matches whole words only — no false positive on look-alikes", () => {
+    for (const hint of ["pinned", "spinner", "Pinterest", "passport", "Passenger name", "tokenizer", "secretary", "compass", "keyword", "opinion", "username", "email"]) {
+      expect(isSecretField("text", null, [hint])).toBe(false);
+    }
+  });
+
   it("is self-contained, so its source can be shipped into the page", () => {
     // Re-hydrate from source with no surrounding scope: must still work.
     const rehydrated: unknown = new Function(`return (${isSecretField.toString()});`)();
@@ -29,5 +44,7 @@ describe("isSecretField — the one shared secret-control predicate", () => {
     if (typeof rehydrated !== "function") return;
     expect(rehydrated("text", "current-password")).toBe(true);
     expect(rehydrated("text", "email")).toBe(false);
+    expect(rehydrated("text", null, ["apiKey"])).toBe(true);
+    expect(rehydrated("text", null, ["spinner"])).toBe(false);
   });
 });

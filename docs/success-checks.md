@@ -195,6 +195,10 @@ jevitate explore --url https://app.example.test/profile --goal "set the last nam
   --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
 ```
 
+A Journey's own `textIncludes`, `valueEquals` and `attr` assertions can also refer to a parameter
+or extracted value (`${name}` or `{ "var": "name" }`); see
+[parameter-relative assertions](./journeys.md#parameter-relative-assertions).
+
 ## Typing a file's exact text (`--type-fixture`)
 
 A goal that quotes a passage to type has it typed as quoted, but a long text, or one whose line

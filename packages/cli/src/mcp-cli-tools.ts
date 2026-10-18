@@ -894,9 +894,25 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   },
   {
     name: "recordings",
-    description: "`jevitate recording diff | fit | postdoc | promote`: compare takes, fit a Recording, post-document takes, promote a literal to a variable.",
+    description:
+      "`jevitate recording diff | fit | postdoc | promote | propose`: compare takes, fit a Recording, post-document takes, promote a literal to a variable, and (#566) propose bindings from two or more takes. " +
+      "Captured values never reach the model: diff returns each value as a hint (length, shape, words), postdoc returns constants redacted. " +
+      "propose (take, more: take files, confined) returns params, outputs, {var} checks (pre-write identity / post-write exact value), credential handbacks, stopBefore and the ambiguities a person must decide (redacted evidence only), " +
+      "and saves an UNPROMOTED draft Journey in the server's journeys store (id; refused when that id exists) or to out (a file inside the project); draft: false saves none. It never promotes or approves: next run review_journey strict and journey verify with mutate.",
     actions: {
       diff: { path: "recording diff", params: { takeA: pos("path"), takeB: pos("path"), more: { kind: "path[]", positional: true } }, omitted: JSON_FLAG },
+      propose: {
+        path: "recording propose",
+        params: {
+          take: pos("path"),
+          more: { kind: "path[]", positional: true },
+          out: { kind: "project-path", flag: "--out" },
+          draft: b("--no-draft"),
+          id: s("--id"),
+          name: s("--name"),
+        },
+        omitted: { "--journeys-dir": OMIT.storeDir, ...JSON_FLAG },
+      },
       fit: { path: "recording fit", params: { file: pos("path") }, omitted: JSON_FLAG },
       postdoc: { path: "recording postdoc", params: { take: pos("path"), more: { kind: "path[]", positional: true }, decisions: path("--decisions"), out: path("--out") }, omitted: JSON_FLAG },
       // No --json flag: it prints the promoted Recording as JSON (refusals are envelopes).

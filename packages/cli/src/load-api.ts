@@ -122,14 +122,16 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       );
       // #400: a load iteration means the same as a `journey run` — the Journey's end state and
       // each step's `expectRequests` are judged, so a replay whose checks fail is not an ok run.
+      const refs = httpCheckRefs({ params: opts.params, secretParams: secretParamNames(journey, opts.params) });
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey, {
         secrets: secretParamValues(journey, opts.params),
         // #543: http end-state checks request only origins in this run's allowlist.
         httpProbe: createHttpProbe({ allowlist: allowedOrigins }),
-        resolveRef: httpCheckRefs({ params: opts.params, secretParams: secretParamNames(journey, opts.params) }),
+        resolveRef: refs,
       });
       const observer = outcomeChecks.observer();
-      const interpreter = observer === undefined ? new RecordingInterpreter({ fixtureBaseDir }) : new RecordingInterpreter({ observer, fixtureBaseDir });
+      // #565: a step expectation's references resolve from the same names (a secret one refused).
+      const interpreter = observer === undefined ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs }) : new RecordingInterpreter({ observer, fixtureBaseDir, refLookup: refs });
       const runner = new JourneyRunner(actor, interpreter);
 
       // `runLoadTest` calls `run()` exactly `iterationsPerActor` times for

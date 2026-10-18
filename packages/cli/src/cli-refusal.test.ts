@@ -179,6 +179,7 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "recording diff": { cases: [[missing, missing]] },
   "recording fit": { cases: [[missing]] },
   "recording postdoc": { cases: [[missing]] },
+  "recording propose": { cases: [[missing, missing]] },
   "journey list": { exempt: "a listing: an empty or missing dir lists nothing" },
   "journey find": { exempt: "a search: no match is an empty result" },
   "journey run": {

@@ -38,8 +38,15 @@ export const SETUP_REF = /\$\{setup\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
  * outgoing request only: never into a URL, the step log, the result or the Recording.
  */
 export const SECRET_FIELD_REF = /\$\{secretField\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
-/** Either reference, matched in ONE pass (a substituted value is never re-expanded). */
-const STEP_REF = /\$\{(setup|secretField)\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
+/**
+ * A `${setup.x}`/`${restore.x}` (#560) output reference, for URL-origin, binding and credential
+ * checks. `${restore.x}` is bound by an EARLIER restore step and lives only for that restore pass:
+ * restore outputs are cleared at the start of every `restore()`, never join `bindings()`/setup
+ * outputs, and are never persisted.
+ */
+const OUTPUT_REF = /\$\{(setup|restore)\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
+/** Any reference, matched in ONE pass (a substituted value is never re-expanded). */
+const STEP_REF = /\$\{(setup|restore|secretField)\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const OUTPUT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** A fixture identity's name (#243) — the same shape as a persona/actor name. */
 const IDENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
@@ -106,12 +113,20 @@ export interface FixtureBounds {
   readonly allowlist: readonly string[];
   /** What a relative step URL resolves against (the mission's start URL). */
   readonly baseUrl: string;
+  /**
+   * #560/#561: rewrites every resolved step URL (setup and restore) before the allowlist check and
+   * fetch — e.g. map a recorded origin onto the one this run may actually reach.
+   */
+  readonly rebaseUrl?: (absoluteUrl: string) => string;
 }
 
 
-/** Every `${setup.x}` name referenced in `text`. */
+/**
+ * Every `${setup.x}`/`${restore.x}` (#560) output name referenced in `text`. Outside the fixture's
+ * own steps a `${restore.x}` is never bound, so {@link checkSetupRefs} refuses it like an unknown setup output.
+ */
 export function referencedNames(text: string): string[] {
-  return [...text.matchAll(SETUP_REF)].map((m) => m[1] as string);
+  return [...text.matchAll(OUTPUT_REF)].map((m) => m[2] as string);
 }
 
 /**
@@ -177,15 +192,27 @@ function resolveStepUrl(url: string, baseUrl: string): URL | null {
   }
 }
 
-/** Throws unless `url` (with references substituted) is an http(s) URL on an allowlisted origin. */
-function assertStepUrl(url: string, bounds: FixtureBounds, where: string): void {
+/** `url` resolved against the base URL and passed through `rebaseUrl` (#560/#561), or null when unusable. */
+function resolvedStepUrl(url: string, bounds: FixtureBounds): URL | null {
   const u = resolveStepUrl(url, bounds.baseUrl);
+  if (u === null || bounds.rebaseUrl === undefined) return u;
+  try {
+    return new URL(bounds.rebaseUrl(u.href));
+  } catch {
+    return null;
+  }
+}
+
+/** Throws unless `url` (with references substituted) is http(s) on an allowlisted origin; returns the rebased absolute URL. */
+function assertStepUrl(url: string, bounds: FixtureBounds, where: string): string {
+  const u = resolvedStepUrl(url, bounds);
   if (u === null || (u.protocol !== "http:" && u.protocol !== "https:")) {
     throw new FixtureSpecError(`${where}.url must be an http(s) URL (got ${JSON.stringify(redactUrl(url))})`);
   }
   if (!isAuthorizedExploreTarget(u.href, bounds.allowlist)) {
     throw new FixtureSpecError(`${where}.url origin ${u.origin} is not an --allow origin (${[...bounds.allowlist].join(", ")})`);
   }
+  return u.href;
 }
 
 function parseAuth(v: unknown, where: string): RequestAuth {
@@ -227,7 +254,14 @@ function parseAuth(v: unknown, where: string): RequestAuth {
   throw new FixtureSpecError(`${where}.from must be localStorage, cookies or secretField`);
 }
 
-function parseStep(v: unknown, where: string, bounds: FixtureBounds, known: Set<string> | null, phase: "setup" | "restore"): FixtureHttpStep {
+/** The output names visible to a step being parsed; `setup` is null when a `--before` hook may bind more. */
+interface KnownOutputs {
+  readonly setup: Set<string> | null;
+  /** Restore outputs bound by EARLIER steps of the same restore pass (#560). */
+  readonly restore: Set<string>;
+}
+
+function parseStep(v: unknown, where: string, bounds: FixtureBounds, known: KnownOutputs, phase: "setup" | "restore"): FixtureHttpStep {
   if (!isRecord(v)) throw new FixtureSpecError(`${where} must be an object`);
   const cmd = findCommandKey(v, where);
   if (cmd !== null) {
@@ -244,10 +278,10 @@ function parseStep(v: unknown, where: string, bounds: FixtureBounds, known: Set<
     throw new FixtureSpecError(`${where}.url: \${secretField.*} is allowed only in json, body or headers (a URL is logged)`);
   }
   // A reference may fill a path or query value, never choose the origin: check it with placeholders.
-  assertStepUrl(v.url.replace(SETUP_REF, "0"), bounds, where);
-  const u = resolveStepUrl(v.url.replace(SETUP_REF, "0"), bounds.baseUrl);
-  const probe = resolveStepUrl(v.url.replace(SETUP_REF, "x.evil.test"), bounds.baseUrl);
-  if (u === null || probe === null || probe.origin !== u.origin) throw new FixtureSpecError(`${where}.url: a \${setup.*} reference cannot choose the origin`);
+  assertStepUrl(v.url.replace(OUTPUT_REF, "0"), bounds, where);
+  const u = resolveStepUrl(v.url.replace(OUTPUT_REF, "0"), bounds.baseUrl);
+  const probe = resolveStepUrl(v.url.replace(OUTPUT_REF, "x.evil.test"), bounds.baseUrl);
+  if (u === null || probe === null || probe.origin !== u.origin) throw new FixtureSpecError(`${where}.url: a \${setup.*}/\${restore.*} reference cannot choose the origin`);
   let headers: Record<string, string> | undefined;
   if (v.headers !== undefined) {
     if (!isRecord(v.headers)) throw new FixtureSpecError(`${where}.headers must be an object of strings`);
@@ -277,7 +311,6 @@ function parseStep(v: unknown, where: string, bounds: FixtureBounds, known: Set<
   }
   let outputs: Record<string, string> | undefined;
   if (v.outputs !== undefined) {
-    if (phase === "restore") throw new FixtureSpecError(`${where}.outputs: only setup steps bind outputs`);
     if (!isRecord(v.outputs)) throw new FixtureSpecError(`${where}.outputs must be an object of name → "$.path" | "header:<name>"`);
     outputs = {};
     for (const [name, path] of Object.entries(v.outputs)) {
@@ -309,10 +342,15 @@ function parseStep(v: unknown, where: string, bounds: FixtureBounds, known: Set<
     ...(secretOutputs === undefined ? {} : { secretOutputs }),
     ...(v.timeoutMs === undefined ? {} : { timeoutMs: v.timeoutMs as number }),
   };
-  if (known !== null) {
-    for (const s of stringsIn([step.url, step.headers ?? {}, step.json ?? null, step.body ?? ""])) {
-      for (const name of referencedNames(s)) {
-        if (!known.has(name)) throw new FixtureSpecError(`${where} references \${setup.${name}}, which no earlier setup step outputs`);
+  for (const s of stringsIn([step.url, step.headers ?? {}, step.json ?? null, step.body ?? ""])) {
+    for (const m of s.matchAll(OUTPUT_REF)) {
+      const kind = m[1] as "setup" | "restore";
+      const name = m[2] as string;
+      if (kind === "restore") {
+        if (phase === "setup") throw new FixtureSpecError(`${where} references \${restore.${name}}, which is only usable inside the restore phase (#560)`);
+        if (!known.restore.has(name)) throw new FixtureSpecError(`${where} references \${restore.${name}}, which no earlier restore step outputs`);
+      } else if (known.setup !== null && !known.setup.has(name)) {
+        throw new FixtureSpecError(`${where} references \${setup.${name}}, which no earlier setup step outputs`);
       }
     }
   }
@@ -342,30 +380,43 @@ export function parseFixtureSpec(raw: unknown, bounds: FixtureBounds, opts: { op
     if (!Array.isArray(v)) throw new FixtureSpecError(`${where} must be an array of steps`);
     return v;
   };
-  const known: Set<string> | null = opts.openRefs === true ? null : new Set();
-  const outputsSeen = new Set<string>();
+  const known: KnownOutputs = { setup: opts.openRefs === true ? null : new Set<string>(), restore: new Set<string>() };
+  const setupOutputsSeen = new Set<string>();
   const setup = list(raw.setup, "fixtures.setup").map((s, i) => {
     const step = parseStep(s, `fixtures.setup[${i}]`, bounds, known, "setup");
     for (const name of Object.keys(step.outputs ?? {})) {
-      if (outputsSeen.has(name)) throw new FixtureSpecError(`fixtures.setup[${i}].outputs.${name} is bound twice`);
-      outputsSeen.add(name);
-      known?.add(name);
+      if (setupOutputsSeen.has(name)) throw new FixtureSpecError(`fixtures.setup[${i}].outputs.${name} is bound twice`);
+      setupOutputsSeen.add(name);
+      known.setup?.add(name);
     }
     return step;
   });
   const restoreKey = raw.teardown !== undefined ? "teardown" : "restore";
-  const restore = list(raw[restoreKey], `fixtures.${restoreKey}`).map((s, i) => parseStep(s, `fixtures.${restoreKey}[${i}]`, bounds, known, "restore"));
+  const restoreOutputsSeen = new Set<string>();
+  const restore = list(raw[restoreKey], `fixtures.${restoreKey}`).map((s, i) => {
+    const step = parseStep(s, `fixtures.${restoreKey}[${i}]`, bounds, known, "restore");
+    for (const name of Object.keys(step.outputs ?? {})) {
+      if (restoreOutputsSeen.has(name)) throw new FixtureSpecError(`fixtures.${restoreKey}[${i}].outputs.${name} is bound twice`);
+      restoreOutputsSeen.add(name);
+      known.restore.add(name);
+    }
+    return step;
+  });
   if (setup.length === 0 && restore.length === 0) throw new FixtureSpecError("a fixtures spec needs at least one setup or restore step");
-  // A credential header built from a setup output needs that output to be SECRET: a public output
-  // is persisted with the result, and a credential never is.
-  if (known !== null) {
-    const secret = new Set(setup.flatMap((s) => s.secretOutputs ?? []));
+  // A credential header built from an output needs that output to be SECRET: a public output is
+  // persisted with the result, and a credential never is (setup and restore alike, #560).
+  if (known.setup !== null) {
+    const setupSecret = new Set(setup.flatMap((s) => s.secretOutputs ?? []));
+    const restoreSecret = new Set(restore.flatMap((s) => s.secretOutputs ?? []));
     for (const [phase, steps] of [["setup", setup], [restoreKey, restore]] as const) {
       for (const [i, s] of steps.entries()) {
         for (const [k, x] of Object.entries(s.headers ?? {})) {
           if (!CREDENTIAL_HEADERS.has(k.toLowerCase())) continue;
-          for (const name of referencedNames(x)) {
-            if (!secret.has(name)) throw new FixtureSpecError(`fixtures.${phase}[${i}].headers.${k}: \${setup.${name}} carries a credential — list it in secretOutputs`);
+          for (const m of x.matchAll(OUTPUT_REF)) {
+            const kind = m[1] as "setup" | "restore";
+            const name = m[2] as string;
+            const secret = kind === "setup" ? setupSecret : restoreSecret;
+            if (!secret.has(name)) throw new FixtureSpecError(`fixtures.${phase}[${i}].headers.${k}: \${${kind}.${name}} carries a credential — list it in secretOutputs`);
           }
         }
       }
@@ -429,6 +480,15 @@ export class UnboundSetupRefError extends Error {
   }
 }
 
+/** A `${restore.x}` used outside a restore pass, or one no earlier restore step bound (#560). */
+export class UnboundRestoreRefError extends Error {
+  readonly code = "E_FIXTURE_REF" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "UnboundRestoreRefError";
+  }
+}
+
 /**
  * Substitutes every `${setup.x}` in `text`. An unknown name throws (never a hollow run); a SECRET
  * output throws unless `allowSecret` — goal/URL/success text is model- or artifact-visible.
@@ -445,14 +505,28 @@ export function substituteSetupRefs(text: string, b: FixtureBindings, opts: { al
 }
 
 /**
- * A step's `json`/`body`/`headers` text with every `${setup.x}` and `${secretField.VAR}` filled in,
- * in one pass (#166). The result goes on the wire ONLY — never into a log line or an artifact.
+ * A step's `url`/`json`/`body`/`headers` text with every `${setup.x}`, `${restore.x}` (#560) and
+ * `${secretField.VAR}` filled in, in one pass (#166). Secrets are allowed here — the result goes on
+ * the wire ONLY, never into a log line or an artifact (the URL is redacted when logged).
  */
-function substituteStepText(text: string, b: FixtureBindings, secretFields: Readonly<Record<string, string>>, where: string): string {
+function substituteStepText(
+  text: string,
+  b: FixtureBindings,
+  restore: FixtureBindings,
+  phase: "setup" | "restore",
+  secretFields: Readonly<Record<string, string>>,
+  where: string,
+): string {
   return text.replace(STEP_REF, (_whole, kind: string, name: string) => {
     if (kind === "setup") {
       const v = b.values[name];
       if (v === undefined) throw new UnboundSetupRefError(`${where} references \${setup.${name}}, which the fixture setup did not output`);
+      return v;
+    }
+    if (kind === "restore") {
+      if (phase !== "restore") throw new UnboundRestoreRefError(`${where} references \${restore.${name}}, which is only usable inside the restore phase`);
+      const v = restore.values[name];
+      if (v === undefined) throw new UnboundRestoreRefError(`${where} references \${restore.${name}}, which no earlier restore step output`);
       return v;
     }
     const v = secretFields[name];
@@ -608,6 +682,9 @@ export class MissionFixtures {
   readonly #specHash: string;
   #values: Record<string, string> = {};
   #secretNames = new Set<string>();
+  /** Restore-phase outputs (#560): live only for one restore pass, never exposed as setup bindings. */
+  #restoreValues: Record<string, string> = {};
+  #restoreSecretNames = new Set<string>();
   #active = false;
   #cycles = 0;
   readonly #log: FixtureStepLog[] = [];
@@ -674,9 +751,11 @@ export class MissionFixtures {
     return Object.fromEntries(Object.entries(this.#values).filter(([k]) => !this.#secretNames.has(k)));
   }
 
-  /** Secret output values: the caller adds them to the run's redaction set. */
+  /** Secret output values (setup and the current restore pass): the caller adds them to the run's redaction set. */
   secrets(): string[] {
-    return [...this.#secretNames].map((n) => this.#values[n]).filter((v): v is string => v !== undefined && v !== "");
+    const values = [...this.#secretNames].map((n) => this.#values[n]);
+    values.push(...[...this.#restoreSecretNames].map((n) => this.#restoreValues[n]));
+    return values.filter((v): v is string => v !== undefined && v !== "");
   }
 
   #redact(text: string): string {
@@ -736,6 +815,9 @@ export class MissionFixtures {
 
   /** Restores the state the last `setup()` created. Never throws: every step is logged. */
   async restore(): Promise<void> {
+    // #560: each restore pass starts with no restore bindings, so `reset()` never reuses a stale id.
+    this.#restoreValues = {};
+    this.#restoreSecretNames = new Set();
     if (!this.#active) return;
     this.#active = false;
     for (const [i, step] of (this.#opts.spec?.restore ?? []).entries()) await this.#runHttp(step, "restore", i);
@@ -817,14 +899,21 @@ export class MissionFixtures {
     let headers: Record<string, string>;
     try {
       const b = this.bindings();
-      url = new URL(substituteSetupRefs(step.url, b, { allowSecret: true, where: name }), this.#opts.baseUrl).href;
-      // Re-check the substituted URL: a bound value never widens the allowlist.
-      assertStepUrl(url, this.#opts, name);
-      const sub = (text: string): string => substituteStepText(text, b, this.#opts.auth.secretFields ?? {}, name);
+      const restoreB: FixtureBindings = { values: this.#restoreValues, secretNames: this.#restoreSecretNames };
+      // Re-resolve and re-check the substituted URL (#560/#561): a bound value never widens the allowlist.
+      url = assertStepUrl(substituteStepText(step.url, b, restoreB, phase, {}, name), this.#opts, name);
+      const sub = (text: string): string => substituteStepText(text, b, restoreB, phase, this.#opts.auth.secretFields ?? {}, name);
       for (const [k, x] of Object.entries(step.headers ?? {})) {
+        if (!CREDENTIAL_HEADERS.has(k.toLowerCase())) continue;
         // A `--before` hook may bind names at run time: a credential header still takes secret outputs only.
-        const pub = CREDENTIAL_HEADERS.has(k.toLowerCase()) ? referencedNames(x).find((n) => !b.secretNames.has(n)) : undefined;
-        if (pub !== undefined) throw new UnboundSetupRefError(`${name}: headers.${k} uses \${setup.${pub}}, which is not a secret output`);
+        for (const m of x.matchAll(OUTPUT_REF)) {
+          const kind = m[1] as "setup" | "restore";
+          const out = m[2] as string;
+          if (kind === "setup" && !b.secretNames.has(out)) throw new UnboundSetupRefError(`${name}: headers.${k} uses \${setup.${out}}, which is not a secret output`);
+          if (kind === "restore" && phase === "restore" && !restoreB.secretNames.has(out)) {
+            throw new UnboundRestoreRefError(`${name}: headers.${k} uses \${restore.${out}}, which is not a secret output`);
+          }
+        }
       }
       headers = { ...(substituteDeep(step.headers ?? {}, sub) as Record<string, string>) };
       if (step.json !== undefined) {
@@ -877,8 +966,10 @@ export class MissionFixtures {
             log({ ok: false, url: shownUrl, status: res.status, detail });
             return detail;
           }
-          this.#values[out] = v;
-          if (step.secretOutputs?.includes(out) === true) this.#secretNames.add(out);
+          const values = phase === "restore" ? this.#restoreValues : this.#values;
+          const secretNames = phase === "restore" ? this.#restoreSecretNames : this.#secretNames;
+          values[out] = v;
+          if (step.secretOutputs?.includes(out) === true) secretNames.add(out);
         }
       } else {
         await res.body?.cancel().catch(() => undefined);

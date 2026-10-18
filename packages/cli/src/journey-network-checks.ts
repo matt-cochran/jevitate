@@ -10,7 +10,7 @@
  * replay whose steps all passed but whose outcome is absent is a failed run, never `ok`.
  */
 import type { Page } from "playwright";
-import { journeyEndState, type Journey } from "@jevitate/journey";
+import { SECRET_PARAM_NAME_RE, journeyEndState, type Journey } from "@jevitate/journey";
 import type { NetworkCheck } from "@jevitate/recording";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { Actor } from "@jevitate/screenplay";
@@ -86,7 +86,11 @@ export class JourneyOutcomeChecks {
       readonly stepResponseTimeoutMs?: number;
       /** #543: makes the end state's `http` checks' requests; absent, they fail closed (unevaluable). */
       readonly httpProbe?: HttpProbe;
-      /** #543: resolves an `http` check's `${name}` (a param, `setup.x`); a secret one is refused. */
+      /**
+       * #543: resolves an `http` check's `${name}` (a param, `setup.x`); a secret one is refused.
+       * #562/#565: page / `reloadThen` checks resolve their `${name}` / `{ var }` operands from it too
+       * (plus the replay's `extract` outputs).
+       */
       readonly resolveRef?: HttpCheckRefResolver;
     } = {},
   ) {
@@ -182,6 +186,24 @@ export class JourneyOutcomeChecks {
     return out;
   }
 
+  /**
+   * #562/#565: the names an end-state check may refer to — the run's params and `setup.x` (the
+   * caller's resolver, which marks secrets), then what the replay bound (`extract` outputs). A value
+   * that is one of the run's secrets is a secret whatever its name, so it is refused, never expanded.
+   */
+  #endStateRefs(result: JourneyRunResult): HttpCheckRefResolver {
+    const output = "output" in result && result.output !== null && typeof result.output === "object" ? (result.output as Readonly<Record<string, unknown>>) : {};
+    return (name) => {
+      const ref = this.#resolveRef?.(name);
+      if (ref !== undefined) return ref;
+      if (!Object.hasOwn(output, name)) return undefined;
+      const value = output[name];
+      if (typeof value !== "string") return undefined;
+      // #564: an `extract` output named like a credential (`apiKey`) is a secret whatever its value.
+      return { value, secret: this.#secrets.includes(value) || SECRET_PARAM_NAME_RE.test(name) };
+    };
+  }
+
   #stopCaptures(monitor: ReturnType<typeof monitorFor>, capture: RequestCapture): void {
     monitor.stopCapture(capture);
     for (const s of this.#steps) if (s.capture !== undefined) monitor.stopCapture(s.capture);
@@ -250,7 +272,7 @@ export class JourneyOutcomeChecks {
           secrets: this.#secrets,
           settleMs: SETTLE_CEILING_MS,
           ...(this.#httpProbe === undefined ? {} : { httpProbe: this.#httpProbe }),
-          ...(this.#resolveRef === undefined ? {} : { resolveRef: this.#resolveRef }),
+          resolveRef: this.#endStateRefs(result),
         });
       } catch (e) {
         // A check that cannot be evaluated (an unusable target) is never a pass.

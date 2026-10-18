@@ -27,6 +27,7 @@ export * from "./partial-report.js";
 export * from "./missions/goal-based.js";
 export * from "./authoring/author-journey.js";
 export * from "./authoring/auto-decide.js";
+export * from "./authoring/binding-proposal.js";
 export * from "./authoring/value-capturing-generation-port.js";
 export * from "./missions/induction.js";
 export * from "./adversarial/input-strategy.js";

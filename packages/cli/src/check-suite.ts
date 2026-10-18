@@ -58,6 +58,17 @@ import { SessionFileInProjectError, assertSessionFileOutsideProject } from "./pr
 export type MissionStrategy = "coverage" | "exploratory" | "adversarial" | "feature" | "usability";
 const STRATEGIES: readonly MissionStrategy[] = ["coverage", "exploratory", "adversarial", "feature", "usability"];
 
+/**
+ * #563: a Journey item's param value that is made unique to each run — the template (which must
+ * contain `{run}`) with `{run}` substituted by a fresh per-run token at execution time.
+ */
+export interface SuiteUniqueParam {
+  readonly unique: string;
+}
+
+/** #563: a Journey item's param value: a plain string, or a per-run-unique template. */
+export type SuiteParamValue = string | SuiteUniqueParam;
+
 export interface SuiteBudget {
   /** Total executed browser actions across every item. */
   readonly maxActions?: number;
@@ -71,7 +82,7 @@ export interface SuiteJourney {
   readonly id: string;
   /** `viewport` ("375x812") or `device` ("iPhone 13"); default: the target's. */
   readonly emulation?: EmulationSpec;
-  readonly params: Readonly<Record<string, string>>;
+  readonly params: Readonly<Record<string, SuiteParamValue>>;
   /** Route globs this Journey covers (for `--changed-routes`); default: its Recording's page routes. */
   readonly routes?: readonly string[];
   /** The item's own session (`null`: none, whatever the target's); default: the target's. */
@@ -456,20 +467,43 @@ function journeyOf(r: Reader, v: unknown, path: string): SuiteJourney {
   if (!isRecord(v)) return r.fail(path, "must be a Journey id or { id, params?, routes? }");
   r.keys(v, path, SUITE_FIELDS.journey);
   const params = v.params ?? {};
-  if (!isRecord(params) || !Object.values(params).every((p) => typeof p === "string")) r.fail(`${path}.params`, "must be an object of string values");
+  if (!isRecord(params)) r.fail(`${path}.params`, 'must be an object of string or { "unique": "<template>" } values');
+  const resolvedParams: Record<string, SuiteParamValue> = {};
+  for (const [key, p] of Object.entries(params)) {
+    const at = `${path}.params.${key}`;
+    if (typeof p === "string") {
+      resolvedParams[key] = p;
+      continue;
+    }
+    if (!isRecord(p) || Object.keys(p).length !== 1 || typeof p.unique !== "string" || p.unique.trim() === "") {
+      r.fail(at, 'must be a string or { "unique": "<template>" }');
+    }
+    if (!p.unique.includes("{run}")) r.fail(at, 'the unique template must contain "{run}"');
+    resolvedParams[key] = { unique: p.unique };
+  }
   const routes = r.strings(v, "routes", path);
   const emulation = r.emulation(v, path);
   const env = r.string(v, "env", path, true);
   const baseUrl = r.url(v, "baseUrl", path, true);
   return {
     id: r.string(v, "id", path),
-    params: params as Record<string, string>,
+    params: resolvedParams,
     ...(routes.length === 0 ? {} : { routes }),
     ...(emulation === undefined ? {} : { emulation }),
     ...(env === undefined ? {} : { env }),
     ...(baseUrl === undefined ? {} : { baseUrl }),
     ...storageStateOf(r, v, path),
   };
+}
+
+/**
+ * #563: resolves a Journey item's `params` for one run. A plain string passes through; a
+ * `{ "unique": "<template>" }` value becomes the template with every `{run}` replaced by `token`
+ * (a fresh, short, lowercase alphanumeric token unique to the suite run and the entry). The parsed
+ * suite keeps the template — only the run substitutes — so the suite's identity is unchanged.
+ */
+export function resolveJourneyParams(params: Readonly<Record<string, SuiteParamValue>>, token: string): Record<string, string> {
+  return Object.fromEntries(Object.entries(params).map(([k, p]) => [k, typeof p === "string" ? p : p.unique.split("{run}").join(token)]));
 }
 
 function goalOf(r: Reader, v: unknown, path: string, i: number): SuiteGoal {

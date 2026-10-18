@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { RecordedStep, Step, TargetDescriptor } from "@jevitate/recording";
-import { describeNavigateUrl } from "@jevitate/recording";
+import { describeNavigateUrl, SECRET_PARAM_NAME_RE as SECRET_NAME_RE } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 
 /**
@@ -48,9 +48,10 @@ export function intentCoverage(journey: Journey): IntentCoverage {
 
 /**
  * A parameter NAME that reads as a credential. Defense in depth for Journeys that declare no
- * `parameters`: such a `--param` value is redacted as if it were marked `secret: true`.
+ * `parameters`: such a `--param` value is redacted as if it were marked `secret: true`. Defined in
+ * `@jevitate/recording` (the interpreter checks it too) and re-exported here.
  */
-export const SECRET_PARAM_NAME_RE = /pass(word|code|phrase)?|secret|token|api[_-]?key|otp|pin\b|credential|session|cookie/i;
+export const SECRET_PARAM_NAME_RE: RegExp = SECRET_NAME_RE;
 
 /** The parameter names whose values are secret: declared `secret: true`, or a credential-like name. */
 export function secretParamNames(journey: Journey, params: Readonly<Record<string, string>> = {}): string[] {
@@ -69,6 +70,17 @@ export function secretParamValues(journey: Journey, params: Readonly<Record<stri
   return secretParamNames(journey, params)
     .map((n) => params[n])
     .filter((v): v is string => typeof v === "string" && v.trim() !== "");
+}
+
+/**
+ * #564: the non-blank values a run bound (its `vars` / `output`: params and `extract` outputs) under a
+ * credential-like name — an `extract as: "apiKey"` is a secret, so every sink redacts its value.
+ */
+export function secretNamedValues(bindings: unknown): string[] {
+  if (bindings === null || typeof bindings !== "object") return [];
+  return Object.entries(bindings as Record<string, unknown>)
+    .filter(([name, v]) => SECRET_PARAM_NAME_RE.test(name) && typeof v === "string" && v.trim() !== "")
+    .map(([, v]) => v as string);
 }
 
 /** A short, value-free description of a step for people and models (a fill shows `<param x>`, never a secret). */

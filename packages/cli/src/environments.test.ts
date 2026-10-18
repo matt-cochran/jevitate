@@ -196,6 +196,10 @@ describe("resolveJourneyEnvironment", () => {
       storageState: join(root, "staging.state.json"),
       secretFields: ["label=Password=env:STAGING_PASSWORD"],
       source: `${join(root, "environments.json")}[staging]`,
+      sourceOrigins: [
+        { baseUrl: "https://staging.example.test", origins: {} },
+        { baseUrl: "http://localhost:3000", origins: {} },
+      ],
     });
     expect(resolveJourneyEnvironment({ env: "staging", persona: "admin", environmentsFile: file(), targetsFile: targetsFile() })?.storageState).toBe(join(root, "admin.state.json"));
     expect(() => resolveJourneyEnvironment({ env: "staging", persona: "ghost", environmentsFile: file(), targetsFile: targetsFile() })).toThrow(/persona "ghost" .*known personas: admin/);

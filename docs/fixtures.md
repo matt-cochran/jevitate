@@ -57,6 +57,32 @@ jevitate explore --strategy goal --url http://localhost:3000/projects/new \
   "step"`, `missions`, one deduped `report`). Without `--from-journey`, any other strategy refuses
   to start.
 
+## Restore outputs: look a resource up, then delete it
+
+A create-style Journey makes a resource whose id the fixture cannot know in `setup`. A `restore` step
+can bind `outputs` (and `secretOutputs`) from its response, and a **later restore step** uses them as
+`${restore.<name>}`:
+
+```json
+{
+  "restore": [
+    { "name": "find-item", "method": "GET", "url": "/api/items?title=Journey%20item",
+      "expectStatus": [200], "outputs": { "itemId": "$.items[0].id" } },
+    { "name": "delete-item", "method": "DELETE", "url": "/api/items/${restore.itemId}" }
+  ]
+}
+```
+
+- Restore outputs are **cleared at the start of every restore pass**, so `verify --mutate`,
+  `regression run` and `check` replays each look the resource up afresh and never reuse a stale id.
+- A lookup that bound nothing fails closed: the step that references it sends no request.
+- They are never persisted and never join the `${setup.x}` bindings. `${restore.x}` is usable only
+  in a *later restore step's* `url`, `json`, `body` and `headers`, not in `setup`, a Journey's
+  `--param`s, `--goal` or `--success`. As with `${setup.x}`, a reference cannot choose the URL's
+  origin, and a credential header built from one needs it listed in `secretOutputs`.
+- Prefer, where the app allows it, per-run unique suite params (`{"unique": "inv-{run}@example.test"}`,
+  see [CI](./ci.md)): nothing then collides between runs and there is less to look up and delete.
+
 ## Fixture identities: mint as one user, run as another
 
 Token flows such as invites, intake links, open sign-up links and teammate invites have two

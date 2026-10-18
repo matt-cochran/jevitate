@@ -86,7 +86,8 @@ mission and reading the result honestly.
   needed (`--secret-field`/`--totp`, `cmd:` sources with `--allow-secret-cmd`, `--type-fixture`,
   `--fixture`, `--success-when`, `--allow-vacuous-checks`, `--dialogs`, `--reply-wait-ms`,
   `--viewport`/`--device`/`--geolocation`, …). A bound secret field becomes a secret Journey param
-  (`secret1`). A `not-reached` result carries `discovery` (stop reason, checks, `resultPath`,
+  (`secret1`); a non-secret value stays a literal until `jevitate recording promote
+  <take> --page N --step M --var <name>` binds it as a variable. A `not-reached` result carries `discovery` (stop reason, checks, `resultPath`,
   `transcriptPath`, `recordingPaths`, `screenshotsDir`): read the transcript before retrying. Every
   `--success` check (any kind, `reloadThen:` included) becomes the Journey's end state
   (`metadata.endState`), and each step's `expect` comes from what it changed (a write step gets
