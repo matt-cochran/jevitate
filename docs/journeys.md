@@ -217,8 +217,9 @@ jevitate journey verify checkout --mutate --allow http://127.0.0.1:26110   # blo
 | `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits at most its hang threshold plus 5 s) | each write step (the lint's rule) |
 | `block-write:<n>` | aborts the write requests step n sends, from its start until the network settled after it | each write step |
 | `stale-value:<n>` | types `""` into fill step n — or, for a `{ "var": name }` fill whose non-secret parameter an assertion names, an altered value of it (stale text in the composer) | each fill whose value a `valueEquals`/`textIncludes` checks, or whose variable an assertion names |
-| `swap-param:<name>` | replays with parameter `name` swapped for a different plausible value (another supplied parameter of the same shape, else the value with its last letter or digit changed), where the app receives it (a fill, a navigate URL); every assertion naming `${name}` still expects the supplied value | each non-secret `--param` an assertion names and an action reads |
-| `truncate-param:<name>` | the same, with the value's tail dropped (its first half kept) | the same, for a value of 2+ characters |
+| `swap-param:<name>` | replays with parameter `name` swapped for a wrong value where the app receives it (a fill, a select, a navigate URL): a reviewed `mutationValues` entry (#579), else for a select another enabled option of the live `<select>`, else another supplied parameter of the same shape, else the value with its last letter or digit changed; every assertion naming `${name}` still expects the supplied value | each non-secret `--param` an assertion at or after the action names and an action reads |
+| `truncate-param:<name>` | the same, with the value's tail dropped (its first half kept) | the same, for a value of 2+ characters, never for a parameter only selects read |
+| `guard-param:<name>` (#580) | replays with parameter `name` wrong for the **whole** run (a reviewed `mutationValues` entry, else as `swap-param` generates one) and nothing pinned, so a check comparing the page with that input must refuse it | each non-secret `--param` a step assertion names **before** any action reads it, or that only assertions read (an `expected_*` context check) |
 
 Which parameters get a `swap-param`/`truncate-param`: a declared, non-secret parameter that you
 supply with `--param` (non-blank, with no `${…}` of its own), that an action reads (a `fill`
@@ -226,8 +227,8 @@ value or a `navigate` URL placeholder), and that an assertion names (`{ "var": n
 `${name}` in `textIncludes`, `valueEquals`, `attr` or `urlIncludes`). These parameters get none:
 
 - a secret parameter. Its value is never altered, compared or reported.
-- a parameter that only assertions read. If no action receives it, changing it changes only what
-  the check expects, which proves nothing about the app.
+- for `swap-param`/`truncate-param`, a parameter that only assertions read: changing it where no
+  action receives it proves nothing about the app. It gets a `guard-param` instead.
 - a parameter you did not supply.
 
 A `{ "var": name }` fill whose parameter an assertion names gets a `stale-value` that types an
@@ -237,7 +238,9 @@ from an earlier reply.
 A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`; the
 **last** write step's mutations are also paired with every end-state check; a `stale-value` is also
 paired with every assertion that checks the typed value (or names its variable); a `swap-param`/
-`truncate-param` is paired with every assertion that names the parameter, so a parameter-relative
+`truncate-param` is paired with every assertion at or after the action that names the parameter, and
+a `guard-param` with the checks before it (the guards that refuse a wrong input before the app
+receives it, such as "this is the right comment and account" before a composer is touched), so a parameter-relative
 check (`valueEquals { "var": "reply" }`, `textIncludes "Sent to ${email}"`) is proven to catch a
 swapped identifier, stale context or truncated text. A secret parameter is never mutated, and the
 report names parameters, never their values. An explicit no-claim `expect` (`count … min
@@ -267,7 +270,7 @@ to exactly that content), `base.outcome`, each mutation's `outcome`, `failedSite
 
 Pin a pairing the derivation would not make with `metadata.mutationPairs` — the assertion `check`
 (`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail when `mustFailWhen`
-(`skip:<n|anchor>`, `block-write:<n|anchor>`, `stale-value:<n|anchor>`, `swap-param:<param>`, `truncate-param:<param>`; [anchors](#explore-from-a-journey-step-anchors-and-campaigns) by name)
+(`skip:<n|anchor>`, `block-write:<n|anchor>`, `stale-value:<n|anchor>`, `swap-param:<param>`, `truncate-param:<param>`, `guard-param:<param>`; [anchors](#explore-from-a-journey-step-anchors-and-campaigns) by name)
 is applied. A pair naming a site, step or anchor the Journey does not have is refused when the
 Journey loads.
 

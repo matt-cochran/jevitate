@@ -30,7 +30,7 @@ import { actionRefs, alteredValue, mutableParamValue, pinAssertionRefs, sitePage
  *    supplied value: a check that cannot tell them apart is vacuous. A secret is never mutated.
  */
 
-export type MutationKind = "skip" | "block-write" | "stale-value" | "swap-param" | "truncate-param";
+export type MutationKind = "skip" | "block-write" | "stale-value" | "swap-param" | "truncate-param" | "guard-param";
 
 export interface JourneyMutation {
   readonly kind: MutationKind;
@@ -105,7 +105,7 @@ export function assertionSiteKey(site: JourneyAssertionSite): string {
   return `end-state:${site.index}`;
 }
 
-const MUTATION_RE = /^(skip|block-write|stale-value|swap-param|truncate-param):(.+)$/;
+const MUTATION_RE = /^(skip|block-write|stale-value|swap-param|truncate-param|guard-param):(.+)$/;
 const SITE_RE = /^(?:step:[1-9][0-9]*|step-request:[1-9][0-9]*:(?:0|[1-9][0-9]*)|end-state:(?:0|[1-9][0-9]*))$/;
 
 function flat(journey: Journey): RecordedStep[] {
@@ -145,15 +145,30 @@ function selectsVar(step: Step, name: string): boolean {
   return step.kind === "select" && "var" in step.value && step.value.var === name;
 }
 
-function paramMutation(kind: "swap-param" | "truncate-param", step: number, param: string): JourneyMutation {
+function paramMutation(kind: "swap-param" | "truncate-param" | "guard-param", step: number, param: string): JourneyMutation {
   return { kind, step, id: `${kind}:${param}`, param };
 }
 
+/**
+ * #580: the step sites that GUARD parameter `name`: assertions naming it that run before any action
+ * reads it (or naming one no action reads, like an `expected_*` context check). They compare the
+ * page with the run's input, so only a wrong INPUT can break them — a `guard-param` mutation.
+ */
+function guardSites(journey: Journey, sites: readonly JourneyAssertionSite[], name: string): JourneyAssertionSite[] {
+  const action = firstActionStep(journey, name);
+  return sites.filter((s) => s.where === "step" && siteRefs(s).includes(name) && (action === null || s.step < action));
+}
+
 /** A declared `swap-param:<name>` / `truncate-param:<name>`: a non-secret parameter an action reads. */
-function paramMutationRef(journey: Journey, kind: "swap-param" | "truncate-param", name: string, value: string): JourneyMutation {
+function paramMutationRef(journey: Journey, kind: "swap-param" | "truncate-param" | "guard-param", name: string, value: string): JourneyMutation {
   const declared = [...journey.metadata.params, ...(journey.metadata.parameters ?? []).map((p) => p.name)];
   if (!declared.includes(name)) throw new Error(`${JSON.stringify(value)}: ${JSON.stringify(name)} is not a declared parameter`);
   if (secretParamNames(journey).includes(name)) throw new Error(`${JSON.stringify(value)}: ${name} is a secret parameter — a secret is never mutated`);
+  if (kind === "guard-param") {
+    const first = guardSites(journey, journeyAssertions(journey), name)[0];
+    if (first === undefined || first.where !== "step") throw new Error(`${JSON.stringify(value)}: no step assertion checks ${name} before an action reads it`);
+    return paramMutation(kind, first.step, name);
+  }
   const step = firstActionStep(journey, name);
   if (step === null) throw new Error(`${JSON.stringify(value)}: no step's action reads ${name} (a fill or a navigate URL)`);
   return paramMutation(kind, step, name);
@@ -162,9 +177,9 @@ function paramMutationRef(journey: Journey, kind: "swap-param" | "truncate-param
 /** Resolves a `mustFailWhen` (`skip:<n|anchor>`, …) against the Journey; throws a readable Error. */
 function resolveMutationRef(journey: Journey, value: string): JourneyMutation {
   const m = MUTATION_RE.exec(value.trim());
-  if (m === null) throw new Error(`${JSON.stringify(value)} is not a mutation — expected skip:<step>, block-write:<step> or stale-value:<step> (a step number or an anchor name), or swap-param:<param> / truncate-param:<param>`);
+  if (m === null) throw new Error(`${JSON.stringify(value)} is not a mutation — expected skip:<step>, block-write:<step> or stale-value:<step> (a step number or an anchor name), or swap-param:<param> / truncate-param:<param> / guard-param:<param>`);
   const ref = m[2]!;
-  if (m[1] === "swap-param" || m[1] === "truncate-param") return paramMutationRef(journey, m[1], ref, value);
+  if (m[1] === "swap-param" || m[1] === "truncate-param" || m[1] === "guard-param") return paramMutationRef(journey, m[1], ref, value);
   let step: number;
   try {
     step = resolveJourneyStep(journey, ref).step;
@@ -300,16 +315,28 @@ export function planJourneyMutations(
   const params = opts.params ?? {};
   const names = [...new Set(sites.flatMap(siteRefs))];
   for (const name of names) {
+    const supplied = mutableParamValue(journey, name, params);
+    // #580: the checks that guard the input (before any action reads it) are proven by a wrong INPUT
+    // for the whole run — never pinned — paired with those guards only.
+    const guards = guardSites(journey, sites, name);
+    const guardValue = supplied === null ? null : (reviewedValue(journey, name, supplied) ?? swappedValue(journey, name, params));
+    if (guards.length > 0 && guardValue !== null) {
+      const g = { ...paramMutation("guard-param", guards[0]!.step, name), source: (reviewedValue(journey, name, supplied!) === null ? "generated" : "reviewed") as SwapSource };
+      mutations.push(g);
+      for (const s of guards) pair(s, g);
+    }
     const at = firstActionStep(journey, name);
     if (at === null) continue;
-    const naming = sites.filter((s) => siteRefs(s).includes(name));
+    // A guard compares the page with the input before the action, so a swap pinned to the supplied
+    // value can never break it: the swap proves only the checks at or after the action.
+    const naming = sites.filter((s) => siteRefs(s).includes(name) && !guards.includes(s));
+    if (naming.length === 0) continue;
     // #579: a select-fed parameter is proven by choosing another enabled live option, never by a
     // truncated value (not a valid selection). Every other parameter still gets both mutations.
     const candidates: readonly (readonly ["swap-param" | "truncate-param", string | null])[] = [
       ["swap-param", swappedValue(journey, name, params)],
       ...(allActionReadsAreSelect(journey, name) ? [] : [["truncate-param", truncatedValue(journey, name, params)] as const]),
     ];
-    const supplied = mutableParamValue(journey, name, params);
     const source: SwapSource =
       supplied !== null && reviewedValue(journey, name, supplied) !== null ? "reviewed" : allActionReadsAreSelect(journey, name) ? "option" : "generated";
     for (const [kind, value] of candidates) {
@@ -353,7 +380,7 @@ const MUTATION_WAIT_MARGIN_MS = 5_000;
  */
 export function mutationReplay(journey: Journey, m: JourneyMutation, opts: MutationReplayOptions = {}): MutationReplay {
   const index = m.step - 1;
-  if (m.kind === "swap-param" || m.kind === "truncate-param") return paramReplay(journey, m, opts.params ?? {});
+  if (m.kind === "swap-param" || m.kind === "truncate-param" || m.kind === "guard-param") return paramReplay(journey, m, opts.params ?? {});
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const step = flat(journey)[index]?.step;
@@ -413,6 +440,14 @@ function paramReplay(journey: Journey, m: JourneyMutation, params: Readonly<Reco
   const name = m.param ?? "";
   const index = m.step - 1;
   const target = flat(journey)[index]?.step;
+  // #580: a guard mutation gives the WHOLE run the wrong input (reviewed, else generated) and pins
+  // nothing: the guards compare the page with exactly that input, so they must refuse it.
+  if (m.kind === "guard-param") {
+    const supplied = mutableParamValue(journey, name, params);
+    const wrong = supplied === null ? null : (reviewedValue(journey, name, supplied) ?? swappedValue(journey, name, params));
+    if (wrong === null) throw new Error(`${m.id}: parameter ${name} has no value this proof may alter (not supplied, blank, too short, or secret)`);
+    return { journey, params: { ...params, [name]: wrong } };
+  }
   // #579: a reviewed `mutationValues` entry is the wrong value first, for any action (a fill, or a
   // select, where it names a real option); assertions stay pinned to the supplied value.
   const reviewedFrom = m.kind === "swap-param" ? mutableParamValue(journey, name, params) : null;
@@ -452,7 +487,7 @@ function relaxedExpect(step: Step): Assertion {
 export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts: MutationReplayOptions = {}): MutationReplay {
   const index = m.step - 1;
   if (m.kind === "skip") return { journey, skipIndex: index };
-  if (m.kind === "swap-param" || m.kind === "truncate-param") {
+  if (m.kind === "swap-param" || m.kind === "truncate-param" || m.kind === "guard-param") {
     // #565: the same altered params; the step that first reads the parameter keeps a weak claim.
     const how = paramReplay(journey, m, opts.params ?? {});
     const target = flat(how.journey)[index];

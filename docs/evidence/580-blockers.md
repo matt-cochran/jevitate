@@ -15,6 +15,8 @@ deliverable of the 0.17.0 plan that removes it. Shapes are fixed in
 | B7 | No offline fixture with ≥2 identities, ≥2 threads, parents and permalinks, and a countable Send | n/a | `test/fixtures/` | `bizops-fixture-app` |
 | B8 | A navigate placeholder is one percent-encoded segment, so a record's whole `permalink` cannot be passed as a param (`/c/c-2041` would become `%2Fc%2Fc-2041`) | n/a | `packages/recording/src/navigate-params.ts` | contract change: the reply Journey owns its URL template (`/c/${commentId}`); no code change |
 | B9 | A `forEach` child's target resolves among the row's descendants, never the row itself, so attributes on the row element cannot be extracted | extract `{ testId: "inbox-row" }` inside a forEach over `inbox-row` rows times out | `packages/interpreter/src/run-step.ts` (`resolveInRoot`) | fixture puts the identity on an inner `row-meta` element; a row self-target is follow-up work for real sites |
+| B10 | A declared param an action reads through `{ var }` without `variableName` is not a run input, so a pinned swap is refused as unknown (`error`) | verify --mutate prepare-reply: swap-param:replyIdentity / replyText `error` | `packages/journey/src/param-schema.ts` | fixed in `bizops-mutation-proof` |
+| B11 | A check that guards an input before the action, or an assertion-only input, cannot be proven (swap pins assertions; no mutation for assertion-only params) | steps 2–6 of prepare-reply unpaired / insensitive | `packages/journey/src/mutation-proof.ts` | `guard-param`, fixed in `bizops-mutation-proof` |
 
 Checked and **not** blockers:
 
