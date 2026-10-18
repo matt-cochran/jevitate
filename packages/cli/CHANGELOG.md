@@ -1,5 +1,14 @@
 # @jevitate/cli
 
+## 0.18.1
+
+### Patch Changes
+
+- df5af84: `journey review/promote/lint/migrate`, `journey readiness` and `journey bundle` read the catalog of `--project` (they read the working directory's project's catalog) (#585).
+  `journey readiness` passes the proof of a read-only Journey that takes no input (nothing a mutation could break) (#581).
+  `journey bundle` lists only the approvals and promotions still pending, each once (#584).
+- 3797dfe: `publish journeeze` reads the upload limit from `whoami` (`limits.maxUploadBytes`, default 95,000,000 bytes) and refuses an oversized bundle before sending it (#596). `handback.evidence.failedAt` is 1-based, as the step a person counts.
+
 ## 0.18.0
 
 ### Minor Changes
