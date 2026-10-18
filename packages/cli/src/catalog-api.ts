@@ -1,10 +1,15 @@
 import { join } from "node:path";
+import type { Command } from "commander";
 import { clock } from "@jevitate/domain";
 import type { CatalogApproval, Finding, Journey, JourneyApprovalWaiver, AcceptedFindings } from "@jevitate/journey";
 import { CatalogLoader, catalogJourney, journeyLinks, requireJob, requirePersona, writeJobApproval, writePersonaApproval, type Catalog } from "./catalog.js";
 import { assertJobRefs } from "./catalog-refs.js";
 import { acknowledgeFindings, preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { findProjectDir } from "./project-dir.js";
+import { type CliDeps, emitJson } from "./cli-shared.js";
+import { fail } from "./envelope.js";
+import { EXIT_CODES } from "./exit-codes.js";
+import { ProjectLayoutError, resolveLayout, type ResolvedLayout } from "./project-layout.js";
 import type { JevSetup } from "./jev-advisor.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { catalogItemEntry } from "./forge-verify.js";
@@ -27,6 +32,65 @@ export function loadCatalog(catalogDir: string | null, journeysDir: string): Pro
 /** The journeys directory of a catalog `--dir` (its `journeys/`), else the CLI's default. */
 export function catalogJourneysDir(flag: string | undefined, fallback: string): string {
   return flag === undefined ? fallback : join(flag, "journeys");
+}
+
+/** #585: the help a catalog/persona/job command keeps on its deprecated `--dir` alias (§2). */
+export const DEPRECATED_PROJECT_DIR_HELP = "deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/)";
+
+/** #585: the location flags of one catalog invocation — `--project`/`--journeys-dir`, plus the deprecated `--dir`. */
+export interface CatalogLayoutFlags {
+  readonly project?: string;
+  readonly journeysDir?: string;
+  readonly dir?: string;
+}
+
+/**
+ * #585: resolves a catalog command's locations with `resolveLayout` (docs/contracts/project-layout.md
+ * §3/§4, dirMeaning "project", requireProject), mirroring `journeyLayout` in `journey-cli/shared.ts`.
+ * The host-injected `CliDeps.catalogDir` — the same catalog seam the MCP server passes — stands in for
+ * `--project`. The deprecation line goes to stderr (never the `--json` stdout envelope). A
+ * `ProjectLayoutError` is emitted as the command's refusal (its code and next action, exit 64) and
+ * null is returned, so the caller returns without touching the catalog; any other error propagates.
+ */
+export function catalogLayout(
+  program: Command,
+  deps: CliDeps,
+  flags: CatalogLayoutFlags,
+  opts: { readonly requireProject?: boolean } = {},
+): ResolvedLayout | null {
+  const seam = deps.catalogDir;
+  const useSeam = seam !== undefined && flags.project === undefined && flags.dir === undefined;
+  // §4: the CLI's journeysDir seam wins over discovery, but a location flag (--project/--journeys-dir/--dir)
+  // decides the store: passing the seam alongside one would let it beat --project, unlike the old --dir help.
+  const seamJourneys = flags.project === undefined && flags.dir === undefined && flags.journeysDir === undefined ? deps.journeysDir : undefined;
+  try {
+    const layout = resolveLayout(
+      {
+        ...(flags.project === undefined ? {} : { project: flags.project }),
+        ...(flags.journeysDir === undefined ? {} : { journeysDir: flags.journeysDir }),
+        ...(flags.dir === undefined ? {} : { dir: flags.dir }),
+      },
+      { dirMeaning: "project", requireProject: opts.requireProject !== false && !useSeam, deps: seamJourneys === undefined ? {} : { journeysDir: seamJourneys } },
+    );
+    if (!useSeam) {
+      if (layout.deprecation !== undefined) program.configureOutput().writeErr?.(`${layout.deprecation}\n`);
+      return layout;
+    }
+    // The injected catalog dir IS the project (its folder name need not be `.jevitate`): keep it, and
+    // take the Journey store from an explicit flag/seam when one was given, else `<project>/journeys`.
+    const journeysFromLocation = layout.from.journeys === "flag" || layout.from.journeys === "seam";
+    return {
+      projectDir: seam,
+      catalogDir: seam,
+      journeysDir: journeysFromLocation ? layout.journeysDir : join(seam, "journeys"),
+      from: { project: "discovered", journeys: journeysFromLocation ? layout.from.journeys : "project" },
+    };
+  } catch (err) {
+    if (!(err instanceof ProjectLayoutError)) throw err;
+    emitJson(program, fail(err.code, `${err.message} — ${err.nextAction}`));
+    process.exitCode = EXIT_CODES.usage;
+    return null;
+  }
 }
 
 /** `persona|job approve --reviewed-hash`: the item changed after the reviewer's sheet was produced. */
