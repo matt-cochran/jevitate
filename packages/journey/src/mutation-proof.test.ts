@@ -13,6 +13,7 @@ import {
   mutationProofVerdict,
   assertionSiteKey,
   type Journey,
+  type JourneyMutation,
   type MutationRunResult,
 } from "./index.js";
 
@@ -378,5 +379,63 @@ describe("#554 relaxed replay", () => {
       ["stale-value:2", failed({ where: "step", step: 2, postcondition: true })],
     ]);
     expect(mutationProofVerdict({ basePassed: true, mutations: plan.mutations, assertions: judgeAssertions(journey, plan, results) }).verdict).toBe("proven");
+  });
+});
+
+// #579: a `{ var }` parameter feeding a `select` is proven by selecting a DIFFERENT live option;
+// `truncate-param` is not planned for it (a truncated value is no valid selection).
+describe("#579 a swap-param feeding a select", () => {
+  const selectParams = { country: "US" };
+  const replyParams = { reply: "hello" };
+
+  function selectJourney(): Journey {
+    return j(
+      [
+        { step: { kind: "navigate", url: "/form", expect: { kind: "visible", target: { role: "heading", name: "Form" } } } },
+        { step: { kind: "select", target: { label: "Country" }, value: { var: "country" }, expect: { kind: "valueEquals", target: { label: "Country" }, value: { var: "country" } } } },
+      ],
+      { params: ["country"] },
+    );
+  }
+
+  function fillJourney(): Journey {
+    return j(
+      [
+        { step: { kind: "navigate", url: "/compose", expect: { kind: "visible", target: { role: "heading", name: "Compose" } } } },
+        { step: { kind: "fill", target: { label: "Reply" }, value: { var: "reply" }, expect: { kind: "valueEquals", target: { label: "Reply" }, value: { var: "reply" } } } },
+      ],
+      { params: ["reply"] },
+    );
+  }
+
+  const mutationOf = (journey: Journey, params: Record<string, string>, kind: "swap-param" | "truncate-param"): JourneyMutation =>
+    planJourneyMutations(journey, { params }).mutations.find((m) => m.kind === kind)!;
+
+  it("does not plan truncate-param for a select-fed parameter", () => {
+    expect(planJourneyMutations(selectJourney(), { params: selectParams }).mutations.map((m) => m.id)).not.toContain("truncate-param:country");
+  });
+
+  it("still plans truncate-param for a fill-fed parameter", () => {
+    expect(planJourneyMutations(fillJourney(), { params: replyParams }).mutations.map((m) => m.id)).toContain("truncate-param:reply");
+  });
+
+  it("a swap-param on a select-fed parameter replays with the select's alternative", () => {
+    const r = mutationReplay(selectJourney(), mutationOf(selectJourney(), selectParams, "swap-param"), { params: selectParams });
+    expect(r.swapSelectAtStep).toEqual({ index: 1, avoid: "US" });
+  });
+
+  it("a swap-param on a select-fed parameter leaves params unchanged", () => {
+    const r = mutationReplay(selectJourney(), mutationOf(selectJourney(), selectParams, "swap-param"), { params: selectParams });
+    expect(r.params).toBeUndefined();
+  });
+
+  it("a relaxed swap-param on a select-fed parameter keeps the select's alternative", () => {
+    const r = relaxedMutationReplay(selectJourney(), mutationOf(selectJourney(), selectParams, "swap-param"), { params: selectParams });
+    expect(r.swapSelectAtStep).toEqual({ index: 1, avoid: "US" });
+  });
+
+  it("a swap-param on a fill-fed parameter carries no select alternative", () => {
+    const r = mutationReplay(fillJourney(), mutationOf(fillJourney(), replyParams, "swap-param"), { params: replyParams });
+    expect(r.swapSelectAtStep).toBeUndefined();
   });
 });
