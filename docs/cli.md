@@ -50,6 +50,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`ui`](#ui): start the local HITL approval dashboard (loopback-only HTTP server)
 - [`ux`](#ux): offline UX review of a saved Recording — ranked, cited usability findings
 - [`verify-fix`](#verify-fix): replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay
+- [`where`](#where): #585: the resolved project layout — project, catalog, journeys and logs dirs, and where each came from; paths only, no file contents
 
 ## ai
 
@@ -270,11 +271,13 @@ jevitate catalog analyze [options]
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
 | `--markdown` | render the report as Markdown |  |  |  |  |
 | `--max-pairs <n>` | the most candidate pairs to judge (default 50); the rest are listed as overflow, never dropped |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | #435: classify the candidate pairs with Jev (advisory; cached by content hash). Without a judgment key: the deterministic layer only |  |  |  |  |
 
 ### catalog draft
@@ -297,10 +300,12 @@ jevitate catalog draft [options] <kind> <id>
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--description <text>` | a persona: its description; a job: its goal |  |  |  |  |
-| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--name <text>` | a persona: who they are (written as its role); a job: what the user wants to do (its motivation, "I want to …") |  |  | yes |  |
 | `--outcome <text>` | a job: what doing it lets them do ("so I can …"); default: a placeholder to write before approving |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--trigger <text>` | a job: when it comes up ("When …"); default: a placeholder to write before approving |  |  |  |  |
 
 ### catalog export
@@ -316,11 +321,13 @@ jevitate catalog export [options]
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--check <file>` | a `jevitate check` record (check.json) to include; repeatable (default: <project>/jevitate-check/check.json when it exists) | `[]` |  |  |  |
-| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
 | `--format <format>` | the bundle format (journeeze-bundle) |  |  | yes |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--out <dir>` | the directory bundle.json is written to (created if missing) |  |  | yes |  |
 | `--product-name <name>` | the bundle's product.name (default: the project's package.json name, else its folder name) |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 
 ### catalog status
 
@@ -335,8 +342,10 @@ the jobs × personas matrix (which have a promoted Journey), approved jobs with 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci, pr-review; default tty). #469: pr-review is recorded only by jevitate after it verifies an approving review of the merged PR through the forge API — never set by a caller |  |  |  |  |
-| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked report) |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--require-approvals` | #437: exit 1 when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed (--allow-channels) |  |  |  |  |
 | `--strict` | #523: exit 1 when a persona/job approval is stale, or a promoted Journey links a catalog entry that is not approved (a draft) or links no job / no persona — the repo-wide gate on what the review sheet flags |  |  |  |  |
 
@@ -724,7 +733,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--ignore-no-progress <pattern>` | a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard) | `[]` |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
-| `--journeys-dir <dir>` | journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--log-correlation-header <name>` | another request/response header that carries a correlation id (repeatable; built in: traceparent, x-request-id, x-correlation-id, request-id, x-amzn-trace-id, x-b3-traceid, x-cloud-trace-context). A log line carrying a request's id is attached to that exact request and the step that sent it, not by time (#204) | `[]` |  |  |  |
 | `--log-defect <level|/regex/>` | backend log lines matching this (repeatable) become a server-log defect: a level (error\|warn\|info\|debug, matched as level>=this) or a /regex/flags/ over the raw line. Its fingerprint is the normalized message (ids/numbers/uuids/timestamps stripped) plus the correlated route; verify-fix re-checks it by re-tailing the same --log-source(s) | `[]` |  |  |  |
@@ -742,6 +751,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--name <name>` | human-readable journey name |  |  |  |  |
 | `--out <dir>` | directory each take's result, transcript and Recording are written to (default: .jevitate/logs/<date>) |  |  |  |  |
 | `--paid <pattern>` | an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze\|Draft\|Improve)\b/i: treated like the built-in paid vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it | `[]` |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--read-rpc <glob>` | a POST request that only READS (repeatable): an RPC-method glob (Estimate*, pkg.Service/Preview*) or a path glob (/api/search*). gRPC-web/Connect Get*/List*/Search*/Find*/Watch*/Stream*/Count*/Describe*/Read* methods are reads already. Reads are never guarded or reported as duplicate writes | `[]` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways (requires keys) | `false` |  |  |  |
 | `--reply-ceiling-ms <ms>` | conversational pages: hard ceiling on the TOTAL wait for one sent message's reply — the send's own wait plus every later 'wait' — however busy the page stays; once spent the run ends naming the missing reply (default 180000; never below --reply-wait-ms) (default 180000; never below --reply-wait-ms) |  |  |  |  |
@@ -1032,10 +1042,12 @@ approve a job (a person's sign-off; CLI only, never an MCP tool): shows its revi
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
-| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
 | `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the job changed since |  |  |  |  |
 
@@ -1058,9 +1070,11 @@ jevitate job draft-outcomes [options] <jobId>
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--count <n>` | how many outcomes to draft (1-3, default 3) |  |  |  |  |
-| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
 | `--fake-ai` | draft with the deterministic fake generator (pipeline smoke only) | `false` |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | draft with the live OpenRouter generation gateway (requires keys) | `false` |  |  |  |
 
 ### job review
@@ -1081,11 +1095,13 @@ a job's review sheet: its story, its personas and which have a promoted Journey 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
 | `--markdown` | render the sheet as Markdown |  |  |  |  |
 | `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 
@@ -1124,10 +1140,12 @@ add an anchor to a Journey: --step takes a 1-based step number or a step id and 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--description <text>` | what this state is, in words |  |  |  |  |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--name <name>` | the anchor's name: 1-64 of lowercase a-z, 0-9, . _ - starting with a letter or digit |  |  | yes |  |
 | `--probe <text>` | a suggested adversarial probe at this state (repeatable) | `[]` |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--region <descriptor>` | the page region missions at this anchor attack (the --success descriptor syntax, e.g. testId=import-view); scopes control coverage to it (#519) |  |  |  |  |
 | `--step <n|stepId>` | the step the anchor follows: a 1-based step number or a step id |  |  | yes |  |
 
@@ -1149,9 +1167,11 @@ remove an anchor from a Journey; re-lints and prints the anchor issues
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--name <name>` | the anchor to remove |  |  | yes |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 
 ### journey anchors
 
@@ -1171,8 +1191,10 @@ list a Journey's anchors (#293): named steps to branch a mission off with `explo
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--suggest` | propose anchors where the recorded flow changes state (a new page, a form that became valid, a completed write), each with the `journey anchor add` command to accept it; advisory, writes nothing (#487) |  |  |  |  |
 
 ### journey annotate
@@ -1203,7 +1225,7 @@ draft each step's objective/expected result (and the goal/success criteria when 
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | draft with the deterministic fake generator (pipeline smoke only) | `false` |  |  |  |
@@ -1212,14 +1234,41 @@ draft each step's objective/expected result (and the goal/success criteria when 
 | `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | draft with the live OpenRouter generation gateway (requires keys) | `false` |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the replay authenticated; must exist |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+### journey bundle
+
+```
+jevitate journey bundle [options] [id]
+```
+
+write a local review bundle (bundle.md + manifest.json) for a Journey (or a linked pair), or check one with --check <dir>
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | no |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--check <dir>` | re-derive a bundle's hashes and fail closed with E_BUNDLE_STALE when any moved |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--out <dir>` | the directory to write bundle.md and manifest.json into (required unless --check) |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
+| `--with <toId>` | a linked pair: <id> produces, <toId> consumes |  |  |  |  |
 
 ### journey chain
 
@@ -1238,15 +1287,17 @@ jevitate journey chain [options]
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--from <id>` | the discover Journey, run once to produce the records |  |  | yes |  |
 | `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--requests <file>` | JSON Lines file of approved requests ({commentId, account, replyText}) |  |  | yes |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each run authenticated; must exist |  |  |  |  |
 | `--to <id>` | the prepare-only reply Journey, run once per matched request |  |  | yes |  |
@@ -1279,7 +1330,7 @@ replay a Journey as a narrated demo (goal, step objectives as captions, target h
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
@@ -1289,11 +1340,13 @@ replay a Journey as a narrated demo (goal, step objectives as captions, target h
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--pace <ms>` | how long each step's caption shows before it acts (default 1500) |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the replay authenticated; must exist |  |  |  |  |
@@ -1316,8 +1369,10 @@ jevitate journey find [options] <query>
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 
 ### journey link
 
@@ -1337,10 +1392,12 @@ jevitate journey link [options] <id>
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | the project's .jevitate directory (catalog files, journeys under journeys/); default: the repo's |  |  |  |  |
-| `--job <jobId>` | link this job (an id in .jevitate/jobs.json) |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
+| `--job <jobId>` | link this job (an id in the project's jobs.json) |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
-| `--persona <personaId>` | link this persona (an id in .jevitate/personas.json) |  |  |  |  |
+| `--persona <personaId>` | link this persona (an id in the project's personas.json) |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--unlink-job` | clear metadata.job |  |  |  |  |
 | `--unlink-persona` | clear metadata.persona |  |  |  |  |
 
@@ -1362,9 +1419,11 @@ report a Journey's weak assertions (writes without an asserted effect, visibilit
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--fix` | #487: stamp the step id of each anchor that references a step by number only, write the Journey (#507: on a promoted Journey its approval goes stale), and report what was fixed |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--sarif <file>` | also write a SARIF 2.1.0 log here |  |  |  |  |
 
 ### journey list
@@ -1377,8 +1436,10 @@ jevitate journey list [options]
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 
 ### journey migrate
 
@@ -1396,17 +1457,19 @@ one-time repo rewrite, CLI only. #467: --step-ids mints a stable step id on ever
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--dry-run` | report what would change, write nothing (with --labels the replay still runs) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--id <id...>` | #497: with --labels, only these Journeys (default: every local Journey) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--labels` | #497: replay the Journeys and store each step's visible label (exclusive with --step-ids; needs the app running) |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--param <kv>` | #497: with --labels, a replay param as key=value (repeatable; each Journey gets only the ones it declares) | `{}` |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--step-ids` | mint missing step ids |  |  |  |  |
 | `--storage-state <file>` | #497: with --labels, Playwright storageState JSON to start the replays authenticated; must exist |  |  |  |  |
 
@@ -1431,11 +1494,13 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 | `--accept-findings <reason>` | #433: promote although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings |  |  |  |  |
 | `--accept-unvetted <reason>` | #433: promote although its linked job/persona is not approved (unknown, draft or stale), recording the reason in approval.waivers |  |  |  |  |
 | `--accept-weak <reason>` | #401: promote a Journey whose assertions cannot prove its outcome, recording the reason |  |  |  |  |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--full` | #496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this: it hands the approval to a person |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--proposal <pid>` | #453: accept this pending self-heal proposal (journey review shows it): the Journey is replaced by the proposed revision through every gate, bound to its proposedHash |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
 | `--reason <text>` | #453: why the proposal is rejected (recorded with the rejection) |  |  |  |  |
@@ -1461,9 +1526,53 @@ jevitate journey publish [options] <id>
 | --- | --- | --- | --- | --- | --- |
 | `--as <id>` | publish under a different id than the local one |  |  |  |  |
 | `--declare-origin <origin>` | origin this Journey is authorized for (repeatable; default: derived from navigate steps) | `[]` |  |  |  |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--to <source>` | registered source name to publish into |  |  | yes |  |
+
+### journey readiness
+
+```
+jevitate journey readiness [options] <id>
+```
+
+report a Journey's (or a linked pair's) technical readiness: static checks, and with --mode replay/prove a baseline replay and fresh mutation proofs
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
+| `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
+| `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
+| `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
+| `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
+| `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
+| `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
+| `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
+| `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
+| `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--mode <mode>` | report (static only) \| replay (baseline run/chain) \| prove (replay + verify --mutate) | `report` |  |  |  |
+| `--param <kv>` | param as key=value (repeatable; required ones are refused by name before any browser) | `{}` |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
+| `--requests <file>` | JSON Lines file of approved requests (required for a pair's replay/prove, as journey chain) |  |  |  |  |
+| `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
+| `--with <toId>` | a linked pair: <id> produces, <toId> consumes (#582 handoff is checked) |  |  |  |  |
 
 ### journey review
 
@@ -1483,12 +1592,14 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--full` | #496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
 | `--markdown` | render the sheet as Markdown |  |  |  |  |
 | `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 | `--stale` | #467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids |  |  |  |  |
@@ -1522,7 +1633,7 @@ jevitate journey run [options] <id>
 | `--change-note <text>` | #453: a change note that explains a break (e.g. 'renamed "Create New" to "Create"'; repeatable) — needs --self-heal hybrid\|full | `[]` |  |  |  |
 | `--changes <range>` | #453: the git range that explains a break (e.g. HEAD~1..HEAD, main...HEAD; read-only, in the journeys dir's repo) — needs --self-heal hybrid\|full |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways for self-heal (pipeline smoke only) | `false` |  |  |  |
@@ -1538,10 +1649,12 @@ jevitate journey run [options] <id>
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for self-heal (requires keys) | `false` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
@@ -1578,18 +1691,20 @@ prove each assertion of a Journey can fail: --mutate replays it with each write 
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
-| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--mutate` | run the mutation proof (required) |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
 
 ## ledger
@@ -2051,10 +2166,12 @@ approve a persona (a person's sign-off; CLI only, never an MCP tool): shows its 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--accept-findings <reason>` | approve although pre-approval findings need an acknowledgment, recording the reason with the approval |  |  |  |  |
-| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--non-interactive-approval <reason>` | #437: approve without a terminal confirmation (a scripted setup), recorded as channel non-interactive (ci under a CI marker) with the reason — never as a person's; check --require-approvals fails it. A coding agent never uses this |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs; a conflicting/duplicate pair classification at or above the documented threshold then needs --accept-findings |  |  |  |  |
 | `--reviewed-hash <hash>` | the content hash of the review sheet you read; refused (E_CATALOG_REVIEW_STALE) if the persona changed since |  |  |  |  |
 
@@ -2076,11 +2193,13 @@ a persona's review sheet: who it is, the jobs it serves, the Journeys linked to 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/); its journeys/ are the Journeys |  |  |  |  |
+| `--dir <path>` | deprecated: use --project <path> (same meaning); the project data dir holding personas.json and jobs.json (default: the repo's .jevitate/) |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
 | `--markdown` | render the sheet as Markdown |  |  |  |  |
 | `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
 
@@ -2797,3 +2916,19 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--storage-state <file>` | override the storageState the mission ran with |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+## where
+
+```
+jevitate where [options]
+```
+
+#585: the resolved project layout — project, catalog, journeys and logs dirs, and where each came from; paths only, no file contents
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
+| `--json` | emit the ResolvedLayout (plus the logs dir) as a JSON envelope |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |

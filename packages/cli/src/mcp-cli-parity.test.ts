@@ -43,6 +43,7 @@ const NATIVE_MCP_TO_CLI: Readonly<Record<string, readonly string[]>> = {
 const EXCLUDED: Readonly<Record<string, string>> = {
   mcp: "the MCP server itself (it owns stdin/stdout); an MCP client is already connected to it",
   ui: "the local human dashboard (loopback HTTP, opens a browser): where a person approves/cancels inbox items — human-only by design",
+  where: "#585: reports where this shell's project, catalog and Journeys resolve; over MCP the stores are the server's (--dir/--project/--journeys-dir are never MCP arguments)",
   init: "local machine setup: writes the harness MCP config, installs skills and collects API keys interactively — the operator's, run once",
   "ai setup": "interactive secret entry (a hidden-echo stdin prompt for an API key): a key never passes through a model or an MCP argument",
   record: "a HUMAN-driven recording: a person clicks through the app in a headed browser while it records — there is nobody to click over MCP (author_journey is the agent's way to author a Journey)",
@@ -235,6 +236,8 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       "--allow": OMIT.mcpOrigins,
       "--ignore-host-load": OMIT.hostLoad,
       "--dir": OMIT.storeDir,
+      "--project": OMIT.storeDir,
+      "--journeys-dir": OMIT.storeDir,
       "--json": OMIT.json,
       "--before": OMIT.hooks,
       "--after": OMIT.hooks,

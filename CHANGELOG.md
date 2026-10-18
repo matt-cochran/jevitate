@@ -7,6 +7,23 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.18.0] – 2026-10-18
+
+0.18.0 makes a linked pair of Journeys easy to check and hand over: one location model, typed handoffs between Journeys, a verified prepare-only handback, one readiness receipt and a local review bundle. Nothing here approves, promotes or sends: every human step stays a person's.
+
+### Added
+
+- **`jevitate journey readiness` and MCP `journey_readiness` (#581).** One receipt for a Journey or a linked pair: lint, schema, handoff, boundary, strict review, annotations, catalog links and approvals, proof freshness, replay and promotion, each `pass`/`fail`/`inconclusive`/`stale`/`not-run`/`awaiting-human`. `report` mode opens no browser; `replay` and `prove` require a non-production target and the required params before anything runs. The verdict never lets a passing replay hide an inconclusive proof.
+- **Typed handoffs (#582).** Optional `metadata.outputs` (the record a Journey produces) and `metadata.inputs` (the contract it accepts, the caller's request fields, and bindings to its params). `journey chain` validates contracts, records and requests before any reply run, never runs an invalid, ambiguous or malformed one, and stamps each run with the contract, a record fingerprint and the capture time.
+- **Prepare-only boundary and typed handback (#583).** Optional `metadata.boundary`: load-time rules refuse steps that could submit, self-heal is refused, first-party writes are observed (or blocked) for the whole run, and `journey run` reports `handback.state` (`prepared`, `verification-failed`, `incomplete`, `inconclusive`, `submitted`) with the person's next step. A run that sent a write never exits 0.
+- **`jevitate journey bundle` and MCP `journey_bundle` (#584).** A local `bundle.md` + `manifest.json` for human sign-off; `--check` fails closed (`E_BUNDLE_STALE`) when a Journey or catalog entry changed. Promotion commands carry a review hash only when the workflow is technically ready.
+- **`--project` / `--journeys-dir` and `jevitate where` (#585).** One resolver for every Journey and catalog command; typed refusals with next actions; no silent fallback to `~/.jevitate` for the catalog.
+
+### Changed
+
+- **`--dir` is deprecated (#585)** on the Journey and catalog commands. It keeps its meaning and prints one stderr notice; use `--journeys-dir` (Journey commands) or `--project` (catalog, persona, job, journey link).
+
+
 ## [0.17.0] – 2026-10-18
 
 0.17.0 makes a two-Journey workflow (discover records, then prepare an approved reply without sending it) runnable end to end and provable: select mutations pick real options, input guards are proven, and one command chains the Journeys over CLI and MCP.

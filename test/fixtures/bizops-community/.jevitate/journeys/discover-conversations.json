@@ -13,7 +13,41 @@
       {
         "description": "The inbox is shown and every open conversation is returned as a record with its provider, channel, account, post, thread, comment, permalink and full source text."
       }
-    ]
+    ],
+    "outputs": {
+      "contract": "community-conversation@1",
+      "collection": "records",
+      "key": [
+        "commentId",
+        "account"
+      ],
+      "fields": {
+        "provider": {
+          "type": "id"
+        },
+        "channel": {
+          "type": "id"
+        },
+        "account": {
+          "type": "id"
+        },
+        "postId": {
+          "type": "id"
+        },
+        "threadId": {
+          "type": "id"
+        },
+        "commentId": {
+          "type": "id"
+        },
+        "permalink": {
+          "type": "path"
+        },
+        "sourceText": {
+          "type": "text"
+        }
+      }
+    }
   },
   "recording": {
     "version": "1",

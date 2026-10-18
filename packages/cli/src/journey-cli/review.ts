@@ -1,4 +1,5 @@
-import { type CliDeps, JEV_PROVIDER_FLAG_HELP, emitUsageLine, jevProviderArg, resolveJourneysDir, emitJson, GatewaySelectionError } from "../cli-shared.js";
+import { type CliDeps, JEV_PROVIDER_FLAG_HELP, emitUsageLine, jevProviderArg, emitJson, GatewaySelectionError } from "../cli-shared.js";
+import { withProjectFlags } from "../project-layout.js";
 import { READINESS_FLAG_HELP, REAL_JEV_FLAG_HELP, jevSetupFor } from "../catalog-cli.js";
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
@@ -14,18 +15,18 @@ import { ReviewSidecarError } from "../journey-review-store.js";
 import { resolveCatalogDir } from "../catalog-api.js";
 import { CatalogInputError } from "../catalog.js";
 import { TargetConfigError } from "../target-config.js";
-import { FULL_FLAG_HELP, targetsOpts } from "./shared.js";
+import { FULL_FLAG_HELP, DEPRECATED_DIR_HELP, journeyLayout, targetsOpts } from "./shared.js";
 
 /** Registers `jevitate journey review`. */
 export function registerJourneyReview(journey: Command, program: Command, deps: CliDeps): void {
   // #432 — the review sheet a reviewer reads before `journey promote`: what the Journey does, what it
   // changes, what it proves, what changed since its last approval, and the content hash to bind to.
-  journey
-    .command("review [id]")
+  withProjectFlags(journey
+    .command("review [id]"))
     .description(
       "a human-readable review sheet for promotion sign-off: summary, steps, side effects, inputs (names only), proof, change since last approval, content hash. #467: --stale (no id) lists every promoted Journey whose approval is stale, labelling step-id-only changes",
     )
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--markdown", "render the sheet as Markdown")
     .option("--full", FULL_FLAG_HELP)
     .option("--out <file>", "write the sheet (JSON with --json, Markdown with --markdown, else text) to this file")
@@ -36,7 +37,11 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
     .option("--stale", "#467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids")
     .option("--json", "emit a JSON envelope (the schema-checked sheet)")
     .action(async function (this: Command, id: string | undefined) {
-      const { dir, json, markdown, full, out: outFile, readiness, real, jevProvider, stale, strict } = this.opts<{ dir?: string; json?: boolean; full?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string; stale?: boolean; strict?: boolean }>();
+      const locationFlags = this.opts<{ dir?: string; project?: string; journeysDir?: string }>();
+      const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
+      if (layout === null) return;
+      const reviewJourneysDir = layout.journeysDir;
+      const { json, markdown, full, out: outFile, readiness, real, jevProvider, stale, strict } = this.opts<{ dir?: string; json?: boolean; full?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string; stale?: boolean; strict?: boolean }>();
       if (json === true && markdown === true) {
         emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--json and --markdown are exclusive: pick one rendering"));
         return;
@@ -48,7 +53,7 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
           return;
         }
         try {
-          const result = await listStaleJourneys({ journeysDir: resolveJourneysDir(deps, dir), catalogDir: resolveCatalogDir(deps.catalogDir) });
+          const result = await listStaleJourneys({ journeysDir: reviewJourneysDir, catalogDir: resolveCatalogDir(deps.catalogDir) });
           if (json) emitJson(program, ok(result));
           else program.configureOutput().writeOut?.(renderStaleJourneys(result));
           process.exitCode = 0;
@@ -63,7 +68,7 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
       }
       try {
         const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir), { real, jevProvider });
-        const { review } = await reviewJourneyById(resolveJourneysDir(deps, dir), id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: readiness === true, strict: strict === true, jev });
+        const { review } = await reviewJourneyById(reviewJourneysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir), readiness: readiness === true, strict: strict === true, jev });
         const warnings = (review.attention ?? []).filter((a) => a.severity === "warn").length;
         const strictVerdict = { passed: warnings === 0, warnings };
         const renderOpts = reviewRenderOptions({ full: full === true, toFile: outFile !== undefined });

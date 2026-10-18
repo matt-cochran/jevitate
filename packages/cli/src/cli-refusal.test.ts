@@ -190,6 +190,24 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--from", "a", "--to", "b", "--requests", validScript, "--storage-state", missing],
     ],
   },
+  // 0.18.0 (#581): replay/prove need a target before anything runs; a missing explicit store is refused.
+  "journey readiness": {
+    base: ["nope"],
+    cases: [
+      ["nope", "--mode", "replay"],
+      ["nope", "--journeys-dir", missing],
+    ],
+  },
+  // #584: --out is required unless --check; a missing explicit store is refused.
+  "journey bundle": {
+    base: ["nope", "--out", join(dir, "bundle-out")],
+    cases: [
+      ["nope"],
+      ["nope", "--out", join(dir, "bundle-out"), "--journeys-dir", missing],
+    ],
+  },
+  // #585: an explicit project path that does not exist is refused with its next action.
+  where: { cases: [["--project", missing]] },
   "journey run": {
     base: ["nope"],
     cases: [
@@ -512,11 +530,19 @@ describe("#218: every command refuses unusable input with 64 and a human error (
  * empty dir printed nothing at all). Limited to the "a listing" REFUSALS-exempt commands — the ones
  * that succeed with no fixture beyond an empty tmp dir, so this needs no browser/model/network.
  */
+/** An existing empty directory (created on first use). */
+function emptyDir(p: string): string {
+  mkdirSync(p, { recursive: true });
+  return p;
+}
+
 describe("#227: a listing command's SUCCESS output without --json is human text, never JSON", () => {
   // A function, like `REFUSALS()` above: `dir` (module-level `let`) is only assigned in `beforeAll`,
   // after this describe block's own body already ran at collection time.
   const LISTINGS = (): ReadonlyArray<{ readonly path: string; readonly argv: readonly string[] }> => [
-    { path: "journey list", argv: ["journey", "list", "--dir", join(dir, "journeys-empty")] },
+    // #585: the current flag (the deprecated --dir prints its deprecation line on stderr). An explicit
+    // --journeys-dir must exist, so the empty store is created first.
+    { path: "journey list", argv: ["journey", "list", "--journeys-dir", emptyDir(join(dir, "journeys-empty"))] },
     { path: "source list", argv: ["source", "list"] },
     { path: "ledger list", argv: ["ledger", "list", "--dir", join(dir, "ledger-empty")] },
     { path: "mission target list", argv: ["mission", "target", "list", "--dir", join(dir, "targets-empty")] },

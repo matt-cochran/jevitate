@@ -27,6 +27,7 @@ import { registerProfileCommands } from "./profile-cli.js";
 import { registerSiteCommands } from "./site-cli.js";
 import { registerRecordingCommands } from "./recording-cli.js";
 import { registerJourneyCommands } from "./journey-cli.js";
+import { registerWhere } from "./project-where.js";
 import { registerCatalogCommands } from "./catalog-cli.js";
 import { registerBuiltinAnalyzers } from "./builtin-analyzers.js";
 import { registerSourceCommands } from "./source-cli.js";
@@ -73,6 +74,8 @@ export function buildProgram(deps: CliDeps): Command {
   registerSiteCommands(program, deps);
   registerRecordingCommands(program, deps);
   registerJourneyCommands(program, deps);
+  // #585: where this invocation's project, catalog, Journeys and logs resolve.
+  registerWhere(program, deps);
   registerCatalogCommands(program, deps); // #433: persona/job review|approve, catalog status
   registerSourceCommands(program, deps);
   registerLoadCommands(program, deps);

@@ -44,6 +44,7 @@ import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { UnsafeNameError, assertSafeName } from "@jevitate/domain";
 import { fail, type JsonEnvelope } from "./envelope.js";
 import { projectDataDir } from "./project-dir.js";
+import { resolveLayout } from "./project-layout.js";
 import { type QueuedMissionExecutor } from "./mission-queue-runner.js";
 import { resolveUsagePricing } from "./usage-config.js";
 import { realOpenRouterCall } from "./openrouter-call.js";
@@ -186,10 +187,18 @@ export function environmentSeams(deps: CliDeps): { environmentsFile?: string; ta
 /**
  * Mirrors `resolveDbPath`'s flag > deps > home-dir-default convention: a
  * per-invocation `--dir` flag wins, then a `CliDeps.journeysDir` wired in by
- * the host, then `~/.jevitate/journeys`.
+ * the host, then the project's journeys, else `~/.jevitate/journeys`.
+ *
+ * #585: delegates to `resolveLayout` (dirMeaning "journeys") so commands not yet
+ * migrated to `--project`/`--journeys-dir` keep its current results. The flag is
+ * passed as the deprecated `--dir` so it retains its current meaning, including
+ * being used as given without an existence check.
  */
 export function resolveJourneysDir(deps: CliDeps, flag?: string): string {
-  return flag ?? deps.journeysDir ?? projectDataDir(["journeys"]);
+  return resolveLayout(flag === undefined ? {} : { dir: flag }, {
+    dirMeaning: "journeys",
+    deps: deps.journeysDir === undefined ? {} : { journeysDir: deps.journeysDir },
+  }).journeysDir;
 }
 
 /** Same flag > home-dir-default convention as `resolveJourneysDir`, for the

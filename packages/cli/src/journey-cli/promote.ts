@@ -1,4 +1,5 @@
-import { type CliDeps, JEV_PROVIDER_FLAG_HELP, jevProviderArg, resolveJourneysDir, emitJson, GatewaySelectionError } from "../cli-shared.js";
+import { type CliDeps, JEV_PROVIDER_FLAG_HELP, jevProviderArg, emitJson, GatewaySelectionError } from "../cli-shared.js";
+import { withProjectFlags } from "../project-layout.js";
 import { REAL_JEV_FLAG_HELP, jevSetupFor } from "../catalog-cli.js";
 import { readFile } from "node:fs/promises";
 import { Command } from "commander";
@@ -16,7 +17,7 @@ import { UnvettedLinksError, resolveCatalogDir } from "../catalog-api.js";
 import { CatalogInputError } from "../catalog.js";
 import { ApprovalFindingsError } from "../pre-approval.js";
 import { TargetConfigError } from "../target-config.js";
-import { FULL_FLAG_HELP, lintFindingLine, targetsOpts } from "./shared.js";
+import { FULL_FLAG_HELP, DEPRECATED_DIR_HELP, journeyLayout, lintFindingLine, targetsOpts } from "./shared.js";
 
 /** Registers `jevitate journey promote`. */
 export function registerJourneyPromote(journey: Command, program: Command, deps: CliDeps): void {
@@ -25,10 +26,10 @@ export function registerJourneyPromote(journey: Command, program: Command, deps:
   // promote`'s human-approval-gate semantics: promoting is a deliberate,
   // explicit act, never automatic (an authored Journey's `metadata.promoted`
   // always starts `false` — see `explore-author-journey`/`jevitate record`).
-  journey
+  withProjectFlags(journey
     .command("promote <id>")
     .description("promote a local Journey (human-approval gate) so it becomes discoverable/runnable; shows its review sheet first and records the approval")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP))
     .option("--accept-weak <reason>", "#401: promote a Journey whose assertions cannot prove its outcome, recording the reason")
     .option("--full", FULL_FLAG_HELP)
     .option("--reviewed-hash <hash>", "#432: the content hash of the review sheet you read; refused (E_JOURNEY_REVIEW_STALE) if the Journey changed since")
@@ -46,12 +47,14 @@ export function registerJourneyPromote(journey: Command, program: Command, deps:
     .option("--reason <text>", "#453: why the proposal is rejected (recorded with the rejection)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, full, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, real, jevProvider, nonInteractiveApproval, proposal, rejectProposal, reason } = this.opts<{
+      const locationFlags = this.opts<{ dir?: string; project?: string; journeysDir?: string }>();
+      const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
+      if (layout === null) return;
+      const { json, full, acceptWeak, reviewedHash: hashFlag, reviewSheet, acceptUnvetted, acceptFindings, real, jevProvider, nonInteractiveApproval, proposal, rejectProposal, reason } = this.opts<{
         proposal?: string;
         rejectProposal?: string;
         reason?: string;
         nonInteractiveApproval?: string;
-        dir?: string;
         json?: boolean;
         full?: boolean;
         acceptWeak?: string;
@@ -64,7 +67,7 @@ export function registerJourneyPromote(journey: Command, program: Command, deps:
       }>();
       try {
         checkNonInteractiveReason(nonInteractiveApproval);
-        const journeysDir = resolveJourneysDir(deps, dir);
+        const journeysDir = layout.journeysDir;
         // #453: the proposal flags, validated before anything is read (an id is 12 hex characters — never a path).
         for (const [flag, value] of [["--proposal", proposal], ["--reject-proposal", rejectProposal]] as const) {
           if (value !== undefined && !isProposalId(value)) {
