@@ -153,10 +153,15 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
           structuredFailures: true,
           ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j, m, replayOpts).journey }),
           ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
+          ...(how.swapSelectAtStep === undefined ? {} : { selectAlternativeAtStep: how.swapSelectAtStep }),
           ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
         });
         const blocked = r.blockedWrites ?? [];
         const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
+        // #579: a select mutation found no other enabled live option — not applied, never proof.
+        if (r.outcome === "quarantined" && /no-alternative/.test(r.reason)) {
+          return { outcome: "not-applied", failedSites: [], ...blockedFields, reason: r.reason };
+        }
         if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], blocked)) {
           return {
             outcome: "not-applied",

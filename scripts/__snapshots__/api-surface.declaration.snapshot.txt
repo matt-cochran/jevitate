@@ -1141,7 +1141,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (56 exports)
+# @jevitate/interpreter (58 exports)
   anchorLocator: other
   applyTextEdit: other
   attrOf: other
@@ -1183,6 +1183,8 @@
   Rgba: other
   rungLocator: other
   runStep: other
+  SelectAlternative: other
+  SelectAlternativeUnavailableError: other
   SizeBounds: other
   sizeViolation: other
   StepObserver: other

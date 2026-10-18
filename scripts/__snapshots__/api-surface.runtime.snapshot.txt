@@ -732,13 +732,14 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (36 exports)
+# @jevitate/interpreter (37 exports)
   BufferingSink: class
   DEFAULT_IN_VIEWPORT_MIN: const (number)
   PLAYWRIGHT_TEST_ID_ATTRIBUTE: const (string)
   PostconditionFailed: class
   RecordingInterpreter: class
   ReplayTargetError: class
+  SelectAlternativeUnavailableError: class
   TFLOW_ID_ATTRIBUTE: const (string)
   anchorLocator: function
   applyTextEdit: function
