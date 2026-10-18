@@ -142,6 +142,10 @@ closed when the app redirects to another thread.
 
 - `name` is a declared parameter, the output of an `extract` step **earlier** in the Journey (in
   the end state, any `extract` output), or a `setup.x` fixture output.
+- A declared parameter only an assertion names (expected context such as a comment id, never an
+  action input) is still a `--param` the run takes: `journey run`, `find_capabilities` and the
+  other run surfaces require it and refuse an undeclared one (#573). It needs no `fill` or
+  navigate placeholder to register it.
 - Fails closed, at load and at run: an unbound name is `E_ASSERTION_REF_UNBOUND`, a secret
   parameter is `E_ASSERTION_REF_SECRET` (refused at load and at run, since the expected text is
   model-visible and persisted), a non-string value is `E_ASSERTION_REF_TYPE`.

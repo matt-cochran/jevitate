@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, deriveParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, journeyParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
 import { createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import type { SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
@@ -93,7 +93,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
     );
   }
 
-  validateParams(deriveParamSchema(journey.recording), opts.params);
+  validateParams(journeyParamSchema(journey), opts.params);
 
   const policy = opts.policy ?? safeRunPolicy();
   const browserPortFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());

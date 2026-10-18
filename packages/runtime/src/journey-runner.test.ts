@@ -45,6 +45,20 @@ describe("JourneyRunner invariants", () => {
     expect(interp.run).not.toHaveBeenCalled(); // fail-fast BEFORE execution
   });
 
+  it("#573: accepts a declared param only an assertion names, and still requires it", async () => {
+    const journey = {
+      metadata: { id: "j", name: "j", promoted: true, params: ["expected_commentid"], createdAtIso: "x" },
+      recording: { version: "1", site: "s", pages: [{ url: "/t", steps: [
+        { step: { kind: "assert", check: { kind: "attr", target: { css: "#c" }, name: "data-id", value: { var: "expected_commentid" } } } },
+      ] }] },
+    } as any;
+    const interp = fakeInterpreter({ outcome: "completed", vars: {} });
+    const r = new JourneyRunner(fakeActor, interp);
+    const res = await r.run({ journey, params: { expected_commentid: "c1" }, policy: safeRunPolicy() });
+    expect(res.outcome).toBe("ok");
+    await expect(r.run({ journey, params: {}, policy: safeRunPolicy() })).rejects.toThrow(/missing: \[expected_commentid\]/);
+  });
+
   it("secretMode fail-closed: an awaiting_human step quarantines (no handback handler)", async () => {
     const interp = fakeInterpreter({
       outcome: "awaiting_human",

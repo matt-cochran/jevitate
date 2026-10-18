@@ -1,7 +1,7 @@
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, EnterSecret } from "@jevitate/screenplay";
 import { clock, type RunPolicy } from "@jevitate/domain";
-import { deriveParamSchema, secretParamValues, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
+import { journeyParamSchema, secretParamValues, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
 import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult, type StepResolution, type StepWait } from "@jevitate/interpreter";
 import { RecordingSchema, type Recording, type RecordedStep, type Step } from "@jevitate/recording";
 import {
@@ -229,7 +229,7 @@ export class JourneyRunner {
 
   async #run(req: JourneyRunRequest, collect: (r: InterpretResult) => InterpretResult): Promise<JourneyRunResult> {
     assertCompletePolicy(req?.policy); // #1 — fires before ANY interpreter call
-    validateParams(deriveParamSchema(req.journey.recording), req.params); // #5 — before any step
+    validateParams(journeyParamSchema(req.journey), req.params); // #5 — before any step
 
     if (req.policy.secret.secretMode === "vault-autofill") {
       await this.preflightSecretRefs(req.journey.metadata.secretRefs ?? []);
