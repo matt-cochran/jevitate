@@ -50,6 +50,8 @@ export interface JourneyVerifyMutation {
   readonly id: string;
   /** #565: the parameter a `swap-param`/`truncate-param` altered (its name, never a value). */
   readonly param?: string;
+  /** #579: where a `swap-param`'s wrong value came from (`reviewed`, `option`, `generated`), never the value. */
+  readonly source?: JourneyMutation["source"];
   readonly outcome: MutationRunResult["outcome"];
   readonly failedSites: readonly MutationFailedSite[];
   /** block-write: what was aborted (`METHOD path`). */
@@ -185,7 +187,15 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       // #554: a first failure at the mutated step's own postcondition hides the LATER paired sites
       // behind it; one relaxed replay (same action, the step's own expect/waitFor left out) judges them.
       const relaxed = needsRelaxedReplay(plan, m, first) ? await replay(m, relaxedMutationReplay) : undefined;
-      mutations.push({ kind: m.kind, step: m.step, id: m.id, ...(m.param === undefined ? {} : { param: m.param }), ...first, ...(relaxed === undefined ? {} : { relaxed }) });
+      mutations.push({
+        kind: m.kind,
+        step: m.step,
+        id: m.id,
+        ...(m.param === undefined ? {} : { param: m.param }),
+        ...(m.source === undefined ? {} : { source: m.source }),
+        ...first,
+        ...(relaxed === undefined ? {} : { relaxed }),
+      });
     }
   }
 
