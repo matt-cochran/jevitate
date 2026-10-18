@@ -7,7 +7,7 @@ behaviour changes).
 
 ## [Unreleased]
 
-## [0.18.0] – unreleased
+## [0.18.0] – 2026-10-18
 
 0.18.0 makes a linked pair of Journeys easy to check and hand over: one location model, typed handoffs between Journeys, a verified prepare-only handback, one readiness receipt and a local review bundle. Nothing here approves, promotes or sends: every human step stays a person's.
 
