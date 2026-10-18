@@ -8,7 +8,7 @@ import {
   FsJourneyStore,
   JourneyRegistry,
   JourneyStepError,
-  deriveParamSchema,
+  journeyParamSchema,
   journeyBranchPoint,
   journeyPrefix,
   resolveJourneyStep,
@@ -241,7 +241,7 @@ export async function validateCampaignSpec(raw: unknown, specPath: string, opts:
     if (deepest > 0) {
       try {
         const prefix = journeyPrefix(full, deepest);
-        validateParams(deriveParamSchema(prefix.recording), prefixParams(full, prefix, job.params ?? {}));
+        validateParams(journeyParamSchema(prefix), prefixParams(full, prefix, job.params ?? {}));
       } catch (err) {
         problems.push(`${where}.params: ${err instanceof Error ? err.message : String(err)}`);
       }

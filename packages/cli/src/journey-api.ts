@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, deriveParamSchema, describeStep, flatJourneySteps, journeyEndState, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, describeStep, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
@@ -267,10 +267,10 @@ export function redactSecretValues<T>(result: T, secrets: readonly string[]): T 
  * params are then checked by `validateParams` as usual.
  */
 export function prefixParams(full: Journey, prefix: Journey, params: Record<string, string>): Record<string, string> {
-  const known = deriveParamSchema(full.recording).required;
+  const known = journeyParamSchema(full).required;
   const unknown = Object.keys(params).filter((k) => !known.includes(k));
   if (unknown.length > 0) throw new ParamValidationError(`param mismatch — missing: [], unknown: [${unknown.join(", ")}]`);
-  const needed = deriveParamSchema(prefix.recording).required;
+  const needed = journeyParamSchema(prefix).required;
   return Object.fromEntries(Object.entries(params).filter(([k]) => needed.includes(k)));
 }
 
@@ -516,7 +516,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
  * used by BOTH the CLI `journey run` action and external callers. Builds
  * the real `FsJourneyStore` + `JourneyRegistry`, resolves the journey
  * (unknown id -> `UnknownJourneyError`), validates params UP FRONT with
- * `deriveParamSchema`/`validateParams` (unknown/missing param ->
+ * `journeyParamSchema`/`validateParams` (unknown/missing param ->
  * `ParamValidationError`, from `@jevitate/journey`) BEFORE any browser is
  * launched, then builds the real Actor + `JourneyRunner` and runs.
  */
@@ -553,7 +553,7 @@ export async function runJourneyProgrammatically(
   // Fail fast: validate BEFORE any browser launch, so bad params never pay
   // the cost (or risk) of opening a browser.
   const inputParams = journey === full ? opts.params : prefixParams(full, journey, opts.params);
-  validateParams(deriveParamSchema(journey.recording), inputParams);
+  validateParams(journeyParamSchema(journey), inputParams);
   // #402: the mutated copy replays (and is judged); the stored Journey still names, redacts and gates.
   const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
 
