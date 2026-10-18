@@ -29,12 +29,14 @@ never an identity.
 The discover Journey walks the open conversations with `forEach` (`"as": "records"`) and one
 `extract` per record field (`"as": "<field>"`) inside it. A run's `output` then holds:
 
-- `records.count`: the number of rows, as a decimal string (`"0"` when the inbox is empty);
+- `records.count`: the number of rows, as a decimal string;
 - `records.<i>.<field>` for each row `i` (0-based, page order) and each extracted field.
 
 This indexed binding is new in 0.17.0. A `forEach` child `extract` keeps its row-scoped binding
 (`<field>`, last row wins) exactly as before, so existing Journeys are unchanged. An extract that
-finds nothing fails the step; it never binds `""`.
+finds nothing fails the step; it never binds `""`. A `forEach` that matches no row fails its step
+(as it always has), so an empty inbox ends the discover run quarantined: nothing is returned, and
+nothing can be guessed from it.
 
 ## 3. Prepare-only reply Journey params
 
@@ -72,9 +74,10 @@ jevitate journey chain --from discover-conversations --to prepare-reply \
   --requests approved.jsonl [--base-url <url> | --env <name>] [--storage-state <file>] [--json]
 ```
 
-1. Runs `--from` once. A failed run stops the chain (`E_CHAIN_FROM_FAILED`).
-2. Reads its `records.*` outputs. Zero records stops the chain (`E_CHAIN_EMPTY`): no target is
-   guessed.
+1. Runs `--from` once. A failed run stops the chain (`E_CHAIN_FROM_FAILED`); an empty inbox
+   is one (section 2), and its result keeps the run's `reason`.
+2. Reads its `records.*` outputs. Missing or zero `records.count` stops the chain
+   (`E_CHAIN_EMPTY`): no target is guessed.
 3. Joins each request to the record with the same `commentId` and `account`. A request with no
    match is reported `unmatched` and **not run**. A record with no request is not run.
 4. Runs `--to` once per matched request with the params of section 3. Each run is validated as
