@@ -23,7 +23,7 @@ export interface JourneyChainDeps {
   readonly runJourney?: JourneyChainRunner;
 }
 
-export type JourneyChainErrorCode = "E_CHAIN_FROM_FAILED" | "E_CHAIN_EMPTY" | "E_CHAIN_REQUEST";
+export type JourneyChainErrorCode = "E_CHAIN_FROM_FAILED" | "E_CHAIN_EMPTY" | "E_CHAIN_REQUEST" | "E_CHAIN_NOT_PROMOTED";
 
 /** A chain-stopping failure (§5 steps 1, 2 and the §4 request contract). */
 export class JourneyChainError extends Error {
@@ -204,6 +204,11 @@ export interface RunJourneyChainOptions {
   readonly browserPortFactory?: () => BrowserPort;
   readonly allow?: readonly string[];
   readonly siteGate?: SiteGateDeps;
+  /**
+   * Refuse a `from` or `to` Journey that is not promoted (`E_CHAIN_NOT_PROMOTED`) before anything
+   * runs. The CLI sets it unless `--allow-draft`; MCP can never unset it (promoted-only, as run_journey).
+   */
+  readonly requirePromoted?: boolean;
 }
 
 function sharedRunOptions(opts: RunJourneyChainOptions): Partial<RunJourneyProgrammaticallyOptions> & { dir: string } {
@@ -230,6 +235,17 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
   const runner = deps.runJourney ?? runJourneyProgrammatically;
   const shared = sharedRunOptions(opts);
 
+  const registry = new JourneyRegistry(new FsJourneyStore(opts.dir));
+  const toJourney = await registry.get(opts.to);
+  if (toJourney === null) throw new UnknownJourneyError(`unknown journey '${opts.to}'`);
+  if (opts.requirePromoted === true) {
+    const fromJourney = await registry.get(opts.from);
+    if (fromJourney === null) throw new UnknownJourneyError(`unknown journey '${opts.from}'`);
+    for (const j of [fromJourney, toJourney]) {
+      if (!j.metadata.promoted) throw new JourneyChainError("E_CHAIN_NOT_PROMOTED", `journey '${j.metadata.id}' is not promoted — a chain runs promoted Journeys (journey chain --allow-draft runs drafts on the CLI)`);
+    }
+  }
+
   const fromResult = await runner({ ...shared, id: opts.from, params: {} });
   if (fromResult.outcome !== "ok") {
     const reason = "reason" in fromResult ? fromResult.reason : undefined;
@@ -242,8 +258,6 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
   const { count, records } = readRecords(fromResult.output);
 
   // §3: the reply Journey's declared params decide the one conditional mapping (`expected_parentid`).
-  const toJourney = await new JourneyRegistry(new FsJourneyStore(opts.dir)).get(opts.to);
-  if (toJourney === null) throw new UnknownJourneyError(`unknown journey '${opts.to}'`);
   const declared = new Set(journeyParamSchema(toJourney).required);
 
   const byKey = new Map<string, ChainRecord>();

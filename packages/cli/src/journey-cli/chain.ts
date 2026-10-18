@@ -41,15 +41,17 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
     .requiredOption("--requests <file>", "JSON Lines file of approved requests ({commentId, account, replyText})")
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--storage-state <file>", "Playwright storageState JSON to start each run authenticated; must exist")
+    .option("--allow-draft", "also run Journeys that are not promoted (authoring); without it both must be promoted")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { from, to, requests: requestsFile, dir, storageState: storageStateFlag, json } = this.opts<{
+      const { from, to, requests: requestsFile, dir, storageState: storageStateFlag, json, allowDraft } = this.opts<{
         from: string;
         to: string;
         requests: string;
         dir?: string;
         storageState?: string;
         json?: boolean;
+        allowDraft?: boolean;
       }>();
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where both runs go (unknown env / bad file → 64, nothing opened).
@@ -100,6 +102,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
             to,
             requests,
             dir: resolveJourneysDir(deps, dir),
+            requirePromoted: allowDraft !== true,
             ...(siteGate === undefined ? {} : { siteGate }),
             browserPortFactory: deps.explore?.browserPortFactory,
             ...(browser === undefined ? {} : { browser }),

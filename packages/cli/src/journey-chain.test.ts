@@ -274,3 +274,33 @@ test("passes only the params the reply Journey declares, plus replyText", async 
 
   expect(runner.calls.find((c) => c.id === "prepare-narrow")?.params).toEqual({ commentId: "c-1001", replyText: "Thanks, see you Tuesday" });
 });
+
+/** A promoted, parameter-free discover Journey (the fake runner never replays it). */
+function discoverJourney(): Journey {
+  return {
+    metadata: { id: "discover-conversations", name: "Discover", promoted: true, params: [], createdAtIso: "2026-09-19T00:00:00Z" },
+    recording: { version: "1.0.0", site: "https://example.test", pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "https://example.test/", expect: { kind: "urlIncludes", text: "/" } } }] }] },
+  };
+}
+
+test("refuses an unpromoted Journey with E_CHAIN_NOT_PROMOTED when promotion is required", async () => {
+  const draft = { ...replyJourney("prepare-reply"), metadata: { ...replyJourney("prepare-reply").metadata, promoted: false } };
+  const discover = discoverJourney();
+  const d = await setup([draft, discover]);
+  const runner = fakeRunner({ "discover-conversations": oneRecord, "prepare-reply": OK });
+
+  const chain = runJourneyChain({ from: "discover-conversations", to: "prepare-reply", requests: oneRequest, dir: d, requirePromoted: true }, { runJourney: runner.run });
+
+  await expect(chain).rejects.toMatchObject({ code: "E_CHAIN_NOT_PROMOTED" });
+});
+
+test("runs nothing when promotion is required and a Journey is a draft", async () => {
+  const draft = { ...replyJourney("prepare-reply"), metadata: { ...replyJourney("prepare-reply").metadata, promoted: false } };
+  const discover = discoverJourney();
+  const d = await setup([draft, discover]);
+  const runner = fakeRunner({ "discover-conversations": oneRecord, "prepare-reply": OK });
+
+  await runJourneyChain({ from: "discover-conversations", to: "prepare-reply", requests: oneRequest, dir: d, requirePromoted: true }, { runJourney: runner.run }).catch(() => undefined);
+
+  expect(runner.calls).toHaveLength(0);
+});
