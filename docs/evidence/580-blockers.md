@@ -14,6 +14,7 @@ deliverable of the 0.17.0 plan that removes it. Shapes are fixed in
 | B6 | `journey review --strict` flags missing job/persona links; the links need catalog entries, and their approval is human-only | strict review on either Journey | `.jevitate/jobs.json`, `personas.json` | `bizops-catalog-links`, then `human-catalog-signoff` |
 | B7 | No offline fixture with ≥2 identities, ≥2 threads, parents and permalinks, and a countable Send | n/a | `test/fixtures/` | `bizops-fixture-app` |
 | B8 | A navigate placeholder is one percent-encoded segment, so a record's whole `permalink` cannot be passed as a param (`/c/c-2041` would become `%2Fc%2Fc-2041`) | n/a | `packages/recording/src/navigate-params.ts` | contract change: the reply Journey owns its URL template (`/c/${commentId}`); no code change |
+| B9 | A `forEach` child's target resolves among the row's descendants, never the row itself, so attributes on the row element cannot be extracted | extract `{ testId: "inbox-row" }` inside a forEach over `inbox-row` rows times out | `packages/interpreter/src/run-step.ts` (`resolveInRoot`) | fixture puts the identity on an inner `row-meta` element; a row self-target is follow-up work for real sites |
 
 Checked and **not** blockers:
 

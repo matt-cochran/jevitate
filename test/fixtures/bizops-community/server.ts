@@ -30,6 +30,9 @@ const attr = (name: string, value: string | null): string => (value === null ? "
 /** The inbox row for one seeded comment: the identity of the conversation, not its position. */
 const inboxRow = ({ post, thread, comment }: BizopsSeedComment): string =>
   `<li data-testid="inbox-row" data-provider="${esc(post.provider)}" data-channel="${esc(post.channel)}" data-account="${esc(comment.account)}" data-post-id="${esc(post.id)}" data-thread-id="${esc(thread.id)}" data-comment-id="${esc(comment.id)}"${attr("data-parent-id", comment.parentId)} data-permalink="/c/${esc(comment.id)}">` +
+  // The same identity on an element INSIDE the row: a forEach's row-scoped targets match descendants
+  // of the row, never the row itself (#580 blocker B9).
+  `<span data-testid="row-meta" data-provider="${esc(post.provider)}" data-channel="${esc(post.channel)}" data-account="${esc(comment.account)}" data-post-id="${esc(post.id)}" data-thread-id="${esc(thread.id)}" data-comment-id="${esc(comment.id)}"${attr("data-parent-id", comment.parentId)} data-permalink="/c/${esc(comment.id)}"></span>` +
   `<a href="/c/${esc(comment.id)}">${esc(thread.title)}</a> <span>${esc(comment.author)}</span>` +
   // The full source text, so a discover Journey can return it as the record's `sourceText`.
   `<p data-testid="row-text" style="white-space:pre-wrap">${esc(comment.text)}</p></li>`;

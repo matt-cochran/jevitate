@@ -1,0 +1,210 @@
+{
+  "metadata": {
+    "id": "prepare-reply",
+    "name": "Prepare an approved reply on a conversation",
+    "promoted": false,
+    "params": [
+      "commentId",
+      "replyIdentity",
+      "threadId",
+      "expected_commentid",
+      "expected_account",
+      "expected_sourcetext",
+      "replyText"
+    ],
+    "createdAtIso": "2026-10-18T00:00:00.000Z",
+    "goal": "Reopen one conversation and prepare the approved reply in the composer, without sending it.",
+    "persona": "bizops-operator",
+    "job": "answer-community-comments",
+    "role": "community-manager",
+    "parameters": [
+      {
+        "name": "commentId",
+        "description": "The comment to reply to; its permalink leaf, used in the navigate URL template."
+      },
+      {
+        "name": "replyIdentity",
+        "description": "The reply identity (account) to select as the sender.",
+        "mutationValues": [
+          "mcpl",
+          "personal"
+        ]
+      },
+      {
+        "name": "threadId",
+        "description": "The thread to reply in."
+      },
+      {
+        "name": "expected_commentid",
+        "description": "The comment id the reopened page must show, checked before the composer is touched (assertion only)."
+      },
+      {
+        "name": "expected_account",
+        "description": "The account the source comment must belong to, checked before the composer is touched (assertion only)."
+      },
+      {
+        "name": "expected_sourcetext",
+        "description": "The source comment's full text, checked before the composer is touched (assertion only)."
+      },
+      {
+        "name": "replyText",
+        "description": "The approved reply text, typed verbatim into the composer."
+      }
+    ],
+    "successCriteria": [
+      {
+        "description": "The composer holds the approved reply text for the selected identity and thread."
+      },
+      {
+        "description": "Nothing was sent: the Journey ends at the filled composer, with no Send click and no submit key press."
+      }
+    ]
+  },
+  "recording": {
+    "version": "1",
+    "site": "http://127.0.0.1",
+    "intent": "Reopen one comment and prepare its approved reply, without sending it.",
+    "pages": [
+      {
+        "url": "/c/${commentId}",
+        "steps": [
+          {
+            "stepId": "s-open",
+            "step": {
+              "kind": "navigate",
+              "url": "/c/${commentId}",
+              "expect": {
+                "kind": "urlIncludes",
+                "text": "/c/${commentId}"
+              }
+            },
+            "objective": "Reopen exactly the comment's own permalink.",
+            "expectedResult": "The browser is on the comment's permalink."
+          },
+          {
+            "stepId": "s-source-comment",
+            "step": {
+              "kind": "assert",
+              "check": {
+                "kind": "attr",
+                "target": {
+                  "testId": "source-comment"
+                },
+                "name": "data-comment-id",
+                "value": {
+                  "var": "expected_commentid"
+                }
+              }
+            },
+            "objective": "Prove the page shows the expected comment before touching the composer.",
+            "expectedResult": "The source comment carries the expected comment id."
+          },
+          {
+            "stepId": "s-source-account",
+            "step": {
+              "kind": "assert",
+              "check": {
+                "kind": "attr",
+                "target": {
+                  "testId": "source-comment"
+                },
+                "name": "data-account",
+                "value": {
+                  "var": "expected_account"
+                }
+              }
+            },
+            "objective": "Prove the source comment belongs to the expected account before touching the composer.",
+            "expectedResult": "The source comment carries the expected account."
+          },
+          {
+            "stepId": "s-source-text",
+            "step": {
+              "kind": "assert",
+              "check": {
+                "kind": "textIncludes",
+                "target": {
+                  "testId": "source-comment"
+                },
+                "text": {
+                  "var": "expected_sourcetext"
+                }
+              }
+            },
+            "objective": "Prove the page shows the expected source text before touching the composer.",
+            "expectedResult": "The source comment contains the expected source text."
+          },
+          {
+            "stepId": "s-identity",
+            "step": {
+              "kind": "select",
+              "target": {
+                "testId": "account-select"
+              },
+              "value": {
+                "var": "replyIdentity"
+              },
+              "expect": {
+                "kind": "valueEquals",
+                "target": {
+                  "testId": "account-select"
+                },
+                "value": {
+                  "var": "replyIdentity"
+                }
+              }
+            },
+            "objective": "Select the reply identity the approved request names.",
+            "expectedResult": "The reply-as select holds the requested identity."
+          },
+          {
+            "stepId": "s-thread",
+            "step": {
+              "kind": "select",
+              "target": {
+                "testId": "thread-select"
+              },
+              "value": {
+                "var": "threadId"
+              },
+              "expect": {
+                "kind": "valueEquals",
+                "target": {
+                  "testId": "thread-select"
+                },
+                "value": {
+                  "var": "threadId"
+                }
+              }
+            },
+            "objective": "Select the thread the approved request names.",
+            "expectedResult": "The thread select holds the requested thread."
+          },
+          {
+            "stepId": "s-reply-text",
+            "step": {
+              "kind": "fill",
+              "target": {
+                "testId": "reply-body"
+              },
+              "value": {
+                "var": "replyText"
+              },
+              "expect": {
+                "kind": "valueEquals",
+                "target": {
+                  "testId": "reply-body"
+                },
+                "value": {
+                  "var": "replyText"
+                }
+              }
+            },
+            "objective": "Type the approved reply text into the composer and stop.",
+            "expectedResult": "The composer holds the approved reply text; nothing is submitted."
+          }
+        ]
+      }
+    ]
+  }
+}
