@@ -9,7 +9,6 @@ import {
   emulationFromFlags,
   environmentSeams,
   resolveDbPath,
-  resolveJourneysDir,
   withBrowserLaunchFlags,
   withEmulationFlags,
   writeRawResult,
@@ -27,6 +26,8 @@ import { fail, ok } from "../envelope.js";
 import { UnknownJourneyError } from "../journey-api.js";
 import { chainSucceeded, JourneyChainError, runJourneyChain } from "../journey-chain.js";
 import { withSiteGate } from "../site-gate-cli.js";
+import { withProjectFlags } from "../project-layout.js";
+import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 import { type EmulationSpec } from "@jevitate/playwright";
 
 /**
@@ -35,20 +36,23 @@ import { type EmulationSpec } from "@jevitate/playwright";
  * when every request matched and every run was `ok`.
  */
 export function registerJourneyChain(journey: Command, program: Command, deps: CliDeps): void {
-  withReplayAllowFlag(withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(journey.command("chain")))))
+  withReplayAllowFlag(withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(withProjectFlags(journey.command("chain"))))))
     .requiredOption("--from <id>", "the discover Journey, run once to produce the records")
     .requiredOption("--to <id>", "the prepare-only reply Journey, run once per matched request")
     .requiredOption("--requests <file>", "JSON Lines file of approved requests ({commentId, account, replyText})")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--storage-state <file>", "Playwright storageState JSON to start each run authenticated; must exist")
     .option("--allow-draft", "also run Journeys that are not promoted (authoring); without it both must be promoted")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { from, to, requests: requestsFile, dir, storageState: storageStateFlag, json, allowDraft } = this.opts<{
+      const locationFlags = this.opts<{ dir?: string; project?: string; journeysDir?: string }>();
+      const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
+      if (layout === null) return;
+      const chainJourneysDir = layout.journeysDir;
+      const { from, to, requests: requestsFile, storageState: storageStateFlag, json, allowDraft } = this.opts<{
         from: string;
         to: string;
         requests: string;
-        dir?: string;
         storageState?: string;
         json?: boolean;
         allowDraft?: boolean;
@@ -101,7 +105,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
             from,
             to,
             requests,
-            dir: resolveJourneysDir(deps, dir),
+            dir: chainJourneysDir,
             requirePromoted: allowDraft !== true,
             ...(siteGate === undefined ? {} : { siteGate }),
             browserPortFactory: deps.explore?.browserPortFactory,

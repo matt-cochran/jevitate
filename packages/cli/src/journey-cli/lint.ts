@@ -7,8 +7,9 @@ import { anchorEditFailure } from "../journey-anchor-cli.js";
 import { fixJourneyAnchors } from "../journey-anchor-api.js";
 import { currentEngineInfo } from "../engine.js";
 import { renderJourneyLintSarif } from "../journey-lint-sarif.js";
-import { type CliDeps, resolveJourneysDir, emitJson } from "../cli-shared.js";
-import { lintFindingLine } from "./shared.js";
+import { type CliDeps, emitJson } from "../cli-shared.js";
+import { withProjectFlags } from "../project-layout.js";
+import { DEPRECATED_DIR_HELP, journeyLayout, lintFindingLine } from "./shared.js";
 import { FsJourneyStore } from "@jevitate/journey";
 import { journeyLinkWarnings } from "../journey-link-hints.js";
 
@@ -16,20 +17,23 @@ import { journeyLinkWarnings } from "../journey-link-hints.js";
 export function registerJourneyLint(journey: Command, program: Command, deps: CliDeps): void {
   // #401 — the assertion-strength lint: which assertions cannot prove the Journey's outcome. CI can
   // gate on it (`--json`/`--sarif`, exit 1 when any error); `promote` runs the same lint first.
-  journey
+  withProjectFlags(journey
     .command("lint <id>")
     .description("report a Journey's weak assertions (writes without an asserted effect, visibility-only claims, nothing after the last write, …)")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP))
     .option("--sarif <file>", "also write a SARIF 2.1.0 log here")
     .option("--fix", "#487: stamp the step id of each anchor that references a step by number only, write the Journey (#507: on a promoted Journey its approval goes stale), and report what was fixed")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, json, sarif, fix } = this.opts<{ dir?: string; json?: boolean; sarif?: string; fix?: boolean }>();
+      const { dir, project, journeysDir, json, sarif, fix } = this.opts<{ dir?: string; project?: string; journeysDir?: string; json?: boolean; sarif?: string; fix?: boolean }>();
+      const layout = journeyLayout(program, deps, { dir, project, journeysDir });
+      if (layout === null) return;
+      const resolvedJourneysDir = layout.journeysDir;
       try {
         let fixResult: Awaited<ReturnType<typeof fixJourneyAnchors>> | undefined;
         if (fix === true) {
           try {
-            fixResult = await fixJourneyAnchors(resolveJourneysDir(deps, dir), id);
+            fixResult = await fixJourneyAnchors(resolvedJourneysDir, id);
           } catch (err) {
             if (err instanceof UnknownJourneyError) throw err;
             anchorEditFailure(program, err);
@@ -39,11 +43,10 @@ export function registerJourneyLint(journey: Command, program: Command, deps: Cl
         const fixed = fixResult?.stamped ?? [];
         // #507: stamping a promoted Journey makes its approval stale — say so, with the re-approval command.
         const reapproval = fixResult?.needsReapproval === true ? { needsReapproval: true as const, reapproveCommand: fixResult.reapproveCommand } : {};
-        const journeysDir = resolveJourneysDir(deps, dir);
         const catalogDir = resolveCatalogDir(deps.catalogDir);
-        const linted = await lintJourneyById(journeysDir, id, { catalogDir });
+        const linted = await lintJourneyById(resolvedJourneysDir, id, { catalogDir });
         // #523: catalog-aware, advisory: a missing job / persona link is a warning with its fix.
-        const stored = await new FsJourneyStore(journeysDir).get(id);
+        const stored = await new FsJourneyStore(resolvedJourneysDir).get(id);
         const linkFindings = stored === null ? [] : await journeyLinkWarnings(catalogDir, stored);
         const result = { ...linted, findings: [...linted.findings, ...linkFindings], warnings: linted.warnings + linkFindings.length };
         if (sarif !== undefined) {

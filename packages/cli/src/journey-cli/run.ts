@@ -1,4 +1,6 @@
-import { type CliDeps, JEV_PROVIDER_FLAG_HELP, jevProviderArg, resolveDbPath, resolveJourneysDir, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, withDemoFlags, withScreenshotsFlag, type ScreenshotsFlags, type DemoFlags, type EmulationFlags, withEmulationFlags, emulationFromFlags, collectParam, emitJson, environmentSeams, writeRawResult, GatewaySelectionError, buildExploreGateways } from "../cli-shared.js";
+import { type CliDeps, JEV_PROVIDER_FLAG_HELP, jevProviderArg, resolveDbPath, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, withDemoFlags, withScreenshotsFlag, type ScreenshotsFlags, type DemoFlags, type EmulationFlags, withEmulationFlags, emulationFromFlags, collectParam, emitJson, environmentSeams, writeRawResult, GatewaySelectionError, buildExploreGateways } from "../cli-shared.js";
+import { withProjectFlags } from "../project-layout.js";
+import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "../run-tags-cli.js";
 import { existsSync } from "node:fs";
@@ -27,8 +29,8 @@ import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnviron
 
 /** Registers `jevitate journey run`. */
 export function registerJourneyRun(journey: Command, program: Command, deps: CliDeps): void {
-  withScreenshotsFlag(withReplayAllowFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true }))))
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+  withScreenshotsFlag(withReplayAllowFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(withProjectFlags(journey.command("run <id>"))))), { recordVideo: true }))))
+    .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
       "--storage-state <file>",
@@ -56,6 +58,10 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "journey run", async function (this: Command, id: string) {
+      const locationFlags = this.opts<{ dir?: string; project?: string; journeysDir?: string }>();
+      const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
+      if (layout === null) return;
+      const runJourneysDir = layout.journeysDir;
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where the Journey runs (unknown env / bad file → 64, nothing opened).
       let environment: ResolvedJourneyEnvironment | undefined;
@@ -76,7 +82,6 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
       };
       const {
-        dir,
         param,
         storageState: storageStateFlag,
         selfHeal,
@@ -105,7 +110,6 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         healMaxRunMs?: number;
         actionDeltas?: boolean;
         stepResponseTimeout?: number;
-        dir?: string;
         param: Record<string, string>;
         storageState?: string;
         selfHeal: string;
@@ -165,7 +169,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
       let healScope: ChangeScope | undefined;
       try {
         validateJourneyHeal(healRequest, CLI_HEAL_NAMES);
-        if (selfHealMode !== "fail-closed") healScope = await readJourneyChangeScope(healRequest, resolveJourneysDir(deps, dir));
+        if (selfHealMode !== "fail-closed") healScope = await readJourneyChangeScope(healRequest, runJourneysDir);
       } catch (err) {
         if (err instanceof JourneyHealArgsError || err instanceof ChangesArgsError || err instanceof ChangesInputError) {
           emitJson(program, fail(err.code, err.message));
@@ -205,11 +209,11 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         // (fail-closed secret mode) — only `selfHeal.mode` is threaded from
         // the flag; a `--secret-mode` override is a later slice's concern.
         // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
-        const recorded = await withRecordedFixtures(fixtureFlags, { dir: resolveJourneysDir(deps, dir), id });
+        const recorded = await withRecordedFixtures(fixtureFlags, { dir: runJourneysDir, id });
         let fixtureDrift: FixtureDrift | undefined;
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
           ...(siteGate === undefined ? {} : { siteGate }),
-          dir: resolveJourneysDir(deps, dir),
+          dir: runJourneysDir,
           id,
           params: param,
           policy,
@@ -245,7 +249,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         })).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
         if (fixtureDrift !== undefined && !json) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
         // #246 (informational, never failing): how many steps say why — `journey annotate` drafts the rest.
-        const intent = await journeyIntentCoverage(resolveJourneysDir(deps, dir), id);
+        const intent = await journeyIntentCoverage(runJourneysDir, id);
         if (intent !== undefined && intent.withoutObjective > 0 && !json) {
           program.configureOutput().writeErr?.(
             `note: ${intent.withoutObjective} of ${intent.steps} step(s) have no objective — draft them with \`jevitate journey annotate ${id}\`\n`,

@@ -512,11 +512,19 @@ describe("#218: every command refuses unusable input with 64 and a human error (
  * empty dir printed nothing at all). Limited to the "a listing" REFUSALS-exempt commands — the ones
  * that succeed with no fixture beyond an empty tmp dir, so this needs no browser/model/network.
  */
+/** An existing empty directory (created on first use). */
+function emptyDir(p: string): string {
+  mkdirSync(p, { recursive: true });
+  return p;
+}
+
 describe("#227: a listing command's SUCCESS output without --json is human text, never JSON", () => {
   // A function, like `REFUSALS()` above: `dir` (module-level `let`) is only assigned in `beforeAll`,
   // after this describe block's own body already ran at collection time.
   const LISTINGS = (): ReadonlyArray<{ readonly path: string; readonly argv: readonly string[] }> => [
-    { path: "journey list", argv: ["journey", "list", "--dir", join(dir, "journeys-empty")] },
+    // #585: the current flag (the deprecated --dir prints its deprecation line on stderr). An explicit
+    // --journeys-dir must exist, so the empty store is created first.
+    { path: "journey list", argv: ["journey", "list", "--journeys-dir", emptyDir(join(dir, "journeys-empty"))] },
     { path: "source list", argv: ["source", "list"] },
     { path: "ledger list", argv: ["ledger", "list", "--dir", join(dir, "ledger-empty")] },
     { path: "mission target list", argv: ["mission", "target", "list", "--dir", join(dir, "targets-empty")] },
