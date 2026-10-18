@@ -182,6 +182,14 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "recording propose": { cases: [[missing, missing]] },
   "journey list": { exempt: "a listing: an empty or missing dir lists nothing" },
   "journey find": { exempt: "a search: no match is an empty result" },
+  // #580: an unreadable requests file, a missing session or a bad request line refuses before any browser.
+  "journey chain": {
+    base: ["--from", "a", "--to", "b", "--requests", validScript],
+    cases: [
+      ["--from", "a", "--to", "b", "--requests", missing],
+      ["--from", "a", "--to", "b", "--requests", validScript, "--storage-state", missing],
+    ],
+  },
   "journey run": {
     base: ["nope"],
     cases: [

@@ -1,5 +1,18 @@
 # @jevitate/cli
 
+## 0.17.0
+
+### Minor Changes
+
+- 5c1252a: Two-Journey workflows: `journey chain` / MCP `chain_journeys` (discover once, prepare an approved reply per matched request, never send) and indexed `forEach` outputs (#580); option-aware select mutations and reviewed `mutationValues` (#579); `guard-param` proves input checks before the action, and action `{var}` reads are run inputs (#580).
+
+## 0.16.2
+
+### Patch Changes
+
+- c5bc6df: Expand npm setup and next-step documentation, link the public websites, and explain how the
+  open-source Jevitate journey tool connects to Journeeze's hosted help and feedback service.
+
 ## 0.16.1
 
 ### Patch Changes

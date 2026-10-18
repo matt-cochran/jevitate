@@ -1,0 +1,180 @@
+{
+  "metadata": {
+    "id": "discover-conversations",
+    "name": "Discover open community conversations",
+    "promoted": false,
+    "params": [],
+    "createdAtIso": "2026-10-18T00:00:00.000Z",
+    "goal": "Read the community inbox and return one record per open conversation, carrying the identity and context a reply needs.",
+    "persona": "bizops-operator",
+    "job": "answer-community-comments",
+    "role": "community-manager",
+    "successCriteria": [
+      {
+        "description": "The inbox is shown and every open conversation is returned as a record with its provider, channel, account, post, thread, comment, permalink and full source text."
+      }
+    ]
+  },
+  "recording": {
+    "version": "1",
+    "site": "http://127.0.0.1",
+    "intent": "Walk the community inbox and read each open conversation into a record.",
+    "pages": [
+      {
+        "url": "/",
+        "steps": [
+          {
+            "stepId": "s-inbox",
+            "step": {
+              "kind": "navigate",
+              "url": "/",
+              "expect": {
+                "kind": "textIncludes",
+                "target": {
+                  "role": "heading",
+                  "name": "Inbox \u2014 open conversations"
+                },
+                "text": "Inbox"
+              }
+            },
+            "objective": "Open the community inbox, the page that lists every open conversation.",
+            "expectedResult": "The inbox page is shown with its heading."
+          },
+          {
+            "stepId": "s-records",
+            "step": {
+              "kind": "forEach",
+              "items": {
+                "testId": "inbox-row"
+              },
+              "as": "records",
+              "steps": [
+                {
+                  "kind": "extract",
+                  "target": {
+                    "testId": "row-meta"
+                  },
+                  "as": "provider",
+                  "attr": "data-provider",
+                  "expect": {
+                    "kind": "attr",
+                    "target": {
+                      "testId": "row-meta"
+                    },
+                    "name": "data-provider"
+                  }
+                },
+                {
+                  "kind": "extract",
+                  "target": {
+                    "testId": "row-meta"
+                  },
+                  "as": "channel",
+                  "attr": "data-channel",
+                  "expect": {
+                    "kind": "attr",
+                    "target": {
+                      "testId": "row-meta"
+                    },
+                    "name": "data-channel"
+                  }
+                },
+                {
+                  "kind": "extract",
+                  "target": {
+                    "testId": "row-meta"
+                  },
+                  "as": "account",
+                  "attr": "data-account",
+                  "expect": {
+                    "kind": "attr",
+                    "target": {
+                      "testId": "row-meta"
+                    },
+                    "name": "data-account"
+                  }
+                },
+                {
+                  "kind": "extract",
+                  "target": {
+                    "testId": "row-meta"
+                  },
+                  "as": "postId",
+                  "attr": "data-post-id",
+                  "expect": {
+                    "kind": "attr",
+                    "target": {
+                      "testId": "row-meta"
+                    },
+                    "name": "data-post-id"
+                  }
+                },
+                {
+                  "kind": "extract",
+                  "target": {
+                    "testId": "row-meta"
+                  },
+                  "as": "threadId",
+                  "attr": "data-thread-id",
+                  "expect": {
+                    "kind": "attr",
+                    "target": {
+                      "testId": "row-meta"
+                    },
+                    "name": "data-thread-id"
+                  }
+                },
+                {
+                  "kind": "extract",
+                  "target": {
+                    "testId": "row-meta"
+                  },
+                  "as": "commentId",
+                  "attr": "data-comment-id",
+                  "expect": {
+                    "kind": "attr",
+                    "target": {
+                      "testId": "row-meta"
+                    },
+                    "name": "data-comment-id"
+                  }
+                },
+                {
+                  "kind": "extract",
+                  "target": {
+                    "testId": "row-meta"
+                  },
+                  "as": "permalink",
+                  "attr": "data-permalink",
+                  "expect": {
+                    "kind": "attr",
+                    "target": {
+                      "testId": "row-meta"
+                    },
+                    "name": "data-permalink"
+                  }
+                },
+                {
+                  "kind": "extract",
+                  "target": {
+                    "testId": "row-text"
+                  },
+                  "as": "sourceText",
+                  "expect": {
+                    "kind": "count",
+                    "target": {
+                      "testId": "row-text"
+                    },
+                    "min": 1
+                  }
+                }
+              ]
+            },
+            "objective": "Walk every inbox row and read its record fields: provider, channel, account, post, thread, comment and permalink from the row's data-* attributes, and sourceText from the row's text. parentId is deliberately not extracted here: rows without a parent have no such attribute, so a reply-to-reply Journey declares expected_parentid separately.",
+            "expectedResult": "Every inbox row is read into a record, one extract per field, in page order."
+          }
+        ]
+      }
+    ]
+  }
+}

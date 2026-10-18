@@ -7,6 +7,29 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.17.0] – 2026-10-18
+
+0.17.0 makes a two-Journey workflow (discover records, then prepare an approved reply without sending it) runnable end to end and provable: select mutations pick real options, input guards are proven, and one command chains the Journeys over CLI and MCP.
+
+### Added
+
+- **`jevitate journey chain` and MCP `chain_journeys` (#580).** Runs a discover Journey once and a prepare-only Journey once per approved request (JSON Lines `{commentId, account, replyText}`) matched to a discovered record by comment id **and** account. Unmatched requests never run, an empty discovery stops the chain, only the params the reply Journey declares are passed, and the result names ids and outcomes only (reply and source text are redacted from failure reasons). Promoted Journeys only, unless `--allow-draft` (CLI only).
+- **Indexed `forEach` outputs (#580).** A `forEach` child `extract` also binds `<as>.<i>.<field>`, and `<as>.count` after the loop, so a run returns every row. The row-scoped binding is unchanged.
+- **Reviewed `mutationValues` on a parameter (#579).** Up to 20 distinct values a person reviewed as valid but wrong; `verify --mutate` uses the first that differs from the supplied value. Refused on a secret parameter (`E_MUTATION_VALUES_SECRET`).
+- **`guard-param` mutations (#580).** A check that compares the page with an input before any action reads it, or with an assertion-only input (`expected_*`), is proven by giving the whole run a wrong input. `swap-param` now pairs only with checks at or after the action.
+- **Bizops reference workflow (#580).** An offline fixture app, both Journeys, draft catalog entries, acceptance and proof suites, and [docs/bizops-workflow.md](docs/bizops-workflow.md).
+
+### Fixed
+
+- **Select mutations use real options (#579).** `swap-param` on a select-fed parameter picks another enabled option of the live `<select>` instead of a value that is not an option (which timed out and read as cascade); with no other enabled option it is `not-applied` (`no-alternative`). `truncate-param` is no longer planned for a parameter only selects read. Reports name the swap's source (`reviewed`, `option`, `generated`).
+- **Action `{var}` reads are run inputs (#580).** A declared parameter an action reads through `{ var }` without a `variableName` tag is accepted and required by `journey run`, so a mutated replay no longer refuses it as unknown.
+
+## [0.16.2] – 2026-10-18
+
+### Changed
+
+- **Package documentation:** expanded the npm quick start and next steps, linked the public websites, and documented Jevitate's open-source journey foundation for Journeeze's hosted help and feedback service.
+
 ## [0.16.1] – 2026-10-18
 
 ### Fixed

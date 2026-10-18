@@ -1,0 +1,38 @@
+[
+  {
+    "id": "answer-community-comments",
+    "trigger": "a community member posts a comment that needs an answer",
+    "motivation": "prepare a reply that the separate Bizops approval step has approved",
+    "outcome": "answer community comments without ever sending text a separate approval step has not approved",
+    "personas": ["bizops-operator"],
+    "priority": "high",
+    "kind": "core",
+    "provenance": "team_hypothesis",
+    "steps": [
+      { "id": "discover", "name": "Discover the open community conversations", "stage": "locate" },
+      { "id": "prepare", "name": "Prepare the approved reply in the composer", "stage": "prepare" }
+    ],
+    "desiredOutcomes": [
+      {
+        "id": "approved-reply-only",
+        "step": "prepare",
+        "direction": "minimize",
+        "measure": "likelihood",
+        "object": "the likelihood of preparing reply text that the separate Bizops approval step has not approved",
+        "gulf": "execution",
+        "metric": { "kind": "error", "at": "job_end" },
+        "target": { "op": "<=", "value": 0, "unit": "count" },
+        "guardrail": true
+      },
+      {
+        "id": "discover-open-conversations",
+        "step": "discover",
+        "direction": "maximize",
+        "measure": "count",
+        "object": "the number of open conversations discovered with the context a reply needs",
+        "metric": { "kind": "completion", "from": "job_start", "to": "job_end" },
+        "target": { "op": ">=", "value": 100, "unit": "percent" }
+      }
+    ]
+  }
+]

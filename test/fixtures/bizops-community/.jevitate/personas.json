@@ -1,0 +1,9 @@
+{
+  "personas": [
+    {
+      "name": "bizops-operator",
+      "description": "A fictional community operator in the Bizops workspace. They read the community inbox and prepare replies, but do not decide what may be said: a separate approval step (Bizops) has already approved the reply text they prepare, and they never send unapproved text.",
+      "role": "community-manager"
+    }
+  ]
+}

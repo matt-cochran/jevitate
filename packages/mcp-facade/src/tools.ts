@@ -15,6 +15,9 @@ export const ALLOWED_TOOLS = [
   "journey_anchors", "run_campaign",
   // #401 — the assertion-strength lint promote_journey applies; #402 — its mutation proof.
   "lint_journey", "verify_journey",
+  // #580 — the two-journey chain: discover once, prepare-only reply per approved request. Promoted
+  // Journeys only (--allow-draft is CLI-only); ids and outcomes only, never record or reply text.
+  "chain_journeys",
   // #425 — a sweep: many explore missions over a targets file, one aggregated result.
   "run_sweep",
   // #432 — the read-only review sheet a person reads before promote_journey (bound by its content hash).

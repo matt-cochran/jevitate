@@ -62,6 +62,7 @@ const USAGE_ERROR_PATTERNS: readonly RegExp[] = [
 
 const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_CHECK_SUITE", // the suite (or its preflight) was refused
+  "E_CHAIN_REQUEST", // #580: an approved-requests line is malformed or carries an unknown key — nothing ran
   "E_CAMPAIGN_PREFLIGHT", // #485: a campaign's preconditions failed (start URL, session, allow list) — no mission ran
   "E_AI_SETUP_REQUIRED", // no keys / no gateway selected
   "E_MISSING_CREDENTIAL",
