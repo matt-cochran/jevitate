@@ -108,6 +108,10 @@ export interface JourneyReadinessOptions {
   /** The approved requests, as raw JSON Lines (a pair's `replay`/`prove` needs them). */
   readonly requests?: string;
   readonly storageState?: string;
+  /** The shared browser launch settings (`--browser-*`), as `journey run` takes them. */
+  readonly browser?: RunJourneyProgrammaticallyOptions["browser"];
+  /** The host's browser seam (tests inject a pooled browser), as `journey run`/`journey chain`. */
+  readonly browserPortFactory?: RunJourneyProgrammaticallyOptions["browserPortFactory"];
   readonly journeysDir: string;
   readonly catalogDir?: string | null;
   readonly targetsFile?: string;
@@ -411,6 +415,8 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
           dir: opts.journeysDir,
           environment,
           ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
+          ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+          ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
         });
         replay = pairReplay(chained);
       } else {
@@ -420,6 +426,8 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
           params,
           environment,
           ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
+          ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+          ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
           ...(opts.fixtures === undefined ? {} : { fixtures: opts.fixtures(opts.id, environment) }),
         });
         replay = oneJourneyReplay(result as { outcome: string; reason?: string; handback?: HandbackOutcome });
@@ -436,6 +444,8 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
             params,
             environment,
             ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
+          ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+          ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
             ...(opts.fixtures === undefined ? {} : { fixtures: opts.fixtures(ctx.id, environment) }),
           });
         } catch (err) {

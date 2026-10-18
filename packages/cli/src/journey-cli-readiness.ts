@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
 import { fail, ok } from "./envelope.js";
-import { collectParam, emitCommandResult, type CliDeps } from "./cli-shared.js";
+import { browserRunFromFlags, collectParam, emitCommandResult, withBrowserLaunchFlags, type BrowserLaunchFlags, type CliDeps } from "./cli-shared.js";
 import { isEnvironmentError, withEnvironmentFlags, fixtureRebaseUrl, type ResolvedJourneyEnvironment } from "./environments.js";
 import { buildMissionFixtures, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { withRecordedFixtures } from "./journey-fixtures.js";
@@ -40,7 +40,7 @@ function readinessHuman(receipt: ReadinessReceipt): string {
 
 /** Registers `jevitate journey readiness` (not wired into `journey-cli.ts` by this deliverable). */
 export function registerJourneyReadiness(journey: Command, program: Command, deps: CliDeps): void {
-  withFixtureFlags(withEnvironmentFlags(withProjectFlags(journey.command("readiness <id>"))))
+  withBrowserLaunchFlags(withFixtureFlags(withEnvironmentFlags(withProjectFlags(journey.command("readiness <id>")))))
     .description("report a Journey's (or a linked pair's) technical readiness: static checks, and with --mode replay/prove a baseline replay and fresh mutation proofs")
     .option("--with <toId>", "a linked pair: <id> produces, <toId> consumes (#582 handoff is checked)")
     .option("--mode <mode>", "report (static only) | replay (baseline run/chain) | prove (replay + verify --mutate)", "report")
@@ -119,6 +119,13 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
       }
 
       let receipt: ReadinessReceipt;
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags>(), deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitCommandResult(program, fail("E_READINESS_ARGS", err instanceof Error ? err.message : String(err)), { json: json === true, exitCode: EXIT_CODES.usage, command: "journey readiness" });
+        return;
+      }
       try {
         receipt = await runJourneyReadiness(
           {
@@ -130,6 +137,8 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
             params: param,
             ...(requests === undefined ? {} : { requests }),
             ...(storageStateFlag === undefined ? {} : { storageState: storageStateFlag }),
+            ...(browser === undefined ? {} : { browser }),
+            browserPortFactory: deps.explore?.browserPortFactory,
             journeysDir: layout.journeysDir,
             catalogDir: resolveCatalogDir(deps.catalogDir, layout.catalogDir ?? undefined),
             ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath }),

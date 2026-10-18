@@ -411,9 +411,10 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),
         fixtureIdentity: FIXTURE_IDENTITY,
+        ...EXTENSION,
         ...ENVIRONMENT,
       },
-      omitted: { ...LOCATION_FLAGS, ...HOOK_FLAGS, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
