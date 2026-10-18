@@ -135,6 +135,42 @@
             "expectedResult": "The source comment contains the expected source text."
           },
           {
+            "stepId": "s-identity-matches",
+            "step": {
+              "kind": "assert",
+              "check": {
+                "kind": "attr",
+                "target": {
+                  "testId": "source-comment"
+                },
+                "name": "data-account",
+                "value": {
+                  "var": "replyIdentity"
+                }
+              }
+            },
+            "objective": "Refuse a reply identity other than the account this conversation belongs to, before the composer is touched.",
+            "expectedResult": "The source comment belongs to the requested reply identity."
+          },
+          {
+            "stepId": "s-thread-matches",
+            "step": {
+              "kind": "assert",
+              "check": {
+                "kind": "attr",
+                "target": {
+                  "testId": "conversation-meta"
+                },
+                "name": "data-thread-id",
+                "value": {
+                  "var": "threadId"
+                }
+              }
+            },
+            "objective": "Refuse a thread other than the one this conversation is in, before the composer is touched.",
+            "expectedResult": "The reopened conversation is in the requested thread."
+          },
+          {
             "stepId": "s-identity",
             "step": {
               "kind": "select",
