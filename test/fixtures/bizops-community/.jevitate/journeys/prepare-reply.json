@@ -111,7 +111,23 @@
         "label": "Send"
       },
       "nextStep": "Read the prepared reply in Community, then click Send yourself."
-    }
+    },
+    "anchors": [
+      {
+        "name": "prepare.start",
+        "step": 1,
+        "stepId": "s-open",
+        "jobStep": "prepare",
+        "boundary": "start"
+      },
+      {
+        "name": "prepare.end",
+        "step": 9,
+        "stepId": "s-reply-text",
+        "jobStep": "prepare",
+        "boundary": "end"
+      }
+    ]
   },
   "recording": {
     "version": "1",

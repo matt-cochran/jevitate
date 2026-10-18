@@ -8,7 +8,7 @@ import { withSiteGate } from "../site-gate-cli.js";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 import { type CliDeps, resolveDbPath, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, type DemoFlags, collectParam, emitJson, environmentSeams } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
-import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
+import { DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout } from "./shared.js";
 
 /** Registers `jevitate journey migrate`. */
 export function registerJourneyMigrate(journey: Command, program: Command, deps: CliDeps): void {
@@ -55,7 +55,7 @@ export function registerJourneyMigrate(journey: Command, program: Command, deps:
           return;
         }
         try {
-          const result = await migrateStepIds({ journeysDir: migrateJourneysDir, projectDir: resolveCatalogDir(deps.catalogDir), dryRun: dryRun === true });
+          const result = await migrateStepIds({ journeysDir: migrateJourneysDir, projectDir: resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)), dryRun: dryRun === true });
           if (json) emitJson(program, ok(result));
           else program.configureOutput().writeOut?.(renderMigrateStepIds(result));
           process.exitCode = 0;

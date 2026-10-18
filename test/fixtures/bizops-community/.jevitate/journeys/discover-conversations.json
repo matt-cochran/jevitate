@@ -47,7 +47,23 @@
           "type": "text"
         }
       }
-    }
+    },
+    "anchors": [
+      {
+        "name": "discover.start",
+        "step": 1,
+        "stepId": "s-inbox",
+        "jobStep": "discover",
+        "boundary": "start"
+      },
+      {
+        "name": "discover.end",
+        "step": 2,
+        "stepId": "s-records",
+        "jobStep": "discover",
+        "boundary": "end"
+      }
+    ]
   },
   "recording": {
     "version": "1",
@@ -204,8 +220,7 @@
                 }
               ]
             },
-            "objective": "Walk every inbox row and read its record fields: provider, channel, account, post, thread, comment and permalink from the row's data-* attributes, and sourceText from the row's text. parentId is deliberately not extracted here: rows without a parent have no such attribute, so a reply-to-reply Journey declares expected_parentid separately.",
-            "expectedResult": "Every inbox row is read into a record, one extract per field, in page order."
+            "objective": "Walk every inbox row and read its record fields: provider, channel, account, post, thread, comment and permalink from the row's data-* attributes, and sourceText from the row's text. parentId is deliberately not extracted here: rows without a parent have no such attribute, so a reply-to-reply Journey declares expected_parentid separately."
           }
         ]
       }
