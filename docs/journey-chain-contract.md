@@ -44,11 +44,16 @@ The reply Journey reopens one conversation and prepares, never sends, the reply.
 
 | Param | From | Used by |
 | --- | --- | --- |
-| `permalink` | record | the `navigate` that reopens the comment |
+| `commentId` | record | the `navigate` that reopens the comment, through the Journey's own URL template (e.g. `/c/${commentId}`) |
 | `replyIdentity` | record `account` | the `select` of the reply identity |
 | `threadId` | record | the `select` of the thread |
 | `expected_commentid`, `expected_parentid`, `expected_account`, `expected_sourcetext` | record | assertion-only checks **before** the composer is touched (#573) |
 | `replyText` | the approved request | the composer `fill`, then `valueEquals { "var": "replyText" }` |
+
+`permalink` is not a param: a navigate placeholder is one percent-encoded path segment (#399), so a
+whole path or URL cannot be passed through it. The record keeps `permalink` for Bizops and for
+people; the Journey owns its site's URL template and proves the page it opened is the right one
+with the `expected_*` checks.
 
 `expected_parentid` is declared only by a Journey for replies to replies. The Journey ends with
 the composer filled and **zero** submissions: no Send click, no submit key press, no implicit
@@ -80,7 +85,8 @@ jevitate journey chain --from discover-conversations --to prepare-reply \
    (`E_CHAIN_EMPTY`): no target is guessed.
 3. Joins each request to the record with the same `commentId` and `account`. A request with no
    match is reported `unmatched` and **not run**. A record with no request is not run.
-4. Runs `--to` once per matched request with the params of section 3. Each run is validated as
+4. Runs `--to` once per matched request with the params of section 3 (each only when the `--to`
+   Journey declares it, except `replyText`, which it must declare). Each run is validated as
    `journey run` validates params; a missing record field is `E_CHAIN_FIELD` for that request.
 5. Exits non-zero unless every request matched and every run was `ok`.
 

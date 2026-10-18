@@ -13,6 +13,7 @@ deliverable of the 0.17.0 plan that removes it. Shapes are fixed in
 | B5 | No reviewed mutation value per parameter: when a page has a single valid alternative the proof cannot be steered to it | n/a (field missing) | `packages/journey/src/journey.ts` (`JourneyParameter`) | `param-mutation-values-contract` |
 | B6 | `journey review --strict` flags missing job/persona links; the links need catalog entries, and their approval is human-only | strict review on either Journey | `.jevitate/jobs.json`, `personas.json` | `bizops-catalog-links`, then `human-catalog-signoff` |
 | B7 | No offline fixture with ≥2 identities, ≥2 threads, parents and permalinks, and a countable Send | n/a | `test/fixtures/` | `bizops-fixture-app` |
+| B8 | A navigate placeholder is one percent-encoded segment, so a record's whole `permalink` cannot be passed as a param (`/c/c-2041` would become `%2Fc%2Fc-2041`) | n/a | `packages/recording/src/navigate-params.ts` | contract change: the reply Journey owns its URL template (`/c/${commentId}`); no code change |
 
 Checked and **not** blockers:
 
