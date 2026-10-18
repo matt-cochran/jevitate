@@ -7,7 +7,7 @@ behaviour changes).
 
 ## [Unreleased]
 
-## [0.18.1] – unreleased
+## [0.18.1] – 2026-10-18
 
 ### Fixed
 
