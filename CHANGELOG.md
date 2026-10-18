@@ -24,6 +24,8 @@ behaviour changes).
 - **Select mutations use real options (#579).** `swap-param` on a select-fed parameter picks another enabled option of the live `<select>` instead of a value that is not an option (which timed out and read as cascade); with no other enabled option it is `not-applied` (`no-alternative`). `truncate-param` is no longer planned for a parameter only selects read. Reports name the swap's source (`reviewed`, `option`, `generated`).
 - **Action `{var}` reads are run inputs (#580).** A declared parameter an action reads through `{ var }` without a `variableName` tag is accepted and required by `journey run`, so a mutated replay no longer refuses it as unknown.
 
+## [0.16.2] – 2026-10-18
+
 ### Changed
 
 - **Package documentation:** expanded the npm quick start and next steps, linked the public websites, and documented Jevitate's open-source journey foundation for Journeeze's hosted help and feedback service.
