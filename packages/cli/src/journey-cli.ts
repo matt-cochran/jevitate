@@ -3,6 +3,7 @@ import type { CliDeps } from "./cli-shared.js";
 import { registerJourneyList } from "./journey-cli/list.js";
 import { registerJourneyFind } from "./journey-cli/find.js";
 import { registerJourneyRun } from "./journey-cli/run.js";
+import { registerJourneyChain } from "./journey-cli/chain.js";
 import { registerJourneyPromote } from "./journey-cli/promote.js";
 import { registerJourneyReview } from "./journey-cli/review.js";
 import { registerJourneyMigrate } from "./journey-cli/migrate.js";
@@ -15,13 +16,17 @@ import { registerJourneyLinkCommand } from "./journey-link-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
 import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
 
-/** Registers `jevitate journey`: `list|find|run|promote|lint|verify|anchors|anchor|link|annotate|demo|publish`. */
+/** Registers `jevitate journey`: `list|find|run|chain|promote|lint|verify|anchors|anchor|link|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
   registerJourneyList(journey, program, deps);
   registerJourneyFind(journey, program, deps);
   registerJourneyRun(journey, program, deps);
+
+  // #580 — run a discover Journey once, then a prepare-only reply Journey per matched request.
+  registerJourneyChain(journey, program, deps);
+
   registerJourneyPromote(journey, program, deps);
   registerJourneyReview(journey, program, deps);
   registerJourneyMigrate(journey, program, deps);
