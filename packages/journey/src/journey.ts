@@ -407,7 +407,8 @@ export const JourneySchema: ZodType<Journey> = z.object({
 });
 
 /** A step's own assertions with their field names (a `forEach`'s children are walked separately). */
-function ownAssertions(step: Step): { field: string; assertion: Assertion }[] {
+/** A step's own assertions (its `check`, `resume` or `expect`), each with the field that holds it. */
+export function ownAssertions(step: Step): { field: string; assertion: Assertion }[] {
   if (step.kind === "assert") return [{ field: "check", assertion: step.check }];
   if (step.kind === "handback") return [{ field: "resume", assertion: step.resume }];
   return "expect" in step ? [{ field: "expect", assertion: step.expect }] : [];

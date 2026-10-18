@@ -770,7 +770,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (134 exports)
+# @jevitate/journey (136 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -873,6 +873,7 @@
   journeyAssertions: function
   journeyBranchPoint: function
   journeyEndState: function
+  journeyParamSchema: function
   journeyPrefix: function
   journeyProofHash: function
   journeyRunParams: function
@@ -887,6 +888,7 @@
   mutationReplay: function
   mutationWait: function
   needsRelaxedReplay: function
+  ownAssertions: function
   planJourneyMutations: function
   prefixLandingPath: function
   relaxedMutationReplay: function

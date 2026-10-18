@@ -7,6 +7,12 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.16.1] – 2026-10-18
+
+### Fixed
+
+- **Assertion-only parameters are run inputs (#573).** A parameter declared in `metadata.params` / `parameters` that only an assertion names (`{ "var": "name" }` or `${name}`, in a step expectation or an end-state check) is now accepted by `journey run` and the other run surfaces (verify, prefix runs, campaigns, load tests, `source run`), and required when missing; an undeclared `--param` is still refused. Before, run validation saw only fills and navigate placeholders and refused it with `E_INVALID_PARAMS`.
+
 ## [0.16.0] – 2026-10-17
 
 0.16.0 makes create-style and parameterized Journeys repeatable and provable: assertions can check the values a run was given or read, fixtures can undo what a Journey created, environments move split-origin Journeys, and manual recordings flow into a reviewable binding proposal.
