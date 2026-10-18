@@ -58,7 +58,60 @@
       {
         "description": "Nothing was sent: the Journey ends at the filled composer, with no Send click and no submit key press."
       }
-    ]
+    ],
+    "inputs": {
+      "accepts": "community-conversation@1",
+      "request": {
+        "fields": {
+          "commentId": {
+            "type": "id"
+          },
+          "account": {
+            "type": "id"
+          },
+          "replyText": {
+            "type": "text"
+          }
+        },
+        "key": [
+          "commentId",
+          "account"
+        ]
+      },
+      "bindings": {
+        "commentId": {
+          "record": "commentId"
+        },
+        "replyIdentity": {
+          "record": "account"
+        },
+        "threadId": {
+          "record": "threadId"
+        },
+        "expected_commentid": {
+          "record": "commentId"
+        },
+        "expected_account": {
+          "record": "account"
+        },
+        "expected_sourcetext": {
+          "record": "sourceText"
+        },
+        "replyText": {
+          "request": "replyText"
+        }
+      }
+    },
+    "boundary": {
+      "kind": "prepare-only",
+      "stopBefore": {
+        "target": {
+          "testId": "reply-send"
+        },
+        "label": "Send"
+      },
+      "nextStep": "Read the prepared reply in Community, then click Send yourself."
+    }
   },
   "recording": {
     "version": "1",
