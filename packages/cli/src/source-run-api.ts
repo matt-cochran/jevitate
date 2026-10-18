@@ -1,4 +1,4 @@
-import { deriveParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
+import { journeyParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
 import { createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import type { SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
@@ -52,7 +52,7 @@ export type RunResolvedJourney = (
 /**
  * The real, Playwright-backed runner for a gated source Journey. Mirrors
  * `journey-api.ts`'s `runJourneyProgrammatically` exactly:
- *  - validates params UP FRONT (`deriveParamSchema`/`validateParams`) before
+ *  - validates params UP FRONT (`journeyParamSchema`/`validateParams`) before
  *    any browser launch, so bad params never pay the cost/risk of a browser;
  *  - opens a real `PlaywrightBrowserPort` scoped to the Journey's authorized
  *    origins (the gate has already proven `declaredOrigins ⊆ manifest`);
@@ -70,7 +70,7 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     );
   }
 
-  validateParams(deriveParamSchema(file.recording), params);
+  validateParams(journeyParamSchema(file), params);
 
   // The browser allowlist is the Journey's authorized origin set — the base
   // site plus every gate-approved declared origin.

@@ -4,7 +4,7 @@ import {
   FsJourneyStore,
   JourneyRegistry,
   JourneyStepError,
-  deriveParamSchema,
+  journeyParamSchema,
   journeyBranchPoint,
   journeyPrefix,
   prefixLandingPath,
@@ -202,7 +202,7 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
   }
   const prefix = journeyPrefix(full, resolved.step);
   const used = prefixParams(full, prefix, opts.params);
-  validateParams(deriveParamSchema(prefix.recording), used);
+  validateParams(journeyParamSchema(prefix), used);
   const branch = journeyBranchPoint(full, resolved);
   const site = full.recording.site;
   let startUrl: string;
