@@ -105,13 +105,13 @@ function recordParams(commentId: string, replyText: string, overrides: Readonly<
   };
 }
 
-/** The prepare-reply Journey's own reply-text fill step (0-based, matching `handback.evidence.failedAt`). */
-async function replyTextFillIndex(journeysDir: string): Promise<number> {
+/** A prepare-reply step's number as a person counts it (1-based, matching `handback.evidence.failedAt`). */
+async function stepNumber(journeysDir: string, stepId: string): Promise<number> {
   const journey = await new JourneyRegistry(new FsJourneyStore(journeysDir)).get("prepare-reply");
   if (journey === null) throw new Error("prepare-reply is not in the fixture journeys");
-  const fill = flatJourneySteps(journey).find((s) => s.recorded.stepId === "s-reply-text");
-  if (fill === undefined) throw new Error("prepare-reply has no s-reply-text step");
-  return fill.index;
+  const step = flatJourneySteps(journey).find((s) => s.recorded.stepId === stepId);
+  if (step === undefined) throw new Error(`prepare-reply has no ${stepId} step`);
+  return step.index + 1;
 }
 
 function checkOf(receipt: ReadinessReceipt, check: string, id: string): ReadinessCheck | undefined {
@@ -123,10 +123,10 @@ function checkOf(receipt: ReadinessReceipt, check: string, id: string): Readines
 describe("#583 prepare-reply ends at a prepared handback (served)", () => {
   let correct: Awaited<ReturnType<typeof runJourneyProgrammatically>>;
   let wrong: Awaited<ReturnType<typeof runJourneyProgrammatically>>;
-  let fillIndex = 0;
+  let commentCheckStep = 0;
 
   beforeAll(async () => {
-    fillIndex = await replyTextFillIndex(served.journeysDir);
+    commentCheckStep = await stepNumber(served.journeysDir, "s-source-comment");
     correct = await runJourneyProgrammatically({
       dir: served.journeysDir,
       id: "prepare-reply",
@@ -159,8 +159,8 @@ describe("#583 prepare-reply ends at a prepared handback (served)", () => {
     expect(wrong.handback?.state).toBe("verification-failed");
   });
 
-  it("pins the failed_commentid verification before the reply-text fill", () => {
-    expect(wrong.handback?.evidence.failedAt).toBeLessThan(fillIndex);
+  it("names the comment-id check as the failed step, before the reply-text fill", () => {
+    expect(wrong.handback?.evidence.failedAt).toBe(commentCheckStep);
   });
 
   it("submits nothing to the community site throughout", () => {
@@ -241,12 +241,13 @@ describe("#581 readiness report over the committed pair (served)", () => {
     expect(checkOf(receipt, "boundary", "prepare-reply")?.state).toBe("pass");
   });
 
-  it("lists the draft persona under awaitingHuman", () => {
-    expect(receipt.awaitingHuman.some((a) => a.item === "persona:bizops-operator (draft)")).toBe(true);
+  // The committed pair was signed off by a person (#580): nothing is left for one.
+  it("lists nothing under awaitingHuman for the signed-off pair", () => {
+    expect(receipt.awaitingHuman).toEqual([]);
   });
 
-  it("lists the draft job under awaitingHuman", () => {
-    expect(receipt.awaitingHuman.some((a) => a.item === "job:answer-community-comments (draft)")).toBe(true);
+  it("reports the signed-off pair's promotion check pass", () => {
+    expect(checkOf(receipt, "promotion", "prepare-reply")?.state).toBe("pass");
   });
 
   it("opens no browser in report mode", () => {
@@ -328,14 +329,12 @@ describe("#584 the local review bundle over the committed pair (served)", () => 
     expect(existsSync(join(outDir, "manifest.json"))).toBe(true);
   });
 
-  it("lists the promote commands after the blockers under the blockers heading", () => {
-    const after = md.slice(md.indexOf("## After the blockers are fixed"));
-    expect(after).toContain("- jevitate journey promote discover-conversations\n");
+  it("lists nothing for a person once the pair is signed off", () => {
+    expect(md).toContain("Nothing is waiting for a person");
   });
 
-  it("omits a reviewed hash from the blocked promote commands", () => {
-    const after = md.slice(md.indexOf("## After the blockers are fixed"));
-    expect(after).not.toContain("--reviewed-hash");
+  it("repeats no approval a person already gave", () => {
+    expect(md).not.toMatch(/jevitate (persona|job) approve|jevitate journey promote/);
   });
 
   it("passes on the freshly built bundle", async () => {

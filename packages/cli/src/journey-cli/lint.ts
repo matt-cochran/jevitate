@@ -9,7 +9,7 @@ import { currentEngineInfo } from "../engine.js";
 import { renderJourneyLintSarif } from "../journey-lint-sarif.js";
 import { type CliDeps, emitJson } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
-import { DEPRECATED_DIR_HELP, journeyLayout, lintFindingLine } from "./shared.js";
+import { DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, lintFindingLine } from "./shared.js";
 import { FsJourneyStore } from "@jevitate/journey";
 import { journeyLinkWarnings } from "../journey-link-hints.js";
 
@@ -43,7 +43,7 @@ export function registerJourneyLint(journey: Command, program: Command, deps: Cl
         const fixed = fixResult?.stamped ?? [];
         // #507: stamping a promoted Journey makes its approval stale — say so, with the re-approval command.
         const reapproval = fixResult?.needsReapproval === true ? { needsReapproval: true as const, reapproveCommand: fixResult.reapproveCommand } : {};
-        const catalogDir = resolveCatalogDir(deps.catalogDir);
+        const catalogDir = resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout));
         const linted = await lintJourneyById(resolvedJourneysDir, id, { catalogDir });
         // #523: catalog-aware, advisory: a missing job / persona link is a warning with its fix.
         const stored = await new FsJourneyStore(resolvedJourneysDir).get(id);

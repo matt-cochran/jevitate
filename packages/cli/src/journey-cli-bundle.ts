@@ -3,7 +3,7 @@ import { resolveCatalogDir } from "./catalog-api.js";
 import { emitCommandResult, type CliDeps } from "./cli-shared.js";
 import { fail, ok } from "./envelope.js";
 import { EXIT_CODES } from "./exit-codes.js";
-import { journeyLayout, targetsOpts } from "./journey-cli/shared.js";
+import { flaggedCatalogDir, journeyLayout, targetsOpts } from "./journey-cli/shared.js";
 import { BundleStaleError, buildJourneyBundle, checkJourneyBundle } from "./journey-bundle.js";
 import { withProjectFlags } from "./project-layout.js";
 
@@ -34,7 +34,7 @@ export function registerJourneyBundle(journey: Command, program: Command, deps: 
       const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
       if (layout === null) return;
       const { with: withId, out, check, json } = this.opts<{ with?: string; out?: string; check?: string; json?: boolean }>();
-      const catalogDir = resolveCatalogDir(deps.catalogDir, layout.catalogDir ?? undefined);
+      const catalogDir = resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout));
       const location = { journeysDir: layout.journeysDir, catalogDir, ...targetsOpts(deps) };
       const bundleDeps = { cwd: () => process.cwd() };
 

@@ -130,7 +130,9 @@ export function handbackFacts(a: { readonly result: JourneyRunResult; readonly s
   const failedKind: HandbackFacts["failedKind"] = at === undefined ? undefined : /postcondition failed/.test(reason ?? "") ? "postcondition" : "other";
   return {
     outcome: a.result.outcome,
-    ...(at === undefined ? {} : { failedAt: at }),
+    // `at` is the run's 0-based step index; `failedAt` names the step as a person counts it (1-based,
+    // as the run's own "step N failed" reason does).
+    ...(at === undefined ? {} : { failedAt: at + 1 }),
     ...(failedKind === undefined ? {} : { failedKind }),
     steps: a.steps,
     checksPassed: a.result.outcome === "ok" ? a.steps : at ?? 0,

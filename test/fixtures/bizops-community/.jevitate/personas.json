@@ -3,7 +3,16 @@
     {
       "name": "bizops-operator",
       "description": "A fictional community operator in the Bizops workspace. They read the community inbox and prepare replies, but do not decide what may be said: a separate approval step (Bizops) has already approved the reply text they prepare, and they never send unapproved text.",
-      "role": "community-manager"
+      "role": "community-manager",
+      "approval": {
+        "contentHash": "2ff8b19bec931f447eb489be9ce8a2b3ffce175b1bdd45af0bb9e87ddcdb4b55",
+        "at": "2026-10-18T21:54:46.601Z",
+        "provenance": {
+          "channel": "tty",
+          "agentSignals": [],
+          "user": "mc"
+        }
+      }
     }
   ]
 }
