@@ -13,22 +13,28 @@ import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../jou
 import { withEngine } from "../engine.js";
 import { verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
-import { type CliDeps, resolveDbPath, resolveJourneysDir, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, type DemoFlags, collectParam, emitJson, environmentSeams } from "../cli-shared.js";
+import { type CliDeps, resolveDbPath, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, type DemoFlags, collectParam, emitJson, environmentSeams } from "../cli-shared.js";
+import { withProjectFlags } from "../project-layout.js";
+import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 
 /** Registers `jevitate journey verify`. */
 export function registerJourneyVerify(journey: Command, program: Command, deps: CliDeps): void {
   // #402 — the negative proof: replay the Journey once as recorded, then once per mutation (skip a
   // write step, abort its writes, type an empty value into a checked fill); each assertion must fail
   // under its paired mutation. `verify` is reserved for proofs: today only `--mutate` exists.
-  withReplayAllowFlag(withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(journey.command("verify <id>")))))
+  withReplayAllowFlag(withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(withProjectFlags(journey.command("verify <id>"))))))
     .description("prove each assertion of a Journey can fail: --mutate replays it with each write step skipped or blocked, and each checked fill emptied")
     .option("--mutate", "run the mutation proof (required)")
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--storage-state <file>", "Playwright storageState JSON to start each replay authenticated (as journey run)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { mutate, dir, param, storageState: storageStateFlag, json, env: envName, baseUrl } = this.opts<
+      const locationFlags = this.opts<{ dir?: string; project?: string; journeysDir?: string }>();
+      const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
+      if (layout === null) return;
+      const verifyJourneysDir = layout.journeysDir;
+      const { mutate, param, storageState: storageStateFlag, json, env: envName, baseUrl } = this.opts<
         { mutate?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags
       >();
       if (mutate !== true) {
@@ -65,12 +71,12 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       }
       try {
         // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
-        const recorded = await withRecordedFixtures(fixtureFlags, { dir: resolveJourneysDir(deps, dir), id });
+        const recorded = await withRecordedFixtures(fixtureFlags, { dir: verifyJourneysDir, id });
         let fixtureDrift: FixtureDrift | undefined;
         const report = await withSiteGate(resolveDbPath(deps), (siteGate) =>
           verifyJourneyMutations({
             ...(siteGate === undefined ? {} : { siteGate }),
-            dir: resolveJourneysDir(deps, dir),
+            dir: verifyJourneysDir,
             id,
             params: param,
             browserPortFactory: deps.explore?.browserPortFactory,

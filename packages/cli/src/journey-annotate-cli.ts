@@ -24,7 +24,6 @@ import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnviron
 import {
   type CliDeps,
   resolveDbPath,
-  resolveJourneysDir,
   type BrowserLaunchFlags,
   withBrowserLaunchFlags,
   withScreenshotsFlag,
@@ -40,6 +39,8 @@ import {
   GatewaySelectionError,
   buildGenerationGateway,
 } from "./cli-shared.js";
+import { journeyLayout, DEPRECATED_DIR_HELP } from "./journey-cli/shared.js";
+import { withProjectFlags } from "./project-layout.js";
 
 /**
  * #246 — `jevitate journey annotate <id>`: replay the Journey and DRAFT its intent (each step's
@@ -48,12 +49,12 @@ import {
  * Journey changed since the draft). The model never edits a Journey on its own.
  */
 export function registerJourneyAnnotateCommand(journey: Command, program: Command, deps: CliDeps): void {
-  withScreenshotsFlag(withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("annotate <id>"))))))
+  withScreenshotsFlag(withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(withProjectFlags(journey.command("annotate <id>")))))))
     .description(
       "draft each step's objective/expected result (and the goal/success criteria when missing) by replaying the Journey; " +
         "writes a reviewable draft, never the Journey — `--approve` applies a reviewed draft (human gate)",
     )
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--storage-state <file>", "Playwright storageState JSON to start the replay authenticated; must exist")
     .option("--real", "draft with the live OpenRouter generation gateway (requires keys)", false)
@@ -63,9 +64,11 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const ownFixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState: storageStateFlag, real, fakeAi, approve, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, ...emulationFlags } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, real, fakeAi, approve, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, project, journeysDir: journeysDirFlag, ...emulationFlags } = this.opts<{
         actionDeltas?: boolean;
         dir?: string;
+        project?: string;
+        journeysDir?: string;
         param: Record<string, string>;
         storageState?: string;
         real?: boolean;
@@ -74,7 +77,9 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
         json?: boolean;
       } & EmulationFlags & EnvironmentFlags & ScreenshotsFlags>();
       const out = program.configureOutput().writeOut;
-      const journeysDir = resolveJourneysDir(deps, dir);
+      const layout = journeyLayout(program, deps, { project, journeysDir: journeysDirFlag, dir });
+      if (layout === null) return;
+      const journeysDir = layout.journeysDir;
 
       if (approve === true) {
         if (

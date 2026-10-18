@@ -4,6 +4,8 @@ import { registerJourneyList } from "./journey-cli/list.js";
 import { registerJourneyFind } from "./journey-cli/find.js";
 import { registerJourneyRun } from "./journey-cli/run.js";
 import { registerJourneyChain } from "./journey-cli/chain.js";
+import { registerJourneyReadiness } from "./journey-cli-readiness.js";
+import { registerJourneyBundle } from "./journey-cli-bundle.js";
 import { registerJourneyPromote } from "./journey-cli/promote.js";
 import { registerJourneyReview } from "./journey-cli/review.js";
 import { registerJourneyMigrate } from "./journey-cli/migrate.js";
@@ -26,6 +28,9 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
 
   // #580 — run a discover Journey once, then a prepare-only reply Journey per matched request.
   registerJourneyChain(journey, program, deps);
+  // 0.18.0 — #581 one readiness receipt; #584 the local human review bundle (neither approves anything).
+  registerJourneyReadiness(journey, program, deps);
+  registerJourneyBundle(journey, program, deps);
 
   registerJourneyPromote(journey, program, deps);
   registerJourneyReview(journey, program, deps);

@@ -22,7 +22,6 @@ import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnviron
 import {
   type CliDeps,
   resolveDbPath,
-  resolveJourneysDir,
   type BrowserLaunchFlags,
   withBrowserLaunchFlags,
   browserRunFromFlags,
@@ -38,6 +37,8 @@ import {
   environmentSeams,
 } from "./cli-shared.js";
 import { clock } from "@jevitate/domain";
+import { journeyLayout, DEPRECATED_DIR_HELP } from "./journey-cli/shared.js";
+import { withProjectFlags } from "./project-layout.js";
 
 /**
  * #248 — `jevitate journey demo <id>`: replay a Journey as a narrated demo (goal title card, each
@@ -47,12 +48,12 @@ import { clock } from "@jevitate/domain";
  * the logs dir. A Journey that no longer replays writes nothing and exits 1 (a stale demo).
  */
 export function registerJourneyDemoCommand(journey: Command, program: Command, deps: CliDeps): void {
-  withScreenshotsFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("demo <id>")))))))
+  withScreenshotsFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(withProjectFlags(journey.command("demo <id>"))))))))
     .description(
       "replay a Journey as a narrated demo (goal, step objectives as captions, target highlights) → a WebM video with .vtt subtitles " +
         "and/or a Markdown step-by-step guide with screenshots; a Journey that no longer replays fails (exit 1)",
     )
-    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--storage-state <file>", "Playwright storageState JSON to start the replay authenticated; must exist")
     .option("--video <file>", "write the demo video here (.webm) and its subtitles beside it (.vtt)")
@@ -62,9 +63,11 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const ownFixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState: storageStateFlag, video: videoFlag, guide: guideFlag, pace, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, ...rest } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, video: videoFlag, guide: guideFlag, pace, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, project, journeysDir: journeysDirFlag, ...rest } = this.opts<{
         actionDeltas?: boolean;
         dir?: string;
+        project?: string;
+        journeysDir?: string;
         param: Record<string, string>;
         storageState?: string;
         video?: string;
@@ -73,7 +76,9 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
         json?: boolean;
       } & EmulationFlags & EnvironmentFlags & ScreenshotsFlags>();
       const out = program.configureOutput().writeOut;
-      const journeysDir = resolveJourneysDir(deps, dir);
+      const layout = journeyLayout(program, deps, { project, journeysDir: journeysDirFlag, dir });
+      if (layout === null) return;
+      const journeysDir = layout.journeysDir;
 
       // #247: --env/--base-url choose where the demo runs — the same resolver as `journey run`.
       let environment: ResolvedJourneyEnvironment | undefined;

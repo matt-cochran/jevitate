@@ -7,18 +7,21 @@ import {
   OutcomeCheckSchema,
   RecordingSchema,
   STEP_ID_RE,
+  TargetDescriptorSchema,
   type Assertion,
   type NetworkCheck,
   type OutcomeCheck,
   type Recording,
   type Step,
   type StatusSpec,
+  type TargetDescriptor,
 } from "@jevitate/recording";
 import { mutationPairIssues } from "./mutation-proof.js";
 import { SECRET_PARAM_NAME_RE, secretParamNames } from "./intent.js";
 import { ApprovalProposalSchema } from "./proposal-schema.js";
 import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
 import { anchorRuleIssues } from "./anchor-rules.js";
+import { handoffSchemaIssues, JourneyInputsSchema, JourneyOutputsSchema, type HandoffInputsDecl, type HandoffOutputsDecl } from "./handoff.js";
 
 export { ANCHOR_NAME_RE } from "./anchor-rules.js";
 
@@ -135,6 +138,36 @@ export interface JourneyMetadata {
    * namespace (`journeeze`, …), carried verbatim. It counts toward the content hash.
    */
   extensions?: Extensions;
+  /**
+   * #582: the typed handoff this Journey PRODUCES (docs/contracts/journey-handoff.md §2). Optional and
+   * additive: a Journey without it validates, hashes and chains exactly as in 0.17.0. Its fields are
+   * `extract` outputs of this Journey and its `contract` is the record a consuming Journey accepts.
+   */
+  outputs?: HandoffOutputsDecl;
+  /**
+   * #582: the typed handoff this Journey CONSUMES (§3) — the contract it accepts, the caller's request
+   * and how both bind to its params. Optional and additive.
+   */
+  inputs?: HandoffInputsDecl;
+  /**
+   * #583 — a prepare-only boundary: the Journey prepares a value and stops before the action a
+   * person takes (Send). Load-time rules refuse a Journey whose steps would cross it
+   * (`E_BOUNDARY_SCHEMA`); a run reports a typed `handback` state (§4 of the contract). Additive.
+   */
+  boundary?: HandbackBoundary;
+}
+
+/**
+ * #583 — the control a person uses after a prepare-only handback: declared and shown, never acted
+ * on. `blockWrites` aborts every first-party write request during the run (the #402 write guard).
+ */
+export interface HandbackBoundary {
+  kind: "prepare-only";
+  stopBefore: { target: TargetDescriptor; label: string };
+  /** The exact human next step (1–500 chars), shown wherever the state is shown. */
+  nextStep: string;
+  /** Optional: `true` aborts every first-party write request during the run. Default `false`. */
+  blockWrites?: boolean;
 }
 
 /** #465: namespaced tool-specific fields (`{ "<namespace>": … }`), carried verbatim and hashed. */
@@ -275,6 +308,22 @@ const JourneySuccessCriterionSchema = z.object({
   check: AssertionSchema.optional(),
 }).strict();
 
+// #583: the prepare-only boundary — strict, and the only kind. Its section-2 refusals run in the
+// Journey's superRefine below (`boundaryRuleIssues`).
+const HandbackBoundarySchema = z
+  .object({
+    kind: z.literal("prepare-only"),
+    stopBefore: z
+      .object({
+        target: TargetDescriptorSchema,
+        label: z.string().min(1).max(200),
+      })
+      .strict(),
+    nextStep: z.string().min(1).max(500),
+    blockWrites: z.boolean().optional(),
+  })
+  .strict();
+
 const JourneyParameterSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
@@ -390,9 +439,15 @@ export const JourneySchema: ZodType<Journey> = z.object({
       .refine((ss) => new Set(ss).size === ss.length, { message: "serves: duplicate id" })
       .optional(),
     extensions: ExtensionsSchema.optional(),
+    // #582: the optional typed handoff blocks (§2 producing, §3 consuming).
+    outputs: JourneyOutputsSchema.optional(),
+    inputs: JourneyInputsSchema.optional(),
+    boundary: HandbackBoundarySchema.optional(),
   }).strict(),
   recording: RecordingSchema,
 }).superRefine((j, ctx) => {
+  // #583 §2: a prepare-only boundary may not be crossed by the steps it declares.
+  for (const issue of boundaryRuleIssues(j)) ctx.addIssue({ code: "custom", path: [...issue.path], message: issue.message });
   // #293/#466: anchor names, uniqueness and step range (anchor-rules.ts).
   for (const issue of anchorRuleIssues(j)) ctx.addIssue({ code: "custom", path: [...issue.path], message: issue.message });
   // #402: a declared mutation pair must name an assertion and a step (or anchor) the Journey has.
@@ -416,6 +471,8 @@ export const JourneySchema: ZodType<Journey> = z.object({
   );
   // #562/#565: an assertion's `${name}` / `{ var }` must name something the run binds when it is checked.
   for (const issue of assertionRefIssues(j as Journey)) ctx.addIssue({ code: "custom", path: [...issue.path], message: issue.message });
+  // #582: handoff outputs/inputs load-time refusals (§2-§3), reported as E_HANDOFF_SCHEMA issues.
+  for (const issue of handoffSchemaIssues(j as Journey)) ctx.addIssue({ code: "custom", path: [...issue.path], message: issue.message });
   // #579: mutationValues are reviewed, non-secret values — never a credential.
   (j.metadata.parameters ?? []).forEach((p, i) => {
     if (p.mutationValues === undefined) return;
@@ -428,6 +485,73 @@ export const JourneySchema: ZodType<Journey> = z.object({
     }
   });
 });
+
+/**
+ * #583 §2: the load-time refusals of a prepare-only boundary, each message starting
+ * `E_BOUNDARY_SCHEMA` and naming the offending step's path. A Journey with a prepare-only boundary
+ * may not: click the `stopBefore` control (top level or a `forEach` child), press Enter/NumpadEnter,
+ * click after the last `fill`/`editText`/`select`, or contain a `handback` step.
+ */
+function boundaryRuleIssues(j: Journey): { path: (string | number)[]; message: string }[] {
+  const boundary = j.metadata.boundary;
+  if (boundary === undefined) return [];
+  const out: { path: (string | number)[]; message: string }[] = [];
+  const stop = boundary.stopBefore.target;
+  // The flat walk: a `forEach`'s children run at the `forEach`'s own position, so a click after the
+  // last prepare step is a click after it however deeply it is nested.
+  const entries: { step: Step; path: (string | number)[] }[] = [];
+  j.recording.pages.forEach((page, pi) => {
+    page.steps.forEach((rs, si) => {
+      const base: (string | number)[] = ["recording", "pages", pi, "steps", si, "step"];
+      entries.push({ step: rs.step, path: base });
+      if (rs.step.kind === "forEach") rs.step.steps.forEach((child, ci) => entries.push({ step: child, path: [...base, "steps", ci] }));
+    });
+  });
+  let lastPrepare = -1;
+  entries.forEach((e, i) => {
+    if (e.step.kind === "fill" || e.step.kind === "editText" || e.step.kind === "select") lastPrepare = i;
+  });
+  entries.forEach((e, i) => {
+    const where = `${boundaryPathName(e.path)} (step ${i + 1})`;
+    if (e.step.kind === "handback") {
+      out.push({ path: e.path, message: `E_BOUNDARY_SCHEMA: ${where} is a handback step — a prepare-only boundary IS the handback` });
+      return;
+    }
+    if (e.step.kind === "press" && (e.step.key === "Enter" || e.step.key === "NumpadEnter")) {
+      out.push({ path: e.path, message: `E_BOUNDARY_SCHEMA: ${where} presses ${e.step.key} — a prepare-only boundary never submits` });
+      return;
+    }
+    if (e.step.kind !== "click") return;
+    if (sameHandbackTarget(e.step.target, stop)) {
+      out.push({ path: e.path, message: `E_BOUNDARY_SCHEMA: ${where} clicks the stopBefore target — the boundary control is never acted on` });
+      return;
+    }
+    if (i > lastPrepare) {
+      out.push({ path: e.path, message: `E_BOUNDARY_SCHEMA: ${where} clicks after the last fill/editText/select — nothing is clicked once the value is prepared` });
+    }
+  });
+  return out;
+}
+
+/** `recording.pages[0].steps[2].step` — how a boundary issue names the offending step. */
+function boundaryPathName(path: (string | number)[]): string {
+  return path.map((p, i) => (typeof p === "number" ? `[${p}]` : i === 0 ? p : `.${p}`)).join("");
+}
+
+/**
+ * #583: do two descriptors identify the same control? The highest rung present in either decides
+ * (testId, then role+name, then label, then text, then css) — so a recorded click on
+ * `{ testId, role, name }` still equals the boundary's `{ testId }`, while a different control with
+ * its own rung never does.
+ */
+function sameHandbackTarget(a: TargetDescriptor, b: TargetDescriptor): boolean {
+  if (a.testId !== undefined || b.testId !== undefined) return a.testId !== undefined && a.testId === b.testId;
+  if (a.role !== undefined || b.role !== undefined) return a.role !== undefined && a.role === b.role && (a.name ?? "") === (b.name ?? "");
+  if (a.label !== undefined || b.label !== undefined) return a.label !== undefined && a.label === b.label;
+  if (a.text !== undefined || b.text !== undefined) return a.text !== undefined && a.text === b.text && (a.textMatch ?? "") === (b.textMatch ?? "");
+  if (a.css !== undefined || b.css !== undefined) return a.css !== undefined && a.css === b.css;
+  return false;
+}
 
 /** A step's own assertions with their field names (a `forEach`'s children are walked separately). */
 /** A step's own assertions (its `check`, `resume` or `expect`), each with the field that holds it. */

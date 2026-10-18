@@ -18,6 +18,9 @@ export const ALLOWED_TOOLS = [
   // #580 — the two-journey chain: discover once, prepare-only reply per approved request. Promoted
   // Journeys only (--allow-draft is CLI-only); ids and outcomes only, never record or reply text.
   "chain_journeys",
+  // 0.18.0 — #581 the readiness receipt (report mode is read-only; replay/prove refuse production) and
+  // #584 the local review bundle (writes inside the project only). Neither approves or promotes.
+  "journey_readiness", "journey_bundle",
   // #425 — a sweep: many explore missions over a targets file, one aggregated result.
   "run_sweep",
   // #432 — the read-only review sheet a person reads before promote_journey (bound by its content hash).

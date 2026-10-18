@@ -13,7 +13,6 @@ import { FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "./
 import { buildMissionFixtures, checkSetupRefs, checkUrlRefOrigin, setupRefFreeUrl, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import {
   type CliDeps,
-  resolveJourneysDir,
   type BrowserLaunchFlags,
   withBrowserLaunchFlags,
   browserLaunchFromFlags,
@@ -24,9 +23,9 @@ import {
   withEmulationFlags,
   withScreenshotsFlag,
 } from "./cli-shared.js";
-import { resolveCatalogDir } from "./catalog-api.js";
 import { journeyLinkWarnings } from "./journey-link-hints.js";
-import { lintFindingLine } from "./journey-cli/shared.js";
+import { journeyLayout, lintFindingLine } from "./journey-cli/shared.js";
+import { withProjectFlags } from "./project-layout.js";
 import type { JourneyLintFinding } from "@jevitate/journey";
 import { GOAL_RUN_OPTIONS, GoalRunFlagError, resolveGoalRunFlags, type GoalRunFlags, type GoalRunShaping } from "./goal-run-flags.js";
 import { triagedServerLog, type ServerLogOptions } from "./explore-shared.js";
@@ -96,9 +95,11 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
   // authoring path is untouched.
   const cmd = withServerLogFlags(
     withBrowserLaunchFlags(
-      program
-        .command("explore-author-journey")
-        .description("Jev-driving authors a promotable Journey (authoring plane); never auto-promoted"),
+      withProjectFlags(
+        program
+          .command("explore-author-journey")
+          .description("Jev-driving authors a promotable Journey (authoring plane); never auto-promoted"),
+      ),
     ),
   )
     .option("--url <url>", "target URL (must be an authorized origin)")
@@ -117,7 +118,6 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
     )
-    .option("--journeys-dir <dir>", "journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option(
       "--allow <origin>",
       "authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it",
@@ -155,6 +155,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         id?: string;
         name?: string;
         takes: string;
+        project?: string;
         journeysDir?: string;
         allow: string[];
         maxActions?: string;
@@ -257,6 +258,9 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
       }
       // #313: with --real the judge triages the signals; a fake gateway triages them by code.
       const authorGoalRun: GoalRunShaping = { ...goalRun, ...triagedServerLog(serverLog, judge, o.real === true) };
+      // #585: the location flags (--project/--journeys-dir, deprecated --dir) resolve before the store is touched.
+      const layout = journeyLayout(program, deps, { project: o.project, journeysDir: o.journeysDir });
+      if (layout === null) return;
 
       try {
         const result = await runAuthorJourney({
@@ -264,7 +268,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
           goal: o.goal,
           successChecks,
           allowlist,
-          journeysDir: resolveJourneysDir(deps, o.journeysDir),
+          journeysDir: layout.journeysDir,
           journeyId: o.id,
           journeyName: o.name,
           takes: Number(o.takes),
@@ -280,7 +284,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
           ...(o.out === undefined ? {} : { outDir: o.out }),
           usage: authorUsage,
         })
-          .then((r) => withLinkWarnings(r, resolveCatalogDir(deps.catalogDir)))
+          .then((r) => withLinkWarnings(r, layout.catalogDir))
           .then((r) => ({ ...r, usage: authorUsage.snapshot() }));
         const envelope = ok(result);
         if (o.json) {
