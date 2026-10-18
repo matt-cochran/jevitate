@@ -7,6 +7,8 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.16.0] – 2026-10-17
+
 0.16.0 makes create-style and parameterized Journeys repeatable and provable: assertions can check the values a run was given or read, fixtures can undo what a Journey created, environments move split-origin Journeys, and manual recordings flow into a reviewable binding proposal.
 
 ### Added
