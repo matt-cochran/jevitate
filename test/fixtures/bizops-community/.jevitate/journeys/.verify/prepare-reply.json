@@ -1,0 +1,15 @@
+{
+  "journeyId": "prepare-reply",
+  "contentHash": "c8859b4a5a5d65cf86d98bef10cf470a14a7e56439676261a5d61f845f82c1a8",
+  "proofHash": "f54bed120c092960e9f5ac9ea763d9481b6e95a7661d61c015296070566c02c5",
+  "verdict": "insensitive",
+  "summary": {
+    "sensitive": 3,
+    "insensitive": 1,
+    "cascade": 0,
+    "notApplied": 0,
+    "error": 2,
+    "unpaired": 3
+  },
+  "at": "2026-10-18T14:23:39.647Z"
+}

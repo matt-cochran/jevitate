@@ -1,0 +1,16 @@
+{
+  "journeyId": "discover-conversations",
+  "contentHash": "7bc6509a1566ce13818da80a3e3bc2052877b1aba8b98b88f621be79070bba71",
+  "proofHash": "ecd678ab05fdcf76c85383761267cf4689e4aeae0436fcf523dbbb3ba5055c66",
+  "verdict": "inconclusive",
+  "reason": "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs)",
+  "summary": {
+    "sensitive": 0,
+    "insensitive": 0,
+    "cascade": 0,
+    "notApplied": 0,
+    "error": 0,
+    "unpaired": 1
+  },
+  "at": "2026-10-18T14:22:56.924Z"
+}
