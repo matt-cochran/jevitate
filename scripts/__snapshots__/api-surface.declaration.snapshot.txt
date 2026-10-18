@@ -1201,7 +1201,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (233 exports)
+# @jevitate/journey (234 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1429,6 +1429,7 @@
   stripStepIds: function
   suggestAnchorName: function
   suggestAnchors: function
+  SwapSource: type-alias
   SWEEP_MODES: variable
   SweepMode: type-alias
   sweepStops: function

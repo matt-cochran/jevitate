@@ -43,7 +43,15 @@ export interface JourneyMutation {
   readonly id: string;
   /** #565: the parameter a `swap-param`/`truncate-param` alters (a name, never a value). */
   readonly param?: string;
+  /**
+   * #579: where a planned `swap-param`'s wrong value comes from — a human-reviewed `mutationValues`
+   * entry, another enabled live `<select>` option, or a generated alteration. Never the value itself.
+   */
+  readonly source?: SwapSource;
 }
+
+/** #579: the origin of a `swap-param`'s wrong value (`JourneyMutation.source`). */
+export type SwapSource = "reviewed" | "option" | "generated";
 
 /** One (assertion site, mutation) pair: the mutation must make that assertion fail. */
 export interface MutationPair {
@@ -121,6 +129,15 @@ function firstActionStep(journey: Journey, name: string): number | null {
 function allActionReadsAreSelect(journey: Journey, name: string): boolean {
   const reads = flat(journey).filter((r) => actionRefs(r.step).includes(name));
   return reads.length > 0 && reads.every((r) => r.step.kind === "select");
+}
+
+/**
+ * #579: the first reviewed `mutationValues` entry of parameter `name` that differs from the supplied
+ * value — a value a human checked is valid for the page but wrong for this run — or null.
+ */
+function reviewedValue(journey: Journey, name: string, supplied: string): string | null {
+  const declared = (journey.metadata.parameters ?? []).find((p) => p.name === name);
+  return declared?.mutationValues?.find((v) => v !== supplied) ?? null;
 }
 
 /** #579: is `step` a `select` whose value is exactly the `{ var }` reference `name`? */
@@ -292,9 +309,12 @@ export function planJourneyMutations(
       ["swap-param", swappedValue(journey, name, params)],
       ...(allActionReadsAreSelect(journey, name) ? [] : [["truncate-param", truncatedValue(journey, name, params)] as const]),
     ];
+    const supplied = mutableParamValue(journey, name, params);
+    const source: SwapSource =
+      supplied !== null && reviewedValue(journey, name, supplied) !== null ? "reviewed" : allActionReadsAreSelect(journey, name) ? "option" : "generated";
     for (const [kind, value] of candidates) {
       if (value === null) continue;
-      const m = paramMutation(kind, at, name);
+      const m = kind === "swap-param" ? { ...paramMutation(kind, at, name), source } : paramMutation(kind, at, name);
       mutations.push(m);
       for (const s of naming) pair(s, m);
     }
@@ -393,6 +413,11 @@ function paramReplay(journey: Journey, m: JourneyMutation, params: Readonly<Reco
   const name = m.param ?? "";
   const index = m.step - 1;
   const target = flat(journey)[index]?.step;
+  // #579: a reviewed `mutationValues` entry is the wrong value first, for any action (a fill, or a
+  // select, where it names a real option); assertions stay pinned to the supplied value.
+  const reviewedFrom = m.kind === "swap-param" ? mutableParamValue(journey, name, params) : null;
+  const reviewed = reviewedFrom === null ? null : reviewedValue(journey, name, reviewedFrom);
+  if (reviewedFrom !== null && reviewed !== null) return { journey: pinAssertionRefs(journey, name, reviewedFrom), params: { ...params, [name]: reviewed } };
   // #579: a `{ var }` parameter feeding a `select` cannot be swapped by rewriting params — the
   // replay picks another enabled live option instead, and the assertions keep expecting the supplied
   // value (params unchanged). The copy is cloned so a relaxed replay can weaken the step's expect.
