@@ -36,6 +36,8 @@ import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
 import { JourneyOutcomeChecks, type OutcomeCheckFailure, type SlowStep } from "./journey-network-checks.js";
+import { assertHandbackNoHeal, attachHandback, HandbackWriteObserver } from "./journey-handback.js";
+import type { HandbackOutcome } from "@jevitate/journey";
 
 /**
  * Distinct from `@jevitate/journey`'s `ParamValidationError` so CLI/API callers
@@ -528,7 +530,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
   mutation: MutationReplayOptions = {},
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[]; offAllowlistWrites?: string[] } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[]; offAllowlistWrites?: string[]; handback?: HandbackOutcome } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -563,6 +565,8 @@ export async function runJourneyProgrammatically(
   const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
 
   const policy = opts.policy ?? safeRunPolicy();
+  // #583 §3: a prepare-only boundary never self-heals — refused before any fixture or browser opens.
+  assertHandbackNoHeal(journey, policy.selfHeal.mode !== "fail-closed");
 
   // The site policy (`jevitate site policy set <origin>`): pacing, throttles, budgets, quiet hours —
   // decided before any fixture or browser; a refusal says why and when to retry.
@@ -625,6 +629,13 @@ export async function runJourneyProgrammatically(
     // #485: the origins outside the run's allow list that the page sent a write to (origins only —
     // never a path, query or body). The campaign preflight reads them for an allow-list slip.
     const offAllowlist = watchOffAllowlistWrites(session, allowedOrigins);
+    // #583 §3: a declared boundary watches every first-party write for the whole run (aborting them
+    // only with `blockWrites`), so the typed handback state is decided from the run's own evidence.
+    const handbackObserver =
+      journey.metadata.boundary === undefined
+        ? undefined
+        : new HandbackWriteObserver(allowedOrigins, { blockWrites: journey.metadata.boundary.blockWrites === true });
+    if (handbackObserver !== undefined) await handbackObserver.arm(session.page);
     try {
       const actor = CastActor.named("cli-runner").whoCan(
         new BrowseTheWeb(session, allowedOrigins),
@@ -686,6 +697,7 @@ export async function runJourneyProgrammatically(
         await blocker?.guard.disarm();
         await healGuard?.guard.disarm();
         await healGuard?.dispose();
+        await handbackObserver?.disarm();
       }
       // #453: a self-heal run persists its record (heal attempts, the proposal) and indexes it.
       // #453 review: a run that cannot write its proposal (a prefix or mutated replay, a proof error)
@@ -697,6 +709,9 @@ export async function runJourneyProgrammatically(
         result = persisted.result;
         healFields = persisted.fields;
       }
+      // #583: the typed handback state, decided from the run's own results and network evidence —
+      // attached only when the Journey declares a boundary (otherwise the result is unchanged).
+      result = attachHandback(result, journey, handbackObserver?.counts() ?? { writes: 0, writesBlocked: 0, observation: "unavailable" });
       const mutationFields: MutationReplayFields = {
         ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretValues([...outcomeChecks.lastFailures], runSecrets) } : {}),
         ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),

@@ -1201,7 +1201,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (261 exports)
+# @jevitate/journey (266 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1271,6 +1271,7 @@
   checkJobStory: function
   checkPersona: function
   checkStatement: function
+  classifyHandback: function
   classifyMutation: function
   deriveParamSchema: function
   describeStep: function
@@ -1291,6 +1292,10 @@
   GtwrCharacteristic: type-alias
   GtwrRule: interface
   GtwrSetCharacteristic: type-alias
+  HandbackBoundary: interface
+  HandbackEvidence: interface
+  HandbackFacts: interface
+  HandbackOutcome: interface
   HANDOFF_CONTRACT_RE: variable
   HANDOFF_FIELD_TYPES: variable
   HandoffBinding: type-alias

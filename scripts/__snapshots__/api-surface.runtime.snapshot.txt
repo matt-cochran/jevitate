@@ -771,7 +771,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (150 exports)
+# @jevitate/journey (151 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -868,6 +868,7 @@
   checkJobStory: function
   checkPersona: function
   checkStatement: function
+  classifyHandback: function
   classifyMutation: function
   deriveParamSchema: function
   describeStep: function
