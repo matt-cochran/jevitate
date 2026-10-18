@@ -43,7 +43,15 @@ export interface JourneyMutation {
   readonly id: string;
   /** #565: the parameter a `swap-param`/`truncate-param` alters (a name, never a value). */
   readonly param?: string;
+  /**
+   * #579: where a planned `swap-param`'s wrong value comes from — a human-reviewed `mutationValues`
+   * entry, another enabled live `<select>` option, or a generated alteration. Never the value itself.
+   */
+  readonly source?: SwapSource;
 }
+
+/** #579: the origin of a `swap-param`'s wrong value (`JourneyMutation.source`). */
+export type SwapSource = "reviewed" | "option" | "generated";
 
 /** One (assertion site, mutation) pair: the mutation must make that assertion fail. */
 export interface MutationPair {
@@ -112,6 +120,29 @@ function mutation(kind: MutationKind, step: number): JourneyMutation {
 function firstActionStep(journey: Journey, name: string): number | null {
   const i = flat(journey).findIndex((r) => actionRefs(r.step).includes(name));
   return i < 0 ? null : i + 1;
+}
+
+/**
+ * #579: does every action that reads `name` read it at a `select`? Then a truncated value is no valid
+ * selection probe (a swap proves it by picking a different live option instead).
+ */
+function allActionReadsAreSelect(journey: Journey, name: string): boolean {
+  const reads = flat(journey).filter((r) => actionRefs(r.step).includes(name));
+  return reads.length > 0 && reads.every((r) => r.step.kind === "select");
+}
+
+/**
+ * #579: the first reviewed `mutationValues` entry of parameter `name` that differs from the supplied
+ * value — a value a human checked is valid for the page but wrong for this run — or null.
+ */
+function reviewedValue(journey: Journey, name: string, supplied: string): string | null {
+  const declared = (journey.metadata.parameters ?? []).find((p) => p.name === name);
+  return declared?.mutationValues?.find((v) => v !== supplied) ?? null;
+}
+
+/** #579: is `step` a `select` whose value is exactly the `{ var }` reference `name`? */
+function selectsVar(step: Step, name: string): boolean {
+  return step.kind === "select" && "var" in step.value && step.value.var === name;
 }
 
 function paramMutation(kind: "swap-param" | "truncate-param", step: number, param: string): JourneyMutation {
@@ -263,20 +294,27 @@ export function planJourneyMutations(
     for (const s of checking) pair(s, m);
   });
 
-  // #565: each non-secret parameter an assertion names, and an action reads, is swapped and truncated
-  // where the app receives it — paired with every assertion that names it.
+  // #565: each non-secret parameter an assertion names, and an action reads, is swapped (and, unless
+  // a `select` is its only read — #579 — truncated) where the app receives it, paired with every
+  // assertion that names it.
   const params = opts.params ?? {};
   const names = [...new Set(sites.flatMap(siteRefs))];
   for (const name of names) {
     const at = firstActionStep(journey, name);
     if (at === null) continue;
     const naming = sites.filter((s) => siteRefs(s).includes(name));
-    for (const [kind, value] of [
+    // #579: a select-fed parameter is proven by choosing another enabled live option, never by a
+    // truncated value (not a valid selection). Every other parameter still gets both mutations.
+    const candidates: readonly (readonly ["swap-param" | "truncate-param", string | null])[] = [
       ["swap-param", swappedValue(journey, name, params)],
-      ["truncate-param", truncatedValue(journey, name, params)],
-    ] as const) {
+      ...(allActionReadsAreSelect(journey, name) ? [] : [["truncate-param", truncatedValue(journey, name, params)] as const]),
+    ];
+    const supplied = mutableParamValue(journey, name, params);
+    const source: SwapSource =
+      supplied !== null && reviewedValue(journey, name, supplied) !== null ? "reviewed" : allActionReadsAreSelect(journey, name) ? "option" : "generated";
+    for (const [kind, value] of candidates) {
       if (value === null) continue;
-      const m = paramMutation(kind, at, name);
+      const m = kind === "swap-param" ? { ...paramMutation(kind, at, name), source } : paramMutation(kind, at, name);
       mutations.push(m);
       for (const s of naming) pair(s, m);
     }
@@ -359,6 +397,11 @@ export interface MutationReplay {
   readonly blockIndex?: number;
   readonly blockRequests?: readonly string[];
   readonly params?: Readonly<Record<string, string>>;
+  /**
+   * #579: instead of altering a parameter (a `select` cannot be swapped by rewriting params), pick a
+   * DIFFERENT enabled live option at this 0-based flat step while avoiding the supplied value.
+   */
+  readonly swapSelectAtStep?: { readonly index: number; readonly avoid: string };
 }
 
 /**
@@ -368,6 +411,21 @@ export interface MutationReplay {
  */
 function paramReplay(journey: Journey, m: JourneyMutation, params: Readonly<Record<string, string>>): MutationReplay {
   const name = m.param ?? "";
+  const index = m.step - 1;
+  const target = flat(journey)[index]?.step;
+  // #579: a reviewed `mutationValues` entry is the wrong value first, for any action (a fill, or a
+  // select, where it names a real option); assertions stay pinned to the supplied value.
+  const reviewedFrom = m.kind === "swap-param" ? mutableParamValue(journey, name, params) : null;
+  const reviewed = reviewedFrom === null ? null : reviewedValue(journey, name, reviewedFrom);
+  if (reviewedFrom !== null && reviewed !== null) return { journey: pinAssertionRefs(journey, name, reviewedFrom), params: { ...params, [name]: reviewed } };
+  // #579: a `{ var }` parameter feeding a `select` cannot be swapped by rewriting params — the
+  // replay picks another enabled live option instead, and the assertions keep expecting the supplied
+  // value (params unchanged). The copy is cloned so a relaxed replay can weaken the step's expect.
+  if (m.kind === "swap-param" && target !== undefined && selectsVar(target, name)) {
+    const supplied = mutableParamValue(journey, name, params);
+    if (supplied === null) throw new Error(`${m.id}: parameter ${name} has no value this proof may alter (not supplied, blank, too short, or secret)`);
+    return { journey: structuredClone(journey), swapSelectAtStep: { index, avoid: supplied } };
+  }
   const supplied = mutableParamValue(journey, name, params);
   const altered = m.kind === "swap-param" ? swappedValue(journey, name, params) : truncatedValue(journey, name, params);
   if (supplied === null || altered === null) throw new Error(`${m.id}: parameter ${name} has no value this proof may alter (not supplied, blank, too short, or secret)`);

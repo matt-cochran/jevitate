@@ -207,6 +207,11 @@ export interface MutationReplayOptions {
   /** #402: leave this flat step (0-based) out of the replay — `RecordingInterpreter`'s `skipStep`. */
   skipStep?: (index: number) => boolean;
   /**
+   * #579: a swap-param feeding a `select` selects a DIFFERENT enabled live option at this flat step
+   * (0-based) instead of rewriting the param — `RecordingInterpreter`'s `selectAlternative`.
+   */
+  selectAlternativeAtStep?: { index: number; avoid: string };
+  /**
    * #402: ABORT the write requests (the #110 classifier, first-party only — `ReadOnlyGuard`) that
    * start while this flat step (0-based) runs, until the network settles after it. Never answered,
    * never sent; what was blocked comes back as `blockedWrites`.
@@ -650,12 +655,19 @@ export async function runJourneyProgrammatically(
         shots === undefined ? undefined : screenshotObserver(shots, (a) => a.ability(BrowseTheWebToken).session.page, whatOf),
       );
       const skipStep = mutation.skipStep;
+      const selectAlternative = mutation.selectAlternativeAtStep;
       const fixtureBaseDir = opts.fixtureBaseDir ?? journeyFixtureBaseDir();
       const interpreter =
         opts.interpreter ??
-        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined
+        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined
           ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs })
-          : new RecordingInterpreter({ observer, fixtureBaseDir, refLookup: refs, ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }) }));
+          : new RecordingInterpreter({
+              observer,
+              fixtureBaseDir,
+              refLookup: refs,
+              ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }),
+              ...(selectAlternative === undefined ? {} : { selectAlternative: (i: number) => (i === selectAlternative.index ? { avoid: selectAlternative.avoid } : undefined) }),
+            }));
       const heal: JourneyHealOptions | undefined =
         opts.heal === undefined || healGuard === undefined
           ? undefined

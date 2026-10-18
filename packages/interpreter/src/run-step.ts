@@ -9,6 +9,22 @@ import { applyTextEdit } from "./rich-text.js";
 import { evaluateVisual, isVisualAssertion } from "./visual-state.js";
 
 /**
+ * #579: a `select` mutation found no enabled option other than the one it must avoid — fail closed
+ * (never select a guess, never a disabled or empty option). The message never carries a value.
+ */
+export class SelectAlternativeUnavailableError extends Error {
+  constructor() {
+    super("no-alternative: the select has no enabled option other than the one this proof avoids");
+    this.name = "SelectAlternativeUnavailableError";
+  }
+}
+
+/** #579: which live option a `select` mutation must avoid (never chosen, never reported). */
+export interface SelectAlternative {
+  readonly avoid: string;
+}
+
+/**
  * The recorded target resolved to exactly ONE element (anchor, else exact rung + nth), as a
  * Screenplay Target — or a typed `ReplayTargetError`. Never a guess.
  */
@@ -32,6 +48,23 @@ import { waitForOutcome, type StepWait } from "./outcome-wait.js";
  * action into the paced production runner needs to explicitly add this —
  * it will not happen automatically just by reusing `runStep`.
  */
+
+/**
+ * #579: the first enabled, non-empty `<option>` value that is not `avoid`, read from the live
+ * `<select>` in the browser — or `SelectAlternativeUnavailableError`. Browser code; no timers.
+ */
+async function selectAlternativeValue(locator: Locator, avoid: string): Promise<string> {
+  const value = await locator.evaluate((el: Element, avoided: string): string | null => {
+    const options = (el as unknown as { options?: ArrayLike<{ disabled: boolean; value: string }> }).options ?? [];
+    for (let i = 0; i < options.length; i += 1) {
+      const option = options[i]!;
+      if (!option.disabled && option.value !== "" && option.value !== avoided) return option.value;
+    }
+    return null;
+  }, avoid);
+  if (value === null) throw new SelectAlternativeUnavailableError();
+  return value;
+}
 
 /**
  * Resolves a `ValueOrVar` to a plain string ready for typing.
@@ -164,7 +197,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string } = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly selectAlternative?: (index: number) => SelectAlternative | undefined } = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   // #562/#565: an expectation's `${name}` / `{ var }` operands resolve as it is checked — after this
@@ -220,9 +253,14 @@ export async function runStep(
       return { kind: "done" };
     }
     case "select": {
-      const value = resolveValue(step.value, vars);
+      // #579: a swap-param mutation supplies an `avoid` value instead of the recorded `{var}` — the
+      // live <select> names a DIFFERENT enabled, non-empty option; when it has none, fail closed.
+      const alternative = targetOpts.selectAlternative?.(index);
+      const chosen = alternative === undefined ? resolveValue(step.value, vars) : undefined;
       const page = actor.ability(BrowseTheWebToken).session.page;
-      await (await resolveTarget(page, step.target, targetOpts)).selectOption(value);
+      const locator = await resolveTarget(page, step.target, targetOpts);
+      const value = chosen ?? (await selectAlternativeValue(locator, alternative!.avoid));
+      await locator.selectOption(value);
       await postcondition(actor, expected(step.expect), step.waitFor, "select", index, targetOpts);
       return { kind: "done" };
     }
