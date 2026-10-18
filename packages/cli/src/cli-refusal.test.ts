@@ -190,6 +190,24 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       ["--from", "a", "--to", "b", "--requests", validScript, "--storage-state", missing],
     ],
   },
+  // 0.18.0 (#581): replay/prove need a target before anything runs; a missing explicit store is refused.
+  "journey readiness": {
+    base: ["nope"],
+    cases: [
+      ["nope", "--mode", "replay"],
+      ["nope", "--journeys-dir", missing],
+    ],
+  },
+  // #584: --out is required unless --check; a missing explicit store is refused.
+  "journey bundle": {
+    base: ["nope", "--out", join(dir, "bundle-out")],
+    cases: [
+      ["nope"],
+      ["nope", "--out", join(dir, "bundle-out"), "--journeys-dir", missing],
+    ],
+  },
+  // #585: an explicit project path that does not exist is refused with its next action.
+  where: { cases: [["--project", missing]] },
   "journey run": {
     base: ["nope"],
     cases: [
