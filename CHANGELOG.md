@@ -7,6 +7,13 @@ behaviour changes).
 
 ## [Unreleased]
 
+0.19.0 lets one discover Journey serve any account or thread through producer params, and lets `journey verify --mutate` prove an assertion that an earlier intentional defense used to mask.
+
+### Added
+
+- **`journey chain` takes producer params (#608).** `--param name=value` (repeatable; MCP `params` object) supplies the discover Journey's params. They are validated against its param schema before anything runs: a missing or unknown param is refused with `E_CHAIN_PARAMS` and no browser opens, and the values are redacted from reasons. `journey readiness --with` in `replay`/`prove` passes `--param` values to the producer through the chain and refuses unknown params (`E_READINESS_PARAMS`) before any browser. In `prove` the consumer's mutation proof runs with the params the chain bound for the first matched request; with no matched request the consumer proof is not-verified with a hint.
+- **Targeted mutation proof in `journey verify --mutate` (#609).** When a later assertion is a cascade only because an earlier intentional defense caught the same mutation first, verify relaxes those earlier step postconditions one at a time in a copy (at most 4; the target is never relaxed) and judges the target on its own. The report records `targeted` runs, `relaxedSites`, `targetedRefusal` and a summary `targeted` count; the line reads "(proved by X, relaxed step:2)". A refused targeted proof stays a cascade and the verdict inconclusive. To let an unpaired earlier check be relaxed, declare it a defense with `metadata.mutationPairs`. `journey readiness` reports how many assertions were proven this way and, for an inconclusive proof, a blocker with this guidance.
+
 ## [0.18.1] – 2026-10-18
 
 ### Fixed
