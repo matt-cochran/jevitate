@@ -10,7 +10,9 @@ import {
   mutationProofVerdict,
   nextTargetedRelaxation,
   planJourneyMutations,
+  relaxedMutationReplay,
   runTargetedProof,
+  targetedControlReplay,
   targetedMutationReplay,
   type Journey,
   type JourneyMutation,
@@ -165,8 +167,12 @@ describe("#609 targetedMutationReplay", () => {
 });
 
 describe("#609 runTargetedProof", () => {
-  const run = (replayResult: { outcome: MutationRunResult["outcome"]; failedSites: readonly MutationFailedSite[] }, p: MutationPlan = plan()) =>
-    runTargetedProof(threadJourney(), p, swapMutation(), endStateSite, relaxedBlockedAtStep2, async () => replayResult, { params: PARAMS });
+  const run = (
+    replayResult: { outcome: MutationRunResult["outcome"]; failedSites: readonly MutationFailedSite[] },
+    p: MutationPlan = plan(),
+    control: MutationRunResult["outcome"] = "passed",
+  ) =>
+    runTargetedProof(threadJourney(), p, swapMutation(), endStateSite, relaxedBlockedAtStep2, async (_describe, kind) => (kind === "control" ? { outcome: control, failedSites: [] } : replayResult), { params: PARAMS });
 
   it("records the earlier site it relaxed", async () => {
     const proof = await run({ outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] });
@@ -185,12 +191,60 @@ describe("#609 runTargetedProof", () => {
     expect(classifyMutation(endStateSite, swapMutation(), { ...relaxedBlockedAtStep2, targeted: [proof] })).toBe("insensitive");
   });
 
+  it("refuses a targeted failure whose unmutated control replay does not pass", async () => {
+    const proof = await run({ outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] }, plan(), "failed");
+    expect(proof.refused).toMatch(/unmutated control replay with step:2 relaxed did not pass/);
+  });
+
+  it("a failed control keeps the target a cascade", async () => {
+    const proof = await run({ outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] }, plan(), "failed");
+    expect(classifyMutation(endStateSite, swapMutation(), { ...relaxedBlockedAtStep2, targeted: [proof] })).toBe("cascade");
+  });
+
+  it("describes each targeted replay from the Journey the run gives it", async () => {
+    const seen: string[] = [];
+    const given = { ...threadJourney(), recording: { ...threadJourney().recording, site: "http://env.example.test" } };
+    await runTargetedProof(threadJourney(), plan(), swapMutation(), endStateSite, relaxedBlockedAtStep2, async (describe, kind) => {
+      seen.push(describe(given).journey.recording.site);
+      return kind === "control" ? { outcome: "passed", failedSites: [] } : { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] };
+    }, { params: PARAMS });
+    expect(seen).toEqual(["http://env.example.test", "http://env.example.test"]);
+  });
+
   it("a refused targeted run keeps the target a cascade and names the refusing site", async () => {
     const m = swapMutation();
     const proof = await run({ outcome: "failed", failedSites: [] }, unpairedPlan(m));
     const result: MutationRunResult = { ...relaxedBlockedAtStep2, targeted: [proof] };
     const judged = judgeAssertions(threadJourney(), unpairedPlan(m), new Map([[m.id, result]])).find((a) => a.site === "end-state:0");
     expect(judged).toMatchObject({ verdict: "cascade", targetedRefusal: "step:2 is not paired with swap-param:threadId" });
+  });
+});
+
+describe("#609 targetedControlReplay", () => {
+  it("applies no mutation (no altered params, skip, block or select swap)", () => {
+    expect(Object.keys(targetedControlReplay(threadJourney(), swapMutation(), ["step:2"]))).toEqual(["journey"]);
+  });
+
+  it("weakens the mutated step's own claim as the targeted replay does", () => {
+    const how = targetedControlReplay(threadJourney(), swapMutation(), ["step:2"]);
+    const own = how.journey.recording.pages[0]!.steps[0]!.step;
+    expect("expect" in own ? own.expect.kind : own.kind).toBe("visible");
+  });
+
+  it("leaves the input Journey deep-equal to before", () => {
+    const journey = threadJourney();
+    const before = structuredClone(journey);
+    targetedControlReplay(journey, swapMutation(), ["step:2"]);
+    expect(journey).toEqual(before);
+  });
+});
+
+describe("#609 relaxed guard-param replay", () => {
+  it("leaves the input Journey deep-equal to before", () => {
+    const journey = threadJourney();
+    const before = structuredClone(journey);
+    relaxedMutationReplay(journey, { id: "guard-param:threadId", kind: "guard-param", step: 1, param: "threadId" }, { params: PARAMS });
+    expect(journey).toEqual(before);
   });
 });
 

@@ -24,6 +24,7 @@ import {
   relaxedMutationReplay,
   runTargetedProof,
   type AssertionVerdict,
+  type Journey,
   type JourneyMutation,
   type MutationFailedSite,
   type MutationProofVerdict,
@@ -158,11 +159,14 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     type Replayed = NonNullable<JourneyVerifyMutation["relaxed"]>;
     // #565: a param mutation's replay runs with altered params (never a secret's), so it needs them.
     const replayOpts = { ...lintOpts, params: opts.params };
-    const runReplay = async (m: JourneyMutation, how: MutationReplay): Promise<Replayed> => {
+    // The replay is DESCRIBED, not fixed: `mutateJourney` re-describes it on the Journey the run moved
+    // onto the environment (#247), so a mutated copy never drops `--env`/`--base-url`.
+    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay): Promise<Replayed> => {
       try {
+        const how = describe(journey);
         const r = await run(how.params === undefined ? runOpts : { ...runOpts, params: { ...how.params } }, {
           structuredFailures: true,
-          ...(how.journey === journey ? {} : { mutateJourney: () => how.journey }),
+          ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j).journey }),
           ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
           ...(how.swapSelectAtStep === undefined ? {} : { selectAlternativeAtStep: how.swapSelectAtStep }),
           ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
@@ -192,7 +196,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       }
     };
     // #402: a named mutation lowers to its `MutationReplay`; #609's targeted proof passes one directly.
-    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, describe(journey, m, replayOpts));
+    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts));
     const siteByKey = new Map(sites.map((s) => [assertionSiteKey(s), s]));
     for (const m of plan.mutations) {
       const first = await replay(m, mutationReplay);
@@ -207,7 +211,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         if (pair.mutation !== m.id) continue;
         const site = siteByKey.get(pair.site);
         if (site === undefined || classifyMutation(site, m, initial) !== "cascade") continue;
-        targeted.push(await runTargetedProof(journey, plan, m, site, initial, (how) => runReplay(m, how), replayOpts));
+        targeted.push(await runTargetedProof(journey, plan, m, site, initial, (describe) => runReplay(m, describe), replayOpts));
       }
       mutations.push({
         kind: m.kind,
