@@ -558,7 +558,8 @@ function describeFile(step: Extract<Step, { kind: "upload" }>): string | undefin
 /** Everything that needs the reviewer's decision, warnings first (stable within a severity). */
 function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: readonly string[], goal: string | undefined): JourneyReviewAttention[] {
   const out: JourneyReviewAttention[] = [];
-  const warn = (text: string, hint?: string): void => void out.push({ severity: "warn", text, ...(hint === undefined ? {} : { hint }) });
+  const warn = (text: string, hint?: string, settledBy?: "catalog-approval"): void =>
+    void out.push({ severity: "warn", text, ...(hint === undefined ? {} : { hint }), ...(settledBy === undefined ? {} : { settledBy }) });
   const info = (text: string, hint?: string): void => void out.push({ severity: "info", text, ...(hint === undefined ? {} : { hint }) });
 
   const weakSteps = [...new Set(r.proof.stepAssertions.filter((a) => a.weak).map((a) => a.step))];
@@ -582,12 +583,13 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
     else info(`${text}, exempted by allowControl`);
   }
   if (r.catalog !== undefined) {
-    if (r.catalog.unvetted.length > 0) warn(`Unvetted catalog links: ${r.catalog.unvetted.join(", ")}`, `approve them, or promote with --accept-unvetted "<reason>"`);
+    if (r.catalog.unvetted.length > 0) warn(`Unvetted catalog links: ${r.catalog.unvetted.join(", ")}`, `approve them, or promote with --accept-unvetted "<reason>"`, "catalog-approval");
     if (r.catalog.needsReReview.length > 0) warn(`Catalog links need re-review: ${r.catalog.needsReReview.join("; ")}`);
   }
   for (const f of r.findings ?? []) {
     if (f.analyzer === "catalog-analysis") continue;
-    if (f.severity !== "info") warn(f.message, f.fix);
+    // #608: an unvetted link is a person's catalog approval, as the line above says.
+    if (f.severity !== "info") warn(f.message, f.fix, f.analyzer === "catalog-links" && f.code === "journey.unvetted" ? "catalog-approval" : undefined);
     else if (f.analyzer === "readiness" || f.analyzer === "readiness-jev") info(f.message, f.fix);
   }
   const c = r.changeSinceApproval;

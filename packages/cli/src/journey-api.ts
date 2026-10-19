@@ -689,7 +689,11 @@ export async function runJourneyProgrammatically(
       // `extract as: "apiKey"`), so the output, failures and artifacts below never carry it.
       let runSecrets: readonly string[] = secrets;
       try {
-        const raw = await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params, policy }));
+        // #609: a mutated copy may no longer name a param the stored Journey takes (a targeted proof
+        // relaxed the only check naming an assertion-only `expected_*` param). The supplied set was
+        // validated against the stored Journey above; the copy runs with the subset it still reads.
+        const replayParams = replayed === journey ? params : prefixParams(journey, replayed, params);
+        const raw = await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params: replayParams, policy }));
         runSecrets = runSecretValues(secrets, raw);
         result = redactSecretValues(raw, runSecrets);
       } finally {

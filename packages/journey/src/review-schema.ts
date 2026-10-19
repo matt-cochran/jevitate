@@ -167,7 +167,13 @@ export const ReviewChangeSchema = z.discriminatedUnion("kind", [
 
 /** One item that needs the reviewer's decision, most severe first. Additive. */
 export const ReviewAttentionSchema = z
-  .object({ severity: z.enum(["warn", "info"]), text: z.string(), hint: z.string().optional() })
+  .object({
+    severity: z.enum(["warn", "info"]),
+    text: z.string(),
+    hint: z.string().optional(),
+    /** #608: a person's catalog approval settles this item — readiness lists it as awaiting-human, never as a failure. */
+    settledBy: z.enum(["catalog-approval"]).optional(),
+  })
   .strict();
 
 export const JourneyReviewSchema = z

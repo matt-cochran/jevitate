@@ -132,12 +132,16 @@ Each check reports one state:
 The verdict is computed in this order: `blocked` (any fail), then `inconclusive`, then `incomplete`
 (the proof is stale or missing, or the replay did not run in `replay`/`prove`), then
 `technically-ready`. A passing replay never hides an inconclusive proof. One case is not inconclusive: a read-only Journey that takes no input (like a discover Journey) has nothing a mutation could break, so its proof check passes with that note. Approvals are listed under
-`awaitingHuman` and are never acted on.
+`awaitingHuman` and are never acted on. An unvetted (draft or stale) job/persona link is one of
+them: it is the catalog check's `awaiting-human` item and does not also fail the strict review
+(#608). `journey promote` still refuses it without approval or `--accept-unvetted`.
 
 `report` mode opens no browser and sends nothing. `replay` and `prove` refuse three things before
-any browser opens: a missing target, an environment flagged `production: true`, and missing params
-(named, never shown). In a pair's `prove` mode, the consuming Journey is verified with the params you
-pass; if they do not cover it, its proof shows the refusal as `not-run`.
+any browser opens: a missing target, an environment flagged `production: true`, and missing or
+unknown params (named, never shown). For a pair, `--param` values are the producing Journey's params
+and reach it through the chain (#608). In `prove` mode the consuming Journey is verified with the
+params the chain bound for the first matched request (record fields plus the request); when no
+request matched, its proof shows `not-run` with a hint to supply a matching `--requests` line.
 
 The receipt carries no param value, page text, secret or full URL. Exit codes: 0 technically-ready,
 1 blocked, 2 inconclusive or incomplete. Over MCP the same command is `journey_readiness`.
