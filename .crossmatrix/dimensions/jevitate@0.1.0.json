@@ -1055,7 +1055,7 @@
           "id": "loc:docs/journeys.md",
           "label": "docs/journeys.md",
           "sourceRef": {
-            "contentHash": "sha256:02e2181e6f96290cc941f411bcd618fee9fb5403d91349d2cd8bc8ac04c41863",
+            "contentHash": "sha256:5b1a5364a97b434e5c506b36ee887c73bb7f727e623ee29bedc55b0be2afdc6f",
             "locator": "docs/journeys.md",
             "sourceRef": "docs/journeys.md",
             "sourceType": "file",
@@ -6271,7 +6271,7 @@
           "id": "loc:packages/cli/src/journey-network-checks.ts",
           "label": "packages/cli/src/journey-network-checks.ts",
           "sourceRef": {
-            "contentHash": "sha256:79f99d20a4ab4ffe1d6b63cff8a73a5a390c59134ae9d65a1a4707ba719a45e5",
+            "contentHash": "sha256:af052dd2cf53066856b5e70a09abbd47e35fde5f226a8e3aea2dcdbc22216e1d",
             "locator": "packages/cli/src/journey-network-checks.ts",
             "sourceRef": "packages/cli/src/journey-network-checks.ts",
             "sourceType": "file",
@@ -6479,7 +6479,7 @@
           "id": "loc:packages/cli/src/journey-readiness.ts",
           "label": "packages/cli/src/journey-readiness.ts",
           "sourceRef": {
-            "contentHash": "sha256:73a3ae19840ed0392e571420882d27e2179b355f1f8edac4e64c84e574f7fc96",
+            "contentHash": "sha256:502cd4b8cc80f9faad44a16369607f57c14fe287280a40fcb34114f10a92747a",
             "locator": "packages/cli/src/journey-readiness.ts",
             "sourceRef": "packages/cli/src/journey-readiness.ts",
             "sourceType": "file",
@@ -6639,7 +6639,7 @@
           "id": "loc:packages/cli/src/journey-review.ts",
           "label": "packages/cli/src/journey-review.ts",
           "sourceRef": {
-            "contentHash": "sha256:9ce4996d0bd62073ec36f05c6f7caea9be346e6f2dc7323490313fcdd06e390b",
+            "contentHash": "sha256:bef625f37da42a5083b5cc68bf09382b9d6a62f24e80ba273bdff410e28e2d4c",
             "locator": "packages/cli/src/journey-review.ts",
             "sourceRef": "packages/cli/src/journey-review.ts",
             "sourceType": "file",
@@ -6687,7 +6687,7 @@
           "id": "loc:packages/cli/src/journey-review/render.ts",
           "label": "packages/cli/src/journey-review/render.ts",
           "sourceRef": {
-            "contentHash": "sha256:83b9181f8e90474041d564abc3c54aa37991f6ad351b2123149242323a39edd5",
+            "contentHash": "sha256:0178fa57286b9104f1158c441912272a4ab19923336dc85450b7b48f4057b980",
             "locator": "packages/cli/src/journey-review/render.ts",
             "sourceRef": "packages/cli/src/journey-review/render.ts",
             "sourceType": "file",
@@ -6799,7 +6799,7 @@
           "id": "loc:packages/cli/src/journey-two-journey-readiness-served.test.ts",
           "label": "packages/cli/src/journey-two-journey-readiness-served.test.ts",
           "sourceRef": {
-            "contentHash": "sha256:3ef04e42c3ea0ec3c83e979e6d2c9afc459280acb191b623dd41de95eab5d82e",
+            "contentHash": "sha256:49abd50e6c7bb28f4dcad5ba162332e169584c844cfd08ef8de1d3199bb72bdf",
             "locator": "packages/cli/src/journey-two-journey-readiness-served.test.ts",
             "sourceRef": "packages/cli/src/journey-two-journey-readiness-served.test.ts",
             "sourceType": "file",
@@ -6911,7 +6911,7 @@
           "id": "loc:packages/cli/src/journey-verify.ts",
           "label": "packages/cli/src/journey-verify.ts",
           "sourceRef": {
-            "contentHash": "sha256:085f871abbd46ae0350b103d0461863f7b20af1d32b2a84fc311cfaa14a9c738",
+            "contentHash": "sha256:ebb2e4cfef9f3cd37eeecc9e9c89aff36378171e9f80fd378aeff4d8eef38d5c",
             "locator": "packages/cli/src/journey-verify.ts",
             "sourceRef": "packages/cli/src/journey-verify.ts",
             "sourceType": "file",
@@ -16751,7 +16751,7 @@
           "id": "loc:packages/explore/src/page-monitor.ts",
           "label": "packages/explore/src/page-monitor.ts",
           "sourceRef": {
-            "contentHash": "sha256:5313fad93129d1a846560674378b61b090bf523b7448dd3f5e44042464a2a30a",
+            "contentHash": "sha256:e4f3dbdf8af0a1bc7b60129404950c79f89017ea981a6ebfe2ee96e1cdf92c0f",
             "locator": "packages/explore/src/page-monitor.ts",
             "sourceRef": "packages/explore/src/page-monitor.ts",
             "sourceType": "file",
@@ -19695,7 +19695,7 @@
           "id": "loc:packages/journey/src/journey.ts",
           "label": "packages/journey/src/journey.ts",
           "sourceRef": {
-            "contentHash": "sha256:dc433fece44b426e41737721f4d8744777ccca49a5d36ca5883fb9b795985ec7",
+            "contentHash": "sha256:c2f116c1af0ac985dcbf77509536aa5896933159e28ed55e439360c450ab8779",
             "locator": "packages/journey/src/journey.ts",
             "sourceRef": "packages/journey/src/journey.ts",
             "sourceType": "file",
@@ -19887,7 +19887,7 @@
           "id": "loc:packages/journey/src/mutation-proof.ts",
           "label": "packages/journey/src/mutation-proof.ts",
           "sourceRef": {
-            "contentHash": "sha256:4a005f4ee47098487b52f5522bde2da75bcf797552dd2484dee16bcf9404e48e",
+            "contentHash": "sha256:ed493e3d0befa0949b873cae1e95105ae2741ccdd5da6f1d24eef26799059d27",
             "locator": "packages/journey/src/mutation-proof.ts",
             "sourceRef": "packages/journey/src/mutation-proof.ts",
             "sourceType": "file",
@@ -19967,7 +19967,7 @@
           "id": "loc:packages/journey/src/proof-hash.ts",
           "label": "packages/journey/src/proof-hash.ts",
           "sourceRef": {
-            "contentHash": "sha256:aa31db29d45bff5bb753db7bcf1450add153ce46222bbcf090206c9e78bb356d",
+            "contentHash": "sha256:7e4cb937f7a51cde4da58fe752eee1acad4a027722b9a38d13e27746c4f81c1f",
             "locator": "packages/journey/src/proof-hash.ts",
             "sourceRef": "packages/journey/src/proof-hash.ts",
             "sourceType": "file",
@@ -20031,7 +20031,7 @@
           "id": "loc:packages/journey/src/review-schema.ts",
           "label": "packages/journey/src/review-schema.ts",
           "sourceRef": {
-            "contentHash": "sha256:60e0c2dcd2ef122257a70208d232a5bcc61a0673c918a0f7ac1854489651a668",
+            "contentHash": "sha256:74468da37a86d6d695f98b55172bf15a679d5b9bce27fd45143f3004063c6730",
             "locator": "packages/journey/src/review-schema.ts",
             "sourceRef": "packages/journey/src/review-schema.ts",
             "sourceType": "file",
@@ -26111,7 +26111,7 @@
           "id": "loc:scripts/__snapshots__/api-surface.declaration.snapshot.txt",
           "label": "scripts/__snapshots__/api-surface.declaration.snapshot.txt",
           "sourceRef": {
-            "contentHash": "sha256:f9ea333334333c54c65fa4deff6587c9774032e1148c72d1fd9b7a389413a034",
+            "contentHash": "sha256:7ce5fca4b559fa2cb378b0650da32a909ad99d6e7f5f734bcce859a5a0aaf80f",
             "locator": "scripts/__snapshots__/api-surface.declaration.snapshot.txt",
             "sourceRef": "scripts/__snapshots__/api-surface.declaration.snapshot.txt",
             "sourceType": "file",
@@ -26127,7 +26127,7 @@
           "id": "loc:scripts/__snapshots__/api-surface.runtime.snapshot.txt",
           "label": "scripts/__snapshots__/api-surface.runtime.snapshot.txt",
           "sourceRef": {
-            "contentHash": "sha256:7c12bed7dcbfc4cdd71b9ebc0dbbbefc5ce26598fc36acc51415807e4cc8b329",
+            "contentHash": "sha256:e9f17ec9ae1a6d5ae121acad861475e7d1989f050cf6f5dfa3ba4ddeaad0beb7",
             "locator": "scripts/__snapshots__/api-surface.runtime.snapshot.txt",
             "sourceRef": "scripts/__snapshots__/api-surface.runtime.snapshot.txt",
             "sourceType": "file",
@@ -26655,7 +26655,7 @@
           "id": "loc:.changeset",
           "label": ".changeset",
           "sourceRef": {
-            "contentHash": "sha256:afbb12acc83f140a635d8031138684d4fa7eea1a705501ad0ae3370b146cf9d5",
+            "contentHash": "sha256:8d8766dea23278218d0d4a9cdbc30fed623b99c96f986e46e34e9376afb99ade",
             "locator": ".changeset",
             "sourceRef": ".changeset",
             "sourceType": "directory",
@@ -26815,7 +26815,7 @@
           "id": "loc:docs",
           "label": "docs",
           "sourceRef": {
-            "contentHash": "sha256:38befd6a176055f02932db4c822edde834cf8ef299ebd9ec7f44abe26e081de9",
+            "contentHash": "sha256:b9b3221c76c665e17851fa0d8f1e471702ff2ae5f01e5198558ca4faa160bfc2",
             "locator": "docs",
             "sourceRef": "docs",
             "sourceType": "directory",
@@ -26927,7 +26927,7 @@
           "id": "loc:packages",
           "label": "packages",
           "sourceRef": {
-            "contentHash": "sha256:c71f4485d0b272ff7463409e91324daa8429fe804e63cf007ebf07a11a1de688",
+            "contentHash": "sha256:66ce832f1b3e1a581c3d5df17596365bd84402833dbf2dbcedec1e250c037ca0",
             "locator": "packages",
             "sourceRef": "packages",
             "sourceType": "directory",
@@ -27007,7 +27007,7 @@
           "id": "loc:packages/cli",
           "label": "packages/cli",
           "sourceRef": {
-            "contentHash": "sha256:59263d61cdbc1700772382b29ab96d0d9c64b19959b5248e78bd65838537596d",
+            "contentHash": "sha256:ca64befecd0c161dc90b10e87655d37c202a92f1f6416532ac3587857de9ae05",
             "locator": "packages/cli",
             "sourceRef": "packages/cli",
             "sourceType": "directory",
@@ -27151,7 +27151,7 @@
           "id": "loc:packages/cli/src",
           "label": "packages/cli/src",
           "sourceRef": {
-            "contentHash": "sha256:02fc043a04b49c29f0e067304b08f446a3887956659317bc56abe28449bf7415",
+            "contentHash": "sha256:a52f5f55e9d1ba29976f0f1e7f4bf787fcdabc50d893bdcd364ee57eae357415",
             "locator": "packages/cli/src",
             "sourceRef": "packages/cli/src",
             "sourceType": "directory",
@@ -27215,7 +27215,7 @@
           "id": "loc:packages/cli/src/journey-review",
           "label": "packages/cli/src/journey-review",
           "sourceRef": {
-            "contentHash": "sha256:7505e8cd296853ba33c1e089cc81eabcce6cf57075afd9927557494549664a61",
+            "contentHash": "sha256:18b01f695e1e7d54b485a76e13dce002636ec12084bdd8f9bbe58b60c5a042b8",
             "locator": "packages/cli/src/journey-review",
             "sourceRef": "packages/cli/src/journey-review",
             "sourceType": "directory",
@@ -27535,7 +27535,7 @@
           "id": "loc:packages/explore",
           "label": "packages/explore",
           "sourceRef": {
-            "contentHash": "sha256:b9dfa79c10df84d987b197aff701fe8f15fc880a4d34fc5e53aa200958965e63",
+            "contentHash": "sha256:57d551a841d85760138989f3b35496a5784e50769f5e0a18f99633fe86f30127",
             "locator": "packages/explore",
             "sourceRef": "packages/explore",
             "sourceType": "directory",
@@ -27551,7 +27551,7 @@
           "id": "loc:packages/explore/src",
           "label": "packages/explore/src",
           "sourceRef": {
-            "contentHash": "sha256:fda943bf8697f1f897aedfb1871baa11c668958e1ca555787a6ec853b5464bd1",
+            "contentHash": "sha256:95bf48833fe918a105441ccbd982af308a868ac4cc7248c6f2f45a1ba5922a12",
             "locator": "packages/explore/src",
             "sourceRef": "packages/explore/src",
             "sourceType": "directory",
@@ -27871,7 +27871,7 @@
           "id": "loc:packages/journey",
           "label": "packages/journey",
           "sourceRef": {
-            "contentHash": "sha256:a54476d4edf4001f810237c3250ca1d2f3c50ea346f45ea06b1f61ea02334dc9",
+            "contentHash": "sha256:8255e00cdb2e69e1593bfc697a3651428242da450fbc804658531e6552d2bf97",
             "locator": "packages/journey",
             "sourceRef": "packages/journey",
             "sourceType": "directory",
@@ -27887,7 +27887,7 @@
           "id": "loc:packages/journey/src",
           "label": "packages/journey/src",
           "sourceRef": {
-            "contentHash": "sha256:16ba71a8b7b2b7b8897e3341644b5bf50cc4508a94e92094a29f2c6c23807975",
+            "contentHash": "sha256:1e0de021aabfa7b2e000ba5ad5c5b809662799dfa7e65a1a6a7a2654fecc3199",
             "locator": "packages/journey/src",
             "sourceRef": "packages/journey/src",
             "sourceType": "directory",
@@ -28751,7 +28751,7 @@
           "id": "loc:scripts",
           "label": "scripts",
           "sourceRef": {
-            "contentHash": "sha256:62e1a7c775dc46afa3a4e2771c3940e2cb2332817c3ff08d7efbd460aba544be",
+            "contentHash": "sha256:9ba837cbc6b94dba8e956a3453092f5d86e14b05cb6e460ba8c8511f04311522",
             "locator": "scripts",
             "sourceRef": "scripts",
             "sourceType": "directory",
@@ -28767,7 +28767,7 @@
           "id": "loc:scripts/__snapshots__",
           "label": "scripts/__snapshots__",
           "sourceRef": {
-            "contentHash": "sha256:e1671e5049ae103ffd7acbbdb17b1b5175b7da978f03273bd11b7a7b42c2c8b7",
+            "contentHash": "sha256:611a4d0e0248d164eee98e39a5acd8983a7d27b2969f3fec371a839c9ed46fe9",
             "locator": "scripts/__snapshots__",
             "sourceRef": "scripts/__snapshots__",
             "sourceType": "directory",
@@ -28898,6 +28898,438 @@
             "contentHash": "sha256:1c3abbece8b3afbb9ee7e1963767aa59a903fa5d38818999f5998e3cf9185584",
             "locator": "test/fixtures/bizops-community/.jevitate/journeys/.approved",
             "sourceRef": "test/fixtures/bizops-community/.jevitate/journeys/.approved",
+            "sourceType": "directory",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".changeset",
+            "path": ".changeset/0-20-0-declared-targeted-proofs.md",
+            "type": "file"
+          },
+          "id": "loc:.changeset/0-20-0-declared-targeted-proofs.md",
+          "label": ".changeset/0-20-0-declared-targeted-proofs.md",
+          "sourceRef": {
+            "contentHash": "sha256:2ea8e92b4b694a662dfc6e94239f53d5874cdf9003f06eb3f766d84cddacdc83",
+            "locator": ".changeset/0-20-0-declared-targeted-proofs.md",
+            "sourceRef": ".changeset/0-20-0-declared-targeted-proofs.md",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix",
+            "path": ".crossmatrix/.gitattributes",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/.gitattributes",
+          "label": ".crossmatrix/.gitattributes",
+          "sourceRef": {
+            "contentHash": "sha256:451954d5f764833d01288827beeff4c2c2b76992a63cc803879669b2c8014ae0",
+            "locator": ".crossmatrix/.gitattributes",
+            "sourceRef": ".crossmatrix/.gitattributes",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix",
+            "path": ".crossmatrix/README.md",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/README.md",
+          "label": ".crossmatrix/README.md",
+          "sourceRef": {
+            "contentHash": "sha256:8545ed2eccf45f4ca9d7b92f26a48f4a5a890f37cbc1b5da17056772ee3ed2d9",
+            "locator": ".crossmatrix/README.md",
+            "sourceRef": ".crossmatrix/README.md",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/audit",
+            "path": ".crossmatrix/audit/.gitkeep",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/audit/.gitkeep",
+          "label": ".crossmatrix/audit/.gitkeep",
+          "sourceRef": {
+            "contentHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "locator": ".crossmatrix/audit/.gitkeep",
+            "sourceRef": ".crossmatrix/audit/.gitkeep",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/audit",
+            "path": ".crossmatrix/audit/jevitate.jsonl",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/audit/jevitate.jsonl",
+          "label": ".crossmatrix/audit/jevitate.jsonl",
+          "sourceRef": {
+            "contentHash": "sha256:2df76009837cdbd05c0a853b59d57f98dbae235f63eae23147ae4de03a8b6e09",
+            "locator": ".crossmatrix/audit/jevitate.jsonl",
+            "sourceRef": ".crossmatrix/audit/jevitate.jsonl",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/config",
+            "path": ".crossmatrix/config/.gitkeep",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/config/.gitkeep",
+          "label": ".crossmatrix/config/.gitkeep",
+          "sourceRef": {
+            "contentHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "locator": ".crossmatrix/config/.gitkeep",
+            "sourceRef": ".crossmatrix/config/.gitkeep",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/config",
+            "path": ".crossmatrix/config/jevitate@0.1.0.json",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/config/jevitate@0.1.0.json",
+          "label": ".crossmatrix/config/jevitate@0.1.0.json",
+          "sourceRef": {
+            "contentHash": "sha256:3f0fd1c0d776cb26de3c96ef1c0304b563b81710fbad3c2eee1fc2a3509d675d",
+            "locator": ".crossmatrix/config/jevitate@0.1.0.json",
+            "sourceRef": ".crossmatrix/config/jevitate@0.1.0.json",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/dimensions",
+            "path": ".crossmatrix/dimensions/.gitkeep",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/dimensions/.gitkeep",
+          "label": ".crossmatrix/dimensions/.gitkeep",
+          "sourceRef": {
+            "contentHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "locator": ".crossmatrix/dimensions/.gitkeep",
+            "sourceRef": ".crossmatrix/dimensions/.gitkeep",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/dimensions",
+            "path": ".crossmatrix/dimensions/jevitate@0.1.0.json",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/dimensions/jevitate@0.1.0.json",
+          "label": ".crossmatrix/dimensions/jevitate@0.1.0.json",
+          "sourceRef": {
+            "contentHash": "sha256:c2f2f5e60b674af33fea8ad2d7775f6f3154df415196930d65f7b5e6bc08df72",
+            "locator": ".crossmatrix/dimensions/jevitate@0.1.0.json",
+            "sourceRef": ".crossmatrix/dimensions/jevitate@0.1.0.json",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/dimensions",
+            "path": ".crossmatrix/dimensions/project-code@6d444d1e1599.json",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/dimensions/project-code@6d444d1e1599.json",
+          "label": ".crossmatrix/dimensions/project-code@6d444d1e1599.json",
+          "sourceRef": {
+            "contentHash": "sha256:b9092ba5126a96461ea539e8791f6f8970e71472d36b00c495a51314d2b820d0",
+            "locator": ".crossmatrix/dimensions/project-code@6d444d1e1599.json",
+            "sourceRef": ".crossmatrix/dimensions/project-code@6d444d1e1599.json",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/dimensions",
+            "path": ".crossmatrix/dimensions/project-cpm@5c41090b0c0a.json",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/dimensions/project-cpm@5c41090b0c0a.json",
+          "label": ".crossmatrix/dimensions/project-cpm@5c41090b0c0a.json",
+          "sourceRef": {
+            "contentHash": "sha256:794d4e0527f29cff6a784d0ae1808cd947a5882fd2067f014090cd3219742fed",
+            "locator": ".crossmatrix/dimensions/project-cpm@5c41090b0c0a.json",
+            "sourceRef": ".crossmatrix/dimensions/project-cpm@5c41090b0c0a.json",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/dimensions",
+            "path": ".crossmatrix/dimensions/project-jevitate@868d3ba5047d.json",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/dimensions/project-jevitate@868d3ba5047d.json",
+          "label": ".crossmatrix/dimensions/project-jevitate@868d3ba5047d.json",
+          "sourceRef": {
+            "contentHash": "sha256:dcebddc2d571b74d322f832a00a9416cae1606ebcce6a219eff691402005c44e",
+            "locator": ".crossmatrix/dimensions/project-jevitate@868d3ba5047d.json",
+            "sourceRef": ".crossmatrix/dimensions/project-jevitate@868d3ba5047d.json",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/dimensions",
+            "path": ".crossmatrix/dimensions/project-playbooks@d6a4b31cee1f.json",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/dimensions/project-playbooks@d6a4b31cee1f.json",
+          "label": ".crossmatrix/dimensions/project-playbooks@d6a4b31cee1f.json",
+          "sourceRef": {
+            "contentHash": "sha256:020295981cfabafff3894f945ac3990768e536198fb9ead8359b47d88e79e456",
+            "locator": ".crossmatrix/dimensions/project-playbooks@d6a4b31cee1f.json",
+            "sourceRef": ".crossmatrix/dimensions/project-playbooks@d6a4b31cee1f.json",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/dimensions",
+            "path": ".crossmatrix/dimensions/project-tests@6da813b8ff37.json",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/dimensions/project-tests@6da813b8ff37.json",
+          "label": ".crossmatrix/dimensions/project-tests@6da813b8ff37.json",
+          "sourceRef": {
+            "contentHash": "sha256:19146e50afab1a5766ac0ba34368a0d539462b7e9a18867538aa20eb6d0dcc55",
+            "locator": ".crossmatrix/dimensions/project-tests@6da813b8ff37.json",
+            "sourceRef": ".crossmatrix/dimensions/project-tests@6da813b8ff37.json",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/state",
+            "path": ".crossmatrix/state/.gitkeep",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/state/.gitkeep",
+          "label": ".crossmatrix/state/.gitkeep",
+          "sourceRef": {
+            "contentHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "locator": ".crossmatrix/state/.gitkeep",
+            "sourceRef": ".crossmatrix/state/.gitkeep",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix/state",
+            "path": ".crossmatrix/state/jevitate.json",
+            "type": "file"
+          },
+          "id": "loc:.crossmatrix/state/jevitate.json",
+          "label": ".crossmatrix/state/jevitate.json",
+          "sourceRef": {
+            "contentHash": "sha256:f930895c608c88e331180dcf1a00ed58350d69c8507be25717f7227ed57c5193",
+            "locator": ".crossmatrix/state/jevitate.json",
+            "sourceRef": ".crossmatrix/state/jevitate.json",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/cli/src",
+            "path": "packages/cli/src/journey-declared-targeted-guidance.test.ts",
+            "type": "file"
+          },
+          "id": "loc:packages/cli/src/journey-declared-targeted-guidance.test.ts",
+          "label": "packages/cli/src/journey-declared-targeted-guidance.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:c8246e452b0284190a0c0379c6b9e9d88c790fc3f9071384832da1f4ce8e9cdc",
+            "locator": "packages/cli/src/journey-declared-targeted-guidance.test.ts",
+            "sourceRef": "packages/cli/src/journey-declared-targeted-guidance.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/cli/src",
+            "path": "packages/cli/src/journey-network-checks-membership.test.ts",
+            "type": "file"
+          },
+          "id": "loc:packages/cli/src/journey-network-checks-membership.test.ts",
+          "label": "packages/cli/src/journey-network-checks-membership.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:297c2f9758618855a2973c18ba30e090a10f7030b27c40169880abbc7235058c",
+            "locator": "packages/cli/src/journey-network-checks-membership.test.ts",
+            "sourceRef": "packages/cli/src/journey-network-checks-membership.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/cli/src",
+            "path": "packages/cli/src/journey-review-proof-plans.test.ts",
+            "type": "file"
+          },
+          "id": "loc:packages/cli/src/journey-review-proof-plans.test.ts",
+          "label": "packages/cli/src/journey-review-proof-plans.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:01214714cffa4e339baf1bbd90a9321471bf8e9db624fbe00836f7552414d47c",
+            "locator": "packages/cli/src/journey-review-proof-plans.test.ts",
+            "sourceRef": "packages/cli/src/journey-review-proof-plans.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/cli/src",
+            "path": "packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+            "type": "file"
+          },
+          "id": "loc:packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+          "label": "packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:d5105606b1e829de231aad8d7730c360e47345c2ba4a6adf89137c20edc10a07",
+            "locator": "packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+            "sourceRef": "packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/explore/src",
+            "path": "packages/explore/src/page-monitor-capture-membership.test.ts",
+            "type": "file"
+          },
+          "id": "loc:packages/explore/src/page-monitor-capture-membership.test.ts",
+          "label": "packages/explore/src/page-monitor-capture-membership.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:96e829cc23a6ff44b6b66351f0ea8a15c510a2eef825c717be081011a58eff06",
+            "locator": "packages/explore/src/page-monitor-capture-membership.test.ts",
+            "sourceRef": "packages/explore/src/page-monitor-capture-membership.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/journey/src",
+            "path": "packages/journey/src/targeted-proof-plan.test.ts",
+            "type": "file"
+          },
+          "id": "loc:packages/journey/src/targeted-proof-plan.test.ts",
+          "label": "packages/journey/src/targeted-proof-plan.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:9e7c410b16662cee638b667cba47a2c6017e5d213b71c1fe5dbf6b97fc96a4ed",
+            "locator": "packages/journey/src/targeted-proof-plan.test.ts",
+            "sourceRef": "packages/journey/src/targeted-proof-plan.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "",
+            "path": ".crossmatrix",
+            "type": "dir"
+          },
+          "id": "loc:.crossmatrix",
+          "label": ".crossmatrix",
+          "sourceRef": {
+            "contentHash": "sha256:98d29a21d2e1dc56faa62225aeb7d8027f6f5559e601e9f1b455e4c515f9b44a",
+            "locator": ".crossmatrix",
+            "sourceRef": ".crossmatrix",
+            "sourceType": "directory",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix",
+            "path": ".crossmatrix/audit",
+            "type": "dir"
+          },
+          "id": "loc:.crossmatrix/audit",
+          "label": ".crossmatrix/audit",
+          "sourceRef": {
+            "contentHash": "sha256:6da340a5dcbc744b9bc47206a7cb104e77b8b8aeb1bca4735a7647a7d758e43b",
+            "locator": ".crossmatrix/audit",
+            "sourceRef": ".crossmatrix/audit",
+            "sourceType": "directory",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix",
+            "path": ".crossmatrix/config",
+            "type": "dir"
+          },
+          "id": "loc:.crossmatrix/config",
+          "label": ".crossmatrix/config",
+          "sourceRef": {
+            "contentHash": "sha256:4f4c30059aef50177afc743c63f45607a06aa4ad3a2c031c588403397fd1023b",
+            "locator": ".crossmatrix/config",
+            "sourceRef": ".crossmatrix/config",
+            "sourceType": "directory",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix",
+            "path": ".crossmatrix/dimensions",
+            "type": "dir"
+          },
+          "id": "loc:.crossmatrix/dimensions",
+          "label": ".crossmatrix/dimensions",
+          "sourceRef": {
+            "contentHash": "sha256:5687bf989c195168a282a0410658c2b050c9294b14426e2017ff423313e6e3b0",
+            "locator": ".crossmatrix/dimensions",
+            "sourceRef": ".crossmatrix/dimensions",
+            "sourceType": "directory",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": ".crossmatrix",
+            "path": ".crossmatrix/state",
+            "type": "dir"
+          },
+          "id": "loc:.crossmatrix/state",
+          "label": ".crossmatrix/state",
+          "sourceRef": {
+            "contentHash": "sha256:7e1cecc0674287482fab20fcf1603d2125a1f27d048d9150d213158f48fbf3c4",
+            "locator": ".crossmatrix/state",
+            "sourceRef": ".crossmatrix/state",
             "sourceType": "directory",
             "system": "git"
           }
@@ -31528,7 +31960,7 @@
           "id": "test:packages/cli/src/journey-two-journey-readiness-served.test.ts",
           "label": "packages/cli/src/journey-two-journey-readiness-served.test.ts",
           "sourceRef": {
-            "contentHash": "sha256:3ef04e42c3ea0ec3c83e979e6d2c9afc459280acb191b623dd41de95eab5d82e",
+            "contentHash": "sha256:49abd50e6c7bb28f4dcad5ba162332e169584c844cfd08ef8de1d3199bb72bdf",
             "locator": "packages/cli/src/journey-two-journey-readiness-served.test.ts",
             "sourceRef": "packages/cli/src/journey-two-journey-readiness-served.test.ts",
             "sourceType": "file",
@@ -40651,6 +41083,102 @@
             "contentHash": "sha256:ab73b456da166eb248162eb70e5ebadc89895e16f1e7b8cfc6dec71b621ee445",
             "locator": "test/global-temp-cleanup.ts",
             "sourceRef": "test/global-temp-cleanup.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/cli/src",
+            "path": "packages/cli/src/journey-declared-targeted-guidance.test.ts",
+            "type": "file"
+          },
+          "id": "test:packages/cli/src/journey-declared-targeted-guidance.test.ts",
+          "label": "packages/cli/src/journey-declared-targeted-guidance.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:c8246e452b0284190a0c0379c6b9e9d88c790fc3f9071384832da1f4ce8e9cdc",
+            "locator": "packages/cli/src/journey-declared-targeted-guidance.test.ts",
+            "sourceRef": "packages/cli/src/journey-declared-targeted-guidance.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/cli/src",
+            "path": "packages/cli/src/journey-network-checks-membership.test.ts",
+            "type": "file"
+          },
+          "id": "test:packages/cli/src/journey-network-checks-membership.test.ts",
+          "label": "packages/cli/src/journey-network-checks-membership.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:297c2f9758618855a2973c18ba30e090a10f7030b27c40169880abbc7235058c",
+            "locator": "packages/cli/src/journey-network-checks-membership.test.ts",
+            "sourceRef": "packages/cli/src/journey-network-checks-membership.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/cli/src",
+            "path": "packages/cli/src/journey-review-proof-plans.test.ts",
+            "type": "file"
+          },
+          "id": "test:packages/cli/src/journey-review-proof-plans.test.ts",
+          "label": "packages/cli/src/journey-review-proof-plans.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:01214714cffa4e339baf1bbd90a9321471bf8e9db624fbe00836f7552414d47c",
+            "locator": "packages/cli/src/journey-review-proof-plans.test.ts",
+            "sourceRef": "packages/cli/src/journey-review-proof-plans.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/cli/src",
+            "path": "packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+            "type": "file"
+          },
+          "id": "test:packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+          "label": "packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:d5105606b1e829de231aad8d7730c360e47345c2ba4a6adf89137c20edc10a07",
+            "locator": "packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+            "sourceRef": "packages/cli/src/journey-verify-declared-targeted-served.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/explore/src",
+            "path": "packages/explore/src/page-monitor-capture-membership.test.ts",
+            "type": "file"
+          },
+          "id": "test:packages/explore/src/page-monitor-capture-membership.test.ts",
+          "label": "packages/explore/src/page-monitor-capture-membership.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:96e829cc23a6ff44b6b66351f0ea8a15c510a2eef825c717be081011a58eff06",
+            "locator": "packages/explore/src/page-monitor-capture-membership.test.ts",
+            "sourceRef": "packages/explore/src/page-monitor-capture-membership.test.ts",
+            "sourceType": "file",
+            "system": "git"
+          }
+        },
+        {
+          "attributes": {
+            "parent": "packages/journey/src",
+            "path": "packages/journey/src/targeted-proof-plan.test.ts",
+            "type": "file"
+          },
+          "id": "test:packages/journey/src/targeted-proof-plan.test.ts",
+          "label": "packages/journey/src/targeted-proof-plan.test.ts",
+          "sourceRef": {
+            "contentHash": "sha256:9e7c410b16662cee638b667cba47a2c6017e5d213b71c1fe5dbf6b97fc96a4ed",
+            "locator": "packages/journey/src/targeted-proof-plan.test.ts",
+            "sourceRef": "packages/journey/src/targeted-proof-plan.test.ts",
             "sourceType": "file",
             "system": "git"
           }
