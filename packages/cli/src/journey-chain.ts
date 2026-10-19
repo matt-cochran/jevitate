@@ -6,8 +6,10 @@ import {
   handoffKey,
   journeyParamSchema,
   outputKeyFields,
+  ParamValidationError,
   readRecords as readHandoffRecords,
   recordFingerprint,
+  validateParams,
   validateRecords,
   validateRequests,
   type HandoffContext,
@@ -47,7 +49,7 @@ export interface JourneyChainDeps {
   readonly runJourney?: JourneyChainRunner;
 }
 
-export type JourneyChainErrorCode = "E_CHAIN_FROM_FAILED" | "E_CHAIN_EMPTY" | "E_CHAIN_REQUEST" | "E_CHAIN_NOT_PROMOTED" | "E_HANDOFF_INCOMPATIBLE";
+export type JourneyChainErrorCode = "E_CHAIN_FROM_FAILED" | "E_CHAIN_EMPTY" | "E_CHAIN_REQUEST" | "E_CHAIN_PARAMS" | "E_CHAIN_NOT_PROMOTED" | "E_HANDOFF_INCOMPATIBLE";
 
 /** A chain-stopping failure (§5 steps 1, 2 and the §4 request contract). */
 export class JourneyChainError extends Error {
@@ -216,6 +218,14 @@ function redactReason(reason: string, params: Readonly<Record<string, string>>, 
   return out;
 }
 
+/**
+ * #608: a producing param is supplied by the caller and never echoed — if a reason (from the
+ * producing run or a later one) quotes its value, it becomes `<param name>`.
+ */
+function redactProducerParams(reason: string, params: Readonly<Record<string, string>> | undefined): string {
+  return params === undefined ? reason : redactReason(reason, params, Object.keys(params));
+}
+
 /** §5 step 5: the chain succeeded only when every request matched and every run was `ok`. */
 export function chainSucceeded(result: JourneyChainResult): boolean {
   return result.unmatched.length === 0 && result.runs.every((run) => run.outcome === "ok");
@@ -227,6 +237,11 @@ export interface RunJourneyChainOptions {
   readonly to: string;
   /** The approved requests as raw JSON Lines (§4). */
   readonly requests: string;
+  /**
+   * #608: explicit params for the producing (discover) Journey, validated against its param schema
+   * before anything runs. Absent means no params, exactly as the fixed `{}` was before.
+   */
+  readonly params?: Readonly<Record<string, string>>;
   /** The journeys directory. */
   readonly dir: string;
   readonly environment?: ResolvedJourneyEnvironment;
@@ -361,10 +376,10 @@ async function runHandoffChain(
         ...identity,
         outcome: result.outcome,
         ...stamp,
-        ...("reason" in result ? { reason: redactReason(result.reason, params, redactors) } : {}),
+        ...("reason" in result ? { reason: redactProducerParams(redactReason(result.reason, params, redactors), opts.params) } : {}),
       });
     } catch (err) {
-      runs.push({ ...identity, outcome: "error", ...stamp, reason: redactReason(err instanceof Error ? err.message : String(err), params, redactors) });
+      runs.push({ ...identity, outcome: "error", ...stamp, reason: redactProducerParams(redactReason(err instanceof Error ? err.message : String(err), params, redactors), opts.params) });
     }
   }
 
@@ -387,9 +402,19 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
   const inputs = toJourney.metadata.inputs;
 
   // §4: the compatibility check always loads the producing Journey, even when drafts are allowed.
-  const needsFrom = inputs !== undefined || opts.requirePromoted === true;
-  const fromJourney = needsFrom ? await registry.get(opts.from) : null;
-  if (needsFrom && fromJourney === null) throw new UnknownJourneyError(`unknown journey '${opts.from}'`);
+  const fromJourney = await registry.get(opts.from);
+  if (fromJourney === null) throw new UnknownJourneyError(`unknown journey '${opts.from}'`);
+
+  // #608: the producing Journey's params are explicit and validated with `validateParams`' exact
+  // missing/unknown semantics BEFORE any runner — so a mismatch never opens a browser.
+  const producerParams: Record<string, string> = { ...(opts.params ?? {}) };
+  try {
+    validateParams(journeyParamSchema(fromJourney), producerParams);
+  } catch (err) {
+    if (err instanceof ParamValidationError) throw new JourneyChainError("E_CHAIN_PARAMS", err.message);
+    throw err;
+  }
+
   if (opts.requirePromoted === true) {
     for (const j of [fromJourney as Journey, toJourney]) {
       if (!j.metadata.promoted) throw new JourneyChainError("E_CHAIN_NOT_PROMOTED", `journey '${j.metadata.id}' is not promoted — a chain runs promoted Journeys (journey chain --allow-draft runs drafts on the CLI)`);
@@ -409,9 +434,9 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
   // JSON Lines objects after the record set is known (§4 step 5).
   const requests = handoff === undefined ? parseChainRequests(opts.requests) : undefined;
 
-  const fromResult = await runner({ ...shared, id: opts.from, params: {} });
+  const fromResult = await runner({ ...shared, id: opts.from, params: producerParams });
   if (fromResult.outcome !== "ok") {
-    const reason = "reason" in fromResult ? fromResult.reason : undefined;
+    const reason = "reason" in fromResult ? redactProducerParams(fromResult.reason, opts.params) : undefined;
     throw new JourneyChainError(
       "E_CHAIN_FROM_FAILED",
       `discover Journey '${opts.from}' did not run ok (${fromResult.outcome})${reason === undefined ? "" : `: ${reason}`}`,
@@ -452,12 +477,12 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
         commentId: request.commentId,
         account: request.account,
         outcome: result.outcome,
-        ...("reason" in result ? { reason: redactReason(result.reason, mapped.params) } : {}),
+        ...("reason" in result ? { reason: redactProducerParams(redactReason(result.reason, mapped.params), opts.params) } : {}),
       });
     } catch (err) {
       // A param the reply Journey does not take (or any other refusal) fails only this request; the
       // rest of the chain still runs (§5 step 4).
-      runs.push({ commentId: request.commentId, account: request.account, outcome: "error", reason: redactReason(err instanceof Error ? err.message : String(err), mapped.params) });
+      runs.push({ commentId: request.commentId, account: request.account, outcome: "error", reason: redactProducerParams(redactReason(err instanceof Error ? err.message : String(err), mapped.params), opts.params) });
     }
   }
 
