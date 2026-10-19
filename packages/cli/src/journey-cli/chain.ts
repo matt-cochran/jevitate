@@ -4,6 +4,7 @@ import {
   type BrowserLaunchFlags,
   browserRunFromFlags,
   type CliDeps,
+  collectParam,
   emitJson,
   type EmulationFlags,
   emulationFromFlags,
@@ -40,6 +41,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
     .requiredOption("--from <id>", "the discover Journey, run once to produce the records")
     .requiredOption("--to <id>", "the prepare-only reply Journey, run once per matched request")
     .requiredOption("--requests <file>", "JSON Lines file of approved requests ({commentId, account, replyText})")
+    .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--storage-state <file>", "Playwright storageState JSON to start each run authenticated; must exist")
     .option("--allow-draft", "also run Journeys that are not promoted (authoring); without it both must be promoted")
@@ -49,13 +51,14 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
       const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
       if (layout === null) return;
       const chainJourneysDir = layout.journeysDir;
-      const { from, to, requests: requestsFile, storageState: storageStateFlag, json, allowDraft } = this.opts<{
+      const { from, to, requests: requestsFile, storageState: storageStateFlag, json, allowDraft, param } = this.opts<{
         from: string;
         to: string;
         requests: string;
         storageState?: string;
         json?: boolean;
         allowDraft?: boolean;
+        param: Record<string, string>;
       }>();
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where both runs go (unknown env / bad file → 64, nothing opened).
@@ -105,6 +108,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
             from,
             to,
             requests,
+            ...(Object.keys(param).length === 0 ? {} : { params: param }),
             dir: chainJourneysDir,
             requirePromoted: allowDraft !== true,
             ...(siteGate === undefined ? {} : { siteGate }),

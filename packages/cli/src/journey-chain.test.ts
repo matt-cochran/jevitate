@@ -77,7 +77,8 @@ let dir: string;
 async function setup(journeys: Journey[]): Promise<string> {
   dir = await mkdtemp(join(tmpdir(), "jev-580-"));
   const store = new FsJourneyStore(dir);
-  for (const j of journeys) await store.put(j);
+  // #608: runJourneyChain always loads the producing Journey to validate its params.
+  for (const j of [...journeys, discoverJourney()]) await store.put(j);
   return dir;
 }
 
