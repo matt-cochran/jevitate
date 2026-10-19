@@ -1,6 +1,6 @@
 import type { Assertion, OutcomeWait, RecordedStep, Step } from "@jevitate/recording";
 import { WAIT_FOR_STALL_MS } from "@jevitate/recording";
-import type { Journey } from "./journey.js";
+import type { Journey, JourneyTargetedProofPlan } from "./journey.js";
 import { isNoClaimExpect, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { journeyWriteSteps, type JourneyLintOptions } from "./lint.js";
 import { resolveJourneyStep } from "./anchors.js";
@@ -90,6 +90,8 @@ export interface TargetedProof {
   readonly refused?: string;
   /** The unmutated control replay's outcome (`targetedControlReplay`), run before a targeted failure counts. */
   readonly control?: MutationRunResult["outcome"];
+  /** #616: a DECLARED plan chose this proof's relaxations, not the automatic bound search. */
+  readonly declared?: true;
 }
 
 /** A mutated replay: it passed, failed (where), was not applied (nothing to mutate), or errored. */
@@ -238,6 +240,72 @@ export function mutationPairIssues(journey: Journey): { readonly index: number; 
       resolveMutationRef(journey, pair.mustFailWhen);
     } catch (err) {
       out.push({ index, field: "mustFailWhen", message: `mutationPairs: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  });
+  return out;
+}
+
+/**
+ * #616: what is wrong with `metadata.targetedProofs` — an unknown assertion site, an unresolvable
+ * `mustFailWhen`, or a `relax` entry that is not a relaxable earlier `step:<n>` postcondition (a
+ * resume/handback assertion, a step with no page postcondition, the target itself, a step at or
+ * after a step target, a duplicate, or a missing step). Empty when every plan resolves.
+ */
+export function targetedProofPlanIssues(journey: Journey): { readonly index: number; readonly field: "check" | "mustFailWhen" | "relax"; readonly message: string }[] {
+  const plans = journey.metadata.targetedProofs ?? [];
+  if (plans.length === 0) return [];
+  const sites = new Set(journeyAssertions(journey).map(assertionSiteKey));
+  const steps = flat(journey);
+  const out: { index: number; field: "check" | "mustFailWhen" | "relax"; message: string }[] = [];
+  const seen = new Set<string>();
+  plans.forEach((plan, index) => {
+    const key = `${plan.check}\u0000${plan.mustFailWhen}`;
+    if (seen.has(key)) out.push({ index, field: "check", message: `targetedProofs: duplicate plan for ${plan.check} and ${plan.mustFailWhen}` });
+    seen.add(key);
+    if (!SITE_RE.test(plan.check)) {
+      out.push({ index, field: "check", message: `targetedProofs: ${JSON.stringify(plan.check)} is not an assertion site — expected step:<n>, step-request:<n>:<i> or end-state:<i>` });
+    } else if (!sites.has(plan.check)) {
+      out.push({ index, field: "check", message: `targetedProofs: the Journey has no assertion at ${plan.check}` });
+    }
+    try {
+      resolveMutationRef(journey, plan.mustFailWhen);
+    } catch (err) {
+      out.push({ index, field: "mustFailWhen", message: `targetedProofs: ${err instanceof Error ? err.message : String(err)}` });
+    }
+    const check = /^step:([1-9][0-9]*)$/.exec(plan.check);
+    const targetStep = check === null ? null : Number(check[1]);
+    const relaxed = new Set<string>();
+    for (const entry of plan.relax) {
+      if (!/^step:[1-9][0-9]*$/.test(entry)) {
+        out.push({ index, field: "relax", message: `targetedProofs: ${JSON.stringify(entry)} is not a step assertion site — expected step:<n>` });
+        continue;
+      }
+      if (relaxed.has(entry)) {
+        out.push({ index, field: "relax", message: `targetedProofs: ${entry} is relaxed twice` });
+        continue;
+      }
+      relaxed.add(entry);
+      const n = Number(entry.slice("step:".length));
+      const recorded = steps[n - 1];
+      if (recorded === undefined) {
+        out.push({ index, field: "relax", message: `targetedProofs: the Journey has no step ${n}` });
+        continue;
+      }
+      if (targetStep === n) {
+        out.push({ index, field: "relax", message: `targetedProofs: ${entry} is the target assertion — a declared proof never relaxes it` });
+        continue;
+      }
+      if (targetStep !== null && n > targetStep) {
+        out.push({ index, field: "relax", message: `targetedProofs: ${entry} is not before the target step:${targetStep}` });
+        continue;
+      }
+      if (recorded.step.kind === "handback") {
+        out.push({ index, field: "relax", message: `targetedProofs: ${entry} is a resume assertion — a declared proof never relaxes it` });
+        continue;
+      }
+      if (recorded.step.kind !== "assert" && !("expect" in recorded.step)) {
+        out.push({ index, field: "relax", message: `targetedProofs: ${entry} has no page postcondition to relax` });
+      }
     }
   });
   return out;
@@ -554,6 +622,13 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
  */
 export const MAX_TARGETED_RELAXATIONS = 4;
 
+/**
+ * #616 — how many earlier postconditions a DECLARED targeted-proof plan may name. Higher than the
+ * automatic bound because a human reviewed each relaxation; still bounded so a plan cannot relax the
+ * whole Journey. Enforced at load (`metadata.targetedProofs[].relax`).
+ */
+export const MAX_DECLARED_RELAXATIONS = 8;
+
 /** #609 — the site-key form of a failed site, for a refusal that names where the replay stopped. */
 function failedSiteKey(f: MutationFailedSite): string {
   if (f.where === "step") return `step:${f.step}`;
@@ -707,6 +782,74 @@ export async function runTargetedProof(
 }
 
 /**
+ * #616 — a DECLARED targeted proof: the plan names exactly which earlier postconditions a human
+ * reviewed and allows the proof to relax, so a layered Journey whose automatic #609 proof hits
+ * `MAX_TARGETED_RELAXATIONS` can still prove a late assertion. It refuses (no replay at all) unless
+ * every `relax` site is paired with `m.id`. Otherwise it runs EXACTLY ONE targeted replay with that
+ * relax list; when the replay stops first at an undeclared earlier postcondition (not in `relax`)
+ * before the target, it refuses naming that site. When `classifyMutationPlain` makes the target
+ * sensitive, it runs EXACTLY ONE unmutated control replay, which must pass (as `runTargetedProof`).
+ * The target assertion is never relaxed. Total replays per plan: at most two.
+ */
+export async function runDeclaredTargetedProof(
+  journey: Journey,
+  plan: MutationPlan,
+  m: JourneyMutation,
+  target: JourneyAssertionSite,
+  declared: JourneyTargetedProofPlan,
+  replay: (
+    describe: (journey: Journey) => MutationReplay,
+    kind: "targeted" | "control",
+  ) => Promise<{ readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] }>,
+  opts: MutationReplayOptions = {},
+): Promise<TargetedProof> {
+  const site = assertionSiteKey(target);
+  const relax = declared.relax;
+  const unpaired = relax.find((key) => !plan.pairs.some((p) => p.site === key && p.mutation === m.id));
+  if (unpaired !== undefined) {
+    return { site, relaxedSites: relax, outcome: "error", failedSites: [], declared: true, refused: `${unpaired} is not paired with ${m.id}` };
+  }
+  const relaxedNow = [...relax];
+  const run = await replay((j) => targetedMutationReplay(j, m, site, relaxedNow, opts), "targeted");
+  const first = run.failedSites[0];
+  if (first !== undefined && first.where === "step" && first.postcondition && !relax.includes(`step:${first.step}`) && (target.where !== "step" || first.step < target.step)) {
+    const key = `step:${first.step}`;
+    return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true, refused: `${key} blocked the declared proof (not in relax)` };
+  }
+  if (classifyMutationPlain(target, m, run) === "sensitive") {
+    const control = await replay((j) => targetedControlReplay(j, m, relaxedNow), "control");
+    if (control.outcome !== "passed") {
+      return {
+        site,
+        relaxedSites: relax,
+        outcome: run.outcome,
+        failedSites: run.failedSites,
+        declared: true,
+        control: control.outcome,
+        refused: `the unmutated control replay with ${relax.join(", ")} relaxed did not pass (${control.outcome})`,
+      };
+    }
+    return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true, control: control.outcome };
+  }
+  return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true };
+}
+
+/**
+ * #616 — a reviewable start for `metadata.targetedProofs`: when an automatic #609 proof stopped at
+ * the relaxation bound, name the sites it already relaxed plus the blocking site that needs one more
+ * relaxation. Returns null for any other refusal (not a bound the declaration can fix), for no
+ * blocking step, or when the result would exceed `MAX_DECLARED_RELAXATIONS`.
+ */
+export function suggestTargetedProofPlan(proof: TargetedProof, m: JourneyMutation): JourneyTargetedProofPlan | null {
+  if (proof.refused !== `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached`) return null;
+  const first = proof.failedSites[0];
+  if (first === undefined || first.where !== "step") return null;
+  const relax = [...proof.relaxedSites, `step:${first.step}`];
+  if (relax.length > MAX_DECLARED_RELAXATIONS) return null;
+  return { check: proof.site, mustFailWhen: m.id, relax };
+}
+
+/**
  * #554: does this failed result need a relaxed replay? Only when it failed first at the mutated
  * step's OWN postcondition (`{where:'step', step: m.step, postcondition: true}`) and `plan.pairs`
  * pairs `m` with at least one site other than the step's own (`step:<m.step>`) — otherwise the
@@ -770,6 +913,21 @@ function classifyMutationPlain(site: JourneyAssertionSite, m: JourneyMutation, r
 const PRECEDENCE: readonly MutationVerdict[] = ["sensitive", "insensitive", "cascade", "not-applied", "error"];
 
 /**
+ * #616: is `key` proven sensitive to `m` — directly, or through a targeted proof whose own relaxed
+ * sites are (recursively) proven sensitive to `m`? `visiting` breaks a relaxation cycle (unsound).
+ */
+function provenSensitive(journey: Journey, m: JourneyMutation, results: ReadonlyMap<string, MutationRunResult>, key: string, visiting: ReadonlySet<string>): boolean {
+  if (visiting.has(key)) return false;
+  const site = journeyAssertions(journey).find((s) => assertionSiteKey(s) === key);
+  const result = results.get(m.id) ?? { outcome: "error", failedSites: [] };
+  if (site === undefined || classifyMutation(site, m, result) !== "sensitive") return false;
+  const proof = result.targeted?.find((t) => t.site === key);
+  if (proof === undefined || proof.refused !== undefined) return true;
+  const next = new Set([...visiting, key]);
+  return proof.relaxedSites.every((relaxed) => provenSensitive(journey, m, results, relaxed, next));
+}
+
+/**
  * #402/#609: every assertion's verdict over its paired mutations — sensitive when ANY paired
  * mutation broke it for the right reason (`provedBy` the first), else insensitive when one passed,
  * else cascade / not-applied / error; `unpaired` when no mutation is paired with it. A sensitive
@@ -787,10 +945,18 @@ export function judgeAssertions(journey: Journey, plan: MutationPlan, results: R
       const first = verdicts.find((x) => x.v === v);
       if (first === undefined) continue;
       if (v === "sensitive") {
-        const proof = proofFor(first.m, key);
-        return proof !== undefined && proof.refused === undefined
-          ? { site: key, verdict: v, provedBy: first.m.id, relaxedSites: proof.relaxedSites }
-          : { site: key, verdict: v, provedBy: first.m.id };
+        // #616: a targeted (declared or automatic) sensitive verdict is sound only when every site it
+        // relaxed is itself proven sensitive to the SAME mutation (transitively) — otherwise the
+        // target merely sits behind an unproven defense. The first sound paired mutation proves it.
+        let unsound: string | undefined;
+        for (const { m } of verdicts.filter((x) => x.v === "sensitive")) {
+          const proof = proofFor(m, key);
+          if (proof === undefined || proof.refused !== undefined) return { site: key, verdict: v, provedBy: m.id };
+          const bad = proof.relaxedSites.find((relaxed) => !provenSensitive(journey, m, results, relaxed, new Set([key])));
+          if (bad === undefined) return { site: key, verdict: v, provedBy: m.id, relaxedSites: proof.relaxedSites };
+          unsound ??= `relaxed site ${bad} is not itself proven sensitive to ${m.id}`;
+        }
+        return { site: key, verdict: "cascade", targetedRefusal: unsound! };
       }
       if (v === "cascade") {
         const refusal = paired.map((m) => proofFor(m, key)).find((t) => t !== undefined && t.refused !== undefined);
