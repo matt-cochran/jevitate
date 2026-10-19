@@ -137,6 +137,8 @@ export const ReviewVerifySchema = z.discriminatedUnion("status", [
       stale: z.boolean(),
       reason: z.string().optional(),
       summary: z.record(z.string(), z.number()),
+      /** #616: a reviewable declared targeted-proof plan the automatic bound refused (names only). */
+      suggestedTargetedProofs: z.array(z.object({ check: z.string(), mustFailWhen: z.string(), relax: z.array(z.string()) }).strict()).optional(),
     })
     .strict(),
 ]);
@@ -219,6 +221,8 @@ export const JourneyReviewSchema = z
         endStateText: z.array(z.string()).optional(),
         lint: z.object({ errors: z.number().int(), warnings: z.number().int(), findings: z.array(ReviewLintFindingSchema) }).strict(),
         acceptedWeak: z.object({ reason: z.string(), rules: z.array(z.string()) }).strict().optional(),
+        /** #616: the declared targeted-proof plans (`metadata.targetedProofs`) a reviewer approves with the Journey. Additive. */
+        targetedProofs: z.array(z.object({ check: z.string(), mustFailWhen: z.string(), relax: z.array(z.string()) }).strict()).optional(),
         verify: ReviewVerifySchema,
       })
       .strict(),

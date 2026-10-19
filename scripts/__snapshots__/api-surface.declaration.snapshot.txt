@@ -1201,7 +1201,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (277 exports)
+# @jevitate/journey (278 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1273,6 +1273,7 @@
   checkStatement: function
   classifyHandback: function
   classifyMutation: function
+  declaredTargetedProofFor: function
   deriveParamSchema: function
   describeStep: function
   DesiredOutcome: type-alias

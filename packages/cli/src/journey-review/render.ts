@@ -260,9 +260,12 @@ export function renderProvesAtTheEnd(r: JourneyReview, w: SheetWriter, opts: Ren
   void opts;
   // ── Proves at the end
   const endState = r.proof.endStateText ?? r.proof.endState;
-  if (endState.length > 0) {
+  const plans = r.proof.targetedProofs ?? [];
+  if (endState.length > 0 || plans.length > 0) {
     w.head("PROVES AT THE END", "Proves at the end");
     for (const e of endState) w.put(`${w.bullet}✓ `, e, w.bullet.length + 2);
+    // #616: each declared plan names the mutation it answers and the earlier checks a human reviewed.
+    for (const p of plans) w.put(`${w.bullet}↺ `, `declared targeted proof: ${p.check} against ${p.mustFailWhen} may relax ${p.relax.join(", ")}`, w.bullet.length + 2);
     w.gap();
   }
 }
