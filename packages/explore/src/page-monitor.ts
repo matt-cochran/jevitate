@@ -281,31 +281,32 @@ const MAX_CAPTURED = 20_000;
  * `responseStatus`) are evaluated over it.
  */
 export class RequestCapture {
-  readonly #requests: CapturedRequest[] = [];
+  /**
+   * #617: every request that finished during the capture (its whole completion history), each
+   * tagged with whether THIS capture saw it begin. A request already in flight when the capture
+   * started still finishes into it, but was not sent by the run the capture covers.
+   */
+  readonly #requests: Array<{ readonly r: CapturedRequest; readonly sent: boolean }> = [];
   /** #283: requests sent since the capture started that have not finished (keyed by the request). */
   readonly #inflight = new Map<object, CapturedRequest>();
   /** #283: requests sent that never reported an end (their document went away first). */
   readonly #unfinished: CapturedRequest[] = [];
-  /** #617: the request keys whose START this capture saw; only these are this capture's to call SENT. */
-  readonly #beganKeys = new WeakSet<object>();
-  /** #617: the finished requests this capture saw begin, in finish order — the sent() half of `#requests`. */
-  readonly #finishedBegan: CapturedRequest[] = [];
   #truncated = false;
 
-  /** @internal — fed by the page's monitor. */
-  add(r: CapturedRequest): void {
-    this.#requests.push(r);
+  /**
+   * @internal — fed by the page's monitor. `sent` is false for a completion the capture never saw
+   * begin (#617); it stays in the completion history but is not counted as sent by the capture.
+   */
+  add(r: CapturedRequest, sent = true): void {
+    this.#requests.push({ r, sent });
     if (this.#requests.length > MAX_CAPTURED) {
-      const dropped = this.#requests.shift();
+      this.#requests.shift();
       this.#truncated = true;
-      // #617: drop it from the sent() history too, so that stays a subsequence of `#requests`.
-      if (dropped !== undefined && this.#finishedBegan[0] === dropped) this.#finishedBegan.shift();
     }
   }
 
   /** @internal — the page's monitor saw `key` sent. */
   began(key: object, r: CapturedRequest): void {
-    this.#beganKeys.add(key);
     this.#inflight.set(key, { ...r, status: null, failed: false, pending: true });
   }
 
@@ -316,28 +317,30 @@ export class RequestCapture {
   ended(key: object, finished: CapturedRequest | null): void {
     const sent = this.#inflight.get(key);
     this.#inflight.delete(key);
-    if (finished !== null) {
-      this.add(finished);
-      // #617: the completion history keeps EVERY request that finished while live; `sent()` keeps
-      // only the ones this capture saw begin, so a request sent before the capture started is not it.
-      if (this.#beganKeys.has(key)) this.#finishedBegan.push(finished);
-    } else if (sent !== undefined && this.#unfinished.length < MAX_CAPTURED) this.#unfinished.push(sent);
+    // #617: only a request this capture saw begin counts as sent; a late completion from a request
+    // that began before the capture started is added to the history but not to `sent()`.
+    if (finished !== null) this.add(finished, sent !== undefined);
+    else if (sent !== undefined && this.#unfinished.length < MAX_CAPTURED) this.#unfinished.push(sent);
   }
 
-  /** The requests captured so far, in the order they finished. */
+  /** The requests captured so far, in the order they finished, including ones the capture never saw begin. */
   requests(): CapturedRequest[] {
-    return [...this.#requests];
+    return this.#requests.map((e) => e.r);
   }
 
   /**
-   * Every request SENT since the capture started (#283): the finished ones whose start this capture
-   * saw (#617 — a request sent before it started but finished after is in `requests()`, not here),
-   * then the ones still in flight or abandoned without an end event (`pending: true`, `status:
-   * null`). A `requestMade` check is judged over these — a request counts once it was sent, whether
-   * or not its response has arrived.
+   * Every request SENT since the capture started (#283): the finished ones this capture saw begin,
+   * then the ones still in flight or abandoned without an end event (`pending: true`, `status: null`).
+   * A `requestMade` check is judged over these — a request counts once it was sent, whether or not
+   * its response has arrived. A request that began before the capture started is never among them
+   * (#617): only its completion shows up, in `requests()`.
    */
   sent(): CapturedRequest[] {
-    return [...this.#finishedBegan, ...this.#unfinished, ...this.#inflight.values()];
+    return [
+      ...this.#requests.filter((e) => e.sent).map((e) => e.r),
+      ...this.#unfinished,
+      ...this.#inflight.values(),
+    ];
   }
 
   /** True when more requests finished than the capture keeps (the oldest were dropped). */
