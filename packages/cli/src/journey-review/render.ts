@@ -365,7 +365,14 @@ export function renderFullDetail(r: JourneyReview, w: SheetWriter, opts: RenderO
     w.put(w.bullet, `Approved${c.approvedAt === undefined ? "" : ` ${humanTime(c.approvedAt)}`} as ${nb(w.code(c.approvedHash))}${c.kind === "snapshot-missing" ? "; its snapshot is missing" : ""} — ${c.changed ? "CHANGED since" : "unchanged since"}`);
     if (c.stepIdOnly === true) w.put(w.bullet, STEP_ID_ONLY_LABEL);
     if (c.kind === "diff") {
-      for (const [label, d] of [["Steps", c.steps], ["Assertions", c.assertions], ["Side effects", c.sideEffects]] as const) {
+      const blocks: [string, { added: string[]; removed: string[] }][] = [
+        ["Steps", c.steps],
+        ["Assertions", c.assertions],
+        ["Side effects", c.sideEffects],
+      ];
+      // #616: the proof-plan block is only present when a side declares one.
+      if (c.proofPlans !== undefined) blocks.push(["Proof plans", c.proofPlans]);
+      for (const [label, d] of blocks) {
         if (d.added.length === 0 && d.removed.length === 0) continue;
         w.put(w.bullet, `${label}:`);
         for (const l of d.removed) w.put(`${w.bullet}  `, `− ${l}`, w.bullet.length + 4);

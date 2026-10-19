@@ -163,6 +163,8 @@ export const ReviewChangeSchema = z.discriminatedUnion("kind", [
       steps: DiffSchema,
       assertions: DiffSchema,
       sideEffects: DiffSchema,
+      /** #616: proof-plan changes (`metadata.mutationPairs` / `metadata.targetedProofs`); omitted when neither side declares any. */
+      proofPlans: DiffSchema.optional(),
     })
     .strict(),
 ]);

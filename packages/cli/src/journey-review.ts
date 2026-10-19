@@ -368,6 +368,8 @@ function buildChange(journey: Journey, hash: string, snapshot: Journey | null | 
   }
   const approvedHash = journeyReviewHash(snapshot);
   const approvedAt = approval?.at ?? snapshot.metadata.approval?.at;
+  const beforePlans = proofPlanLines(snapshot);
+  const afterPlans = proofPlanLines(journey);
   return {
     kind: "diff",
     approvedHash,
@@ -377,6 +379,8 @@ function buildChange(journey: Journey, hash: string, snapshot: Journey | null | 
     steps: multisetDiff(stepLines(snapshot), stepLines(journey)),
     assertions: multisetDiff(assertionLines(snapshot), assertionLines(journey)),
     sideEffects: multisetDiff(sideEffectLines(snapshot), sideEffectLines(journey)),
+    // #616: only present when a side declares a proof plan, so an unrelated diff stays as before.
+    ...(beforePlans.length === 0 && afterPlans.length === 0 ? {} : { proofPlans: multisetDiff(beforePlans, afterPlans) }),
   };
 }
 
@@ -391,6 +395,14 @@ function assertionLines(j: Journey): string[] {
     ...journeyAssertions(j)
       .filter((s) => s.where === "step-request")
       .map((s) => `step request: ${describeCheck(s.check)}`),
+  ];
+}
+
+/** #616: the declared negative-proof plans (`metadata.mutationPairs` / `metadata.targetedProofs`) as diff lines. */
+function proofPlanLines(j: Journey): string[] {
+  return [
+    ...(j.metadata.mutationPairs ?? []).map((p) => `mutation pair: ${p.check} must fail when ${p.mustFailWhen}`),
+    ...(j.metadata.targetedProofs ?? []).map((p) => `targeted proof: ${p.check} against ${p.mustFailWhen} may relax ${p.relax.join(", ")}`),
   ];
 }
 
