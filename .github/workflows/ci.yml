@@ -214,6 +214,8 @@ jobs:
     - test
     - cross-platform-pool
     - package
+    - release-policy
+    - publication-proof
     if: ${{ always() }}
     runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     steps:
@@ -227,7 +229,50 @@ jobs:
         POOL: ${{ needs.cross-platform-pool.result }}
         EVENT: ${{ github.event_name }}
         PACKAGE: ${{ needs.package.result }}
+        POLICY: ${{ needs.release-policy.result }}
+        PUBLICATION: ${{ needs.publication-proof.result }}
       shell: bash
-      run: "set -euo pipefail\ntest \"$TEST\" = success\ntest \"$POOL\" = success\nif [ \"$TARGET\" = main ] ||\
-        \ [ \"$REF\" = refs/heads/main ]; then\n  test \"$REUSE\" = success\n  test \"$HIT\" = true\nelif [ \"$EVENT\"\
-        \ = push ] && [ \"$REF\" = refs/heads/dev ]; then\n  test \"$PACKAGE\" = success\nfi\n"
+      run: "set -euo pipefail\nif [ \"$TARGET\" = main ] || [ \"$REF\" = refs/heads/main ]; then\n  test \"$PUBLICATION\"\
+        \ = success\nelse\n  test \"$POLICY\" = success\nfi\nset -euo pipefail\ntest \"$TEST\" = success\ntest \"\
+        $POOL\" = success\nif [ \"$TARGET\" = main ] || [ \"$REF\" = refs/heads/main ]; then\n  test \"$REUSE\"\
+        \ = success\n  test \"$HIT\" = true\nelif [ \"$EVENT\" = push ] && [ \"$REF\" = refs/heads/dev ]; then\n\
+        \  test \"$PACKAGE\" = success\nfi\n"
+  release-policy:
+    name: Release policy regressions
+    if: github.base_ref != 'main' && github.ref != 'refs/heads/main'
+    runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    steps:
+    - &id001
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - &id002
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: '24'
+    - run: node --test scripts/ci/staged-publication.test.ts
+  publication-proof:
+    name: Staging publication proof
+    needs: reuse
+    if: (github.base_ref == 'main' || github.ref == 'refs/heads/main') && needs.reuse.outputs.hit == 'true'
+    runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - *id001
+    - *id002
+    - id: tree
+      run: echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: jevitate-${{ steps.tree.outputs.tree }}
+        run-id: ${{ needs.reuse.outputs.run_id }}
+        github-token: ${{ github.token }}
+        path: staged-candidate
+    - name: Verify staging publication and exact registry bytes
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BUILD_RUN: ${{ needs.reuse.outputs.run_id }}
+      run: node scripts/ci/staged-publication.ts verify staged-candidate
