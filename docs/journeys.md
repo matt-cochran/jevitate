@@ -267,10 +267,17 @@ of the Journey and replays until the target assertion itself is what fails, so i
   mutation, at or after the mutated step and before the target, are relaxed;
 - the earlier check must be paired with that mutation, so declare an unpaired earlier check as a
   defense with `metadata.mutationPairs`, for example
-  `{ "check": "step:2", "mustFailWhen": "swap-param:account" }`.
+  `{ "check": "step:2", "mustFailWhen": "swap-param:account" }`;
+- a targeted failure counts only after a **control** replay passes: the same relaxations with no
+  mutation (supplied params, nothing skipped, blocked or swapped). If relaxing the earlier checks
+  breaks the target on its own (for example a removed `waitFor` was the gate), the target stays a
+  cascade.
+
+Every mutated, relaxed, targeted and control replay runs on the chosen `--env`/`--base-url`, like
+the unmutated one.
 
 The JSON report records the runs as `mutations[].targeted` (`site`, `relaxedSites`, `outcome`,
-`failedSites`, `refused?`), `relaxedSites` on each proven assertion, `targetedRefusal` on an
+`failedSites`, `control?`, `refused?`), `relaxedSites` on each proven assertion, `targetedRefusal` on an
 assertion left as a cascade, and a `targeted` count in `summary`. The human line reads
 `(proved by swap-param:account, relaxed step:2)`. A refusal keeps the verdict `cascade`, so the
 proof stays inconclusive (exit 2); it is never counted as proof. Refusal reasons:
@@ -280,7 +287,8 @@ proof stays inconclusive (exit 2); it is never counted as proof. Refusal reasons
 - the failing site is not a step postcondition (an action failed, or it is an end-state or
   request check), or it is a `handback` resume assertion;
 - the failing step is not before the target, or is not paired with this mutation (pair it);
-- the site is already relaxed, or the bound of 4 relaxations is reached.
+- the site is already relaxed, or the bound of 4 relaxations is reached;
+- the unmutated control replay with the same relaxations did not pass.
 
 `journey readiness` in `prove` mode reports how many assertions were proven through a targeted
 proof. For an inconclusive proof it adds a blocker whose `why` gives the authoring guidance above.
