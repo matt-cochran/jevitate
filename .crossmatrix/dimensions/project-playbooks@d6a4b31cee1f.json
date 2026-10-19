@@ -1,0 +1,547 @@
+{
+  "dimensionSetId": "project-playbooks",
+  "dimensions": [
+    {
+      "id": "task-traits",
+      "kind": "criterion",
+      "label": "Task traits",
+      "members": [
+        {
+          "attributes": {
+            "playbooks": [
+              "vague-feature"
+            ]
+          },
+          "id": "trait:vague_request",
+          "label": "vague_request",
+          "sourceRef": {
+            "contentHash": "sha256:6a933ce8412ae70d81f9c5464ec80b1faccb7ada9b9fbf3d5400f65952a0eacf",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:vague_request",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "decision-evaluate"
+            ]
+          },
+          "id": "trait:decision_needed",
+          "label": "decision_needed",
+          "sourceRef": {
+            "contentHash": "sha256:a59b6236bed0262a314753421dc3d202cb4a6d1240c48bd0c1d97fd8764b065c",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:decision_needed",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "ui-change"
+            ]
+          },
+          "id": "trait:ui_or_journey",
+          "label": "ui_or_journey",
+          "sourceRef": {
+            "contentHash": "sha256:1fb12fd332b5bdb6ae48545871de0db544e3dfc0f82edd8538ce145ecb720247",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:ui_or_journey",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "perf-regression"
+            ]
+          },
+          "id": "trait:performance_or_measurement",
+          "label": "performance_or_measurement",
+          "sourceRef": {
+            "contentHash": "sha256:60dca5be92dc3482ccedc45dfaadc7bfac2e5756a28a7840c36ac7531855ad1e",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:performance_or_measurement",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "flaky-bug"
+            ]
+          },
+          "id": "trait:flaky_or_unexplained_failure",
+          "label": "flaky_or_unexplained_failure",
+          "sourceRef": {
+            "contentHash": "sha256:3a4776c3984094c8a464c47cec12a0f16107de9611d4c8e9b275522a1b6939e1",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:flaky_or_unexplained_failure",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "risky-migration"
+            ]
+          },
+          "id": "trait:risky_change",
+          "label": "risky_change",
+          "sourceRef": {
+            "contentHash": "sha256:30b5936a6278c16d37b3ad43b1b2ab8351ab4ba3f6454d8566f32db7e3f2d5c8",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:risky_change",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "vague-feature",
+              "risky-migration",
+              "planned-change"
+            ]
+          },
+          "id": "trait:plan_sized",
+          "label": "plan_sized",
+          "sourceRef": {
+            "contentHash": "sha256:2c4bc600e482e367b92e852068906fa8f1fb4778ffe040fcbc16ac9f9fd9f6fb",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:plan_sized",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "contradiction"
+            ]
+          },
+          "id": "trait:technical_contradiction",
+          "label": "technical_contradiction",
+          "sourceRef": {
+            "contentHash": "sha256:b2a813b4a70175682a50c28312be44c9540606742ed84dbafe7704b3eb72e2e5",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:technical_contradiction",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "vague-feature",
+              "decision-evaluate"
+            ]
+          },
+          "id": "trait:customer_job_or_outcome",
+          "label": "customer_job_or_outcome",
+          "sourceRef": {
+            "contentHash": "sha256:6453ee3d7514ac49333fc57a7e928ec87531d8ee7c3bea7ed29da2a86e7779ff",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:customer_job_or_outcome",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "plain-change"
+            ]
+          },
+          "id": "trait:trivial_change",
+          "label": "trivial_change",
+          "sourceRef": {
+            "contentHash": "sha256:202661af84d0f6f5d40f332e74ddab259d69726398c29d94e3943f76801c25cd",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:trait:trivial_change",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        }
+      ],
+      "order": 0,
+      "system": "playbooks"
+    },
+    {
+      "id": "playbooks",
+      "kind": "option",
+      "label": "Playbooks",
+      "members": [
+        {
+          "attributes": {
+            "steps": [
+              "elicitation:requirements-interview",
+              "crossmatrix:house-of-quality",
+              "cpm:plan-backed-deliverable"
+            ],
+            "traits": {
+              "customer_job_or_outcome": 0.8,
+              "plan_sized": 0.6,
+              "vague_request": 1
+            }
+          },
+          "id": "playbook:vague-feature",
+          "label": "Shape a vague feature request into a plan",
+          "sourceRef": {
+            "contentHash": "sha256:c29340fa3419da7685e424694913f844c0cad23bb0fc4d3d1a88d0fda69b9a98",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:playbook:vague-feature",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "steps": [
+              "crossmatrix:house-of-quality",
+              "elicitation:requirements-interview"
+            ],
+            "traits": {
+              "customer_job_or_outcome": 0.5,
+              "decision_needed": 1
+            }
+          },
+          "id": "playbook:decision-evaluate",
+          "label": "Evaluate competing options against customer value",
+          "sourceRef": {
+            "contentHash": "sha256:6fd7f9e02a63b52bb83e82d594bcae93f81323b5017b8b3578b290d78bdb2c33",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:playbook:decision-evaluate",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "steps": [
+              "scientific-process:hypothesis-experiment",
+              "crossmatrix:codemap-context"
+            ],
+            "traits": {
+              "flaky_or_unexplained_failure": 1
+            }
+          },
+          "id": "playbook:flaky-bug",
+          "label": "Explain an intermittent or unexplained failure",
+          "sourceRef": {
+            "contentHash": "sha256:fdea33075a1e4120023c5495b10fa112c4c02ab45e622740ebbe7a2d67abc43a",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:playbook:flaky-bug",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "steps": [
+              "scientific-process:hypothesis-experiment",
+              "jevitate:browser-check"
+            ],
+            "traits": {
+              "performance_or_measurement": 1
+            }
+          },
+          "id": "playbook:perf-regression",
+          "label": "Measure and fix a performance regression",
+          "sourceRef": {
+            "contentHash": "sha256:1b23f92194fb8017d1edb0cbed4f398030c41e9767f9cde0ebd6ef594d155587",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:playbook:perf-regression",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "steps": [
+              "fmeca:risk-before-change",
+              "cpm:plan-backed-deliverable"
+            ],
+            "traits": {
+              "plan_sized": 0.5,
+              "risky_change": 1
+            }
+          },
+          "id": "playbook:risky-migration",
+          "label": "De-risk a risky change or migration",
+          "sourceRef": {
+            "contentHash": "sha256:1ccaac7e671ed37695393bb0a500a2b7d6ba39afc93b03769b0bf65948e13505",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:playbook:risky-migration",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "steps": [
+              "crossmatrix:codemap-context",
+              "jevitate:browser-check"
+            ],
+            "traits": {
+              "ui_or_journey": 1
+            }
+          },
+          "id": "playbook:ui-change",
+          "label": "Change a UI surface or journey",
+          "sourceRef": {
+            "contentHash": "sha256:e7f7ed034decd19bd0e8a3343e2db8afd30331110d81cca99bfdb366296086e2",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:playbook:ui-change",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "steps": [
+              "triz:contradiction"
+            ],
+            "traits": {
+              "technical_contradiction": 1
+            }
+          },
+          "id": "playbook:contradiction",
+          "label": "Resolve a genuine technical contradiction",
+          "sourceRef": {
+            "contentHash": "sha256:e27e303e2538458ccfbb7c2a37b9da359a83ab2afeb3b3a0503affb03f123aea",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:playbook:contradiction",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "steps": [
+              "cpm:plan-backed-deliverable"
+            ],
+            "traits": {
+              "plan_sized": 1
+            }
+          },
+          "id": "playbook:planned-change",
+          "label": "Plan a multi-file change",
+          "sourceRef": {
+            "contentHash": "sha256:adfc91c8bc55b7c303a7847d81b24cb45cadca46e3cc1300b603657bf989c3ee",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:playbook:planned-change",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "steps": [],
+            "traits": {
+              "trivial_change": 1
+            }
+          },
+          "id": "playbook:plain-change",
+          "label": "Make a small, well-specified change",
+          "sourceRef": {
+            "contentHash": "sha256:0b23e7d2b673c0ee3834f5d2e4f684e7e0f63cdea234bae70c1520dd02a36110",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:playbook:plain-change",
+            "sourceType": "playbook",
+            "system": "playbooks"
+          },
+          "status": "active"
+        }
+      ],
+      "order": 1,
+      "system": "playbooks"
+    },
+    {
+      "id": "tool-applications",
+      "kind": "implementation_asset",
+      "label": "Tool applications",
+      "members": [
+        {
+          "attributes": {
+            "playbooks": [
+              "decision-evaluate",
+              "vague-feature"
+            ],
+            "tool": "elicitation"
+          },
+          "id": "application:elicitation:requirements-interview",
+          "label": "elicitation:requirements-interview",
+          "sourceRef": {
+            "contentHash": "sha256:a48e1e29dc1eb4ea496d9f676cf6c39110d9a7d01205595304c4f64e495965b5",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:application:elicitation:requirements-interview",
+            "sourceType": "tool_application",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "decision-evaluate",
+              "vague-feature"
+            ],
+            "tool": "crossmatrix"
+          },
+          "id": "application:crossmatrix:house-of-quality",
+          "label": "crossmatrix:house-of-quality",
+          "sourceRef": {
+            "contentHash": "sha256:9d8f57399dfcfef306194114af59247a28b3fecb2d4bf4facdb0dfd354061f57",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:application:crossmatrix:house-of-quality",
+            "sourceType": "tool_application",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "planned-change",
+              "risky-migration",
+              "vague-feature"
+            ],
+            "tool": "cpm"
+          },
+          "id": "application:cpm:plan-backed-deliverable",
+          "label": "cpm:plan-backed-deliverable",
+          "sourceRef": {
+            "contentHash": "sha256:32b297a346335e97c421cf963901adf84f9677aca89f22a64e8bad81ecb97410",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:application:cpm:plan-backed-deliverable",
+            "sourceType": "tool_application",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "flaky-bug",
+              "perf-regression"
+            ],
+            "tool": "scientific-process"
+          },
+          "id": "application:scientific-process:hypothesis-experiment",
+          "label": "scientific-process:hypothesis-experiment",
+          "sourceRef": {
+            "contentHash": "sha256:da68ef497566869b720d5c7d61c767e9265dc9593daf4178adac17a1b80f345f",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:application:scientific-process:hypothesis-experiment",
+            "sourceType": "tool_application",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "flaky-bug",
+              "ui-change"
+            ],
+            "tool": "crossmatrix"
+          },
+          "id": "application:crossmatrix:codemap-context",
+          "label": "crossmatrix:codemap-context",
+          "sourceRef": {
+            "contentHash": "sha256:41b52748566f9c45d24fc675ac82de37309a8f1245c1f1924f5ec6fa3eba943d",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:application:crossmatrix:codemap-context",
+            "sourceType": "tool_application",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "perf-regression",
+              "ui-change"
+            ],
+            "tool": "jevitate"
+          },
+          "id": "application:jevitate:browser-check",
+          "label": "jevitate:browser-check",
+          "sourceRef": {
+            "contentHash": "sha256:b46b9e3f1bbe88de9f0211a8051ffaa3cf43d48fbf5334d4319f21d41fc7b73a",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:application:jevitate:browser-check",
+            "sourceType": "tool_application",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "risky-migration"
+            ],
+            "tool": "fmeca"
+          },
+          "id": "application:fmeca:risk-before-change",
+          "label": "fmeca:risk-before-change",
+          "sourceRef": {
+            "contentHash": "sha256:13de25f8431f24b764d1072c8bd9634c19b15cf8630293b3e129c21679fedcc5",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:application:fmeca:risk-before-change",
+            "sourceType": "tool_application",
+            "system": "playbooks"
+          },
+          "status": "active"
+        },
+        {
+          "attributes": {
+            "playbooks": [
+              "contradiction"
+            ],
+            "tool": "triz"
+          },
+          "id": "application:triz:contradiction",
+          "label": "triz:contradiction",
+          "sourceRef": {
+            "contentHash": "sha256:019ea311df8a1288531fb844af3b17d766aaf78ecd1145033b88567965d3095a",
+            "locator": "playbooks/playbooks.json",
+            "sourceRef": "playbooks:application:triz:contradiction",
+            "sourceType": "tool_application",
+            "system": "playbooks"
+          },
+          "status": "active"
+        }
+      ],
+      "order": 2,
+      "system": "playbooks"
+    }
+  ],
+  "schemaVersion": "0.2.0",
+  "version": "d6a4b31cee1f"
+}

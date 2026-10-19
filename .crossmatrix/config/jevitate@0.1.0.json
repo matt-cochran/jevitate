@@ -1,0 +1,11 @@
+{
+  "aspect": "custom",
+  "configId": "jevitate",
+  "dimensionSetRef": {
+    "dimensionSetId": "jevitate",
+    "version": "0.1.0"
+  },
+  "relations": [],
+  "schemaVersion": "0.2.0",
+  "version": "0.1.0"
+}
