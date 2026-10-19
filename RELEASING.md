@@ -7,6 +7,21 @@ Jevitate publishes two public packages to npm:
 
 All other `packages/*` are `private` and never published.
 
+## Production promotion contract (owner policy, 2026-10-19)
+
+Refs https://github.com/matt-cochran/execution-policy/issues/9.
+Main reports the canonical **Build gate** from exact-tree reuse. Missing, expired,
+failed or mismatched evidence fails closed. No main CI test/pack fallback and no
+main/tag release build fallback are allowed. Version changes go through dev and
+staging. Native OS tests are unchanged before main; supported Linux jobs retain
+the CI_RUNNER_MODE GitHub/Blacksmith switch. Dev PRs require a real issue;
+promotions carry the original traceability and need no new ticket.
+
+The older fallback instructions below are superseded by this contract: never run
+a source-building manual release on main. Restore a retained artifact or validate
+a new candidate before production. A missing npm release must be published from
+verified retained tarballs; it does not authorize new compilation or tests.
+
 ## How a release happens
 
 Build and test once, then promote the same bytes (#534). Versioning goes through
