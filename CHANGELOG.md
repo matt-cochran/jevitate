@@ -7,6 +7,8 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.19.0] – 2026-10-19
+
 0.19.0 lets one discover Journey serve any account or thread through producer params, and lets `journey verify --mutate` prove an assertion that an earlier intentional defense used to mask.
 
 ### Added
