@@ -13,6 +13,7 @@ import {
   FsJourneyStore,
   JourneyRegistry,
   assertionSiteKey,
+  classifyMutation,
   journeyAssertions,
   journeyProofHash,
   judgeAssertions,
@@ -21,11 +22,14 @@ import {
   needsRelaxedReplay,
   planJourneyMutations,
   relaxedMutationReplay,
+  runTargetedProof,
   type AssertionVerdict,
   type JourneyMutation,
   type MutationFailedSite,
   type MutationProofVerdict,
+  type MutationReplay,
   type MutationRunResult,
+  type TargetedProof,
 } from "@jevitate/journey";
 import { describeCheck, type BlockedWrite } from "@jevitate/explore";
 import { clock } from "@jevitate/domain";
@@ -68,6 +72,8 @@ export interface JourneyVerifyMutation {
     readonly blockedWrites?: readonly string[];
     readonly reason?: string;
   };
+  /** #609: targeted proofs run for assertion sites this mutation left as a cascade. */
+  readonly targeted?: readonly TargetedProof[];
 }
 
 export interface JourneyVerifyAssertion {
@@ -76,6 +82,10 @@ export interface JourneyVerifyAssertion {
   readonly check: string;
   readonly verdict: AssertionVerdict;
   readonly provedBy?: string;
+  /** #609: the earlier postconditions a targeted proof weakened to reach a sensitive verdict. */
+  readonly relaxedSites?: readonly string[];
+  /** #609: why a targeted proof was refused, when the verdict stays a cascade. */
+  readonly targetedRefusal?: string;
 }
 
 export interface JourneyVerifyReport {
@@ -87,7 +97,7 @@ export interface JourneyVerifyReport {
   readonly reason?: string;
   readonly mutations: readonly JourneyVerifyMutation[];
   readonly assertions: readonly JourneyVerifyAssertion[];
-  readonly summary: Readonly<Record<"sensitive" | "insensitive" | "cascade" | "notApplied" | "error" | "unpaired", number>>;
+  readonly summary: Readonly<Record<"sensitive" | "insensitive" | "cascade" | "notApplied" | "error" | "unpaired" | "targeted", number>>;
 }
 
 /** The exit code for a proof's verdict (docs/ci.md): 0 proven · 1 insensitive · 2 inconclusive. */
@@ -148,12 +158,11 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     type Replayed = NonNullable<JourneyVerifyMutation["relaxed"]>;
     // #565: a param mutation's replay runs with altered params (never a secret's), so it needs them.
     const replayOpts = { ...lintOpts, params: opts.params };
-    const replay = async (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => {
+    const runReplay = async (m: JourneyMutation, how: MutationReplay): Promise<Replayed> => {
       try {
-        const how = describe(journey, m, replayOpts);
         const r = await run(how.params === undefined ? runOpts : { ...runOpts, params: { ...how.params } }, {
           structuredFailures: true,
-          ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j, m, replayOpts).journey }),
+          ...(how.journey === journey ? {} : { mutateJourney: () => how.journey }),
           ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
           ...(how.swapSelectAtStep === undefined ? {} : { selectAlternativeAtStep: how.swapSelectAtStep }),
           ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
@@ -182,11 +191,24 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         return { outcome: "error", failedSites: [], reason: err instanceof Error ? err.message : String(err) };
       }
     };
+    // #402: a named mutation lowers to its `MutationReplay`; #609's targeted proof passes one directly.
+    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, describe(journey, m, replayOpts));
+    const siteByKey = new Map(sites.map((s) => [assertionSiteKey(s), s]));
     for (const m of plan.mutations) {
       const first = await replay(m, mutationReplay);
       // #554: a first failure at the mutated step's own postcondition hides the LATER paired sites
       // behind it; one relaxed replay (same action, the step's own expect/waitFor left out) judges them.
       const relaxed = needsRelaxedReplay(plan, m, first) ? await replay(m, relaxedMutationReplay) : undefined;
+      const initial: MutationRunResult = { outcome: first.outcome, failedSites: first.failedSites, ...(relaxed === undefined ? {} : { relaxed }) };
+      // #609: a later assertion still a `cascade` is only hidden by an earlier postcondition; a
+      // targeted proof relaxes them one at a time (in a clone) to reach the target itself.
+      const targeted: TargetedProof[] = [];
+      for (const pair of plan.pairs) {
+        if (pair.mutation !== m.id) continue;
+        const site = siteByKey.get(pair.site);
+        if (site === undefined || classifyMutation(site, m, initial) !== "cascade") continue;
+        targeted.push(await runTargetedProof(journey, plan, m, site, initial, (how) => runReplay(m, how), replayOpts));
+      }
       mutations.push({
         kind: m.kind,
         step: m.step,
@@ -195,16 +217,27 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         ...(m.source === undefined ? {} : { source: m.source }),
         ...first,
         ...(relaxed === undefined ? {} : { relaxed }),
+        ...(targeted.length === 0 ? {} : { targeted }),
       });
     }
   }
 
   const results = new Map<string, MutationRunResult>(
-    mutations.map((m) => [m.id, { outcome: m.outcome, failedSites: m.failedSites, ...(m.relaxed === undefined ? {} : { relaxed: m.relaxed }) }]),
+    mutations.map((m) => [
+      m.id,
+      { outcome: m.outcome, failedSites: m.failedSites, ...(m.relaxed === undefined ? {} : { relaxed: m.relaxed }), ...(m.targeted === undefined ? {} : { targeted: m.targeted }) },
+    ]),
   );
   // Base failed: nothing ran, so every paired assertion is an `error` (no proof either way).
   const judged = judgeAssertions(journey, plan, results);
-  const assertions: JourneyVerifyAssertion[] = judged.map((a) => ({ site: a.site, check: checkOf.get(a.site) ?? a.site, verdict: a.verdict, ...(a.provedBy === undefined ? {} : { provedBy: a.provedBy }) }));
+  const assertions: JourneyVerifyAssertion[] = judged.map((a) => ({
+    site: a.site,
+    check: checkOf.get(a.site) ?? a.site,
+    verdict: a.verdict,
+    ...(a.provedBy === undefined ? {} : { provedBy: a.provedBy }),
+    ...(a.relaxedSites === undefined ? {} : { relaxedSites: a.relaxedSites }),
+    ...(a.targetedRefusal === undefined ? {} : { targetedRefusal: a.targetedRefusal }),
+  }));
   const { verdict, reason } = mutationProofVerdict({ basePassed: base.outcome === "ok", mutations, assertions: judged });
   const count = (v: AssertionVerdict): number => assertions.filter((a) => a.verdict === v).length;
   const report: JourneyVerifyReport = {
@@ -222,6 +255,8 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       notApplied: count("not-applied"),
       error: count("error"),
       unpaired: count("unpaired"),
+      // #609: assertions proven sensitive through a targeted proof that relaxed earlier sites.
+      targeted: assertions.filter((a) => (a.relaxedSites?.length ?? 0) > 0).length,
     },
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
@@ -241,5 +276,9 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
 
 /** One human line per assertion — verdict, site, check, and the mutation that proved it. */
 export function verifyAssertionLine(a: JourneyVerifyAssertion): string {
-  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${a.provedBy === undefined ? "" : `  (proved by ${a.provedBy})`}`;
+  // #609: a sensitive verdict reached by a targeted proof names the earlier postconditions it relaxed.
+  const relaxed = a.relaxedSites === undefined || a.relaxedSites.length === 0 ? "" : `, relaxed ${a.relaxedSites.join(", ")}`;
+  const proved = a.provedBy === undefined ? "" : `  (proved by ${a.provedBy}${relaxed})`;
+  const refused = a.targetedRefusal === undefined ? "" : `  (targeted proof refused: ${a.targetedRefusal})`;
+  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}`;
 }
