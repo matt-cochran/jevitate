@@ -42,7 +42,9 @@ ends on: a state-changing job checks its write and what persisted, for example
   during discovery (a non-read request answered 2xx/3xx) becomes
   `responseStatus:<METHOD> <path>=2xx`, with id segments as `*`. It is judged over the requests
   the replay sent from the moment that step began, so it pairs the check with the step that
-  causes it (`step request check not met: step 3 (click …): …`).
+  causes it (`step request check not met: step 3 (click …): …`). A request counts for a capture or
+  a step window only when that capture saw it **sent** after the window began (identity, not a
+  timestamp): a late response from an earlier attempt never satisfies a restarted step (#617).
   A request sent but not yet answered (a cold start after a deploy) is waited for, up to
   `journey run --step-response-timeout <ms>` (MCP `run_journey` `stepResponseTimeoutMs`; default
   15000; a step's own `responseTimeoutMs` overrides it). A 2xx within the bound passes and is reported as an advisory `slowSteps` finding
@@ -292,6 +294,43 @@ proof stays inconclusive (exit 2); it is never counted as proof. Refusal reasons
 
 `journey readiness` in `prove` mode reports how many assertions were proven through a targeted
 proof. For an inconclusive proof it adds a blocker whose `why` gives the authoring guidance above.
+
+**Declared targeted proofs (#616).** The automatic proof relaxes at most 4 earlier postconditions.
+When a layered Journey has more defenses than that, `journey verify --mutate` cannot untangle the
+target: it reports the target as a `cascade` refused at `relaxation bound 4 reached` and adds
+`suggestedTargetedProofs` to the JSON report — for each stopped proof, the `check` and
+`mustFailWhen` it was proving plus the `relax` list the proof had already used together with the
+next blocking site. `journey readiness --mode prove` prints that entry as the authoring fix (it no
+longer suggests removing the checks). Declare it under `metadata.targetedProofs` and the proof runs
+exactly one targeted replay with those postconditions relaxed, plus exactly one unmutated control
+replay that must pass:
+
+```json
+"targetedProofs": [{ "check": "end-state:3", "mustFailWhen": "swap-param:threadId",
+                     "relax": ["step:4", "step:6", "step:7", "step:8", "step:9"] }]
+```
+
+Rules:
+
+- at most 8 `relax` entries; a plan that names more is refused when the Journey loads;
+- each entry is an earlier `step:<n>` page postcondition and never the target, a `handback`/resume
+  assertion, or a `step-request`/`end-state` site; the `check` is an assertion site of this Journey
+  and `mustFailWhen` resolves, or the plan is refused when the Journey loads;
+- every `relax` site must be paired with that mutation (derived, or declared with
+  `metadata.mutationPairs`) and must itself be proven sensitive to it — transitively, through the
+  proofs of any sites its own targeted proof relaxed;
+- otherwise the target stays a `cascade` with a named refusal: `<key> blocked the declared proof
+  (not in relax)` when the replay stops first at an undeclared earlier postcondition, `<key> is not
+  paired with <m>` when a relaxed site is unpaired, or `relaxed site <key> is not itself proven
+  sensitive to <m>` when a relaxed site is not a real defense.
+
+The plan is part of the Journey's proof (content) hash, so declaring or editing one changes the
+review hash and the Journey needs re-approval. `journey review` shows each plan under **Proves at
+the end** (`declared targeted proof: end-state:3 against swap-param:threadId may relax step:4, …`)
+and in JSON as `proof.targetedProofs`. A declared proof's human line reads
+`(proved by swap-param:threadId, declared plan relaxed step:4, step:6, …)` and the assertion
+carries `declaredProof: true`. Relaxation exists only inside the cloned replays `verify` runs, so a
+production `journey run` is unaffected.
 
 Each assertion gets one verdict:
 
@@ -758,6 +797,7 @@ key is refused when the file is read.
 | `parameters` | no | `[{ "name", "description"?, "secret"? }]`: its inputs. `secret: true` marks a value (a password, a token) that is redacted wherever it is shown. A declared parameter never carries a value |
 | `anchors` | no | `[{ "name", "step", "description"?, "probes"?, "region"? }]`: named states worth exploring from — the state after `step` top-level steps (1-based). `name` is letters, digits, `.`, `_`, `-` and never all digits; `probes` are suggested adversarial attacks there; `region` is a [scope region](./exploration.md#scope-regions) descriptor. See [Explore from a Journey step](#explore-from-a-journey-step-anchors-and-campaigns) |
 | `mutationPairs` | no | `[{ "check", "mustFailWhen" }]`: declared negative-proof pairs for `journey verify --mutate` — the assertion at `check` (`step:<n>`, `step-request:<n>:<i>`, `end-state:<i>`) must fail under `mustFailWhen` (`skip:`/`block-write:`/`stale-value:` + a step number or anchor). An unknown site, step or anchor is refused at load. See [Proving assertions can fail](#proving-assertions-can-fail) |
+| `targetedProofs` | no | `[{ "check", "mustFailWhen", "relax" }]`: declared targeted-proof plans for `journey verify --mutate` (#616) — a human-reviewed list of at most 8 earlier `step:<n>` page postconditions the target at `check` may relax while proving it fails under `mustFailWhen`. Every `relax` site must be paired with that mutation and itself proven sensitive to it (transitively); a plan naming an unknown site, step, target, resume, duplicate or more than 8 entries is refused at load. Part of the proof hash, so it needs re-approval. See [Proving assertions can fail](#proving-assertions-can-fail) |
 
 `recording` holds `version`, `site` (the origin it runs on), optional `intent`, and `pages[]`, each
 with `url` and `steps[]`. Every step is `{ "step": {…}, … }`: the action (`navigate`, `click`,

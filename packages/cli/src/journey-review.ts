@@ -20,6 +20,7 @@ import {
   type JourneyReviewStep,
   type JourneyReviewVerify,
   type JourneyReviewWriteRequest,
+  type JourneyTargetedProofPlan,
   type JourneyCatalogLinks,
   type Finding,
   type ApprovalProvenance,
@@ -91,6 +92,8 @@ export interface JourneyVerifyRecord {
   readonly reason?: string;
   readonly summary: Readonly<Record<string, number>>;
   readonly at: string;
+  /** #616: the declared targeted-proof plans the automatic bound refused, read by readiness guidance. */
+  readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
 }
 
 export interface JourneyReviewContext {
@@ -365,6 +368,8 @@ function buildChange(journey: Journey, hash: string, snapshot: Journey | null | 
   }
   const approvedHash = journeyReviewHash(snapshot);
   const approvedAt = approval?.at ?? snapshot.metadata.approval?.at;
+  const beforePlans = proofPlanLines(snapshot);
+  const afterPlans = proofPlanLines(journey);
   return {
     kind: "diff",
     approvedHash,
@@ -374,6 +379,8 @@ function buildChange(journey: Journey, hash: string, snapshot: Journey | null | 
     steps: multisetDiff(stepLines(snapshot), stepLines(journey)),
     assertions: multisetDiff(assertionLines(snapshot), assertionLines(journey)),
     sideEffects: multisetDiff(sideEffectLines(snapshot), sideEffectLines(journey)),
+    // #616: only present when a side declares a proof plan, so an unrelated diff stays as before.
+    ...(beforePlans.length === 0 && afterPlans.length === 0 ? {} : { proofPlans: multisetDiff(beforePlans, afterPlans) }),
   };
 }
 
@@ -388,6 +395,14 @@ function assertionLines(j: Journey): string[] {
     ...journeyAssertions(j)
       .filter((s) => s.where === "step-request")
       .map((s) => `step request: ${describeCheck(s.check)}`),
+  ];
+}
+
+/** #616: the declared negative-proof plans (`metadata.mutationPairs` / `metadata.targetedProofs`) as diff lines. */
+function proofPlanLines(j: Journey): string[] {
+  return [
+    ...(j.metadata.mutationPairs ?? []).map((p) => `mutation pair: ${p.check} must fail when ${p.mustFailWhen}`),
+    ...(j.metadata.targetedProofs ?? []).map((p) => `targeted proof: ${p.check} against ${p.mustFailWhen} may relax ${p.relax.join(", ")}`),
   ];
 }
 
@@ -431,6 +446,7 @@ function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | 
     stale: rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHash(journey),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     summary: { ...rec.summary },
+    ...(rec.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: rec.suggestedTargetedProofs.map((p) => ({ ...p, relax: [...p.relax] })) }),
   };
 }
 
@@ -518,6 +534,8 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
         findings: findings.map((f) => ({ rule: f.rule, level: f.level, ...(f.step === undefined ? {} : { step: f.step }), message: f.message })),
       },
       ...(m.acceptedWeak === undefined ? {} : { acceptedWeak: { reason: m.acceptedWeak.reason, rules: [...m.acceptedWeak.rules] } }),
+      // #616: the declared targeted-proof plans, copied out of the metadata for review.
+      ...(m.targetedProofs === undefined || m.targetedProofs.length === 0 ? {} : { targetedProofs: m.targetedProofs.map((p) => ({ check: p.check, mustFailWhen: p.mustFailWhen, relax: [...p.relax] })) }),
       verify: buildVerify(journey, hash, ctx.lastVerify),
     },
     changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot, ctx.stepIdOnly === true),

@@ -165,6 +165,11 @@ export class JourneyOutcomeChecks {
   async #judge(s: StepWindow, fallback?: RequestCapture): Promise<JudgedCheck[]> {
     const window = s.capture ?? fallback;
     if (window === undefined) return [];
+    // #617: a step with its OWN capture (every started window) is judged by IDENTITY — `sent()`
+    // already lists only the requests that capture saw begin, so a request from an earlier attempt
+    // (or a previous step) cannot be admitted by a timestamp. `since` is kept only for the
+    // fallback path (no step boundary was reported: the whole-replay capture needs the cut).
+    const ownCapture = s.capture !== undefined;
     const since = s.startedAt;
     const until = s.until;
     const out: JudgedCheck[] = [];
@@ -176,7 +181,10 @@ export class JourneyOutcomeChecks {
           () => ({
             requests: window
               .sent()
-              .filter((q) => (since === undefined || (q.startedAt !== undefined && q.startedAt >= since)) && (until === undefined || (q.startedAt !== undefined && q.startedAt <= until))),
+              .filter((q) => (
+                (ownCapture || since === undefined || (q.startedAt !== undefined && q.startedAt >= since)) &&
+                (until === undefined || (q.startedAt !== undefined && q.startedAt <= until))
+              )),
             truncated: window.truncated,
           }),
           s.responseTimeoutMs ?? this.#responseTimeoutMs,

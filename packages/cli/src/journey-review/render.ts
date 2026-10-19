@@ -260,9 +260,12 @@ export function renderProvesAtTheEnd(r: JourneyReview, w: SheetWriter, opts: Ren
   void opts;
   // ── Proves at the end
   const endState = r.proof.endStateText ?? r.proof.endState;
-  if (endState.length > 0) {
+  const plans = r.proof.targetedProofs ?? [];
+  if (endState.length > 0 || plans.length > 0) {
     w.head("PROVES AT THE END", "Proves at the end");
     for (const e of endState) w.put(`${w.bullet}✓ `, e, w.bullet.length + 2);
+    // #616: each declared plan names the mutation it answers and the earlier checks a human reviewed.
+    for (const p of plans) w.put(`${w.bullet}↺ `, `declared targeted proof: ${p.check} against ${p.mustFailWhen} may relax ${p.relax.join(", ")}`, w.bullet.length + 2);
     w.gap();
   }
 }
@@ -362,7 +365,14 @@ export function renderFullDetail(r: JourneyReview, w: SheetWriter, opts: RenderO
     w.put(w.bullet, `Approved${c.approvedAt === undefined ? "" : ` ${humanTime(c.approvedAt)}`} as ${nb(w.code(c.approvedHash))}${c.kind === "snapshot-missing" ? "; its snapshot is missing" : ""} — ${c.changed ? "CHANGED since" : "unchanged since"}`);
     if (c.stepIdOnly === true) w.put(w.bullet, STEP_ID_ONLY_LABEL);
     if (c.kind === "diff") {
-      for (const [label, d] of [["Steps", c.steps], ["Assertions", c.assertions], ["Side effects", c.sideEffects]] as const) {
+      const blocks: [string, { added: string[]; removed: string[] }][] = [
+        ["Steps", c.steps],
+        ["Assertions", c.assertions],
+        ["Side effects", c.sideEffects],
+      ];
+      // #616: the proof-plan block is only present when a side declares one.
+      if (c.proofPlans !== undefined) blocks.push(["Proof plans", c.proofPlans]);
+      for (const [label, d] of blocks) {
         if (d.added.length === 0 && d.removed.length === 0) continue;
         w.put(w.bullet, `${label}:`);
         for (const l of d.removed) w.put(`${w.bullet}  `, `− ${l}`, w.bullet.length + 4);

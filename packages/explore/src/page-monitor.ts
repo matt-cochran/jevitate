@@ -13,7 +13,7 @@ export const RPC_TRAILER_READ_MS = 2_000;
 const INTERACTIVE_SELECTOR =
   "a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=textbox],[role=checkbox],[role=combobox],[contenteditable=true]";
 
-/** BROWSER CODE â€” true when an enabled interactive control has a rendered box. */
+/** BROWSER CODE — true when an enabled interactive control has a rendered box. */
 function hasEnabledControl(selector: string): boolean {
   for (const el of Array.from(document.querySelectorAll(selector))) {
     const r = (el as HTMLElement).getBoundingClientRect();
@@ -26,13 +26,13 @@ function hasEnabledControl(selector: string): boolean {
 }
 
 /**
- * PageMonitor â€” the ONE place a page's activity is observed, so every mission shares one definition
+ * PageMonitor — the ONE place a page's activity is observed, so every mission shares one definition
  * of "the page has SETTLED" (owner ruling 4):
  *
- *   settled â‡” no in-flight requests AND no STRUCTURAL DOM mutations for a quiet window (500ms).
+ *   settled ⇔ no in-flight requests AND no STRUCTURAL DOM mutations for a quiet window (500ms).
  *
- * Not in-flight work: long-lived connections â€” WebSocket, EventSource, any response streamed as
- * `text/event-stream` (SSE over fetch/XHR) â€” requests the target marks as background
+ * Not in-flight work: long-lived connections — WebSocket, EventSource, any response streamed as
+ * `text/event-stream` (SSE over fetch/XHR) — requests the target marks as background
  * (`settle.ignoreRequests`), and auto-detected long-polls (a request pending longer than
  * `settle.longPollMs` while the page is otherwise interactive; see ./settle-config.ts). Not a DOM
  * change: text-only updates of existing nodes and inline-style animation.
@@ -43,11 +43,11 @@ function hasEnabledControl(selector: string): boolean {
  * the latest mutation. Both clocks are wall-clock milliseconds on the same machine. Nothing here is
  * OS-specific: Playwright events and standard DOM APIs only.
  *
- * Long-lived streams (EventSource / WebSocket) are not "in flight" work â€” they never end by design â€”
+ * Long-lived streams (EventSource / WebSocket) are not "in flight" work — they never end by design —
  * so they never block settling.
  */
 
-/** Default quiet window (ms): no requests in flight and no DOM mutations for this long â‡’ settled. */
+/** Default quiet window (ms): no requests in flight and no DOM mutations for this long ⇒ settled. */
 export const SETTLE_QUIET_MS = 500;
 
 /**
@@ -59,8 +59,8 @@ export const DEFERRED_EFFECT_MAX_MS = 5_000;
 
 /**
  * Response content types that are STREAMS (#153): once such a response has STARTED (headers
- * received), the request is a long-lived connection the server keeps writing to â€” SSE, gRPC-web and
- * Connect server streams, NDJSON / JSON-seq feeds, multipart replace â€” not pending work. A request
+ * received), the request is a long-lived connection the server keeps writing to — SSE, gRPC-web and
+ * Connect server streams, NDJSON / JSON-seq feeds, multipart replace — not pending work. A request
  * that never got a response at all is still pending (and can still be a hang).
  */
 export const STREAMING_CONTENT =
@@ -86,7 +86,7 @@ export interface CompletedRequest extends InflightRequest {
   readonly failed: boolean;
   readonly endedAt: number;
   /**
-   * `failed` fired AFTER a response had already been received (#73) â€” connect-web/gRPC-web clients
+   * `failed` fired AFTER a response had already been received (#73) — connect-web/gRPC-web clients
    * abort their fetch once the body is read, which Chromium reports as `requestfailed:
    * net::ERR_ABORTED` for an otherwise-successful request. `status` is the response that was
    * actually received; this just flags that the request's own end event was an abort, not a
@@ -108,7 +108,7 @@ export interface SettleResult {
 }
 
 /**
- * #303: what counts as an ANNOUNCEMENT the page made (a toast, a banner, a live region's update) â€”
+ * #303: what counts as an ANNOUNCEMENT the page made (a toast, a banner, a live region's update) —
  * noted by the monitor's observer as it happens, so an action's delta still sees one that was gone
  * before the page settled.
  */
@@ -121,7 +121,7 @@ const TRANSIENT_MAX = 50;
 /** Bound (chars) on one announcement's text. */
 const TRANSIENT_TEXT_MAX = 200;
 
-/** One announcement the page made (raw page text â€” redact before keeping or sending it). */
+/** One announcement the page made (raw page text — redact before keeping or sending it). */
 export interface TransientNote {
   readonly t: number;
   readonly role: string;
@@ -143,7 +143,7 @@ const INSTRUMENT = `(() => {
   const textOnly = (nodes) => Array.from(nodes).every((n) => n.nodeType === 3 || n.nodeType === 8);
   // Only STRUCTURAL change resets the quiet window: nodes added/removed, or an attribute that can
   // change what is actionable. Text-only changes of existing nodes (a ticking clock, a live counter,
-  // a re-rendered label) and inline-style animation do not â€” the page's structure is settled.
+  // a re-rendered label) and inline-style animation do not — the page's structure is settled.
   const structural = (r) => {
     if (r.type === "characterData") return false;
     if (r.type === "childList") return !(textOnly(r.addedNodes) && textOnly(r.removedNodes));
@@ -248,11 +248,11 @@ export interface CapturedRequest {
   readonly failed: boolean;
   /** See `CompletedRequest.abortedAfterResponse` (#73): `failed` fired after `status` was received. */
   readonly abortedAfterResponse?: boolean;
-  /** Playwright's resource type (`xhr`, `fetch`, `document`, `script`, â€¦) â€” classifies asset vs API (#130c). */
+  /** Playwright's resource type (`xhr`, `fetch`, `document`, `script`, …) — classifies asset vs API (#130c). */
   readonly resourceType?: string;
-  /** The RESPONSE's `content-type`, when known â€” also used to classify asset vs API (#130c). */
+  /** The RESPONSE's `content-type`, when known — also used to classify asset vs API (#130c). */
   readonly contentType?: string | null;
-  /** When it started (the monitor's clock) â€” attributes a write to the action that fired it. */
+  /** When it started (the monitor's clock) — attributes a write to the action that fired it. */
   readonly startedAt?: number;
   /** #486: how long the response took (start to end, the monitor's clock); absent while pending. */
   readonly durationMs?: number;
@@ -266,7 +266,7 @@ export interface CapturedRequest {
   readonly pending?: true;
   /**
    * #378: a gRPC-web / Connect call's own result (`grpc-status`, from a header or the body's trailer
-   * frame) â€” an HTTP 200 can carry a failed RPC. See `effectiveStatus`. Absent when not an RPC (or
+   * frame) — an HTTP 200 can carry a failed RPC. See `effectiveStatus`. Absent when not an RPC (or
    * its status could not be read).
    */
   readonly rpcStatus?: RpcStatus;
@@ -276,7 +276,7 @@ export interface CapturedRequest {
 const MAX_CAPTURED = 20_000;
 
 /**
- * Every request that finishes on a page from `startCapture()` on â€” unlike the timing window, which
+ * Every request that finishes on a page from `startCapture()` on — unlike the timing window, which
  * forgets requests once a perception has read them. Network assertions (`requestMade`,
  * `responseStatus`) are evaluated over it.
  */
@@ -294,7 +294,7 @@ export class RequestCapture {
   #truncated = false;
 
   /**
-   * @internal â€” fed by the page's monitor. `sent` is false for a completion the capture never saw
+   * @internal — fed by the page's monitor. `sent` is false for a completion the capture never saw
    * begin (#617); it stays in the completion history but is not counted as sent by the capture.
    */
   add(r: CapturedRequest, sent = true): void {
@@ -305,13 +305,13 @@ export class RequestCapture {
     }
   }
 
-  /** @internal â€” the page's monitor saw `key` sent. */
+  /** @internal — the page's monitor saw `key` sent. */
   began(key: object, r: CapturedRequest): void {
     this.#inflight.set(key, { ...r, status: null, failed: false, pending: true });
   }
 
   /**
-   * @internal â€” `key` ended. `finished` is its finished record (then `add`ed), or null when the
+   * @internal — `key` ended. `finished` is its finished record (then `add`ed), or null when the
    * monitor had already forgotten it (its document was replaced): it stays "sent, never finished".
    */
   ended(key: object, finished: CapturedRequest | null): void {
@@ -331,7 +331,7 @@ export class RequestCapture {
   /**
    * Every request SENT since the capture started (#283): the finished ones this capture saw begin,
    * then the ones still in flight or abandoned without an end event (`pending: true`, `status: null`).
-   * A `requestMade` check is judged over these â€” a request counts once it was sent, whether or not
+   * A `requestMade` check is judged over these — a request counts once it was sent, whether or not
    * its response has arrived. A request that began before the capture started is never among them
    * (#617): only its completion shows up, in `requests()`.
    */
@@ -362,7 +362,7 @@ export const RECURRING_WINDOW_MS = 30_000;
 export const RECURRING_MIN_COMPLETIONS = 2;
 
 /**
- * #383: is `r` (in flight) a recurring read â€” a GET/HEAD whose method + path completed at least
+ * #383: is `r` (in flight) a recurring read — a GET/HEAD whose method + path completed at least
  * {@link RECURRING_MIN_COMPLETIONS} times among `recent`? Query strings are ignored (a cache-buster).
  */
 export function isRecurringRead(r: Pick<InflightRequest, "method" | "url">, recent: readonly Pick<CompletedRequest, "method" | "url">[]): boolean {
@@ -392,7 +392,7 @@ function requestContentTypeOf(r: Request): string | undefined {
   }
 }
 
-/** How long (ms) finished requests are remembered past a perception â€” `BACKGROUND_WINDOW_MS`'s look-back. */
+/** How long (ms) finished requests are remembered past a perception — `BACKGROUND_WINDOW_MS`'s look-back. */
 const RECENT_REQUESTS_MS = 60_000;
 
 export class PageMonitor {
@@ -423,7 +423,7 @@ export class PageMonitor {
     this.#lastNetworkActivity = now();
     this.#lastNavigation = now();
     page.on("request", (r) => {
-      // #375: an sms:/tel:/mailto:/deep-link navigation is handed to the OS, never fetched â€” not
+      // #375: an sms:/tel:/mailto:/deep-link navigation is handed to the OS, never fetched — not
       // pending work, not a failed request, not a document navigation of the page.
       if (isExternalSchemeUrl(r.url())) return;
       const startedAt = this.#now();
@@ -455,7 +455,7 @@ export class PageMonitor {
       this.#touch();
     });
     // A new document replaced the old one: requests the OLD document started before the navigation
-    // began can no longer finish, and Chromium does not always report them â€” drop them so they
+    // began can no longer finish, and Chromium does not always report them — drop them so they
     // cannot hold "settled" hostage. Requests the new document started are kept.
     page.on("domcontentloaded", () => {
       const navAt = this.#documentNavStartedAt;
@@ -463,7 +463,7 @@ export class PageMonitor {
       for (const [r, info] of this.#inflight) {
         if (info.startedAt >= navAt) continue;
         // #289: a request the old document already got its RESPONSE for (a save whose handler then
-        // navigated away on the response) ended with that status â€” kept as completed, never lost.
+        // navigated away on the response) ended with that status — kept as completed, never lost.
         if (this.#statuses.has(r)) end(r, false);
         else this.#inflight.delete(r);
       }
@@ -515,7 +515,7 @@ export class PageMonitor {
       }
       if (!ignored) this.#touch();
     };
-    // #378: a gRPC-web / Connect response's status may be in its body's trailer frame â€” its end is
+    // #378: a gRPC-web / Connect response's status may be in its body's trailer frame — its end is
     // recorded once that (bounded, one-shot) read is done, so every capture sees the RPC's result.
     const finish = (r: Request, failed: boolean): void => {
       const read = this.#rpcReads.get(r);
@@ -525,7 +525,7 @@ export class PageMonitor {
       }
       this.#rpcReads.delete(r);
       // Bounded: a body that never resolves (an aborted fetch, a closing context) must not leave a
-      // finished request pending â€” that would read as a request-pending hang.
+      // finished request pending — that would read as a request-pending hang.
       void clockBounded(read, RPC_TRAILER_READ_MS, null).then((s) => {
         if (s !== null) this.#rpcStatuses.set(r, s);
         end(r, failed);
@@ -601,7 +601,7 @@ export class PageMonitor {
   }
 
   /**
-   * #383: pending work minus the page's own polling â€” an in-flight read (GET/HEAD) whose method and
+   * #383: pending work minus the page's own polling — an in-flight read (GET/HEAD) whose method and
    * path already completed {@link RECURRING_MIN_COMPLETIONS} times in the last
    * {@link RECURRING_WINDOW_MS} is a periodic poll (a balance, a notification count), not the app
    * working on what the run did; so is a read the page started on its own more than
@@ -623,7 +623,7 @@ export class PageMonitor {
   }
 
   /**
-   * Every request that has not finished yet (#283) â€” pending work AND requests the settle rule treats
+   * Every request that has not finished yet (#283) — pending work AND requests the settle rule treats
    * as background (a long-poll, a stream, a `--settle-ignore`d one). Settle never waits on the
    * background ones, but a write a run's action fired is still in flight until it ENDS: a unary RPC
    * the server holds open for minutes is demoted to "long-poll" for settling, never forgotten.
@@ -634,7 +634,7 @@ export class PageMonitor {
 
   /**
    * #406: waits until every write (not GET/HEAD, not a stream, not `--settle-ignore`d) started at or
-   * after `sinceMs` has ENDED â€” a long-poll demotion is not an end â€” or `deadlineMs` (this monitor's
+   * after `sinceMs` has ENDED — a long-poll demotion is not an end — or `deadlineMs` (this monitor's
    * clock) passes. Returns the writes still in flight then (empty: all ended).
    */
   async writesEnded(sinceMs: number, deadlineMs: number): Promise<InflightRequest[]> {
@@ -680,7 +680,7 @@ export class PageMonitor {
 
   /**
    * #303: the announcements (toasts, banners, live-region updates) the page made at or after
-   * `sinceMs` (wall clock), oldest first â€” RAW page text: the caller redacts it before keeping it.
+   * `sinceMs` (wall clock), oldest first — RAW page text: the caller redacts it before keeping it.
    * Empty when the page cannot answer within `boundMs`.
    */
   async transientsSince(sinceMs: number, boundMs = 1_000): Promise<TransientNote[]> {
@@ -691,7 +691,7 @@ export class PageMonitor {
     try {
       return await Promise.race([
         this.#page
-          // `since` is Node time; the page stamps its notes with ITS clock (#304: the two may differ â€”
+          // `since` is Node time; the page stamps its notes with ITS clock (#304: the two may differ —
           // `page.clock` in tests), so the cut is made by AGE: the same number of ms back in page time.
           .evaluate(
             ({ ageMs }) => {
@@ -759,7 +759,7 @@ export class PageMonitor {
    * Closes the window at `at` (the perception just read the page) and forgets requests that ended
    * more than `RECENT_REQUESTS_MS` before it. The window's own readers ask `completedSince(start)`;
    * the recent history is what tells the page's background polling from an action's work (#241:
-   * `backgroundEndpoints` looks back that far) â€” forgotten at every perception, a poll that ran
+   * `backgroundEndpoints` looks back that far) — forgotten at every perception, a poll that ran
    * between two quick decisions was taken for the action's effect.
    */
   closeWindow(at: number, docId: string | null): void {
@@ -792,7 +792,7 @@ export class PageMonitor {
 
   /**
    * The latest DOM mutation time, or null when the page could not answer within `boundMs` (a busy
-   * main thread) â€” which counts as NOT quiet.
+   * main thread) — which counts as NOT quiet.
    */
   async #lastMutation(boundMs: number): Promise<{ lastMutation: number; deferredUntil: number; pageNow: number } | null> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -837,7 +837,7 @@ export class PageMonitor {
   /**
    * Waits until the page has settled: no pending request and no network or DOM activity for
    * `quietMs`, bounded by `ceilingMs`. `ignoreRequest` discounts requests that are not the awaited
-   * work â€” the page's background polling (#241): neither pending nor activity.
+   * work — the page's background polling (#241): neither pending nor activity.
    */
   async waitSettled(opts: { quietMs?: number; ceilingMs: number; ignoreRequest?: (r: InflightRequest) => boolean }): Promise<SettleResult> {
     await this.instrument();
