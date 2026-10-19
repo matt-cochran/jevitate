@@ -44,13 +44,15 @@ let server: Server;
 let origin: string;
 let dir: string;
 
-function threadJourney(id: string, opts: { readonly staticGuard?: boolean; readonly site?: string } = {}): Journey {
+function threadJourney(id: string, opts: { readonly staticGuard?: boolean; readonly contextCheck?: boolean; readonly site?: string } = {}): Journey {
   return {
     metadata: {
       id,
       name: "Open a thread",
       promoted: false,
-      params: ["threadId"],
+      params: opts.contextCheck === true ? ["threadId", "expected_threadid"] : ["threadId"],
+      // The context check guards against a wrong thread too: declared, so a targeted proof may relax it.
+      ...(opts.contextCheck === true ? { mutationPairs: [{ check: "step:4", mustFailWhen: "swap-param:threadId" }] } : {}),
       createdAtIso: "2026-10-19T00:00:00.000Z",
       endState: [{ kind: "page", assertion: { kind: "valueEquals", target: { label: "Thread" }, value: { var: "threadId" } } }],
     },
@@ -68,6 +70,7 @@ function threadJourney(id: string, opts: { readonly staticGuard?: boolean; reado
             },
             ...(opts.staticGuard === true ? [{ step: { kind: "assert" as const, check: { kind: "textIncludes" as const, target: { css: "#status" }, text: "thread-001" } } }] : []),
             { step: { kind: "click", target: { role: "button" as const, name: "Open" }, expect: { kind: "attr", target: { css: "#view" }, name: "data-threadid", value: { var: "threadId" } } } },
+            ...(opts.contextCheck === true ? [{ step: { kind: "assert" as const, check: { kind: "attr" as const, target: { css: "#view" }, name: "data-threadid", value: { var: "expected_threadid" } } } }] : []),
           ],
         },
       ],
@@ -123,6 +126,7 @@ const assertion = (r: Report, site: string): Assertion | undefined => r.assertio
 let proven: { out: string; report: Report };
 let refused: { out: string; report: Report };
 let onEnv: { out: string; report: Report };
+let context: { out: string; report: Report };
 
 beforeAll(async () => {
   server = createServer((_req, res) => {
@@ -136,6 +140,7 @@ beforeAll(async () => {
   // #609 review: recorded on an origin nothing serves, replayed on --base-url — every mutated and
   // targeted copy must follow the environment, never the recorded site.
   onEnv = await verify(threadJourney("on-env", { site: "http://127.0.0.1:9" }), ["--base-url", origin]);
+  context = await verify(threadJourney("context", { contextCheck: true }), ["--param", "expected_threadid=thread-001"]);
 }, 600_000);
 
 afterAll(async () => {
@@ -174,5 +179,15 @@ describe("journey verify --mutate targeted proof (#609, served)", () => {
 
   it("when the blocking check is not paired, the proof is inconclusive", () => {
     expect(refused.report.verdict).toBe("inconclusive");
+  });
+
+  // The relaxed copy no longer names `expected_threadid` (its only check was relaxed); the replay
+  // must still run, with the params the copy reads, instead of erroring on an unknown param.
+  it("relaxing a declared context check that alone names a param still reaches the end state", () => {
+    expect(assertion(context.report, "end-state:0")?.relaxedSites).toEqual(["step:3", "step:4"]);
+  });
+
+  it("with a declared context check relaxed in turn, the proof is proven", () => {
+    expect(context.report.verdict).toBe("proven");
   });
 });
