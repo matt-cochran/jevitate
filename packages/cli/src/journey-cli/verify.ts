@@ -110,8 +110,9 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
           if (fixtureDrift !== undefined) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
           for (const a of report.assertions) out?.(`${verifyAssertionLine(a)}\n`);
           const s = report.summary;
+          const targeted = s.targeted > 0 ? `, ${s.targeted} targeted` : "";
           out?.(
-            `${report.verdict} — journey '${report.journeyId}': ${s.sensitive} sensitive, ${s.insensitive} insensitive, ${s.cascade} cascade, ${s.notApplied} not applied, ${s.error} error, ${s.unpaired} unpaired` +
+            `${report.verdict} — journey '${report.journeyId}': ${s.sensitive} sensitive, ${s.insensitive} insensitive, ${s.cascade} cascade, ${s.notApplied} not applied, ${s.error} error, ${s.unpaired} unpaired${targeted}` +
               `${report.reason === undefined ? "" : ` (${report.reason})`}\n`,
           );
         }
