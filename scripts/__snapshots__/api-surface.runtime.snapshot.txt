@@ -771,7 +771,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (151 exports)
+# @jevitate/journey (155 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -830,6 +830,7 @@
   JourneySchema: object
   JourneyStepError: class
   JudgmentUsageSchema: object
+  MAX_TARGETED_RELAXATIONS: const (number)
   METRIC_KINDS: array
   MetricSchema: object
   OUTCOME_DIRECTIONS: array
@@ -898,6 +899,7 @@
   mutationReplay: function
   mutationWait: function
   needsRelaxedReplay: function
+  nextTargetedRelaxation: function
   outputKeyFields: function
   ownAssertions: function
   planJourneyMutations: function
@@ -909,6 +911,7 @@
   renderJobStory: function
   resolveAnchorStep: function
   resolveJourneyStep: function
+  runTargetedProof: function
   secretNamedValues: function
   secretParamNames: function
   secretParamValues: function
@@ -919,6 +922,7 @@
   suggestAnchorName: function
   suggestAnchors: function
   sweepStops: function
+  targetedMutationReplay: function
   validateFieldValue: function
   validateParams: function
   validateRecords: function
