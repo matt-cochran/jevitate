@@ -7,6 +7,22 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.20.0] – 2026-10-19
+
+0.20.0 lets a Journey with layered pre-fill defenses prove its late assertions through a declared, human-reviewed targeted-proof plan, and keeps a previous attempt's late request from satisfying a restarted step.
+
+### Added
+
+- **Declared targeted-proof plans (#616).** `metadata.targetedProofs` (`[{ "check", "mustFailWhen", "relax" }]`, at most 8 earlier `step:<n>` page postconditions) tells `journey verify --mutate` which earlier defenses it may relax to prove a target the automatic proof (still bounded at 4) cannot reach. A declared plan runs exactly one targeted replay plus one unmutated control replay that must pass. Every relaxed site must be paired with the mutation and itself proven sensitive to it (transitively). Otherwise the target stays a cascade with a named refusal: `<key> blocked the declared proof (not in relax)`, `<key> is not paired with <m>` or `relaxed site <key> is not itself proven sensitive to <m>`. A relax entry before the mutated step is refused at load. A proof the automatic bound stopped reports `suggestedTargetedProofs`. `journey readiness --mode prove` prints that entry as the fix instead of suggesting fewer checks. The plan is part of the proof and review hashes, so declaring one needs re-approval. `journey review` lists the plans under "Proves at the end" (JSON `proof.targetedProofs`), and the change-since-approval diff shows mutation-pair and targeted-proof changes. A declared proof's line reads "declared plan relaxed …" with `declaredProof: true`. Production replay is unchanged.
+
+### Changed
+
+- **Sounder targeted proofs (#616).** A targeted proof (declared or automatic) now counts as sensitive only when each site it relaxed is itself proven sensitive to the same mutation. If no paired mutation gives a sound sensitive verdict, the site is judged insensitive when another mutation passed, and a cascade otherwise. A Journey proven in 0.19.0 can become inconclusive when a relaxed site's own proof did not hold.
+
+### Fixed
+
+- **Request checks count requests by identity (#617).** A capture's `sent()` lists only requests whose start it saw, so a late response from an earlier attempt (a heal probe or retried step) no longer satisfies a restarted step's `requestMade` check, even within the same clock tick. `requests()` keeps the full completion history, and a valid request sent in the same tick as its window still counts.
+
 ## [0.19.0] – 2026-10-19
 
 0.19.0 lets one discover Journey serve any account or thread through producer params, and lets `journey verify --mutate` prove an assertion that an earlier intentional defense used to mask.
