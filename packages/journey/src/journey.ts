@@ -16,7 +16,7 @@ import {
   type StatusSpec,
   type TargetDescriptor,
 } from "@jevitate/recording";
-import { mutationPairIssues } from "./mutation-proof.js";
+import { MAX_DECLARED_RELAXATIONS, mutationPairIssues, targetedProofPlanIssues } from "./mutation-proof.js";
 import { SECRET_PARAM_NAME_RE, secretParamNames } from "./intent.js";
 import { ApprovalProposalSchema } from "./proposal-schema.js";
 import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
@@ -121,6 +121,13 @@ export interface JourneyMetadata {
    */
   mutationPairs?: JourneyMutationPair[];
   /**
+   * #616 — DECLARED targeted-proof plans for `journey verify --mutate`: an assertion the automatic
+   * #609 proof cannot reach because more than its bound of earlier defenses catch the mutation first,
+   * with the earlier postconditions a human reviewed and allows the proof to relax. Validated at
+   * load; the target assertion is never relaxed. Additive.
+   */
+  targetedProofs?: JourneyTargetedProofPlan[];
+  /**
    * #432 — the last human approval (`journey promote`, `demo approve`): the review hash of the
    * Journey that was approved (`journeyReviewHash`: the content hash without the approval
    * bookkeeping — `promoted`, `approval`, `acceptedWeak`), when, and the assertion-strength waiver
@@ -215,6 +222,13 @@ export interface AcceptedFindings {
 export interface JourneyMutationPair {
   check: string;
   mustFailWhen: string;
+}
+
+/** #616: one declared targeted-proof plan — see `JourneyMetadata.targetedProofs`. */
+export interface JourneyTargetedProofPlan {
+  check: string;
+  mustFailWhen: string;
+  relax: string[];
 }
 
 /** #322: an expected HTTP status — a class (`2xx`) or an exact code (`201`). */
@@ -418,6 +432,19 @@ export const JourneySchema: ZodType<Journey> = z.object({
       .array(z.object({ check: z.string().min(1).max(100), mustFailWhen: z.string().min(1).max(200) }).strict())
       .max(100)
       .optional(),
+    // #616: a declared targeted-proof plan; the relax list is bounded tighter than the automatic proof.
+    targetedProofs: z
+      .array(
+        z
+          .object({
+            check: z.string().min(1).max(100),
+            mustFailWhen: z.string().min(1).max(200),
+            relax: z.array(z.string().min(1).max(60)).min(1).max(MAX_DECLARED_RELAXATIONS),
+          })
+          .strict(),
+      )
+      .max(20)
+      .optional(),
     approval: z
       .object({
         contentHash: z.string().regex(/^[0-9a-f]{64}$/, "approval.contentHash: a sha256 hex digest"),
@@ -453,6 +480,10 @@ export const JourneySchema: ZodType<Journey> = z.object({
   // #402: a declared mutation pair must name an assertion and a step (or anchor) the Journey has.
   for (const issue of mutationPairIssues(j)) {
     ctx.addIssue({ code: "custom", path: ["metadata", "mutationPairs", issue.index, issue.field], message: issue.message });
+  }
+  // #616: a declared targeted-proof plan must name an assertion, a resolvable mutation and relaxable steps.
+  for (const issue of targetedProofPlanIssues(j)) {
+    ctx.addIssue({ code: "custom", path: ["metadata", "targetedProofs", issue.index, issue.field], message: issue.message });
   }
   // #399: a `${name}` in a navigate URL must name a declared parameter (`params` or `parameters`).
   const declared = new Set([...j.metadata.params, ...(j.metadata.parameters ?? []).map((p) => p.name)]);

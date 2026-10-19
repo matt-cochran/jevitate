@@ -17,10 +17,9 @@ staging. Native OS tests are unchanged before main; supported Linux jobs retain
 the CI_RUNNER_MODE GitHub/Blacksmith switch. Dev PRs require a real issue;
 promotions carry the original traceability and need no new ticket.
 
-The older fallback instructions below are superseded by this contract: never run
-a source-building manual release on main. Restore a retained artifact or validate
-a new candidate before production. A missing npm release must be published from
-verified retained tarballs; it does not authorize new compilation or tests.
+Never run a source-building manual release on main. Repair staging publication
+or validate a new candidate before production. Main only promotes the exact
+retained tarballs already published and accepted on staging.
 
 ## How a release happens
 
@@ -72,50 +71,24 @@ same **git tree**, so the tree hash names the build everywhere: the artifact is
    @jevitate/cli && jevitate --version`.
 7. **Back-merge `main` into `dev`** (next section).
 
-If the version never reached npm (staging was skipped or its publish failed), the merge to `main`
-publishes the tree's artifact straight to `latest`. If no green artifact exists for the tree (it was
-never built on `dev`, the dev run failed, or the artifact expired), Release runs CI's full gate and
-pack in its own run first (`build`, a call of `ci.yml`), then publishes that. A version-packages PR
-straight into `main` (`changeset-release/main`, below) takes this path.
+## Retry and missing artifacts
 
-**Retry:** every step is idempotent (a version on npm is never republished, an existing dist-tag,
-tag or release is left alone). Rerun the failed Release run, or **Actions → Release → Run workflow**
-on `staging` (republish `next`) or `main` (`latest`, tags, release) with `publish` checked.
+Production requires a successful staging Release/npm run for the complete source
+tree. Build gate and the release plan verify that provenance and compare npm's
+SHA-512 integrity with the retained tarballs. Missing/expired artifacts, a failed
+staging publication, or different registry bytes stop promotion. Main never
+first-publishes a missing version, rebuilds, or repeats the application suite.
 
-**Versioning on `main` instead (rare):** with changesets still pending on `main`, the Release run
-on that push runs `pnpm version-packages` and pushes `changeset-release/main`. Actions may not open
-PRs here (setting off on purpose), so open it:
+Repair/retry staging first, preserving its verified artifact. Version changes go
+through an issue-backed PR into dev; use a fresh version when the package bytes
+change. npm versions cannot be replaced. Retry the failed workflow jobs rather
+than rebuilding on main. The source-building `scripts/release.sh` publisher is
+retired; use the retained Release workflow and its OIDC publisher.
 
-```bash
-gh pr create --head changeset-release/main --base main --title "chore: version packages" --fill
-```
-
-### Fallback: publish by hand
-
-If the workflow's OIDC publish fails, nothing is published; publish from a clean, up-to-date `main`:
-
-```bash
-npm login            # once; a publisher in the @jevitate org who also owns `jevitate`
-bash scripts/release.sh
-```
-
-It installs, builds, bundles, publishes both packages with tag `latest` (prompting for your 2FA OTP
-each time), waits until the registry serves both versions (`JEVITATE_RELEASE_WAIT_SECS`, default
-180), and creates the three tags locally. It never pushes; it prints:
-
-```bash
-git push origin "@jevitate/cli@x.y.z" "jevitate@x.y.z" "vx.y.z"
-gh release create "vx.y.z" --verify-tag --title "Jevitate vx.y.z" --notes-file <(awk '/^## \[x.y.z\]/{p=1;next} /^## \[/{if(p)exit} p' CHANGELOG.md)
-```
-
-If the version is already on npm as `next` and only moving `latest` failed, don't run the script:
-
-```bash
-npm dist-tag add @jevitate/cli@x.y.z latest
-npm dist-tag add jevitate@x.y.z latest
-```
-
-then rerun the Release run (it creates the tags and the GitHub release).
+Build/test Linux jobs keep CI_RUNNER_MODE. npm OIDC publication stays on a
+GitHub-hosted runner because npm does not support self-hosted trusted publishers.
+Publish lifecycle scripts are disabled; staging already produced and tested the
+tarballs. Do not add NPM_TOKEN or a manual source-publishing fallback.
 
 ## After every release: back-merge `main` → `dev`
 
@@ -146,8 +119,8 @@ records, and the next promotion conflicts again.
 | Job | When | What |
 | --- | --- | --- |
 | `reuse` | PRs into `staging`/`main` | resolves the merge commit's tree; `scripts/ci/find-tree-artifact.mjs` looks for a non-expired `jevitate-<tree>` artifact from a successful dev push run of `ci.yml` (or a Release run) whose head commit really has that tree |
-| `test`, `cross-platform-pool` | always | the full suite / 3-OS pool, or, after a `reuse` hit, one step naming the run it reused. Same job names either way, so branch protection is unaffected |
-| `package` | pushes to `dev`, and Release's fallback | build + bundle, `scripts/ci/pack-release.sh` (packs from each package dir: pnpm 9 can't `--filter … pack`), upload `jevitate-<tree>` |
+| `test`, `cross-platform-pool` | full checks before main; reuse only on main | the full suite / 3-OS pool, or, after a `reuse` hit, one step naming the run it reused. Same job names either way, so branch protection is unaffected |
+| `package` | pushes to `dev`, and staging recovery only | build + bundle, `scripts/ci/pack-release.sh` (packs from each package dir: pnpm 9 can't `--filter … pack`), upload `jevitate-<tree>` |
 
 **`.github/workflows/release.yml`** runs on pushes to `staging` and `main`, on pushed `v*` tags and
 on manual dispatch. `plan` (`scripts/ci/release-plan.mjs`) picks one mode:
@@ -155,8 +128,8 @@ on manual dispatch. `plan` (`scripts/ci/release-plan.mjs`) picks one mode:
 | Mode | When | What runs |
 | --- | --- | --- |
 | `next` | `staging`, no pending changesets, a package's version isn't on npm | download + verify the tree's artifact (or `build` it), `npm publish --tag next` |
-| `latest` | a `vX.Y.Z` tag, or a manual run with `publish` on `main`, no pending changesets | `npm dist-tag add … latest` (publishing the artifact first only if npm lacks the version), then tags and GitHub release |
-| `version` | `main`, `.changeset/*.md` pending | `changeset version`, push `changeset-release/main`, print how to open the PR |
+| `latest` | a `vX.Y.Z` tag, or a manual run with `publish` on `main`, no pending changesets | `npm dist-tag add … latest` (only after matching successful staging publication and registry integrity proof), then tags and GitHub release |
+| `version` | source versioning belongs on `dev` | main rejects this mode; version on dev and promote normally |
 | `none` | otherwise (incl. a manual run without `publish`) | nothing |
 
 npm provenance on a published version points at the Release run on the `staging` merge commit; the

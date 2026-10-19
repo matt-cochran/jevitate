@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { monitorFor } from "./page-monitor.js";
+import { monitorFor, RequestCapture, type CapturedRequest } from "./page-monitor.js";
 import { evaluateNetworkCheck } from "./success-checks.js";
 import { withSession, useSkippingTime } from "./testkit.js";
 
@@ -105,5 +105,58 @@ describe("PageMonitor — response then requestfailed (#73)", () => {
       },
       origin,
     );
+  });
+});
+
+/** A capture record with the fields a check reads; `over` supplies the scenario's time and path. */
+const captured = (over: Partial<CapturedRequest> = {}): CapturedRequest => ({
+  method: "POST",
+  url: "http://127.0.0.1/api/old",
+  path: "/api/old",
+  status: null,
+  failed: false,
+  ...over,
+});
+
+// #617: a request already in flight when a capture starts still COMPLETES into it (history), but it
+// was never SENT by the run this capture covers — it must not satisfy a requestMade check. The equal
+// `startedAt` in these tests makes a timestamp comparison unable to hide the mistake.
+describe("RequestCapture — sent counts only requests this capture saw begin (#617)", () => {
+  it("a request that completes without ever being begun is absent from sent", () => {
+    const capture = new RequestCapture();
+    capture.ended({}, captured({ startedAt: 1_000, status: 200 }));
+
+    expect(capture.sent()).toEqual([]);
+  });
+
+  it("a request that completes without ever being begun stays in requests", () => {
+    const capture = new RequestCapture();
+    capture.ended({}, captured({ path: "/api/old", startedAt: 1_000, status: 200 }));
+
+    expect(capture.requests().map((r) => r.path)).toEqual(["/api/old"]);
+  });
+
+  it("a request begun in the capture is visible in sent while it is pending", () => {
+    const capture = new RequestCapture();
+    capture.began({}, captured({ path: "/api/new", startedAt: 1_000 }));
+
+    expect(capture.sent().map((r) => r.path)).toEqual(["/api/new"]);
+  });
+
+  it("a request begun in the capture is visible in sent once it completes", () => {
+    const capture = new RequestCapture();
+    const key = {};
+    capture.began(key, captured({ path: "/api/new", startedAt: 1_000 }));
+    capture.ended(key, captured({ path: "/api/new", startedAt: 1_000, status: 200 }));
+
+    expect(capture.sent().map((r) => r.path)).toEqual(["/api/new"]);
+  });
+
+  it("a completion never begun in the capture cannot satisfy sent at the same timestamp", () => {
+    const capture = new RequestCapture();
+    capture.began({}, captured({ path: "/api/new", startedAt: 1_000 }));
+    capture.ended({}, captured({ path: "/api/old", startedAt: 1_000, status: 200 }));
+
+    expect(capture.sent().map((r) => r.path)).toEqual(["/api/new"]);
   });
 });

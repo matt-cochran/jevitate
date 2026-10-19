@@ -19,7 +19,7 @@ import type { Journey } from "./journey.js";
  * | metadata                           | preconditions[].description            | excluded   | prose                                                    |
  * | metadata                           | successCriteria[].check                | included   | a code check (the list of checks; a check-less entry adds nothing) |
  * | metadata                           | successCriteria[].description          | excluded   | prose (annotate writes it)                               |
- * | metadata                           | endState, networkChecks, mutationPairs | included   | assertions and the declared negative proofs              |
+ * | metadata                           | endState, networkChecks, mutationPairs, targetedProofs | included   | assertions and the declared negative proofs              |
  * | metadata                           | anchors (name, step, stepId, region)   | included   | mutation sites (`skip:<anchor>`); region scopes missions |
  * | metadata                           | anchors[].description, probes          | excluded   | text for people and missions, never executed             |
  * | metadata                           | anchors[].jobStep, boundary            | excluded   | catalog links                                            |

@@ -67,7 +67,7 @@ jobs:
       run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
     - name: Find the tree's tested artifact
       id: find
-      if: steps.plan.outputs.needs_artifact == 'true'
+      if: steps.plan.outputs.mode == 'next' || steps.plan.outputs.mode == 'latest'
       continue-on-error: true
       env:
         GITHUB_TOKEN: ${{ github.token }}
@@ -84,6 +84,10 @@ jobs:
         \ (dev push run missing, failed or expired). Fallback: running the full gate and packing in this run.\"\n\
         \  echo \"::warning title=No tested artifact for this tree::${msg}\"\nfi\necho \"${msg}\" >> \"$GITHUB_STEP_SUMMARY\"\
         \n"
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: '24'
+      if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
     - name: Production never rebuilds missing release artifacts
       if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
       env:
@@ -91,10 +95,20 @@ jobs:
         FOUND: ${{ steps.find.outputs.found }}
         MODE: ${{ steps.plan.outputs.mode }}
       shell: bash
-      run: "set -euo pipefail\nif [ \"$MODE\" = version ]; then\n  echo '::error::Version source changes on dev,\
-        \ validate them and promote through staging.'\n  exit 1\nfi\nif [ \"$NEEDS_ARTIFACT\" = true ] && [ \"$FOUND\"\
-        \ != true ]; then\n  echo '::error::No verified retained artifact. Build and test on dev/staging first;\
-        \ main never rebuilds or retests.'\n  exit 1\nfi\n"
+      run: node scripts/ci/staged-publication.ts plan
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      if: (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && steps.plan.outputs.mode == 'latest'
+      with:
+        name: jevitate-${{ steps.tree.outputs.tree }}
+        run-id: ${{ steps.find.outputs.run_id }}
+        github-token: ${{ github.token }}
+        path: staged-candidate
+    - name: Require successful staging publication of these exact bytes
+      if: (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && steps.plan.outputs.mode == 'latest'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BUILD_RUN: ${{ steps.find.outputs.run_id }}
+      run: node scripts/ci/staged-publication.ts verify staged-candidate
   build:
     needs: plan
     if: (needs.plan.outputs.needs_artifact == 'true' && needs.plan.outputs.artifact_found != 'true') && github.ref
@@ -111,7 +125,7 @@ jobs:
     - build
     if: '!cancelled() && needs.plan.result == ''success'' && (needs.plan.outputs.mode == ''next'' || needs.plan.outputs.mode
       == ''latest'') && (needs.build.result == ''success'' || needs.build.result == ''skipped'')'
-    runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
@@ -121,6 +135,7 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       TREE: ${{ needs.plan.outputs.tree }}
       DIST_TAG: ${{ needs.plan.outputs.mode }}
+      NPM_CONFIG_IGNORE_SCRIPTS: 'true'
     steps:
     - name: Checkout (scripts only)
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
