@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsJourneyStore, type Journey, type JourneyReview } from "@jevitate/journey";
 import { runJourneyReadiness, type JourneyReadinessDeps } from "./journey-readiness.js";
-import type { JourneyChainResult } from "./journey-chain.js";
+import type { JourneyChainDeps, JourneyChainResult } from "./journey-chain.js";
+import type { RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
 /**
  * #581 — `journey readiness`: a report over a Journey (or a linked pair). Every runner is faked, so
@@ -73,6 +74,19 @@ function consumer(id: string, accepts: string): Journey {
   });
 }
 
+/** #608: a producing Journey whose Recording binds `threadId` and `replyIdentity` (both required). */
+function producerWithParams(id: string): Journey {
+  const bound = (p: string) => ({
+    variableName: p,
+    step: { kind: "select" as const, target: { testId: p }, value: { var: p }, expect: { kind: "visible" as const, target: { testId: p } } },
+  });
+  return journey(id, { params: ["threadId", "replyIdentity"], promoted: true }, {
+    version: "1.0.0",
+    site: "https://example.test",
+    pages: [{ url: "/", steps: [bound("threadId"), bound("replyIdentity")] }],
+  });
+}
+
 function reviewEx(overrides: ReviewOverrides = {}): JourneyReview {
   return {
     id: "x",
@@ -118,6 +132,16 @@ function reviewDep(source: ReviewOverrides | ((j: Journey) => ReviewOverrides) =
 
 function receipt(opts: Parameters<typeof runJourneyReadiness>[0], deps: JourneyReadinessDeps) {
   return runJourneyReadiness(opts, deps);
+}
+
+/** #608: a pair chain that invokes the chain's `runJourney` seam for the producer and, when given,
+ * the consumer — so its bound params reach the readiness wrapper. */
+function chainBinding(toParams?: Record<string, string>): Chain {
+  return (async (opts: Parameters<Chain>[0], deps?: JourneyChainDeps) => {
+    await deps?.runJourney?.({ id: opts.from, params: {} } as RunJourneyProgrammaticallyOptions);
+    if (toParams !== undefined) await deps?.runJourney?.({ id: opts.to, params: toParams } as RunJourneyProgrammaticallyOptions);
+    return { runs: [], unmatched: [] } as JourneyChainResult;
+  }) as unknown as Chain;
 }
 
 function checkOf(r: Awaited<ReturnType<typeof runJourneyReadiness>>, check: string, id: string) {
@@ -261,5 +285,132 @@ describe("journey readiness", () => {
       { review: reviewDep({ catalog: { linked: true, job: { id: "j", status: "draft" }, persona: { id: "p", status: "approved" }, unvetted: ["job:j (draft)"], needsReReview: [] } }) },
     );
     expect(checkOf(r, "catalog", "publish")?.state).toBe("awaiting-human");
+  });
+
+  it("an unvetted-link warning a catalog approval settles does not fail review-strict (#608)", async () => {
+    await store.put(journey("publish"));
+    const r = await receipt(
+      { id: "publish", journeysDir },
+      {
+        review: reviewDep({
+          attention: [{ severity: "warn", text: "Unvetted catalog links: job:j (draft)", settledBy: "catalog-approval" }],
+          catalog: { linked: true, job: { id: "j", status: "draft" }, persona: { id: "p", status: "approved" }, unvetted: ["job:j (draft)"], needsReReview: [] },
+        }),
+      },
+    );
+    expect(checkOf(r, "review-strict", "publish")?.state).toBe("pass");
+  });
+
+  it("an unsettled strict warning beside an unvetted link still fails review-strict (#608)", async () => {
+    await store.put(journey("publish"));
+    const r = await receipt(
+      { id: "publish", journeysDir },
+      {
+        review: reviewDep({
+          attention: [
+            { severity: "warn", text: "Unvetted catalog links: job:j (draft)", settledBy: "catalog-approval" },
+            { severity: "warn", text: "a weak step" },
+          ],
+          catalog: { linked: true, job: { id: "j", status: "draft" }, persona: { id: "p", status: "approved" }, unvetted: ["job:j (draft)"], needsReReview: [] },
+        }),
+      },
+    );
+    expect(checkOf(r, "review-strict", "publish")?.detail).toBe("a weak step");
+  });
+
+  // #608 — a pair's producer params flow to the chain; unknown names are refused before it.
+  it("pair replay passes its params to the chain", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const chain = vi.fn(async () => ({ runs: [], unmatched: [] }) as JourneyChainResult);
+    await receipt(
+      { id: "producer", with: "consumer", mode: "replay", baseUrl: "https://example.test", requests: "x", params: { threadId: "thread-001", replyIdentity: "mcpl" }, journeysDir },
+      { review: reviewDep(), chain: chain as unknown as Chain },
+    );
+    expect(chain.mock.calls[0]![0]).toMatchObject({ params: { threadId: "thread-001", replyIdentity: "mcpl" } });
+  });
+
+  it("pair replay refuses an undeclared producer param with E_READINESS_PARAMS naming it", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const chain = vi.fn(async () => ({ runs: [], unmatched: [] }) as JourneyChainResult);
+    await expect(
+      receipt(
+        { id: "producer", with: "consumer", mode: "replay", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r", extra: "z" }, journeysDir },
+        { review: reviewDep(), chain: chain as unknown as Chain },
+      ),
+    ).rejects.toMatchObject({ code: "E_READINESS_PARAMS", message: "unknown param(s): extra" });
+  });
+
+  it("pair replay never calls the chain for an undeclared producer param", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const chain = vi.fn(async () => ({ runs: [], unmatched: [] }) as JourneyChainResult);
+    await receipt(
+      { id: "producer", with: "consumer", mode: "replay", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r", extra: "z" }, journeysDir },
+      { review: reviewDep(), chain: chain as unknown as Chain },
+    ).catch(() => undefined);
+    expect(chain).not.toHaveBeenCalled();
+  });
+
+  it("pair prove verifies the consumer with the params the chain bound for it", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const verifyCalls: Array<{ id: string; params?: Record<string, string> }> = [];
+    const verify = vi.fn(async (o: { id: string; params?: Record<string, string> }) => {
+      verifyCalls.push(o);
+      return {};
+    });
+    const replyText = "Line one\n\nLine three";
+    const chain = chainBinding({ commentId: "c-1", replyIdentity: "r", threadId: "t", replyText });
+    await receipt(
+      { id: "producer", with: "consumer", mode: "prove", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r" }, journeysDir },
+      { review: reviewDep(() => ({ verify: PROVEN })), run: run as unknown as Run, chain, verify: verify as unknown as Verify },
+    );
+    expect(verifyCalls.find((c) => c.id === "consumer")?.params).toEqual({ commentId: "c-1", replyIdentity: "r", threadId: "t", replyText });
+  });
+
+  it("pair prove does not verify the consumer when the chain bound no consumer run", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const verifyCalls: Array<{ id: string }> = [];
+    const verify = vi.fn(async (o: { id: string }) => {
+      verifyCalls.push(o);
+      return {};
+    });
+    await receipt(
+      { id: "producer", with: "consumer", mode: "prove", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r" }, journeysDir },
+      { review: reviewDep(() => ({ verify: PROVEN })), run: run as unknown as Run, chain: chainBinding(), verify: verify as unknown as Verify },
+    );
+    expect(verifyCalls.some((c) => c.id === "consumer")).toBe(false);
+  });
+
+  it("pair prove marks the consumer proof not-verified with a hint naming it when the chain bound no consumer run", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const verify = vi.fn(async () => ({}));
+    const r = await receipt(
+      { id: "producer", with: "consumer", mode: "prove", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r" }, journeysDir },
+      { review: reviewDep(() => ({ verify: PROVEN })), run: run as unknown as Run, chain: chainBinding(), verify: verify as unknown as Verify },
+    );
+    expect(checkOf(r, "proof", "consumer")).toMatchObject({ state: "not-run", detail: "the chain bound no request for 'consumer' — supply a --requests line that matches a discovered record" });
+  });
+
+  it("the pair prove receipt never contains a param value or reply text", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const verify = vi.fn(async () => ({}));
+    const replyText = "Line one\n\nLine three";
+    const r = await receipt(
+      { id: "producer", with: "consumer", mode: "prove", baseUrl: "https://example.test", requests: "x", params: { threadId: "SUPER-SECRET-THREAD", replyIdentity: "SECRET-IDENTITY" }, journeysDir },
+      { review: reviewDep(() => ({ verify: PROVEN })), run: run as unknown as Run, chain: chainBinding({ commentId: "c-1", replyIdentity: "SECRET-IDENTITY", threadId: "SUPER-SECRET-THREAD", replyText }), verify: verify as unknown as Verify },
+    );
+    const serialized = JSON.stringify(r);
+    const leaked = ["SUPER-SECRET-THREAD", "SECRET-IDENTITY", replyText].filter((value) => serialized.includes(value));
+    expect(leaked).toEqual([]);
   });
 });

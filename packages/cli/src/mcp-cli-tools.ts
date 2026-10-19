@@ -435,13 +435,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "chain_journeys",
     description:
-      "`jevitate journey chain --from <discover> --to <reply> --requests <file>` (#580): run a discover Journey once, then a prepare-only reply Journey once per approved request in the JSON Lines file ({commentId, account, replyText}) matched to a discovered record by commentId AND account. Both Journeys must be promoted. Unmatched requests never run; an empty discovery stops the chain (no target is guessed). The result names ids and outcomes only, never record or reply text. Exit 0 only when every request matched and its run was ok.",
+      "`jevitate journey chain --from <discover> --to <reply> --requests <file>` (#580): run a discover Journey once, then a prepare-only reply Journey once per approved request in the JSON Lines file ({commentId, account, replyText}) matched to a discovered record by commentId AND account. Both Journeys must be promoted. #608: params supplies explicit producer (discover) params, validated against the producer's schema before anything runs. Unmatched requests never run; an empty discovery stops the chain (no target is guessed). The result names ids and outcomes only, never record or reply text. Exit 0 only when every request matched and its run was ok.",
     command: {
       path: "journey chain",
       params: {
         from: s("--from", { required: true }),
         to: s("--to", { required: true }),
         requests: path("--requests", { required: true }),
+        params: { kind: "params", flag: "--param" },
         storageState: session("--storage-state"),
         ...EXTENSION,
         ...EMULATION,

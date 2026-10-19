@@ -145,7 +145,7 @@ interface ReplayOutcome {
 const REQUIRED_PROOF_CHECK = "proof";
 
 /** #581 §1: the target shared by `replay` and `prove`, refused in this order before any runner call. */
-function resolveTarget(opts: JourneyReadinessOptions, deps: JourneyReadinessDeps, required: readonly string[]): ResolvedJourneyEnvironment {
+function resolveTarget(opts: JourneyReadinessOptions, deps: JourneyReadinessDeps, required: readonly string[], declared: readonly string[]): ResolvedJourneyEnvironment {
   let environment: ResolvedJourneyEnvironment | undefined;
   if (opts.env !== undefined || opts.baseUrl !== undefined) {
     environment = environmentFromFlags(
@@ -162,6 +162,12 @@ function resolveTarget(opts: JourneyReadinessOptions, deps: JourneyReadinessDeps
   const missing = required.filter((name) => !(name in (opts.params ?? {})));
   if (missing.length > 0) {
     throw new ReadinessError("E_READINESS_PARAMS", `missing required param(s): ${missing.join(", ")}`);
+  }
+  // #608: a param the driven Journey does not declare is refused by name here (never by the chain),
+  // so a mistyped `--param` never opens a browser. Names only — never a value.
+  const unknown = Object.keys(opts.params ?? {}).filter((name) => !declared.includes(name));
+  if (unknown.length > 0) {
+    throw new ReadinessError("E_READINESS_PARAMS", `unknown param(s): ${unknown.join(", ")}`);
   }
   return environment;
 }
@@ -219,7 +225,9 @@ function boundaryCheck(ctx: JourneyContext): ReadinessCheck {
 
 /** `journey review --strict`: every `warn` attention item is a blocker (an `info` item is advice, not a gate). */
 function reviewStrictCheck(ctx: JourneyContext): { check: ReadinessCheck; blocker?: ReadinessBlocker } {
-  const warns = (ctx.review.attention ?? []).filter((a) => a.severity === "warn");
+  // #608: an item a person's catalog approval settles is the catalog check's awaiting-human entry;
+  // counted here too, a draft workflow could never be technically ready. Promotion still refuses it.
+  const warns = (ctx.review.attention ?? []).filter((a) => a.severity === "warn" && !(a.settledBy === "catalog-approval" && ctx.review.catalog !== undefined));
   if (warns.length > 0) {
     return {
       check: { check: "review-strict", journey: ctx.id, state: "fail", detail: warns.map((a) => a.text).join("; ") },
@@ -292,8 +300,12 @@ function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { ch
     };
   }
   if (verify.verdict === "proven") {
-    const passed = Object.values(verify.summary).reduce((a, b) => a + b, 0);
-    return { check: { check: "proof", journey: ctx.id, state: "pass", detail: `proven ${passed}/${passed}`, evidence } };
+    // #609: `targeted` is a subset of `sensitive`, not a seventh outcome — summing every count
+    // would double-count it. It is named separately, never added to the proven total.
+    const targeted = verify.summary.targeted ?? 0;
+    const passed = Object.entries(verify.summary).filter(([k]) => k !== "targeted").reduce((a, [, b]) => a + b, 0);
+    const detail = targeted === 0 ? `proven ${passed}/${passed}` : `proven ${passed}/${passed}, ${targeted} through a targeted proof (earlier defenses relaxed one at a time; see the verify report)`;
+    return { check: { check: "proof", journey: ctx.id, state: "pass", detail, evidence } };
   }
   if (verify.verdict === "insensitive") {
     return {
@@ -307,12 +319,40 @@ function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { ch
   if (nothingToMutate(ctx.journey, verify.summary)) {
     return { check: { check: "proof", journey: ctx.id, state: "pass", detail: "read-only with no inputs: nothing a mutation could break", evidence } };
   }
-  return { check: { check: "proof", journey: ctx.id, state: "inconclusive", detail: verify.reason ?? `proof verdict ${verify.verdict}`, evidence } };
+  // #609: an inconclusive proof stays inconclusive — the refusal names the authoring fix, not a pass.
+  return {
+    check: { check: "proof", journey: ctx.id, state: "inconclusive", detail: verify.reason ?? `proof verdict ${verify.verdict}`, evidence },
+    blocker: { check: "proof", journey: ctx.id, why: inconclusiveProofGuidance(verify.reason ?? ""), next: `jevitate journey verify ${ctx.id} --mutate` },
+  };
+}
+
+/** #609: the marker `mutationProofVerdict` puts before a refused targeted proof's own refusal text. */
+const TARGETED_REFUSAL_MARKER = "a targeted proof was refused: ";
+
+/**
+ * #609: the authoring guidance a refused targeted proof carries, chosen from the refusal text (names
+ * only — a refusal never contains a param value, a record field or reply text). A proof that stays
+ * inconclusive for any other reason gets the generic cascade guidance.
+ */
+function inconclusiveProofGuidance(reason: string): string {
+  const at = reason.indexOf(TARGETED_REFUSAL_MARKER);
+  if (at < 0) return "inspect the cascade assertions in the verify report";
+  const refusal = reason.slice(at + TARGETED_REFUSAL_MARKER.length).trim();
+  const unpaired = /^(\S+) is not paired with (\S+)$/.exec(refusal);
+  if (unpaired !== null) {
+    return `declare the earlier check ${unpaired[1]} as a defense of ${unpaired[2]} with a metadata.mutationPairs entry {check:'${unpaired[1]}', mustFailWhen:'${unpaired[2]}'}, then re-run verify`;
+  }
+  const bound = /relaxation bound (\d+)/.exec(refusal);
+  if (bound !== null) return `reduce the layered checks between the mutation and the target (relaxation bound ${bound[1]})`;
+  if (refusal.includes("action failed")) return "the mutated value makes an earlier action impossible, so that target cannot be proven independently — keep the check; it stays inconclusive by design";
+  return "inspect the cascade assertions in the verify report";
 }
 
 /** No mutation was paired at all (only unpaired checks), the Journey writes nothing and takes no param. */
 function nothingToMutate(journey: Journey, summary: Readonly<Record<string, number>>): boolean {
-  const paired = Object.entries(summary).filter(([k]) => k !== "unpaired").reduce((n, [, v]) => n + v, 0);
+  // #609: `targeted` is part of `sensitive`, so it is not a fresh pairing — counting it would make a
+  // read-only Journey look mutable.
+  const paired = Object.entries(summary).filter(([k]) => k !== "unpaired" && k !== "targeted").reduce((n, [, v]) => n + v, 0);
   // At least one check was looked at and none could be paired (a proof with no counts proves nothing).
   return (summary.unpaired ?? 0) > 0 && paired === 0 && journeyWriteSteps(journey).length === 0 && journeyParamSchema(journey).required.length === 0;
 }
@@ -417,21 +457,39 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
   const pair = opts.with !== undefined;
   let environment: ResolvedJourneyEnvironment | undefined;
   let replay: ReplayOutcome | undefined;
+  /** #608: the params the chain bound for the first consumer (`to`) run, captured via the runner seam. */
+  let boundConsumerParams: Record<string, string> | undefined;
   if (mode !== "report") {
-    environment = resolveTarget(opts, deps, requiredParams(contexts[0]!.journey, pair, opts.requests !== undefined));
+    const producerSchema = journeyParamSchema(contexts[0]!.journey).required;
+    environment = resolveTarget(opts, deps, requiredParams(contexts[0]!.journey, pair, opts.requests !== undefined), producerSchema);
     const params = { ...(opts.params ?? {}) };
     try {
       if (pair) {
-        const chained = await chain({
-          from: opts.id,
-          to: opts.with as string,
-          requests: opts.requests ?? "",
-          dir: opts.journeysDir,
-          environment,
-          ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
-          ...(opts.browser === undefined ? {} : { browser: opts.browser }),
-          ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
-        });
+        const chained = await chain(
+          {
+            from: opts.id,
+            to: opts.with as string,
+            requests: opts.requests ?? "",
+            params: { ...(opts.params ?? {}) },
+            dir: opts.journeysDir,
+            environment,
+            ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
+            ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+            ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
+          },
+          {
+            // #608: the consumer's proof must run with the params the chain actually bound for it
+            // (record fields + request), captured from the first consumer run; names and outcomes
+            // are all the chain itself returns.
+            runJourney: async (chainOpts) => {
+              const result = await run(chainOpts);
+              if (chainOpts.id === opts.with && boundConsumerParams === undefined) {
+                boundConsumerParams = { ...chainOpts.params };
+              }
+              return result;
+            },
+          },
+        );
         replay = pairReplay(chained);
       } else {
         const result = await run({
@@ -451,11 +509,25 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
     }
     if (mode === "prove") {
       for (const ctx of contexts) {
+        const consumer = pair && ctx.id === opts.with;
+        if (consumer && boundConsumerParams === undefined) {
+          // #608: the chain bound no request for the consumer, so no proof can run. Saying so names
+          // the consumer only — never a param value, a record field or reply text.
+          ctx.review = {
+            ...ctx.review,
+            proof: {
+              ...ctx.review.proof,
+              verify: { status: "not-verified", hint: `the chain bound no request for '${ctx.id}' — supply a --requests line that matches a discovered record` },
+            },
+          };
+          continue;
+        }
+        const proofParams = consumer ? (boundConsumerParams as Record<string, string>) : params;
         try {
           await verify({
             dir: opts.journeysDir,
             id: ctx.id,
-            params,
+            params: proofParams,
             environment,
             ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
           ...(opts.browser === undefined ? {} : { browser: opts.browser }),
