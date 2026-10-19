@@ -14,6 +14,7 @@ import {
   JourneyRegistry,
   assertionSiteKey,
   classifyMutation,
+  declaredTargetedProofFor,
   journeyAssertions,
   journeyProofHash,
   judgeAssertions,
@@ -22,10 +23,13 @@ import {
   needsRelaxedReplay,
   planJourneyMutations,
   relaxedMutationReplay,
+  runDeclaredTargetedProof,
   runTargetedProof,
+  suggestTargetedProofPlan,
   type AssertionVerdict,
   type Journey,
   type JourneyMutation,
+  type JourneyTargetedProofPlan,
   type MutationFailedSite,
   type MutationProofVerdict,
   type MutationReplay,
@@ -87,6 +91,8 @@ export interface JourneyVerifyAssertion {
   readonly relaxedSites?: readonly string[];
   /** #609: why a targeted proof was refused, when the verdict stays a cascade. */
   readonly targetedRefusal?: string;
+  /** #616: the proving targeted proof came from a declared `metadata.targetedProofs` plan. */
+  readonly declaredProof?: true;
 }
 
 export interface JourneyVerifyReport {
@@ -99,6 +105,8 @@ export interface JourneyVerifyReport {
   readonly mutations: readonly JourneyVerifyMutation[];
   readonly assertions: readonly JourneyVerifyAssertion[];
   readonly summary: Readonly<Record<"sensitive" | "insensitive" | "cascade" | "notApplied" | "error" | "unpaired" | "targeted", number>>;
+  /** #616: a reviewable `metadata.targetedProofs` entry for each automatic proof stopped at its bound. */
+  readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
 }
 
 /** The exit code for a proof's verdict (docs/ci.md): 0 proven · 1 insensitive · 2 inconclusive. */
@@ -154,6 +162,9 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const plan = planJourneyMutations(journey, { ...lintOpts, params: opts.params });
 
   const mutations: JourneyVerifyMutation[] = [];
+  // #616: automatic targeted proofs stopped at their relaxation bound, each a reviewable start.
+  const suggested: JourneyTargetedProofPlan[] = [];
+  const seenSuggestions = new Set<string>();
   if (base.outcome === "ok") {
     // One mutated replay, as `mutationReplay` (or #554's `relaxedMutationReplay`) describes it.
     type Replayed = NonNullable<JourneyVerifyMutation["relaxed"]>;
@@ -211,7 +222,22 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         if (pair.mutation !== m.id) continue;
         const site = siteByKey.get(pair.site);
         if (site === undefined || classifyMutation(site, m, initial) !== "cascade") continue;
-        targeted.push(await runTargetedProof(journey, plan, m, site, initial, (describe) => runReplay(m, describe), replayOpts));
+        // #616: a declared plan (reviewed earlier relaxations) replaces the automatic bound search.
+        const declared = declaredTargetedProofFor(journey, m, pair.site);
+        targeted.push(
+          declared === undefined
+            ? await runTargetedProof(journey, plan, m, site, initial, (describe) => runReplay(m, describe), replayOpts)
+            : await runDeclaredTargetedProof(journey, plan, m, site, declared, (describe) => runReplay(m, describe), replayOpts),
+        );
+        // #616: a proof the automatic bound stopped names the plan a human could declare instead.
+        const suggestion = suggestTargetedProofPlan(targeted[targeted.length - 1]!, m);
+        if (suggestion !== null) {
+          const key = `${suggestion.check}\u0000${suggestion.mustFailWhen}\u0000${suggestion.relax.join(",")}`;
+          if (!seenSuggestions.has(key)) {
+            seenSuggestions.add(key);
+            suggested.push(suggestion);
+          }
+        }
       }
       mutations.push({
         kind: m.kind,
@@ -241,6 +267,8 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     ...(a.provedBy === undefined ? {} : { provedBy: a.provedBy }),
     ...(a.relaxedSites === undefined ? {} : { relaxedSites: a.relaxedSites }),
     ...(a.targetedRefusal === undefined ? {} : { targetedRefusal: a.targetedRefusal }),
+    // #616: the proving proof was a declared plan, not the automatic relaxation search.
+    ...(a.provedBy !== undefined && results.get(a.provedBy)?.targeted?.some((t) => t.site === a.site && t.declared === true) === true ? { declaredProof: true as const } : {}),
   }));
   const { verdict, reason } = mutationProofVerdict({ basePassed: base.outcome === "ok", mutations, assertions: judged });
   const count = (v: AssertionVerdict): number => assertions.filter((a) => a.verdict === v).length;
@@ -262,6 +290,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       // #609: assertions proven sensitive through a targeted proof that relaxed earlier sites.
       targeted: assertions.filter((a) => (a.relaxedSites?.length ?? 0) > 0).length,
     },
+    ...(suggested.length === 0 ? {} : { suggestedTargetedProofs: suggested }),
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
   const redacted = redactSecretParams(report, journey, opts.params);
@@ -273,6 +302,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     verdict: redacted.verdict,
     ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
     summary: { ...redacted.summary },
+    ...(redacted.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: redacted.suggestedTargetedProofs }),
     at: clock.nowIso(),
   });
   return redacted;
@@ -281,7 +311,9 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
 /** One human line per assertion — verdict, site, check, and the mutation that proved it. */
 export function verifyAssertionLine(a: JourneyVerifyAssertion): string {
   // #609: a sensitive verdict reached by a targeted proof names the earlier postconditions it relaxed.
-  const relaxed = a.relaxedSites === undefined || a.relaxedSites.length === 0 ? "" : `, relaxed ${a.relaxedSites.join(", ")}`;
+  // #616: a declared plan's relaxations are named as reviewed, not as an automatic search.
+  const relaxed =
+    a.relaxedSites === undefined || a.relaxedSites.length === 0 ? "" : a.declaredProof === true ? `, declared plan relaxed ${a.relaxedSites.join(", ")}` : `, relaxed ${a.relaxedSites.join(", ")}`;
   const proved = a.provedBy === undefined ? "" : `  (proved by ${a.provedBy}${relaxed})`;
   const refused = a.targetedRefusal === undefined ? "" : `  (targeted proof refused: ${a.targetedRefusal})`;
   return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}`;

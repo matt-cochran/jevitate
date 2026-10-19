@@ -20,6 +20,7 @@ import {
   type JourneyReviewStep,
   type JourneyReviewVerify,
   type JourneyReviewWriteRequest,
+  type JourneyTargetedProofPlan,
   type JourneyCatalogLinks,
   type Finding,
   type ApprovalProvenance,
@@ -91,6 +92,8 @@ export interface JourneyVerifyRecord {
   readonly reason?: string;
   readonly summary: Readonly<Record<string, number>>;
   readonly at: string;
+  /** #616: the declared targeted-proof plans the automatic bound refused, read by readiness guidance. */
+  readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
 }
 
 export interface JourneyReviewContext {
@@ -431,6 +434,7 @@ function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | 
     stale: rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHash(journey),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     summary: { ...rec.summary },
+    ...(rec.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: rec.suggestedTargetedProofs.map((p) => ({ ...p, relax: [...p.relax] })) }),
   };
 }
 
@@ -518,6 +522,8 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
         findings: findings.map((f) => ({ rule: f.rule, level: f.level, ...(f.step === undefined ? {} : { step: f.step }), message: f.message })),
       },
       ...(m.acceptedWeak === undefined ? {} : { acceptedWeak: { reason: m.acceptedWeak.reason, rules: [...m.acceptedWeak.rules] } }),
+      // #616: the declared targeted-proof plans, copied out of the metadata for review.
+      ...(m.targetedProofs === undefined || m.targetedProofs.length === 0 ? {} : { targetedProofs: m.targetedProofs.map((p) => ({ check: p.check, mustFailWhen: p.mustFailWhen, relax: [...p.relax] })) }),
       verify: buildVerify(journey, hash, ctx.lastVerify),
     },
     changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot, ctx.stepIdOnly === true),

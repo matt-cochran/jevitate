@@ -850,6 +850,23 @@ export function suggestTargetedProofPlan(proof: TargetedProof, m: JourneyMutatio
 }
 
 /**
+ * #616 — the declared `metadata.targetedProofs` plan for assertion site `siteKey` that a human
+ * reviewed against mutation `m` (its `mustFailWhen` resolves to `m.id`), or undefined. An
+ * unresolvable ref is skipped here: the load-time schema refuses it.
+ */
+export function declaredTargetedProofFor(journey: Journey, m: JourneyMutation, siteKey: string): JourneyTargetedProofPlan | undefined {
+  for (const plan of journey.metadata.targetedProofs ?? []) {
+    if (plan.check !== siteKey) continue;
+    try {
+      if (resolveMutationRef(journey, plan.mustFailWhen).id === m.id) return plan;
+    } catch {
+      // An unresolvable `mustFailWhen` is a schema error, not this lookup's concern.
+    }
+  }
+  return undefined;
+}
+
+/**
  * #554: does this failed result need a relaxed replay? Only when it failed first at the mutated
  * step's OWN postcondition (`{where:'step', step: m.step, postcondition: true}`) and `plan.pairs`
  * pairs `m` with at least one site other than the step's own (`step:<m.step>`) — otherwise the
