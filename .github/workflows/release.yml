@@ -111,7 +111,7 @@ jobs:
     - build
     if: '!cancelled() && needs.plan.result == ''success'' && (needs.plan.outputs.mode == ''next'' || needs.plan.outputs.mode
       == ''latest'') && (needs.build.result == ''success'' || needs.build.result == ''skipped'')'
-    runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
@@ -121,6 +121,7 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       TREE: ${{ needs.plan.outputs.tree }}
       DIST_TAG: ${{ needs.plan.outputs.mode }}
+      NPM_CONFIG_IGNORE_SCRIPTS: 'true'
     steps:
     - name: Checkout (scripts only)
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
