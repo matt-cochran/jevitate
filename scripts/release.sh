@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+
+# Production publishes retained artifacts; source builds belong before main.
+if [ "$(git branch --show-current)" = main ] || [ "${GITHUB_REF:-}" = refs/heads/main ] || [ "${GITHUB_REF_TYPE:-}" = tag ]; then
+  echo 'No manual source-building release on main. Promote the verified staging tarballs.' >&2
+  exit 1
+fi
 #
 # Manual release (the FALLBACK path; normally the Release workflow publishes the
 # tarballs CI built and tested on dev: a merge to staging publishes them as

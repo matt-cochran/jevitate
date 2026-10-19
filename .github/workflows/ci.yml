@@ -1,176 +1,126 @@
 name: CI
-
-# Build and test once per landed tree (#534). See RELEASING.md.
-#
-#   - PR into dev: the full gate (`test` + `cross-platform-pool`), unchanged.
-#   - push to dev (what actually landed): the same full gate, then `package` packs both public
-#     packages into the release-candidate artifact `jevitate-<git tree hash>` (two .tgz,
-#     manifest.json, SHA256SUMS; 90 days). Staging and main publish THESE bytes.
-#   - PR into staging/main (a promotion): `reuse` resolves the tree of the PR's merge commit, which
-#     is exactly what will land. When a green dev push (or Release run) already built and tested
-#     that tree, `test` and `cross-platform-pool` pass in seconds without rerunning; otherwise
-#     (e.g. a hotfix, or staging holding something dev lacks) they run in full. The job names
-#     never change, so branch protection sees the same checks either way.
-#   - workflow_call (release.yml's fallback when no artifact exists): the full gate + `package`.
-#
-# No push runs for staging/main: their merge commits carry a tree that was already tested.
-# Actions are pinned to commit SHAs (version in the trailing comment).
-on:
+'on':
   push:
-    branches: [dev]
+    branches:
+    - dev
   pull_request:
-    branches: [dev, staging, main]
+    branches:
+    - dev
+    - staging
+    - main
   workflow_call:
     inputs:
       package:
         description: Also pack the release-candidate artifact after the gate passes
         type: boolean
         default: false
-
-# Only a PR's runs replace each other; every dev push runs to completion so each landed tree
-# gets its own verdict and artifact.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 permissions:
   contents: read
-
 jobs:
-  # Promotion PRs only: is this exact tree already built and tested?
   reuse:
     if: github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'main')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10  # #417: a lookup takes seconds
+    runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    timeout-minutes: 10
     permissions:
       contents: read
-      actions: read # list artifacts + runs
+      actions: read
     outputs:
       hit: ${{ steps.find.outputs.found == 'true' }}
       run_id: ${{ steps.find.outputs.run_id }}
     steps:
-      - name: Checkout (the PR merge commit)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 2 # the merge commit and its parents (base, head)
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-
-      - name: Resolve the tree that would land
-        id: tree
-        # The merge commit's tree is what a merge commit into staging/main will contain. It equals
-        # the head's (dev's) tree only when the base has nothing the head lacks.
-        run: |
-          tree=$(git rev-parse 'HEAD^{tree}')
-          head_tree=$(git rev-parse 'HEAD^2^{tree}' 2>/dev/null || echo unknown)
-          echo "tree=${tree}" >> "$GITHUB_OUTPUT"
-          echo "merge tree ${tree}; head tree ${head_tree}"
-          if [ "${tree}" != "${head_tree}" ]; then
-            echo "::notice title=Merge tree differs from the head's::${GITHUB_BASE_REF} has changes ${GITHUB_HEAD_REF} lacks; only an artifact of the merge tree counts."
-          fi
-
-      - name: Find a tested build of this tree
-        id: find
-        # An API failure must not fail the PR: no hit simply means the full suite runs.
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          TREE: ${{ steps.tree.outputs.tree }}
-        run: node scripts/ci/find-tree-artifact.mjs "${TREE}"
-
-      - name: Report
-        env:
-          FOUND: ${{ steps.find.outputs.found }}
-          RUN_ID: ${{ steps.find.outputs.run_id }}
-          HEAD_SHA: ${{ steps.find.outputs.head_sha }}
-          TREE: ${{ steps.tree.outputs.tree }}
-        run: |
-          if [ "${FOUND}" = "true" ]; then
-            msg="tree ${TREE} was built and tested by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID} (commit ${HEAD_SHA}); test and cross-platform-pool reuse it."
-          else
-            msg="no green build of tree ${TREE} found; test and cross-platform-pool run in full."
-          fi
-          echo "::notice title=Tree reuse::${msg}"
-          echo "${msg}" >> "$GITHUB_STEP_SUMMARY"
-
+    - name: Checkout (the PR merge commit)
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        fetch-depth: 2
+    - name: Setup Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: 22
+    - name: Resolve the tree that would land
+      id: tree
+      run: "tree=$(git rev-parse 'HEAD^{tree}')\nhead_tree=$(git rev-parse 'HEAD^2^{tree}' 2>/dev/null || echo unknown)\n\
+        echo \"tree=${tree}\" >> \"$GITHUB_OUTPUT\"\necho \"merge tree ${tree}; head tree ${head_tree}\"\nif [ \"\
+        ${tree}\" != \"${head_tree}\" ]; then\n  echo \"::notice title=Merge tree differs from the head's::${GITHUB_BASE_REF}\
+        \ has changes ${GITHUB_HEAD_REF} lacks; only an artifact of the merge tree counts.\"\nfi\n"
+    - name: Find a tested build of this tree
+      id: find
+      continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        TREE: ${{ steps.tree.outputs.tree }}
+      run: node scripts/ci/find-tree-artifact.mjs "${TREE}"
+    - name: Report
+      env:
+        FOUND: ${{ steps.find.outputs.found }}
+        RUN_ID: ${{ steps.find.outputs.run_id }}
+        HEAD_SHA: ${{ steps.find.outputs.head_sha }}
+        TREE: ${{ steps.tree.outputs.tree }}
+      run: "if [ \"${FOUND}\" = \"true\" ]; then\n  msg=\"tree ${TREE} was built and tested by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}\
+        \ (commit ${HEAD_SHA}); test and cross-platform-pool reuse it.\"\nelse\n  msg=\"no green build of tree ${TREE}\
+        \ found; test and cross-platform-pool run in full.\"\nfi\necho \"::notice title=Tree reuse::${msg}\"\necho\
+        \ \"${msg}\" >> \"$GITHUB_STEP_SUMMARY\"\n"
   test:
     needs: reuse
-    # Runs when `reuse` was skipped (dev PRs/pushes, workflow_call) or failed: no hit = full suite.
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    # #417: GitHub's default is 6 h; a normal run takes ~13–21 min.
+    if: ${{ !cancelled() && ((github.base_ref != 'main' && github.ref != 'refs/heads/main') || (needs.reuse.result
+      == 'success' && needs.reuse.outputs.hit == 'true')) }}
+    runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       REUSED: ${{ needs.reuse.outputs.hit == 'true' }}
     steps:
-      - name: Reused a tested build of this tree
-        if: env.REUSED == 'true'
-        env:
-          RUN_ID: ${{ needs.reuse.outputs.run_id }}
-        run: echo "Passed by reuse of run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID} (same git tree)."
-
-      - name: Checkout
-        if: env.REUSED != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install pnpm
-        if: env.REUSED != 'true'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Setup Node
-        if: env.REUSED != 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        if: env.REUSED != 'true'
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Playwright browser (chromium)
-        if: env.REUSED != 'true'
-        # playwright is a dependency of @jevitate/cli (and @jevitate/playwright),
-        # not a root-level bin, so the script scopes the exec to the package that
-        # owns the binary. Each attempt is bounded and retried once (#417).
-        timeout-minutes: 10
-        run: bash scripts/ci-install-chromium.sh
-
-      - name: Build
-        if: env.REUSED != 'true'
-        run: pnpm -r build
-
-      - name: Test
-        if: env.REUSED != 'true'
-        run: pnpm exec vitest run
-
-      - name: Lint
-        if: env.REUSED != 'true'
-        run: pnpm lint
-
-      - name: No-permissive-fallback gate
-        if: env.REUSED != 'true'
-        run: node scripts/check-no-permissive-fallback.mjs
-
-  # The browser pool + resource-signal readers must work on Linux, Windows and
-  # macOS (WSL2 is covered by local runs: it is the Linux reader with a
-  # `wsl2:` source label). Each OS builds, runs @jevitate/playwright's unit
-  # tests (fixture-driven signal readers + pool) and a REAL-Chromium pool smoke
-  # (one pooled browser, two isolated contexts, admission sample logged as
-  # `[pool-smoke] <platform> admission: …`, storageState round-trip, crash →
-  # loud failure + relaunch) against that OS's real signal source.
+    - name: Reused a tested build of this tree
+      if: env.REUSED == 'true'
+      env:
+        RUN_ID: ${{ needs.reuse.outputs.run_id }}
+      run: echo "Passed by reuse of run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID} (same git
+        tree)."
+    - name: Checkout
+      if: env.REUSED != 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - name: Install pnpm
+      if: env.REUSED != 'true'
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+    - name: Setup Node
+      if: env.REUSED != 'true'
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: 22
+        cache: pnpm
+    - name: Install dependencies
+      if: env.REUSED != 'true'
+      run: pnpm install --frozen-lockfile
+    - name: Install Playwright browser (chromium)
+      if: env.REUSED != 'true'
+      timeout-minutes: 10
+      run: bash scripts/ci-install-chromium.sh
+    - name: Build
+      if: env.REUSED != 'true'
+      run: pnpm -r build
+    - name: Test
+      if: env.REUSED != 'true'
+      run: pnpm exec vitest run
+    - name: Lint
+      if: env.REUSED != 'true'
+      run: pnpm lint
+    - name: No-permissive-fallback gate
+      if: env.REUSED != 'true'
+      run: node scripts/check-no-permissive-fallback.mjs
   cross-platform-pool:
     needs: reuse
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && ((github.base_ref != 'main' && github.ref != 'refs/heads/main') || (needs.reuse.result
+      == 'success' && needs.reuse.outputs.hit == 'true')) }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    # #417: a normal run takes ~1–3 min.
+        os:
+        - ubuntu-latest
+        - windows-latest
+        - macos-latest
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404'
+      || matrix.os }}
     timeout-minutes: 15
     env:
       REUSED: ${{ needs.reuse.outputs.hit == 'true' }}
@@ -178,90 +128,106 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Reused a tested build of this tree
-        if: env.REUSED == 'true'
-        env:
-          RUN_ID: ${{ needs.reuse.outputs.run_id }}
-        run: echo "Passed by reuse of run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID} (same git tree)."
-
-      - name: Checkout
-        if: env.REUSED != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install pnpm
-        if: env.REUSED != 'true'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Setup Node
-        if: env.REUSED != 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        if: env.REUSED != 'true'
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Playwright browser (chromium)
-        if: env.REUSED != 'true'
-        # --with-deps installs Linux system packages; Windows/macOS need none.
-        timeout-minutes: 10
-        run: bash scripts/ci-install-chromium.sh
-
-      - name: Build
-        if: env.REUSED != 'true'
-        run: pnpm -r build
-
-      - name: Pool + signal unit tests and real-Chromium pool smoke
-        if: env.REUSED != 'true'
-        run: pnpm exec vitest run packages/playwright/src
-
-  # The release candidate: only after the whole gate passed for this exact tree.
+    - name: Reused a tested build of this tree
+      if: env.REUSED == 'true'
+      env:
+        RUN_ID: ${{ needs.reuse.outputs.run_id }}
+      run: echo "Passed by reuse of run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID} (same git
+        tree)."
+    - name: Checkout
+      if: env.REUSED != 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - name: Install pnpm
+      if: env.REUSED != 'true'
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+    - name: Setup Node
+      if: env.REUSED != 'true'
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: 22
+        cache: pnpm
+    - name: Install dependencies
+      if: env.REUSED != 'true'
+      run: pnpm install --frozen-lockfile
+    - name: Install Playwright browser (chromium)
+      if: env.REUSED != 'true'
+      timeout-minutes: 10
+      run: bash scripts/ci-install-chromium.sh
+    - name: Build
+      if: env.REUSED != 'true'
+      run: pnpm -r build
+    - name: Pool + signal unit tests and real-Chromium pool smoke
+      if: env.REUSED != 'true'
+      run: pnpm exec vitest run packages/playwright/src
   package:
-    needs: [test, cross-platform-pool]
-    # Explicit results: a bare condition implies success(), which is false because `reuse` (an ancestor) is skipped here.
-    if: >-
-      !cancelled() && needs.test.result == 'success' && needs.cross-platform-pool.result == 'success' &&
-      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || inputs.package)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30  # #417: a normal run takes ~3–5 min
+    needs:
+    - test
+    - cross-platform-pool
+    if: (!cancelled() && needs.test.result == 'success' && needs.cross-platform-pool.result == 'success' && ((github.event_name
+      == 'push' && github.ref == 'refs/heads/dev') || inputs.package)) && github.ref != 'refs/heads/main' && github.base_ref
+      != 'main' && github.ref_type != 'tag'
+    runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - name: Install pnpm
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+    - name: Setup Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: 22
+        cache: pnpm
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+    - name: Build and bundle
+      run: 'pnpm -r build
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        pnpm --filter @jevitate/cli run bundle
 
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: pnpm
+        node packages/cli/dist/bin.js --version
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        '
+    - name: Pack (tarballs, manifest.json, SHA256SUMS)
+      id: pack
+      run: 'tree=$(git rev-parse ''HEAD^{tree}'')
 
-      - name: Build and bundle
-        # pnpm -r build runs packages/cli's build-info pre-step; the bundle is what npm ships.
-        run: |
-          pnpm -r build
-          pnpm --filter @jevitate/cli run bundle
-          node packages/cli/dist/bin.js --version
+        echo "tree=${tree}" >> "$GITHUB_OUTPUT"
 
-      - name: Pack (tarballs, manifest.json, SHA256SUMS)
-        id: pack
-        run: |
-          tree=$(git rev-parse 'HEAD^{tree}')
-          echo "tree=${tree}" >> "$GITHUB_OUTPUT"
-          bash scripts/ci/pack-release.sh "${RUNNER_TEMP}/release"
-          ( cd "${RUNNER_TEMP}/release" && sha256sum -c SHA256SUMS )
+        bash scripts/ci/pack-release.sh "${RUNNER_TEMP}/release"
 
-      - name: Upload jevitate-<tree>
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: jevitate-${{ steps.pack.outputs.tree }}
-          path: ${{ runner.temp }}/release/
-          if-no-files-found: error
-          retention-days: 90 # the repo maximum; an expired artifact makes the release rebuild
-          compression-level: 0 # tarballs are already gzipped
+        ( cd "${RUNNER_TEMP}/release" && sha256sum -c SHA256SUMS )
+
+        '
+    - name: Upload jevitate-<tree>
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: jevitate-${{ steps.pack.outputs.tree }}
+        path: ${{ runner.temp }}/release/
+        if-no-files-found: error
+        retention-days: 90
+        compression-level: 0
+  build-gate:
+    name: Build gate
+    needs:
+    - reuse
+    - test
+    - cross-platform-pool
+    - package
+    if: ${{ always() }}
+    runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    steps:
+    - name: Require validated checks or exact-tree reuse
+      env:
+        TARGET: ${{ github.base_ref }}
+        REF: ${{ github.ref }}
+        REUSE: ${{ needs.reuse.result }}
+        HIT: ${{ needs.reuse.outputs.hit }}
+        TEST: ${{ needs.test.result }}
+        POOL: ${{ needs.cross-platform-pool.result }}
+        EVENT: ${{ github.event_name }}
+        PACKAGE: ${{ needs.package.result }}
+      shell: bash
+      run: "set -euo pipefail\ntest \"$TEST\" = success\ntest \"$POOL\" = success\nif [ \"$TARGET\" = main ] ||\
+        \ [ \"$REF\" = refs/heads/main ]; then\n  test \"$REUSE\" = success\n  test \"$HIT\" = true\nelif [ \"$EVENT\"\
+        \ = push ] && [ \"$REF\" = refs/heads/dev ]; then\n  test \"$PACKAGE\" = success\nfi\n"
