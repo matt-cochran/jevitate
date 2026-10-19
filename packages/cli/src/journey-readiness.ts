@@ -145,7 +145,7 @@ interface ReplayOutcome {
 const REQUIRED_PROOF_CHECK = "proof";
 
 /** #581 §1: the target shared by `replay` and `prove`, refused in this order before any runner call. */
-function resolveTarget(opts: JourneyReadinessOptions, deps: JourneyReadinessDeps, required: readonly string[]): ResolvedJourneyEnvironment {
+function resolveTarget(opts: JourneyReadinessOptions, deps: JourneyReadinessDeps, required: readonly string[], declared: readonly string[]): ResolvedJourneyEnvironment {
   let environment: ResolvedJourneyEnvironment | undefined;
   if (opts.env !== undefined || opts.baseUrl !== undefined) {
     environment = environmentFromFlags(
@@ -162,6 +162,12 @@ function resolveTarget(opts: JourneyReadinessOptions, deps: JourneyReadinessDeps
   const missing = required.filter((name) => !(name in (opts.params ?? {})));
   if (missing.length > 0) {
     throw new ReadinessError("E_READINESS_PARAMS", `missing required param(s): ${missing.join(", ")}`);
+  }
+  // #608: a param the driven Journey does not declare is refused by name here (never by the chain),
+  // so a mistyped `--param` never opens a browser. Names only — never a value.
+  const unknown = Object.keys(opts.params ?? {}).filter((name) => !declared.includes(name));
+  if (unknown.length > 0) {
+    throw new ReadinessError("E_READINESS_PARAMS", `unknown param(s): ${unknown.join(", ")}`);
   }
   return environment;
 }
@@ -417,21 +423,39 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
   const pair = opts.with !== undefined;
   let environment: ResolvedJourneyEnvironment | undefined;
   let replay: ReplayOutcome | undefined;
+  /** #608: the params the chain bound for the first consumer (`to`) run, captured via the runner seam. */
+  let boundConsumerParams: Record<string, string> | undefined;
   if (mode !== "report") {
-    environment = resolveTarget(opts, deps, requiredParams(contexts[0]!.journey, pair, opts.requests !== undefined));
+    const producerSchema = journeyParamSchema(contexts[0]!.journey).required;
+    environment = resolveTarget(opts, deps, requiredParams(contexts[0]!.journey, pair, opts.requests !== undefined), producerSchema);
     const params = { ...(opts.params ?? {}) };
     try {
       if (pair) {
-        const chained = await chain({
-          from: opts.id,
-          to: opts.with as string,
-          requests: opts.requests ?? "",
-          dir: opts.journeysDir,
-          environment,
-          ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
-          ...(opts.browser === undefined ? {} : { browser: opts.browser }),
-          ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
-        });
+        const chained = await chain(
+          {
+            from: opts.id,
+            to: opts.with as string,
+            requests: opts.requests ?? "",
+            params: { ...(opts.params ?? {}) },
+            dir: opts.journeysDir,
+            environment,
+            ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
+            ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+            ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
+          },
+          {
+            // #608: the consumer's proof must run with the params the chain actually bound for it
+            // (record fields + request), captured from the first consumer run; names and outcomes
+            // are all the chain itself returns.
+            runJourney: async (chainOpts) => {
+              const result = await run(chainOpts);
+              if (chainOpts.id === opts.with && boundConsumerParams === undefined) {
+                boundConsumerParams = { ...chainOpts.params };
+              }
+              return result;
+            },
+          },
+        );
         replay = pairReplay(chained);
       } else {
         const result = await run({
@@ -451,11 +475,25 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
     }
     if (mode === "prove") {
       for (const ctx of contexts) {
+        const consumer = pair && ctx.id === opts.with;
+        if (consumer && boundConsumerParams === undefined) {
+          // #608: the chain bound no request for the consumer, so no proof can run. Saying so names
+          // the consumer only — never a param value, a record field or reply text.
+          ctx.review = {
+            ...ctx.review,
+            proof: {
+              ...ctx.review.proof,
+              verify: { status: "not-verified", hint: `the chain bound no request for '${ctx.id}' — supply a --requests line that matches a discovered record` },
+            },
+          };
+          continue;
+        }
+        const proofParams = consumer ? (boundConsumerParams as Record<string, string>) : params;
         try {
           await verify({
             dir: opts.journeysDir,
             id: ctx.id,
-            params,
+            params: proofParams,
             environment,
             ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
           ...(opts.browser === undefined ? {} : { browser: opts.browser }),
