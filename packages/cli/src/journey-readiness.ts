@@ -298,8 +298,12 @@ function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { ch
     };
   }
   if (verify.verdict === "proven") {
-    const passed = Object.values(verify.summary).reduce((a, b) => a + b, 0);
-    return { check: { check: "proof", journey: ctx.id, state: "pass", detail: `proven ${passed}/${passed}`, evidence } };
+    // #609: `targeted` is a subset of `sensitive`, not a seventh outcome — summing every count
+    // would double-count it. It is named separately, never added to the proven total.
+    const targeted = verify.summary.targeted ?? 0;
+    const passed = Object.entries(verify.summary).filter(([k]) => k !== "targeted").reduce((a, [, b]) => a + b, 0);
+    const detail = targeted === 0 ? `proven ${passed}/${passed}` : `proven ${passed}/${passed}, ${targeted} through a targeted proof (earlier defenses relaxed one at a time; see the verify report)`;
+    return { check: { check: "proof", journey: ctx.id, state: "pass", detail, evidence } };
   }
   if (verify.verdict === "insensitive") {
     return {
@@ -313,12 +317,40 @@ function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { ch
   if (nothingToMutate(ctx.journey, verify.summary)) {
     return { check: { check: "proof", journey: ctx.id, state: "pass", detail: "read-only with no inputs: nothing a mutation could break", evidence } };
   }
-  return { check: { check: "proof", journey: ctx.id, state: "inconclusive", detail: verify.reason ?? `proof verdict ${verify.verdict}`, evidence } };
+  // #609: an inconclusive proof stays inconclusive — the refusal names the authoring fix, not a pass.
+  return {
+    check: { check: "proof", journey: ctx.id, state: "inconclusive", detail: verify.reason ?? `proof verdict ${verify.verdict}`, evidence },
+    blocker: { check: "proof", journey: ctx.id, why: inconclusiveProofGuidance(verify.reason ?? ""), next: `jevitate journey verify ${ctx.id} --mutate` },
+  };
+}
+
+/** #609: the marker `mutationProofVerdict` puts before a refused targeted proof's own refusal text. */
+const TARGETED_REFUSAL_MARKER = "a targeted proof was refused: ";
+
+/**
+ * #609: the authoring guidance a refused targeted proof carries, chosen from the refusal text (names
+ * only — a refusal never contains a param value, a record field or reply text). A proof that stays
+ * inconclusive for any other reason gets the generic cascade guidance.
+ */
+function inconclusiveProofGuidance(reason: string): string {
+  const at = reason.indexOf(TARGETED_REFUSAL_MARKER);
+  if (at < 0) return "inspect the cascade assertions in the verify report";
+  const refusal = reason.slice(at + TARGETED_REFUSAL_MARKER.length).trim();
+  const unpaired = /^(\S+) is not paired with (\S+)$/.exec(refusal);
+  if (unpaired !== null) {
+    return `declare the earlier check ${unpaired[1]} as a defense of ${unpaired[2]} with a metadata.mutationPairs entry {check:'${unpaired[1]}', mustFailWhen:'${unpaired[2]}'}, then re-run verify`;
+  }
+  const bound = /relaxation bound (\d+)/.exec(refusal);
+  if (bound !== null) return `reduce the layered checks between the mutation and the target (relaxation bound ${bound[1]})`;
+  if (refusal.includes("action failed")) return "the mutated value makes an earlier action impossible, so that target cannot be proven independently — keep the check; it stays inconclusive by design";
+  return "inspect the cascade assertions in the verify report";
 }
 
 /** No mutation was paired at all (only unpaired checks), the Journey writes nothing and takes no param. */
 function nothingToMutate(journey: Journey, summary: Readonly<Record<string, number>>): boolean {
-  const paired = Object.entries(summary).filter(([k]) => k !== "unpaired").reduce((n, [, v]) => n + v, 0);
+  // #609: `targeted` is part of `sensitive`, so it is not a fresh pairing — counting it would make a
+  // read-only Journey look mutable.
+  const paired = Object.entries(summary).filter(([k]) => k !== "unpaired" && k !== "targeted").reduce((n, [, v]) => n + v, 0);
   // At least one check was looked at and none could be paired (a proof with no counts proves nothing).
   return (summary.unpaired ?? 0) > 0 && paired === 0 && journeyWriteSteps(journey).length === 0 && journeyParamSchema(journey).required.length === 0;
 }
