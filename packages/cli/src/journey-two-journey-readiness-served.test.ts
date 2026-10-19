@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { ProfileManager } from "@jevitate/daemon";
-import { FsJourneyStore, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, type Journey, type JourneyTargetedProofPlan } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
@@ -15,17 +15,20 @@ import { useSkippingTime } from "../../explore/src/testkit.js";
 useSkippingTime({ per: "all" });
 
 /**
- * #608/#609 end to end — the complete fictional two-journey objective through the CLI against a
- * local app: `open-comment-conversation` (draft) discovers the selected thread/account and returns
- * a typed `bizops-comment@1` record; `prepare-comment-reply` (draft, prepare-only) reopens it,
- * checks the observed account/thread/comment/context, and fills the exact multiline reply without
- * ever clicking Send. The server counts every write; no approval is granted or faked.
+ * #608/#609/#616 part C end to end — the complete fictional two-journey objective through the CLI
+ * against a local app: `open-comment-conversation` (draft) discovers the selected thread/account and
+ * returns a typed `bizops-comment@1` record (with its post id); `prepare-comment-reply` (draft,
+ * prepare-only) reopens it, checks the observed account/thread/post/comment/context through layered
+ * defenses, and fills the exact multiline reply without ever clicking Send. The server counts every
+ * write; no approval is granted or faked. Before the declared plan the layered thread defenses exhaust
+ * the automatic proof bound; after a human-reviewed `metadata.targetedProofs` is declared, readiness
+ * prove reaches technically-ready with the late end state proven sensitive.
  */
 
-const THREADS: Record<string, { commentId: string; text: string }> = {
-  "thread-001": { commentId: "c-1001", text: "Will the panels arrive by Tuesday?" },
-  "thread-002": { commentId: "c-2002", text: "Can I change the delivery address?" },
-  "thread-003": { commentId: "c-3003", text: "Is the warranty transferable?" },
+const THREADS: Record<string, { commentId: string; postId: string; text: string }> = {
+  "thread-001": { commentId: "c-1001", postId: "post-001", text: "Will the panels arrive by Tuesday?" },
+  "thread-002": { commentId: "c-2002", postId: "post-002", text: "Can I change the delivery address?" },
+  "thread-003": { commentId: "c-3003", postId: "post-003", text: "Is the warranty transferable?" },
 };
 
 const page = `<!doctype html><html><head><title>Conversations</title></head><body><main>
@@ -39,7 +42,7 @@ const page = `<!doctype html><html><head><title>Conversations</title></head><bod
     <option value="ops">ops</option>
   </select></label>
   <button type="button" id="open">Open</button>
-  <section id="thread" data-threadid="" data-account=""></section>
+  <section id="thread" data-threadid="" data-postid="" data-commentid="" data-account=""></section>
   <label>Reply <textarea aria-label="Reply"></textarea></label>
   <button type="button" id="send">Send</button>
   <script>
@@ -52,6 +55,8 @@ const page = `<!doctype html><html><head><title>Conversations</title></head><bod
     document.getElementById("open").addEventListener("click", () => {
       const t = THREADS[thread.value];
       view.setAttribute("data-threadid", thread.value);
+      view.setAttribute("data-postid", t.postId);
+      view.setAttribute("data-commentid", t.commentId);
       view.setAttribute("data-account", account.value);
       view.innerHTML = "";
       const article = document.createElement("article");
@@ -61,6 +66,7 @@ const page = `<!doctype html><html><head><title>Conversations</title></head><bod
       meta.setAttribute("data-commentid", t.commentId);
       meta.setAttribute("data-account", account.value);
       meta.setAttribute("data-threadid", thread.value);
+      meta.setAttribute("data-postid", t.postId);
       meta.setAttribute("data-permalink", "/c/" + t.commentId);
       meta.textContent = t.commentId;
       const source = document.createElement("p");
@@ -118,6 +124,7 @@ function producer(): Journey {
           commentId: { type: "id" },
           account: { type: "id" },
           threadId: { type: "id" },
+          postId: { type: "id" },
           sourceText: { type: "text" },
           permalink: { type: "path" },
         },
@@ -160,6 +167,7 @@ function producer(): Journey {
                   { kind: "extract", target: { css: ".meta" }, as: "commentId", attr: "data-commentid", expect: { kind: "attr", target: { css: ".meta" }, name: "data-commentid" } },
                   { kind: "extract", target: { css: ".meta" }, as: "account", attr: "data-account", expect: { kind: "attr", target: { css: ".meta" }, name: "data-account" } },
                   { kind: "extract", target: { css: ".meta" }, as: "threadId", attr: "data-threadid", expect: { kind: "attr", target: { css: ".meta" }, name: "data-threadid" } },
+                  { kind: "extract", target: { css: ".meta" }, as: "postId", attr: "data-postid", expect: { kind: "attr", target: { css: ".meta" }, name: "data-postid" } },
                   { kind: "extract", target: { css: ".meta" }, as: "permalink", attr: "data-permalink", expect: { kind: "attr", target: { css: ".meta" }, name: "data-permalink" } },
                   { kind: "extract", target: { css: ".source" }, as: "sourceText", expect: { kind: "attr", target: { css: ".meta" }, name: "data-commentid" } },
                 ],
@@ -172,7 +180,7 @@ function producer(): Journey {
   };
 }
 
-function consumer(): Journey {
+function consumer(targetedProofs?: readonly JourneyTargetedProofPlan[]): Journey {
   return {
     metadata: {
       id: CONSUMER,
@@ -182,14 +190,18 @@ function consumer(): Journey {
       job: "reply-to-comment",
       persona: "community-manager",
       promoted: false,
-      params: ["threadId", "replyIdentity", "expected_commentid", "expected_account", "expected_sourcetext", "replyText"],
-      anchors: [{ name: "reply-prepared", step: 8, stepId: "s-fill01" }],
-      // #609: the pre-fill context checks are intentional defenses against a wrong thread/account —
-      // declared, so a targeted proof may relax them (one at a time) to prove the end state too.
+      params: ["threadId", "replyIdentity", "expected_threadid", "expected_postid", "expected_commentid", "expected_account", "expected_sourcetext", "replyText"],
+      anchors: [{ name: "reply-prepared", step: 10, stepId: "s-fill01" }],
+      ...(targetedProofs === undefined ? {} : { targetedProofs: [...targetedProofs] }),
+      // #616: the layered pre-fill thread defenses are intentional — declared so a targeted proof
+      // may relax them one at a time (the declared plan is a human review in the real flow).
       mutationPairs: [
-        { check: "step:5", mustFailWhen: "swap-param:replyIdentity" },
+        { check: "step:4", mustFailWhen: "swap-param:threadId" },
+        { check: "step:5", mustFailWhen: "swap-param:threadId" },
         { check: "step:6", mustFailWhen: "swap-param:threadId" },
         { check: "step:7", mustFailWhen: "swap-param:threadId" },
+        { check: "step:8", mustFailWhen: "swap-param:threadId" },
+        { check: "step:9", mustFailWhen: "swap-param:replyIdentity" },
       ],
       createdAtIso: "2026-10-19T00:00:00.000Z",
       inputs: {
@@ -198,6 +210,8 @@ function consumer(): Journey {
         bindings: {
           threadId: { record: "threadId" },
           replyIdentity: { record: "account" },
+          expected_threadid: { record: "threadId" },
+          expected_postid: { record: "postId" },
           expected_commentid: { record: "commentId" },
           expected_account: { record: "account" },
           expected_sourcetext: { record: "sourceText" },
@@ -212,6 +226,7 @@ function consumer(): Journey {
       endState: [
         { kind: "page", assertion: { kind: "valueEquals", target: { label: "Thread" }, value: { var: "threadId" } } },
         { kind: "page", assertion: { kind: "valueEquals", target: { label: "Reply as" }, value: { var: "replyIdentity" } } },
+        { kind: "page", assertion: { kind: "attr", target: { css: "#thread" }, name: "data-threadid", value: { var: "expected_threadid" } } },
         { kind: "page", assertion: { kind: "valueEquals", target: { label: "Reply" }, value: { var: "replyText" } } },
       ],
     },
@@ -237,9 +252,11 @@ function consumer(): Journey {
               objective: "Reopen the thread and confirm it is the record's thread",
               step: { kind: "click", target: { role: "button", name: "Open" }, expect: { kind: "attr", target: { css: "#thread" }, name: "data-threadid", value: { var: "threadId" } } },
             },
-            { objective: "Confirm the observed account before touching the composer", step: { kind: "assert", check: { kind: "attr", target: { css: "#thread" }, name: "data-account", value: { var: "expected_account" } } } },
+            { objective: "Confirm the handoff thread id before touching the composer", step: { kind: "assert", check: { kind: "attr", target: { css: "#thread" }, name: "data-threadid", value: { var: "expected_threadid" } } } },
+            { objective: "Confirm the handoff post id before touching the composer", step: { kind: "assert", check: { kind: "attr", target: { css: "#thread" }, name: "data-postid", value: { var: "expected_postid" } } } },
             { objective: "Confirm the observed comment before touching the composer", step: { kind: "assert", check: { kind: "attr", target: { css: "#thread .meta" }, name: "data-commentid", value: { var: "expected_commentid" } } } },
-            { objective: "Confirm the comment's context before touching the composer", step: { kind: "assert", check: { kind: "textIncludes", target: { css: "#thread .source" }, text: { var: "expected_sourcetext" } } } },
+            { objective: "Confirm the comment's complete source text before touching the composer", step: { kind: "assert", check: { kind: "textIncludes", target: { css: "#thread .source" }, text: { var: "expected_sourcetext" } } } },
+            { objective: "Confirm the observed account before touching the composer", step: { kind: "assert", check: { kind: "attr", target: { css: "#thread" }, name: "data-account", value: { var: "expected_account" } } } },
             {
               objective: "Prepare the exact approved reply",
               stepId: "s-fill01",
@@ -287,20 +304,23 @@ async function requestsFile(name: string, lines: readonly Record<string, string>
 
 interface Selection {
   readonly threadId: string;
+  readonly postId: string;
   readonly account: string;
   readonly commentId: string;
   readonly reply: string;
 }
 
 const SELECTIONS: readonly Selection[] = [
-  { threadId: "thread-001", account: "mcpl", commentId: "c-1001", reply: REPLY_1 },
-  { threadId: "thread-002", account: "personal", commentId: "c-2002", reply: REPLY_2 },
+  { threadId: "thread-001", postId: "post-001", account: "mcpl", commentId: "c-1001", reply: REPLY_1 },
+  { threadId: "thread-002", postId: "post-002", account: "personal", commentId: "c-2002", reply: REPLY_2 },
 ];
 
 /** The params the chain binds for the consumer from the record + request (the documented bindings). */
 const consumerParams = (s: Selection): string[] => [
   `threadId=${s.threadId}`,
   `replyIdentity=${s.account}`,
+  `expected_threadid=${s.threadId}`,
+  `expected_postid=${s.postId}`,
   `expected_commentid=${s.commentId}`,
   `expected_account=${s.account}`,
   `expected_sourcetext=${THREADS[s.threadId]!.text}`,
@@ -313,8 +333,11 @@ let chains: { env: Envelope; exitCode: number | undefined; draft: string | undef
 let missing: { env: Envelope; requestsReached: number };
 let replay: Envelope;
 let verifyProducer: Envelope;
-let verifyConsumer: Envelope;
-let prove: Envelope;
+let verifyConsumerBefore: Envelope;
+let verifyConsumerAfter: Envelope;
+let consumerDeclared: Journey;
+let proveBefore: Envelope;
+let proveAfter: Envelope;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -370,8 +393,21 @@ beforeAll(async () => {
   ];
   replay = envelope((await cli(readinessArgs("replay"))).out);
   verifyProducer = envelope((await cli(["journey", "verify", PRODUCER, "--mutate", ...paramFlags([`threadId=${selection.threadId}`, `replyIdentity=${selection.account}`]), "--json"])).out);
-  verifyConsumer = envelope((await cli(["journey", "verify", CONSUMER, "--mutate", ...paramFlags(consumerParams(selection)), "--json"])).out);
-  prove = envelope((await cli(readinessArgs("prove"))).out);
+
+  // #616 part C: BEFORE any declaration the five layered pre-fill defenses exhaust the automatic
+  // relaxation bound, so the consumer proof is inconclusive and the report suggests the plan to
+  // declare. Nothing is promoted, approved or sent here.
+  const verifyConsumerArgs = (): string[] => ["journey", "verify", CONSUMER, "--mutate", ...paramFlags(consumerParams(selection)), "--json"];
+  verifyConsumerBefore = envelope((await cli(verifyConsumerArgs())).out);
+  proveBefore = envelope((await cli(readinessArgs("prove"))).out);
+
+  // The test plays the human review: it writes back exactly the plan the proof suggested (all
+  // suggested entries), never a fabricated approval.
+  const suggested = (verifyConsumerBefore.data?.suggestedTargetedProofs ?? []) as JourneyTargetedProofPlan[];
+  consumerDeclared = consumer(suggested);
+  await new FsJourneyStore(journeysDir).put(consumerDeclared);
+  verifyConsumerAfter = envelope((await cli(verifyConsumerArgs())).out);
+  proveAfter = envelope((await cli(readinessArgs("prove"))).out);
 }, 1_800_000);
 
 afterAll(async () => {
@@ -381,7 +417,10 @@ afterAll(async () => {
 
 const checkOf = (receipt: Envelope, check: string, journey: string): any => receipt.data?.checks?.find((c: { check: string; journey: string }) => c.check === check && c.journey === journey);
 
-describe("two-journey discover → prepare-only reply, end to end (#608, #609, served)", () => {
+const assertion = (receipt: Envelope, site: string): { verdict?: string; declaredProof?: boolean } | undefined =>
+  receipt.data?.assertions?.find((a: { site: string }) => a.site === site);
+
+describe("two-journey discover → prepare-only reply, end to end (#608, #609, #616, served)", () => {
   it.each([0, 1])("journey chain for selection %i runs every matched request ok", (i) => {
     expect(chains[i]!.env.data?.runs?.map((r: { outcome: string }) => r.outcome)).toEqual(["ok"]);
   });
@@ -418,38 +457,65 @@ describe("two-journey discover → prepare-only reply, end to end (#608, #609, s
     expect(verifyProducer.data?.verdict).toBe("proven");
   });
 
-  it("journey verify --mutate proves the consumer conclusively with its bound params", () => {
-    expect(verifyConsumer.data?.verdict).toBe("proven");
+  it("before the declaration, the consumer proof is inconclusive", () => {
+    expect(checkOf(proveBefore, "proof", CONSUMER)?.state).toBe("inconclusive");
+  });
+
+  it("before the declaration, the consumer proof names the relaxation bound the layered defenses exhausted", () => {
+    expect(checkOf(proveBefore, "proof", CONSUMER)?.detail).toContain("relaxation bound 4 reached");
+  });
+
+  it("before the declaration, the consumer verify report suggests a plan relaxing at least five step sites", () => {
+    const relaxed = (verifyConsumerBefore.data?.suggestedTargetedProofs?.[0]?.relax ?? []) as string[];
+    expect(relaxed.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("the stored consumer declares five thread defenses paired with swap-param:threadId", async () => {
+    const stored = await new FsJourneyStore(journeysDir).get(CONSUMER);
+    const paired = (stored?.metadata.mutationPairs ?? []).filter((p) => p.mustFailWhen === "swap-param:threadId");
+    expect(paired.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("after the declaration, journey verify --mutate proves the consumer conclusively with its bound params", () => {
+    expect(verifyConsumerAfter.data?.verdict).toBe("proven");
+  });
+
+  it("after the declaration, the consumer's end-state thread assertion is sensitive", () => {
+    expect(assertion(verifyConsumerAfter, "end-state:0")?.verdict).toBe("sensitive");
+  });
+
+  it("after the declaration, the consumer's end-state thread assertion names a declared proof", () => {
+    expect(assertion(verifyConsumerAfter, "end-state:0")?.declaredProof).toBe(true);
   });
 
   it("the layered defenses are proven independently through a targeted proof (relaxedSites)", () => {
-    const relaxed = [...(verifyProducer.data?.assertions ?? []), ...(verifyConsumer.data?.assertions ?? [])].filter((a: { relaxedSites?: string[] }) => (a.relaxedSites?.length ?? 0) > 0);
+    const relaxed = [...(verifyProducer.data?.assertions ?? []), ...(verifyConsumerAfter.data?.assertions ?? [])].filter((a: { relaxedSites?: string[] }) => (a.relaxedSites?.length ?? 0) > 0);
     expect(relaxed.length).toBeGreaterThan(0);
   });
 
   it.each([PRODUCER, CONSUMER])("readiness prove passes the proof check of %s", (id) => {
-    expect(checkOf(prove, "proof", id)?.state).toBe("pass");
+    expect(checkOf(proveAfter, "proof", id)?.state).toBe("pass");
   });
 
   it("readiness prove reports no proof blocker", () => {
-    expect(prove.data?.blockers?.filter((b: { check: string }) => b.check === "proof")).toEqual([]);
+    expect(proveAfter.data?.blockers?.filter((b: { check: string }) => b.check === "proof")).toEqual([]);
   });
 
   it("readiness prove passes the pair's replay check", () => {
-    expect(checkOf(prove, "replay", CONSUMER)?.state).toBe("pass");
+    expect(checkOf(proveAfter, "replay", CONSUMER)?.state).toBe("pass");
   });
 
   // #608: the draft catalog links are a person's catalog approval — listed under awaitingHuman,
   // never a strict blocker — so the complete objective is technically ready with no approval faked.
   it("readiness prove is technically ready", () => {
-    expect(prove.data?.verdict).toBe("technically-ready");
+    expect(proveAfter.data?.verdict).toBe("technically-ready");
   });
 
   it("readiness prove lists the unvetted catalog links as awaiting a person", () => {
-    expect(prove.data?.awaitingHuman?.filter((a: { check: string }) => a.check === "catalog").length).toBeGreaterThan(0);
+    expect(proveAfter.data?.awaitingHuman?.filter((a: { check: string }) => a.check === "catalog").length).toBeGreaterThan(0);
   });
 
   it("readiness prove names promotion of both Journeys as awaiting a person", () => {
-    expect(prove.data?.awaitingHuman?.filter((a: { check: string }) => a.check === "promotion").map((a: { journey: string }) => a.journey)).toEqual([PRODUCER, CONSUMER]);
+    expect(proveAfter.data?.awaitingHuman?.filter((a: { check: string }) => a.check === "promotion").map((a: { journey: string }) => a.journey)).toEqual([PRODUCER, CONSUMER]);
   });
 });
