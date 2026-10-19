@@ -439,11 +439,14 @@ describe("two-journey discover → prepare-only reply, end to end (#608, #609, s
     expect(checkOf(prove, "replay", CONSUMER)?.state).toBe("pass");
   });
 
-  // Remaining blocker (reported, not worked around): `review-strict` restates the draft catalog links —
-  // which the `catalog` check already lists as awaiting a person — as a strict blocker. No approval is faked.
-  it("readiness prove is blocked only by review-strict restating the unvetted (draft) catalog links", () => {
-    const why = (prove.data?.blockers ?? []).map((b: { check: string; why: string }) => `${b.check}: ${b.why.split("; ").filter((t) => !/^(Unvetted catalog links|its links are not approved): /.test(t)).join("; ")}`);
-    expect(why).toEqual([`review-strict: `, `review-strict: `]);
+  // #608: the draft catalog links are a person's catalog approval — listed under awaitingHuman,
+  // never a strict blocker — so the complete objective is technically ready with no approval faked.
+  it("readiness prove is technically ready", () => {
+    expect(prove.data?.verdict).toBe("technically-ready");
+  });
+
+  it("readiness prove lists the unvetted catalog links as awaiting a person", () => {
+    expect(prove.data?.awaitingHuman?.filter((a: { check: string }) => a.check === "catalog").length).toBeGreaterThan(0);
   });
 
   it("readiness prove names promotion of both Journeys as awaiting a person", () => {

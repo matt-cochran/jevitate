@@ -287,6 +287,37 @@ describe("journey readiness", () => {
     expect(checkOf(r, "catalog", "publish")?.state).toBe("awaiting-human");
   });
 
+  it("an unvetted-link warning a catalog approval settles does not fail review-strict (#608)", async () => {
+    await store.put(journey("publish"));
+    const r = await receipt(
+      { id: "publish", journeysDir },
+      {
+        review: reviewDep({
+          attention: [{ severity: "warn", text: "Unvetted catalog links: job:j (draft)", settledBy: "catalog-approval" }],
+          catalog: { linked: true, job: { id: "j", status: "draft" }, persona: { id: "p", status: "approved" }, unvetted: ["job:j (draft)"], needsReReview: [] },
+        }),
+      },
+    );
+    expect(checkOf(r, "review-strict", "publish")?.state).toBe("pass");
+  });
+
+  it("an unsettled strict warning beside an unvetted link still fails review-strict (#608)", async () => {
+    await store.put(journey("publish"));
+    const r = await receipt(
+      { id: "publish", journeysDir },
+      {
+        review: reviewDep({
+          attention: [
+            { severity: "warn", text: "Unvetted catalog links: job:j (draft)", settledBy: "catalog-approval" },
+            { severity: "warn", text: "a weak step" },
+          ],
+          catalog: { linked: true, job: { id: "j", status: "draft" }, persona: { id: "p", status: "approved" }, unvetted: ["job:j (draft)"], needsReReview: [] },
+        }),
+      },
+    );
+    expect(checkOf(r, "review-strict", "publish")?.detail).toBe("a weak step");
+  });
+
   // #608 — a pair's producer params flow to the chain; unknown names are refused before it.
   it("pair replay passes its params to the chain", async () => {
     await store.put(producerWithParams("producer"));

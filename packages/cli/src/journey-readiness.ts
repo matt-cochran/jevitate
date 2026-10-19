@@ -225,7 +225,9 @@ function boundaryCheck(ctx: JourneyContext): ReadinessCheck {
 
 /** `journey review --strict`: every `warn` attention item is a blocker (an `info` item is advice, not a gate). */
 function reviewStrictCheck(ctx: JourneyContext): { check: ReadinessCheck; blocker?: ReadinessBlocker } {
-  const warns = (ctx.review.attention ?? []).filter((a) => a.severity === "warn");
+  // #608: an item a person's catalog approval settles is the catalog check's awaiting-human entry;
+  // counted here too, a draft workflow could never be technically ready. Promotion still refuses it.
+  const warns = (ctx.review.attention ?? []).filter((a) => a.severity === "warn" && !(a.settledBy === "catalog-approval" && ctx.review.catalog !== undefined));
   if (warns.length > 0) {
     return {
       check: { check: "review-strict", journey: ctx.id, state: "fail", detail: warns.map((a) => a.text).join("; ") },

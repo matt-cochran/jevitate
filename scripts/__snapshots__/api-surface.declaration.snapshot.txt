@@ -1201,7 +1201,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (271 exports)
+# @jevitate/journey (272 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1467,6 +1467,7 @@
   sweepStops: function
   TARGET_OPS: variable
   TARGET_UNITS: variable
+  targetedControlReplay: function
   targetedMutationReplay: function
   TargetedProof: interface
   validateFieldValue: function
