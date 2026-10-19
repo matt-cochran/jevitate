@@ -50,7 +50,7 @@ describe("#580 Bizops mutation proof (served)", () => {
   });
 
   it("proves every prepare-reply check sensitive, with no cascade, error or unpaired check", () => {
-    expect(reports.get("c-2041")!.summary).toEqual({ sensitive: 9, insensitive: 0, cascade: 0, notApplied: 0, error: 0, unpaired: 0 });
+    expect(reports.get("c-2041")!.summary).toEqual({ sensitive: 9, insensitive: 0, cascade: 0, notApplied: 0, error: 0, unpaired: 0, targeted: 0 });
   });
 
   it("calls discover inconclusive because it has nothing to mutate", () => {

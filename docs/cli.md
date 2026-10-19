@@ -1297,6 +1297,7 @@ jevitate journey chain [options]
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--requests <file>` | JSON Lines file of approved requests ({commentId, account, replyText}) |  |  | yes |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each run authenticated; must exist |  |  |  |  |

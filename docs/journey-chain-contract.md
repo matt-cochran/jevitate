@@ -76,8 +76,16 @@ Bizops and is not read here.
 
 ```bash
 jevitate journey chain --from discover-conversations --to prepare-reply \
-  --requests approved.jsonl [--base-url <url> | --env <name>] [--storage-state <file>] [--json]
+  --requests approved.jsonl [--param name=value ...] [--base-url <url> | --env <name>] \
+  [--storage-state <file>] [--json]
 ```
+
+`--param name=value` (repeatable) supplies the **producer's** (`--from`) params, so one discover
+Journey serves any account or thread by params and nothing is hardcoded in the Journey. The
+values are validated against the producer's param schema before anything runs: a missing
+required param or an unknown name is refused with `E_CHAIN_PARAMS` and no browser is opened.
+Supplied values are redacted from every `reason` in the result. Reply (`--to`) params still come
+only from the records and requests (section 3).
 
 1. Runs `--from` once. A failed run stops the chain (`E_CHAIN_FROM_FAILED`); an empty inbox
    is one (section 2), and its result keeps the run's `reason`.
@@ -105,7 +113,19 @@ jevitate journey chain --from discover-conversations --to prepare-reply \
 
 ## 6. MCP
 
-The same operation is one MCP tool taking `{ from, to, requests: [<request>], baseUrl?, env? }`
+The same operation is one MCP tool taking `{ from, to, requests: [<request>], params?, baseUrl?, env? }`
+(`params` is an object of producer param names to values, validated and redacted as in section 5)
 and returning the section 5 result. It is added to `ALLOWED_TOOLS` only through the
 `@jevitate/mcp-facade` allowlist review. It takes no selectors, scripts or extra fields: the
 Journeys are the only behaviour.
+
+## 7. Readiness for a linked pair
+
+`jevitate journey readiness <discover> --with <reply>` in `replay` or `prove` mode runs the
+pair through this chain. `--param name=value` values are passed to the producer through the
+chain. An unknown param is refused with `E_READINESS_PARAMS` before any browser opens (a missing
+required param is refused the same way, as before).
+
+In `prove` mode the consumer's mutation proof runs with the params the chain bound for the first
+matched request (the record fields and the request). If no request matched, the consumer proof is
+`not-verified` and the hint asks for a `--requests` line that matches a discovered record.

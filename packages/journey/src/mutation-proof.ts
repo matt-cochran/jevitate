@@ -75,6 +75,23 @@ export type MutationFailedSite =
   | { readonly where: "end-state"; readonly index: number }
   | { readonly where: "unevaluable" };
 
+/**
+ * #609 — a bounded TARGETED proof: an assertion that only looks like a `cascade` because an EARLIER
+ * intentional defense caught the paired mutation first. Each `relaxedSites` entry is an earlier
+ * `step:<n>` postcondition weakened in a cloned Journey so the replay could reach the target; the
+ * target assertion itself is never relaxed.
+ */
+export interface TargetedProof {
+  readonly site: string;
+  readonly relaxedSites: readonly string[];
+  readonly outcome: MutationRunResult["outcome"];
+  readonly failedSites: readonly MutationFailedSite[];
+  /** Set when no further relaxation is allowed: why the target stays a cascade. */
+  readonly refused?: string;
+  /** The unmutated control replay's outcome (`targetedControlReplay`), run before a targeted failure counts. */
+  readonly control?: MutationRunResult["outcome"];
+}
+
 /** A mutated replay: it passed, failed (where), was not applied (nothing to mutate), or errored. */
 export interface MutationRunResult {
   readonly outcome: "passed" | "failed" | "not-applied" | "error";
@@ -85,6 +102,8 @@ export interface MutationRunResult {
    * first at that postcondition can still say whether each LATER site is broken or vacuous.
    */
   readonly relaxed?: { readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] };
+  /** #609: targeted proofs run for assertion sites this mutation left as a cascade. */
+  readonly targeted?: readonly TargetedProof[];
 }
 
 /** sensitive: broke for the right reason · insensitive: still passed (vacuous) · cascade: broke elsewhere. */
@@ -96,6 +115,10 @@ export interface AssertionProof {
   readonly verdict: AssertionVerdict;
   /** The mutation that proved it sensitive. */
   readonly provedBy?: string;
+  /** #609: the earlier postconditions a targeted proof weakened to reach a sensitive verdict. */
+  readonly relaxedSites?: readonly string[];
+  /** #609: why a targeted proof was refused, when the verdict stays a cascade. */
+  readonly targetedRefusal?: string;
 }
 
 /** `step:<n>` · `step-request:<n>:<i>` · `end-state:<i>` — the names `metadata.mutationPairs` uses. */
@@ -492,13 +515,15 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
   if (m.kind === "swap-param" || m.kind === "truncate-param" || m.kind === "guard-param") {
     // #565: the same altered params; the step that first reads the parameter keeps a weak claim.
     const how = paramReplay(journey, m, opts.params ?? {});
-    const target = flat(how.journey)[index];
+    // A guard mutation replays the input Journey itself, so it is cloned before the claim is weakened.
+    const copy = how.journey === journey ? structuredClone(journey) : how.journey;
+    const target = flat(copy)[index];
     if (target !== undefined && "expect" in target.step) {
       const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
       delete step.waitFor;
       target.step = step as Step;
     }
-    return how;
+    return { ...how, journey: copy };
   }
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
@@ -524,6 +549,164 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
 }
 
 /**
+ * #609 — how many earlier postconditions a targeted proof may weaken before it stops. A proof that
+ * needs more than this is not evidence about the target; it is a cascade the run could not untangle.
+ */
+export const MAX_TARGETED_RELAXATIONS = 4;
+
+/** #609 — the site-key form of a failed site, for a refusal that names where the replay stopped. */
+function failedSiteKey(f: MutationFailedSite): string {
+  if (f.where === "step") return `step:${f.step}`;
+  if (f.where === "step-request") return `step-request:${f.step}:${f.checkIndex}`;
+  if (f.where === "end-state") return `end-state:${f.index}`;
+  return "unevaluable";
+}
+
+/**
+ * #609 — `relaxedMutationReplay` plus a weakened postcondition at every earlier step in
+ * `relaxedSiteKeys` (only `step:<n>`): a step's `expect` becomes `relaxedExpect`, an `assert` step's
+ * `check` becomes the no-claim `urlIncludes ""`, and each loses `waitFor`. The target assertion is
+ * never relaxed, the input Journey is never modified, and no step is removed (indices hold).
+ */
+export function targetedMutationReplay(
+  journey: Journey,
+  m: JourneyMutation,
+  targetSiteKey: string,
+  relaxedSiteKeys: readonly string[],
+  opts: MutationReplayOptions = {},
+): MutationReplay {
+  if (relaxedSiteKeys.includes(targetSiteKey)) throw new Error(`${targetSiteKey} is the target assertion — a targeted proof never relaxes it`);
+  const base = relaxedMutationReplay(journey, m, opts);
+  if (relaxedSiteKeys.length === 0) return base;
+  return { ...base, journey: relaxStepSites(journey, base.journey, relaxedSiteKeys) };
+}
+
+/**
+ * #609 — the CONTROL for a targeted proof: the same weakened postconditions (the relaxed sites and the
+ * mutated step's own claim, as the targeted replay weakens them) with NO mutation — the supplied
+ * params, nothing skipped, blocked or swapped. It must pass: when relaxing the earlier checks breaks
+ * the target on its own (e.g. a removed `waitFor` was the gate), the target's failure is not
+ * evidence about the mutation.
+ */
+export function targetedControlReplay(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): MutationReplay {
+  const own = flat(journey)[m.step - 1]?.step;
+  const ownKey = own !== undefined && (own.kind === "assert" || "expect" in own) ? [`step:${m.step}`] : [];
+  return { journey: relaxStepSites(journey, journey, [...new Set([...ownKey, ...relaxedSiteKeys])]) };
+}
+
+/** #609: a clone of `from` with each `step:<n>` postcondition in `keys` weakened (sites read from `journey`). */
+function relaxStepSites(journey: Journey, from: Journey, keys: readonly string[]): Journey {
+  const byKey = new Map(journeyAssertions(journey).map((s) => [assertionSiteKey(s), s]));
+  const copy = structuredClone(from);
+  const steps = flat(copy);
+  for (const key of keys) {
+    const match = /^step:([1-9][0-9]*)$/.exec(key);
+    if (match === null) throw new Error(`${key} is not a step assertion site — a targeted proof only relaxes step:<n>`);
+    const site = byKey.get(key);
+    if (site !== undefined && site.where === "step" && site.field === "resume") throw new Error(`${key} is a resume assertion — a targeted proof never relaxes it`);
+    const recorded = steps[Number(match[1]) - 1];
+    if (recorded === undefined) throw new Error(`journey '${journey.metadata.id}' has no step ${match[1]} to relax`);
+    const step: Record<string, unknown> = { ...recorded.step };
+    if (recorded.step.kind === "assert") step.check = { kind: "urlIncludes", text: "" };
+    else if ("expect" in recorded.step) step.expect = relaxedExpect(recorded.step);
+    else throw new Error(`${key} has no page postcondition to relax`);
+    delete step.waitFor;
+    recorded.step = step as Step;
+  }
+  return copy;
+}
+
+/**
+ * #609 — the next earlier postcondition a targeted proof should weaken to reach `targetSiteKey`, or
+ * `{refuse}` when there is no defensible one, or null when the target is no longer a cascade. A
+ * relaxable failure is the FIRST failed site, at a `step` with `postcondition: true`, at or after the
+ * mutated step, before the target, paired with `m` (its own sensitivity evidence), not already
+ * relaxed, and within `MAX_TARGETED_RELAXATIONS`.
+ */
+export function nextTargetedRelaxation(
+  journey: Journey,
+  plan: MutationPlan,
+  m: JourneyMutation,
+  targetSiteKey: string,
+  result: { readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] },
+  relaxedSoFar: readonly string[],
+): { readonly relax: string } | { readonly refuse: string } | null {
+  const target = journeyAssertions(journey).find((s) => assertionSiteKey(s) === targetSiteKey);
+  if (target === undefined) return { refuse: `${targetSiteKey} is not an assertion site of this Journey` };
+  if (classifyMutation(target, m, result) !== "cascade") return null;
+  const first = result.failedSites[0];
+  if (first === undefined) return { refuse: "no failed site to relax" };
+  if (first.where === "unevaluable") return { refuse: "unevaluable end state" };
+  if (first.where !== "step") return { refuse: `${failedSiteKey(first)} is not a step postcondition` };
+  const key = `step:${first.step}`;
+  if (!first.postcondition) return { refuse: `${key} action failed (not a postcondition)` };
+  if (first.step < m.step) return { refuse: "failure before the mutated step" };
+  const step = flat(journey)[first.step - 1]?.step;
+  if (step === undefined) return { refuse: `${key} does not exist` };
+  if (step.kind === "handback") return { refuse: `${key} is a resume assertion (not a relaxable page postcondition)` };
+  if (target.where === "step" && target.step <= first.step) return { refuse: `${key} is not before the target ${targetSiteKey}` };
+  if (!plan.pairs.some((p) => p.site === key && p.mutation === m.id)) return { refuse: `${key} is not paired with ${m.id}` };
+  if (relaxedSoFar.includes(key)) return { refuse: `${key} is already relaxed` };
+  if (relaxedSoFar.length >= MAX_TARGETED_RELAXATIONS) return { refuse: `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached` };
+  return { relax: key };
+}
+
+/**
+ * #609 — drive a targeted proof: from `initial` (its `relaxed` result when the mutated step's own
+ * postcondition failed first, as `classifyMutation` reads it), relax the earliest defensible blocking
+ * postcondition and replay until the target is no longer a cascade, a relaxation is refused, or the
+ * bound is reached. The target's own assertion is never relaxed. A targeted failure at the target
+ * counts only after an unmutated control replay with the same relaxations passes.
+ */
+export async function runTargetedProof(
+  journey: Journey,
+  plan: MutationPlan,
+  m: JourneyMutation,
+  target: JourneyAssertionSite,
+  initial: MutationRunResult,
+  replay: (
+    describe: (journey: Journey) => MutationReplay,
+    kind: "targeted" | "control",
+  ) => Promise<{ readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] }>,
+  opts: MutationReplayOptions = {},
+): Promise<TargetedProof> {
+  const site = assertionSiteKey(target);
+  const relaxedSites: string[] = [];
+  const relaxedFirst =
+    initial.relaxed !== undefined &&
+    initial.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition) &&
+    !(target.where === "step" && target.step === m.step);
+  let run = relaxedFirst
+    ? { outcome: initial.relaxed!.outcome, failedSites: initial.relaxed!.failedSites }
+    : { outcome: initial.outcome, failedSites: initial.failedSites };
+  for (;;) {
+    const next = nextTargetedRelaxation(journey, plan, m, site, run, relaxedSites);
+    if (next === null) break;
+    if ("refuse" in next) return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites, refused: next.refuse };
+    relaxedSites.push(next.relax);
+    // The replay is described per Journey it is given (the stored one moved onto the environment).
+    const relaxedNow = [...relaxedSites];
+    run = await replay((j) => targetedMutationReplay(j, m, site, relaxedNow, opts), "targeted");
+  }
+  if (relaxedSites.length > 0 && classifyMutationPlain(target, m, run) === "sensitive") {
+    // A failure counts only when the same relaxations WITHOUT the mutation still pass.
+    const control = await replay((j) => targetedControlReplay(j, m, relaxedSites), "control");
+    if (control.outcome !== "passed") {
+      return {
+        site,
+        relaxedSites,
+        outcome: run.outcome,
+        failedSites: run.failedSites,
+        control: control.outcome,
+        refused: `the unmutated control replay with ${relaxedSites.join(", ")} relaxed did not pass (${control.outcome})`,
+      };
+    }
+    return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites, control: control.outcome };
+  }
+  return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites };
+}
+
+/**
  * #554: does this failed result need a relaxed replay? Only when it failed first at the mutated
  * step's OWN postcondition (`{where:'step', step: m.step, postcondition: true}`) and `plan.pairs`
  * pairs `m` with at least one site other than the step's own (`step:<m.step>`) — otherwise the
@@ -537,11 +720,25 @@ export function needsRelaxedReplay(plan: MutationPlan, m: JourneyMutation, resul
 }
 
 /**
+ * #609 — classify on the plain rules, then, when that is a `cascade` and `result.targeted` carries a
+ * targeted proof for this site, classify on that proof's final run (no further relaxation). A
+ * refused targeted attempt still cascades; a site is sensitive only when the target itself failed.
+ */
+export function classifyMutation(site: JourneyAssertionSite, m: JourneyMutation, result: MutationRunResult): MutationVerdict {
+  const verdict = classifyMutationPlain(site, m, result);
+  if (verdict !== "cascade") return verdict;
+  const proof = result.targeted?.find((t) => t.site === assertionSiteKey(site));
+  if (proof === undefined || proof.refused !== undefined) return "cascade";
+  const targeted = classifyMutationPlain(site, m, { outcome: proof.outcome, failedSites: proof.failedSites });
+  return targeted === "sensitive" || targeted === "insensitive" ? targeted : "cascade";
+}
+
+/**
  * #402: one assertion against one mutated replay. Sensitive only when the replay failed AT that
  * assertion and nothing failed before the mutated step — a failure anywhere else is a cascade,
  * never counted as proof.
  */
-export function classifyMutation(site: JourneyAssertionSite, m: JourneyMutation, result: MutationRunResult): MutationVerdict {
+function classifyMutationPlain(site: JourneyAssertionSite, m: JourneyMutation, result: MutationRunResult): MutationVerdict {
   // #554: the mutated step's own postcondition failed, so a later site is judged on the relaxed
   // replay (same rules, no further relaxed level). The step's own step site keeps the original
   // result, so its own failure stays the sensitive verdict.
@@ -550,7 +747,7 @@ export function classifyMutation(site: JourneyAssertionSite, m: JourneyMutation,
     result.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition) &&
     !(site.where === "step" && site.step === m.step)
   ) {
-    return classifyMutation(site, m, { outcome: result.relaxed.outcome, failedSites: result.relaxed.failedSites });
+    return classifyMutationPlain(site, m, { outcome: result.relaxed.outcome, failedSites: result.relaxed.failedSites });
   }
   if (result.outcome === "passed") return "insensitive";
   if (result.outcome === "not-applied") return "not-applied";
@@ -573,11 +770,14 @@ export function classifyMutation(site: JourneyAssertionSite, m: JourneyMutation,
 const PRECEDENCE: readonly MutationVerdict[] = ["sensitive", "insensitive", "cascade", "not-applied", "error"];
 
 /**
- * #402: every assertion's verdict over its paired mutations — sensitive when ANY paired mutation
- * broke it for the right reason (`provedBy` the first), else insensitive when one passed, else
- * cascade / not-applied / error; `unpaired` when no mutation is paired with it.
+ * #402/#609: every assertion's verdict over its paired mutations — sensitive when ANY paired
+ * mutation broke it for the right reason (`provedBy` the first), else insensitive when one passed,
+ * else cascade / not-applied / error; `unpaired` when no mutation is paired with it. A sensitive
+ * verdict reached by a targeted proof records its relaxed sites; a cascade that a targeted attempt
+ * refused records why (#609).
  */
 export function judgeAssertions(journey: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>): AssertionProof[] {
+  const proofFor = (m: JourneyMutation, key: string): TargetedProof | undefined => results.get(m.id)?.targeted?.find((t) => t.site === key);
   return journeyAssertions(journey).map((site) => {
     const key = assertionSiteKey(site);
     const paired = plan.mutations.filter((m) => plan.pairs.some((p) => p.site === key && p.mutation === m.id));
@@ -586,7 +786,17 @@ export function judgeAssertions(journey: Journey, plan: MutationPlan, results: R
     for (const v of PRECEDENCE) {
       const first = verdicts.find((x) => x.v === v);
       if (first === undefined) continue;
-      return v === "sensitive" ? { site: key, verdict: v, provedBy: first.m.id } : { site: key, verdict: v };
+      if (v === "sensitive") {
+        const proof = proofFor(first.m, key);
+        return proof !== undefined && proof.refused === undefined
+          ? { site: key, verdict: v, provedBy: first.m.id, relaxedSites: proof.relaxedSites }
+          : { site: key, verdict: v, provedBy: first.m.id };
+      }
+      if (v === "cascade") {
+        const refusal = paired.map((m) => proofFor(m, key)).find((t) => t !== undefined && t.refused !== undefined);
+        if (refusal !== undefined) return { site: key, verdict: v, targetedRefusal: refusal.refused };
+      }
+      return { site: key, verdict: v };
     }
     return { site: key, verdict: "error" };
   });
@@ -613,5 +823,9 @@ export function mutationProofVerdict(input: {
   if (paired.length === 0) return { verdict: "inconclusive", reason: "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs)" };
   if (paired.some((a) => a.verdict === "insensitive")) return { verdict: "insensitive" };
   if (paired.every((a) => a.verdict === "sensitive")) return { verdict: "proven" };
+  const refusals = input.assertions.map((a) => a.targetedRefusal).filter((r): r is string => r !== undefined);
+  if (refusals.length > 0) {
+    return { verdict: "inconclusive", reason: `some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error); a targeted proof was refused: ${refusals[0]}` };
+  }
   return { verdict: "inconclusive", reason: "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error)" };
 }

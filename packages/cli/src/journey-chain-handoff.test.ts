@@ -334,7 +334,8 @@ test("refuses with E_CHAIN_EMPTY when the producing run returns zero records", a
 
 test("omits rejected from the result when the consuming Journey declares no inputs (0.17.0)", async () => {
   const legacy: Journey = { ...consumer("reply"), metadata: { ...consumer("reply").metadata, inputs: undefined, params: ["commentId", "replyIdentity", "threadId", "expected_commentid", "expected_account", "expected_sourcetext", "replyText"] } };
-  const d = await setup([legacy]);
+  // #608: runJourneyChain always loads the producing Journey to validate its params.
+  const d = await setup([legacy, producer("discover")]);
   const discover: JourneyRunResult = {
     outcome: "ok",
     output: { "records.count": "1", "records.0.commentId": "c-1001", "records.0.account": "mcpl", "records.0.threadId": "t-1", "records.0.sourceText": "Panels arrive Tuesday", "records.0.permalink": "/c/1001" },
