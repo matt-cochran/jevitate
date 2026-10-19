@@ -44,7 +44,7 @@ let server: Server;
 let origin: string;
 let dir: string;
 
-function threadJourney(id: string, opts: { readonly staticGuard?: boolean } = {}): Journey {
+function threadJourney(id: string, opts: { readonly staticGuard?: boolean; readonly site?: string } = {}): Journey {
   return {
     metadata: {
       id,
@@ -56,7 +56,7 @@ function threadJourney(id: string, opts: { readonly staticGuard?: boolean } = {}
     },
     recording: {
       version: "1",
-      site: origin,
+      site: opts.site ?? origin,
       pages: [
         {
           url: "/threads",
@@ -111,10 +111,10 @@ interface Report {
   summary: Record<string, number>;
 }
 
-async function verify(j: Journey): Promise<{ out: string; report: Report }> {
+async function verify(j: Journey, extra: readonly string[] = []): Promise<{ out: string; report: Report }> {
   const journeysDir = join(dir, j.metadata.id);
   await new FsJourneyStore(journeysDir).put(j);
-  const r = await cli(journeysDir, ["journey", "verify", j.metadata.id, "--mutate", "--param", "threadId=thread-001", "--json"]);
+  const r = await cli(journeysDir, ["journey", "verify", j.metadata.id, "--mutate", "--param", "threadId=thread-001", ...extra, "--json"]);
   return { out: r.out, report: (JSON.parse(r.out) as { data: Report }).data };
 }
 
@@ -122,6 +122,7 @@ const assertion = (r: Report, site: string): Assertion | undefined => r.assertio
 
 let proven: { out: string; report: Report };
 let refused: { out: string; report: Report };
+let onEnv: { out: string; report: Report };
 
 beforeAll(async () => {
   server = createServer((_req, res) => {
@@ -132,6 +133,9 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "jevitate-verify-targeted-"));
   proven = await verify(threadJourney("proven"));
   refused = await verify(threadJourney("refused", { staticGuard: true }));
+  // #609 review: recorded on an origin nothing serves, replayed on --base-url — every mutated and
+  // targeted copy must follow the environment, never the recorded site.
+  onEnv = await verify(threadJourney("on-env", { site: "http://127.0.0.1:9" }), ["--base-url", origin]);
 }, 600_000);
 
 afterAll(async () => {
@@ -162,6 +166,10 @@ describe("journey verify --mutate targeted proof (#609, served)", () => {
 
   it("when the blocking check is not paired with the mutation, the end-state assertion keeps a targeted refusal", () => {
     expect(assertion(refused.report, "end-state:0")?.targetedRefusal).toMatch(/step:3 is not paired with swap-param:threadId/);
+  });
+
+  it("mutated and targeted replays follow --base-url, so the proof on the environment is proven", () => {
+    expect(onEnv.report.verdict).toBe("proven");
   });
 
   it("when the blocking check is not paired, the proof is inconclusive", () => {

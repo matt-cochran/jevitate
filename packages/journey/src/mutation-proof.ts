@@ -88,6 +88,8 @@ export interface TargetedProof {
   readonly failedSites: readonly MutationFailedSite[];
   /** Set when no further relaxation is allowed: why the target stays a cascade. */
   readonly refused?: string;
+  /** The unmutated control replay's outcome (`targetedControlReplay`), run before a targeted failure counts. */
+  readonly control?: MutationRunResult["outcome"];
 }
 
 /** A mutated replay: it passed, failed (where), was not applied (nothing to mutate), or errored. */
@@ -513,13 +515,15 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
   if (m.kind === "swap-param" || m.kind === "truncate-param" || m.kind === "guard-param") {
     // #565: the same altered params; the step that first reads the parameter keeps a weak claim.
     const how = paramReplay(journey, m, opts.params ?? {});
-    const target = flat(how.journey)[index];
+    // A guard mutation replays the input Journey itself, so it is cloned before the claim is weakened.
+    const copy = how.journey === journey ? structuredClone(journey) : how.journey;
+    const target = flat(copy)[index];
     if (target !== undefined && "expect" in target.step) {
       const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
       delete step.waitFor;
       target.step = step as Step;
     }
-    return how;
+    return { ...how, journey: copy };
   }
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
@@ -574,10 +578,28 @@ export function targetedMutationReplay(
   if (relaxedSiteKeys.includes(targetSiteKey)) throw new Error(`${targetSiteKey} is the target assertion — a targeted proof never relaxes it`);
   const base = relaxedMutationReplay(journey, m, opts);
   if (relaxedSiteKeys.length === 0) return base;
+  return { ...base, journey: relaxStepSites(journey, base.journey, relaxedSiteKeys) };
+}
+
+/**
+ * #609 — the CONTROL for a targeted proof: the same weakened postconditions (the relaxed sites and the
+ * mutated step's own claim, as the targeted replay weakens them) with NO mutation — the supplied
+ * params, nothing skipped, blocked or swapped. It must pass: when relaxing the earlier checks breaks
+ * the target on its own (e.g. a removed `waitFor` was the gate), the target's failure is not
+ * evidence about the mutation.
+ */
+export function targetedControlReplay(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): MutationReplay {
+  const own = flat(journey)[m.step - 1]?.step;
+  const ownKey = own !== undefined && (own.kind === "assert" || "expect" in own) ? [`step:${m.step}`] : [];
+  return { journey: relaxStepSites(journey, journey, [...new Set([...ownKey, ...relaxedSiteKeys])]) };
+}
+
+/** #609: a clone of `from` with each `step:<n>` postcondition in `keys` weakened (sites read from `journey`). */
+function relaxStepSites(journey: Journey, from: Journey, keys: readonly string[]): Journey {
   const byKey = new Map(journeyAssertions(journey).map((s) => [assertionSiteKey(s), s]));
-  const copy = structuredClone(base.journey);
+  const copy = structuredClone(from);
   const steps = flat(copy);
-  for (const key of relaxedSiteKeys) {
+  for (const key of keys) {
     const match = /^step:([1-9][0-9]*)$/.exec(key);
     if (match === null) throw new Error(`${key} is not a step assertion site — a targeted proof only relaxes step:<n>`);
     const site = byKey.get(key);
@@ -591,7 +613,7 @@ export function targetedMutationReplay(
     delete step.waitFor;
     recorded.step = step as Step;
   }
-  return { ...base, journey: copy };
+  return copy;
 }
 
 /**
@@ -633,7 +655,8 @@ export function nextTargetedRelaxation(
  * #609 — drive a targeted proof: from `initial` (its `relaxed` result when the mutated step's own
  * postcondition failed first, as `classifyMutation` reads it), relax the earliest defensible blocking
  * postcondition and replay until the target is no longer a cascade, a relaxation is refused, or the
- * bound is reached. The target's own assertion is never relaxed.
+ * bound is reached. The target's own assertion is never relaxed. A targeted failure at the target
+ * counts only after an unmutated control replay with the same relaxations passes.
  */
 export async function runTargetedProof(
   journey: Journey,
@@ -641,7 +664,10 @@ export async function runTargetedProof(
   m: JourneyMutation,
   target: JourneyAssertionSite,
   initial: MutationRunResult,
-  replay: (how: MutationReplay) => Promise<{ readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] }>,
+  replay: (
+    describe: (journey: Journey) => MutationReplay,
+    kind: "targeted" | "control",
+  ) => Promise<{ readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] }>,
   opts: MutationReplayOptions = {},
 ): Promise<TargetedProof> {
   const site = assertionSiteKey(target);
@@ -658,7 +684,24 @@ export async function runTargetedProof(
     if (next === null) break;
     if ("refuse" in next) return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites, refused: next.refuse };
     relaxedSites.push(next.relax);
-    run = await replay(targetedMutationReplay(journey, m, site, relaxedSites, opts));
+    // The replay is described per Journey it is given (the stored one moved onto the environment).
+    const relaxedNow = [...relaxedSites];
+    run = await replay((j) => targetedMutationReplay(j, m, site, relaxedNow, opts), "targeted");
+  }
+  if (relaxedSites.length > 0 && classifyMutationPlain(target, m, run) === "sensitive") {
+    // A failure counts only when the same relaxations WITHOUT the mutation still pass.
+    const control = await replay((j) => targetedControlReplay(j, m, relaxedSites), "control");
+    if (control.outcome !== "passed") {
+      return {
+        site,
+        relaxedSites,
+        outcome: run.outcome,
+        failedSites: run.failedSites,
+        control: control.outcome,
+        refused: `the unmutated control replay with ${relaxedSites.join(", ")} relaxed did not pass (${control.outcome})`,
+      };
+    }
+    return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites, control: control.outcome };
   }
   return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites };
 }
