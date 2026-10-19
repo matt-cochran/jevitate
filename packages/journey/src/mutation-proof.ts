@@ -267,8 +267,9 @@ export function targetedProofPlanIssues(journey: Journey): { readonly index: num
     } else if (!sites.has(plan.check)) {
       out.push({ index, field: "check", message: `targetedProofs: the Journey has no assertion at ${plan.check}` });
     }
+    let mutated: JourneyMutation | undefined;
     try {
-      resolveMutationRef(journey, plan.mustFailWhen);
+      mutated = resolveMutationRef(journey, plan.mustFailWhen);
     } catch (err) {
       out.push({ index, field: "mustFailWhen", message: `targetedProofs: ${err instanceof Error ? err.message : String(err)}` });
     }
@@ -305,6 +306,11 @@ export function targetedProofPlanIssues(journey: Journey): { readonly index: num
       }
       if (recorded.step.kind !== "assert" && !("expect" in recorded.step)) {
         out.push({ index, field: "relax", message: `targetedProofs: ${entry} has no page postcondition to relax` });
+        continue;
+      }
+      // #616: a check before the mutation takes effect cannot catch it, so it is never a defense to relax.
+      if (mutated !== undefined && n < mutated.step) {
+        out.push({ index, field: "relax", message: `targetedProofs: ${entry} is before the mutated step ${mutated.step} (${plan.mustFailWhen})` });
       }
     }
   });
@@ -958,14 +964,16 @@ export function judgeAssertions(journey: Journey, plan: MutationPlan, results: R
     const paired = plan.mutations.filter((m) => plan.pairs.some((p) => p.site === key && p.mutation === m.id));
     if (paired.length === 0) return { site: key, verdict: "unpaired" };
     const verdicts = paired.map((m) => ({ m, v: classifyMutation(site, m, results.get(m.id) ?? { outcome: "error", failedSites: [] }) }));
+    // #616: set when every sensitive verdict rested on an unproven relaxed site — those count as cascades.
+    let unsound: string | undefined;
     for (const v of PRECEDENCE) {
       const first = verdicts.find((x) => x.v === v);
-      if (first === undefined) continue;
+      if (first === undefined && !(v === "cascade" && unsound !== undefined)) continue;
       if (v === "sensitive") {
         // #616: a targeted (declared or automatic) sensitive verdict is sound only when every site it
         // relaxed is itself proven sensitive to the SAME mutation (transitively) — otherwise the
-        // target merely sits behind an unproven defense. The first sound paired mutation proves it.
-        let unsound: string | undefined;
+        // target merely sits behind an unproven defense. The first sound paired mutation proves it;
+        // with none, the site falls through (an insensitive mutation still outranks the cascade).
         for (const { m } of verdicts.filter((x) => x.v === "sensitive")) {
           const proof = proofFor(m, key);
           if (proof === undefined || proof.refused !== undefined) return { site: key, verdict: v, provedBy: m.id };
@@ -973,8 +981,9 @@ export function judgeAssertions(journey: Journey, plan: MutationPlan, results: R
           if (bad === undefined) return { site: key, verdict: v, provedBy: m.id, relaxedSites: proof.relaxedSites };
           unsound ??= `relaxed site ${bad} is not itself proven sensitive to ${m.id}`;
         }
-        return { site: key, verdict: "cascade", targetedRefusal: unsound! };
+        continue;
       }
+      if (v === "cascade" && unsound !== undefined) return { site: key, verdict: v, targetedRefusal: unsound };
       if (v === "cascade") {
         const refusal = paired.map((m) => proofFor(m, key)).find((t) => t !== undefined && t.refused !== undefined);
         if (refusal !== undefined) return { site: key, verdict: v, targetedRefusal: refusal.refused };
