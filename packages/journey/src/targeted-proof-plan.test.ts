@@ -272,3 +272,23 @@ describe("#616 proof hash", () => {
     expect(journeyProofHash(withDeclared)).not.toBe(journeyProofHash(without));
   });
 });
+
+describe("#616 review follow-ups", () => {
+  it("judges a site insensitive when its only sensitive mutation rests on an unproven relaxed site and another mutation passed", () => {
+    const m = swap();
+    const other: JourneyMutation = { kind: "truncate-param", step: 1, id: "truncate-param:threadId", param: "threadId" };
+    const proof: TargetedProof = { site: "end-state:0", relaxedSites: ["step:5"], outcome: "failed", failedSites: [{ where: "end-state", index: 0 }], control: "passed", declared: true };
+    const p: MutationPlan = { mutations: [m, other], pairs: [...plan().pairs, { site: "end-state:0", mutation: other.id }] };
+    const results = new Map<string, MutationRunResult>([
+      [m.id, { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }], targeted: [proof] }],
+      [other.id, { outcome: "passed", failedSites: [] }],
+    ]);
+    expect(judgeAssertions(parsed(), p, results).find((a) => a.site === "end-state:0")?.verdict).toBe("insensitive");
+  });
+
+  it("issues at the relax path for a step before the mutated step", () => {
+    const steps = [{ step: { kind: "assert", check: { kind: "urlIncludes", text: "/threads" } } }, ...defaultSteps()];
+    expect(issuesAt(withPlan({ check: "end-state:0", mustFailWhen: "swap-param:threadId", relax: ["step:1"] }, steps), ["metadata", "targetedProofs", 0, "relax"])).toHaveLength(1);
+  });
+});
+

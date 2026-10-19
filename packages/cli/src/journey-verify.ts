@@ -270,6 +270,8 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     // #616: the proving proof was a declared plan, not the automatic relaxation search.
     ...(a.provedBy !== undefined && results.get(a.provedBy)?.targeted?.some((t) => t.site === a.site && t.declared === true) === true ? { declaredProof: true as const } : {}),
   }));
+  const order = new Map(journeyAssertions(journey).map((s, i) => [assertionSiteKey(s), i]));
+  const siteOrder = (key: string): number => order.get(key) ?? Number.MAX_SAFE_INTEGER;
   const { verdict, reason } = mutationProofVerdict({ basePassed: base.outcome === "ok", mutations, assertions: judged });
   const count = (v: AssertionVerdict): number => assertions.filter((a) => a.verdict === v).length;
   const report: JourneyVerifyReport = {
@@ -290,7 +292,8 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       // #609: assertions proven sensitive through a targeted proof that relaxed earlier sites.
       targeted: assertions.filter((a) => (a.relaxedSites?.length ?? 0) > 0).length,
     },
-    ...(suggested.length === 0 ? {} : { suggestedTargetedProofs: suggested }),
+    // #616: in assertion order, so the first suggestion is the one for the refusal the verdict quotes.
+    ...(suggested.length === 0 ? {} : { suggestedTargetedProofs: [...suggested].sort((a, b) => siteOrder(a.check) - siteOrder(b.check)) }),
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
   const redacted = redactSecretParams(report, journey, opts.params);
