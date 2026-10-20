@@ -1201,7 +1201,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (272 exports)
+# @jevitate/journey (278 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1273,6 +1273,7 @@
   checkStatement: function
   classifyHandback: function
   classifyMutation: function
+  declaredTargetedProofFor: function
   deriveParamSchema: function
   describeStep: function
   DesiredOutcome: type-alias
@@ -1382,6 +1383,7 @@
   JourneyStepError: class
   JourneyStore: interface
   JourneySuccessCriterion: interface
+  JourneyTargetedProofPlan: interface
   JourneyWriteStep: interface
   journeyWriteSteps: function
   judgeAssertions: function
@@ -1389,6 +1391,7 @@
   lintJourney: function
   lintUploadFixtures: function
   listJourneyAnchors: function
+  MAX_DECLARED_RELAXATIONS: variable
   MAX_TARGETED_RELAXATIONS: variable
   Metric: type-alias
   METRIC_KINDS: variable
@@ -1448,6 +1451,7 @@
   ReviewStepSchema: variable
   ReviewVerifySchema: variable
   ReviewWriteRequestSchema: variable
+  runDeclaredTargetedProof: function
   runTargetedProof: function
   SECRET_PARAM_NAME_RE: variable
   secretNamedValues: function
@@ -1461,6 +1465,7 @@
   stripStepIds: function
   suggestAnchorName: function
   suggestAnchors: function
+  suggestTargetedProofPlan: function
   SwapSource: type-alias
   SWEEP_MODES: variable
   SweepMode: type-alias
@@ -1470,6 +1475,7 @@
   targetedControlReplay: function
   targetedMutationReplay: function
   TargetedProof: interface
+  targetedProofPlanIssues: function
   validateFieldValue: function
   validateParams: function
   validateRecords: function

@@ -1,5 +1,6 @@
 import { relative, sep } from "node:path";
 import {
+  MAX_DECLARED_RELAXATIONS,
   checkCompatibility,
   journeyParamSchema,
   journeyWriteSteps,
@@ -8,6 +9,7 @@ import {
   type Journey,
   type JourneyLintFinding,
   type JourneyReview,
+  type JourneyTargetedProofPlan,
 } from "@jevitate/journey";
 import { currentBuildTree, currentEngineInfo } from "./engine.js";
 import { environmentFromFlags, type ResolvedJourneyEnvironment } from "./environments.js";
@@ -320,9 +322,11 @@ function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { ch
     return { check: { check: "proof", journey: ctx.id, state: "pass", detail: "read-only with no inputs: nothing a mutation could break", evidence } };
   }
   // #609: an inconclusive proof stays inconclusive — the refusal names the authoring fix, not a pass.
+  // #616: a recorded proof carries the declared plans the automatic bound refused.
+  const suggested = verify.status === "recorded" ? verify.suggestedTargetedProofs : undefined;
   return {
     check: { check: "proof", journey: ctx.id, state: "inconclusive", detail: verify.reason ?? `proof verdict ${verify.verdict}`, evidence },
-    blocker: { check: "proof", journey: ctx.id, why: inconclusiveProofGuidance(verify.reason ?? ""), next: `jevitate journey verify ${ctx.id} --mutate` },
+    blocker: { check: "proof", journey: ctx.id, why: inconclusiveProofGuidance(verify.reason ?? "", suggested), next: `jevitate journey verify ${ctx.id} --mutate` },
   };
 }
 
@@ -334,7 +338,7 @@ const TARGETED_REFUSAL_MARKER = "a targeted proof was refused: ";
  * only — a refusal never contains a param value, a record field or reply text). A proof that stays
  * inconclusive for any other reason gets the generic cascade guidance.
  */
-function inconclusiveProofGuidance(reason: string): string {
+function inconclusiveProofGuidance(reason: string, suggested?: readonly JourneyTargetedProofPlan[]): string {
   const at = reason.indexOf(TARGETED_REFUSAL_MARKER);
   if (at < 0) return "inspect the cascade assertions in the verify report";
   const refusal = reason.slice(at + TARGETED_REFUSAL_MARKER.length).trim();
@@ -343,7 +347,19 @@ function inconclusiveProofGuidance(reason: string): string {
     return `declare the earlier check ${unpaired[1]} as a defense of ${unpaired[2]} with a metadata.mutationPairs entry {check:'${unpaired[1]}', mustFailWhen:'${unpaired[2]}'}, then re-run verify`;
   }
   const bound = /relaxation bound (\d+)/.exec(refusal);
-  if (bound !== null) return `reduce the layered checks between the mutation and the target (relaxation bound ${bound[1]})`;
+  if (bound !== null) {
+    // #616: a declared plan lets a human review the earlier relaxations the automatic bound refused.
+    const first = suggested?.[0];
+    const plan =
+      first === undefined
+        ? `declare a metadata.targetedProofs plan (at most ${MAX_DECLARED_RELAXATIONS} earlier postconditions)`
+        : `declare exactly this metadata.targetedProofs entry: ${JSON.stringify(first)} — a human reviews it like any other proof change (the review hash changes, so the Journey needs re-approval)`;
+    return `${plan}, then re-run verify (relaxation bound ${bound[1]})`;
+  }
+  const blocked = /^(\S+) blocked the declared proof \(not in relax\)$/.exec(refusal);
+  if (blocked !== null) return `add ${blocked[1]} to that plan's relax list (metadata.targetedProofs), then re-run verify`;
+  const unsound = /^relaxed site (\S+) is not itself proven sensitive to (\S+)$/.exec(refusal);
+  if (unsound !== null) return `pair ${unsound[1]} with ${unsound[2]} (metadata.mutationPairs) or make it a real defense, then re-run verify`;
   if (refusal.includes("action failed")) return "the mutated value makes an earlier action impossible, so that target cannot be proven independently — keep the check; it stays inconclusive by design";
   return "inspect the cascade assertions in the verify report";
 }

@@ -1,0 +1,31 @@
+{
+  "dimensionSetId": "project-jevitate",
+  "dimensions": [
+    {
+      "id": "jevitate-jobs",
+      "kind": "customer_requirement",
+      "label": "Jevitate jobs",
+      "members": [],
+      "order": 0,
+      "system": "jevitate"
+    },
+    {
+      "id": "jevitate-personas",
+      "kind": "context",
+      "label": "Jevitate personas",
+      "members": [],
+      "order": 0,
+      "system": "jevitate"
+    },
+    {
+      "id": "jevitate-journeys",
+      "kind": "test_artifact",
+      "label": "Jevitate journeys",
+      "members": [],
+      "order": 0,
+      "system": "jevitate"
+    }
+  ],
+  "schemaVersion": "0.2.0",
+  "version": "868d3ba5047d"
+}

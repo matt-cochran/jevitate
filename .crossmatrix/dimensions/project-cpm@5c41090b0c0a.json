@@ -1,0 +1,15 @@
+{
+  "dimensionSetId": "project-cpm",
+  "dimensions": [
+    {
+      "id": "cpm",
+      "kind": "implementation_asset",
+      "label": "CPM deliverables",
+      "members": [],
+      "order": 0,
+      "system": "cpm"
+    }
+  ],
+  "schemaVersion": "0.2.0",
+  "version": "5c41090b0c0a"
+}

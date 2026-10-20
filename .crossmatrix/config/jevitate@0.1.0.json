@@ -1,0 +1,64 @@
+{
+  "aspect": "custom",
+  "configId": "jevitate",
+  "dimensionSetRef": {
+    "dimensionSetId": "jevitate",
+    "version": "0.1.0"
+  },
+  "relations": [
+    {
+      "coveragePolicy": "none",
+      "from": "cpm",
+      "id": "codemap-cpm",
+      "relationType": "implements",
+      "scale": "codemap",
+      "to": "code"
+    },
+    {
+      "coveragePolicy": "none",
+      "from": "jevitate-jobs",
+      "id": "codemap-jevitate-jobs",
+      "relationType": "implements",
+      "scale": "codemap",
+      "to": "code"
+    },
+    {
+      "coveragePolicy": "none",
+      "from": "jevitate-journeys",
+      "id": "codemap-jevitate-journeys",
+      "relationType": "implements",
+      "scale": "codemap",
+      "to": "code"
+    },
+    {
+      "coveragePolicy": "none",
+      "from": "code",
+      "id": "codemap-contains",
+      "relationType": "contains",
+      "scale": "codemap",
+      "to": "code"
+    }
+  ],
+  "scales": [
+    {
+      "id": "codemap",
+      "levels": [
+        {
+          "observation": "implements",
+          "value": 9.0
+        },
+        {
+          "observation": "tests",
+          "value": 3.0
+        },
+        {
+          "observation": "touches",
+          "value": 1.0
+        }
+      ],
+      "mode": "categorical"
+    }
+  ],
+  "schemaVersion": "0.2.0",
+  "version": "0.1.0"
+}
