@@ -7,7 +7,7 @@ behaviour changes).
 
 ## [Unreleased]
 
-## [0.21.0] – unreleased
+## [0.21.0] – 2026-10-22
 
 0.21.0 makes a typed chain fail closed when it could not run an approved request, and lets a reference URL be handed off as data without widening where a run may browse.
 
