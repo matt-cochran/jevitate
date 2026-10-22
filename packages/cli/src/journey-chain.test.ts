@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { RunJourneyProgrammaticallyOptions } from "./journey-api.js";
-import { JourneyChainError, runJourneyChain } from "./journey-chain.js";
+import { chainSucceeded, JourneyChainError, runJourneyChain, type JourneyChainResult } from "./journey-chain.js";
 
 // #580: `jevitate journey chain` runs a discover Journey once, then a prepare-only
 // reply Journey once per approved request matched to a discovered record. These tests
@@ -304,4 +304,48 @@ test("runs nothing when promotion is required and a Journey is a draft", async (
   await runJourneyChain({ from: "discover-conversations", to: "prepare-reply", requests: oneRequest, dir: d, requirePromoted: true }, { runJourney: runner.run }).catch(() => undefined);
 
   expect(runner.calls).toHaveLength(0);
+});
+
+test("fails the chain when a request was rejected even with no runs or unmatched", () => {
+  const result: JourneyChainResult = {
+    from: { journey: "discover-conversations", outcome: "ok", records: 1 },
+    runs: [],
+    unmatched: [],
+    rejected: [{ key: "c-1001\u0000mcpl", reason: "invalid-record", errors: [{ field: "sourceText", code: "missing" }] }],
+    requests: { total: 1, ran: 0 },
+  };
+
+  expect(chainSucceeded(result)).toBe(false);
+});
+
+test("passes the chain for an intentionally empty request batch", () => {
+  const result: JourneyChainResult = {
+    from: { journey: "discover-conversations", outcome: "ok", records: 1 },
+    runs: [],
+    unmatched: [],
+    requests: { total: 0, ran: 0 },
+  };
+
+  expect(chainSucceeded(result)).toBe(true);
+});
+
+test("reports the request total and run count on the fixed-key path", async () => {
+  const d = await setup([replyJourney("prepare-reply")]);
+  const runner = fakeRunner({ "discover-conversations": oneRecord, "prepare-reply": OK });
+
+  const result = await runJourneyChain({ from: "discover-conversations", to: "prepare-reply", requests: oneRequest, dir: d }, { runJourney: runner.run });
+
+  expect(result.requests).toEqual({ total: 1, ran: 1 });
+});
+
+test("counts zero runs when a matched record lacks a required field", async () => {
+  const d = await setup([replyJourney("prepare-reply-parent", { parent: true })]);
+  const runner = fakeRunner({
+    "discover-conversations": { outcome: "ok", output: { "records.count": "1", ...recordOutput(0, { commentId: "c-1001", account: "mcpl", permalink: "/c/1001", threadId: "t-1", sourceText: "first" }) } },
+    "prepare-reply-parent": OK,
+  });
+
+  const result = await runJourneyChain({ from: "discover-conversations", to: "prepare-reply-parent", requests: oneRequest, dir: d }, { runJourney: runner.run });
+
+  expect(result.requests).toEqual({ total: 1, ran: 0 });
 });

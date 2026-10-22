@@ -96,7 +96,11 @@ only from the records and requests (section 3).
 4. Runs `--to` once per matched request with the params of section 3 (each only when the `--to`
    Journey declares it, except `replyText`, which it must declare). Each run is validated as
    `journey run` validates params; a missing record field is `E_CHAIN_FIELD` for that request.
-5. Exits non-zero unless every request matched and every run was `ok`.
+5. Exits non-zero unless every request matched, no record or request was rejected, and every
+   run was `ok` (#624). A request whose matching record was rejected is reported in `rejected`
+   with its field-specific errors and is **not run**; that fails the chain. Zero runs never pass
+   on their own: only an intentionally empty request batch (`requests.total` is 0) succeeds with no
+   runs.
 
 `--json` result (names and outcomes only; no record or reply text is ever echoed):
 
@@ -107,9 +111,15 @@ only from the records and requests (section 3).
     { "commentId": "c-1001", "account": "mcpl", "outcome": "ok" },
     { "commentId": "c-2002", "account": "personal", "outcome": "quarantined", "reason": "step 3 failed: …" }
   ],
-  "unmatched": [{ "commentId": "c-9999", "account": "mcpl" }]
+  "unmatched": [{ "commentId": "c-9999", "account": "mcpl" }],
+  "rejected": [],
+  "requests": { "total": 3, "ran": 2 }
 }
 ```
+
+`requests.total` counts the valid and rejected request lines; `requests.ran` counts the `--to`
+runs. `rejected` lists each refused record or request as
+`{ "key", "reason": "invalid-record" | "invalid-request" | "ambiguous", "errors": [{ "field", "code" }] }`.
 
 ## 6. MCP
 
@@ -128,4 +138,10 @@ required param is refused the same way, as before).
 
 In `prove` mode the consumer's mutation proof runs with the params the chain bound for the first
 matched request (the record fields and the request). If no request matched, the consumer proof is
-`not-verified` and the hint asks for a `--requests` line that matches a discovered record.
+`not-verified` and the hint asks for a `--requests` line that matches a discovered record. If a
+request matched a record that was rejected, the hint names the rejection (`<key>: <field> <code>`)
+instead (#624).
+
+Both modes use the chain's success rule (section 5): a pair whose chain rejected a record or
+request, or left one unmatched, fails `replay` with a detail that names the counts and the first
+rejection; it never passes because an empty list of runs had no failures.

@@ -96,6 +96,8 @@ export interface JourneyChainResult {
   readonly from: { readonly journey: string; readonly outcome: string; readonly records: number };
   readonly runs: readonly ChainRunResult[];
   readonly unmatched: readonly ChainUnmatched[];
+  /** §5: `total` counts the valid and rejected request lines; `ran` counts the `--to` runs. */
+  readonly requests: { readonly total: number; readonly ran: number };
   /** §4/§5 (handoff): records, ambiguous keys and requests a chain refused to run; absent in 0.17.0 mode. */
   readonly rejected?: readonly HandoffRejection[];
 }
@@ -226,9 +228,13 @@ function redactProducerParams(reason: string, params: Readonly<Record<string, st
   return params === undefined ? reason : redactReason(reason, params, Object.keys(params));
 }
 
-/** §5 step 5: the chain succeeded only when every request matched and every run was `ok`. */
+/**
+ * §5 step 5: the chain succeeded only when every request matched, nothing was rejected and every run
+ * was `ok`. Zero runs never fail on their own: only an intentionally empty request batch
+ * (`requests.total` 0) succeeds with no runs.
+ */
 export function chainSucceeded(result: JourneyChainResult): boolean {
-  return result.unmatched.length === 0 && result.runs.every((run) => run.outcome === "ok");
+  return result.unmatched.length === 0 && (result.rejected?.length ?? 0) === 0 && result.runs.every((run) => run.outcome === "ok");
 }
 
 /** The flags every run in the chain shares (environment, session, browser, allowlist, site policy). */
@@ -383,7 +389,8 @@ async function runHandoffChain(
     }
   }
 
-  return { from: { journey: opts.from, outcome: "ok", records: records.length }, runs, unmatched, rejected };
+  const total = requestValidation.valid.length + requestValidation.rejected.length;
+  return { from: { journey: opts.from, outcome: "ok", records: records.length }, runs, unmatched, requests: { total, ran: runs.length }, rejected };
 }
 
 /**
@@ -460,6 +467,7 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
 
   const runs: ChainRunResult[] = [];
   const unmatched: ChainUnmatched[] = [];
+  let ran = 0;
   for (const request of requests ?? []) {
     const record = byKey.get(recordKey(request.commentId, request.account));
     if (record === undefined) {
@@ -471,6 +479,7 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
       runs.push({ commentId: request.commentId, account: request.account, outcome: E_CHAIN_FIELD, reason: mapped.detail });
       continue;
     }
+    ran += 1;
     try {
       const result = await runner({ ...shared, id: opts.to, params: mapped.params });
       runs.push({
@@ -486,5 +495,5 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
     }
   }
 
-  return { from: { journey: opts.from, outcome: "ok", records: count }, runs, unmatched };
+  return { from: { journey: opts.from, outcome: "ok", records: count }, runs, unmatched, requests: { total: (requests ?? []).length, ran } };
 }
