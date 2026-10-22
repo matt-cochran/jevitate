@@ -7,6 +7,24 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.21.0] – unreleased
+
+0.21.0 makes a typed chain fail closed when it could not run an approved request, and lets a reference URL be handed off as data without widening where a run may browse.
+
+### Added
+
+- **Data origins for `url` handoff fields (#624).** An output or request field `{ "type": "url", "origins": ["https://example.com"] }` is validated against those exact origins as **data**, not against the browser origins, so a localhost-only run can carry an external reference URL without being allowed to visit it. Entries are exact origins (`https://…`, or `http://` only for a loopback host; no path or wildcard); `origins` on any other type is refused at load. The list lives in the Journey file, so it is reviewed and approved with the Journey. A binding that passes the value to a navigating step is still held to the run's own origin guard.
+- **`requests: { total, ran }` in the `journey chain` result (#624).** `total` counts the valid and rejected request lines, `ran` the `--to` runs.
+
+### Behaviour changes
+
+- **`journey chain` fails closed on rejections (#624).** A request whose matching record (or the request itself) was rejected is not run and now fails the chain: exit 1, and MCP `chain_journeys` reports an error. Before, `runs: []` plus a non-empty `rejected` exited 0. Only an intentionally empty request batch succeeds with no runs.
+- **Linked `journey readiness` names the rejection (#624).** `replay` fails with a detail that counts unmatched, rejected and failed runs and names the first rejection as `<key>: <field> <code>`; in `prove`, the consumer proof hint names that rejection instead of asking for a matching `--requests` line. Only keys, field names and codes are shown, never values.
+
+### Upgrade notes
+
+- A chain that previously exited 0 while rejecting its records now exits 1. Fix the records, or, for a `url` field that carries an external reference as data, declare its `origins` (and re-approve the Journey).
+
 ## [0.20.0] – 2026-10-19
 
 0.20.0 lets a Journey with layered pre-fill defenses prove its late assertions through a declared, human-reviewed targeted-proof plan, and keeps a previous attempt's late request from satisfying a restarted step.
