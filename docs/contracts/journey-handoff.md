@@ -12,7 +12,7 @@ in 0.17.0.
 | `id` | a non-empty opaque string, 1–512 chars, no control characters, compared byte for byte | trimmed, case-folded or coerced from a number |
 | `text` | any string up to 20 000 chars, newlines kept verbatim | trimmed, normalised or paraphrased |
 | `path` | a site-relative path: starts with `/`, not `//`, no scheme, no `..` segment, ≤ 2048 chars | an absolute URL |
-| `url` | an absolute `http(s)` URL whose origin is one of the Journey's allowed origins (`recording.site`, `metadata.allowedOrigins`, the run's environment) | a new origin: a supplied URL never widens what a run may reach |
+| `url` | an absolute `http(s)` URL whose origin is one of the Journey's allowed origins (`recording.site`, `metadata.allowedOrigins`, the run's environment), or, when the field declares `origins`, one of those data origins instead | a new origin: a supplied URL never widens what a run may reach |
 | `timestamp` | an ISO 8601 UTC instant (`…Z`) | a local time |
 
 ## 2. Producing Journey: `metadata.outputs`
@@ -41,7 +41,16 @@ in 0.17.0.
   `<collection>.count` (0.17.0). Absent: one record from flat `<field>` outputs.
 - `key` lists the fields that identify a record (all `id`, all required). Default: every required
   `id` field.
-- `required` defaults to `true`. Every field must be produced by an `extract` (`as`) of the Journey;
+- `required` defaults to `true`.
+- `origins` (#624, `url` fields only): the origins a reference URL in this field may have when it
+  is handed off as **data**, for example `"referenceUrl": { "type": "url", "origins":
+  ["https://example.com"] }`. Each entry is an exact origin: `https://<host>[:port]`, or
+  `http://` only for a loopback host; no path, no wildcard. When `origins` is present the value is
+  checked against it and **not** against the browser origins, so a localhost-only run can carry an
+  external reference without being allowed to visit it. It never widens navigation: if a binding
+  passes the value to a step that navigates, the run's own origin guard still applies. It lives in
+  the Journey file, so it is reviewed and approved with the Journey. Absent: the value must have
+  one of the Journey's allowed origins, as before. `origins` on any other type is refused at load. Every field must be produced by an `extract` (`as`) of the Journey;
   a field nothing extracts is refused at load (`outputs: field <f> is never extracted`).
 
 ## 3. Consuming Journey: `metadata.inputs`
