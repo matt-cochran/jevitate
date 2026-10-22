@@ -420,10 +420,20 @@ function oneJourneyReplay(result: { outcome: string; reason?: string; handback?:
   return { state: "fail", detail: `the replay ended ${result.outcome}` };
 }
 
+/** #624: the first rejection as `<key>: <field> <code>` — keys, field names and codes only, never values. */
+function firstRejection(result: JourneyChainResult): string | undefined {
+  const rejection = result.rejected?.[0];
+  if (rejection === undefined) return undefined;
+  const error = rejection.errors[0];
+  return error === undefined ? rejection.key : `${rejection.key}: ${error.field} ${error.code}`;
+}
+
 function pairReplay(result: JourneyChainResult): ReplayOutcome {
   if (chainSucceeded(result)) return { state: "pass", detail: "the chain held for every request" };
   if (result.runs.some((r) => r.outcome === "inconclusive")) return { state: "inconclusive", detail: "a chained run had no verdict" };
-  return { state: "fail", detail: `${result.unmatched.length} unmatched request(s), ${result.runs.filter((r) => r.outcome !== "ok").length} failed run(s)` };
+  const counts = `${result.unmatched.length} unmatched request(s), ${result.rejected?.length ?? 0} rejected, ${result.runs.filter((r) => r.outcome !== "ok").length} failed run(s)`;
+  const first = firstRejection(result);
+  return { state: "fail", detail: first === undefined ? counts : `${counts}; first rejection ${first}` };
 }
 
 function verdictOf(checks: readonly ReadinessCheck[], mode: ReadinessMode): ReadinessVerdict {
@@ -475,13 +485,15 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
   let replay: ReplayOutcome | undefined;
   /** #608: the params the chain bound for the first consumer (`to`) run, captured via the runner seam. */
   let boundConsumerParams: Record<string, string> | undefined;
+  /** #624: the pair chain's result, kept in scope so the prove hint can name a rejection. */
+  let chained: JourneyChainResult | undefined;
   if (mode !== "report") {
     const producerSchema = journeyParamSchema(contexts[0]!.journey).required;
     environment = resolveTarget(opts, deps, requiredParams(contexts[0]!.journey, pair, opts.requests !== undefined), producerSchema);
     const params = { ...(opts.params ?? {}) };
     try {
       if (pair) {
-        const chained = await chain(
+        chained = await chain(
           {
             from: opts.id,
             to: opts.with as string,
@@ -527,13 +539,19 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
       for (const ctx of contexts) {
         const consumer = pair && ctx.id === opts.with;
         if (consumer && boundConsumerParams === undefined) {
-          // #608: the chain bound no request for the consumer, so no proof can run. Saying so names
-          // the consumer only — never a param value, a record field or reply text.
+          // #608/#624: the chain bound no request for the consumer, so no proof can run. When the
+          // chain rejected a record, the hint names that rejection; otherwise it asks for a
+          // matching request. Either way it names only the consumer and keys/fields/codes — never
+          // a param value, a record field value or reply text.
+          const rejection = chained === undefined ? undefined : firstRejection(chained);
+          const hint = rejection === undefined
+            ? `the chain bound no request for '${ctx.id}' — supply a --requests line that matches a discovered record`
+            : `the chain rejected the consumer's matching record (${rejection})`;
           ctx.review = {
             ...ctx.review,
             proof: {
               ...ctx.review.proof,
-              verify: { status: "not-verified", hint: `the chain bound no request for '${ctx.id}' — supply a --requests line that matches a discovered record` },
+              verify: { status: "not-verified", hint },
             },
           };
           continue;

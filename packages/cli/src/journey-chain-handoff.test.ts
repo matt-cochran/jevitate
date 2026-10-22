@@ -11,7 +11,7 @@ import {
 } from "@jevitate/journey";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { RunJourneyProgrammaticallyOptions } from "./journey-api.js";
-import { runJourneyChain } from "./journey-chain.js";
+import { chainSucceeded, runJourneyChain } from "./journey-chain.js";
 
 // #582 (docs/contracts/journey-handoff.md §4-§5): when the consuming Journey declares
 // `metadata.inputs`, `runJourneyChain` validates compatibility, records, duplicates and
@@ -330,6 +330,46 @@ test("refuses with E_CHAIN_EMPTY when the producing run returns zero records", a
   const chain = runJourneyChain({ from: "discover", to: "reply", requests: GOOD_REQUEST, dir: d }, { runJourney: runner.run });
 
   await expect(chain).rejects.toMatchObject({ code: "E_CHAIN_EMPTY" });
+});
+
+test("fails the chain when the only request matches a rejected record", async () => {
+  const d = await setup([producer("discover"), consumer("reply")]);
+  const missingSource = { ...GOOD_RECORD } as Record<string, string>;
+  delete missingSource.sourceText;
+  const runner = fakeRunner({ discover: { outcome: "ok", output: recordOutput([missingSource]) }, reply: OK });
+
+  const result = await runJourneyChain({ from: "discover", to: "reply", requests: GOOD_REQUEST, dir: d }, { runJourney: runner.run });
+
+  expect(chainSucceeded(result)).toBe(false);
+});
+
+test("reports one request and zero runs when the only request matches a rejected record", async () => {
+  const d = await setup([producer("discover"), consumer("reply")]);
+  const missingSource = { ...GOOD_RECORD } as Record<string, string>;
+  delete missingSource.sourceText;
+  const runner = fakeRunner({ discover: { outcome: "ok", output: recordOutput([missingSource]) }, reply: OK });
+
+  const result = await runJourneyChain({ from: "discover", to: "reply", requests: GOOD_REQUEST, dir: d }, { runJourney: runner.run });
+
+  expect(result.requests).toEqual({ total: 1, ran: 0 });
+});
+
+test("passes the chain for an intentionally empty request batch", async () => {
+  const d = await setup([producer("discover"), consumer("reply")]);
+  const runner = fakeRunner({ discover: { outcome: "ok", output: recordOutput([GOOD_RECORD]) }, reply: OK });
+
+  const result = await runJourneyChain({ from: "discover", to: "reply", requests: "", dir: d }, { runJourney: runner.run });
+
+  expect(chainSucceeded(result)).toBe(true);
+});
+
+test("reports the request total and run count on the handoff path", async () => {
+  const d = await setup([producer("discover"), consumer("reply")]);
+  const runner = fakeRunner({ discover: { outcome: "ok", output: recordOutput([GOOD_RECORD]) }, reply: OK });
+
+  const result = await runJourneyChain({ from: "discover", to: "reply", requests: GOOD_REQUEST, dir: d }, { runJourney: runner.run });
+
+  expect(result.requests).toEqual({ total: 1, ran: 1 });
 });
 
 test("omits rejected from the result when the consuming Journey declares no inputs (0.17.0)", async () => {
