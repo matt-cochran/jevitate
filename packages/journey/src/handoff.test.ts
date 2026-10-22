@@ -160,6 +160,54 @@ describe("JourneySchema handoff blocks (#582)", () => {
   });
 });
 
+describe("JourneySchema handoff origins (#624)", () => {
+  const withOrigins = (field: unknown) => journey({ outputs: { contract: "c@1", fields: { referenceUrl: field } } }, ["referenceUrl"]);
+  const handoffIssues = (j: unknown) => {
+    const r = JourneySchema.safeParse(j);
+    return r.success ? [] : r.error.issues.filter((i) => i.message.startsWith("E_HANDOFF_SCHEMA"));
+  };
+
+  it("refuses origins on a non-url outputs field, naming the field", () => {
+    const issues = handoffIssues(withOrigins({ type: "id", origins: ["https://example.com"] }));
+    expect(issues.map((i) => [...i.path])).toContainEqual(["metadata", "outputs", "fields", "referenceUrl"]);
+  });
+
+  it("refuses an origins entry that includes a path", () => {
+    expect(hIssue(withOrigins({ type: "url", origins: ["https://example.com/a"] }))[0]).toMatch(/^E_HANDOFF_SCHEMA/);
+  });
+
+  it("refuses an origins entry with a wildcard host", () => {
+    expect(hIssue(withOrigins({ type: "url", origins: ["https://*.example.com"] }))[0]).toMatch(/^E_HANDOFF_SCHEMA/);
+  });
+
+  it("refuses an origins entry with a non-http(s) scheme", () => {
+    expect(hIssue(withOrigins({ type: "url", origins: ["ftp://example.com"] }))[0]).toMatch(/^E_HANDOFF_SCHEMA/);
+  });
+
+  it("refuses a plain http origins entry for a non-loopback host", () => {
+    expect(hIssue(withOrigins({ type: "url", origins: ["http://example.com"] }))[0]).toMatch(/^E_HANDOFF_SCHEMA/);
+  });
+
+  it("accepts an exact https origins entry", () => {
+    expect(JourneySchema.safeParse(withOrigins({ type: "url", origins: ["https://example.com"] })).success).toBe(true);
+  });
+
+  it("accepts a loopback http origins entry on 127.0.0.1", () => {
+    expect(JourneySchema.safeParse(withOrigins({ type: "url", origins: ["http://127.0.0.1:4342"] })).success).toBe(true);
+  });
+
+  it("accepts a loopback http origins entry on localhost", () => {
+    expect(JourneySchema.safeParse(withOrigins({ type: "url", origins: ["http://localhost:8080"] })).success).toBe(true);
+  });
+
+  it("refuses origins on a non-url request field, naming the field", () => {
+    const request = { fields: { ref: { type: "text", origins: ["https://example.com"] } }, key: [] };
+    const inputs = { accepts: "c@1", request, bindings: {} };
+    const issues = handoffIssues(journey({ inputs }));
+    expect(issues.map((i) => [...i.path])).toContainEqual(["metadata", "inputs", "request", "fields", "ref"]);
+  });
+});
+
 describe("validateFieldValue id", () => {
   it("reports a non-string id as type", () => {
     expect(err("id", 42)).toEqual({ code: "type" });
@@ -296,6 +344,35 @@ describe("validateRecords", () => {
 
   it("accepts a well-formed record", () => {
     expect(validateRecords(OUTPUTS, [{ commentId: "c1", account: "a1", sourceText: "hi" }]).valid).toHaveLength(1);
+  });
+});
+
+describe("validateRecords data origins (#624)", () => {
+  const fields = { ref: { type: "url", origins: ["https://example.com"] } };
+
+  it("accepts a url field matching its declared data origin when the run allows only localhost", () => {
+    const { valid } = validateRecords({ contract: "c@1", fields }, [{ ref: "https://example.com/reference/1" }], { allowedOrigins: ["http://127.0.0.1:4342"] });
+    expect(valid).toHaveLength(1);
+  });
+
+  it("does not accept a url field's value from the run origins when the field declares data origins", () => {
+    const { rejected } = validateRecords({ contract: "c@1", fields }, [{ ref: "https://browser.example/x" }], { allowedOrigins: ["https://browser.example"] });
+    expect(rejected[0].errors).toContainEqual({ field: "ref", code: "malformed" });
+  });
+
+  it("rejects a url field outside its declared data origins as malformed", () => {
+    const { rejected } = validateRecords({ contract: "c@1", fields }, [{ ref: "https://evil.example/x" }], { allowedOrigins: ["http://127.0.0.1:4342"] });
+    expect(rejected[0].errors).toContainEqual({ field: "ref", code: "malformed" });
+  });
+
+  it("validates a url field without origins against the run's allowed origins", () => {
+    const { valid } = validateRecords({ contract: "c@1", fields: { ref: { type: "url" } } }, [{ ref: "https://a.example/x" }], { allowedOrigins: ["https://a.example"] });
+    expect(valid).toHaveLength(1);
+  });
+
+  it("rejects a url field without origins when its origin is not allowed", () => {
+    const { rejected } = validateRecords({ contract: "c@1", fields: { ref: { type: "url" } } }, [{ ref: "https://evil.example/x" }], { allowedOrigins: ["https://a.example"] });
+    expect(rejected[0].errors).toContainEqual({ field: "ref", code: "malformed" });
   });
 });
 

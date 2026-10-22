@@ -24,6 +24,8 @@ export const HANDOFF_CONTRACT_RE = /^[a-z0-9][a-z0-9.-]{0,63}@[1-9][0-9]{0,3}$/;
 export interface HandoffFieldDecl {
   readonly type: HandoffFieldType;
   readonly required?: boolean;
+  /** §2 (#624): a `url` field's data origins, checked instead of the browser origins. */
+  readonly origins?: readonly string[];
 }
 export type HandoffFields = Record<string, HandoffFieldDecl>;
 
@@ -93,6 +95,7 @@ const HandoffFieldSchema = z
   .object({
     type: z.enum(HANDOFF_FIELD_TYPES, { message: `E_HANDOFF_SCHEMA: a field type is one of ${HANDOFF_FIELD_TYPES.join("|")}` }),
     required: z.boolean().optional(),
+    origins: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -226,7 +229,8 @@ function fieldErrors(fields: HandoffFields, bag: HandoffRecord, ctx: HandoffCont
       if (decl.required !== false) errors.push({ field: name, code: "missing" });
       continue;
     }
-    const err = validateFieldValue(decl.type, value, ctx);
+    const fieldCtx = decl.type === "url" && decl.origins !== undefined ? { allowedOrigins: decl.origins } : ctx;
+    const err = validateFieldValue(decl.type, value, fieldCtx);
     if (err !== null) errors.push({ field: name, code: err.code });
   }
   for (const name of Object.keys(bag)) if (fields[name] === undefined) errors.push({ field: name, code: "unknown" });
@@ -336,6 +340,40 @@ function forEachNames(journey: Journey): Set<string> {
   return names;
 }
 
+/** §2 (#624): an `origins` entry must be an exact origin — https, or http only for a loopback host. */
+const LOOPBACK_ORIGIN_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** The reason an `origins` entry is not an exact origin, or `null` when it is. */
+function originEntryError(entry: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(entry);
+  } catch {
+    return "is not an origin";
+  }
+  if (url.origin !== entry || url.hostname.includes("*")) return "is not an exact origin";
+  if (url.protocol === "https:") return null;
+  if (url.protocol === "http:" && LOOPBACK_ORIGIN_HOSTS.has(url.hostname)) return null;
+  return "must be https, or http only for a loopback host";
+}
+
+/** §2 (#624): `origins` is a `url`-only list of exact origins. */
+function originsFieldIssues(path: ReadonlyArray<string | number>, fields: HandoffFields): HandoffIssue[] {
+  const issues: HandoffIssue[] = [];
+  for (const [name, decl] of Object.entries(fields)) {
+    if (decl.origins === undefined) continue;
+    if (decl.type !== "url") {
+      issues.push({ path: [...path, name], message: `E_HANDOFF_SCHEMA: origins is only allowed on url fields ("${name}" is ${decl.type})` });
+      continue;
+    }
+    decl.origins.forEach((entry, i) => {
+      const reason = originEntryError(entry);
+      if (reason !== null) issues.push({ path: [...path, name, i], message: `E_HANDOFF_SCHEMA: origins entry "${entry}" ${reason}` });
+    });
+  }
+  return issues;
+}
+
 /**
  * §2/§3 load-time refusals, as `E_HANDOFF_SCHEMA` issues run by `JourneySchema`'s `superRefine`: an
  * `outputs` field no `extract` produces; key rules; a binding to an undeclared param or request field,
@@ -352,6 +390,7 @@ export function handoffSchemaIssues(journey: Journey): HandoffIssue[] {
     if (outputs.collection !== undefined && !forEachNames(journey).has(outputs.collection)) {
       issues.push({ path: ["metadata", "outputs", "collection"], message: `E_HANDOFF_SCHEMA: outputs.collection "${outputs.collection}" names no forEach as` });
     }
+    issues.push(...originsFieldIssues(["metadata", "outputs", "fields"], outputs.fields));
     if (outputs.key !== undefined) {
       if (new Set(outputs.key).size !== outputs.key.length) issues.push({ path: ["metadata", "outputs", "key"], message: "E_HANDOFF_SCHEMA: outputs.key: duplicate field" });
       outputs.key.forEach((field, i) => {
@@ -384,6 +423,7 @@ export function handoffSchemaIssues(journey: Journey): HandoffIssue[] {
     for (const param of required) {
       if (!(param in inputs.bindings)) issues.push({ path: ["metadata", "inputs", "bindings"], message: `E_HANDOFF_SCHEMA: required param "${param}" has no binding` });
     }
+    issues.push(...originsFieldIssues(["metadata", "inputs", "request", "fields"], inputs.request.fields));
     inputs.request.key.forEach((field, i) => {
       const decl = inputs.request.fields[field];
       if (decl === undefined) issues.push({ path: ["metadata", "inputs", "request", "key", i], message: `E_HANDOFF_SCHEMA: request.key names undeclared field "${field}"` });
