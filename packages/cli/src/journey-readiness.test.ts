@@ -136,11 +136,11 @@ function receipt(opts: Parameters<typeof runJourneyReadiness>[0], deps: JourneyR
 
 /** #608: a pair chain that invokes the chain's `runJourney` seam for the producer and, when given,
  * the consumer — so its bound params reach the readiness wrapper. */
-function chainBinding(toParams?: Record<string, string>): Chain {
+function chainBinding(toParams?: Record<string, string>, rejected?: JourneyChainResult["rejected"]): Chain {
   return (async (opts: Parameters<Chain>[0], deps?: JourneyChainDeps) => {
     await deps?.runJourney?.({ id: opts.from, params: {} } as RunJourneyProgrammaticallyOptions);
     if (toParams !== undefined) await deps?.runJourney?.({ id: opts.to, params: toParams } as RunJourneyProgrammaticallyOptions);
-    return { runs: [], unmatched: [] } as JourneyChainResult;
+    return { runs: [], unmatched: [], rejected: rejected ?? [] } as JourneyChainResult;
   }) as unknown as Chain;
 }
 
@@ -397,6 +397,66 @@ describe("journey readiness", () => {
       { review: reviewDep(() => ({ verify: PROVEN })), run: run as unknown as Run, chain: chainBinding(), verify: verify as unknown as Verify },
     );
     expect(checkOf(r, "proof", "consumer")).toMatchObject({ state: "not-run", detail: "the chain bound no request for 'consumer' — supply a --requests line that matches a discovered record" });
+  });
+
+  // #624 — a chain that rejected a record names the rejection in replay's fail detail and prove's hint.
+  const REJECTED = [{ key: "example-001", reason: "invalid-record" as const, errors: [{ field: "referenceUrl", code: "malformed" as const }] }];
+
+  it("pair replay fails when the chain rejected a record", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const r = await receipt(
+      { id: "producer", with: "consumer", mode: "replay", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r" }, journeysDir },
+      { review: reviewDep(), run: run as unknown as Run, chain: chainBinding(undefined, REJECTED) },
+    );
+    expect(checkOf(r, "replay", "producer")?.state).toBe("fail");
+  });
+
+  it("pair replay names the counts and the first rejection", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const r = await receipt(
+      { id: "producer", with: "consumer", mode: "replay", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r" }, journeysDir },
+      { review: reviewDep(), run: run as unknown as Run, chain: chainBinding(undefined, REJECTED) },
+    );
+    expect(checkOf(r, "replay", "producer")?.detail).toBe("0 unmatched request(s), 1 rejected, 0 failed run(s); first rejection example-001: referenceUrl malformed");
+  });
+
+  it("pair readiness is never technically-ready when the chain rejected its only record", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const r = await receipt(
+      { id: "producer", with: "consumer", mode: "replay", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r" }, journeysDir },
+      { review: reviewDep(), run: run as unknown as Run, chain: chainBinding(undefined, REJECTED) },
+    );
+    expect(r.verdict).not.toBe("technically-ready");
+  });
+
+  it("pair prove hint names the first rejection when the chain rejected the consumer's record", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const verify = vi.fn(async () => ({}));
+    const r = await receipt(
+      { id: "producer", with: "consumer", mode: "prove", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r" }, journeysDir },
+      { review: reviewDep(() => ({ verify: PROVEN })), run: run as unknown as Run, chain: chainBinding(undefined, REJECTED), verify: verify as unknown as Verify },
+    );
+    expect(checkOf(r, "proof", "consumer")?.detail).toContain("example-001: referenceUrl malformed");
+  });
+
+  it("pair prove hint does not ask for a --requests line when the chain rejected a record", async () => {
+    await store.put(producerWithParams("producer"));
+    await store.put(consumer("consumer", "reply@1"));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const verify = vi.fn(async () => ({}));
+    const r = await receipt(
+      { id: "producer", with: "consumer", mode: "prove", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r" }, journeysDir },
+      { review: reviewDep(() => ({ verify: PROVEN })), run: run as unknown as Run, chain: chainBinding(undefined, REJECTED), verify: verify as unknown as Verify },
+    );
+    expect(checkOf(r, "proof", "consumer")?.detail).not.toContain("supply a --requests line");
   });
 
   it("the pair prove receipt never contains a param value or reply text", async () => {
