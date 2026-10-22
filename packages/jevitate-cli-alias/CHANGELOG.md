@@ -1,5 +1,13 @@
 # jevitate
 
+## 0.21.1
+
+### Patch Changes
+
+- CI only: the Chromium install retry waits for the dpkg lock left by a timed-out attempt instead of failing at once (#627). No change to the CLI.
+- Updated dependencies
+  - @jevitate/cli@0.21.1
+
 ## 0.21.0
 
 ### Minor Changes
