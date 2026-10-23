@@ -75,14 +75,14 @@ const ON_ROWS = {
   claims: [{ claim: "Ada Lovelace was imported", quote: "Ada Lovelace — ada@example.com", absent: null }],
 };
 
-async function run(steps: ScriptedStep[]): Promise<GoalBasedResult> {
+async function run(steps: ScriptedStep[], judge = new ScriptedJudge(steps)): Promise<GoalBasedResult> {
   return withSession(
     "report-sent-body-",
     async (session) => {
       const actor = CastActor.named("importer").whoCan(new BrowseTheWeb(session, [origin]));
       return runGoalBasedMission({
         actor,
-        judge: new ScriptedJudge(steps),
+        judge,
         gen: new FakeGenerationGateway({ "goal.answer": ON_ROWS }),
         goal: GOAL,
         allowlist: [origin],
@@ -115,6 +115,16 @@ describe("#649 — what a write sent awaits read-back, whoever typed it", () => 
     async () => {
       const r = await run([{ op: "click", target: "2" }, { op: "click", target: "0" }, { op: "report" }]);
       expect(accepted(r)).toBe(true);
+    },
+    90_000,
+  );
+
+  it(
+    "the model is told when a page loaded from the server shows what the run sent",
+    async () => {
+      const judge = new ScriptedJudge([{ op: "click", target: "2" }, { op: "click", target: "0" }, { op: "done" }]);
+      await run([], judge);
+      expect(judge.states.at(-1)?.history?.some((h) => h.startsWith("read back: this page"))).toBe(true);
     },
     90_000,
   );
