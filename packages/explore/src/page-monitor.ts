@@ -5,6 +5,7 @@ import { visibleBusyIndicator } from "./hang.js";
 import { clock, isExternalSchemeUrl } from "@jevitate/domain";
 import { RPC_CONTENT, rpcStatusOfResponse, type RpcStatus } from "./rpc-status.js";
 import { clockBounded } from "./clock-bound.js";
+import { bodyValues } from "./request-body-values.js";
 
 /** #378: how long a finished RPC's trailer read may hold its end back; past it the header status stands. */
 export const RPC_TRAILER_READ_MS = 2_000;
@@ -383,6 +384,11 @@ function pathOf(url: string): string {
 }
 
 /** A request's own `content-type` header (never throws: a stub request may not expose headers). */
+/** #649: the methods whose request body is a write's payload. */
+const BODY_METHODS = new Set(["POST", "PUT", "PATCH"]);
+/** #649: most recent write bodies kept. */
+const MAX_WRITE_BODIES = 200;
+
 function requestContentTypeOf(r: Request): string | undefined {
   try {
     const v = r.headers()["content-type"];
@@ -398,6 +404,8 @@ const RECENT_REQUESTS_MS = 60_000;
 export class PageMonitor {
   readonly #page: Page;
   readonly #inflight = new Map<Request, InflightRequest>();
+  /** #649: the string values recent writes sent in their bodies (memory only; never persisted). */
+  readonly #writeBodies: Array<{ readonly startedAt: number; readonly url: string; readonly values: readonly string[] }> = [];
   readonly #completed: CompletedRequest[] = [];
   readonly #wakers = new Set<Wake>();
   readonly #statuses = new WeakMap<Request, number>();
@@ -436,6 +444,18 @@ export class PageMonitor {
         startedAt,
         ...(requestContentType === undefined ? {} : { requestContentType }),
       });
+      if (BODY_METHODS.has(r.method().toUpperCase())) {
+        let values: string[] = [];
+        try {
+          values = bodyValues(r.postData(), requestContentType);
+        } catch {
+          // a body Playwright cannot decode: nothing to read back
+        }
+        if (values.length > 0) {
+          this.#writeBodies.push({ startedAt, url: r.url(), values });
+          if (this.#writeBodies.length > MAX_WRITE_BODIES) this.#writeBodies.shift();
+        }
+      }
       for (const c of this.#captures) {
         c.began(r, {
           method: r.method().toUpperCase(),
@@ -707,6 +727,11 @@ export class PageMonitor {
     } finally {
       if (timer !== undefined) clock.clearTimeout(timer);
     }
+  }
+
+  /** #649: the string values the writes started since `sinceMs` sent, from URLs `keep` accepts. */
+  writeBodyValuesSince(sinceMs: number, keep: (url: string) => boolean): string[] {
+    return this.#writeBodies.filter((w) => w.startedAt >= sinceMs && keep(w.url)).flatMap((w) => w.values);
   }
 
   /** Requests that ended since `sinceMs` (wall clock). */

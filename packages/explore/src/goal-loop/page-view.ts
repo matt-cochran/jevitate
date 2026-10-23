@@ -122,6 +122,7 @@ export async function viewPage(ctx: RunContext, step: Perceived): Promise<PageVi
     // an unparsable URL: no chrome evidence from it
   }
   const document = await documentOf(ctx.page);
+  const unreadBefore = [...ctx.observed.unreadWrites()];
   ctx.observed.add(snap.url, visibleText, [...controlFields(snap.controls), ...richFields], {
     ...(await readPageHeadings(ctx.page, ctx.secrets)),
     // #647: which document load this is — a later one that shows a sent value reads it back.
@@ -142,6 +143,15 @@ export async function viewPage(ctx: RunContext, step: Perceived): Promise<PageVi
       .flatMap((c) => (typeof c.href === "string" && c.href !== "" ? [c.href] : [])),
     ...(ctx.documentStatus.has(ctx.docKey(ctx.page.url())) ? { status: ctx.documentStatus.get(ctx.docKey(ctx.page.url()))! } : {}),
   });
+  // #649: this page, loaded from the server, shows what the run sent: say so — the model was told to
+  // look for it, and only then does it know a held ending can now rest on it.
+  {
+    const now = ctx.observed.unreadWrites();
+    const back = unreadBefore.filter((v) => !now.has(v));
+    if (back.length > 0) {
+      ctx.history.push(`read back: this page, loaded from the server, shows what the run sent (${back.map((v) => `"${v}"`).join(", ")}) — the app kept it`);
+    }
+  }
   ctx.noteReplyText(snap.url, visibleText);
   // #424: the run's depth — every page state the loop decides on.
   ctx.depth.noteState(snap.signature, snap.url);
