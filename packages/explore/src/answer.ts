@@ -167,6 +167,42 @@ export class ObservedPages {
     if (document !== undefined) this.#writeDocument = document;
   }
 
+  /**
+   * #649: a sent value the run did not type (a write's request body: a prefilled import's rows) that
+   * a page on the write's own route already showed before the write — its source, not a copy the app
+   * kept. Only a page on another route reads it back: reloading the source shows it either way.
+   */
+  readonly #sourceRoute = new Map<string, string>();
+
+  /** #649: a write's body values the run did not type, decided on the next page seen (see `add`). */
+  #pendingSent: { readonly route: string; readonly values: readonly string[] } | null = null;
+
+  /**
+   * #649: a successful write the run fired sent `values` in its body, from a page on `url`. One the run
+   * did not type awaits read-back like a typed one only when the next page shows it as NEW text — text
+   * no earlier page on that route showed (an import's rows listed from its CSV; never a form's
+   * untouched prefilled fields, still only in their fields). Decided when that page is added.
+   */
+  noteSentValues(values: readonly string[], url: string): void {
+    const own = new Set([...this.#ownInputs, ...this.#unread]);
+    const fresh = values.map((value) => fold(redactContext(value, this.secrets).slice(0, OBSERVED_FIELD_CHARS))).filter((v) => v !== "" && !own.has(v));
+    this.#pendingSent = fresh.length === 0 ? null : { route: routeOf(url), values: fresh };
+  }
+
+  /** #649: the pending body values `text` (the page after the write) newly shows await read-back. */
+  #settleSent(text: string): void {
+    const pending = this.#pendingSent;
+    if (pending === null) return;
+    this.#pendingSent = null;
+    const now = fold(text);
+    const before = this.#pages.filter((p) => routeOf(p.url) === pending.route);
+    for (const v of pending.values) {
+      if (!now.includes(v) || before.some((p) => fold(p.text).includes(v))) continue;
+      this.#unread.add(v);
+      if (before.some((p) => (p.fields ?? []).some((f) => fold(f.value).includes(v)))) this.#sourceRoute.set(v, pending.route);
+    }
+  }
+
   /** #647: the run's sent values (folded) that no page loaded from the server since has shown. */
   unreadWrites(): ReadonlySet<string> {
     return this.#unread;
@@ -182,11 +218,15 @@ export class ObservedPages {
    * #647: a page from a later document load than the write shows `shown` (its visible text, or field
    * values): the sent values it contains are read back from the app. Returns those values.
    */
-  readBack(document: number | undefined, shown: string): string[] {
+  readBack(document: number | undefined, shown: string, url?: string): string[] {
     if (this.#unread.size === 0 || document === undefined || document === this.#writeDocument) return [];
     const text = fold(shown);
-    const back = [...this.#unread].filter((v) => text.includes(v));
-    for (const v of back) this.#unread.delete(v);
+    const route = url === undefined ? undefined : routeOf(url);
+    const back = [...this.#unread].filter((v) => text.includes(v) && (route === undefined || this.#sourceRoute.get(v) !== route));
+    for (const v of back) {
+      this.#unread.delete(v);
+      this.#sourceRoute.delete(v);
+    }
     return back;
   }
 
@@ -229,8 +269,10 @@ export class ObservedPages {
       const nav = navPaths(url, headings.navLinks ?? []).map((p) => redactContext(p, this.secrets));
       if (nav.length > 0) this.#topNav = nav;
     }
+    // #649: the page right after a write decides which of its untyped body values it newly shows.
+    this.#settleSent(page.text);
     // #647: a page from a later document load that shows a sent value reads it back from the app.
-    this.readBack(headings.document, [page.text, ...kept.map((f) => f.value)].join("\n"));
+    this.readBack(headings.document, [page.text, ...kept.map((f) => f.value)].join("\n"), url);
     if (page.text.trim() === "" && kept.length === 0) return;
     const same = (p: ObservedPage): boolean =>
       JSON.stringify(p.fields ?? []) === JSON.stringify(page.fields ?? []) &&
@@ -249,6 +291,15 @@ export class ObservedPages {
   /** Most recent first. */
   pages(): readonly ObservedPage[] {
     return [...this.#pages].reverse();
+  }
+}
+
+/** #649: a URL's path alone (no query): the route a page is on. */
+function routeOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.split(/[?#]/)[0] ?? url;
   }
 }
 

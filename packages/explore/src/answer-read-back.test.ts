@@ -64,3 +64,56 @@ describe("#647 read-back of what the run sent", () => {
     expect(run([]).unreadShownIn("Thanks — we received your message")).toEqual([]);
   });
 });
+
+// #649: what a write's body sent, whoever typed it. The import page holds its source CSV in a field;
+// the write sends its rows; the page then lists them as text. A reload of the import page shows the
+// source field again, which proves nothing.
+describe("#649 read-back of a write's body values the run did not type", () => {
+  const IMPORT = "http://app.test/import";
+  const CONTACTS = "http://app.test/contacts";
+  const csv = [{ label: "CSV", value: "Ada Lovelace,ada@example.com" }];
+
+  function imported(): ObservedPages {
+    const observed = new ObservedPages();
+    observed.add(IMPORT, "Import contacts", csv, { document: 1 });
+    observed.noteSentValues(["Ada Lovelace"], IMPORT);
+    observed.confirmOwnInputs(1);
+    observed.add(IMPORT, "Import contacts\nImported: Ada Lovelace — ada@example.com", csv, { document: 1 });
+    return observed;
+  }
+
+  it("awaits read-back once the page after the write lists it as new text", () => {
+    expect([...imported().unreadWrites()]).toEqual(["ada lovelace"]);
+  });
+
+  it("is not read back by a reload of the page that held it as its source", () => {
+    const observed = imported();
+    observed.add(IMPORT, "Import contacts", csv, { document: 2 });
+    expect([...observed.unreadWrites()]).toEqual(["ada lovelace"]);
+  });
+
+  it("is read back by a later page on another route that lists it", () => {
+    const observed = imported();
+    observed.add(CONTACTS, "Contacts\nAda Lovelace — ada@example.com", [], { document: 2 });
+    expect([...observed.unreadWrites()]).toEqual([]);
+  });
+
+  it("does not await read-back for a form's untouched prefilled field", () => {
+    const observed = new ObservedPages();
+    const fields = [{ label: "Name", value: "Ada Lovelace" }];
+    observed.add(CONTACTS, "Profile", fields, { document: 1 });
+    observed.noteSentValues(["Ada Lovelace"], CONTACTS);
+    observed.confirmOwnInputs(1);
+    observed.add(CONTACTS, "Profile\nSaved", fields, { document: 1 });
+    expect([...observed.unreadWrites()]).toEqual([]);
+  });
+
+  it("does not await read-back for a value the page already showed as text before the write", () => {
+    const observed = new ObservedPages();
+    observed.add(CONTACTS, "Profile\nName: Ada Lovelace", [], { document: 1 });
+    observed.noteSentValues(["Ada Lovelace"], CONTACTS);
+    observed.confirmOwnInputs(1);
+    observed.add(CONTACTS, "Profile\nName: Ada Lovelace\nSaved", [], { document: 1 });
+    expect([...observed.unreadWrites()]).toEqual([]);
+  });
+});

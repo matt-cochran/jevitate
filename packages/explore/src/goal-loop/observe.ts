@@ -43,6 +43,8 @@ export async function perceiveStep(ctx: RunContext): Promise<Perceived> {
     if (lc !== null && lc !== ctx.settledClick) {
       ctx.settledClick = lc;
       if (lc.writes.length > 0 && lc.writes.every((w) => w.status !== null && w.status >= 200 && w.status < 300)) {
+        // #649: what the writes sent, typed or not (a prefilled import), awaits read-back too.
+        ctx.observed.noteSentValues(lc.sentValues, ctx.page.url());
         ctx.observed.confirmOwnInputs(await documentOf(ctx.page));
         ctx.wroteOk = true;
       }

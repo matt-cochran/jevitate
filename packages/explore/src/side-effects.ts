@@ -190,6 +190,11 @@ export interface LastClick {
    */
   readonly completedOk: boolean;
   /**
+   * #649: the string values its own writes sent in their request bodies (memory only) — what it
+   * sent, whoever typed it: a prefilled import's rows await read-back like typed values.
+   */
+  readonly sentValues: readonly string[];
+  /**
    * #463: nothing it sent is still pending and none of the app's own requests failed (non-2xx or no
    * response) — true for a click that sent none. Unlike `completedOk`, alone it proves no request.
    */
@@ -357,7 +362,8 @@ export class SideEffectGuard {
     const own = requests.filter((r: CapturedRequest) => this.#ours(r));
     const settled = !inflightAny && own.every((r) => r.status !== null && r.status >= 200 && r.status < 300);
     const completedOk = own.length > 0 && settled;
-    this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending], completedOk, settled };
+    const sentValues = this.#monitor.writeBodyValuesSince(o.at, (url) => this.#ours({ url }));
+    this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending], completedOk, settled, sentValues };
     if (done.length + pending.length === 0) return;
     this.#fired.set(o.key, {
       label: o.label,
