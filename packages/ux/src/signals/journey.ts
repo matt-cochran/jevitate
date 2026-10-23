@@ -15,7 +15,7 @@ import { writeClassifier } from "@jevitate/recording";
 import { routeOf } from "../route.js";
 import type { UxFinding } from "../types.js";
 import { makeSignalFinding } from "./finding.js";
-import { API_TYPES, BUSY_TEXT, controlKey, durationOf, median, okStatus, quoteLine, requestEvidence, secs, uniqueSteps } from "./shared.js";
+import { API_TYPES, BUSY_TEXT, controlKey, durationOf, labelOf, median, okStatus, quoteLine, requestEvidence, secs, uniqueSteps } from "./shared.js";
 import type { RunSignalCapture, SignalRequest, SignalScreen, SignalStep, SignalOptions } from "./types.js";
 
 /** On-screen copy that tells the user something failed. */
@@ -30,14 +30,6 @@ function normLine(s: string): string {
   return s.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-/** The label a step acted on: the quoted name in `button "Run the simulation →"`, else the descriptor's name. */
-function labelOf(s: SignalStep): string | null {
-  const quoted = /"([^"]{2,160})"/.exec(s.target ?? "")?.[1];
-  const raw = quoted ?? s.descriptor?.name ?? s.descriptor?.text ?? null;
-  if (raw === null || raw === undefined) return null;
-  const t = raw.replace(/[→←↗›»…]+/g, " ").replace(/\s+/g, " ").trim();
-  return t.length >= 2 ? t : null;
-}
 
 function screenBefore(capture: RunSignalCapture, step: number): SignalScreen | undefined {
   return capture.screens.filter((s) => s.step <= step).pop();
