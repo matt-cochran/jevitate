@@ -260,9 +260,14 @@ function clipLine(s: string): string {
   return s.length <= APPEARED_CHARS ? s : `${s.slice(0, APPEARED_CHARS - 1)}…`;
 }
 
+/** #640: a progress indicator — "2 of 6", "Step 3", "Question 4/10". */
+const PROGRESS_LINE = /\b\d+\s*(?:of|\/)\s*\d+\b|\b(?:step|question|page|part|stage|section|confirmation)\s+\d+\b/i;
+
 /**
  * #390: the lines of `after` that `before` did not have (as many times). A line that differs only in
- * its digits (a clock, a counter, "2 of 6") is the same line changing, not new text.
+ * its digits (a clock, a counter, "2 of 6") is the same line changing, not new text. #640: unless
+ * nothing else appeared — then a progress indicator whose number changed is the only sign the page
+ * moved on (a wizard step with the same controls and the same text), and it is reported.
  */
 export function appearedLines(before: string, after: string): string[] {
   const lines = (t: string): string[] =>
@@ -279,5 +284,7 @@ export function appearedLines(before: string, after: string): string[] {
     if (n > 0) had.set(shape(l), n - 1);
     else out.push(l);
   }
-  return out;
+  if (out.length > 0) return out;
+  const was = new Set(lines(before));
+  return lines(after).filter((l) => PROGRESS_LINE.test(l) && !was.has(l));
 }

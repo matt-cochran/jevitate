@@ -5,6 +5,10 @@
  * form field. A composer needs conversational evidence on the page: a transcript (`role=log`, a
  * live region holding message items, repeated message bubbles) or a Send-shaped control paired with
  * the field (within `PAIRED_SUBMIT_DISTANCE` in the DOM tree).
+ *
+ * #638: a Send pairing is not evidence when the field's form names a recipient (a To / Recipient /
+ * Contact control): that is a message form addressed to a person, not a chat with the app — its
+ * text is a form value, and no reply comes back. A transcript still makes it a composer.
  */
 
 /**
@@ -24,17 +28,25 @@ export const SUBMIT_NAME = /\b(send|submit|reply|ask|post)\b|[→➤➔↑]|^\s*
 export const PAIRED_SUBMIT_DISTANCE = 6;
 
 /**
+ * #638: names of a control that addresses a message to a person ("To", "Cc", "Recipients",
+ * "Contact", "Send to"). Matched against the accessible names of the other fields of the form.
+ */
+export const RECIPIENT_NAME = /^\s*(to|cc|bcc)\b|\b(recipients?|contacts?|addressee|send to)\b/i;
+
+/**
  * BROWSER CODE — serialized by `handle.evaluate`: no imports, no closure over module scope.
  * True when the page around `node` (a message-named text field) reads as a conversation:
  *  - a rendered transcript: `[role=log]`, a live region (`aria-live` polite/assertive, not a
  *    status/alert line) holding 2+ items, or 2+ sibling elements whose class/data attributes name
  *    them messages / bubbles; or
  *  - a Send-shaped button (`args.submit`, the `SUBMIT_NAME` source) within `args.distance` tree
- *    edges of the field — a chat input paired with its Send control.
+ *    edges of the field — a chat input paired with its Send control — unless the field and that
+ *    button share a container holding a recipient field (`args.recipient`, the `RECIPIENT_NAME`
+ *    source; #638).
  * A form field whose only buttons are Save / Publish / Update, on a page with no transcript, is
  * neither.
  */
-export function composerEvidence(node: Node, args: { submit: string; distance: number }): boolean {
+export function composerEvidence(node: Node, args: { submit: string; distance: number; recipient: string }): boolean {
   const el = node as Element;
   const norm = (s: string | null): string => (s === null ? "" : s.replace(/\s+/g, " ").trim());
   const parentOf = (a: Element): Element | null =>
@@ -64,8 +76,35 @@ export function composerEvidence(node: Node, args: { submit: string; distance: n
     parents.set(item.parentElement, n);
   }
 
-  // 2. A Send-shaped control paired with the field.
+  // 2. A Send-shaped control paired with the field, unless their shared container addresses the
+  // message to a person (#638).
   const submit = new RegExp(args.submit, "i");
+  const recipient = new RegExp(args.recipient, "i");
+  const labelOf = (a: Element): string => {
+    const aria = norm(a.getAttribute("aria-label"));
+    if (aria !== "") return aria;
+    const by = norm(a.getAttribute("aria-labelledby"));
+    if (by !== "") {
+      const text = by
+        .split(" ")
+        .map((id) => norm(document.getElementById(id)?.textContent ?? null))
+        .join(" ")
+        .trim();
+      if (text !== "") return text;
+    }
+    const id = a.getAttribute("id");
+    if (id !== null && id !== "") {
+      const forLabel = Array.from(document.querySelectorAll("label")).find((l) => l.htmlFor === id);
+      if (forLabel !== undefined) return norm(forLabel.textContent);
+    }
+    const wrap = a.closest("label");
+    if (wrap !== null) return norm(wrap.textContent);
+    return norm(a.getAttribute("placeholder")) || norm(a.getAttribute("name"));
+  };
+  const addressed = (container: Element): boolean =>
+    Array.from(
+      container.querySelectorAll('select, input:not([type="hidden"]):not([type="submit"]):not([type="button"]), [role="combobox"], [role="listbox"]'),
+    ).some((f) => f !== el && !f.contains(el) && rendered(f) && recipient.test(labelOf(f)));
   const up = (a: Element): Element[] => {
     const out: Element[] = [];
     for (let cur: Element | null = a; cur !== null; cur = parentOf(cur)) out.push(cur);
@@ -84,7 +123,7 @@ export function composerEvidence(node: Node, args: { submit: string; distance: n
     for (let i = 0; i < fieldPath.length && i <= args.distance; i++) {
       const j = bp.indexOf(fieldPath[i] as Element);
       if (j >= 0) {
-        if (i + j <= args.distance) return true;
+        if (i + j <= args.distance && !addressed(fieldPath[i] as Element)) return true;
         break;
       }
     }
