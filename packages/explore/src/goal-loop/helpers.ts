@@ -351,11 +351,24 @@ export function pageStatusOf(ctx: Pick<RunContext, "formMessage" | "status">): {
   return parts.length === 0 ? {} : { pageStatus: parts.join("; ") };
 }
 
+/** #647: per page, how many documents it has loaded since the run first asked (counted in Node). */
+const DOCUMENT_LOADS = new WeakMap<Page, { count: number }>();
+
 /**
- * #647: the identity of the page's current document load (`performance.timeOrigin`, read in the page):
- * it changes on every load from the server (a navigation, a reload) and never on a client-side update.
- * Undefined when the page cannot be read (a document being replaced).
+ * #647: the identity of the page's current document load: a count of the page's `domcontentloaded`
+ * events, kept in Node. It changes on every load from the server (a navigation, a reload) and never
+ * on a client-side update; it reads no page clock (a test's fake clock freezes `performance` time),
+ * and it leaves the page itself untouched.
  */
 export async function documentOf(page: Page): Promise<number | undefined> {
-  return page.evaluate(() => performance.timeOrigin).catch(() => undefined);
+  let loads = DOCUMENT_LOADS.get(page);
+  if (loads === undefined) {
+    const counter = { count: 0 };
+    page.on("domcontentloaded", () => {
+      counter.count += 1;
+    });
+    DOCUMENT_LOADS.set(page, counter);
+    loads = counter;
+  }
+  return loads.count;
 }

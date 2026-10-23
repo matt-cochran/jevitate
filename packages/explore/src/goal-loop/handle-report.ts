@@ -8,6 +8,7 @@ import type { RunContext } from "./context.js";
 import { firstLine, quote } from "./helpers.js";
 import { MAX_REPORT_REJECTIONS } from "./limits.js";
 import { deferEnding } from "./min-effort.js";
+import { readBackProbe } from "./read-back.js";
 import type { Flow, Step } from "./step.js";
 
 export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
@@ -32,6 +33,8 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
     ctx.noteReplyText(snap.url, await readPageText(ctx.page, ctx.secrets));
   }
   const replyPages = ctx.replyGoal ? ctx.replies.pages() : null;
+  // #647: an answer on a page that shows what the run sent is read back first (one reload).
+  if (replyPages === null) await readBackProbe(ctx, step);
   const verdict: AnswerVerdict =
     replyPages !== null && replyPages.length === 0
       ? {

@@ -7,19 +7,21 @@ import { GOAL_CHECK_TRIGGER, type DoneVerdict, type RunOutcome } from "../conver
 import type { RunContext } from "./context.js";
 import { MAX_DONE_REJECTIONS } from "./limits.js";
 import { deferEnding } from "./min-effort.js";
+import { readBackProbe, unreadShown } from "./read-back.js";
 import type { Flow, Step } from "./step.js";
 
 /**
- * #647: why an ending judged from the page must wait — the page shows what the run sent, and no page
- * loaded since the write has (a 2xx is not proof the app kept it: this may be the client's own echo).
- * Null when the page shows none of it (a write-only form), or when the operator's success check decided.
+ * #647: why an ending judged from the page must wait — the page shows what the run sent and a reload
+ * (the read-back probe) did not show it again: a 2xx is not proof the app kept it. Null when the page
+ * shows none of it (a write-only form), the probe read it all back, or the operator's success check
+ * decided.
  */
-function unreadWriteHold(ctx: RunContext, step: Step, outcome: RunOutcome): string | null {
+async function unreadWriteHold(ctx: RunContext, step: Step, outcome: RunOutcome): Promise<string | null> {
   if (outcome.status === "completed" && outcome.verifiedBy === "success-condition") return null;
-  const shown = [step.visibleText, ...step.snap.controls.map((c) => c.value ?? "")].join("\n");
-  const unread = ctx.observed.unreadShownIn(shown);
+  await readBackProbe(ctx, step);
+  const unread = unreadShown(ctx, step);
   if (unread.length === 0) return null;
-  return `what the run sent (${unread.map((v) => `"${v}"`).join(", ")}) has not shown on a page loaded since the write — the app may not have kept it (reload, or open the page where the app lists it)`;
+  return `what the run sent (${unread.map((v) => `"${v}"`).join(", ")}) has not shown on a page loaded since the write — the app may not have kept it (open the page where the app lists it)`;
 }
 
 export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
@@ -50,7 +52,7 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
     ctx.goalChecked.add(snap.signature);
     const { verdict, judgments } = await groundGoal();
     // #647: never "already met" on what the run sent before it is read back.
-    if (verdict.accept && unreadWriteHold(ctx, step, verdict.outcome) === null) {
+    if (verdict.accept && (await unreadWriteHold(ctx, step, verdict.outcome)) === null) {
       record(
         true,
         `goal already met — stopped instead of "${decision.op}": ${acceptedBy(verdict.outcome)}`,
@@ -103,7 +105,7 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
     let verdict: DoneVerdict = grounded.verdict;
     // #647: judged done on what the run sent, before any page loaded since has shown it. The first
     // time the run is asked to read it back (not a rejection); after that it is one.
-    const hold = verdict.accept ? unreadWriteHold(ctx, step, verdict.outcome) : null;
+    const hold = verdict.accept ? await unreadWriteHold(ctx, step, verdict.outcome) : null;
     if (hold !== null) {
       if (!ctx.readBackAsked) {
         ctx.readBackAsked = true;
