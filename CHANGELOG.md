@@ -7,6 +7,14 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.21.1] – 2026-10-22
+
+0.21.1 carries a CI fix to production; the CLI is unchanged from 0.21.0.
+
+### Fixed
+
+- **CI Chromium install (#627).** A timed-out `playwright install --with-deps` attempt left its root `apt-get` holding the dpkg lock, so the retry failed at once. On Linux runners apt now waits for the lock.
+
 ## [0.21.0] – 2026-10-22
 
 0.21.0 makes a typed chain fail closed when it could not run an approved request, and lets a reference URL be handed off as data without widening where a run may browse.
