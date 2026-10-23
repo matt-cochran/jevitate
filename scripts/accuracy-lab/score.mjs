@@ -22,11 +22,21 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_GROUND_TRUTH = resolve(here, "../../test/fixtures/accuracy-lab/ground-truth.json");
 
-/** Whether a cell reports a problem, by the verdict rules above. */
+/** Findings that report avoidable effort (#642), never a defect: scored as effort, not as a problem. */
+export const EFFORT_FINDINGS = new Set(["signal-repeated-advance"]);
+
+const isEffort = (f) => EFFORT_FINDINGS.has(f.id);
+
+/** Whether a cell reports a problem, by the verdict rules above (effort findings are not problems). */
 export function declareProblem(row, strategy = row.strategy) {
   if (row.missionOutcome === "defects-found") return true;
   if (strategy === "usability" && row.failureKind === "job-incomplete") return true;
-  return (row.findings?.length ?? 0) > 0 || (row.fingerprints?.length ?? 0) > 0;
+  return (row.findings ?? []).some((f) => !isEffort(f)) || (row.fingerprints?.length ?? 0) > 0;
+}
+
+/** Whether a cell reports avoidable effort (an effort finding). */
+export function declareEffort(row) {
+  return (row.findings ?? []).some(isEffort);
 }
 
 /** Whether a cell is excluded from the rates. A usability job-incomplete is NOT inconclusive. */
@@ -76,7 +86,8 @@ export function scoreRows(rows, groundTruth) {
     const { variant, strategy } = row;
     const gt = groundTruth.variants[variant]?.[strategy];
     if (!gt) continue;
-    const bucket = (variants[variant] ??= {})[strategy] ??= { tp: 0, fp: 0, tn: 0, fn: 0, inconclusive: 0 };
+    const bucket = (variants[variant] ??= {})[strategy] ??= { tp: 0, fp: 0, tn: 0, fn: 0, inconclusive: 0, effortExpected: gt.effortElevated === true, effortReported: 0 };
+    if (declareEffort(row)) bucket.effortReported += 1;
     const all = (strategies[strategy] ??= { tp: 0, fp: 0, tn: 0, fn: 0, inconclusive: 0 });
     if (isInconclusive(row, strategy)) {
       bucket.inconclusive += 1;
@@ -143,6 +154,13 @@ export function formatReport(report) {
     for (const strategy of Object.keys(report.variants[variant])) {
       const c = report.variants[variant][strategy];
       lines.push(`  ${variant.padEnd(11)} ${strategy.padEnd(9)} tp=${c.tp} fp=${c.fp} tn=${c.tn} fn=${c.fn} inconclusive=${c.inconclusive}`);
+    }
+  }
+  lines.push("\neffort findings per variant x strategy (#642; expected where the ground truth says effortElevated)");
+  for (const variant of Object.keys(report.variants)) {
+    for (const strategy of Object.keys(report.variants[variant])) {
+      const c = report.variants[variant][strategy];
+      if (c.effortExpected || c.effortReported > 0) lines.push(`  ${variant.padEnd(11)} ${strategy.padEnd(9)} reported=${c.effortReported} expected=${c.effortExpected}`);
     }
   }
   lines.push("\nper-strategy rates over conclusive cells");

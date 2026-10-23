@@ -2,7 +2,7 @@
 // baseline must reproduce its headline goal numbers (precision 8/12, recall 1.0), and a full
 // measurement must still cover the clean app on every job plus each seeded variant on its job.
 import { expect, test } from "vitest";
-import { readResults, loadGroundTruth, scoreRows } from "./score.mjs";
+import { declareEffort, declareProblem, readResults, loadGroundTruth, scoreRows } from "./score.mjs";
 import { buildCells } from "./run-matrix.mjs";
 
 const BASELINE = new URL("./fixtures/baseline-results.jsonl", import.meta.url).pathname;
@@ -27,4 +27,14 @@ test("the matrix plans clean on every job and each seeded variant on its affecte
     "j3-deadend|J3",
     "j3-effort|J3",
   ]);
+});
+
+const effortOnly = { strategy: "usability", missionOutcome: "clean", failureKind: null, fingerprints: [], findings: [{ id: "signal-repeated-advance", impact: "slowed" }] };
+
+test("an effort finding alone is not a reported problem", () => {
+  expect(declareProblem(effortOnly)).toBe(false);
+});
+
+test("an effort finding is reported as effort", () => {
+  expect(declareEffort(effortOnly)).toBe(true);
 });

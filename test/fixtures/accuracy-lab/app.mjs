@@ -73,6 +73,9 @@ const contactsPage = (state, variant) => {
   const sentRows = state.sent
     .map((m) => `<li data-testid="sent-row" data-to="${esc(m.to)}">${esc(m.to)} — ${esc(m.body)}</li>`)
     .join("");
+  const contactRows = state.contacts
+    .map((c) => `<li data-testid="contact-row" data-email="${esc(c.email)}">${esc(c.name)} &lt;${esc(c.email)}&gt;</li>`)
+    .join("");
   const script = stall
     ? `<script>
 (function () {
@@ -116,6 +119,8 @@ const contactsPage = (state, variant) => {
   <p><button type="submit" data-testid="send-message">Send</button></p>
   <p data-testid="message-status" role="status" aria-live="polite"></p>
 </form>
+<h2>All contacts</h2>
+<ul data-testid="contact-list">${contactRows}</ul>
 <h2>Sent messages</h2>
 <ul data-testid="sent-list">${sentRows}</ul>${script}`,
   );
@@ -322,6 +327,9 @@ function createHandler(variant) {
         const body = JSON.parse((await readBody(req)) || "{}");
         const contacts = Array.isArray(body.contacts) ? body.contacts : [];
         state.imported.push(...contacts);
+        // Imported contacts join the contact list, as in any CRM: the clean variant must be clean
+        // end to end (a run that checks Contacts after importing finds them there).
+        state.contacts.push(...contacts.filter((c) => c && typeof c.email === "string").map((c) => ({ name: String(c.name ?? c.email), email: c.email })));
         return json(res, 200, { ok: true, contacts });
       }
 
