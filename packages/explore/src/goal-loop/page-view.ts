@@ -15,7 +15,7 @@ import { readEditableText } from "../rich-text.js";
 import type { Control } from "../snapshot.js";
 import { requestsStartedSince } from "../stuck-actions.js";
 import type { RunContext } from "./context.js";
-import { isActionOrChromeName, keyOf, safePath, stateBesides } from "./helpers.js";
+import { documentOf, isActionOrChromeName, keyOf, safePath, stateBesides } from "./helpers.js";
 import type { Perceived, StepInput } from "./step.js";
 
 /** The decision's inputs besides the page itself. */
@@ -121,8 +121,11 @@ export async function viewPage(ctx: RunContext, step: Perceived): Promise<PageVi
   } catch {
     // an unparsable URL: no chrome evidence from it
   }
+  const document = await documentOf(ctx.page);
   ctx.observed.add(snap.url, visibleText, [...controlFields(snap.controls), ...richFields], {
     ...(await readPageHeadings(ctx.page, ctx.secrets)),
+    // #647: which document load this is — a later one that shows a sent value reads it back.
+    ...(document === undefined ? {} : { document }),
     // #223: the action / label names (a quote made only of them is a label, not an answer) and
     // the document's status (an answer on a 404 page is no answer). A link that is page content
     // (in the main content, a list, a table, a card) is NOT one: its text may be the answer.

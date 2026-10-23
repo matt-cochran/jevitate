@@ -51,7 +51,7 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
           judge: cfg.judge,
           vetoes: ctx.vetoes,
           // #238: "none exists" is an answer only on observed pages that cover the app enough.
-          ...(replyPages === null ? { topNav: ctx.observed.topNavigation(), ownInputs: ctx.observed.ownInputs() } : {}),
+          ...(replyPages === null ? { topNav: ctx.observed.topNavigation(), ownInputs: ctx.observed.ownInputs(), unreadWrites: ctx.observed.unreadWrites() } : {}),
         })
           // #239: a write goal's report settles nothing before a write of the run succeeded.
           .then((v): AnswerVerdict =>

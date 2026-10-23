@@ -350,3 +350,12 @@ export function pageStatusOf(ctx: Pick<RunContext, "formMessage" | "status">): {
   const parts = [...(isEmptyStatus(ctx.status) ? [] : [describeStatus(ctx.status)]), ...[formMessageStatus(ctx)].filter((x): x is string => x !== null)];
   return parts.length === 0 ? {} : { pageStatus: parts.join("; ") };
 }
+
+/**
+ * #647: the identity of the page's current document load (`performance.timeOrigin`, read in the page):
+ * it changes on every load from the server (a navigation, a reload) and never on a client-side update.
+ * Undefined when the page cannot be read (a document being replaced).
+ */
+export async function documentOf(page: Page): Promise<number | undefined> {
+  return page.evaluate(() => performance.timeOrigin).catch(() => undefined);
+}
