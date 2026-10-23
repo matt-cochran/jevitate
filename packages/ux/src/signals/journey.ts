@@ -114,7 +114,30 @@ export function detectStuckJobs(capture: RunSignalCapture, opts: SignalOptions =
     }
     const polls = [...polled.values()].sort((a, b) => b.length - a.length)[0] ?? [];
     const inProgress = reclicks.length > 0 || waits.length > 0 || busy.length > 0 || polls.length >= 3;
+    // #641: a reusable form keeps offering its control after a 2xx write, so "still offered" alone is
+    // not a hang. Completion is evidence the page moved on: a line the pre-action screen did not show
+    // (not the run's own echo, not an in-progress indicator), and the window does not end busy — a
+    // "Job started" line beside a spinner that never clears is still a stuck job (#96).
+    const before = screenBefore(capture, start.step);
+    const was = new Set(before === undefined ? [] : linesOf(before.visibleText).map(normLine));
+    const labelLine = normLine(label);
+    const own = new Set(
+      [start.value, start.message, ...(capture.typedValues ?? [])]
+        .filter((v): v is string => v !== undefined && v.trim().length > 0)
+        .map(normLine),
+    );
     const last = screens[screens.length - 1]!;
+    const completed =
+      before !== undefined &&
+      !last.busy &&
+      !BUSY_TEXT.test(last.visibleText) &&
+      screens.some((s) =>
+        linesOf(s.visibleText).some((line) => {
+          const n = normLine(line);
+          return n.length >= 2 && n !== labelLine && !was.has(n) && !own.has(n) && !BUSY_TEXT.test(line);
+        }),
+      );
+    if (completed) continue;
     const offered = reclicks.length > 0 || normLine(last.visibleText).includes(normLine(label));
     const endedHere = !capture.screens.some((s) => s.step > last.step);
     const startedAt = Math.min(...writes.map((w) => w.startedAt));
