@@ -39,6 +39,7 @@ full flag list, or see the generated [CLI reference](./cli.md).
 - [Verification](./verification.md): `verify-fix`, `regression capture`, `regression run`, and
   exact replay.
 - [CI, reports and baselines](./ci.md): `jevitate check`, `report`, `diff`, `baseline`.
+- [Verdict accuracy](./accuracy.md): the seeded-defect lab, current precision/recall, and the verdict failure modes.
 - [Operations](./operations.md): build identity, usage and cost, killed runs, crash attribution,
   issue drafts, packaging.
 
