@@ -12,7 +12,8 @@
 //   - internal id    — a UUID/ObjectId/prefixed-id-shaped string rendered in user-facing text
 //                      that the run did not type itself;
 //   - inert control  — a successful click after which nothing observable changed: same url,
-//                      same screen signature, same visible text, and no request.
+//                      same screen signature, same visible text, and no request;
+//   - repeated advance — the same Continue/Next/Confirm needed 3+ times in a row (#642).
 //
 // Each finding cites its evidence (step, requests, text, screenshot) and carries a confidence
 // derived from the strength of that evidence — never from a model. They are UxFindings with tier
@@ -22,6 +23,7 @@
 // Inputs arrive ALREADY REDACTED (the capture layer redacts urls/text before they reach here).
 import type { AnalysisOutcome, UxFinding } from "./types.js";
 import { detectDuplicateWrites, detectHungRequests, detectInertControls, detectInternalIds } from "./signals/basic.js";
+import { detectRepeatedAdvances } from "./signals/effort.js";
 import { detectJourneySignals } from "./signals/journey.js";
 import type { RunSignalCapture, SignalOptions } from "./signals/types.js";
 
@@ -29,6 +31,7 @@ export * from "./signals/types.js";
 export * from "./signals/finding.js";
 export * from "./signals/basic.js";
 export * from "./signals/journey.js";
+export * from "./signals/effort.js";
 
 /** Every signal oracle over one run's capture. */
 export function detectSignals(capture: RunSignalCapture, opts: SignalOptions = {}): UxFinding[] {
@@ -38,6 +41,7 @@ export function detectSignals(capture: RunSignalCapture, opts: SignalOptions = {
     ...withoutSubsumedDuplicateWrites(detectDuplicateWrites(capture, opts), journey),
     ...detectInternalIds(capture),
     ...detectInertControls(capture),
+    ...detectRepeatedAdvances(capture),
     ...journey,
   ];
 }

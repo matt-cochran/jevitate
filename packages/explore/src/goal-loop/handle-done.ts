@@ -3,11 +3,26 @@
  * handling, moved out of `explore.ts` unchanged (#232). "next" when the decision is not settled
  * here (it is acted on as usual).
  */
-import { GOAL_CHECK_TRIGGER } from "../conversation.js";
+import { GOAL_CHECK_TRIGGER, type DoneVerdict, type RunOutcome } from "../conversation.js";
 import type { RunContext } from "./context.js";
 import { MAX_DONE_REJECTIONS } from "./limits.js";
 import { deferEnding } from "./min-effort.js";
+import { readBackProbe, unreadShown } from "./read-back.js";
 import type { Flow, Step } from "./step.js";
+
+/**
+ * #647: why an ending judged from the page must wait — the page shows what the run sent and a reload
+ * (the read-back probe) did not show it again: a 2xx is not proof the app kept it. Null when the page
+ * shows none of it (a write-only form), the probe read it all back, or the operator's success check
+ * decided.
+ */
+async function unreadWriteHold(ctx: RunContext, step: Step, outcome: RunOutcome): Promise<string | null> {
+  if (outcome.status === "completed" && outcome.verifiedBy === "success-condition") return null;
+  await readBackProbe(ctx, step);
+  const unread = unreadShown(ctx, step);
+  if (unread.length === 0) return null;
+  return `what the run sent (${unread.map((v) => `"${v}"`).join(", ")}) has not shown on a page loaded since the write — the app may not have kept it (open the page where the app lists it)`;
+}
 
 export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
   const { cfg } = ctx;
@@ -36,7 +51,8 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
   ) {
     ctx.goalChecked.add(snap.signature);
     const { verdict, judgments } = await groundGoal();
-    if (verdict.accept) {
+    // #647: never "already met" on what the run sent before it is read back.
+    if (verdict.accept && (await unreadWriteHold(ctx, step, verdict.outcome)) === null) {
       record(
         true,
         `goal already met — stopped instead of "${decision.op}": ${acceptedBy(verdict.outcome)}`,
@@ -84,7 +100,21 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
   // `done` is a PROPOSAL (guardrail #4), grounded by `groundGoal`.
   if (decision.op === "done") {
     // #514: a proposed `done` also weighs the job's own write evidence.
-    const { verdict, judgments } = await groundGoal(false, true);
+    const grounded = await groundGoal(false, true);
+    const { judgments } = grounded;
+    let verdict: DoneVerdict = grounded.verdict;
+    // #647: judged done on what the run sent, before any page loaded since has shown it. The first
+    // time the run is asked to read it back (not a rejection); after that it is one.
+    const hold = verdict.accept ? await unreadWriteHold(ctx, step, verdict.outcome) : null;
+    if (hold !== null) {
+      if (!ctx.readBackAsked) {
+        ctx.readBackAsked = true;
+        ctx.history.push(`done deferred: ${hold}`);
+        record(false, `done deferred: ${hold}`, { origin: "engine" });
+        return "continue";
+      }
+      verdict = { accept: false, reason: hold };
+    }
     if (verdict.accept) {
       record(true, `done accepted${pendingNote(verdict.outcome) === null ? "" : " provisionally"}: ${acceptedBy(verdict.outcome)}`, {
         ...(judgments === undefined ? {} : { judgments }),

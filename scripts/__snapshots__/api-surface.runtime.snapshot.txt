@@ -1369,7 +1369,7 @@
   migrateToLatest: function
   openDatabase: function
 
-# @jevitate/ux (114 exports)
+# @jevitate/ux (116 exports)
   APPLIES_QUESTION_ID: const (string)
   CALIBRATED_QUALITY_POLICY: object
   CALIBRATION_KNOWN_APP_CLASSES: array
@@ -1399,6 +1399,7 @@
   QUALITY_LABELS: array
   QUALITY_SHOW_ENV: const (string)
   QualityPolicyError: class
+  REPEATED_ADVANCE_MIN: const (number)
   RedactionUnavailableError: class
   RubricEntrySchema: object
   RubricLoadError: class
@@ -1442,6 +1443,7 @@
   detectInertControls: function
   detectInternalIds: function
   detectJourneySignals: function
+  detectRepeatedAdvances: function
   detectRepeatedReplies: function
   detectSignals: function
   detectStuckJobs: function

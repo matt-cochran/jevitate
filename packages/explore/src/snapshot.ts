@@ -6,7 +6,7 @@ import { isCredentialField } from "./auth-completion.js";
 import { contentHash, clock } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
-import { MESSAGE_FIELD, MESSAGE_INPUT_TYPES, PAIRED_SUBMIT_DISTANCE, SUBMIT_NAME, composerEvidence } from "./composer-evidence.js";
+import { MESSAGE_FIELD, MESSAGE_INPUT_TYPES, PAIRED_SUBMIT_DISTANCE, RECIPIENT_NAME, SUBMIT_NAME, composerEvidence } from "./composer-evidence.js";
 import { redactControl, redactUrl } from "./redact.js";
 import { TEMPORAL_FORMATS, isTemporalInputType } from "./temporal-value.js";
 
@@ -942,7 +942,7 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
       const conversational =
         textEntry && MESSAGE_FIELD.test(raw.name)
           ? await handle
-              .evaluate(composerEvidence, { submit: SUBMIT_NAME.source, distance: PAIRED_SUBMIT_DISTANCE })
+              .evaluate(composerEvidence, { submit: SUBMIT_NAME.source, distance: PAIRED_SUBMIT_DISTANCE, recipient: RECIPIENT_NAME.source })
               .catch(() => false)
           : null;
       // computeDescriptor validates against the live page and throws if nothing

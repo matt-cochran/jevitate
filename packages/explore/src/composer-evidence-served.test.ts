@@ -80,6 +80,35 @@ describe("#370 — a chat composer needs conversational evidence, not the word '
   });
 });
 
+describe("#638 — a message addressed to a person is a form field, not a chat with the app", () => {
+  it("a 'Message' textarea whose form has a Contact select and a Send button (no transcript) is a form field", async () => {
+    const { field } = await fieldOn(
+      `<form><p><label for="to">Contact</label><select id="to"><option>Grace Hopper</option></select></p>
+       <p><label for="body">Message</label><textarea id="body"></textarea></p>
+       <p><button type="submit">Send</button></p></form>`,
+      "Message",
+    );
+    expect(field.conversational).toBe(false);
+  });
+
+  it("a 'To' input beside a 'Message' box and a Send button is a form field", async () => {
+    const { field } = await fieldOn(
+      `<div><input aria-label="To" /><textarea aria-label="Message"></textarea><button>Send</button></div>`,
+      "Message",
+    );
+    expect(field.conversational).toBe(false);
+  });
+
+  it("a direct-message chat with a transcript stays a composer even with a recipient field", async () => {
+    const { field } = await fieldOn(
+      `<div role="log"><p>Grace: are you there?</p></div>
+       <div><input aria-label="To" value="Grace" /><textarea aria-label="Message"></textarea><button>Send</button></div>`,
+      "Message",
+    );
+    expect(field.conversational).toBe(true);
+  });
+});
+
 let server: Server;
 let base: string;
 let published: string[] = [];

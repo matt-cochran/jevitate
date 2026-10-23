@@ -18,6 +18,7 @@ export const SIGNAL_RULES: Readonly<
   "duplicate-create": { id: "signal-duplicate-create", principle: "Error prevention", citation: NNG, severity: "major" },
   "failed-submit": { id: "signal-failed-submit", principle: "Help users recognize, diagnose, and recover from errors", citation: NNG, severity: "major" },
   "url-mismatch": { id: "signal-url-mismatch", principle: "Consistency and standards", citation: NNG, severity: "minor" },
+  "repeated-advance": { id: "signal-repeated-advance", principle: "Flexibility and efficiency of use", citation: NNG, severity: "minor" },
   "horizontal-overflow": { id: "signal-horizontal-overflow", principle: "Flexibility and efficiency of use", citation: NNG, severity: "major" },
   "vertical-clipping": { id: "signal-vertical-clipping", principle: "Visibility of system status", citation: NNG, severity: "major" },
 };
