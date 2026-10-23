@@ -181,7 +181,7 @@ jevitate journey lint checkout --sarif lint.sarif
 | `no-persistence-check` | warning | A write has no `reloadThen` or `http` end-state check, so persistence is unverified |
 | `http-check-off-allowlist` | error | An `http` end-state check reads an origin that is neither the Journey's site nor in its `metadata.allowedOrigins` |
 | `http-check-without-reset` | warning | The Journey has an `http` end-state check but records no fixtures, so nothing resets its source (an earlier email can make it pass) |
-| `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion |
+| `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion (a `waitFor` step's target and state count as its checked outcome, #659) |
 | `upload-file-missing` | error | An `upload` step's literal fixture path does not exist. Relative paths resolve against the project root (the folder holding `.jevitate/`), never the working directory; the message shows the resolved path |
 | `upload-outside-project` | error | An `upload` step's fixture resolves (after symlinks) outside the project root: an absolute path, a `../` path or a symlink that escapes. A run refuses it (`fixture-outside-project`), `journey promote` refuses it (`E_JOURNEY_WEAK`) and `--accept-weak` does not waive it — move the fixture into the project. There is no override flag |
 

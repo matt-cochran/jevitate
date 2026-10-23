@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groundDone, WRITES_DONE_NOTE } from "./conversation.js";
+import { groundDone, WRITES_DONE_NOTE, READ_BACK_DONE_NOTE } from "./conversation.js";
 import { jobWriteEvidence } from "./write-evidence.js";
 import type { SideEffect } from "./side-effects.js";
 
@@ -106,5 +106,24 @@ describe("#514 jobWriteEvidence — only the job's own actions' writes count", (
 
   it("writes past the listed cap are unknown, so not succeeded", () => {
     expect(jobWriteEvidence([write(201)], { truncated: 3, blocked: 0 }).unsucceeded).toEqual(["3 more write(s) not listed"]);
+  });
+});
+
+describe("#645 groundDone — writes the app was seen to keep (read back, #649)", () => {
+  it("accepts a done whose writes were read back when the page judgment is more likely than not", () => {
+    const v = groundDone({ unsubmitted: [], goalMetProbability: 0.62, writes: scoped([write(200)], 0.11), readBack: true });
+    expect(v).toEqual({ accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: READ_BACK_DONE_NOTE } });
+  });
+
+  it("rejects it when the page judgment is below even odds", () => {
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.45, writes: scoped([write(200)], 0.11), readBack: true }).accept).toBe(false);
+  });
+
+  it("rejects the same judgment when nothing was read back", () => {
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.62, writes: scoped([write(200)], 0.11) }).accept).toBe(false);
+  });
+
+  it("rejects it when a write failed", () => {
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.62, writes: scoped([write(200), write(500)], 0.11), readBack: true }).accept).toBe(false);
   });
 });

@@ -1,5 +1,16 @@
 # @jevitate/cli
 
+## 0.23.0
+
+### Minor Changes
+
+- c81a0d3: An import or other write that answers success but keeps nothing is no longer reported clean when the run never typed what it sent (#649). After a 2xx write, the values in its request body that the page then lists (an import's rows) must show again on a page loaded from the server before a `report` or `done` can rest on them, and the run is told when one does. A done whose writes the app was seen to keep this way now needs only even odds from the advisory page judgment instead of 0.75, which removes the false alarms on complete jobs scored just under the threshold (#645). On the accuracy lab: the phantom import is caught on 4 of 4 runs (1 of 6 on 0.22.0) and the phantom message on 4 of 4, with all 20 clean runs clean.
+
+### Patch Changes
+
+- d333507: Two timing fixes that also made CI flaky. A backend log line that a click's request writes just after the step settles now stays on that click when the run's next step is `done` or `blocked`; before, under load it could move to that ending step and be missing from the click's evidence (#653). An adversarial run no longer counts a form submit as "blocked by validation" when no field is invalid and the request is only slow to be reported; it waits up to a second for the request first (#657).
+- c147b65: A `waitFor` step's documented `expectedResult` no longer draws an `intent-uncovered` warning: the wait's target and state are enforced when the step runs, so they count as its checked outcome in `journey lint`, strict review and linked readiness (#659). Steps whose effect really is unchecked still warn.
+
 ## 0.22.0
 
 ### Minor Changes

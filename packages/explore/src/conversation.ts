@@ -543,6 +543,9 @@ export const GOAL_CHECK_TRIGGER = 0.5;
 /** #514: the note an outcome accepted on the job's succeeded writes carries (result and transcript). */
 export const WRITES_DONE_NOTE = "the job's writes succeeded; the page shows no change (repeat data?)";
 
+/** #645: the note an outcome accepted on writes the app was seen to keep carries. */
+export const READ_BACK_DONE_NOTE = "the job's writes succeeded and a page loaded from the server shows what they sent";
+
 export interface DoneEvidence {
   /** Fields holding typed text that was never submitted (labels). */
   readonly unsubmitted: readonly string[];
@@ -575,6 +578,11 @@ export interface DoneEvidence {
    * condition, and only after the page judgment ran and said the goal is not observably met.
    */
   readonly writes?: WriteEvidence & { readonly goalIsWrites: number | null };
+  /**
+   * #645: every value the run's writes sent was read back on a page loaded from the server since
+   * (#647/#649) — code saw the app keep them. Weighed only with `writes`, all succeeded.
+   */
+  readonly readBack?: boolean;
 }
 
 /**
@@ -592,7 +600,9 @@ export interface DoneEvidence {
  *    least one write and EVERY one succeed (2xx; none failed, blocked, unanswered or unlisted) AND
  *    the advisory scope judgment says the whole goal is what those writes did, at the same threshold
  *    — same split: code proves the writes, the model only scopes the goal (a multi-step job writes
- *    2xx halfway through). Accepted with a note: the page shows no change (repeat data?).
+ *    2xx halfway through). Accepted with a note: the page shows no change (repeat data?);
+ *  - (#645) the same writes all succeeded AND what they sent was read back from the app (`readBack`)
+ *    AND the page judgment finds the goal more likely met than not (`GOAL_CHECK_TRIGGER`).
  */
 export function groundDone(e: DoneEvidence): DoneVerdict {
   if (e.unsubmitted.length > 0) {
@@ -620,6 +630,13 @@ export function groundDone(e: DoneEvidence): DoneVerdict {
   const w = e.writes;
   if (w !== undefined && writesAllSucceeded(w) && w.goalIsWrites !== null && w.goalIsWrites >= GOAL_MET_THRESHOLD) {
     return { accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: WRITES_DONE_NOTE } };
+  }
+  // #645: the writes went through AND code read back what they sent from the app — a phantom write
+  // (2xx, nothing kept) cannot get here. The page judgment then only has to find the goal more likely
+  // met than not: on the accuracy lab it scored complete jobs 0.57–0.74 and phantoms up to 0.95, so
+  // the threshold alone could not separate them; the read-back does.
+  if (w !== undefined && writesAllSucceeded(w) && e.readBack === true && p >= GOAL_CHECK_TRIGGER) {
+    return { accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: READ_BACK_DONE_NOTE } };
   }
   const notMet = `the goal is not observably achieved on this page (p=${p.toFixed(2)})`;
   // #514: the writes went through but the scope judgment won't vouch for them — say so, so the reader

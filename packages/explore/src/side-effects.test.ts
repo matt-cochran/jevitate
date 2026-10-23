@@ -118,6 +118,7 @@ function fakeMonitor(): { monitor: PageMonitor; finish: (r: CapturedRequest) => 
     },
     pending: () => [...inflight],
     unfinished: () => [...inflight],
+    writeBodyValuesSince: () => [],
   } as unknown as PageMonitor;
   return { monitor, finish: (r) => capture?.add(r), inflight };
 }
@@ -323,6 +324,7 @@ describe("SideEffectLog (#116)", () => {
       stopCapture() {},
       pending: () => [...inflight],
     unfinished: () => [...inflight],
+    writeBodyValuesSince: () => [],
     } as unknown as PageMonitor;
     const log = new SideEffectLog({ now: () => t });
     log.attach(monitor);

@@ -223,6 +223,7 @@ export function newStep(ctx: RunContext, input: StepInput) {
       ...(signIn === null || goalMet === undefined ? {} : { signIn: { completed: signIn.completed, goalIsSignIn } }),
       ...(saved === null || goalMet === undefined ? {} : { save: { completed: saved.completed, goalIsSave } }),
       ...(writes === undefined || goalMet === undefined ? {} : { writes: { ...writes, goalIsWrites } }),
+      ...(writes === undefined ? {} : { readBack: ctx.observed.readBackConfirmed() }),
     });
     // `value` is code's reading of the probability (the acceptance threshold), not the port's
     // p >= 0.5 — a transcript must never show "goalMet: true" beside "done rejected" (#91).

@@ -333,3 +333,20 @@ describe("log classes (#422): environment / expected-validation lines are never 
     15_000,
   );
 });
+
+describe("a step that performs no browser action owns no log window (#653)", () => {
+  it("a line landing after the last click settled, before `done`, attaches to the click", async () => {
+    const { file, spec } = await openTailedFile();
+    const rt = openServerLogRuntime({ sources: [spec], logDefect: [], secrets: [], drainMs: 400 });
+    await sleep(300); // let the poller confirm the file is open before writing
+    const click = entry("http://x.test/page");
+    rt?.onTranscriptEntry(click, [click]);
+    await sleep(20);
+    await appendFile(file, "WARN slow query on drafts\n"); // the click's backend work, logged just after it settled
+    await sleep(300);
+    const done: TranscriptEntry = { ...click, step: 2, op: "done", target: null };
+    rt?.onTranscriptEntry(done, [click, done]);
+    const result = await rt!.finish([click, done]);
+    expect((result.transcript[0] as { serverLogs?: Array<{ level: string }> }).serverLogs?.map((l) => l.level)).toEqual(["warn"]);
+  });
+});

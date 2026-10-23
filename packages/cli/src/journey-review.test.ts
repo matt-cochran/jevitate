@@ -293,3 +293,21 @@ describe("#565 review sheet: parameter-relative checks", () => {
     expect(emailCheck(j).weak).toBe(true);
   });
 });
+
+describe("#659 — a waitFor step's documented result in the review sheet", () => {
+  it("the review's lint proof has no intent-uncovered finding for it", () => {
+    const base = fixtureJourney();
+    const waitPage = {
+      url: `${SITE}/handoff`,
+      steps: [
+        {
+          step: { kind: "waitFor" as const, target: { testId: "conversation-handoff" }, state: "visible" as const },
+          objective: "Wait for the populated asynchronous handoff before extraction",
+          expectedResult: "The populated handoff is visible before any extraction.",
+        },
+      ],
+    };
+    const journey: Journey = { ...base, recording: { ...base.recording, pages: [...base.recording.pages, waitPage] } };
+    expect(buildJourneyReview(journey).proof.lint.findings.some((f) => f.rule === "intent-uncovered")).toBe(false);
+  });
+});
