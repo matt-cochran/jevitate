@@ -4,6 +4,7 @@
  * join, and the live page reads a planned step is checked with. Not part of the public API.
  */
 
+import { clock } from "@jevitate/domain";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { Recording } from "@jevitate/recording";
 import type { Page } from "playwright";
@@ -180,6 +181,23 @@ export function submitRequestSent(monitor: PageMonitor, sinceMs: number): boolea
   if (monitor.pending().some((r) => r.startedAt >= sinceMs && isSubmitLike(r.method, r.resourceType))) return true;
   if (monitor.completedSince(sinceMs).some((r) => r.startedAt >= sinceMs && isSubmitLike(r.method, r.resourceType))) return true;
   return false;
+}
+
+/** How often {@link submitRequestSentWithin} looks again for the submit's request. */
+const SUBMIT_REQUEST_POLL_MS = 50;
+
+/**
+ * #657: Playwright reports a request to Node asynchronously, so under load a submit that did send
+ * its write can show no request at the instant the click resolved. Looks again until `boundMs`
+ * passes — only for a submit no field blocked: a native-validation refusal never sends one.
+ */
+export async function submitRequestSentWithin(monitor: PageMonitor, sinceMs: number, boundMs: number): Promise<boolean> {
+  const deadline = clock.now() + boundMs;
+  while (!submitRequestSent(monitor, sinceMs)) {
+    if (clock.now() >= deadline) return false;
+    await clock.sleep(SUBMIT_REQUEST_POLL_MS);
+  }
+  return true;
 }
 
 /**

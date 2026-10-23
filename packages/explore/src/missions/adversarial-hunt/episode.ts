@@ -27,9 +27,13 @@ import {
   joinReasons,
   nativeValidationMessage,
   submitRequestSent,
+  submitRequestSentWithin,
   type EarlierSubmit,
 } from "./helpers.js";
 import { clock } from "@jevitate/domain";
+
+/** #657: how long a submit no field blocked may take to show its request before it counts as blocked. */
+const SUBMIT_REQUEST_GRACE_MS = 1_000;
 
 /** What a turn planned: the strategy that runs, its planner, the episode, and the page it was planned on. */
 export interface Turn {
@@ -150,11 +154,14 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
     // #155 — a submit click counts as submitted only when it actually sent a request (a write
     // or a navigation); one the browser blocked with native validation never reached the
     // server, so it is recorded `blocked` instead (with the browser's own message, when known).
+    // #657: a submit no field blocked may have sent a request Playwright has not reported yet.
     if (result.ok && s.submitsForm !== undefined) {
-      if (submitRequestSent(monitorFor(ctx.sessions.page), at)) {
+      const monitor = monitorFor(ctx.sessions.page);
+      const invalid = submitRequestSent(monitor, at) ? undefined : await nativeValidationMessage(ctx.sessions.page);
+      if (invalid === undefined && (await submitRequestSentWithin(monitor, at, SUBMIT_REQUEST_GRACE_MS))) {
         ctx.cov.submitted(ep.stepSnap.url, s.submitsForm);
       } else {
-        ctx.cov.blocked(ep.stepSnap.url, s.submitsForm, await nativeValidationMessage(ctx.sessions.page));
+        ctx.cov.blocked(ep.stepSnap.url, s.submitsForm, invalid);
       }
     }
     if (ran === "visit-route" && s.control !== null) ctx.visitedLinks.add(s.control.name);
