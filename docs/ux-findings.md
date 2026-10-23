@@ -46,6 +46,17 @@ its own that something is a problem, and it never writes the finding's text.
 The rubric still supplies each finding's citation. A claim type is cited under the heuristic it
 violates, but the rubric no longer produces findings by itself, so `heuristicAppendix` is empty.
 
+## Run signals
+
+Besides claims, a usability run reports **signals**: findings code derives from the run's own
+requests, screens and steps, with no model (`packages/ux/src/signals`). They cover a hung request,
+a stuck job, a duplicate write or create, a failed submit, a repeated reply, an inert control, an
+internal id on screen, a URL mismatch and page overflow or clipping. #642 adds
+`signal-repeated-advance`: the same Continue / Next / Confirm needed 3 or more times in a row on one
+route, with nothing entered between the clicks and each click moving the page on. It is "slowed"
+friction (avoidable steps), never a defect. #641: a 2xx write is not a stuck job when the page then
+showed a result and did not stay busy, even though its form stays usable.
+
 ## Claim types and what code checks
 
 | Claim type | Source | Verified when | Cited under |
