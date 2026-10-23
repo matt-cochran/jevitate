@@ -6,6 +6,8 @@ import { aggregateOf, formatUsageLine, type UsageCounts } from "@jevitate/ai-cor
 import { consolidate, diffRuns, findingKey, renderJUnit, renderReportMarkdown, renderSarif, type ConsolidatedDefect, type DiffEntry, type FindingIdentity, type FindingsDiff, type GateCase, type RunRecord } from "@jevitate/findings";
 import { approvalsReportVerified } from "./approval-provenance.js";
 import { loadCatalog } from "./catalog-api.js";
+import { findJob, type Catalog } from "./catalog.js";
+import { evaluateOutcomeTargets } from "./outcome-targets.js";
 import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { runUsabilityMission } from "./ux-api.js";
@@ -35,6 +37,35 @@ const REAL_RUNNERS: CheckRunners = {
   usability: runUsabilityMission,
   verifyFix: runVerifyFix,
 };
+
+/**
+ * #643: for each Journey item with a baseline (a clean replay) whose catalog job declares desired
+ * outcomes, the outcome-target results (`evaluateOutcomeTargets`). Catalogs are read once per
+ * Journeys dir; a catalog that cannot be read adds nothing (the targets are advisory).
+ */
+async function addOutcomeTargets(items: CheckItemReport[], executed: ReadonlyArray<{ readonly item: Planned }>, opts: RunCheckOptions): Promise<void> {
+  const catalogDir = opts.projectDir === undefined ? findProjectDir() : opts.projectDir;
+  if (catalogDir === null) return;
+  const catalogs = new Map<string, Promise<Catalog | null>>();
+  const catalogFor = (journeysDir: string): Promise<Catalog | null> => {
+    const dir = resolve(journeysDir);
+    let c = catalogs.get(dir);
+    if (c === undefined) {
+      c = loadCatalog(catalogDir, dir).catch(() => null);
+      catalogs.set(dir, c);
+    }
+    return c;
+  };
+  for (const [idx, { item }] of executed.entries()) {
+    const report = items[idx];
+    if (report === undefined || item.kind !== "journey" || report.baseline === undefined) continue;
+    const catalog = await catalogFor(item.t.target.journeysDir ?? opts.journeysDir);
+    const jobId = catalog?.journeys.find((j) => j.id === item.name)?.job;
+    const outcomes = catalog === null || jobId === undefined ? undefined : findJob(catalog, jobId)?.job.desiredOutcomes;
+    if (outcomes === undefined || outcomes.length === 0) continue;
+    items[idx] = { ...report, outcomeTargets: evaluateOutcomeTargets(outcomes, report.baseline) };
+  }
+}
 
 /** #437: the `--require-approvals` violations as hard `approval` defects (one per item and problem). */
 async function approvalDefects(opts: RunCheckOptions, req: NonNullable<RunCheckOptions["requireApprovals"]>): Promise<{ defects: ConsolidatedDefect[] }> {
@@ -302,6 +333,9 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       ...(ex.locatorHealth === undefined ? {} : { locatorHealth: ex.locatorHealth }),
     };
   });
+
+  // #643: each passed Journey item's job outcome targets against its machine baseline (advisory, never gating).
+  await addOutcomeTargets(itemReports, executed, opts);
 
   // #470: locator health over the Journey items (advisory unless the gate is set), and its trend against --baseline.
   const details: Array<{ name: string; detail: LocatorHealthDetail }> = executed.flatMap(({ item, ex }) =>
