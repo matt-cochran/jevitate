@@ -65,7 +65,7 @@ verdict to a team (a false "clean" is worse than a false alarm).
 | A completed write on a reusable form reported as a stuck job | false usability alarm | 2 | 2/42 | 0/42 | #641 |
 | Avoidable steps unreported | effort invisible; agents disagree | 2 | 3/42 | 0/42 | #642 — `signal-repeated-advance` |
 | `done` rejected just under `GOAL_MET_THRESHOLD` (p 0.69–0.74 after a completed job) | false alarm | 3 | 2/42 | 2/42 | open (#645): the judgment cannot separate complete from incomplete jobs (see below) |
-| A 2xx write that did not persist accepted as done | false clean: silent data loss reported as success | 5 | — | 5/11 phantom cells | open (#647): verify the write persisted |
+| A 2xx write that did not persist accepted as done | false clean: silent data loss reported as success | 5 | — | 5/11 phantom cells | #647: what the run typed counts only once a page loaded since the write shows it (`j2-phantom` caught 6/6); content it did not type is open (#649) |
 
 The counts come from the cells' transcripts; one cell can show more than one mode. The remaining
 mode is the next experiment: lowering the threshold trades false alarms for false "succeeded"
@@ -91,6 +91,14 @@ threshold separates them; lowering it would add false "succeeded" verdicts. `j2-
 ended `clean` / `succeeded` on 3 of 3 cells: a write that answered 2xx but did not persist is not
 caught. The lever is code evidence that a write persisted (read it back after a reload), not the
 threshold (#647).
+
+#647 does that for what the run itself typed. After a 2xx write, the typed values count as evidence
+for a report or a `done` only once a page from a later document load (a reload, or the page that
+lists them) shows them again; the first request to read them back costs the run nothing, and a run
+that verifies a write is never stopped as no-progress. Re-run on 2026-10-23: `j2-phantom` caught on
+6 of 6 cells (it was missed on all 5 conclusive cells before), clean J1 6/6 and clean J2 5/6 clean
+(the one miss is the #645 near-threshold `done`). Content the run did not type, such as
+`j3-phantom`'s prefilled CSV, has nothing of the run's own to read back: #649.
 
 ## Lessons from building it
 
