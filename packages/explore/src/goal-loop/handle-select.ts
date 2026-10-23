@@ -1,7 +1,8 @@
 /**
  * Options-aware `select` (J-5, #273): the generator sees the real options and code selects only an
- * option the page actually has — never the one already selected, never a placeholder unless the goal
- * asks to clear the field. The goal loop's select handler, moved out of `explore.ts` unchanged (#232).
+ * option the page actually has — the one already selected is a no-op (#639), never a placeholder
+ * unless the goal asks to clear the field. The goal loop's select handler, moved out of `explore.ts`
+ * unchanged (#232).
  */
 
 import { act } from "../act.js";
@@ -19,8 +20,8 @@ export async function handleSelectOption(ctx: RunContext, step: ActStep, op: Dec
   const options = control.options as readonly string[];
   // Options-aware select (J-5): the generator sees the real options, and code selects only an
   // option the page actually has — never a guessed value.
-  // #273: never the option already selected (a no-op), never a placeholder ("—", "Select…")
-  // unless the goal asks to clear the field.
+  // #273: never a placeholder ("—", "Select…") unless the goal asks to clear the field.
+  // #639: the option already selected is accepted as a no-op, not refused.
   const current = control.selected ?? null;
   const clearing = CLEARS_FIELD.test(cfg.goal);
   const choices = options.filter((o) => o !== current && (clearing || !isPlaceholderOption(o)));
@@ -50,11 +51,20 @@ export async function handleSelectOption(ctx: RunContext, step: ActStep, op: Dec
     return "continue";
   }
   const named = text === null ? null : matchOption(text, options);
-  if (named !== null && !choices.includes(named)) {
-    // The current option (or a placeholder) again: never acted — the page would not change.
+  if (named !== null && named === current) {
+    // #639: the model named the option already shown selected — a no-op, never a refusal. The page
+    // does not change, so record it as a successful step ("nothing to change") and let the loop move on.
     ctx.fillHelper.commit();
-    const why = named === current ? `${quote(named, 60)} is already selected` : `${quote(named, 60)} is a placeholder, not a choice`;
-    const reason = `select refused: ${why} in ${control.name || control.summary} — options not tried: ${untried()}`;
+    const reason = `${quote(named, 60)} is already selected in ${control.name || control.summary} — nothing to change`;
+    ctx.history.push(reason);
+    record(true, reason, { value: named });
+    ctx.lastActedOp = op;
+    return "continue";
+  }
+  if (named !== null && !choices.includes(named)) {
+    // A placeholder again: never acted — the page would not change.
+    ctx.fillHelper.commit();
+    const reason = `select refused: ${quote(named, 60)} is a placeholder, not a choice in ${control.name || control.summary} — options not tried: ${untried()}`;
     ctx.history.push(reason);
     record(false, reason, { origin: "engine", value: named });
     ctx.lastActedOp = op;
