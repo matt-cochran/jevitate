@@ -7,6 +7,24 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.22.0] – 2026-10-23
+
+0.22.0 makes Jevitate's verdicts more often right, and measures it: a seeded-defect lab with known ground truth now ships with the repo. On its 42 runs, goal-run precision rose from 64% to 90% and usability precision from 60% to 90%, every planted defect is still found, and no run ends without a verdict.
+
+### Added
+
+- **Accuracy lab (#644).** `test/fixtures/accuracy-lab` is a small app with a clean variant and variants with one planted defect each; `scripts/accuracy-lab/run-matrix.mjs` runs every cell against the global or a built CLI (`JEVITATE_BIN`), and `score.mjs` reports precision, recall, cross-strategy agreement and effort. `docs/accuracy.md` has the current rates and the remaining failure modes. The lab makes real model calls, so it is not part of CI.
+- **`signal-repeated-advance` (#642).** A usability run that needed the same Continue / Next / Confirm 3 or more times in a row on one route, with nothing entered between, reports a grounded "slowed" finding citing the steps. It is never a defect.
+- **Desired-outcome target misses in `check.json` (#643).** A clean Journey item whose job declares duration targets carries `outcomeTargets`: a target the replay's floor already breaks is a definite miss; the rest is left to real-user measurement. Advisory: a miss never fails the check.
+
+### Fixed
+
+- **A message form addressed to a person is not a chat (#638).** A Message box with a To or Contact field and a Send button was driven as a chat with the app: the goal prompt was typed as the message and each send waited 60s for a reply. It is now a form field.
+- **Selecting the option already selected (#639).** A page default the run did not set is accepted once as a no-op instead of a refusal that derailed the run. Re-choosing an option the run set itself, or a placeholder, is still refused (#273).
+- **Wizards whose steps share the same buttons (#640).** A step that changes only its progress indicator ("Confirmation 1 of 3" to "2 of 3") is told to the model as new text, so goal runs no longer abandon working wizards.
+- **A completed write on a reusable form is not a stuck job (#641)**, unless the page stays busy to the end.
+- **Silent data loss is no longer reported clean (#647).** After a 2xx write, what the run typed counts as evidence for a report or a `done` only once a page loaded from the server shows it again. Before such an ending rests on a page showing it, Jevitate reloads that page once and checks (a verification read, not recorded as a Journey step). Content the run did not type, such as a prefilled import, is not covered yet (#649).
+
 ## [0.21.1] – 2026-10-22
 
 0.21.1 carries a CI fix to production; the CLI is unchanged from 0.21.0.
