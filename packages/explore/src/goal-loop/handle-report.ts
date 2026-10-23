@@ -78,6 +78,15 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
     ctx.stop = "done";
     return "stop";
   }
+  // #647: an answer resting on what the run sent, not yet read back, is not wrong — it is unverified.
+  // The first time, the run is asked to read it back (reload, or the page that lists it) without
+  // spending one of its report attempts; after that it counts like any ungrounded answer.
+  if (verdict.unconfirmedWrite === true && !ctx.readBackAsked) {
+    ctx.readBackAsked = true;
+    ctx.history.push(`report deferred: ${verdict.reason}`);
+    record(false, `report deferred: ${verdict.reason}`, { answer: verdict.answer, origin: "engine" });
+    return "continue";
+  }
   ctx.reportRejections += 1;
   // #424: what code DID ground of a rejected answer is evidence for the partial report.
   for (const e of verdict.answer?.evidence ?? []) if (e.grounded) ctx.reportClaims.push(e);

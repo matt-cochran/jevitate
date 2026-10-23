@@ -22,6 +22,9 @@ import { REDACTION_MASK, buildJudgmentState, redactContext, redactText, redactUr
  * goal's question?" — may then VETO an answer code accepted; it never approves one on its own.
  */
 
+/** #647: the start of the reason a claim resting on the run's own, unread write is not grounded. */
+const UNCONFIRMED_WRITE = "the quote shows what the run itself sent";
+
 /** Bound on the observed text handed to the answer generator. */
 export const ANSWER_PAGES_CHARS = 8_000;
 /** Distinct observed page texts kept for grounding (oldest dropped first). */
@@ -167,6 +170,12 @@ export class ObservedPages {
   /** #647: the run's sent values (folded) that no page loaded from the server since has shown. */
   unreadWrites(): ReadonlySet<string> {
     return this.#unread;
+  }
+
+  /** #647: the unread sent values (folded) that `shown` (a page's text, or field values) displays. */
+  unreadShownIn(shown: string): string[] {
+    const text = fold(shown);
+    return [...this.#unread].filter((v) => text.includes(v));
   }
 
   /**
@@ -325,6 +334,8 @@ export type AnswerVerdict =
       readonly accept: false;
       readonly reason: string;
       readonly answer: RunAnswer | null;
+      /** #647: the answer rests on what the run sent, not yet read back from a page loaded since. */
+      readonly unconfirmedWrite?: true;
       /**
        * #223: what was reported is on the pages but does not answer the question (only a control's
        * label, an error page, or Jev's veto) — for the run, an answer not found. Absent otherwise.
@@ -706,7 +717,7 @@ function groundClaimOn(
   // may be rendering the run's own request. It grounds once a page loaded from the server shows it.
   const sent = [...unread].find((v) => v.length >= MIN_QUOTE_CHARS && q.includes(v));
   if (sent !== undefined) {
-    const why = `the quote shows what the run itself sent ("${sent}"), and no page loaded since the write has shown it — the app may not have kept it (reload, or open the page where the app lists it, and report what that shows)`;
+    const why = `${UNCONFIRMED_WRITE} ("${sent}"), and no page loaded since the write has shown it — the app may not have kept it (reload, or open the page where the app lists it, and report what that shows)`;
     return { ...base, url: page.url, grounded: false, ...where, why };
   }
   if (found.source === "page-text" && !CONTROL_GOAL.test(goal) && quoteIsOnlyControlNames(quote, found.page)) {
@@ -770,6 +781,7 @@ export function groundAnswer(
   if (badAt >= 0) {
     const bad = evidence[badAt]!;
     const reason = `the answer is not grounded: "${bad.claim}" — ${bad.why ?? "ungrounded"}`;
+    if (bad.why?.startsWith(UNCONFIRMED_WRITE) === true) return { accept: false, reason, answer, unconfirmedWrite: true };
     return grounded_[badAt]!.notAnswer ? { accept: false, reason, answer, notAnswer: true } : { accept: false, reason, answer };
   }
   const grounded = new Set(evidence.flatMap((e) => numbersIn(e.quote)));

@@ -55,4 +55,12 @@ describe("#647 read-back of what the run sent", () => {
     const observed = run([]);
     expect(observed.readBack(1, sentRow)).toEqual([]);
   });
+
+  it("reports which unread sent values a page shows", () => {
+    expect(run([]).unreadShownIn(sentRow)).toEqual(["hello from acme"]);
+  });
+
+  it("reports none for a page that does not show what was sent (a write-only form)", () => {
+    expect(run([]).unreadShownIn("Thanks — we received your message")).toEqual([]);
+  });
 });
