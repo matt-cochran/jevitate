@@ -117,3 +117,22 @@ describe("#649 read-back of a write's body values the run did not type", () => {
     expect([...observed.unreadWrites()]).toEqual([]);
   });
 });
+
+describe("#645 readBackConfirmed", () => {
+  it("is true once every sent value was read back", () => {
+    const observed = new ObservedPages();
+    observed.add(URL, "Sent messages\nNo messages yet", [], { document: 1 });
+    observed.noteOwnInput("Hello from Acme");
+    observed.confirmOwnInputs(1);
+    observed.add(URL, sentRow, [], { document: 2 });
+    expect(observed.readBackConfirmed()).toBe(true);
+  });
+
+  it("is false while a sent value is unread", () => {
+    expect(run([{ text: sentRow, document: 1 }]).readBackConfirmed()).toBe(false);
+  });
+
+  it("is false when nothing was ever sent", () => {
+    expect(new ObservedPages().readBackConfirmed()).toBe(false);
+  });
+});

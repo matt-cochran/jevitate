@@ -227,7 +227,19 @@ export class ObservedPages {
       this.#unread.delete(v);
       this.#sourceRoute.delete(v);
     }
+    this.#readBackCount += back.length;
     return back;
+  }
+
+  /** #645: how many sent values a page loaded from the server has shown again. */
+  #readBackCount = 0;
+
+  /**
+   * #645: the app was seen to keep what the run's writes sent — at least one value was read back and
+   * none is still unread. Code evidence the page judgment lacks (see `groundDone`).
+   */
+  readBackConfirmed(): boolean {
+    return this.#readBackCount > 0 && this.#unread.size === 0;
   }
 
   /** #239: the run's own typed, not-yet-saved values (folded). */
