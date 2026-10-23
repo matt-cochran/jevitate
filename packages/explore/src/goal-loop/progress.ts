@@ -19,7 +19,7 @@ import { redactUrl } from "../redact.js";
 import { describeStatus, isEmptyStatus, readFormText, readPageStatus, statusDelta } from "../status.js";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { RunContext } from "./context.js";
-import { EXPECTED_RETURN, savedAndLeft, settledNavigation } from "./helpers.js";
+import { EXPECTED_RETURN, documentOf, savedAndLeft, settledNavigation } from "./helpers.js";
 import { LAST_CHANCE_NOTE, MAX_MOVING_SCROLLS } from "./limits.js";
 import type { Flow, Perceived } from "./step.js";
 import { clock } from "@jevitate/domain";
@@ -44,6 +44,12 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   // leaves the signature unchanged. What newly appeared on the same page is told to the model, and
   // an action whose effect it is made progress (when no action delta, #303, already judged it).
   const text = await readPageText(ctx.page, ctx.secrets).catch(() => "");
+  // #647: a page loaded from the server since the run's write shows what it sent — the app kept it.
+  // Told to the model (it may report now), and progress: verifying a write never reads as a stall.
+  const readBack = ctx.observed.readBack(await documentOf(ctx.page), text);
+  if (readBack.length > 0) {
+    ctx.history.push(clipLine(`a page loaded from the server shows what the run sent (${readBack.map((v) => `"${v}"`).join(", ")}) — the app kept it`));
+  }
   const previous = ctx.pageText;
   ctx.pageText = { url: snap.url, text };
   const replyTold = ctx.replyTold;
@@ -101,7 +107,7 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   // #2 — no-progress: the last executed op left the page unchanged N times.
   // #303: the last action's delta decides when there is one — only `no-change` counts toward the
   // streak, `inconclusive` holds it; without one the page signature decides, as before.
-  const verdictNow = formShown.length > 0 ? "relevant-change" : (ctx.deltaVerdict ?? (added.length > 0 ? "relevant-change" : null));
+  const verdictNow = formShown.length > 0 || readBack.length > 0 ? "relevant-change" : (ctx.deltaVerdict ?? (added.length > 0 ? "relevant-change" : null));
   ctx.deltaVerdict = null;
   // #323: past the bound, a moving scroll is no progress even when the signature changed (a
   // virtualized list renders other rows at each position) — it only revisits what it has seen.

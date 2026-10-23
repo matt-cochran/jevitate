@@ -169,6 +169,18 @@ export class ObservedPages {
     return this.#unread;
   }
 
+  /**
+   * #647: a page from a later document load than the write shows `shown` (its visible text, or field
+   * values): the sent values it contains are read back from the app. Returns those values.
+   */
+  readBack(document: number | undefined, shown: string): string[] {
+    if (this.#unread.size === 0 || document === undefined || document === this.#writeDocument) return [];
+    const text = fold(shown);
+    const back = [...this.#unread].filter((v) => text.includes(v));
+    for (const v of back) this.#unread.delete(v);
+    return back;
+  }
+
   /** #239: the run's own typed, not-yet-saved values (folded). */
   ownInputs(): ReadonlySet<string> {
     return this.#ownInputs;
@@ -209,10 +221,7 @@ export class ObservedPages {
       if (nav.length > 0) this.#topNav = nav;
     }
     // #647: a page from a later document load that shows a sent value reads it back from the app.
-    if (this.#unread.size > 0 && headings.document !== undefined && headings.document !== this.#writeDocument) {
-      const shown = [fold(page.text), ...kept.map((f) => fold(f.value))].join("\n");
-      for (const v of [...this.#unread]) if (shown.includes(v)) this.#unread.delete(v);
-    }
+    this.readBack(headings.document, [page.text, ...kept.map((f) => f.value)].join("\n"));
     if (page.text.trim() === "" && kept.length === 0) return;
     const same = (p: ObservedPage): boolean =>
       JSON.stringify(p.fields ?? []) === JSON.stringify(page.fields ?? []) &&

@@ -45,4 +45,14 @@ describe("#647 read-back of what the run sent", () => {
     const v = groundAnswer({ answer: "The page says the message was sent", claims: [{ claim: "Message sent", quote: "Message sent" }] }, observed.pages(), { unreadWrites: observed.unreadWrites() });
     expect(v.accept).toBe(true);
   });
+
+  it("a later document showing the sent text reads it back", () => {
+    const observed = run([]);
+    expect(observed.readBack(2, sentRow)).toEqual(["hello from acme"]);
+  });
+
+  it("the document the write was sent from reads nothing back", () => {
+    const observed = run([]);
+    expect(observed.readBack(1, sentRow)).toEqual([]);
+  });
 });
