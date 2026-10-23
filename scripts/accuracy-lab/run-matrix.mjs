@@ -19,6 +19,8 @@ export const JOBS_BY_VARIANT = {
   "j2-stall": ["J2"],
   "j3-effort": ["J3"],
   "j3-deadend": ["J3"],
+  "j2-phantom": ["J2"],
+  "j3-phantom": ["J3"],
 };
 export const STRATEGIES = ["goal", "usability"];
 

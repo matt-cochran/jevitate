@@ -17,7 +17,7 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const VARIANTS = ["clean", "j1-5xx", "j2-stall", "j3-effort", "j3-deadend"];
+export const VARIANTS = ["clean", "j1-5xx", "j2-stall", "j3-effort", "j3-deadend", "j2-phantom", "j3-phantom"];
 
 const SAMPLE_CSV = "name,email\nGrace Hopper,grace@example.com\nAlan Turing,alan@example.com";
 
@@ -319,17 +319,21 @@ function createHandler(variant) {
       if (req.method === "POST" && path === "/api/messages") {
         const body = JSON.parse((await readBody(req)) || "{}");
         const message = { to: String(body.to ?? ""), body: String(body.body ?? "") };
-        state.sent.push(message);
+        // #645 j2-phantom: answers success but stores nothing — the job only looks done.
+        if (variant !== "j2-phantom") state.sent.push(message);
         return json(res, 200, { ok: true, ...message });
       }
 
       if (req.method === "POST" && path === "/api/import") {
         const body = JSON.parse((await readBody(req)) || "{}");
         const contacts = Array.isArray(body.contacts) ? body.contacts : [];
-        state.imported.push(...contacts);
-        // Imported contacts join the contact list, as in any CRM: the clean variant must be clean
-        // end to end (a run that checks Contacts after importing finds them there).
-        state.contacts.push(...contacts.filter((c) => c && typeof c.email === "string").map((c) => ({ name: String(c.name ?? c.email), email: c.email })));
+        // #645 j3-phantom: answers success but writes nothing — the job only looks done.
+        if (variant !== "j3-phantom") {
+          state.imported.push(...contacts);
+          // Imported contacts join the contact list, as in any CRM: the clean variant must be clean
+          // end to end (a run that checks Contacts after importing finds them there).
+          state.contacts.push(...contacts.filter((c) => c && typeof c.email === "string").map((c) => ({ name: String(c.name ?? c.email), email: c.email })));
+        }
         return json(res, 200, { ok: true, contacts });
       }
 

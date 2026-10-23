@@ -75,4 +75,26 @@ describe("accuracy-lab fixture variants", () => {
       await app.close();
     }
   });
+
+  it("j2-phantom answers a send with success but lists no sent message afterwards", async () => {
+    const app = await start("j2-phantom");
+    try {
+      await fetch(`${app.url}/api/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ to: "grace@example.com", body: "Hello" }) });
+      const html = await (await fetch(`${app.url}/contacts`)).text();
+      expect(html).not.toMatch(/data-testid="sent-row"/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("j3-phantom answers an import with success but lists no imported contact afterwards", async () => {
+    const app = await start("j3-phantom");
+    try {
+      await fetch(`${app.url}/api/import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ contacts: [{ name: "Ada Byron", email: "ada@example.com" }] }) });
+      const html = await (await fetch(`${app.url}/contacts`)).text();
+      expect(html).not.toContain("ada@example.com");
+    } finally {
+      await app.close();
+    }
+  });
 });

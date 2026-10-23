@@ -23,9 +23,11 @@ test("the matrix plans clean on every job and each seeded variant on its affecte
     "clean|J2",
     "clean|J3",
     "j1-5xx|J1",
+    "j2-phantom|J2",
     "j2-stall|J2",
     "j3-deadend|J3",
     "j3-effort|J3",
+    "j3-phantom|J3",
   ]);
 });
 
