@@ -1,6 +1,7 @@
 import type { ApprovalChannel } from "@jevitate/journey";
 // check-types.ts — `jevitate check` option, result and error types (#231).
 import type { SlownessReport } from "./cold-start-report.js";
+import type { OutcomeTargetResult } from "./outcome-targets.js";
 import { type GenerationPort, type JudgmentPort, type UsageAggregate, type UsageTracker } from "@jevitate/ai-core";
 import type { BrowserPort } from "@jevitate/playwright";
 import type { BrowserRunOptions } from "./browser-run-options.js";
@@ -186,6 +187,8 @@ export interface CheckItemReport {
   readonly journeyHash?: string;
   /** #469: the machine baseline of a Journey item — present only when its run was clean. */
   readonly baseline?: CheckBaseline;
+  /** #643: the item's job outcome targets against `baseline` (advisory; present when the job declares desired outcomes). */
+  readonly outcomeTargets?: readonly OutcomeTargetResult[];
   /** #470: how stable a Journey item's locators are (advisory; gates only past `maxBrittleSteps`). */
   readonly locatorHealth?: LocatorHealth;
 }

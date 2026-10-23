@@ -15,7 +15,7 @@ import { writeClassifier } from "@jevitate/recording";
 import { routeOf } from "../route.js";
 import type { UxFinding } from "../types.js";
 import { makeSignalFinding } from "./finding.js";
-import { API_TYPES, BUSY_TEXT, controlKey, durationOf, median, okStatus, quoteLine, requestEvidence, secs, uniqueSteps } from "./shared.js";
+import { API_TYPES, BUSY_TEXT, controlKey, durationOf, labelOf, median, okStatus, quoteLine, requestEvidence, secs, uniqueSteps } from "./shared.js";
 import type { RunSignalCapture, SignalRequest, SignalScreen, SignalStep, SignalOptions } from "./types.js";
 
 /** On-screen copy that tells the user something failed. */
@@ -30,14 +30,6 @@ function normLine(s: string): string {
   return s.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-/** The label a step acted on: the quoted name in `button "Run the simulation →"`, else the descriptor's name. */
-function labelOf(s: SignalStep): string | null {
-  const quoted = /"([^"]{2,160})"/.exec(s.target ?? "")?.[1];
-  const raw = quoted ?? s.descriptor?.name ?? s.descriptor?.text ?? null;
-  if (raw === null || raw === undefined) return null;
-  const t = raw.replace(/[→←↗›»…]+/g, " ").replace(/\s+/g, " ").trim();
-  return t.length >= 2 ? t : null;
-}
 
 function screenBefore(capture: RunSignalCapture, step: number): SignalScreen | undefined {
   return capture.screens.filter((s) => s.step <= step).pop();
@@ -114,7 +106,30 @@ export function detectStuckJobs(capture: RunSignalCapture, opts: SignalOptions =
     }
     const polls = [...polled.values()].sort((a, b) => b.length - a.length)[0] ?? [];
     const inProgress = reclicks.length > 0 || waits.length > 0 || busy.length > 0 || polls.length >= 3;
+    // #641: a reusable form keeps offering its control after a 2xx write, so "still offered" alone is
+    // not a hang. Completion is evidence the page moved on: a line the pre-action screen did not show
+    // (not the run's own echo, not an in-progress indicator), and the window does not end busy — a
+    // "Job started" line beside a spinner that never clears is still a stuck job (#96).
+    const before = screenBefore(capture, start.step);
+    const was = new Set(before === undefined ? [] : linesOf(before.visibleText).map(normLine));
+    const labelLine = normLine(label);
+    const own = new Set(
+      [start.value, start.message, ...(capture.typedValues ?? [])]
+        .filter((v): v is string => v !== undefined && v.trim().length > 0)
+        .map(normLine),
+    );
     const last = screens[screens.length - 1]!;
+    const completed =
+      before !== undefined &&
+      !last.busy &&
+      !BUSY_TEXT.test(last.visibleText) &&
+      screens.some((s) =>
+        linesOf(s.visibleText).some((line) => {
+          const n = normLine(line);
+          return n.length >= 2 && n !== labelLine && !was.has(n) && !own.has(n) && !BUSY_TEXT.test(line);
+        }),
+      );
+    if (completed) continue;
     const offered = reclicks.length > 0 || normLine(last.visibleText).includes(normLine(label));
     const endedHere = !capture.screens.some((s) => s.step > last.step);
     const startedAt = Math.min(...writes.map((w) => w.startedAt));

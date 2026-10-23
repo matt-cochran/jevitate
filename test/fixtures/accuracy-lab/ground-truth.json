@@ -1,0 +1,148 @@
+{
+  "app": "Acme CRM",
+  "purpose": "Ground truth for measuring jevitate verdict quality on the seeded-defect lab. Each variant changes exactly one behavior of the clean app.",
+  "jobs": {
+    "J1": {
+      "id": "update-my-profile",
+      "goal": "Change the profile name to 'Ada Byron' and the email to 'ada.byron@example.com', press Save, then reload the page and confirm the new values persisted.",
+      "entry": "/profile"
+    },
+    "J2": {
+      "id": "send-contact-message",
+      "goal": "Send a message 'Hello from Acme' to the first contact and confirm it appears in the Sent messages list.",
+      "entry": "/contacts"
+    },
+    "J3": {
+      "id": "import-contacts-csv",
+      "goal": "Import the pasted CSV of contacts (name,email), map the columns, complete every confirmation, and confirm the imported rows appear.",
+      "entry": "/import"
+    }
+  },
+  "defectClasses": {
+    "none": "No defect: the job completes and nothing is misreported.",
+    "failed-submit-masked": "A write fails at the network layer while the UI reports success.",
+    "stall-no-request": "A primary control produces no request and no feedback.",
+    "excess-effort": "A functional job that adds avoidable confirmation work; no error.",
+    "dead-end": "A primary control is disabled with no explanation, so the job cannot complete.",
+    "silent-loss": "A write answers success but nothing is stored: the job looks done and is not (#645 negatives for done calibration)."
+  },
+  "verdictContract": {
+    "goal": {
+      "defectExpected": "true when a goal-strategy run should report the variant as a defect (a failed/dead-end goal or a stall), false when it should report success",
+      "expectedOutcome": "the goal outcome a correct run should reach: succeeded | failed | blocked | exhausted"
+    },
+    "usability": {
+      "defectExpected": "true when a usability review should surface a finding for the variant",
+      "effortElevated": "true when the variant adds avoidable steps and a review should report higher effort",
+      "note": "usability findings are advisory; they never gate missionOutcome"
+    }
+  },
+  "variants": {
+    "clean": {
+      "affectedJob": null,
+      "defectClass": "none",
+      "step": null,
+      "description": "Every job behaves: J1 persists, J2 sends and shows the message, J3 imports after its normal steps.",
+      "goal": {
+        "defectExpected": false,
+        "expectedOutcome": "succeeded"
+      },
+      "usability": {
+        "defectExpected": false,
+        "effortElevated": false
+      }
+    },
+    "j1-5xx": {
+      "affectedJob": "J1",
+      "defectClass": "failed-submit-masked",
+      "step": "save-profile",
+      "description": "The profile Save issues PUT /api/profile, which returns 500 and does not persist, yet the page shows the 'Saved' status regardless.",
+      "goal": {
+        "defectExpected": true,
+        "expectedOutcome": "failed",
+        "note": "Reloading after Save exposes the unchanged value behind the false 'Saved'."
+      },
+      "usability": {
+        "defectExpected": true,
+        "effortElevated": false,
+        "note": "The usability run correctly reports the failed backend save: the 500 surfaces through the backend signal, so it is a true detection."
+      }
+    },
+    "j2-stall": {
+      "affectedJob": "J2",
+      "defectClass": "stall-no-request",
+      "step": "send-message",
+      "description": "The Send button submits nothing: no request leaves the browser and no status text or sent row appears.",
+      "goal": {
+        "defectExpected": true,
+        "expectedOutcome": "blocked",
+        "note": "The goal cannot complete and the run should report the dead control."
+      },
+      "usability": {
+        "defectExpected": true,
+        "effortElevated": false,
+        "note": "A primary control that does nothing is a clear usability defect."
+      }
+    },
+    "j3-effort": {
+      "affectedJob": "J3",
+      "defectClass": "excess-effort",
+      "step": "confirm-import",
+      "description": "The import inserts three extra confirmation screens between column mapping and the final Import; each needs a click and none errors.",
+      "goal": {
+        "defectExpected": false,
+        "expectedOutcome": "succeeded",
+        "note": "The import still completes; only its effort is inflated."
+      },
+      "usability": {
+        "defectExpected": false,
+        "effortElevated": true,
+        "note": "A correct review reports elevated effort without a functional defect."
+      }
+    },
+    "j3-deadend": {
+      "affectedJob": "J3",
+      "defectClass": "dead-end",
+      "step": "confirm-import",
+      "description": "The final Import button is disabled and no explanation is offered, so the import cannot be completed.",
+      "goal": {
+        "defectExpected": true,
+        "expectedOutcome": "blocked",
+        "note": "The run reaches the confirm screen but cannot finish the goal."
+      },
+      "usability": {
+        "defectExpected": true,
+        "effortElevated": false,
+        "note": "A disabled primary action with no explanation is a clear usability defect."
+      }
+    },
+    "j2-phantom": {
+      "affectedJob": "J2",
+      "defectClass": "silent-loss",
+      "step": "send-message",
+      "description": "Send shows 'Message sent' and the row, but the server stores nothing: a reload or another visit shows no sent message.",
+      "goal": {
+        "defectExpected": true,
+        "expectedOutcome": "failed"
+      },
+      "usability": {
+        "defectExpected": true,
+        "effortElevated": false
+      }
+    },
+    "j3-phantom": {
+      "affectedJob": "J3",
+      "defectClass": "silent-loss",
+      "step": "import-confirm",
+      "description": "Import shows the imported rows, but the server writes nothing: Contacts never lists them.",
+      "goal": {
+        "defectExpected": true,
+        "expectedOutcome": "failed"
+      },
+      "usability": {
+        "defectExpected": true,
+        "effortElevated": false
+      }
+    }
+  }
+}

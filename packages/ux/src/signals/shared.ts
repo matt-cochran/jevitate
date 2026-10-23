@@ -46,3 +46,12 @@ export function quoteLine(text: string, needle: string): string {
   const t = line.replace(/\s+/g, " ").trim();
   return t.length <= 160 ? t : `${t.slice(0, 157)}...`;
 }
+
+/** The label a step acted on: the quoted name in `button "Run the simulation →"`, else the descriptor's name. */
+export function labelOf(s: SignalStep): string | null {
+  const quoted = /"([^"]{2,160})"/.exec(s.target ?? "")?.[1];
+  const raw = quoted ?? s.descriptor?.name ?? s.descriptor?.text ?? null;
+  if (raw === null || raw === undefined) return null;
+  const t = raw.replace(/[→←↗›»…]+/g, " ").replace(/\s+/g, " ").trim();
+  return t.length >= 2 ? t : null;
+}

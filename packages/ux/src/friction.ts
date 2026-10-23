@@ -49,6 +49,7 @@ export const SIGNAL_IMPACT: Readonly<Record<SignalKind, JobImpact>> = {
   "internal-id": "confused",
   "inert-control": "confused",
   "url-mismatch": "confused",
+  "repeated-advance": "slowed",
   "horizontal-overflow": "confused",
   "vertical-clipping": "confused",
 };

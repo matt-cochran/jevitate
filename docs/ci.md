@@ -142,6 +142,23 @@ step's completion) and `anchors[]` — `job_start` at 0, each of the Journey's a
 not complete records no baseline. `jevitate catalog export` / `publish journeeze` read these from
 `jevitate-check/check.json` (the `--out` default) to send them to Journeeze.
 
+### Desired-outcome targets in `check.json` (#643)
+
+When a clean Journey item's job (`metadata.job`) declares `desiredOutcomes` in `jobs.json`, the
+item also carries `outcomeTargets[]`: one entry per outcome, `{ outcomeId, status, floorSeconds?,
+target?, reason }`. A clean replay is the fastest path the app allows, so the time it measured
+between a `duration` metric's `from` and `to` anchors is a floor no person goes below. The test is
+one-sided:
+
+| `status` | Meaning |
+|---|---|
+| `miss` | the floor already breaks the target: an upper bound in seconds (`<`, `<=`) the floor reaches, or a `share_under` threshold the floor exceeds while the target asks for some share under it. No user can meet it. |
+| `not-decidable` | the floor meets the target; whether people do is for real-user measurement (Journeeze) |
+| `unmeasured` | an anchor the metric names is not in the replay's baseline (`reason` names it) |
+| `not-decidable-by-replay` | no duration metric, no target, or a lower-bound target |
+
+Target misses are advisory: they never change an item's verdict or the exit code.
+
 ### Publishing the catalog to Journeeze from CI
 
 `jevitate publish journeeze` exports the catalog bundle (personas, jobs, promoted Journeys with

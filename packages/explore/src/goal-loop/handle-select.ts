@@ -1,7 +1,9 @@
 /**
  * Options-aware `select` (J-5, #273): the generator sees the real options and code selects only an
- * option the page actually has — never the one already selected, never a placeholder unless the goal
- * asks to clear the field. The goal loop's select handler, moved out of `explore.ts` unchanged (#232).
+ * option the page actually has — never a placeholder unless the goal asks to clear the field. A
+ * default the page already shows is accepted once as a no-op (#639); re-choosing an option the run
+ * set itself is the select loop and is refused (#273). The goal loop's select handler, moved out of `explore.ts`
+ * unchanged (#232).
  */
 
 import { act } from "../act.js";
@@ -19,8 +21,8 @@ export async function handleSelectOption(ctx: RunContext, step: ActStep, op: Dec
   const options = control.options as readonly string[];
   // Options-aware select (J-5): the generator sees the real options, and code selects only an
   // option the page actually has — never a guessed value.
-  // #273: never the option already selected (a no-op), never a placeholder ("—", "Select…")
-  // unless the goal asks to clear the field.
+  // #273: never a placeholder ("—", "Select…") unless the goal asks to clear the field.
+  // #639: the option already selected is accepted as a no-op, not refused.
   const current = control.selected ?? null;
   const clearing = CLEARS_FIELD.test(cfg.goal);
   const choices = options.filter((o) => o !== current && (clearing || !isPlaceholderOption(o)));
@@ -50,11 +52,25 @@ export async function handleSelectOption(ctx: RunContext, step: ActStep, op: Dec
     return "continue";
   }
   const named = text === null ? null : matchOption(text, options);
+  const field = control.name || control.summary;
+  const noop = `${quote(named ?? "", 60)} is already selected in ${field} — nothing to change`;
+  // #639: the model confirming a default the page already shows (a real option, not a placeholder)
+  // is a no-op, accepted once. #273: re-choosing an option this run set itself, or one the model was
+  // already told is set, is the select loop — refused below, naming the options not tried.
+  const setByRun = (): boolean =>
+    ctx.transcript.entries().some((e) => e.op === "select" && e.actOk && e.value === named && (e.target ?? "").includes(`"${control.name}"`));
+  if (named !== null && named === current && !isPlaceholderOption(named) && !ctx.history.includes(noop) && !setByRun()) {
+    ctx.fillHelper.commit();
+    ctx.history.push(noop);
+    record(true, noop, { value: named });
+    ctx.lastActedOp = op;
+    return "continue";
+  }
   if (named !== null && !choices.includes(named)) {
-    // The current option (or a placeholder) again: never acted — the page would not change.
+    // The current option again (a loop, #273) or a placeholder: never acted — the page would not change.
     ctx.fillHelper.commit();
     const why = named === current ? `${quote(named, 60)} is already selected` : `${quote(named, 60)} is a placeholder, not a choice`;
-    const reason = `select refused: ${why} in ${control.name || control.summary} — options not tried: ${untried()}`;
+    const reason = `select refused: ${why} in ${field} — options not tried: ${untried()}`;
     ctx.history.push(reason);
     record(false, reason, { origin: "engine", value: named });
     ctx.lastActedOp = op;

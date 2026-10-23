@@ -104,6 +104,8 @@ export type SignalKind =
   | "duplicate-create"
   | "failed-submit"
   | "url-mismatch"
+  /** #642: the same advance control (Continue / Next / Confirm…) needed again and again — avoidable steps. */
+  | "repeated-advance"
   /**
    * Horizontal page overflow (#149): pure DOM geometry
    * (`@jevitate/explore`'s `detectOverflow`), computed live during the run — unlike every other
