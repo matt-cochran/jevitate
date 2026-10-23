@@ -32,8 +32,8 @@ const control = (over: Partial<Control> = {}): Control =>
   }) as Control;
 
 /** Run one select whose generated value is `text` against a combobox showing `control()`. */
-async function run(text: string | null, over: Partial<Control> = {}, goal = "set the email column") {
-  const history: string[] = [];
+async function run(text: string | null, over: Partial<Control> = {}, goal = "set the email column", prior: { history?: string[]; entries?: object[] } = {}) {
+  const history: string[] = [...(prior.history ?? [])];
   const record = vi.fn();
   const noteMutation = vi.fn();
   const fillHelper = { valueFor: async () => ({ text, source: "model" as const }), commit: vi.fn() };
@@ -47,6 +47,7 @@ async function run(text: string | null, over: Partial<Control> = {}, goal = "set
     lastActedOp: null,
     fillHelper,
     recorder: { select: vi.fn() },
+    transcript: { entries: () => prior.entries ?? [] },
     tracker: { countAction: vi.fn() },
     noteMutation,
     cleared: vi.fn(),
@@ -88,6 +89,25 @@ describe("#639 — the other select outcomes are unchanged", () => {
 
   it("a placeholder is still refused", async () => {
     const { record } = await run("—", { options: ["—", "email", "phone"] });
+    expect(record.mock.calls[0]![0]).toBe(false);
+  });
+});
+
+describe("#273 — re-choosing the current option is still the select loop", () => {
+  it("a current placeholder named again is refused", async () => {
+    const { record } = await run("—", { options: ["—", "email", "phone"], selected: "—" });
+    expect(record.mock.calls[0]![0]).toBe(false);
+  });
+
+  it("an option this run already selected is refused when named again", async () => {
+    const entries = [{ op: "select", actOk: true, value: "email", target: 'combobox "Email column"' }];
+    const { record } = await run("email", {}, "set the email column", { entries });
+    expect(record.mock.calls[0]![0]).toBe(false);
+  });
+
+  it("a default named a second time after being told it is set is refused", async () => {
+    const history = ['"email" is already selected in Email column — nothing to change'];
+    const { record } = await run("email", {}, "set the email column", { history });
     expect(record.mock.calls[0]![0]).toBe(false);
   });
 });
