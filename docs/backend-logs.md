@@ -69,7 +69,10 @@ and `outOfScopeLines`.
 
 **Correlation.** Each step's window runs from the previous step's settle time to this step's own
 settle time — the wall-clock epoch a mission's incremental transcript-flush listener already
-observes, so this needs no change to the mission loop. The LAST step's window is additionally held
+observes, so this needs no change to the mission loop. A step that performs no browser action
+(`done`, `blocked`, or a turn that found nothing to do) owns no window: its span extends the acting
+step before it, so a line that action's request logged a few ms after the step settled still
+attaches to that action (#653). The LAST step's window is additionally held
 open for `--server-log-drain-ms` (default 3000, operator-settable up to minutes) so async backend
 work that settles after the browser gave up is still caught: the run's own await for this only
 happens AFTER the mission function has returned, so a log source never blocks a mission's own

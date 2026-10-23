@@ -609,8 +609,13 @@ export class ServerLogRuntime {
   }
 }
 
+/** #653: a step that performs no browser action (`done`, `blocked`, none found) causes no backend work. */
+const NON_ACTING_OPS: ReadonlySet<TranscriptEntry["op"]> = new Set(["done", "blocked", null]);
+
 /** Contiguous per-step correlation windows: `[previous settle, this settle]`, the LAST one extended
- *  by `drainMs` so async backend work that lands after the mission's own bounds still attaches. */
+ *  by `drainMs` so async backend work that lands after the mission's own bounds still attaches.
+ *  #653: a step that performs no browser action owns no window: its span extends the acting step
+ *  before it, so that step's backend line, logged a few ms after it settled, still attaches to it. */
 function stepWindows(
   transcript: readonly TranscriptEntry[],
   stepEpoch: ReadonlyMap<number, number>,
@@ -624,7 +629,9 @@ function stepWindows(
     const settle = stepEpoch.get(entry.step) ?? prevEnd;
     const isLast = i === transcript.length - 1;
     const endMs = isLast ? settle + drainMs : settle;
-    windows.push({ step: entry.step, startMs: prevEnd, endMs });
+    const acting = windows[windows.length - 1];
+    if (NON_ACTING_OPS.has(entry.op) && acting !== undefined) acting.endMs = endMs;
+    else windows.push({ step: entry.step, startMs: prevEnd, endMs });
     prevEnd = settle;
   }
   return windows;
