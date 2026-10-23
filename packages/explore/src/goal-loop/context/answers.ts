@@ -41,6 +41,7 @@ export function initAnswers(ctx: MutableRunContext, cfg: ExploreConfig): void {
   ctx.settledClick = null;
   ctx.clickedRegion = null;
   ctx.wroteOk = false;
+  ctx.readBackAsked = false;
   /** #239: a write goal ("record a decision…") is not settled by a report before the run saved anything. */
   ctx.writeGoal = goalAsksToWrite(cfg.goal);
   // #229: answers Jev vetoed stay rejected for the rest of the run, however often they are re-reported.

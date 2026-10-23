@@ -18,9 +18,17 @@ useSkippingTime({ per: "all" });
  */
 
 let saved: unknown[] = [];
+/** #647: the form shows the last saved bet when loaded again, as an app that keeps it does. */
+let echoSaved = false;
 
-const FORM = `<!doctype html><html><body><main><h1>Start a bet</h1><p>Decisions you record appear in your ledger.</p>
-<form id="f"><label>The bet <input name="bet" aria-label="The bet"></label>
+const escapeAttr = (v: string): string => v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+const lastBet = (): string => {
+  const last = saved.at(-1) as { bet?: unknown } | undefined;
+  return echoSaved && typeof last?.bet === "string" ? last.bet : "";
+};
+
+const form = (): string => `<!doctype html><html><body><main><h1>Start a bet</h1><p>Decisions you record appear in your ledger.</p>
+<form id="f"><label>The bet <input name="bet" aria-label="The bet" value="${escapeAttr(lastBet())}"></label>
 <label>Context <textarea name="context" aria-label="Context"></textarea></label>
 <button type="submit">Save decision</button></form><p role="status" id="s"></p></main>
 <script>
@@ -46,7 +54,7 @@ beforeAll(async () => {
       return;
     }
     if (path === "/decisions/new") {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(FORM);
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(form());
       return;
     }
     res.writeHead(404).end("not found");
@@ -59,6 +67,7 @@ afterAll(async () => {
 });
 beforeEach(() => {
   saved = [];
+  echoSaved = false;
 });
 
 const GOAL =
@@ -119,14 +128,23 @@ describe("#239 — a report never grounds on the run's own unsaved input", () =>
     90_000,
   );
 
+  const SAVE_THEN_REPORT: ScriptedStep[] = [{ op: "type", target: "0" }, { op: "type", target: "1" }, { op: "click", target: "2" }, { op: "report" }];
+
   it(
-    "typed, saved (a 2xx write), then reported on the field's value: the value is the app's now — accepted",
+    "typed, saved (a 2xx write), and shown again after a reload: the value is the app's — the report is accepted",
     async () => {
-      const r = await run([{ op: "type", target: "0" }, { op: "type", target: "1" }, { op: "click", target: "2" }, { op: "report" }], ON_OWN_INPUT);
-      expect(saved).toHaveLength(1);
-      expect(reports(r).at(-1)).toMatch(/report accepted/);
+      echoSaved = true;
+      const r = await run(SAVE_THEN_REPORT, ON_OWN_INPUT);
       expect(r.outcome).toBe("succeeded");
-      expect(r.run.answer?.evidence[0]).toMatchObject({ grounded: true, source: "control-value", control: "The bet" });
+    },
+    90_000,
+  );
+
+  it(
+    "#647 — typed and saved (a 2xx write), but no longer shown after a reload: the report is not accepted",
+    async () => {
+      const r = await run(SAVE_THEN_REPORT, ON_OWN_INPUT);
+      expect(reports(r).some((x) => /report accepted/.test(x))).toBe(false);
     },
     90_000,
   );

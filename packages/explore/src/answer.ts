@@ -22,6 +22,9 @@ import { REDACTION_MASK, buildJudgmentState, redactContext, redactText, redactUr
  * goal's question?" — may then VETO an answer code accepted; it never approves one on its own.
  */
 
+/** #647: the start of the reason a claim resting on the run's own, unread write is not grounded. */
+const UNCONFIRMED_WRITE = "the quote shows what the run itself sent";
+
 /** Bound on the observed text handed to the answer generator. */
 export const ANSWER_PAGES_CHARS = 8_000;
 /** Distinct observed page texts kept for grounding (oldest dropped first). */
@@ -90,6 +93,8 @@ export interface PageFacts extends PageHeadings {
   readonly navLinks?: readonly string[];
   /** #447: why the control names given are not the page's whole control inventory (absent: they are). */
   readonly inventoryIncomplete?: string;
+  /** #647: the identity of the page's document load (`performance.timeOrigin`): it changes on every load from the server. */
+  readonly document?: number;
 }
 
 /** Control names kept per observed page (#223). */
@@ -143,9 +148,46 @@ export class ObservedPages {
     if (v !== "") this.#ownInputs.add(v);
   }
 
-  /** #239: a submit the run clicked fired writes that all succeeded (2xx): what it typed was sent and saved. */
-  confirmOwnInputs(): void {
+  /**
+   * #647: values a 2xx write sent that no page loaded from the server has shown since. A 2xx says the
+   * request was accepted, not that the app kept it: until a later document shows the value, a page
+   * showing it may only be the client's own rendering of what the run sent.
+   */
+  readonly #unread = new Set<string>();
+  /** #647: the document the last such write was sent from. */
+  #writeDocument: number | null = null;
+
+  /**
+   * #239: a submit the run clicked fired writes that all succeeded (2xx): what it typed was sent. #647:
+   * it is read back only when a page from a later document load (`document`) shows it.
+   */
+  confirmOwnInputs(document?: number): void {
+    for (const v of this.#ownInputs) this.#unread.add(v);
     this.#ownInputs.clear();
+    if (document !== undefined) this.#writeDocument = document;
+  }
+
+  /** #647: the run's sent values (folded) that no page loaded from the server since has shown. */
+  unreadWrites(): ReadonlySet<string> {
+    return this.#unread;
+  }
+
+  /** #647: the unread sent values (folded) that `shown` (a page's text, or field values) displays. */
+  unreadShownIn(shown: string): string[] {
+    const text = fold(shown);
+    return [...this.#unread].filter((v) => text.includes(v));
+  }
+
+  /**
+   * #647: a page from a later document load than the write shows `shown` (its visible text, or field
+   * values): the sent values it contains are read back from the app. Returns those values.
+   */
+  readBack(document: number | undefined, shown: string): string[] {
+    if (this.#unread.size === 0 || document === undefined || document === this.#writeDocument) return [];
+    const text = fold(shown);
+    const back = [...this.#unread].filter((v) => text.includes(v));
+    for (const v of back) this.#unread.delete(v);
+    return back;
   }
 
   /** #239: the run's own typed, not-yet-saved values (folded). */
@@ -187,6 +229,8 @@ export class ObservedPages {
       const nav = navPaths(url, headings.navLinks ?? []).map((p) => redactContext(p, this.secrets));
       if (nav.length > 0) this.#topNav = nav;
     }
+    // #647: a page from a later document load that shows a sent value reads it back from the app.
+    this.readBack(headings.document, [page.text, ...kept.map((f) => f.value)].join("\n"));
     if (page.text.trim() === "" && kept.length === 0) return;
     const same = (p: ObservedPage): boolean =>
       JSON.stringify(p.fields ?? []) === JSON.stringify(page.fields ?? []) &&
@@ -290,6 +334,8 @@ export type AnswerVerdict =
       readonly accept: false;
       readonly reason: string;
       readonly answer: RunAnswer | null;
+      /** #647: the answer rests on what the run sent, not yet read back from a page loaded since. */
+      readonly unconfirmedWrite?: true;
       /**
        * #223: what was reported is on the pages but does not answer the question (only a control's
        * label, an error page, or Jev's veto) — for the run, an answer not found. Absent otherwise.
@@ -626,12 +672,13 @@ function groundClaim(
   goal: string,
   answer: string,
   own: ReadonlySet<string>,
+  unread: ReadonlySet<string>,
   absent?: string | null,
 ): Grounded {
   // #447: an absence claim rests on the observed controls and text, never on a quote.
   const name = (absent ?? "").replace(/\s+/g, " ").trim();
   if (name !== "") return { evidence: groundAbsence(claim, name, pages, goal), notAnswer: false };
-  const r = groundClaimOn(claim, quote, pages, given, goal, answer, own);
+  const r = groundClaimOn(claim, quote, pages, given, goal, answer, own, unread);
   return "evidence" in r ? r : { evidence: r, notAnswer: false };
 }
 
@@ -643,6 +690,7 @@ function groundClaimOn(
   goal: string,
   answer: string,
   own: ReadonlySet<string>,
+  unread: ReadonlySet<string>,
 ): AnswerEvidence | Grounded {
   const q = bareQuote(quote);
   const base = { claim, quote };
@@ -663,6 +711,13 @@ function groundClaimOn(
   // what the app recorded: "record a decision" was accepted on its own unsubmitted form values.
   if (found.source === "control-value" && found.value !== undefined && own.has(fold(found.value))) {
     const why = `the quote is the run's own typed input in "${found.control ?? "a form field"}", never saved — it shows what the run entered, not what the app recorded (submit it, then report what the app shows)`;
+    return { ...base, url: page.url, grounded: false, ...where, why };
+  }
+  // #647: what the run sent, shown only since its write (a 2xx is not proof the app kept it): the page
+  // may be rendering the run's own request. It grounds once a page loaded from the server shows it.
+  const sent = [...unread].find((v) => v.length >= MIN_QUOTE_CHARS && q.includes(v));
+  if (sent !== undefined) {
+    const why = `${UNCONFIRMED_WRITE} ("${sent}"), and no page loaded since the write has shown it — the app may not have kept it (reload, or open the page where the app lists it, and report what that shows)`;
     return { ...base, url: page.url, grounded: false, ...where, why };
   }
   if (found.source === "page-text" && !CONTROL_GOAL.test(goal) && quoteIsOnlyControlNames(quote, found.page)) {
@@ -709,13 +764,16 @@ export function groundAnswer(
     readonly goal?: string;
     /** #239: the run's own typed, not-yet-saved form values (folded) — a field holding one grounds nothing. */
     readonly ownInputs?: ReadonlySet<string>;
+    /** #647: values the run's writes sent that no page loaded since has shown (`ObservedPages.unreadWrites`). */
+    readonly unreadWrites?: ReadonlySet<string>;
   } = {},
 ): AnswerVerdict {
   const text = (proposed.answer ?? "").trim();
   if (text === "" || (NO_ANSWER_TEXT.test(text) && proposed.claims.length === 0)) return { accept: false, reason: NO_ANSWER_REASON, answer: null };
   const given = new Set(numbersIn(opts.goal ?? ""));
   const own = opts.ownInputs ?? new Set<string>();
-  const grounded_ = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given, opts.goal ?? "", text, own, c.absent));
+  const unread = opts.unreadWrites ?? new Set<string>();
+  const grounded_ = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given, opts.goal ?? "", text, own, unread, c.absent));
   const evidence = grounded_.map((g) => g.evidence);
   const answer: RunAnswer = { text, evidence };
   if (evidence.length === 0) return { accept: false, reason: "the answer cites no page text", answer };
@@ -723,6 +781,7 @@ export function groundAnswer(
   if (badAt >= 0) {
     const bad = evidence[badAt]!;
     const reason = `the answer is not grounded: "${bad.claim}" — ${bad.why ?? "ungrounded"}`;
+    if (bad.why?.startsWith(UNCONFIRMED_WRITE) === true) return { accept: false, reason, answer, unconfirmedWrite: true };
     return grounded_[badAt]!.notAnswer ? { accept: false, reason, answer, notAnswer: true } : { accept: false, reason, answer };
   }
   const grounded = new Set(evidence.flatMap((e) => numbersIn(e.quote)));
@@ -982,6 +1041,8 @@ export async function reportAnswer(
     readonly topNav?: readonly string[];
     /** #239: the run's own typed, not-yet-saved form values (`ObservedPages.ownInputs`). */
     readonly ownInputs?: ReadonlySet<string>;
+    /** #647: sent values not yet read back from a page loaded since (`ObservedPages.unreadWrites`). */
+    readonly unreadWrites?: ReadonlySet<string>;
   },
 ): Promise<AnswerVerdict> {
   const secrets = input.secrets ?? [];
@@ -1000,7 +1061,11 @@ export async function reportAnswer(
     answer: out.answer === null ? null : r(out.answer),
     claims: out.claims.map((c) => ({ claim: r(c.claim), quote: r(c.quote), ...(c.absent == null ? {} : { absent: r(c.absent) }) })),
   });
-  const grounding = { goal: input.goal, ...(input.ownInputs === undefined ? {} : { ownInputs: input.ownInputs }) };
+  const grounding = {
+    goal: input.goal,
+    ...(input.ownInputs === undefined ? {} : { ownInputs: input.ownInputs }),
+    ...(input.unreadWrites === undefined ? {} : { unreadWrites: input.unreadWrites }),
+  };
   const res = await gen.generate("goal.answer", ask);
   const verdict = await vetoed(groundAnswer(scrub(res.output), input.pages, grounding), input.judge, vet, vetoes);
   if (verdict.accept) return verdict;

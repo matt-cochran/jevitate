@@ -170,6 +170,8 @@ export interface RunContext {
   /** #380: reads the clicked control's region state when its window closes (null when no click is open). */
   clickedRegion: (() => Promise<string | undefined>) | null;
   wroteOk: boolean;
+  /** #647: the run was already asked once to read back what it sent before its answer counts. */
+  readBackAsked: boolean;
   /** #239: a write goal ("record a decision…") is not settled by a report before the run saved anything. */
   readonly writeGoal: boolean;
   readonly vetoes: VetoedAnswers;

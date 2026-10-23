@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 export const VARIANTS = ["clean", "j1-5xx", "j2-stall", "j3-effort", "j3-deadend", "j2-phantom", "j3-phantom"];
 
-const SAMPLE_CSV = "name,email\nGrace Hopper,grace@example.com\nAlan Turing,alan@example.com";
+const SAMPLE_CSV = "name,email\nAda Lovelace,ada@example.com\nKatherine Johnson,katherine@example.com";
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);

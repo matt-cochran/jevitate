@@ -12,6 +12,7 @@ import { maskSecretFields } from "../secret-fields.js";
 import { markTypeFixtures } from "../type-fixtures.js";
 import type { RunContext } from "./context.js";
 import type { Flow, Perceived } from "./step.js";
+import { documentOf } from "./helpers.js";
 import { clock } from "@jevitate/domain";
 import { dialogHistoryLine, takeDialogEvents } from "../native-dialogs.js";
 
@@ -42,7 +43,7 @@ export async function perceiveStep(ctx: RunContext): Promise<Perceived> {
     if (lc !== null && lc !== ctx.settledClick) {
       ctx.settledClick = lc;
       if (lc.writes.length > 0 && lc.writes.every((w) => w.status !== null && w.status >= 200 && w.status < 300)) {
-        ctx.observed.confirmOwnInputs();
+        ctx.observed.confirmOwnInputs(await documentOf(ctx.page));
         ctx.wroteOk = true;
       }
     }

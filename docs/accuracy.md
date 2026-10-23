@@ -65,7 +65,7 @@ verdict to a team (a false "clean" is worse than a false alarm).
 | A completed write on a reusable form reported as a stuck job | false usability alarm | 2 | 2/42 | 0/42 | #641 |
 | Avoidable steps unreported | effort invisible; agents disagree | 2 | 3/42 | 0/42 | #642 — `signal-repeated-advance` |
 | `done` rejected just under `GOAL_MET_THRESHOLD` (p 0.69–0.74 after a completed job) | false alarm | 3 | 2/42 | 2/42 | open (#645): the judgment cannot separate complete from incomplete jobs (see below) |
-| A 2xx write that did not persist accepted as done | false clean: silent data loss reported as success | 5 | — | 5/11 phantom cells | open (#647): verify the write persisted |
+| A 2xx write that did not persist accepted as done | false clean: silent data loss reported as success | 5 | — | 5/11 phantom cells | #647: what the run typed counts only once a reload shows it again (`j2-phantom` caught 6/6, from 1/6); content it did not type is open (#649) |
 
 The counts come from the cells' transcripts; one cell can show more than one mode. The remaining
 mode is the next experiment: lowering the threshold trades false alarms for false "succeeded"
@@ -91,6 +91,16 @@ threshold separates them; lowering it would add false "succeeded" verdicts. `j2-
 ended `clean` / `succeeded` on 3 of 3 cells: a write that answered 2xx but did not persist is not
 caught. The lever is code evidence that a write persisted (read it back after a reload), not the
 threshold (#647).
+
+#647 does that for what the run itself typed. After a 2xx write, a typed value counts as evidence
+for a report or a `done` only once a page loaded from the server since shows it again. Before such an
+ending rests on a page that shows the value, code reloads that page once (the read-back probe: a GET
+through the actor, not recorded as a Journey step) and checks it. A value the reload shows is the
+app's; one it no longer shows holds the ending. An interleaved A/B on 2026-10-23 (the same cells,
+alternating builds): `j2-phantom` was caught on 6 of 6 cells (1 of 6 without #647); clean J1 stayed
+clean on 6 of 6 with both builds, and clean J2 on 10 of 12 (11 of 12 without), the two misses being
+the #645 near-threshold `done` and an existing grounding rule, not the read-back. Content the run did
+not type, such as `j3-phantom`'s prefilled CSV, has nothing of the run's own to read back: #649.
 
 ## Lessons from building it
 

@@ -8,6 +8,7 @@ import type { RunContext } from "./context.js";
 import { firstLine, quote } from "./helpers.js";
 import { MAX_REPORT_REJECTIONS } from "./limits.js";
 import { deferEnding } from "./min-effort.js";
+import { readBackProbe } from "./read-back.js";
 import type { Flow, Step } from "./step.js";
 
 export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
@@ -32,6 +33,8 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
     ctx.noteReplyText(snap.url, await readPageText(ctx.page, ctx.secrets));
   }
   const replyPages = ctx.replyGoal ? ctx.replies.pages() : null;
+  // #647: an answer on a page that shows what the run sent is read back first (one reload).
+  if (replyPages === null) await readBackProbe(ctx, step);
   const verdict: AnswerVerdict =
     replyPages !== null && replyPages.length === 0
       ? {
@@ -51,7 +54,7 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
           judge: cfg.judge,
           vetoes: ctx.vetoes,
           // #238: "none exists" is an answer only on observed pages that cover the app enough.
-          ...(replyPages === null ? { topNav: ctx.observed.topNavigation(), ownInputs: ctx.observed.ownInputs() } : {}),
+          ...(replyPages === null ? { topNav: ctx.observed.topNavigation(), ownInputs: ctx.observed.ownInputs(), unreadWrites: ctx.observed.unreadWrites() } : {}),
         })
           // #239: a write goal's report settles nothing before a write of the run succeeded.
           .then((v): AnswerVerdict =>
@@ -77,6 +80,15 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
     ctx.outcome = { status: "completed", verifiedBy: "grounded-answer" };
     ctx.stop = "done";
     return "stop";
+  }
+  // #647: an answer resting on what the run sent, not yet read back, is not wrong — it is unverified.
+  // The first time, the run is asked to read it back (reload, or the page that lists it) without
+  // spending one of its report attempts; after that it counts like any ungrounded answer.
+  if (verdict.unconfirmedWrite === true && !ctx.readBackAsked) {
+    ctx.readBackAsked = true;
+    ctx.history.push(`report deferred: ${verdict.reason}`);
+    record(false, `report deferred: ${verdict.reason}`, { answer: verdict.answer, origin: "engine" });
+    return "continue";
   }
   ctx.reportRejections += 1;
   // #424: what code DID ground of a rejected answer is evidence for the partial report.
