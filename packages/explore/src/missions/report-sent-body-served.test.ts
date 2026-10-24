@@ -151,4 +151,15 @@ describe("#649 — what a write sent awaits read-back, whoever typed it", () => 
     },
     90_000,
   );
+
+  it(
+    "#680 — a rejected report on a write goal before anything was imported is told no write succeeded",
+    async () => {
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "report" }]);
+      const r = await run([], judge);
+      expect(r.transcript.find((e) => e.op === "report")?.reason).toContain(NO_WRITE_YET);
+      expect(judge.states.at(-1)?.history?.some((h) => h.startsWith("report rejected:") && h.includes(NO_WRITE_YET))).toBe(true);
+    },
+    90_000,
+  );
 });
