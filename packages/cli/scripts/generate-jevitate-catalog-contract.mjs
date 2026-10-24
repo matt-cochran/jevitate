@@ -126,7 +126,7 @@ function canonical(value) {
 }
 const vector = (kind, input) => ({ kind, input, canonical: canonical(input), sha256: sha256(canonical(input)) });
 const vectors = {
-  algorithm: "jevitate-content-hash-v1",
+  algorithm: "jevitate-content-hash-v2",
   canonicalization: "UTF-8 JSON; arrays retain order; object keys sort lexicographically by unsigned UTF-16 code units; no whitespace",
   vectors: [
     vector("persona", { id: "owner", description: "Owns the product", role: "owner", extensions: { journeeze: { tier: "private" } } }),
@@ -148,7 +148,7 @@ const validJourney = {
 };
 
 rmSync(root, { recursive: true, force: true });
-write("README.md", `# Jevitate repository catalog contract v1\n\nThis immutable contract release defines the git-backed \`.jevitate/\` files shared with consumers.\nThe JSON Schemas are closed where the runtime schemas are closed. The sole v1 exception is legacy\npersona descriptive keys: they remain open and participate in the persona approval hash; a future\nv2 moves non-core data under the namespaced \`extensions\` object.\n\nApproval hashes use \`approval-hash-vectors.json\`. Canonical object keys sort lexicographically by\nunsigned UTF-16 code units; arrays retain order and the encoded JSON has no insignificant whitespace.\nSession paths and login settings are operational and excluded from persona approval hashes. A\nconsumer must still run Jevitate's semantic reference and approval checks; JSON Schema validation\nalone is insufficient.\n\nThe manifest records the source repository, the full source commit and the package version at that\ncommit. Publication is intentionally two commits: first commit source and generator changes, then\nrun the generator with that commit's SHA and commit the regenerated immutable contract.\n`);
+write("README.md", `# Jevitate repository catalog contract v1\n\nThis immutable contract release defines the git-backed \`.jevitate/\` files shared with consumers.\nThe JSON Schemas are closed where the runtime schemas are closed. The sole v1 exception is legacy\npersona descriptive keys: they remain open and participate in the persona approval hash; a future\nv2 moves non-core data under the namespaced \`extensions\` object.\n\nNew approval hashes use \`jevitate-content-hash-v2\` and the vectors in\n\`approval-hash-vectors.json\`: object keys sort lexicographically by unsigned UTF-16 code units;\narrays retain order and the encoded JSON has no insignificant whitespace. Readers also recognize\nexisting v1 approvals (JavaScript \`localeCompare\`) but never write a new v1 approval. Session paths\nand login settings are operational and excluded from persona approval hashes. A consumer must still\nrun Jevitate's semantic reference and approval checks; JSON Schema validation alone is insufficient.\n\nThe manifest records the source repository, the full source commit and the package version at that\ncommit. Publication is intentionally two commits: first commit source and generator changes, then\nrun the generator with that commit's SHA and commit the regenerated immutable contract.\n`);
 write("schemas/job.schema.json", jobEntry);
 write("schemas/jobs.schema.json", jobsFile);
 write("schemas/journey.schema.json", journey);

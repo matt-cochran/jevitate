@@ -97,7 +97,7 @@ describe("the published Jevitate repository-catalog contract", () => {
 
   it("approval-hash vectors are reproduced by the production hash implementation", () => {
     const vectors = read(join(ROOT, "approval-hash-vectors.json"));
-    expect(vectors.algorithm).toBe("jevitate-content-hash-v1");
+    expect(vectors.algorithm).toBe("jevitate-content-hash-v2");
     for (const vector of vectors.vectors) expect(contentHash(vector.input), vector.kind).toBe(vector.sha256);
   });
 });
