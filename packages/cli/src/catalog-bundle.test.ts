@@ -54,11 +54,19 @@ function applyPatch(doc: any, patch: Array<{ op: string; path: string; value?: u
   return out;
 }
 
-/** Contract §8: SHA-256 of canonical JSON, keys sorted by `localeCompare` — written independently of jevitate's. */
+/** Contract §8: SHA-256 of canonical JSON, keys sorted by unsigned UTF-16 code units. */
+function compareUtf16(a: string, b: string): number {
+  const length = Math.min(a.length, b.length);
+  for (let i = 0; i < length; i += 1) {
+    const difference = a.charCodeAt(i) - b.charCodeAt(i);
+    if (difference !== 0) return difference < 0 ? -1 : 1;
+  }
+  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+}
 function canonical(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v);
   if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
-  const entries = Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  const entries = Object.entries(v as Record<string, unknown>).sort(([a], [b]) => compareUtf16(a, b));
   return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
 }
 const sha256 = (v: unknown): string => createHash("sha256").update(canonical(v)).digest("hex");

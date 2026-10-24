@@ -26,7 +26,9 @@ const ID = "jz-guide-fixture";
 const APPROVED = "627218a7f4a6be3e3324115eb3e1488a6afe703acbaa778176e3ff8414d671f9";
 const readJson = (p: string): any => JSON.parse(readFileSync(p, "utf8"));
 const Ajv = Ajv2020 as unknown as typeof Ajv2020.default;
-const validate = new Ajv({ allErrors: true, strict: false }).compile(readJson(join(FIXTURES, "catalog-bundle.v1.json")));
+// The pinned schema is minor 1; contract versioning requires that reader to prune additions from
+// the producer's minor-2 bundle before validating it.
+const validate = new Ajv({ allErrors: true, strict: false, removeAdditional: true }).compile(readJson(join(FIXTURES, "catalog-bundle.v1.json")));
 const fakeGit: GitExec = async (args) => ({ stdout: args[0] === "rev-parse" ? "592a7021c4f0be9d3a8e6b1f2c7d4e5a6b7c8d9e\n" : "" });
 const sha256 = (b: Buffer): string => createHash("sha256").update(b).digest("hex");
 
@@ -90,7 +92,7 @@ describe("an approved demo in the bundle (#471)", () => {
   });
 
   it("validates against the pinned schema with demos and files", () => {
-    expect(validate(r.bundle) ? [] : validate.errors).toEqual([]);
+    expect(validate(structuredClone(r.bundle)) ? [] : validate.errors).toEqual([]);
   });
 
   it("names the Journey's current approved hash as renderedFrom", () => {
