@@ -33,3 +33,9 @@ export const MAX_MOVING_SCROLLS = 12;
 /** The one "last chance" turn the model gets before a no-progress stop (#172). */
 export const LAST_CHANCE_NOTE =
   "no progress: the last steps left the page unchanged and you have seen the whole page — act on a visible control, report the answer, or say done/blocked now";
+/**
+ * #680: the last-chance note for a write goal before any write of the run succeeded — not an
+ * invitation to report: nothing was sent yet, so the turn goes to the control that submits it.
+ */
+export const LAST_CHANCE_NO_WRITE_NOTE =
+  "no progress: the last steps left the page unchanged, and no write of this run has succeeded yet — the goal asks for a change the app must receive: go back and press the control that submits it (Import, Save, Send…), or say blocked if the app offers none";

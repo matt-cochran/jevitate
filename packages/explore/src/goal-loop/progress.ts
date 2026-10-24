@@ -20,7 +20,7 @@ import { describeStatus, isEmptyStatus, readFormText, readPageStatus, statusDelt
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { RunContext } from "./context.js";
 import { EXPECTED_RETURN, savedAndLeft, settledNavigation } from "./helpers.js";
-import { LAST_CHANCE_NOTE, MAX_MOVING_SCROLLS } from "./limits.js";
+import { LAST_CHANCE_NOTE, LAST_CHANCE_NO_WRITE_NOTE, MAX_MOVING_SCROLLS } from "./limits.js";
 import type { Flow, Perceived } from "./step.js";
 import { clock } from "@jevitate/domain";
 
@@ -197,7 +197,9 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
       // reports, or says done/blocked. For a find-out goal an idle choice becomes a report.
       ctx.lastChanceGiven = true;
       ctx.lastChanceTurn = true;
-      ctx.history.push(LAST_CHANCE_NOTE);
+      // #680: a write goal with nothing sent yet is told so here — its last turn otherwise goes to a
+      // report or done that code must reject, and the run stops before it can act on the rejection.
+      ctx.history.push(ctx.writeGoal && !ctx.wroteOk ? LAST_CHANCE_NO_WRITE_NOTE : LAST_CHANCE_NOTE);
     } else {
       ctx.stop = "no-progress";
       return "stop";
