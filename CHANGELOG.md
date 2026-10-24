@@ -9,18 +9,26 @@ behaviour changes).
 
 ## [0.24.0] – 2026-10-24
 
+0.24.0 removes the usability false alarms 0.23.0 showed on import wizards, closes a silent-data-loss gap where retyping a sent message counted as the app keeping it, and ships Jevitate's repository-catalog contract with the CLI. On the accuracy lab at 6 replicates per cell (twice the usual), usability precision is 100% (83.3% on 0.23.0), goal precision is 96.2%, and all 24 phantom runs are caught. `docs/accuracy.md` has the measurements.
+
 ### Added
 
-- **Published repository-catalog contract (#668).** The immutable v2 schemas, approval-hash vectors, fixtures and manifest now ship in `@jevitate/cli`, while the v1.0.0 artifact remains available for previous-major consumers. Journeeze can pin the packaged contract and verify its manifest instead of copying a flexible convention.
+- **The repository-catalog contract ships with the CLI (#669, #668).** `@jevitate/cli` includes `contracts/jevitate-catalog/v2/` (current) and the immutable `v1/` (v1.0.0, for previous-major consumers). Each holds JSON Schemas for `.jevitate/personas.json`, `.jevitate/jobs.json` and Journey files, generated from the runtime schemas, plus approval-hash vectors, conformance fixtures and a SHA-256 manifest. Consumers vendor one released package and verify its manifest; `docs/catalog.md` states the compatibility policy. The catalog bundle is now v1 minor 2, adding `catalogContract`, which pins the exact v2 manifest its producer used.
 
-### Changed
+### Behaviour changes
 
+- **Approval hashes are portable (#668).** Canonical JSON for content and approval hashes now orders object keys by unsigned UTF-16 code unit instead of the host's `localeCompare`, so every platform and language computes the same hash. Approvals recorded by earlier versions are still recognized through their legacy hash; new approvals are written with the portable one.
 - **The done judgment sees the read-back (#667).** When every value the run's writes sent was shown again on a page loaded from the server, the advisory page judgment is given that as a trusted code fact, with how many of those values the current page shows. A completed import listed on Contacts no longer scores just under the even-odds bar.
 - **More goals count as writes, and a premature done is told why (#667).** A goal that asks to import, upload, update, change, edit, rename, delete or remove is now a write goal, joining record, save, create, add, invite, submit, send, post, publish, register, book and schedule. The read-back and report rules for writes apply to it. A rejected `done` on a write goal before any write succeeded now says no write was made yet, so a run that wandered past a wizard's final Import is steered back to it. On the accuracy lab's interleaved A/B (#670), j3-effort usability false alarms fell from 5 of 31 runs to 1 of 20, with every phantom and dead-end still caught.
 
 ### Fixed
 
 - **A field the run typed into is not a read-back (#671).** After a write, a sent value counts as kept only when a page loaded from the server shows it again. A form field holding what the run itself typed on that page load no longer counts: retyping a sent message into its composer after a reload had let a send that stored nothing be reported as done through a grounded report.
+
+### Upgrade notes
+
+- Existing approvals stay valid; nothing needs re-approving. An approval Jevitate writes from 0.24.0 on uses the portable hash, which a consumer pinned to catalog contract v1 cannot reproduce: move such consumers to contract v2.
+- A goal that asks to import, upload, update, change, edit, rename, delete or remove now follows the write rules: a `report` or `done` resting on what the run sent needs a page loaded from the server to show it again.
 
 ## [0.23.0] – 2026-10-23
 
