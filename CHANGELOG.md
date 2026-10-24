@@ -7,6 +7,12 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.24.0] – 2026-10-24
+
+### Added
+
+- **Published repository-catalog contract (#668).** The immutable v2 schemas, approval-hash vectors, fixtures and manifest now ship in `@jevitate/cli`, while the v1.0.0 artifact remains available for previous-major consumers. Journeeze can pin the packaged contract and verify its manifest instead of copying a flexible convention.
+
 ### Changed
 
 - **The done judgment sees the read-back (#667).** When every value the run's writes sent was shown again on a page loaded from the server, the advisory page judgment is given that as a trusted code fact, with how many of those values the current page shows. A completed import listed on Contacts no longer scores just under the even-odds bar.
