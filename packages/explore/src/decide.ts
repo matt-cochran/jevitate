@@ -411,6 +411,12 @@ export async function judgeGoalCompletion(
     /** #514: code-observed write facts (method, endpoint, status — never a value), when every job write succeeded. */
     readonly writeFacts?: string;
     /**
+     * #667: code-observed read-back — what the run's writes sent was shown again on a page loaded
+     * from the server, and how much of it this page shows. Without it the judgment weighs a listing
+     * page cold and doubts it shows the job's result.
+     */
+    readonly readBackFacts?: string;
+    /**
      * #225: the page's form fields and their current values (non-secret — see `Control.value`). A
      * field's value is never in the page's `innerText`, yet it is where a form displays what was saved.
      */
@@ -426,6 +432,7 @@ export async function judgeGoalCompletion(
       ...(input.signInFacts === undefined ? [] : [`SIGN-IN (observed by code, trusted): ${input.signInFacts}`]),
       ...(input.saveFacts === undefined ? [] : [`SAVE (observed by code, trusted): ${input.saveFacts}`]),
       ...(input.writeFacts === undefined ? [] : [`WRITES (observed by code, trusted): ${input.writeFacts}`]),
+      ...(input.readBackFacts === undefined ? [] : [`READ-BACK (observed by code, trusted): ${input.readBackFacts}`]),
       ...(input.pageStatus === undefined || input.pageStatus === "" ? [] : [`PAGE STATUS (untrusted): ${input.pageStatus}`]),
       `VISIBLE PAGE TEXT (untrusted): ${input.pageText.replace(/\s+/g, " ").slice(0, GOAL_TEXT_CHARS)}`,
       ...(input.fieldValues === undefined || input.fieldValues.length === 0
