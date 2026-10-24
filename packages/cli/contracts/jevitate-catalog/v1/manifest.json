@@ -1,15 +1,19 @@
 {
   "kind": "jevitate.catalog-contract",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "package": "@jevitate/cli",
   "source": {
     "repository": "https://github.com/matt-cochran/jevitate.git",
-    "commit": "aa10014d9cdf4dea005a47db9f42c03c838d3ff6",
+    "commit": "1399911d7e64e1071168c95ba36f31cc39339d2f",
     "packageVersionAtCommit": "0.23.0"
   },
   "compatibility": {
     "repositoryCatalogMajor": 1,
-    "approvalHash": "jevitate-content-hash-v1"
+    "approvalHash": "jevitate-content-hash-v2",
+    "readsApprovalHashes": [
+      "jevitate-content-hash-v2",
+      "jevitate-content-hash-v1"
+    ]
   },
   "exceptions": [
     "personas.v1.legacy-descriptive-keys"
@@ -17,13 +21,13 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 1103,
-      "sha256": "e3db08207f7e85181c713a8e0f53725fd7be3dba96af26cd608ca40070ff2e09"
+      "bytes": 1252,
+      "sha256": "f16239eef99be3cfd83f003365527f6dfdbdba2021f56d967e5ca58bef0b4b15"
     },
     {
       "path": "approval-hash-vectors.json",
       "bytes": 2450,
-      "sha256": "52b8a39ba94162afdc85dd1141f91e0cc24c64ccf4a7995a8feee297a899ef60"
+      "sha256": "eff8769d651e6c9c665498006d739918a1702a485209e6bede1315f83e6bf711"
     },
     {
       "path": "fixtures/invalid/jobs-unknown-field.json",

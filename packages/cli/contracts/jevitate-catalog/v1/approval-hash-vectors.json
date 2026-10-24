@@ -1,5 +1,5 @@
 {
-  "algorithm": "jevitate-content-hash-v1",
+  "algorithm": "jevitate-content-hash-v2",
   "canonicalization": "UTF-8 JSON; arrays retain order; object keys sort lexicographically by unsigned UTF-16 code units; no whitespace",
   "vectors": [
     {
