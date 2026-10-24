@@ -13,7 +13,7 @@ import { monitorFor } from "../page-monitor.js";
 import { redactContext } from "../redact.js";
 import { backgroundEndpoints } from "../stuck-actions.js";
 import type { RunContext } from "./context.js";
-import { MAX_TYPE_NO_EFFECT, firstLine, keyOf, quote, searchLike, stateBesides } from "./helpers.js";
+import { MAX_TYPE_NO_EFFECT, documentOf, firstLine, keyOf, quote, searchLike, stateBesides } from "./helpers.js";
 import { FORM_TEXT_MAX_CHARS } from "./limits.js";
 import type { Flow } from "./step.js";
 import { type ActStep } from "./step.js";
@@ -118,6 +118,8 @@ export async function handleFill(ctx: RunContext, step: ActStep): Promise<Flow> 
       // it is a correction, not the chat anti-pattern — so only composers are tracked.
       ctx.recorder.fill(control.descriptor, text, at);
       ctx.valueLog.typed(control.name || control.summary, text);
+      // #671: on this document load, a field holding what the run typed (a composer too) is not a read-back.
+      ctx.observed.noteTypedOn(text, await documentOf(ctx.page));
       if (!ctx.isBound(control) && !isCredentialField(control) && !sendable(control)) {
         ctx.save.noteTyped(control.name || control.summary, text);
         // #239: until a write after it succeeds, the field shows what the run entered — not grounds.

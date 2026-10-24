@@ -130,7 +130,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (94 exports)
+# @jevitate/domain (98 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEFECT_OUTCOME_STATUSES: array
@@ -176,8 +176,10 @@
   assertRunTag: function
   assertSafeName: function
   attributeCrash: function
+  canonicalJson: function
   clock: object
   combineOutcomes: function
+  compareUtf16CodeUnits: function
   contentHash: function
   currentClock: function
   defectOutcomeOf: function
@@ -203,6 +205,8 @@
   isWithinQuietHours: function
   journeezeFingerprintMarker: function
   journeyExitCode: function
+  legacyCanonicalJson: function
+  legacyContentHash: function
   looksLikeRendererOom: function
   makeRng: function
   matchesRunTags: function

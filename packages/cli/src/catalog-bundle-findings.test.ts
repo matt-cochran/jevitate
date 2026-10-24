@@ -23,7 +23,9 @@ const FIXTURES = fileURLToPath(new URL("../test-fixtures/", import.meta.url));
 const SAMPLE = join(FIXTURES, "catalog-bundle", "sample-project");
 const readJson = (p: string): any => JSON.parse(readFileSync(p, "utf8"));
 const Ajv = Ajv2020 as unknown as typeof Ajv2020.default;
-const validate = new Ajv({ allErrors: true, strict: false }).compile(readJson(join(FIXTURES, "catalog-bundle.v1.json")));
+// The pinned schema is minor 1; contract versioning requires that reader to prune additions from
+// the producer's minor-2 bundle before validating it.
+const validate = new Ajv({ allErrors: true, strict: false, removeAdditional: true }).compile(readJson(join(FIXTURES, "catalog-bundle.v1.json")));
 const fixtureCase = (name: string): any => readJson(join(FIXTURES, "catalog-bundle", "cases", `${name}.json`));
 const sha16 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 16);
 
@@ -246,6 +248,6 @@ describe("the exported bundle", () => {
       { git: fakeGit, version: () => "0.10.0" },
     );
     const bundle = readJson(result.bundlePath);
-    expect({ findings: bundle.findings.length, valid: validate(bundle), errors: validate.errors ?? null }).toEqual({ findings: 2, valid: true, errors: null });
+    expect({ findings: bundle.findings.length, valid: validate(structuredClone(bundle)), errors: validate.errors ?? null }).toEqual({ findings: 2, valid: true, errors: null });
   });
 });

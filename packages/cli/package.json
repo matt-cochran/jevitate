@@ -36,7 +36,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
-  "files": ["dist", "skills", "ui"],
+  "files": ["contracts", "dist", "skills", "ui"],
   "publishConfig": {
     "access": "public"
   },
@@ -74,10 +74,12 @@
     "@jevitate/storage-sqlite": "workspace:*",
     "@jevitate/ux": "workspace:*",
     "ajv": "^8.20.0",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "zod": "^4.6.5"
   },
   "scripts": {
     "build": "node scripts/generate-build-info.mjs && tsc --build",
-    "bundle": "node ./build.mjs"
+    "bundle": "node ./build.mjs",
+    "contract:generate": "pnpm --filter @jevitate/journey build && node scripts/generate-jevitate-catalog-contract.mjs"
   }
 }

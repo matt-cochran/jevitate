@@ -1,4 +1,4 @@
-import { contentHash } from "@jevitate/domain";
+import { contentHash, legacyContentHash } from "@jevitate/domain";
 import type { JourneyProposal, JourneyReviewProposal } from "@jevitate/journey";
 import {
   SECRET_PARAM_NAME_RE,
@@ -75,6 +75,18 @@ export function journeyReviewHash(journey: Journey): string {
   const metadata: Record<string, unknown> = { ...journey.metadata };
   for (const k of BOOKKEEPING) delete metadata[k];
   return contentHash({ metadata, recording: journey.recording });
+}
+
+/** Pre-portable-key-order hash, used only to honor an approval written by an older Jevitate. */
+export function journeyLegacyReviewHash(journey: Journey): string {
+  const metadata: Record<string, unknown> = { ...journey.metadata };
+  for (const k of BOOKKEEPING) delete metadata[k];
+  return legacyContentHash({ metadata, recording: journey.recording });
+}
+
+export function journeyApprovalMatches(journey: Journey): boolean {
+  const approved = journey.metadata.approval?.contentHash;
+  return approved !== undefined && (approved === journeyReviewHash(journey) || approved === journeyLegacyReviewHash(journey));
 }
 
 /** #432: the last `journey verify --mutate` verdict, as recorded beside the Journey. */
@@ -362,7 +374,7 @@ function buildChange(journey: Journey, hash: string, snapshot: Journey | null | 
   const idOnly = stepIdOnly ? { stepIdOnly: true as const } : {};
   if (snapshot === null || snapshot === undefined) {
     if (approval !== undefined) {
-      return { kind: "snapshot-missing", approvedHash: approval.contentHash, approvedAt: approval.at, changed: approval.contentHash !== hash, ...idOnly };
+      return { kind: "snapshot-missing", approvedHash: approval.contentHash, approvedAt: approval.at, changed: !journeyApprovalMatches(journey), ...idOnly };
     }
     return journey.metadata.promoted ? { kind: "no-record" } : { kind: "first-approval" };
   }
