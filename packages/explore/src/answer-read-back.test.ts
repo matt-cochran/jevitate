@@ -136,3 +136,31 @@ describe("#645 readBackConfirmed", () => {
     expect(new ObservedPages().readBackConfirmed()).toBe(false);
   });
 });
+
+// #671: after a reload the run typed the sent message into the composer again. The field then holds
+// the run's own entry, not what the app kept, so it must not read the sent value back (a phantom send
+// was reported as done through a grounded report).
+describe("#671 a field holding what the run typed on this document load is not a read-back", () => {
+  const composer = [{ label: "Message", value: "Hello from Acme" }];
+
+  it("a reloaded page whose composer holds the run's retyped message reads nothing back", () => {
+    const observed = run([{ text: sentRow, document: 1 }]);
+    observed.noteTypedOn("Hello from Acme", 2);
+    observed.add(URL, emptyList, composer, { document: 2 });
+    expect([...observed.unreadWrites()]).toEqual(["hello from acme"]);
+    expect(ground(observed).accept).toBe(false);
+  });
+
+  it("a field the app prefilled on a later load still reads the sent value back", () => {
+    const observed = run([{ text: sentRow, document: 1 }]);
+    observed.add(URL, emptyList, composer, { document: 2 });
+    expect([...observed.unreadWrites()]).toEqual([]);
+  });
+
+  it("what the run typed on an earlier load does not hide a field the app shows after the next one", () => {
+    const observed = run([{ text: sentRow, document: 1 }]);
+    observed.noteTypedOn("Hello from Acme", 2);
+    observed.add(URL, emptyList, composer, { document: 3 });
+    expect([...observed.unreadWrites()]).toEqual([]);
+  });
+});

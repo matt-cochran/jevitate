@@ -17,7 +17,7 @@ import {
 } from "../secret-fields.js";
 import { boundTypeFixture, typeFixturePlaceholder } from "../type-fixtures.js";
 import type { RunContext } from "./context.js";
-import { keyOf, submitsAForm } from "./helpers.js";
+import { documentOf, keyOf, submitsAForm } from "./helpers.js";
 import type { ActStep, Flow } from "./step.js";
 
 /**
@@ -133,6 +133,7 @@ export async function handleCodeTypedField(ctx: RunContext, step: ActStep): Prom
       ctx.valueLog.typed(control.name || control.summary, value);
       ctx.save.noteTyped(control.name || control.summary, value);
       ctx.observed.noteOwnInput(value);
+      ctx.observed.noteTypedOn(value, await documentOf(ctx.page));
       ctx.noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
       ctx.tracker.countAction();
       ctx.cleared(control);
