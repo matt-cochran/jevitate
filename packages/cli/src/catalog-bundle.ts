@@ -1,6 +1,7 @@
 import { JOURNEY_MISSION_OUTCOME, JOURNEY_RUN_OUTCOMES, MISSION_EXIT_CODES, MISSION_OUTCOMES, isRecord, type MissionOutcome } from "@jevitate/domain";
 import { flatJourneySteps, SECRET_PARAM_NAME_RE, type CatalogApproval, type Journey } from "@jevitate/journey";
 import { CatalogInputError, findJob, findPersona, type Catalog, type CatalogJourney } from "./catalog.js";
+import { CATALOG_CONTRACT_IDENTITY } from "./catalog-contract-identity.js";
 import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } from "./catalog-refs.js";
 
 /**
@@ -46,8 +47,8 @@ import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } fr
 
 export const BUNDLE_KIND = "journeeze.catalog-bundle" as const;
 export const BUNDLE_VERSION = 1 as const;
-/** The schema minor this producer is built against (minor 1, journeeze-saas #173: optional `finding.locator` and `check.appVersion`). */
-export const BUNDLE_MINOR = 1 as const;
+/** Minor 2 binds every new bundle to the exact immutable Jevitate catalog contract. */
+export const BUNDLE_MINOR = 2 as const;
 
 export interface BundleApproval {
   readonly contentHash: string;
@@ -209,6 +210,7 @@ export interface CatalogBundleV1 {
   readonly version: typeof BUNDLE_VERSION;
   readonly minor: typeof BUNDLE_MINOR;
   readonly producer: { readonly tool: "jevitate"; readonly version: string; readonly commit?: string };
+  readonly catalogContract: typeof CATALOG_CONTRACT_IDENTITY;
   readonly product: { readonly name: string };
   readonly catalog: {
     readonly personas: readonly BundlePersona[];
@@ -926,6 +928,7 @@ export function buildCatalogBundle(input: CatalogBundleInput): CatalogBundleBuil
       version: BUNDLE_VERSION,
       minor: BUNDLE_MINOR,
       producer: { tool: "jevitate", version: input.producer.version, ...(commit === undefined ? {} : { commit }) },
+      catalogContract: CATALOG_CONTRACT_IDENTITY,
       product: { name: input.productName },
       catalog: { personas, jobs, journeys: journeys.map((j) => j.entry) },
       ...(shown.demos.length === 0 ? {} : { demos: shown.demos }),

@@ -9,6 +9,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { CatalogLoader } from "./catalog.js";
+import { CATALOG_CONTRACT_IDENTITY } from "./catalog-contract-identity.js";
 
 const ROOT = fileURLToPath(new URL("../contracts/jevitate-catalog/v1", import.meta.url));
 const SCHEMAS = join(ROOT, "schemas");
@@ -53,6 +54,11 @@ describe("the published Jevitate repository-catalog contract", () => {
     }
     const actual = new Set(files(ROOT).map((path) => path.slice(ROOT.length + 1).replaceAll("\\", "/")));
     expect([...actual].sort()).toEqual([...expected].sort());
+    expect(CATALOG_CONTRACT_IDENTITY).toEqual({
+      kind: manifest.kind,
+      version: manifest.version,
+      manifestSha256: digest(join(ROOT, "manifest.json")),
+    });
   });
 
   it("publishes the exact Job and Journey schemas implemented by the runtime", () => {
