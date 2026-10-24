@@ -37,6 +37,8 @@ const MIN_QUOTE_CHARS = 3;
 const MAX_OBSERVED_FIELDS = 40;
 /** Bound on each kept control value / label. */
 const OBSERVED_FIELD_CHARS = 500;
+/** #667: most read-back values kept for the done judgment's code fact. */
+const MAX_READ_BACK_VALUES = 50;
 
 /** A form control's current value as observed (#207): the control's label and what it holds. */
 export interface ObservedField {
@@ -243,11 +245,19 @@ export class ObservedPages {
       this.#sourceRoute.delete(v);
     }
     this.#readBackCount += back.length;
+    for (const v of back) if (this.#readBackValues.length < MAX_READ_BACK_VALUES) this.#readBackValues.push(v);
     return back;
   }
 
   /** #645: how many sent values a page loaded from the server has shown again. */
   #readBackCount = 0;
+  /** #667: the sent values (folded) read back so far, bounded. */
+  readonly #readBackValues: string[] = [];
+
+  /** #667: the sent values (folded) a page loaded from the server has shown again. */
+  readBackValues(): readonly string[] {
+    return this.#readBackValues;
+  }
 
   /**
    * #645: the app was seen to keep what the run's writes sent — at least one value was read back and
@@ -1236,7 +1246,7 @@ export function goalAdmitsAbsence(goal: string): boolean {
  * not one.
  */
 const WRITE_GOAL =
-  /(?:^\s*|[.!?;:]\s+|\b(?:then|and|please)\s+)(?:record|save|create|add|invite|submit|send|post|publish|register|book|schedule)\b/i;
+  /(?:^\s*|[.!?;:]\s+|\b(?:then|and|please)\s+)(?:record|save|create|add|invite|submit|send|post|publish|register|book|schedule|import|upload|update|change|edit|rename|delete|remove)\b/i;
 
 export function goalAsksToWrite(goal: string): boolean {
   return WRITE_GOAL.test(goal);

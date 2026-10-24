@@ -198,6 +198,8 @@ export function newStep(ctx: RunContext, input: StepInput) {
         // (no extra model call) only when every one succeeded, and never beside the #225 save facts.
         if (proposedDone) writes = jobWritesOf(ctx);
         const writeFacts = writes !== undefined && saved === null && writesAllSucceeded(writes) ? writes.facts : undefined;
+        // #667: the read-back, as code observed it — only once every sent value was read back.
+        const readBackFacts = ctx.observed.readBackConfirmed() ? readBackFactsOf(ctx.observed.readBackValues(), pageText) : undefined;
         const judged = await judgeGoalCompletion(cfg.judge, {
           goal: cfg.goal,
           url: snap.url,
@@ -208,6 +210,7 @@ export function newStep(ctx: RunContext, input: StepInput) {
           ...(signIn === null ? {} : { signInFacts: signIn.facts }),
           ...(saved === null ? {} : { saveFacts: saved.facts }),
           ...(writeFacts === undefined ? {} : { writeFacts }),
+          ...(readBackFacts === undefined ? {} : { readBackFacts }),
           fieldValues: fieldValuesOf(snap.controls, ctx.isBound),
         }).catch(() => ({ goalMet: null, goalIsSignIn: null, goalIsSave: null, goalIsWrites: null }));
         goalMet = judged.goalMet;
@@ -235,4 +238,14 @@ export function newStep(ctx: RunContext, input: StepInput) {
     return { verdict, judgments: Object.keys(judgments).length === 0 ? undefined : judgments };
   };
   return { ...input, record, signIn, pendingNote, acceptedBy, groundGoal };
+}
+
+/**
+ * #667: the read-back as a code fact for the done judgment: every value the run's writes sent was
+ * shown again on a page loaded from the server after the write, and how many of them `pageText` shows.
+ */
+function readBackFactsOf(values: readonly string[], pageText: string): string {
+  const text = pageText.toLowerCase();
+  const shown = values.filter((v) => text.includes(v)).length;
+  return `every value this run's writes sent (${values.length}) was shown again on a page loaded from the server after the write — the app kept them; this page shows ${shown} of them`;
 }

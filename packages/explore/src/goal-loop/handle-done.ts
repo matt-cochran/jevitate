@@ -16,6 +16,10 @@ import type { Flow, Step } from "./step.js";
  * shows none of it (a write-only form), the probe read it all back, or the operator's success check
  * decided.
  */
+/** #667: why a write goal's done cannot hold before any write of the run succeeded. */
+export const NO_WRITE_YET =
+  "no write of this run has succeeded yet — the goal asks for a change the app must receive: go back and press the control that submits it (Import, Save, Send…)";
+
 async function unreadWriteHold(ctx: RunContext, step: Step, outcome: RunOutcome): Promise<string | null> {
   if (outcome.status === "completed" && outcome.verifiedBy === "success-condition") return null;
   await readBackProbe(ctx, step);
@@ -141,12 +145,15 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
       }
     }
     ctx.doneRejections += 1;
-    ctx.history.push(`done rejected: ${verdict.reason} — keep working toward the goal`);
-    record(false, `done rejected (${ctx.doneRejections}/${MAX_DONE_REJECTIONS}): ${verdict.reason}`, {
+    // #667: a write goal ended before anything was sent — say so (code knows it), not only that the
+    // page does not look done: the model otherwise wanders away from the step that writes.
+    const why = ctx.writeGoal && !ctx.wroteOk ? `${verdict.reason}; ${NO_WRITE_YET}` : verdict.reason;
+    ctx.history.push(`done rejected: ${why} — keep working toward the goal`);
+    record(false, `done rejected (${ctx.doneRejections}/${MAX_DONE_REJECTIONS}): ${why}`, {
       ...(judgments === undefined ? {} : { judgments }),
     });
     if (ctx.doneRejections >= MAX_DONE_REJECTIONS) {
-      ctx.incomplete = `the model proposed done ${ctx.doneRejections} times, but ${verdict.reason}`;
+      ctx.incomplete = `the model proposed done ${ctx.doneRejections} times, but ${why}`;
       ctx.endedOnRejectedDone = true;
       // #217: the loop ended on the model's `done` (code rejected it) — the stop says so; it
       // never reads `blocked` (the model did not give up). The outcome stays incomplete.

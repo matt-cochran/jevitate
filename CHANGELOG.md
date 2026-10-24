@@ -7,6 +7,11 @@ behaviour changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **The done judgment sees the read-back (#667).** When every value the run's writes sent was shown again on a page loaded from the server, the advisory page judgment is given that as a trusted code fact, with how many of those values the current page shows. A completed import listed on Contacts no longer scores just under the even-odds bar.
+- **More goals count as writes, and a premature done is told why (#667).** A goal that asks to import, upload, update, change, edit, rename, delete or remove is now a write goal, joining record, save, create, add, invite, submit, send, post, publish, register, book and schedule. The read-back and report rules for writes apply to it. A rejected `done` on a write goal before any write succeeded now says no write was made yet, so a run that wandered past a wizard's final Import is steered back to it. On the accuracy lab's interleaved A/B (#670), j3-effort usability false alarms fell from 5 of 31 runs to 1 of 20, with every phantom and dead-end still caught.
+
 ### Fixed
 
 - **A field the run typed into is not a read-back (#671).** After a write, a sent value counts as kept only when a page loaded from the server shows it again. A form field holding what the run itself typed on that page load no longer counts: retyping a sent message into its composer after a reload had let a send that stored nothing be reported as done through a grounded report.

@@ -522,6 +522,18 @@ describe("#239 — the run's own typed, unsaved values are not grounds", () => {
       expect(goalAsksToWrite(g), g).toBe(false);
     }
   });
+
+  it("#667: an import is a write goal", () => {
+    expect(goalAsksToWrite("Import the pasted CSV of contacts (name,email), map the columns, and confirm the imported rows appear.")).toBe(true);
+  });
+
+  it("#667: changing a saved value is a write goal", () => {
+    expect(goalAsksToWrite("Change the profile name to 'Ada Byron', press Save, then reload the page.")).toBe(true);
+  });
+
+  it("#667: a question about changing something is not", () => {
+    expect(goalAsksToWrite("Find out how to change the plan")).toBe(false);
+  });
 });
 
 describe("#395 — a hint retry that finds nothing never hides why the first answer was rejected", () => {

@@ -5,6 +5,7 @@ import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
 import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "../testkit.js";
+import { NO_WRITE_YET } from "../goal-loop/handle-done.js";
 
 // #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
 useSkippingTime({ per: "all" });
@@ -125,6 +126,28 @@ describe("#649 — what a write sent awaits read-back, whoever typed it", () => 
       const judge = new ScriptedJudge([{ op: "click", target: "2" }, { op: "click", target: "0" }, { op: "done" }]);
       await run([], judge);
       expect(judge.states.at(-1)?.history?.some((h) => h.startsWith("read back: this page"))).toBe(true);
+    },
+    90_000,
+  );
+
+  it(
+    "#667 — the done judgment is given the read-back as a code fact",
+    async () => {
+      const judge = new ScriptedJudge([{ op: "click", target: "2" }, { op: "click", target: "0" }, { op: "done" }]);
+      await run([], judge);
+      const fact = judge.goalCalls.at(-1)?.state.controls.find((c) => c.startsWith("READ-BACK (observed by code"));
+      expect(fact).toContain("this page shows 4 of them");
+    },
+    90_000,
+  );
+
+  it(
+    "#667 — a done on a write goal before anything was imported is told no write succeeded",
+    async () => {
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "done" }]);
+      judge.goalMetProbability = 0.3;
+      const r = await run([], judge);
+      expect(r.transcript.find((e) => e.op === "done")?.reason).toContain(NO_WRITE_YET);
     },
     90_000,
   );
