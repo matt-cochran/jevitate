@@ -52,6 +52,24 @@ Every planted defect was found by both builds: the gains are in precision (fewer
 in runs that finish. Time fell because the message form no longer waits 60 s per send for a chat
 reply (#638).
 
+## Results (2026-10-24, 0.24.0)
+
+0.24.0 (#667, #671), the same lab, 6 replicates per cell (108 cells, twice the usual 3), `run-matrix.mjs --replicates 6`:
+
+| | 0.23.0 (3 replicates) | 0.24.0 (6 replicates) |
+|---|---|---|
+| usability precision / recall / specificity | 83.3% / 100% / 75.0% | **100% / 100% / 100%** |
+| goal precision / recall / specificity | 100% / 100% / 100% | 96.2% / 100% / 95.8% |
+| phantoms caught (`j2-phantom`, `j3-phantom`, both strategies) | 12 of 12 | **24 of 24** |
+| extra effort reported (`j3-effort` usability) | 3 of 3 | 6 of 6 |
+| strategies agree (variant/job majority) | 8 of 9 | **9 of 9** |
+
+Precision is measured on the defect-free cells (`clean` J1–J3 and `j3-effort`), all 48 of which ran their full 6 replicates on a quiet host: no usability false alarm. The one goal false alarm (`j3-effort` r3) is #667's wander past Import ending in a rejected `report` instead of a `done`, which the no-write hint does not yet cover (#680).
+
+Recall on `j2-stall` (both strategies) and `j1-5xx` usability is only partly measured. Other workloads starved the host (load up to 24/core) during those cells, and jevitate correctly declined to judge (`degraded-environment`, "load > 2/core — not an app finding", [A starved host](./outcomes.md)). Every one of those cells that ran on a usable host found its defect (j2-stall goal 2 of 2, j2-stall usability 4 of 4, j1-5xx usability 4 of 4), and none was reported clean. Data: `.delivery/experiments/lab-0.24.0-rc/` (a first pass is kept in `results.first-pass.jsonl`).
+
+Before 0.24.0, an interleaved A/B on the J3 cells (20 replicates per arm, #670) showed that most of 0.23.0's 83.3% was sampling noise: the same 0.23.0 binary gave 3 J3 false alarms in 6 runs in the lab, then 2 in 40 and 3 in 24. #667 lowered `j3-effort` usability false alarms from 5 of 31 to 1 of 20. The same A/B found #671, a phantom send reported done after the run retyped the message into its composer.
+
 ## Failure modes of the verdict pipeline (FMECA)
 
 Occurrence is the share of the 42 cells each mode affected; severity rates the harm of the wrong

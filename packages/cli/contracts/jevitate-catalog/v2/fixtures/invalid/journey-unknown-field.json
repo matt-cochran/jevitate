@@ -1,0 +1,15 @@
+{
+  "metadata": {
+    "id": "review-work",
+    "name": "Review work",
+    "promoted": false,
+    "params": [],
+    "createdAtIso": "2026-10-24T00:00:00.000Z"
+  },
+  "recording": {
+    "version": "1.0.0",
+    "site": "http://localhost",
+    "pages": []
+  },
+  "typo": true
+}

@@ -1,6 +1,6 @@
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { isStepIdOnlyChange } from "./journey-anchor-gate.js";
-import { journeyReviewHash } from "./journey-review.js";
+import { journeyApprovalMatches, journeyLegacyReviewHash, journeyReviewHash } from "./journey-review.js";
 import { readApprovedSnapshot } from "./journey-review-store.js";
 import { loadCatalog } from "./catalog-api.js";
 import { catalogJourney, journeyLinks } from "./catalog.js";
@@ -46,8 +46,8 @@ export interface StaleJourneysResult {
 /** #467: true when the approval is stale and the only change since is minted step ids (against the snapshot, else the approved hash). */
 export function isStepIdOnlyStale(journey: Journey, snapshot: Journey | null): boolean {
   const approval = journey.metadata.approval;
-  if (approval === undefined || approval.contentHash === journeyReviewHash(journey)) return false;
-  if (snapshot !== null && journeyReviewHash(snapshot) === approval.contentHash) return isStepIdOnlyChange(snapshot, journey);
+  if (approval === undefined || journeyApprovalMatches(journey)) return false;
+  if (snapshot !== null && [journeyReviewHash(snapshot), journeyLegacyReviewHash(snapshot)].includes(approval.contentHash)) return isStepIdOnlyChange(snapshot, journey);
   return isStepIdOnlyChange(approval.contentHash, journey);
 }
 
@@ -62,7 +62,7 @@ export async function listStaleJourneys(req: StaleJourneysRequest): Promise<Stal
     const approval = journey.metadata.approval;
     if (approval === undefined) continue;
     const contentHash = journeyReviewHash(journey);
-    const hashStale = approval.contentHash !== contentHash;
+    const hashStale = !journeyApprovalMatches(journey);
     const links = journeyLinks(catalog, catalogJourney(journey));
     const catalogStale = !hashStale && links.linked && [links.job?.status, links.persona?.status].includes("stale");
     if (!hashStale && !catalogStale) continue;

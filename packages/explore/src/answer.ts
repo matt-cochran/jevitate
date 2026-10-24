@@ -37,6 +37,8 @@ const MIN_QUOTE_CHARS = 3;
 const MAX_OBSERVED_FIELDS = 40;
 /** Bound on each kept control value / label. */
 const OBSERVED_FIELD_CHARS = 500;
+/** #667: most read-back values kept for the done judgment's code fact. */
+const MAX_READ_BACK_VALUES = 50;
 
 /** A form control's current value as observed (#207): the control's label and what it holds. */
 export interface ObservedField {
@@ -203,6 +205,21 @@ export class ObservedPages {
     }
   }
 
+  /**
+   * #671: values the run typed into a field on one document load. A field holding one shows the run's
+   * own entry, never what the app kept: retyping a sent message into its composer after a reload is
+   * not a read-back.
+   */
+  #typedOn: { readonly document: number; readonly values: Set<string> } | null = null;
+
+  /** #671: the run typed `value` into a field (a message composer too) on document load `document`. */
+  noteTypedOn(value: string, document: number | undefined): void {
+    const v = fold(redactContext(value, this.secrets).slice(0, OBSERVED_FIELD_CHARS));
+    if (document === undefined || v === "") return;
+    if (this.#typedOn?.document !== document) this.#typedOn = { document, values: new Set() };
+    this.#typedOn.values.add(v);
+  }
+
   /** #647: the run's sent values (folded) that no page loaded from the server since has shown. */
   unreadWrites(): ReadonlySet<string> {
     return this.#unread;
@@ -228,11 +245,19 @@ export class ObservedPages {
       this.#sourceRoute.delete(v);
     }
     this.#readBackCount += back.length;
+    for (const v of back) if (this.#readBackValues.length < MAX_READ_BACK_VALUES) this.#readBackValues.push(v);
     return back;
   }
 
   /** #645: how many sent values a page loaded from the server has shown again. */
   #readBackCount = 0;
+  /** #667: the sent values (folded) read back so far, bounded. */
+  readonly #readBackValues: string[] = [];
+
+  /** #667: the sent values (folded) a page loaded from the server has shown again. */
+  readBackValues(): readonly string[] {
+    return this.#readBackValues;
+  }
 
   /**
    * #645: the app was seen to keep what the run's writes sent — at least one value was read back and
@@ -284,7 +309,10 @@ export class ObservedPages {
     // #649: the page right after a write decides which of its untyped body values it newly shows.
     this.#settleSent(page.text);
     // #647: a page from a later document load that shows a sent value reads it back from the app.
-    this.readBack(headings.document, [page.text, ...kept.map((f) => f.value)].join("\n"), url);
+    // #671: a field holding what the run typed on this document load shows its own entry, not the app's.
+    const typed = this.#typedOn !== null && this.#typedOn.document === headings.document ? [...this.#typedOn.values] : [];
+    const appFields = kept.map((f) => f.value).filter((value) => !typed.some((t) => fold(value).includes(t)));
+    this.readBack(headings.document, [page.text, ...appFields].join("\n"), url);
     if (page.text.trim() === "" && kept.length === 0) return;
     const same = (p: ObservedPage): boolean =>
       JSON.stringify(p.fields ?? []) === JSON.stringify(page.fields ?? []) &&
@@ -1218,7 +1246,7 @@ export function goalAdmitsAbsence(goal: string): boolean {
  * not one.
  */
 const WRITE_GOAL =
-  /(?:^\s*|[.!?;:]\s+|\b(?:then|and|please)\s+)(?:record|save|create|add|invite|submit|send|post|publish|register|book|schedule)\b/i;
+  /(?:^\s*|[.!?;:]\s+|\b(?:then|and|please)\s+)(?:record|save|create|add|invite|submit|send|post|publish|register|book|schedule|import|upload|update|change|edit|rename|delete|remove)\b/i;
 
 export function goalAsksToWrite(goal: string): boolean {
   return WRITE_GOAL.test(goal);

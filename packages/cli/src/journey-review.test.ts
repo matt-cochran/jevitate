@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { JourneyReviewSchema, applyAnnotationDraft, journeyProofHash, type AnnotationDraft, type Journey } from "@jevitate/journey";
-import { buildJourneyReview, journeyReviewHash, renderReviewMarkdown, renderReviewText, reviewSheetHash, type JourneyVerifyRecord } from "./journey-review.js";
+import { buildJourneyReview, journeyLegacyReviewHash, journeyReviewHash, renderReviewMarkdown, renderReviewText, reviewSheetHash, type JourneyVerifyRecord } from "./journey-review.js";
 
 /** #432 — the review sheet builder: one assertion per test, per section. */
 
@@ -179,6 +179,12 @@ describe("#432 buildJourneyReview", () => {
   it("change: an approval whose snapshot is missing is compared by hash", () => {
     const current = fixtureJourney({ promoted: true, approval: { contentHash: "a".repeat(64), at: "2026-10-03T00:00:00.000Z" } });
     expect(buildJourneyReview(current).changeSinceApproval).toEqual({ kind: "snapshot-missing", approvedHash: "a".repeat(64), approvedAt: "2026-10-03T00:00:00.000Z", changed: true });
+  });
+
+  it("change: a legacy v1 hash still authorizes the unchanged Journey", () => {
+    const bare = fixtureJourney();
+    const current = fixtureJourney({ promoted: true, approval: { contentHash: journeyLegacyReviewHash(bare), at: "2026-10-03T00:00:00.000Z" } });
+    expect(buildJourneyReview(current).changeSinceApproval).toMatchObject({ kind: "snapshot-missing", changed: false });
   });
 
   it("content hash: the review hash, which promoting does not change", () => {

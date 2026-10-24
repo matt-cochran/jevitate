@@ -1,6 +1,7 @@
 import { JOURNEY_MISSION_OUTCOME, JOURNEY_RUN_OUTCOMES, MISSION_EXIT_CODES, MISSION_OUTCOMES, isRecord, type MissionOutcome } from "@jevitate/domain";
 import { flatJourneySteps, SECRET_PARAM_NAME_RE, type CatalogApproval, type Journey } from "@jevitate/journey";
 import { CatalogInputError, findJob, findPersona, type Catalog, type CatalogJourney } from "./catalog.js";
+import { CATALOG_CONTRACT_IDENTITY } from "./catalog-contract-identity.js";
 import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } from "./catalog-refs.js";
 
 /**
@@ -46,8 +47,8 @@ import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } fr
 
 export const BUNDLE_KIND = "journeeze.catalog-bundle" as const;
 export const BUNDLE_VERSION = 1 as const;
-/** The schema minor this producer is built against (minor 1, journeeze-saas #173: optional `finding.locator` and `check.appVersion`). */
-export const BUNDLE_MINOR = 1 as const;
+/** Minor 2 binds every new bundle to the exact immutable Jevitate catalog contract. */
+export const BUNDLE_MINOR = 2 as const;
 
 export interface BundleApproval {
   readonly contentHash: string;
@@ -209,6 +210,7 @@ export interface CatalogBundleV1 {
   readonly version: typeof BUNDLE_VERSION;
   readonly minor: typeof BUNDLE_MINOR;
   readonly producer: { readonly tool: "jevitate"; readonly version: string; readonly commit?: string };
+  readonly catalogContract: typeof CATALOG_CONTRACT_IDENTITY;
   readonly product: { readonly name: string };
   readonly catalog: {
     readonly personas: readonly BundlePersona[];
@@ -697,7 +699,7 @@ function bundleChecks(input: CatalogBundleInput, journeys: readonly ExportedJour
         if (outcome.outcome !== "clean") why = `the run was ${outcome.outcome}, and a baseline comes only from a clean run`;
         else if (journeyId === undefined || journeyHash === undefined) why = "the item names no Journey review hash";
         else if (cj === undefined) why = `Journey ${journeyId} is not in the bundle`;
-        else if (cj.approval?.contentHash !== journeyHash || cj.contentHash !== journeyHash) why = `it was measured on a Journey revision (${journeyHash.slice(0, 12)}…) that is not ${journeyId}'s approved one`;
+        else if (cj.approval?.contentHash !== journeyHash || cj.changedSinceApproval) why = `it was measured on a Journey revision (${journeyHash.slice(0, 12)}…) that is not ${journeyId}'s approved one`;
         else {
           const b = bundleBaseline(item.baseline, cj.journey);
           if ("drop" in b) why = b.drop;
@@ -756,13 +758,13 @@ function bundleDemos(input: CatalogBundleInput, journeys: readonly ExportedJourn
       warn.push(`${where}: its Journey is not in the bundle (not promoted, or left out) — the demo is left out`);
       continue;
     }
-    const approved = ex.cj.approval !== undefined && ex.cj.approval.contentHash === ex.cj.contentHash;
+    const approved = ex.cj.approval !== undefined && !ex.cj.changedSinceApproval;
     if (!approved) {
       warn.push(`${where}: its Journey changed since it was approved — the demo is left out (approve the Journey and its demo again)`);
       continue;
     }
-    if (d.renderedFrom !== ex.cj.contentHash) {
-      warn.push(`${where}: rendered from another version of its Journey (${d.renderedFrom.slice(0, 12)}, approved ${ex.cj.contentHash.slice(0, 12)}) — the demo is left out (run \`jevitate demo approve\` again)`);
+    if (d.renderedFrom !== ex.cj.approval!.contentHash) {
+      warn.push(`${where}: rendered from another version of its Journey (${d.renderedFrom.slice(0, 12)}, approved ${ex.cj.approval!.contentHash.slice(0, 12)}) — the demo is left out (run \`jevitate demo approve\` again)`);
       continue;
     }
     if (d.steps.length === 0 || d.steps.length > MEDIA_LIMITS.demoSteps) {
@@ -926,6 +928,7 @@ export function buildCatalogBundle(input: CatalogBundleInput): CatalogBundleBuil
       version: BUNDLE_VERSION,
       minor: BUNDLE_MINOR,
       producer: { tool: "jevitate", version: input.producer.version, ...(commit === undefined ? {} : { commit }) },
+      catalogContract: CATALOG_CONTRACT_IDENTITY,
       product: { name: input.productName },
       catalog: { personas, jobs, journeys: journeys.map((j) => j.entry) },
       ...(shown.demos.length === 0 ? {} : { demos: shown.demos }),

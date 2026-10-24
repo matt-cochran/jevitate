@@ -190,16 +190,18 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (150 exports)
+# @jevitate/domain (154 exports)
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
   attributeCrash: function
   Attribution: type-alias
   AttributionResult: interface
+  canonicalJson: function
   clock: variable
   ClockImpl: interface
   combineOutcomes: function
+  compareUtf16CodeUnits: function
   contentHash: function
   CrashEvidence: interface
   currentClock: function
@@ -266,6 +268,8 @@
   JOURNEY_RUN_OUTCOMES: variable
   journeyExitCode: function
   JourneyRunOutcome: type-alias
+  legacyCanonicalJson: function
+  legacyContentHash: function
   LogClassCauseRecord: type-alias
   LogClassCauseSchema: variable
   looksLikeRendererOom: function
