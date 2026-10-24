@@ -11,7 +11,8 @@ import { z } from "zod";
 import { CatalogLoader } from "./catalog.js";
 import { CATALOG_CONTRACT_IDENTITY } from "./catalog-contract-identity.js";
 
-const ROOT = fileURLToPath(new URL("../contracts/jevitate-catalog/v1", import.meta.url));
+const ROOT = fileURLToPath(new URL("../contracts/jevitate-catalog/v2", import.meta.url));
+const V1_ROOT = fileURLToPath(new URL("../contracts/jevitate-catalog/v1", import.meta.url));
 const SCHEMAS = join(ROOT, "schemas");
 const FIXTURES = join(ROOT, "fixtures");
 const read = (path: string): any => JSON.parse(readFileSync(path, "utf8"));
@@ -22,7 +23,7 @@ const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true 
 });
 const generated = (schema: Parameters<typeof z.toJSONSchema>[0], id: string, title: string): object => ({
   ...z.toJSONSchema(schema, { target: "draft-2020-12", unrepresentable: "any" }),
-  $id: `https://jevitate.com/schemas/catalog/v1/${id}`,
+  $id: `https://jevitate.com/schemas/catalog/v2/${id}`,
   title,
 });
 
@@ -32,11 +33,26 @@ afterEach(() => {
 });
 
 describe("the published Jevitate repository-catalog contract", () => {
+  it("preserves the immutable v1.0.0 contract for previous-major consumers", () => {
+    const manifestPath = join(V1_ROOT, "manifest.json");
+    const manifest = read(manifestPath);
+    expect(digest(manifestPath)).toBe("63d468537b34bfd9072d48de5b53f58d688c0f4370f8083ffd3fae26714f4c8e");
+    expect(manifest).toMatchObject({
+      kind: "jevitate.catalog-contract",
+      version: "1.0.0",
+      package: "@jevitate/cli",
+      compatibility: { repositoryCatalogMajor: 1, approvalHash: "jevitate-content-hash-v1" },
+    });
+    const expected = new Set<string>(["manifest.json", ...manifest.files.map((file: { path: string }) => file.path)]);
+    const actual = new Set(files(V1_ROOT).map((path) => path.slice(V1_ROOT.length + 1).replaceAll("\\", "/")));
+    expect([...actual].sort()).toEqual([...expected].sort());
+  });
+
   it("has an exact manifest for every published contract file", () => {
     const manifest = read(join(ROOT, "manifest.json"));
     expect(manifest).toMatchObject({
       kind: "jevitate.catalog-contract",
-      version: "1.1.0",
+      version: "2.0.0",
       package: "@jevitate/cli",
       source: {
         repository: "https://github.com/matt-cochran/jevitate.git",
@@ -66,8 +82,8 @@ describe("the published Jevitate repository-catalog contract", () => {
   });
 
   it("publishes the exact Job and Journey schemas implemented by the runtime", () => {
-    expect(read(join(SCHEMAS, "job.schema.json"))).toEqual(generated(JobSchema, "job.schema.json", "Jevitate job v1"));
-    expect(read(join(SCHEMAS, "journey.schema.json"))).toEqual(generated(JourneySchema, "journey.schema.json", "Jevitate Journey v1"));
+    expect(read(join(SCHEMAS, "job.schema.json"))).toEqual(generated(JobSchema, "job.schema.json", "Jevitate job v2"));
+    expect(read(join(SCHEMAS, "journey.schema.json"))).toEqual(generated(JourneySchema, "journey.schema.json", "Jevitate Journey v2"));
   });
 
   it("accepts the positive fixtures and refuses the closed-schema negative fixtures", () => {
