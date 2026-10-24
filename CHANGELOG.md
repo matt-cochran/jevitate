@@ -7,9 +7,11 @@ behaviour changes).
 
 ## [Unreleased]
 
-### Fixed
+## [0.23.1] – 2026-10-24
 
-- **A field the run typed into is not a read-back (#671).** After a write, a sent value counts as kept only when a page loaded from the server shows it again. A form field holding what the run itself typed on that page load no longer counts: retyping a sent message into its composer after a reload had let a send that stored nothing be reported as done through a grounded report.
+### Added
+
+- **Published repository-catalog contract (#668).** The immutable v2 schemas, approval-hash vectors, fixtures and manifest now ship in `@jevitate/cli`, while the v1.0.0 artifact remains available for previous-major consumers. Journeeze can pin the packaged contract and verify its manifest instead of copying a flexible convention.
 
 ## [0.23.0] – 2026-10-23
 
