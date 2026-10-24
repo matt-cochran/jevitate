@@ -7,6 +7,14 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.23.1] – 2026-10-24
+
+0.23.1 ships Jevitate's repository-catalog contract with the CLI, so other tools can validate and hash catalog files against the exact schemas Jevitate runs. No runtime behaviour changes.
+
+### Added
+
+- **The repository-catalog v1 contract ships with the CLI (#669).** `@jevitate/cli` now includes `contracts/jevitate-catalog/v1/`: JSON Schemas for personas, jobs and Journeys generated from the runtime schemas, valid and invalid fixtures, approval-hash vectors and a SHA-256 manifest. The contract is immutable; `docs/catalog.md` states the compatibility policy.
+
 ## [0.23.0] – 2026-10-23
 
 0.23.0 closes the silent-data-loss gap that 0.22.0 left open: an import that answers success but keeps nothing is now caught, and catching it no longer costs false alarms on imports that work. On the accuracy lab, the phantom import is caught on 4 of 4 runs (1 of 6 on 0.22.0) and the phantom message on 4 of 4, and all 20 clean goal and usability runs stay clean.
