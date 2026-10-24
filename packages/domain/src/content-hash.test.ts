@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { canonicalJson, compareUtf16CodeUnits, contentHash, sha256 } from "./content-hash.js";
+import { canonicalJson, compareUtf16CodeUnits, contentHash, legacyContentHash, sha256 } from "./content-hash.js";
 
 test("contentHash is key-order independent and content sensitive", () => {
   expect(contentHash({ a: 1, b: 2 })).toBe(contentHash({ b: 2, a: 1 }));
@@ -15,6 +15,11 @@ test("canonical JSON orders Unicode keys by unsigned UTF-16 code units", () => {
   expect(canonicalJson({ "\uE000": 1, "𐀀": 2, "e\u0301": 3, "é": 4 })).toBe('{"é":3,"é":4,"𐀀":2,"":1}');
   expect(compareUtf16CodeUnits("a", "a\u0000")).toBeLessThan(0);
   expect(compareUtf16CodeUnits("𐀀", "\uE000")).toBeLessThan(0);
+});
+
+test("legacyContentHash recognizes an approval written with localeCompare without writing it", () => {
+  const value = { a: 1, "á": 2, "Å": 3, id: 4 };
+  expect(legacyContentHash(value)).not.toBe(contentHash(value));
 });
 
 test("sha256 hashes UTF-8 text to lowercase hex", () => {

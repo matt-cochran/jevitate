@@ -36,14 +36,18 @@ describe("the published Jevitate repository-catalog contract", () => {
     const manifest = read(join(ROOT, "manifest.json"));
     expect(manifest).toMatchObject({
       kind: "jevitate.catalog-contract",
-      version: "1.0.0",
+      version: "1.1.0",
       package: "@jevitate/cli",
       source: {
         repository: "https://github.com/matt-cochran/jevitate.git",
         commit: expect.stringMatching(/^[0-9a-f]{40}$/),
         packageVersionAtCommit: expect.stringMatching(/^\d+\.\d+\.\d+/),
       },
-      compatibility: { repositoryCatalogMajor: 1, approvalHash: "jevitate-content-hash-v1" },
+      compatibility: {
+        repositoryCatalogMajor: 1,
+        approvalHash: "jevitate-content-hash-v2",
+        readsApprovalHashes: ["jevitate-content-hash-v2", "jevitate-content-hash-v1"],
+      },
     });
     const expected = new Set<string>(["manifest.json"]);
     for (const file of manifest.files) {

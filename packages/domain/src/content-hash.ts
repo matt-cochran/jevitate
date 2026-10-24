@@ -24,9 +24,22 @@ export function canonicalJson(value: unknown): string {
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
 }
 
+/** Pre-0.24 canonicalization, retained only to recognize already-recorded approvals. */
+export function legacyCanonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(legacyCanonicalJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${legacyCanonicalJson(v)}`).join(",")}}`;
+}
+
 /** SHA-256 of canonical JSON: equal values hash equal whatever their object-key insertion order. */
 export function contentHash(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+/** Legacy v1 approval hash. Never write a new approval with this value. */
+export function legacyContentHash(value: unknown): string {
+  return createHash("sha256").update(legacyCanonicalJson(value)).digest("hex");
 }
 
 /** SHA-256 of UTF-8 text as lowercase hex. */

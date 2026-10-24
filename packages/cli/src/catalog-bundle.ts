@@ -699,7 +699,7 @@ function bundleChecks(input: CatalogBundleInput, journeys: readonly ExportedJour
         if (outcome.outcome !== "clean") why = `the run was ${outcome.outcome}, and a baseline comes only from a clean run`;
         else if (journeyId === undefined || journeyHash === undefined) why = "the item names no Journey review hash";
         else if (cj === undefined) why = `Journey ${journeyId} is not in the bundle`;
-        else if (cj.approval?.contentHash !== journeyHash || cj.contentHash !== journeyHash) why = `it was measured on a Journey revision (${journeyHash.slice(0, 12)}…) that is not ${journeyId}'s approved one`;
+        else if (cj.approval?.contentHash !== journeyHash || cj.changedSinceApproval) why = `it was measured on a Journey revision (${journeyHash.slice(0, 12)}…) that is not ${journeyId}'s approved one`;
         else {
           const b = bundleBaseline(item.baseline, cj.journey);
           if ("drop" in b) why = b.drop;
@@ -758,13 +758,13 @@ function bundleDemos(input: CatalogBundleInput, journeys: readonly ExportedJourn
       warn.push(`${where}: its Journey is not in the bundle (not promoted, or left out) — the demo is left out`);
       continue;
     }
-    const approved = ex.cj.approval !== undefined && ex.cj.approval.contentHash === ex.cj.contentHash;
+    const approved = ex.cj.approval !== undefined && !ex.cj.changedSinceApproval;
     if (!approved) {
       warn.push(`${where}: its Journey changed since it was approved — the demo is left out (approve the Journey and its demo again)`);
       continue;
     }
-    if (d.renderedFrom !== ex.cj.contentHash) {
-      warn.push(`${where}: rendered from another version of its Journey (${d.renderedFrom.slice(0, 12)}, approved ${ex.cj.contentHash.slice(0, 12)}) — the demo is left out (run \`jevitate demo approve\` again)`);
+    if (d.renderedFrom !== ex.cj.approval!.contentHash) {
+      warn.push(`${where}: rendered from another version of its Journey (${d.renderedFrom.slice(0, 12)}, approved ${ex.cj.approval!.contentHash.slice(0, 12)}) — the demo is left out (run \`jevitate demo approve\` again)`);
       continue;
     }
     if (d.steps.length === 0 || d.steps.length > MEDIA_LIMITS.demoSteps) {

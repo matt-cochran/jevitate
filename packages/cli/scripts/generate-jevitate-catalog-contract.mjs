@@ -7,7 +7,7 @@ import { JobSchema, JourneySchema } from "../../journey/dist/index.js";
 
 const root = fileURLToPath(new URL("../contracts/jevitate-catalog/v1", import.meta.url));
 const identityModule = fileURLToPath(new URL("../src/catalog-contract-identity.ts", import.meta.url));
-const contractVersion = "1.0.0";
+const contractVersion = "1.1.0";
 const schemaBase = "https://jevitate.com/schemas/catalog/v1";
 const packageJson = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -174,7 +174,11 @@ const manifest = {
   version: contractVersion,
   package: "@jevitate/cli",
   source,
-  compatibility: { repositoryCatalogMajor: 1, approvalHash: "jevitate-content-hash-v1" },
+  compatibility: {
+    repositoryCatalogMajor: 1,
+    approvalHash: "jevitate-content-hash-v2",
+    readsApprovalHashes: ["jevitate-content-hash-v2", "jevitate-content-hash-v1"],
+  },
   exceptions: ["personas.v1.legacy-descriptive-keys"],
   files: manifestFiles,
 };
