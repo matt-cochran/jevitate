@@ -1,6 +1,6 @@
 {
-  "algorithm": "jevitate-content-hash-v2",
-  "canonicalization": "UTF-8 JSON; arrays retain order; object keys sort lexicographically by unsigned UTF-16 code units; no whitespace",
+  "algorithm": "jevitate-content-hash-v1",
+  "canonicalization": "UTF-8 JSON; arrays retain order; object keys sort with JavaScript localeCompare; no whitespace",
   "vectors": [
     {
       "kind": "persona",
@@ -39,19 +39,8 @@
         "a": 3,
         "Å": 4
       },
-      "canonical": "{\"a\":3,\"z\":1,\"Å\":4,\"ä\":2}",
-      "sha256": "3db95dddd935182a5f842fc08fd53436fbaeac1cfb62e933441643c1920312be"
-    },
-    {
-      "kind": "unicode-code-unit-order",
-      "input": {
-        "": 1,
-        "𐀀": 2,
-        "é": 3,
-        "é": 4
-      },
-      "canonical": "{\"é\":3,\"é\":4,\"𐀀\":2,\"\":1}",
-      "sha256": "e41f068bae10d342a86d2a4354424df7bd5c5b2b216f2a8742a6a02928f5acd2"
+      "canonical": "{\"a\":3,\"Å\":4,\"ä\":2,\"z\":1}",
+      "sha256": "0b5d08d5b2ef6655febaa4ed83088f2e7b1c2dc0e4c054319a20dd79e28c234e"
     },
     {
       "kind": "journey-review",

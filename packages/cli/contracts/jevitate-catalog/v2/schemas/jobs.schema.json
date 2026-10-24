@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jevitate.com/schemas/catalog/v2/jobs.schema.json",
+  "title": "Jevitate jobs.json v2",
+  "oneOf": [
+    {
+      "type": "array",
+      "items": {
+        "$ref": "job.schema.json"
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobs"
+      ],
+      "properties": {
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "job.schema.json"
+          }
+        }
+      }
+    }
+  ]
+}

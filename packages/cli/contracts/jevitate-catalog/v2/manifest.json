@@ -1,0 +1,78 @@
+{
+  "kind": "jevitate.catalog-contract",
+  "version": "2.0.0",
+  "package": "@jevitate/cli",
+  "source": {
+    "repository": "https://github.com/matt-cochran/jevitate.git",
+    "commit": "58ef64ab8c1e628bc25b3dab973b23b5b69a4488",
+    "packageVersionAtCommit": "0.23.0"
+  },
+  "compatibility": {
+    "repositoryCatalogMajor": 1,
+    "approvalHash": "jevitate-content-hash-v2",
+    "readsApprovalHashes": [
+      "jevitate-content-hash-v2",
+      "jevitate-content-hash-v1"
+    ]
+  },
+  "exceptions": [
+    "personas.v1.legacy-descriptive-keys"
+  ],
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 1394,
+      "sha256": "91f185e0eb2b81daf94d4cb30709bc63c1aa2c989556a97c95d1cea878fc1055"
+    },
+    {
+      "path": "approval-hash-vectors.json",
+      "bytes": 2450,
+      "sha256": "eff8769d651e6c9c665498006d739918a1702a485209e6bede1315f83e6bf711"
+    },
+    {
+      "path": "fixtures/invalid/jobs-unknown-field.json",
+      "bytes": 195,
+      "sha256": "119291e1f011ff538623c1c238591d5ee333088a2a7d7d2dee5e403ecaecf8f1"
+    },
+    {
+      "path": "fixtures/invalid/journey-unknown-field.json",
+      "bytes": 274,
+      "sha256": "823c9b86784dfb6cedafa7690f745ad51693f8fbbde046f44dc408255032c4ae"
+    },
+    {
+      "path": "fixtures/valid/jobs.json",
+      "bytes": 177,
+      "sha256": "f041e58590631c0ea23ecc20fc8a03f606e606331afe6c664eb241341dd4b126"
+    },
+    {
+      "path": "fixtures/valid/journey.json",
+      "bytes": 258,
+      "sha256": "33a9c9a2fb1e839e4f2bf7155b9da71d7cdbace5029f7542f85e79cd65ee0197"
+    },
+    {
+      "path": "fixtures/valid/personas.json",
+      "bytes": 90,
+      "sha256": "396b6916bed042307ab890855ae2dee661e7a79303befb55e33d3c5698c7f9ff"
+    },
+    {
+      "path": "schemas/job.schema.json",
+      "bytes": 15411,
+      "sha256": "2f4608dc6b58494f9e52935b3f5c7037de7d3768cfb334ab5a1cc550861d5eeb"
+    },
+    {
+      "path": "schemas/jobs.schema.json",
+      "bytes": 555,
+      "sha256": "bcd91a8002c24de12c696c31628719e079ffcf821ca48db2b1013660abf509b0"
+    },
+    {
+      "path": "schemas/journey.schema.json",
+      "bytes": 362358,
+      "sha256": "521e0f150967b10e5cc4547cc1401238478b4e2fe04dfb8febaa8dba27ae7f04"
+    },
+    {
+      "path": "schemas/personas.schema.json",
+      "bytes": 5708,
+      "sha256": "74cb8dc071545458823fd164d444c33f161eee8c3fed85e5b3f8d05cd6430afb"
+    }
+  ]
+}
