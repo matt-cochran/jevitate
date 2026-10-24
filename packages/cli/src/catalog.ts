@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { contentHash, isRecord } from "@jevitate/domain";
+import { contentHash, isRecord, legacyContentHash } from "@jevitate/domain";
 import {
   CATALOG_ID_RE,
   CatalogApprovalSchema,
@@ -16,7 +16,7 @@ import {
   type JourneyApproval,
   type JourneyCatalogLinks,
 } from "@jevitate/journey";
-import { journeyReviewHash } from "./journey-review.js";
+import { journeyApprovalMatches, journeyReviewHash } from "./journey-review.js";
 
 /**
  * #433 — the catalog: personas, jobs and Journeys, with their ids, content hashes and approval
@@ -125,9 +125,9 @@ export interface Catalog {
   readonly journeysDir?: string;
 }
 
-function statusOf(approval: CatalogApproval | undefined, hash: string): CatalogItemStatus {
+function statusOf(approval: CatalogApproval | undefined, hash: string, legacyHash: string): CatalogItemStatus {
   if (approval === undefined) return "draft";
-  return approval.contentHash === hash ? "approved" : "stale";
+  return approval.contentHash === hash || approval.contentHash === legacyHash ? "approved" : "stale";
 }
 
 
@@ -210,7 +210,7 @@ function catalogPersona(p: RawPersona, path: string): CatalogPersona {
     hasLogin: p.fields.login !== undefined,
     ...(approval === undefined ? {} : { approval }),
     contentHash: hash,
-    status: statusOf(approval, hash),
+    status: statusOf(approval, hash, personaLegacyContentHash(p.id, p.fields)),
   };
 }
 
@@ -219,6 +219,12 @@ export function personaContentHash(id: string, fields: Readonly<Record<string, u
   const described: Record<string, unknown> = { id };
   for (const [k, v] of Object.entries(fields)) if (k !== "approval" && !SESSION_KEYS.has(k)) described[k] = v;
   return contentHash(described);
+}
+
+function personaLegacyContentHash(id: string, fields: Readonly<Record<string, unknown>>): string {
+  const described: Record<string, unknown> = { id };
+  for (const [k, v] of Object.entries(fields)) if (k !== "approval" && !SESSION_KEYS.has(k)) described[k] = v;
+  return legacyContentHash(described);
 }
 
 // ── jobs.json ─────────────────────────────────────────────────────────────────────────────────
@@ -252,7 +258,7 @@ export function catalogJobOf(job: Job): CatalogJob {
     personas: [...new Set([...(job.personas ?? []), ...(job.persona === undefined ? [] : [job.persona])])],
     ...(job.approval === undefined ? {} : { approval: job.approval }),
     contentHash: hash,
-    status: statusOf(job.approval, hash),
+    status: statusOf(job.approval, hash, jobLegacyContentHash(job)),
   };
 }
 
@@ -263,6 +269,11 @@ export function catalogJobOf(job: Job): CatalogJob {
 export function jobContentHash(job: Job): string {
   const { approval: _a, ...rest } = job;
   return contentHash(rest);
+}
+
+function jobLegacyContentHash(job: Job): string {
+  const { approval: _a, ...rest } = job;
+  return legacyContentHash(rest);
 }
 
 // ── Journeys ──────────────────────────────────────────────────────────────────────────────────
@@ -279,7 +290,7 @@ export function catalogJourney(journey: Journey): CatalogJourney {
     ...(m.persona === undefined ? {} : { personaText: m.persona }),
     ...(m.approval === undefined ? {} : { approval: m.approval }),
     contentHash: hash,
-    changedSinceApproval: m.promoted && m.approval !== undefined && m.approval.contentHash !== hash,
+    changedSinceApproval: m.promoted && m.approval !== undefined && !journeyApprovalMatches(journey),
   };
 }
 

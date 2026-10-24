@@ -25,7 +25,9 @@ import type { JourneezeHttpRequest } from "./journeeze-connect.js";
 const KEY = "jzu_abcdefghijklmnopqrstuvwxyz234567abcdefgh";
 const FIXTURES = fileURLToPath(new URL("../test-fixtures/", import.meta.url));
 const Ajv = Ajv2020 as unknown as typeof Ajv2020.default;
-const validateBundle = new Ajv({ allErrors: true, strict: false }).compile(JSON.parse(readFileSync(join(FIXTURES, "catalog-bundle.v1.json"), "utf8")) as object);
+// The pinned schema is minor 1; contract versioning requires that reader to prune additions from
+// the producer's minor-2 bundle before validating it.
+const validateBundle = new Ajv({ allErrors: true, strict: false, removeAdditional: true }).compile(JSON.parse(readFileSync(join(FIXTURES, "catalog-bundle.v1.json"), "utf8")) as object);
 
 const JOB = {
   id: "invite",
@@ -200,7 +202,7 @@ describe("0.10 end to end: catalog → Journey → health → bundle → Journee
   it("catalog export writes a bundle that validates against the pinned contract schema", async () => {
     const { json } = await cli(["catalog", "export", "--format", "journeeze-bundle", "--out", join(root, "bundle"), "--product-name", "Ledgerly", "--json"]);
     const bundle = JSON.parse(await readFile(json.data.bundlePath, "utf8"));
-    expect(validateBundle(bundle) ? [] : validateBundle.errors).toEqual([]);
+    expect(validateBundle(structuredClone(bundle)) ? [] : validateBundle.errors).toEqual([]);
   });
 
   it("export_catalog_bundle (MCP) exports both promoted Journeys and the job", async () => {

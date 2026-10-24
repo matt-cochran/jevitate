@@ -55,5 +55,5 @@ CLEAR    lint ✓
 
 APPROVE
   (already approved)
-  jevitate journey promote crm-contacts-import-happy --reviewed-hash 041c04a08d345b8f749842f3e033235efa257d5288d6038707ff35773873f018
-Content hash: 041c04a08d345b8f749842f3e033235efa257d5288d6038707ff35773873f018
+  jevitate journey promote crm-contacts-import-happy --reviewed-hash 65fbb1fed95a5725308e8d0534571ab77b7daa107dccabb71b68d9565fabdbcb
+Content hash: 65fbb1fed95a5725308e8d0534571ab77b7daa107dccabb71b68d9565fabdbcb
