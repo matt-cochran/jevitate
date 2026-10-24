@@ -102,6 +102,32 @@ clean on 6 of 6 with both builds, and clean J2 on 10 of 12 (11 of 12 without), t
 the #645 near-threshold `done` and an existing grounding rule, not the read-back. Content the run did
 not type, such as `j3-phantom`'s prefilled CSV, has nothing of the run's own to read back: #649.
 
+#649 extends the read-back to what a write *sent*, whoever typed it. The string values in a 2xx
+write's request body (bounded, redacted, held in memory only; values under credential-named keys are
+skipped) await read-back when the page after the write newly shows them as text: an import's rows,
+listed from its CSV. A form's untouched prefilled fields, which stay in their fields, do not. A value
+the write's own route held as its source (the CSV field) is read back only by a page on another
+route, since reloading the import page shows the source either way. When a page loaded from the
+server shows the held values, the run is told so.
+
+That alone held `done` on clean J3 too: the model opened Contacts, which listed the rows, but the page
+judgment scored it 0.57–0.70, under 0.75 (#645). The read-back is the code evidence the threshold
+lacked. A phantom write cannot pass it, so when every value the job's writes sent was read back, a
+`done` needs only even odds (0.5) from the page judgment (#645).
+
+Lab runs on 2026-10-23 (`clean` and phantom variants, goal and usability):
+
+| cells | 0.22.0 | #649 read-back only | #649 + #645 |
+|---|---|---|---|
+| `j3-phantom` J3 goal (caught) | 1 / 6 | 6 / 6 | 4 / 4 |
+| `j2-phantom` J2 goal (caught) | — | 1 / 2 | 4 / 4 |
+| clean J3 goal (clean) | 4 / 4 | 2 / 4 | 6 / 6 |
+| clean J3 usability (clean) | 2 / 2 | 0 / 2 | 4 / 4 |
+| clean J1 + J2, goal and usability (clean) | 6 / 6 | 4 / 4 | 10 / 10 |
+
+A limitation remains: rows already shown as page text before the write (a preview table) do not
+await read-back, since a profile page that shows its saved name as text would otherwise be held.
+
 ## Lessons from building it
 
 - The first after-fix run showed the `clean` variant was not clean: imported contacts never reached

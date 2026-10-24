@@ -258,7 +258,9 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
   const refsBound = (a: Assertion): boolean => assertionRefsBound(journey, a);
   const effects = sites.filter((site) => isEffectSite(site, site.where === "step" ? stepOf(site.step) : undefined, refsBound));
   const endEffects = effects.filter((site) => site.where === "end-state");
-  const effectAt = (n: number): boolean => effects.some((site) => (site.where === "step" || site.where === "step-request") && site.step === n);
+  // #659: a `waitFor` step's target and state are enforced at run time — they are its checked outcome.
+  const effectAt = (n: number): boolean =>
+    recorded[n - 1]?.step.kind === "waitFor" || effects.some((site) => (site.where === "step" || site.where === "step-request") && site.step === n);
 
   const writeRequests = recorded.map((r) => writeRequestsOf(r, classify));
   const isWrite = recorded.map((r, i) => isWriteStep(r, classify, writeRequests[i]!));

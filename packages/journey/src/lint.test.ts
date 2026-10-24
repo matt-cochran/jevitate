@@ -179,6 +179,17 @@ describe("#401 lintJourney", () => {
     expect(lintJourney(journey).some((f) => f.rule === "intent-uncovered" && f.step === 1)).toBe(true);
   });
 
+  it("#659: does not flag intent-uncovered on a waitFor step, whose target and state are its checked outcome", () => {
+    const journey = j([
+      {
+        step: { kind: "waitFor", target: { testId: "conversation-handoff" }, state: "visible" },
+        objective: "Wait for the populated asynchronous handoff before extraction",
+        expectedResult: "The populated handoff is visible before any extraction.",
+      },
+    ]);
+    expect(lintJourney(journey).some((f) => f.rule === "intent-uncovered")).toBe(false);
+  });
+
   it("does not flag intent-uncovered when the step asserts its effect", () => {
     const journey = j([
       {

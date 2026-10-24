@@ -7,6 +7,21 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.23.0] – 2026-10-23
+
+0.23.0 closes the silent-data-loss gap that 0.22.0 left open: an import that answers success but keeps nothing is now caught, and catching it no longer costs false alarms on imports that work. On the accuracy lab, the phantom import is caught on 4 of 4 runs (1 of 6 on 0.22.0) and the phantom message on 4 of 4, and all 20 clean goal and usability runs stay clean.
+
+### Changed
+
+- **What a write sent is read back, whoever typed it (#649).** After a 2xx write, the values in its request body that the page then lists, such as an import's rows from a prefilled CSV, must show again on a page loaded from the server before a `report` or `done` can rest on them. Values are held in memory only, never persisted, and values under credential-named keys are skipped. A form's untouched prefilled fields are not held. When a page loaded from the server shows the held values, the run is told so.
+- **A done whose writes the app was seen to keep needs only even odds (#645).** When every write succeeded and code read back what they sent, the advisory page judgment needs 0.5 instead of 0.75. A write that answers success but keeps nothing cannot pass a read-back, which is the separation the threshold alone could not make. `docs/accuracy.md` has the measurements.
+
+### Fixed
+
+- **A `waitFor` step's documented result no longer warns `intent-uncovered` (#659).** Its target and state are enforced when it runs, so they count as its checked outcome in `journey lint`, strict review and linked readiness.
+- **Backend log lines stay on the step that caused them (#653).** A line a click's request logs just after the step settles is no longer moved to a following `done` or `blocked` step.
+- **An adversarial submit is not "blocked by validation" when nothing is invalid (#657).** It waits up to a second for a request Playwright reports late.
+
 ## [0.22.0] – 2026-10-23
 
 0.22.0 makes Jevitate's verdicts more often right, and measures it: a seeded-defect lab with known ground truth now ships with the repo. On its 42 runs, goal-run precision rose from 64% to 90% and usability precision from 60% to 90%, every planted defect is still found, and no run ends without a verdict.

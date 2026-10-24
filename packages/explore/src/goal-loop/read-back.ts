@@ -39,7 +39,7 @@ export async function readBackProbe(ctx: RunContext, step: Step): Promise<string
         .map((e) => (e as HTMLInputElement).value ?? ""),
     )
     .catch(() => [] as string[]);
-  const back = ctx.observed.readBack(await documentOf(ctx.page), redactPageText([text, ...values].join("\n"), ctx.secrets));
+  const back = ctx.observed.readBack(await documentOf(ctx.page), redactPageText([text, ...values].join("\n"), ctx.secrets), ctx.page.url());
   const listed = (vs: readonly string[]): string => vs.map((v) => `"${v}"`).join(", ");
   const missing = unread.filter((v) => !back.includes(v));
   ctx.history.push(
