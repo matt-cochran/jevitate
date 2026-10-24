@@ -38,4 +38,4 @@ export const LAST_CHANCE_NOTE =
  * invitation to report: nothing was sent yet, so the turn goes to the control that submits it.
  */
 export const LAST_CHANCE_NO_WRITE_NOTE =
-  "no progress: the last steps left the page unchanged, and no write of this run has succeeded yet — the goal asks for a change the app must receive: go back and press the control that submits it (Import, Save, Send…), or say blocked if the app offers none";
+  "no progress: the last steps left the page unchanged and you have seen the whole page, but no write of this run has succeeded yet — the goal asks for a change the app must receive: go back and press the control that submits it (Import, Save, Send…), or say blocked if the app offers none";
