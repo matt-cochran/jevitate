@@ -457,6 +457,14 @@ twice:
 
 [Journeeze](https://app.journeeze.dev) can import the catalog as a catalog bundle (v1.0).
 
+The CLI package also ships Jevitate's immutable repository-catalog contract under
+`contracts/jevitate-catalog/v1/`. It contains the JSON Schemas for `.jevitate/personas.json`,
+`.jevitate/jobs.json` and each Journey file, approval-hash vectors, conformance fixtures and a
+SHA-256 manifest. Consumers vendor one exact released package and verify the manifest; they do not
+fetch a mutable schema URL at runtime. The Job and Journey schemas are closed. The v1 persona
+schema retains its pre-contract descriptive-key extension behavior; those keys participate in the
+persona approval hash, while session/login keys do not.
+
 ```bash
 jevitate catalog export --format journeeze-bundle --out dist/catalog            # writes dist/catalog/bundle.json
 jevitate catalog export --format journeeze-bundle --out dist/catalog \
