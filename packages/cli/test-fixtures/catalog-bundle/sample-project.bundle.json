@@ -1,11 +1,16 @@
 {
   "kind": "journeeze.catalog-bundle",
   "version": 1,
-  "minor": 1,
+  "minor": 2,
   "producer": {
     "tool": "jevitate",
     "version": "0.10.0",
     "commit": "592a7021c4f0be9d3a8e6b1f2c7d4e5a6b7c8d9e"
+  },
+  "catalogContract": {
+    "kind": "jevitate.catalog-contract",
+    "version": "1.0.0",
+    "manifestSha256": "7708f60a60725769c40fea825eeef6b2748d9496068e5b8a59ca96495d72de00"
   },
   "product": {
     "name": "journeeze-board"

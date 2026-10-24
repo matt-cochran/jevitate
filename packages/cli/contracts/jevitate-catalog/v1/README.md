@@ -5,6 +5,12 @@ The JSON Schemas are closed where the runtime schemas are closed. The sole v1 ex
 persona descriptive keys: they remain open and participate in the persona approval hash; a future
 v2 moves non-core data under the namespaced `extensions` object.
 
-Approval hashes use `approval-hash-vectors.json`. Session paths and login settings are operational
-and excluded from persona approval hashes. A consumer must still run the semantic reference and
-approval checks documented by Jevitate; JSON Schema validation alone is insufficient.
+Approval hashes use `approval-hash-vectors.json`. Canonical object keys sort lexicographically by
+unsigned UTF-16 code units; arrays retain order and the encoded JSON has no insignificant whitespace.
+Session paths and login settings are operational and excluded from persona approval hashes. A
+consumer must still run Jevitate's semantic reference and approval checks; JSON Schema validation
+alone is insufficient.
+
+The manifest records the source repository, the full source commit and the package version at that
+commit. Publication is intentionally two commits: first commit source and generator changes, then
+run the generator with that commit's SHA and commit the regenerated immutable contract.

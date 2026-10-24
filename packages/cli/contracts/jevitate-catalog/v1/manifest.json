@@ -2,6 +2,11 @@
   "kind": "jevitate.catalog-contract",
   "version": "1.0.0",
   "package": "@jevitate/cli",
+  "source": {
+    "repository": "https://github.com/matt-cochran/jevitate.git",
+    "commit": "aa10014d9cdf4dea005a47db9f42c03c838d3ff6",
+    "packageVersionAtCommit": "0.23.0"
+  },
   "compatibility": {
     "repositoryCatalogMajor": 1,
     "approvalHash": "jevitate-content-hash-v1"
@@ -11,9 +16,14 @@
   ],
   "files": [
     {
+      "path": "README.md",
+      "bytes": 1103,
+      "sha256": "e3db08207f7e85181c713a8e0f53725fd7be3dba96af26cd608ca40070ff2e09"
+    },
+    {
       "path": "approval-hash-vectors.json",
-      "bytes": 2134,
-      "sha256": "8aefdc76f719bc29c166dcd30fcd1f9ef81b4a9f8a470560ef6144303f9db511"
+      "bytes": 2450,
+      "sha256": "52b8a39ba94162afdc85dd1141f91e0cc24c64ccf4a7995a8feee297a899ef60"
     },
     {
       "path": "fixtures/invalid/jobs-unknown-field.json",
@@ -39,11 +49,6 @@
       "path": "fixtures/valid/personas.json",
       "bytes": 90,
       "sha256": "396b6916bed042307ab890855ae2dee661e7a79303befb55e33d3c5698c7f9ff"
-    },
-    {
-      "path": "README.md",
-      "bytes": 683,
-      "sha256": "6ab41d05431bee69c536333df7de0a04b36e9baf3d74969a458e1e8cff4de221"
     },
     {
       "path": "schemas/job.schema.json",
