@@ -7,6 +7,10 @@ behaviour changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A field the run typed into is not a read-back (#671).** After a write, a sent value counts as kept only when a page loaded from the server shows it again. A form field holding what the run itself typed on that page load no longer counts: retyping a sent message into its composer after a reload had let a send that stored nothing be reported as done through a grounded report.
+
 ## [0.23.0] – 2026-10-23
 
 0.23.0 closes the silent-data-loss gap that 0.22.0 left open: an import that answers success but keeps nothing is now caught, and catching it no longer costs false alarms on imports that work. On the accuracy lab, the phantom import is caught on 4 of 4 runs (1 of 6 on 0.22.0) and the phantom message on 4 of 4, and all 20 clean goal and usability runs stay clean.
