@@ -9,7 +9,7 @@ behaviour changes).
 
 ### Fixed
 
-- **A rejected report on a write goal is told no write was made (#680).** Since #667, a rejected `done` on a write goal before any write succeeded says so and points back to the control that submits the change. A rejected `report` took the same wrong turn without that steer: a run that clicked through an import wizard to Contacts without pressing Import, then reported, was told only that its answer did not answer the question, and ended blocked. It now gets the same no-write hint.
+- **A write goal that stalls before anything was sent is told so (#680).** Since #667, a rejected `done` on a write goal before any write succeeded says so and points back to the control that submits the change. The same steer now reaches the run in two more places. One is a rejected `report`. The other is the no-progress last chance, whose note used to invite a report. A run that clicked through an import wizard to Contacts without pressing Import used to spend its last turn on a report that had to be rejected, then stop blocked; it is now sent back to the import page. On the accuracy lab's interleaved A/B (`j3-effort` goal, 14 runs per arm), goal false alarms were 1 of 14, against 5 of 28 on 0.24.0. Every phantom and dead-end was still caught, and clean J3 stayed clean. Most of that difference is how often a run wanders to Contacts at all. The one fixed run that wandered did return to Import, but did not redo the wizard, which had reset.
 
 ## [0.24.0] – 2026-10-24
 
