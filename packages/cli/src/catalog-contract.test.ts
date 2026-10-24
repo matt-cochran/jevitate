@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,10 @@ const SCHEMAS = join(ROOT, "schemas");
 const FIXTURES = join(ROOT, "fixtures");
 const read = (path: string): any => JSON.parse(readFileSync(path, "utf8"));
 const digest = (path: string): string => createHash("sha256").update(readFileSync(path)).digest("hex");
+const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+  const path = join(dir, entry.name);
+  return entry.isDirectory() ? files(path) : [path];
+});
 const generated = (schema: Parameters<typeof z.toJSONSchema>[0], id: string, title: string): object => ({
   ...z.toJSONSchema(schema, { target: "draft-2020-12", unrepresentable: "any" }),
   $id: `https://jevitate.com/schemas/catalog/v1/${id}`,
@@ -33,12 +37,22 @@ describe("the published Jevitate repository-catalog contract", () => {
       kind: "jevitate.catalog-contract",
       version: "1.0.0",
       package: "@jevitate/cli",
+      source: {
+        repository: "https://github.com/matt-cochran/jevitate.git",
+        commit: expect.stringMatching(/^[0-9a-f]{40}$/),
+        packageVersionAtCommit: expect.stringMatching(/^\d+\.\d+\.\d+/),
+      },
       compatibility: { repositoryCatalogMajor: 1, approvalHash: "jevitate-content-hash-v1" },
     });
+    const expected = new Set<string>(["manifest.json"]);
     for (const file of manifest.files) {
+      expect(expected.has(file.path), `duplicate manifest path: ${file.path}`).toBe(false);
+      expected.add(file.path);
       const path = join(ROOT, file.path);
       expect({ bytes: statSync(path).size, sha256: digest(path) }, file.path).toEqual({ bytes: file.bytes, sha256: file.sha256 });
     }
+    const actual = new Set(files(ROOT).map((path) => path.slice(ROOT.length + 1).replaceAll("\\", "/")));
+    expect([...actual].sort()).toEqual([...expected].sort());
   });
 
   it("publishes the exact Job and Journey schemas implemented by the runtime", () => {

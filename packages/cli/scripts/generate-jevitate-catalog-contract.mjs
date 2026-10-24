@@ -8,6 +8,7 @@ import { JobSchema, JourneySchema } from "../../journey/dist/index.js";
 const root = fileURLToPath(new URL("../contracts/jevitate-catalog/v1", import.meta.url));
 const contractVersion = "1.0.0";
 const schemaBase = "https://jevitate.com/schemas/catalog/v1";
+const packageJson = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 const write = (path, value) => {
@@ -84,20 +85,53 @@ const jobsFile = {
 };
 const journey = generatedSchema(JourneySchema, "journey.schema.json", "Jevitate Journey v1");
 
+function parseOptions(argv, env) {
+  const values = new Map();
+  for (let index = 0; index < argv.length; index += 2) {
+    const name = argv[index];
+    const value = argv[index + 1];
+    if (!["--source-repository", "--source-commit", "--package-version-at-commit"].includes(name) || value === undefined) {
+      throw new Error("usage: generate-jevitate-catalog-contract.mjs --source-commit <full-sha> [--source-repository <url>] [--package-version-at-commit <version>]");
+    }
+    values.set(name, value);
+  }
+  const source = {
+    repository: values.get("--source-repository") ?? env.JEVITATE_CONTRACT_SOURCE_REPOSITORY ?? "https://github.com/matt-cochran/jevitate.git",
+    commit: values.get("--source-commit") ?? env.JEVITATE_CONTRACT_SOURCE_COMMIT,
+    packageVersionAtCommit: values.get("--package-version-at-commit") ?? env.JEVITATE_CONTRACT_PACKAGE_VERSION ?? packageJson.version,
+  };
+  if (!/^https:\/\/.+/.test(source.repository)) throw new Error("contract source repository must be an https URL");
+  if (!/^[0-9a-f]{40}$/.test(source.commit ?? "")) throw new Error("contract source commit must be a full lowercase Git SHA");
+  if (typeof source.packageVersionAtCommit !== "string" || source.packageVersionAtCommit.length === 0) throw new Error("contract packageVersionAtCommit is required");
+  return source;
+}
+
+const source = parseOptions(process.argv.slice(2), process.env);
+
+function compareUtf16CodeUnits(a, b) {
+  const length = Math.min(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = a.charCodeAt(index) - b.charCodeAt(index);
+    if (difference !== 0) return difference < 0 ? -1 : 1;
+  }
+  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+}
+
 function canonical(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+  const entries = Object.entries(value).sort(([a], [b]) => compareUtf16CodeUnits(a, b));
   return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`;
 }
 const vector = (kind, input) => ({ kind, input, canonical: canonical(input), sha256: sha256(canonical(input)) });
 const vectors = {
   algorithm: "jevitate-content-hash-v1",
-  canonicalization: "UTF-8 JSON; arrays retain order; object keys sort with JavaScript localeCompare; no whitespace",
+  canonicalization: "UTF-8 JSON; arrays retain order; object keys sort lexicographically by unsigned UTF-16 code units; no whitespace",
   vectors: [
     vector("persona", { id: "owner", description: "Owns the product", role: "owner", extensions: { journeeze: { tier: "private" } } }),
     vector("job", { id: "review-work", trigger: "work is ready", motivation: "review it", outcome: "ship with confidence", personas: ["owner"] }),
     vector("unicode-order", { z: 1, "ä": 2, a: 3, "Å": 4 }),
+    vector("unicode-code-unit-order", { "\uE000": 1, "𐀀": 2, "e\u0301": 3, "é": 4 }),
     vector("journey-review", {
       metadata: { id: "review-work", name: "Review work", params: [], createdAtIso: "2026-10-24T00:00:00.000Z" },
       recording: { version: "1.0.0", site: "http://localhost", pages: [] },
@@ -113,7 +147,7 @@ const validJourney = {
 };
 
 rmSync(root, { recursive: true, force: true });
-write("README.md", `# Jevitate repository catalog contract v1\n\nThis immutable contract release defines the git-backed \`.jevitate/\` files shared with consumers.\nThe JSON Schemas are closed where the runtime schemas are closed. The sole v1 exception is legacy\npersona descriptive keys: they remain open and participate in the persona approval hash; a future\nv2 moves non-core data under the namespaced \`extensions\` object.\n\nApproval hashes use \`approval-hash-vectors.json\`. Session paths and login settings are operational\nand excluded from persona approval hashes. A consumer must still run the semantic reference and\napproval checks documented by Jevitate; JSON Schema validation alone is insufficient.\n`);
+write("README.md", `# Jevitate repository catalog contract v1\n\nThis immutable contract release defines the git-backed \`.jevitate/\` files shared with consumers.\nThe JSON Schemas are closed where the runtime schemas are closed. The sole v1 exception is legacy\npersona descriptive keys: they remain open and participate in the persona approval hash; a future\nv2 moves non-core data under the namespaced \`extensions\` object.\n\nApproval hashes use \`approval-hash-vectors.json\`. Canonical object keys sort lexicographically by\nunsigned UTF-16 code units; arrays retain order and the encoded JSON has no insignificant whitespace.\nSession paths and login settings are operational and excluded from persona approval hashes. A\nconsumer must still run Jevitate's semantic reference and approval checks; JSON Schema validation\nalone is insufficient.\n\nThe manifest records the source repository, the full source commit and the package version at that\ncommit. Publication is intentionally two commits: first commit source and generator changes, then\nrun the generator with that commit's SHA and commit the regenerated immutable contract.\n`);
 write("schemas/job.schema.json", jobEntry);
 write("schemas/jobs.schema.json", jobsFile);
 write("schemas/journey.schema.json", journey);
@@ -133,11 +167,12 @@ function files(dir) {
 }
 const manifestFiles = files(root)
   .map((full) => ({ path: relative(root, full).replaceAll("\\", "/"), bytes: statSync(full).size, sha256: sha256(readFileSync(full)) }))
-  .sort((a, b) => a.path.localeCompare(b.path));
+  .sort((a, b) => compareUtf16CodeUnits(a.path, b.path));
 write("manifest.json", {
   kind: "jevitate.catalog-contract",
   version: contractVersion,
   package: "@jevitate/cli",
+  source,
   compatibility: { repositoryCatalogMajor: 1, approvalHash: "jevitate-content-hash-v1" },
   exceptions: ["personas.v1.legacy-descriptive-keys"],
   files: manifestFiles,
