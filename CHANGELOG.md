@@ -7,6 +7,10 @@ behaviour changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A rejected report on a write goal is told no write was made (#680).** Since #667, a rejected `done` on a write goal before any write succeeded says so and points back to the control that submits the change. A rejected `report` took the same wrong turn without that steer: a run that clicked through an import wizard to Contacts without pressing Import, then reported, was told only that its answer did not answer the question, and ended blocked. It now gets the same no-write hint.
+
 ## [0.24.0] – 2026-10-24
 
 0.24.0 removes the usability false alarms 0.23.0 showed on import wizards, closes a silent-data-loss gap where retyping a sent message counted as the app keeping it, and ships Jevitate's repository-catalog contract with the CLI. On the accuracy lab at 6 replicates per cell (twice the usual), usability precision is 100% (83.3% on 0.23.0), goal precision is 96.2%, and all 24 phantom runs are caught. `docs/accuracy.md` has the measurements.
