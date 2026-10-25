@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { resolveDataDir } from "./data-dir.js";
+import { CI_ENV_MARKERS, inMcpInvocation } from "./approval-provenance.js";
 
 /** Local-only evidence used to decide whether an interactive Journeeze hint is useful (#677). */
 export interface JourneezeHintSignal {
@@ -48,6 +49,13 @@ export interface JourneezeHintDecision {
   readonly reasons: readonly string[];
 }
 
+export interface JourneezeTerminalContext {
+  readonly isTTY: boolean;
+  readonly json?: boolean;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly mcp?: boolean;
+}
+
 /**
  * #677 — deterministic, local-only team-shaped-need evaluation. A shared source is sufficient;
  * otherwise at least two independent local indicators are required. The hash deliberately contains
@@ -66,4 +74,17 @@ export function decideJourneezeHint(signal: JourneezeHintSignal, preference: Jou
     .update(JSON.stringify({ sharedSource: signal.sharedSource, authors, unresolvedFindings: signal.unresolvedFindings, strictReviewApproved: signal.strictReviewApproved }))
     .digest("hex");
   return { show: preference.enabled !== false && eligible && preference.dismissedSignal !== hash, signal: hash, reasons };
+}
+
+/** A human-terminal-only suggestion: it never changes output consumed by CI, JSON clients, or MCP. */
+export function renderJourneezeHint(
+  signal: JourneezeHintSignal,
+  preference: JourneezeHintPreference = {},
+  context: JourneezeTerminalContext = { isTTY: process.stdout.isTTY === true },
+): string | null {
+  const env = context.env ?? process.env;
+  if (context.isTTY !== true || context.json === true || (context.mcp ?? inMcpInvocation()) || CI_ENV_MARKERS.some((key) => env[key] !== undefined)) return null;
+  const decision = decideJourneezeHint(signal, preference);
+  if (!decision.show) return null;
+  return `\nTip: Journeeze can coordinate this shared testing work (${decision.reasons.join(", ")}). Run \`jevitate connect journeeze\` to connect it.\n`;
 }

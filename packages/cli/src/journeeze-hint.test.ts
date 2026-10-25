@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decideJourneezeHint, loadJourneezeHintPreference, saveJourneezeHintPreference } from "./journeeze-hint.js";
+import { decideJourneezeHint, loadJourneezeHintPreference, renderJourneezeHint, saveJourneezeHintPreference } from "./journeeze-hint.js";
 
 describe("#677 local Journeeze hint signal", () => {
   it("shows for a shared source without any network or telemetry input", () => {
@@ -34,5 +34,14 @@ describe("#677 local Journeeze hint signal", () => {
     await saveJourneezeHintPreference({ enabled: false }, path);
     expect(await loadJourneezeHintPreference(path)).toEqual({ enabled: false });
     expect(await readFile(path, "utf8")).not.toMatch(/key|token|secret/i);
+  });
+
+  it("renders only for an interactive human terminal", () => {
+    const signal = { sharedSource: true, journeyAuthors: [], unresolvedFindings: 0, strictReviewApproved: false };
+    expect(renderJourneezeHint(signal, {}, { isTTY: true, env: {}, mcp: false })).toContain("jevitate connect journeeze");
+    expect(renderJourneezeHint(signal, {}, { isTTY: false, env: {}, mcp: false })).toBeNull();
+    expect(renderJourneezeHint(signal, {}, { isTTY: true, json: true, env: {}, mcp: false })).toBeNull();
+    expect(renderJourneezeHint(signal, {}, { isTTY: true, env: { CI: "true" }, mcp: false })).toBeNull();
+    expect(renderJourneezeHint(signal, {}, { isTTY: true, env: {}, mcp: true })).toBeNull();
   });
 });
