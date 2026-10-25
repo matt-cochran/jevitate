@@ -7,17 +7,15 @@ behaviour changes).
 
 ## [Unreleased]
 
+## [0.24.2] – 2026-10-25
+
+0.24.1 was versioned on `dev` but never published; 0.24.2 combines its #680 correction with #687 and #689.
+
 ### Fixed
 
 - **An explicit job-wait budget owns a busy state the app declares (#687).** With `--job-wait-ms`, a busy region the page marks `aria-busy="true"` was still cut off by the generic 15 s `ui-no-progress` ceiling when nothing else showed the job running: no request pending, none completing, static text. A server-side approval job over "Approving… Working for 0:00" ended as a hang 15 s in, with most of a 900 s budget left. That state is now waited out within the budget. An undeclared spinner over a silent page, and any busy state without the flag, still end at the ceiling. `docs/exploration.md` lists which states the budget governs.
 - **A hang inside the job-wait budget says so (#687, #689).** A hang that stood after earlier waits always said "past the N s job-wait budget", even when the page had merely stopped showing work it recognized at 376 s of 900 s. The detail now says which happened. It gives the budget used, the wall-clock time since the first deferral, and how long ago the app last completed a request, so a stalled app or relay can be told apart from the runner's accounting.
 - **`--ignore-no-progress` matches what the indicator says (#687).** A busy indicator with a test id is described by it (`[data-testid=taste-busy]`), so a pattern on its words (`Approving*`) never matched. A pattern now matches either the description or the visible words.
-
-## [0.24.1] – 2026-10-24
-
-0.24.1 is a fix-only patch. A write goal that stalls before anything was sent is now told so on its last turn, the source of 0.24.0's one goal false alarm on the accuracy lab.
-
-### Fixed
 
 - **A write goal that stalls before anything was sent is told so (#680).** Since #667, a rejected `done` on a write goal before any write succeeded says so and points back to the control that submits the change. The same steer now reaches the run in two more places. One is a rejected `report`. The other is the no-progress last chance, whose note used to invite a report. A run that clicked through an import wizard to Contacts without pressing Import used to spend its last turn on a report that had to be rejected, then stop blocked; it is now sent back to the import page. On the accuracy lab's interleaved A/B (`j3-effort` goal, 14 runs per arm), goal false alarms were 1 of 14, against 5 of 28 on 0.24.0. Every phantom and dead-end was still caught, and clean J3 stayed clean. Most of that difference is how often a run wanders to Contacts at all. The one fixed run that wandered did return to Import, but did not redo the wizard, which had reset.
 
