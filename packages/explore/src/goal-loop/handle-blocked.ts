@@ -3,10 +3,14 @@
  * still working, refused while nothing was tried yet, else the run stops. The goal loop's blocked
  * handler, moved out of `explore.ts` unchanged (#232).
  */
+import type { Page } from "playwright";
 import { monitorFor } from "../page-monitor.js";
+import { controlRisk } from "../safety.js";
+import { snapshot } from "../snapshot.js";
 import { awaitWrites } from "../side-effects.js";
 import { readInProgressStatus } from "../status.js";
 import type { RunContext } from "./context.js";
+import type { ActionableControlEvidence, ActionableControlKind } from "./context/types.js";
 import { JOB_WAIT_SLICE_MS, MAX_EARLY_BLOCKED_REFUSALS, quote, waitOutJob } from "./helpers.js";
 import { deferEnding } from "./min-effort.js";
 import type { Flow, Step } from "./step.js";
@@ -87,4 +91,189 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
   ctx.incomplete = `the model reported the goal cannot be advanced from this page${ctx.lastRefusal === null ? "" : ` (${ctx.lastRefusal})`}`;
   ctx.stop = "blocked";
   return "stop";
+}
+
+/**
+ * #688 — actionable-control recovery evidence. When the run is blocked but the page still offers
+ * untried controls, the recovery needs typed, observation-only evidence about each candidate: how to
+ * find it (`locator`), what it looked like (`screenshot`), the condition under which acting is safe
+ * (`predicate`), and exactly where to resume (`resume`). Nothing here selects, clicks or otherwise
+ * executes a candidate — building the evidence reads the page and captures an image only.
+ */
+
+/** The interactive elements recovery evidence reads. Observation only; never a click target here. */
+const RECOVERY_SELECTOR = [
+  "a[href]",
+  "button",
+  "input:not([type=hidden])",
+  "select",
+  "textarea",
+  "[role=button]",
+  "[role=link]",
+  "[role=menuitem]",
+  "[role=tab]",
+  "[role=checkbox]",
+  "[role=radio]",
+  "[role=switch]",
+  "[contenteditable=true]",
+].join(", ");
+
+/** A control asking for approval / authorization rather than performing the goal's own action. */
+const APPROVAL = /\b(?:approve|approval|authorize|authorise|accept|grant|sign[ -]?off|confirm)\b/i;
+
+/** The full condition a candidate must satisfy for a run to act through it safely (#688). */
+const SAFE_PREDICATE = "visible && enabled && !ambiguous && !destructive && !financial && !approval";
+
+/** One interactive element as the browser reads it — the raw input to the evidence contract. */
+interface RecoveryCandidate {
+  readonly name: string;
+  readonly role: string;
+  readonly testId: string | null;
+  readonly id: string | null;
+  readonly visible: boolean;
+  readonly enabled: boolean;
+  readonly box: { readonly x: number; readonly y: number; readonly width: number; readonly height: number } | null;
+}
+
+/** BROWSER CODE — serialized by `locator.evaluateAll`: no imports, no closure over module scope. */
+function readRecoveryCandidates(els: Element[]): RecoveryCandidate[] {
+  const nameOf = (el: Element): string => {
+    const aria = el.getAttribute("aria-label");
+    if (aria !== null && aria.trim() !== "") return aria.replace(/\s+/g, " ").trim();
+    const labelled = el.getAttribute("aria-labelledby");
+    if (labelled !== null) {
+      const text = labelled
+        .split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ");
+      if (text.trim() !== "") return text.replace(/\s+/g, " ").trim();
+    }
+    const title = el.getAttribute("title");
+    if (title !== null && title.trim() !== "") return title.replace(/\s+/g, " ").trim();
+    if (el instanceof HTMLInputElement && el.type !== "password" && el.value !== "") return el.value.replace(/\s+/g, " ").trim();
+    return (el.textContent ?? "").replace(/\s+/g, " ").trim();
+  };
+  return els.map((el) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const visible =
+      style.display !== "none" && style.visibility !== "hidden" && el.getClientRects().length > 0 && rect.width > 0 && rect.height > 0;
+    const disabled = (el as HTMLButtonElement).disabled === true || el.getAttribute("aria-disabled") === "true";
+    return {
+      name: nameOf(el),
+      role: el.getAttribute("role") ?? el.tagName.toLowerCase(),
+      testId: el.getAttribute("data-testid") ?? el.getAttribute("data-test"),
+      id: el.id === "" ? null : el.id,
+      visible,
+      enabled: !disabled,
+      box: visible ? { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height } : null,
+    };
+  });
+}
+
+/**
+ * The class of one candidate control: `hidden`, `disabled` and `ambiguous` are observed facts;
+ * `destructive` / `financial` come from the shared safety vocabulary; `approval` is a confirmation
+ * verb; everything visible, enabled, uniquely named and safe is `safe`.
+ */
+export function classifyActionableControl(input: {
+  readonly name: string;
+  readonly role?: string;
+  readonly visible: boolean;
+  readonly enabled: boolean;
+  readonly duplicateName: boolean;
+}): ActionableControlKind {
+  if (!input.visible) return "hidden";
+  if (!input.enabled) return "disabled";
+  if (input.duplicateName) return "ambiguous";
+  const risk = controlRisk(input.name, input.role);
+  if (risk !== null && (risk.risk === "destructive" || risk.risk === "session-end")) return "destructive";
+  if (risk !== null && risk.risk === "paid") return "financial";
+  if (APPROVAL.test(input.name)) return "approval";
+  return "safe";
+}
+
+/** The condition that must hold for the candidate to be actable, keyed by the class it fell into. */
+function recoveryPredicate(kind: ActionableControlKind): string {
+  switch (kind) {
+    case "safe":
+      return SAFE_PREDICATE;
+    case "hidden":
+      return "visible";
+    case "disabled":
+      return "enabled";
+    case "ambiguous":
+      return "uniquely named";
+    case "destructive":
+      return "!destructive";
+    case "financial":
+      return "!financial";
+    case "approval":
+      return "!approval";
+  }
+}
+
+/** A durable locator for a candidate: its test id, its id, else its role and accessible name. */
+function recoveryLocator(c: RecoveryCandidate): string {
+  if (c.testId !== null && c.testId !== "") return `[data-testid="${c.testId}"]`;
+  if (c.id !== null && c.id !== "") return `#${c.id}`;
+  const role = c.role === "" ? "*" : c.role;
+  return `${role}[name="${c.name.replace(/"/g, '\\"')}"]`;
+}
+
+/** A PNG data URL for the candidate's own box (the viewport when it has none); never a click. */
+async function recoveryScreenshot(page: Page, c: RecoveryCandidate): Promise<string | null> {
+  try {
+    const buf = c.box === null ? await page.screenshot({ animations: "disabled" }) : await page.screenshot({ clip: c.box, animations: "disabled" });
+    return `data:image/png;base64,${buf.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #688 — read every interactive control on `page` (visible or not) and build its recovery evidence.
+ * Observation only: the page is read and captured, never selected, clicked or executed. Ambiguity is
+ * a name shared by more than one visible, enabled control; hidden controls are still reported (with
+ * `kind: "hidden"`) so a recovery can tell "not present" from "present but unusable".
+ */
+export async function collectActionableControlEvidence(
+  page: Page,
+  opts: { readonly screenshots?: boolean } = {},
+): Promise<ActionableControlEvidence[]> {
+  const candidates = await page
+    .locator(RECOVERY_SELECTOR)
+    .evaluateAll(readRecoveryCandidates)
+    .catch(() => [] as RecoveryCandidate[]);
+  const url = page.url();
+  // #688: the page state's stable freshness signature is the same identity the loop uses, so a
+  // recovery resumes only against the state the evidence was gathered on.
+  const state = await snapshot(page).then(
+    (s) => s.signature,
+    () => url,
+  );
+  const visibleNames = new Map<string, number>();
+  for (const c of candidates) {
+    if (c.visible && c.enabled && c.name !== "") visibleNames.set(c.name, (visibleNames.get(c.name) ?? 0) + 1);
+  }
+  const out: ActionableControlEvidence[] = [];
+  for (const c of candidates) {
+    const kind = classifyActionableControl({
+      name: c.name,
+      role: c.role,
+      visible: c.visible,
+      enabled: c.enabled,
+      duplicateName: c.name !== "" && (visibleNames.get(c.name) ?? 0) > 1,
+    });
+    const locator = recoveryLocator(c);
+    out.push({
+      kind,
+      name: c.name,
+      locator,
+      screenshot: opts.screenshots === false ? null : await recoveryScreenshot(page, c),
+      predicate: recoveryPredicate(kind),
+      resume: { url, state, locator },
+    });
+  }
+  return out;
 }
