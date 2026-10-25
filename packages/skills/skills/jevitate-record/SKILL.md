@@ -50,8 +50,9 @@ headed browser demonstration a human performs — you launch it and they drive.
   the human and let them decide. Do not resolve them yourself. When `stopBefore` is absent
   (`no-submit-step`), the draft replays EVERY step, including the final submit. Have the human mark
   the stop before anything runs it.
-- Then follow `jevitate-promotion-ready`: `jevitate journey review <id> --strict` and `jevitate
-  journey verify <id> --mutate --param <name>=<value> ...` (on a non-production environment). The
+- Then follow `jevitate-promotion-ready`: preview with `jevitate journey verify <id> --plan --param
+  <name>=<value> ...`, inspect its pairs/unpaired assertions/replay floor, then run `jevitate journey
+  verify <id> --mutate --param <name>=<value> ...` (on a non-production environment). The
   mutation proof swaps and truncates each proposed parameter to prove the `{var}` checks catch a
   wrong thread or truncated text. Promotion stays the human's.
 - Fewer than two takes (`E_PROPOSAL_TOO_FEW_TAKES`) and takes that did not record the same steps

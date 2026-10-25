@@ -7,6 +7,10 @@ behaviour changes).
 
 ## [Unreleased]
 
+### Added
+
+- **Preview a Journey's mutation proof without running it.** `jevitate journey verify <id> --plan` (and MCP `verify_journey` with `plan: true`) reports every planned mutation, its assertion pairings, unpaired assertions and the minimum replay count without opening a browser, target, fixture, hook or session. The promotion and recording skills now require this inexpensive preflight before a potentially long `--mutate` proof.
+
 ## [0.24.2] – 2026-10-25
 
 0.24.1 was versioned on `dev` but never published; 0.24.2 combines its #680 correction with #687 and #689.

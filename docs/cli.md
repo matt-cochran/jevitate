@@ -1672,7 +1672,7 @@ jevitate journey run [options] <id>
 jevitate journey verify [options] <id>
 ```
 
-prove each assertion of a Journey can fail: --mutate replays it with each write step skipped or blocked, and each checked fill emptied
+preview or prove that each Journey assertion fails when its outcome is absent
 
 **Arguments**
 
@@ -1703,8 +1703,9 @@ prove each assertion of a Journey can fail: --mutate replays it with each write 
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
-| `--mutate` | run the mutation proof (required) |  |  |  |  |
+| `--mutate` | run the mutation proof |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--plan` | print the static mutation/assertion plan without opening a browser |  |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
 
