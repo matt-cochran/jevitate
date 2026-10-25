@@ -24,6 +24,7 @@ export function initGuards(ctx: MutableRunContext, cfg: ExploreConfig): void {
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
    */
   ctx.hangWorkWaitedMs = 0;
+  ctx.hangWorkSince = null;
   /** #258: the longest wait the page has documented this run (its budget, ms); 0 when none. */
   ctx.documentedBudgetMs = 0;
 }

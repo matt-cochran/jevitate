@@ -11,6 +11,7 @@ import {
   probeResponsive,
   visibleBusyIndicator,
   visibleBusyIndicatorContainer,
+  visibleBusyIndicatorText,
   type HangSignal,
 } from "./hang.js";
 import { contentHash, clock } from "@jevitate/domain";
@@ -295,7 +296,9 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
         false,
       );
       // A target can declare an indicator (or a route) where a lasting busy state is expected.
-      if (!gone && !ignoreNoProgress(busy) && !ignoreNoProgress(hangRoute(page.url()))) {
+      // #687: a pattern may name the indicator's visible words too ("Approving*"), not only its description.
+      const busyText = gone ? null : await page.evaluate(visibleBusyIndicatorText).catch(() => null);
+      if (!gone && !ignoreNoProgress(busy) && !(busyText !== null && ignoreDeclared(busyText)) && !ignoreNoProgress(hangRoute(page.url()))) {
         stuckBusy = busy;
         stuckBusyContainer = await page.evaluate(visibleBusyIndicatorContainer).catch(() => null);
         const now = await page.evaluate(visibleBusyIndicator).catch(() => null);

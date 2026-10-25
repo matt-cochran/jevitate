@@ -11,12 +11,42 @@ import { readDocumentedWait, readInProgressStatus, readWorkingStatus } from "../
 import type { RunContext } from "./context.js";
 import { JOB_WAIT_SLICE_MS, documentedWaitBudgetMs, liveBusyWork, stillShowsWork, waitOutJob } from "./helpers.js";
 import type { Flow, Perceived } from "./step.js";
+import { monitorFor } from "../page-monitor.js";
 import { clock } from "@jevitate/domain";
 
 /** #330: the in-progress status shown while a request is pending, described for the transcript. */
 async function statusWhilePending(page: Parameters<typeof readInProgressStatus>[0]): Promise<string | null> {
   const status = await readInProgressStatus(page);
   return status === null ? null : `${status} while its request is in flight (within --job-wait-ms)`;
+}
+
+/**
+ * #687: a busy state the app DECLARES — an `aria-busy="true"` region, the app's own machine-readable
+ * "this is updating" — is the job the operator sized with --job-wait-ms: with the flag, that budget,
+ * not the generic no-progress ceiling, decides how long it may take (a page with no request pending,
+ * the job running server-side). A spinner the app does not declare (#288) and any state without the
+ * flag still end at the ceiling. Null when the page declares no busy region.
+ */
+async function declaredBusy(page: Parameters<typeof readInProgressStatus>[0]): Promise<string | null> {
+  const status = await readInProgressStatus(page);
+  return status?.startsWith("aria-busy region") === true ? `${status}, declared by the app (within --job-wait-ms)` : null;
+}
+
+/**
+ * #689: why a hang stood after the page had been believed working — the budget was spent, or the page
+ * stopped showing work code recognizes before then — with the budget used, the wall-clock time since
+ * the first deferral, and how long ago the app last completed a request.
+ */
+function stoodAfterWork(ctx: RunContext, workBudgetMs: number): string {
+  const s = (ms: number): string => `${Math.round(ms / 1000)}s`;
+  const now = clock.now();
+  const since = ctx.hangWorkSince === null ? "" : `, ${s(now - ctx.hangWorkSince)} since the first deferral`;
+  const last = monitorFor(ctx.page).completedSince(ctx.hangWorkSince ?? 0).filter((r) => r.resourceType !== "document" && r.ignored !== true).at(-1);
+  const activity = last === undefined ? "no app request completed since" : `the app's last request completed ${s(now - last.endedAt)} ago`;
+  if (ctx.hangWorkWaitedMs >= workBudgetMs) {
+    return `still so after ${s(ctx.hangWorkWaitedMs)} of the page showing work${since} — past the ${s(workBudgetMs)} job-wait budget; raise --job-wait-ms for longer jobs; ${activity}`;
+  }
+  return `the page stopped showing work code recognizes (an acknowledged or declared in-progress status, a documented wait, a pending request under a status, or requests completing) after ${s(ctx.hangWorkWaitedMs)} of the ${s(workBudgetMs)} job-wait budget${since}; ${activity}`;
 }
 
 export async function checkHang(ctx: RunContext, step: Perceived): Promise<Flow> {
@@ -41,8 +71,10 @@ export async function checkHang(ctx: RunContext, step: Perceived): Promise<Flow>
       // #330: a request still in flight while the page SAYS it is working ("Designing variations…")
       // is the long job the operator sized with --job-wait-ms: waited out within that budget. Without
       // the flag a bare status is not enough (a stuck page looks exactly like that, #153).
-      (perception.hang.kind === "request-pending" && ctx.jobWaitExplicit ? await statusWhilePending(ctx.page) : null);
+      (perception.hang.kind === "request-pending" && ctx.jobWaitExplicit ? await statusWhilePending(ctx.page) : null) ??
+      (perception.hang.kind === "ui-no-progress" && ctx.jobWaitExplicit ? await declaredBusy(ctx.page) : null);
     if (working !== null) {
+      ctx.hangWorkSince ??= perceiveStartedAt;
       const w = await waitOutJob(ctx.page, Math.min(workBudgetMs - ctx.hangWorkWaitedMs, JOB_WAIT_SLICE_MS), stillShowsWork);
       // The perception's own wait counts too (its whole time, the busy-indicator wait included): the
       // budget bounds the whole time spent believing it.
@@ -92,7 +124,7 @@ export async function checkHang(ctx: RunContext, step: Perceived): Promise<Flow>
       ctx.hangWorkWaitedMs > 0
         ? {
             ...perception.hang,
-            detail: `${perception.hang.detail} (still so after ${Math.round(ctx.hangWorkWaitedMs / 1000)}s of the page showing work — past the ${Math.round(workBudgetMs / 1000)}s job-wait budget; raise --job-wait-ms for longer jobs)`,
+            detail: `${perception.hang.detail} (${stoodAfterWork(ctx, workBudgetMs)})`,
           }
         : perception.hang;
     const withHost: HangSignal = { ...stood, host: judged.host };
