@@ -346,7 +346,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (707 exports)
+# @jevitate/explore (708 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -1046,6 +1046,7 @@
   VetoedAnswers: class
   visibleBusyIndicator: function
   visibleBusyIndicatorContainer: function
+  visibleBusyIndicatorText: function
   VOLATILITY_GAP_MS: variable
   WAIT_OP_MS: variable
   waivableRule: function
