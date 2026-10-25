@@ -10,7 +10,7 @@ import { snapshot } from "../snapshot.js";
 import { awaitWrites } from "../side-effects.js";
 import { readInProgressStatus } from "../status.js";
 import type { RunContext } from "./context.js";
-import type { ActionableControlEvidence, ActionableControlKind } from "./context/types.js";
+import type { ActionableControlEvidence, ActionableControlKind, ActionableControlOutcome, ActionableControlResume } from "./context/types.js";
 import { JOB_WAIT_SLICE_MS, MAX_EARLY_BLOCKED_REFUSALS, quote, waitOutJob } from "./helpers.js";
 import { deferEnding } from "./min-effort.js";
 import type { Flow, Step } from "./step.js";
@@ -132,21 +132,26 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
     return "continue";
   }
   record(true, "model blocked");
+  // #688 — the candidate the terminal outcome names: the safe control whose recovery turn was spent,
+  // or the best real excluded control a manager could still act on (never merely hidden/unusable).
+  const turnSafe = turn !== undefined && turn.given && turn.safe.length > 0 ? turn.safe : null;
+  const excluded = evidence.filter((e) => e.kind !== "safe");
+  const classes = [...new Set(excluded.map((e) => e.kind))].join(", ");
+  const best = turnSafe !== null ? turnSafe[0] : (excluded.find((e) => e.kind !== "hidden" && e.kind !== "disabled") ?? evidence[0]);
+  if (best !== undefined) {
+    // The decision's evidence skipped screenshots; capture the named candidate's own at the stop.
+    const captured = (await collectActionableControlEvidence(ctx.page).catch(() => evidence)).find((e) => e.locator === best.locator);
+    ctx.actionableControl = actionableControlOutcome(captured ?? best);
+  }
   // #235: a control the goal needed may have been refused — the reason says so, actionably.
   const refusal = ctx.lastRefusal === null ? "" : ` (${ctx.lastRefusal})`;
   const base = `the model reported the goal cannot be advanced from this page${refusal}`;
   const recovery =
-    turn !== undefined && turn.given && turn.safe.length > 0
-      ? `the one recovery turn through the safe control ${turn.safe.map(resumeIdentity).join(", ")} did not advance the goal`
-      : (() => {
-          const excluded = evidence.filter((e) => e.kind !== "safe");
-          const classes = [...new Set(excluded.map((e) => e.kind))].join(", ");
-          // The best candidate a manager could still act on: a real control, not merely absent/unusable.
-          const best = excluded.find((e) => e.kind !== "hidden" && e.kind !== "disabled") ?? evidence[0];
-          return `no visible enabled safe control is available to recover through${
-            classes === "" ? "" : ` (excluded control classes: ${classes})`
-          }${best === undefined ? "" : `; resume identity ${resumeIdentity(best)}`}`;
-        })();
+    turnSafe !== null
+      ? `the one recovery turn through the safe control ${turnSafe.map(resumeIdentity).join(", ")} did not advance the goal`
+      : `no visible enabled safe control is available to recover through${
+          classes === "" ? "" : ` (excluded control classes: ${classes})`
+        }${best === undefined ? "" : `; resume identity ${resumeIdentity(best)}`}`;
   // #84's blocker keeps its place immediately after the base phrase (#211: the run names what
   // stopped it) so the durable recovery identity extends the reason instead of displacing it.
   const cause = ctx.blockingCause();
@@ -281,6 +286,74 @@ function recoveryLocator(c: RecoveryCandidate): string {
   if (c.id !== null && c.id !== "") return `#${c.id}`;
   const role = c.role === "" ? "*" : c.role;
   return `${role}[name="${c.name.replace(/"/g, '\\"')}"]`;
+}
+
+/** #688 — the clauses of `SAFE_PREDICATE`, in the exact order it spells them. */
+const SAFE_CLAUSES = ["visible", "enabled", "!ambiguous", "!destructive", "!financial", "!approval"] as const;
+
+/** The safe-predicate clause a candidate of this class fails, or null when every clause holds. */
+function failingClause(kind: ActionableControlKind): string | null {
+  switch (kind) {
+    case "safe":
+      return null;
+    case "hidden":
+      return "visible";
+    case "disabled":
+      return "enabled";
+    case "ambiguous":
+      return "!ambiguous";
+    case "destructive":
+      return "!destructive";
+    case "financial":
+      return "!financial";
+    case "approval":
+      return "!approval";
+  }
+}
+
+/**
+ * #688 — the distinct, machine-readable terminal outcome for one candidate control: the candidate a
+ * manager could resume through (locator, label, visible/enabled facts, screenshot, exact identity),
+ * and the safe-predicate clauses it satisfied and did not. Observation only.
+ */
+export function actionableControlOutcome(e: ActionableControlEvidence): ActionableControlOutcome {
+  const missing = failingClause(e.kind);
+  return {
+    kind: "author_stopped_with_actionable_control",
+    candidate: {
+      locator: e.locator,
+      label: e.name,
+      visible: e.kind !== "hidden",
+      enabled: e.kind !== "disabled",
+      screenshot: e.screenshot,
+      resume: e.resume,
+    },
+    satisfiedPredicates: SAFE_CLAUSES.filter((c) => c !== missing),
+    unsatisfiedPredicates: missing === null ? [] : [missing],
+  };
+}
+
+/**
+ * #688 — is `observed` still exactly the resume identity a caller is about to act from? All three
+ * parts (page URL, page-state signature, control locator) must match, so stale evidence — gathered
+ * on another state, or against another control — is never mistaken for the current page.
+ */
+export function resumeMatches(observed: ActionableControlResume, current: ActionableControlResume): boolean {
+  return observed.url === current.url && observed.state === current.state && observed.locator === current.locator;
+}
+
+/**
+ * #688 — the resume identity `page` presents now for `locator`: its current URL and the same page
+ * state signature `collectActionableControlEvidence` uses. Comparing it with `resumeMatches` tells
+ * a manager whether the evidence is still current.
+ */
+export async function currentResumeIdentity(page: Page, locator: string): Promise<ActionableControlResume> {
+  const url = page.url();
+  const state = await snapshot(page).then(
+    (s) => s.signature,
+    () => url,
+  );
+  return { url, state, locator };
 }
 
 /** A PNG data URL for the candidate's own box (the viewport when it has none); never a click. */

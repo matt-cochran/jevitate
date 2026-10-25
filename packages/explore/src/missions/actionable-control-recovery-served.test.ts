@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway, type JudgmentState } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { snapshot } from "../index.js";
-import { collectActionableControlEvidence } from "../goal-loop/handle-blocked.js";
+import { collectActionableControlEvidence, currentResumeIdentity, resumeMatches } from "../goal-loop/handle-blocked.js";
 import type { ActionableControlEvidence } from "../goal-loop/context/types.js";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
 import { PreferenceJudge, useSkippingTime, withSession, type Preference } from "../testkit.js";
@@ -63,11 +63,29 @@ const RECOVERY_NO_SAFE_HTML = `<!doctype html><html><body>
 </main>
 </body></html>`;
 
+/** #688 — a page where acting on the safe `Done` control completes the goal: clicking it writes the success text. */
+const RECOVERY_WORK_DONE_HTML = `<!doctype html><html><body>
+<main>
+  <h1>Work</h1>
+  <button data-testid="done" id="done" onclick="document.getElementById('result').textContent='Task complete'">Done</button>
+  <div id="result"></div>
+  <button data-testid="destructive" id="destructive">Delete account</button>
+  <button data-testid="approval" id="approval">Approve request</button>
+</main>
+</body></html>`;
+
 let server: Server;
 let origin: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const html = req.url === "/work" ? RECOVERY_WORK_HTML : req.url === "/no-safe" ? RECOVERY_NO_SAFE_HTML : FIXTURE_HTML;
+    const html =
+      req.url === "/work"
+        ? RECOVERY_WORK_HTML
+        : req.url === "/work-done"
+          ? RECOVERY_WORK_DONE_HTML
+          : req.url === "/no-safe"
+            ? RECOVERY_NO_SAFE_HTML
+            : FIXTURE_HTML;
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -99,6 +117,10 @@ function evidenceFor(testId: string): ActionableControlEvidence {
 }
 
 const kindOf = (testId: string): string => evidenceFor(testId).kind;
+
+/** The control descriptions a decision actually offered, without the prompt-injection trust guard. */
+const offeredControls = (n: number): readonly string[] =>
+  (safeRun.judge.states[n]?.controls ?? []).filter((c) => !c.startsWith("SECURITY:"));
 
 describe("#688 — the served fixture tells the control classes apart", () => {
   it("classifies a visible enabled safe control as safe", () => {
@@ -231,5 +253,152 @@ describe("#688 — every safe outcome carries its recovery evidence", () => {
       state: pageState,
       locator: '[data-testid="safe"]',
     });
+  });
+});
+
+/** Drives one goal-based mission whose success is the visible result text, scripting the model intent. */
+async function runRecoveryToGoal(
+  startPath: string,
+  prefs: (n: number, s: JudgmentState) => readonly Preference[],
+): Promise<{ result: GoalBasedResult; judge: PreferenceJudge }> {
+  const judge = new PreferenceJudge(prefs, "blocked");
+  judge.goalMetProbability = 0.1;
+  const result = await withSession(
+    "actionable-recovery-goal-",
+    async (session) => {
+      const actor = CastActor.named("owner").whoCan(new BrowseTheWeb(session, [origin]));
+      return runGoalBasedMission({
+        actor,
+        judge,
+        gen: new FakeGenerationGateway(),
+        goal: "Submit the task on this page to complete it.",
+        allowlist: [origin],
+        startUrl: `${origin}${startPath}`,
+        waitOpMs: 300,
+        bounds: { maxDecisions: 12 },
+        successChecks: [{ kind: "page", assertion: { kind: "textIncludes", target: { css: "#result" }, text: "Task complete" } }],
+      });
+    },
+    origin,
+  );
+  return { result, judge };
+}
+
+// A reload spends a real action so the later `blocked` is the model's (not the #237 early refusal);
+// the recovery turn is then spent clicking the safe Done control, which completes the goal.
+let goalRun: { result: GoalBasedResult; judge: PreferenceJudge };
+beforeAll(async () => {
+  goalRun = await runRecoveryToGoal("/work-done", (n) =>
+    n === 0 ? [{ op: "reload" }] : n === 2 ? [{ op: "click", name: "Done" }] : n === 3 ? [{ op: "done" }] : [],
+  );
+});
+
+describe("#688 — the recovery turn acts through the safe control", () => {
+  it("reaches the goal after the model chooses the safe control", () => {
+    expect(goalRun.result.outcome).toBe("succeeded");
+  });
+
+  it("acts on the safe control through normal action policy", () => {
+    const click = goalRun.result.transcript.find((e) => e.op === "click");
+    expect(click?.target).toContain("Done");
+  });
+
+  it("offers exactly one control to the recovery decision", () => {
+    expect(offeredControls(2)).toHaveLength(1);
+  });
+
+  it("offers the safe control to the recovery decision", () => {
+    expect(offeredControls(2)[0]).toContain("Done");
+  });
+});
+
+describe("#688 — a terminal actionable-control outcome is machine-readable", () => {
+  it("marks the outcome author_stopped_with_actionable_control", () => {
+    expect(safeRun.result.run.actionableControl?.kind).toBe("author_stopped_with_actionable_control");
+  });
+
+  it("carries the candidate locator", () => {
+    expect(safeRun.result.run.actionableControl?.candidate.locator).toBe('[data-testid="done"]');
+  });
+
+  it("carries the candidate label", () => {
+    expect(safeRun.result.run.actionableControl?.candidate.label).toBe("Done");
+  });
+
+  it("carries the candidate's visible and enabled facts", () => {
+    expect(safeRun.result.run.actionableControl?.candidate).toMatchObject({ visible: true, enabled: true });
+  });
+
+  it("carries a screenshot of the candidate", () => {
+    expect(safeRun.result.run.actionableControl?.candidate.screenshot).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("carries the exact resume identity of the candidate", () => {
+    expect(safeRun.result.run.actionableControl?.candidate.resume).toEqual({
+      url: `${origin}/work`,
+      state: workState,
+      locator: '[data-testid="done"]',
+    });
+  });
+
+  it("names the unsatisfied safe-predicate clause of an excluded candidate", () => {
+    expect(noSafeRun.result.run.actionableControl?.unsatisfiedPredicates).toContain("!destructive");
+  });
+
+  it("marks an excluded terminal candidate author_stopped_with_actionable_control", () => {
+    expect(noSafeRun.result.run.actionableControl?.kind).toBe("author_stopped_with_actionable_control");
+  });
+});
+
+describe("#688 — resume identity is exact and stale evidence is rejected", () => {
+  it("accepts a resume identity matching url, state and locator", () => {
+    const resume = evidenceFor("safe").resume;
+    expect(resumeMatches(resume, resume)).toBe(true);
+  });
+
+  it("rejects a resume identity with a different locator", () => {
+    const resume = evidenceFor("safe").resume;
+    expect(resumeMatches(resume, { ...resume, locator: '[data-testid="other"]' })).toBe(false);
+  });
+
+  it("rejects a resume identity from a different page state", () => {
+    const resume = evidenceFor("safe").resume;
+    expect(resumeMatches(resume, { ...resume, state: "a-different-state" })).toBe(false);
+  });
+
+  it("rejects a resume identity from a different URL", () => {
+    const resume = evidenceFor("safe").resume;
+    expect(resumeMatches(resume, { ...resume, url: `${origin}/elsewhere` })).toBe(false);
+  });
+
+  it("matches the current page state while the page is unchanged", async () => {
+    await withSession(
+      "actionable-recovery-current-",
+      async (session) => {
+        await session.page.goto(`${origin}/fixture`, { waitUntil: "domcontentloaded" });
+        const found = (await collectActionableControlEvidence(session.page, { screenshots: false })).find((e) => e.locator === '[data-testid="safe"]');
+        const current = await currentResumeIdentity(session.page, '[data-testid="safe"]');
+        expect(resumeMatches(found?.resume ?? current, current)).toBe(true);
+      },
+      origin,
+    );
+  });
+
+  it("rejects a resume identity once the page state changes", async () => {
+    await withSession(
+      "actionable-recovery-stale-",
+      async (session) => {
+        await session.page.goto(`${origin}/fixture`, { waitUntil: "domcontentloaded" });
+        const found = (await collectActionableControlEvidence(session.page, { screenshots: false })).find((e) => e.locator === '[data-testid="safe"]');
+        await session.page.evaluate(() => {
+          const fresh = document.createElement("button");
+          fresh.textContent = "A control that appeared after the evidence";
+          document.body.appendChild(fresh);
+        });
+        const current = await currentResumeIdentity(session.page, '[data-testid="safe"]');
+        expect(resumeMatches(found?.resume ?? current, current)).toBe(false);
+      },
+      origin,
+    );
   });
 });

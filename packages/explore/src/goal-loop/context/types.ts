@@ -43,3 +43,38 @@ export interface ActionableControlEvidence {
   readonly predicate: string;
   readonly resume: ActionableControlResume;
 }
+
+/**
+ * #688 — the one candidate control a terminal actionable-control outcome names: how to find it, its
+ * visible label and observed visibility/enabled facts, a screenshot, and the exact resume identity.
+ * Observation only — building it never selects, clicks or executes the control.
+ */
+export interface ActionableControlCandidate {
+  /** A durable locator for the control; never a click. */
+  readonly locator: string;
+  /** The control's accessible name (may be empty). */
+  readonly label: string;
+  /** Whether the control was visible when observed. */
+  readonly visible: boolean;
+  /** Whether the control was enabled when observed. */
+  readonly enabled: boolean;
+  /** A PNG data URL captured for the observation, or null when the capture failed. */
+  readonly screenshot: string | null;
+  readonly resume: ActionableControlResume;
+}
+
+/**
+ * #688 — the distinct, machine-readable terminal outcome a blocked run emits when recovery does not
+ * advance the goal. `kind` is the stable discriminator a machine reads
+ * (`author_stopped_with_actionable_control`); the run's own `stop` stays `blocked` and its human
+ * `outcome.reason` keeps the prose. It carries the candidate a manager could resume through, the
+ * safe-predicate clauses it satisfied and did not, and the exact resume identity.
+ */
+export interface ActionableControlOutcome {
+  readonly kind: "author_stopped_with_actionable_control";
+  readonly candidate: ActionableControlCandidate;
+  /** The clauses of the safe predicate the candidate satisfied. */
+  readonly satisfiedPredicates: readonly string[];
+  /** The safe-predicate clause(s) the candidate did not satisfy; empty for a `safe` candidate. */
+  readonly unsatisfiedPredicates: readonly string[];
+}
