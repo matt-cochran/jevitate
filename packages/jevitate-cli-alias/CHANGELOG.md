@@ -1,5 +1,13 @@
 # jevitate
 
+## 0.24.1
+
+### Patch Changes
+
+- 8e7c41b: A write goal that stalls before any write of the run succeeded is now told no write was made yet, on a rejected `report` and on the no-progress last chance, as a rejected `done` is since #667, so the run spends its last turn going back to submit the change instead of on a report that must be rejected (#680).
+- Updated dependencies [8e7c41b]
+  - @jevitate/cli@0.24.1
+
 ## 0.24.0
 
 ### Minor Changes
