@@ -11,7 +11,7 @@ import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFla
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { withEngine } from "../engine.js";
-import { verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
+import { planJourneyVerification, verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 import { type CliDeps, resolveDbPath, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, type DemoFlags, collectParam, emitJson, environmentSeams } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
@@ -21,10 +21,11 @@ import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 export function registerJourneyVerify(journey: Command, program: Command, deps: CliDeps): void {
   // #402 — the negative proof: replay the Journey once as recorded, then once per mutation (skip a
   // write step, abort its writes, type an empty value into a checked fill); each assertion must fail
-  // under its paired mutation. `verify` is reserved for proofs: today only `--mutate` exists.
+  // under its paired mutation. `--plan` previews that exact pairing without opening a browser.
   withReplayAllowFlag(withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(withProjectFlags(journey.command("verify <id>"))))))
-    .description("prove each assertion of a Journey can fail: --mutate replays it with each write step skipped or blocked, and each checked fill emptied")
-    .option("--mutate", "run the mutation proof (required)")
+    .description("preview or prove that each Journey assertion fails when its outcome is absent")
+    .option("--mutate", "run the mutation proof")
+    .option("--plan", "print the static mutation/assertion plan without opening a browser")
     .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--storage-state <file>", "Playwright storageState JSON to start each replay authenticated (as journey run)")
@@ -34,11 +35,32 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
       if (layout === null) return;
       const verifyJourneysDir = layout.journeysDir;
-      const { mutate, param, storageState: storageStateFlag, json, env: envName, baseUrl } = this.opts<
-        { mutate?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags
+      const { mutate, plan, param, storageState: storageStateFlag, json, env: envName, baseUrl } = this.opts<
+        { mutate?: boolean; plan?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags
       >();
-      if (mutate !== true) {
-        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify needs --mutate (the mutation proof is the only verification it runs today)"));
+      if ((mutate === true) === (plan === true)) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify needs exactly one of --plan or --mutate"));
+        return;
+      }
+      if (plan === true) {
+        try {
+          const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param });
+          if (json) emitJson(program, ok(withEngine(report)));
+          else {
+            const out = program.configureOutput().writeOut;
+            for (const mutation of report.mutations) {
+              const sites = report.pairs.filter((pair) => pair.mutation === mutation.id).map((pair) => pair.site);
+              out?.(`${mutation.id} (step ${mutation.step}) -> ${sites.length === 0 ? "unpaired" : sites.join(", ")}\n`);
+            }
+            for (const assertion of report.assertions) if (assertion.mutations.length === 0) out?.(`unpaired ${assertion.site} ${assertion.check}\n`);
+            out?.(
+              `planned — journey '${report.journeyId}': ${report.summary.mutations} mutations, ${report.summary.pairs} pairs, ${report.summary.assertions} assertions, ${report.summary.unpaired} unpaired, at least ${report.summary.minimumReplays} replays\n`,
+            );
+          }
+        } catch (err) {
+          if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+          else throw err;
+        }
         return;
       }
       let environment: ResolvedJourneyEnvironment | undefined;

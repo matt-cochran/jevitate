@@ -46,8 +46,10 @@ function page(saved: string | undefined): string {
 let server: Server;
 let origin: string;
 let dir: string;
+let requestCount = 0;
 beforeAll(async () => {
   server = createServer((req, res) => {
+    requestCount += 1;
     if (req.method === "POST" && req.url?.startsWith("/fx/")) {
       fxLog.push(req.url.slice(4));
       res.writeHead(200, { "content-type": "application/json" }).end("{}");
@@ -149,6 +151,15 @@ interface Report {
   summary: Record<string, number>;
 }
 
+interface PlanReport {
+  journeyId: string;
+  journeyHash: string;
+  mutations: { kind: string; step: number; id: string }[];
+  pairs: { site: string; check: string; mutation: string; declared?: true }[];
+  assertions: { site: string; check: string; mutations: string[] }[];
+  summary: { mutations: number; pairs: number; assertions: number; unpaired: number; minimumReplays: number };
+}
+
 async function verify(j: Journey, extra: string[] = []): Promise<{ exitCode: number | undefined; report: Report; out: string }> {
   const journeysDir = join(dir, j.metadata.id);
   await new FsJourneyStore(journeysDir).put(j);
@@ -163,6 +174,24 @@ const verdictOf = (r: Report, site: string): { verdict: string; provedBy?: strin
 };
 
 describe("journey verify --mutate (#402, served)", () => {
+  it("--plan previews the exact proof graph without opening a browser", async () => {
+    const journeysDir = join(dir, "plan");
+    await new FsJourneyStore(journeysDir).put(weak("plan"));
+    const before = requestCount;
+    const r = await cli(journeysDir, ["journey", "verify", "plan", "--plan", "--json"]);
+    const report = (JSON.parse(r.out) as { data: PlanReport }).data;
+    expect(r.exitCode).toBe(0);
+    expect(requestCount).toBe(before);
+    expect(report.journeyHash).toMatch(/^[0-9a-f]{16,}$/);
+    expect(report.mutations.map((mutation) => mutation.id)).toEqual(["skip:3", "block-write:3"]);
+    expect(report.pairs).toEqual([
+      expect.objectContaining({ site: "step:3", mutation: "skip:3" }),
+      expect.objectContaining({ site: "step:3", mutation: "block-write:3" }),
+    ]);
+    expect(report.assertions.find((assertion) => assertion.site === "step:1")?.mutations).toEqual([]);
+    expect(report.summary).toEqual({ mutations: 2, pairs: 2, assertions: 3, unpaired: 2, minimumReplays: 3 });
+  });
+
   it("a weak Journey: the save step's own-target-visible expect still passes when the save is skipped or blocked — insensitive, exit 1", async () => {
     const { exitCode, report } = await verify(weak("weak"), ["--json"]);
     expect(report.base.outcome).toBe("ok");
@@ -241,12 +270,15 @@ describe("journey verify --mutate (#402, served)", () => {
     expect(exitCode).toBe(2);
   }, 180_000);
 
-  it("without --mutate the command refuses (a usage error), nothing runs", async () => {
+  it("without exactly one of --plan or --mutate the command refuses (a usage error), nothing runs", async () => {
     const journeysDir = join(dir, "refuse");
     await new FsJourneyStore(journeysDir).put(weak("refuse"));
     const r = await cli(journeysDir, ["journey", "verify", "refuse", "--json"]);
     expect(r.exitCode).toBe(64);
     expect(r.out).toMatch(/E_JOURNEY_VERIFY_ARGS/);
-    expect(r.out).toMatch(/--mutate/);
+    expect(r.out).toMatch(/exactly one of --plan or --mutate/);
+    const both = await cli(journeysDir, ["journey", "verify", "refuse", "--plan", "--mutate", "--json"]);
+    expect(both.exitCode).toBe(64);
+    expect(both.out).toMatch(/exactly one of --plan or --mutate/);
   });
 });

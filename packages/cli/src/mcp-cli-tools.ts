@@ -380,13 +380,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "verify_journey",
     description:
-      "`jevitate journey verify <id> --mutate` (#402): prove each assertion can fail. Replays the Journey once (it must pass), then once per mutation — a write step skipped, its write request aborted, a typed value left empty — and reports each assertion as sensitive (failed for the right reason), insensitive (still passed: vacuous), cascade, not-applied or unpaired. Mutations only skip steps or abort the app's own writes; nothing is fabricated. Exit 1 when any paired assertion is insensitive, 2 when nothing could be proven. Set mutate: true.",
+      "`jevitate journey verify <id> --plan|--mutate` (#402): plan previews the exact mutations, assertion pairings, unpaired assertions and minimum replay count without opening a browser; mutate proves each assertion can fail by replaying the Journey once, then once per mutation. Mutations only skip steps, abort the app's own writes or alter checked non-secret inputs; nothing is fabricated. Set exactly one of plan or mutate.",
     command: {
       path: "journey verify",
       params: {
         id: pos(),
         ...EXTENSION,
         mutate: b("--mutate"),
+        plan: b("--plan"),
         params: { kind: "params", flag: "--param" },
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),

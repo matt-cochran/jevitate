@@ -30,7 +30,11 @@ without `--readiness`. ○ items (such as a skipped Jev review) never fail it.
    applying it (`--approve`) is the owner's step, listed below.
 4. **Run it on a non-production environment:** `jevitate journey run <id> --env <name>`.
    Never prove or annotate against production.
-5. **`jevitate journey verify <id> --mutate --env <name>` LAST** (MCP `verify_journey`).
+5. **Preview, then prove LAST.** Run `jevitate journey verify <id> --plan --param name=value ...`
+   first (MCP `verify_journey` with `plan: true`). It is static: it opens no browser, target,
+   fixture, hook or session. Review every mutation/pair, any unpaired assertion and the minimum
+   replay count before spending the proof budget. Then run `jevitate journey verify <id> --mutate
+   --env <name>` (MCP `verify_journey` with `mutate: true`).
    Pass `--param name=value` for each parameter. Each supplied non-secret parameter that an action
    reads and an assertion names gets `swap-param`/`truncate-param` mutations, and a `{var}` fill gets
    a `stale-value` that types an altered value. Secrets are never mutated. A parameter that only
