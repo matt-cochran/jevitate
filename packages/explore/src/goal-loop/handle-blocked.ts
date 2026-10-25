@@ -15,6 +15,34 @@ import { JOB_WAIT_SLICE_MS, MAX_EARLY_BLOCKED_REFUSALS, quote, waitOutJob } from
 import { deferEnding } from "./min-effort.js";
 import type { Flow, Step } from "./step.js";
 
+/**
+ * #688 — the one bounded recovery turn's bookkeeping, keyed by the run context (never a new
+ * `RunContext` field). `safe` is the observation-only evidence gathered when the turn was granted,
+ * `given` bounds the run to exactly one, and `pending` marks the turn not yet decided.
+ */
+interface RecoveryTurn {
+  readonly safe: readonly ActionableControlEvidence[];
+  readonly given: boolean;
+  pending: boolean;
+}
+const RECOVERY_TURNS = new WeakMap<RunContext, RecoveryTurn>();
+
+/**
+ * #688 — the safe-control evidence for the decision now being made, or null when this is not the
+ * recovery turn. The turn is consumed on first call, so a run gets at most one recovery decision.
+ */
+export function takeRecoveryTurn(ctx: RunContext): readonly ActionableControlEvidence[] | null {
+  const turn = RECOVERY_TURNS.get(ctx);
+  if (turn === undefined || !turn.pending) return null;
+  turn.pending = false;
+  return turn.safe;
+}
+
+/** #688 — the durable, JSON-encoded resume identity the blocked outcome carries for a manager. */
+function resumeIdentity(e: ActionableControlEvidence): string {
+  return JSON.stringify(e.resume);
+}
+
 export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> {
   const { modelControls, record } = step;
   // The page says work is under way (#92): "blocked" is premature while a job the page reports
@@ -86,9 +114,43 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
     record(false, deferred, { origin: "engine" });
     return "continue";
   }
+  // #688 — before the model's blocked stands, look once for a safe control to recover through. The
+  // evidence is observation-only: nothing here selects, clicks or executes a candidate. One visible
+  // enabled safe control earns the model exactly one more decision, restricted to those controls;
+  // otherwise — or once that single turn was spent — the blocked ending carries a durable
+  // actionable-control outcome with the exact resume identity a manager resumes from.
+  const evidence = await collectActionableControlEvidence(ctx.page, { screenshots: false }).catch(() => [] as ActionableControlEvidence[]);
+  const safe = evidence.filter((e) => e.kind === "safe" && e.name !== "");
+  const turn = RECOVERY_TURNS.get(ctx);
+  if ((turn === undefined || !turn.given) && safe.length > 0) {
+    RECOVERY_TURNS.set(ctx, { safe, given: true, pending: true });
+    const note = `blocked: one recovery turn is available through the safe control(s) ${safe
+      .map((e) => `${quote(e.name, 40)} (${e.locator})`)
+      .join(", ")} — act through one of them or the run ends blocked`;
+    ctx.history.push(note);
+    record(false, note, { origin: "engine" });
+    return "continue";
+  }
   record(true, "model blocked");
   // #235: a control the goal needed may have been refused — the reason says so, actionably.
-  ctx.incomplete = `the model reported the goal cannot be advanced from this page${ctx.lastRefusal === null ? "" : ` (${ctx.lastRefusal})`}`;
+  const refusal = ctx.lastRefusal === null ? "" : ` (${ctx.lastRefusal})`;
+  const base = `the model reported the goal cannot be advanced from this page${refusal}`;
+  const recovery =
+    turn !== undefined && turn.given && turn.safe.length > 0
+      ? `the one recovery turn through the safe control ${turn.safe.map(resumeIdentity).join(", ")} did not advance the goal`
+      : (() => {
+          const excluded = evidence.filter((e) => e.kind !== "safe");
+          const classes = [...new Set(excluded.map((e) => e.kind))].join(", ");
+          // The best candidate a manager could still act on: a real control, not merely absent/unusable.
+          const best = excluded.find((e) => e.kind !== "hidden" && e.kind !== "disabled") ?? evidence[0];
+          return `no visible enabled safe control is available to recover through${
+            classes === "" ? "" : ` (excluded control classes: ${classes})`
+          }${best === undefined ? "" : `; resume identity ${resumeIdentity(best)}`}`;
+        })();
+  // #84's blocker keeps its place immediately after the base phrase (#211: the run names what
+  // stopped it) so the durable recovery identity extends the reason instead of displacing it.
+  const cause = ctx.blockingCause();
+  ctx.incomplete = cause === null || base.includes(cause) ? `${base}; ${recovery}` : `${base} — last blocker: ${cause}; ${recovery}`;
   ctx.stop = "blocked";
   return "stop";
 }
