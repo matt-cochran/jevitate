@@ -207,11 +207,17 @@ prints the same.
 
 ### Proving assertions can fail
 
-The lint reads a Journey; `journey verify --mutate` runs it. An assertion is evidence only if it
+The lint reads a Journey; `journey verify --plan` previews the exact negative-proof graph without a
+browser, target, session, fixture or hook, and `journey verify --mutate` runs it. Inspect the plan
+before a long proof: it lists every mutation, its paired assertions, unpaired assertions and the
+minimum replay count (the base plus one per mutation; relaxed or targeted proofs may add replays).
+Parameter values help derive the plan but are never returned. An assertion is evidence only if it
 **fails** when the outcome is absent, so the proof replays the Journey once as recorded (it must
 pass), then once per mutation, and checks that each mutation breaks the assertion paired with it:
 
 ```bash
+jevitate journey verify checkout --plan                   # static preflight; no browser or target
+jevitate journey verify checkout --plan --json            # exact mutations, pairs and replay floor
 jevitate journey verify checkout --mutate                 # one line per assertion, then a summary
 jevitate journey verify checkout --mutate --json          # the full report
 jevitate journey verify checkout --mutate --env staging --param sku=A1 --fixtures reset.json

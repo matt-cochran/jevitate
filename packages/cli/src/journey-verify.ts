@@ -109,6 +109,52 @@ export interface JourneyVerifyReport {
   readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
 }
 
+export interface JourneyVerifyPlanReport {
+  readonly journeyId: string;
+  /** `journeyContentHash` of the stored Journey: the preview is bound to exactly this content. */
+  readonly journeyHash: string;
+  readonly mutations: readonly Pick<JourneyMutation, "kind" | "step" | "id" | "param" | "source">[];
+  readonly pairs: readonly { readonly site: string; readonly check: string; readonly mutation: string; readonly declared?: true }[];
+  readonly assertions: readonly { readonly site: string; readonly check: string; readonly mutations: readonly string[] }[];
+  readonly summary: Readonly<Record<"mutations" | "pairs" | "assertions" | "unpaired" | "minimumReplays", number>>;
+}
+
+/**
+ * Static preview of `journey verify --mutate`: no browser, fixtures, hooks, target, session or
+ * credential is opened. Values of params are used only to derive the plan and are never returned.
+ */
+export async function planJourneyVerification(
+  opts: Pick<VerifyJourneyOptions, "dir" | "id" | "params" | "readRequests">,
+): Promise<JourneyVerifyPlanReport> {
+  const journey = await new JourneyRegistry(new FsJourneyStore(opts.dir)).get(opts.id);
+  if (!journey) throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
+  const sites = journeyAssertions(journey);
+  const checkOf = new Map(sites.map((site) => [assertionSiteKey(site), describeCheck(site.check)]));
+  const plan = planJourneyMutations(journey, {
+    ...(opts.readRequests === undefined ? {} : { readRequests: opts.readRequests }),
+    params: opts.params,
+  });
+  const pairs = plan.pairs.map((pair) => ({ ...pair, check: checkOf.get(pair.site) ?? "unknown assertion" }));
+  const assertions = sites.map((site) => {
+    const key = assertionSiteKey(site);
+    return { site: key, check: describeCheck(site.check), mutations: pairs.filter((pair) => pair.site === key).map((pair) => pair.mutation) };
+  });
+  return {
+    journeyId: journey.metadata.id,
+    journeyHash: journeyContentHash(journey),
+    mutations: plan.mutations,
+    pairs,
+    assertions,
+    summary: {
+      mutations: plan.mutations.length,
+      pairs: pairs.length,
+      assertions: assertions.length,
+      unpaired: assertions.filter((assertion) => assertion.mutations.length === 0).length,
+      minimumReplays: plan.mutations.length + 1,
+    },
+  };
+}
+
 /** The exit code for a proof's verdict (docs/ci.md): 0 proven · 1 insensitive · 2 inconclusive. */
 export function verifyExitCode(verdict: MutationProofVerdict): number {
   return verdict === "proven" ? 0 : verdict === "insensitive" ? 1 : 2;

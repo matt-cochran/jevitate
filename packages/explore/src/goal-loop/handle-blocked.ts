@@ -1,7 +1,7 @@
 /**
- * `blocked` (#92, #237, #283): the model gives up — deferred into a bounded job wait while the app is
- * still working, refused while nothing was tried yet, else the run stops. The goal loop's blocked
- * handler, moved out of `explore.ts` unchanged (#232).
+ * `blocked` (#92, #237, #283, #693): the model gives up — deferred into a bounded job wait while the
+ * app is still working, refused while nothing was tried yet or an obvious goal-named control remains,
+ * else the run stops. The goal loop's blocked handler, moved out of `explore.ts` unchanged (#232).
  */
 import type { Page } from "playwright";
 import { monitorFor } from "../page-monitor.js";
@@ -9,8 +9,10 @@ import { controlRisk } from "../safety.js";
 import { snapshot } from "../snapshot.js";
 import { awaitWrites } from "../side-effects.js";
 import { readInProgressStatus } from "../status.js";
+import type { Control } from "../snapshot.js";
 import type { RunContext } from "./context.js";
 import type { ActionableControlEvidence, ActionableControlKind, ActionableControlOutcome, ActionableControlResume } from "./context/types.js";
+import { terms } from "./goal-focus.js";
 import { JOB_WAIT_SLICE_MS, MAX_EARLY_BLOCKED_REFUSALS, quote, waitOutJob } from "./helpers.js";
 import { deferEnding } from "./min-effort.js";
 import type { Flow, Step } from "./step.js";
@@ -41,6 +43,56 @@ export function takeRecoveryTurn(ctx: RunContext): readonly ActionableControlEvi
 /** #688 — the durable, JSON-encoded resume identity the blocked outcome carries for a manager. */
 function resumeIdentity(e: ActionableControlEvidence): string {
   return JSON.stringify(e.resume);
+}
+
+/** Controls that go backwards / dismiss: never the "obvious forward control" #693 protects. */
+const NON_FORWARD = /^(?:back|go back|previous|return|cancel|close|dismiss|×|x|←|‹|arrow[- ]?left)\b/i;
+/** An imperative cue: the page is instructing the user to take an action, not merely showing a label. */
+const DIRECTIVE = /\b(?:choose|select|pick|apply|submit|continue|confirm|save|open|click|press|start|create|send|next|review|accept|approve|add|complete|proceed|generate|upload|finish|sign|log|book|buy|upgrade|run|try|edit|set)\b/i;
+
+/** The label-only comparison used to strip controls out of the page text (so a button's own label is no instruction). */
+const normalized = (text: string): string => text.replace(/\s+/g, " ").trim().toLowerCase();
+const escaped = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The page text with each control's rendered label removed (as many occurrences as the page renders). */
+function instructionText(controls: readonly Control[], visibleText: string): string {
+  const counts = new Map<string, number>();
+  for (const c of controls) {
+    const label = normalized(c.name);
+    if (label !== "") counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  let text = normalized(visibleText);
+  // Remove labels from the END: an instruction before the control stays, a label alone is gone.
+  for (const [label, count] of counts) for (let i = 0; i < count; i++) {
+    const matches = [...text.matchAll(new RegExp(`\\b${escaped(label)}\\b`, "g"))];
+    const last = matches.at(-1);
+    if (last?.index === undefined) break;
+    text = `${text.slice(0, last.index)} ${text.slice(last.index + last[0].length)}`.replace(/\s+/g, " ").trim();
+  }
+  return text;
+}
+
+/**
+ * #693 — an enabled, untried forward control that the goal and the page's own instruction both
+ * name. Deterministic: the page text minus the controls' labels must be an instruction containing
+ * every content word of the control's name, and at least one of those words must be in the goal.
+ */
+function primaryForwardControl(ctx: RunContext, step: Step): Control | null {
+  const goalTerms = terms(ctx.goalText);
+  if (goalTerms.size === 0) return null;
+  const instruction = instructionText(step.modelControls, step.visibleText);
+  const instructionTerms = terms(instruction);
+  if (instructionTerms.size === 0 || !DIRECTIVE.test(instruction)) return null;
+  for (const control of step.modelControls) {
+    if (!control.enabled) continue;
+    const name = control.name.trim();
+    if (name === "" || NON_FORWARD.test(name)) continue;
+    if (ctx.depth.tried(step.snap.url, name)) continue;
+    const controlTerms = terms(name);
+    if (controlTerms.size === 0) continue;
+    if ([...controlTerms].some((t) => goalTerms.has(t)) && [...controlTerms].every((t) => instructionTerms.has(t))) return control;
+  }
+  return null;
 }
 
 export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> {
@@ -104,6 +156,25 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
     ctx.failure = {
       kind: "insufficient-coverage",
       message: `the model gave up before trying any of the page's ${untried.length} controls — too little exploration to conclude the goal cannot be done`,
+    };
+    ctx.stop = "inconclusive";
+    return "stop";
+  }
+  // #693: after earlier actions, a page can still have the obvious next control the goal and its
+  // instruction name — a `blocked` there is refused under the same bounded accounting as #237.
+  const forward = ctx.actionAttempts > 0 ? primaryForwardControl(ctx, step) : null;
+  if (forward !== null) {
+    ctx.earlyBlocked += 1;
+    if (ctx.earlyBlocked <= MAX_EARLY_BLOCKED_REFUSALS) {
+      const reason = `blocked refused: ${quote(forward.name || forward.summary, 60)} is an obvious forward control, still untried on this page, and it matches the goal and the page's instruction — use it before giving up`;
+      ctx.history.push(reason);
+      record(false, reason, { origin: "engine" });
+      return "continue";
+    }
+    record(false, `model blocked while ${quote(forward.name || forward.summary, 60)} remained untried`, { origin: "engine" });
+    ctx.failure = {
+      kind: "insufficient-coverage",
+      message: `the model gave up while ${quote(forward.name || forward.summary, 60)} — the obvious forward control the goal and the page's instruction name — was still untried after earlier actions — too little exploration to conclude the goal cannot be done`,
     };
     ctx.stop = "inconclusive";
     return "stop";
