@@ -7,6 +7,7 @@ import { readPageText, waitForReply } from "../conversation.js";
 import type { RunContext } from "./context.js";
 import { firstLine, quote } from "./helpers.js";
 import { MAX_REPORT_REJECTIONS } from "./limits.js";
+import { NO_WRITE_YET } from "./handle-done.js";
 import { deferEnding } from "./min-effort.js";
 import { readBackProbe } from "./read-back.js";
 import type { Flow, Step } from "./step.js";
@@ -96,8 +97,12 @@ export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
   // #223: an answer that is on the page but does not answer the question is no answer either.
   ctx.lastReportNotFound = (verdict.answer === null && verdict.reason === NO_ANSWER_REASON) || verdict.notAnswer === true;
   ctx.lastAbsenceUncovered = verdict.absenceUncovered === true ? verdict.reason : null;
-  ctx.history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
-  record(false, `report rejected (${ctx.reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
+  // #680: as for a rejected done (#667) — a write goal's report before any write succeeded is told
+  // so, or the model keeps looking for the answer instead of going back to the step that writes.
+  const noWrite = ctx.writeGoal && !ctx.wroteOk && verdict.reason !== UNSAVED_WRITE_REASON;
+  const why = noWrite ? `${verdict.reason}; ${NO_WRITE_YET}` : verdict.reason;
+  ctx.history.push(`report rejected: ${why} — ${noWrite ? "make the change first, then report" : "find the answer on the page before reporting"}`);
+  record(false, `report rejected (${ctx.reportRejections}/${MAX_REPORT_REJECTIONS}): ${why}`, {
     answer: verdict.answer,
   });
   // #424: below the minimum exploration effort, a report that found nothing does not end the run.

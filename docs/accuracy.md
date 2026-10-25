@@ -70,6 +70,18 @@ Recall on `j2-stall` (both strategies) and `j1-5xx` usability is only partly mea
 
 Before 0.24.0, an interleaved A/B on the J3 cells (20 replicates per arm, #670) showed that most of 0.23.0's 83.3% was sampling noise: the same 0.23.0 binary gave 3 J3 false alarms in 6 runs in the lab, then 2 in 40 and 3 in 24. #667 lowered `j3-effort` usability false alarms from 5 of 31 to 1 of 20. The same A/B found #671, a phantom send reported done after the run retyped the message into its composer.
 
+## A/B (2026-10-24, #680, toward 0.24.1)
+
+The single 0.24.0 goal false alarm (`j3-effort` r3) follows one path: Continue ×5, Contacts instead of Import, three scrolls that cannot move, then the no-progress last chance. Its note invited a report. The report was rejected, and the next step stopped the run. A no-write hint on the rejected report alone could not help, because the run never got another turn: report-only fix, 4 of 14 false alarms, against 2 of 14 on the interleaved base. #680 also puts the hint in the last-chance note of a write goal before any write succeeded.
+
+| `j3-effort` goal, interleaved | 0.24.0 | #680 |
+|---|---|---|
+| false alarms | 5 of 28 (2 runs of 14) | 1 of 14 |
+| runs that wandered to Contacts | 5 of 28 | 1 of 14 |
+| guardrails on #680 (j2/j3-phantom, j3-deadend caught; clean J3 clean) | | 12 of 12 |
+
+Every false alarm on both arms is a run that wandered to Contacts, so most of the difference is how often that detour happens. Fisher's test does not separate the arms at this size. The one #680 run that wandered was sent back to Import twice, found the wizard reset, and left again: the hint changes what the run does, but a reset wizard still defeats it. Data: `.delivery/experiments/ab680-{base,fix,base2,fix2}/` (local).
+
 ## Failure modes of the verdict pipeline (FMECA)
 
 Occurrence is the share of the 42 cells each mode affected; severity rates the harm of the wrong

@@ -6,6 +6,7 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
 import { ScriptedJudge, withSession, type ScriptedStep, useSkippingTime } from "../testkit.js";
 import { NO_WRITE_YET } from "../goal-loop/handle-done.js";
+import { LAST_CHANCE_NOTE, LAST_CHANCE_NO_WRITE_NOTE } from "../goal-loop/limits.js";
 
 // #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
 useSkippingTime({ per: "all" });
@@ -148,6 +149,30 @@ describe("#649 — what a write sent awaits read-back, whoever typed it", () => 
       judge.goalMetProbability = 0.3;
       const r = await run([], judge);
       expect(r.transcript.find((e) => e.op === "done")?.reason).toContain(NO_WRITE_YET);
+    },
+    90_000,
+  );
+
+  it(
+    "#680 — a rejected report on a write goal before anything was imported is told no write succeeded",
+    async () => {
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "report" }]);
+      const r = await run([], judge);
+      expect(r.transcript.find((e) => e.op === "report")?.reason).toContain(NO_WRITE_YET);
+      expect(judge.states.at(-1)?.history?.some((h) => h.startsWith("report rejected:") && h.includes(NO_WRITE_YET))).toBe(true);
+    },
+    90_000,
+  );
+
+  it(
+    "#680 — a write goal stalled before anything was imported gets a last chance that says no write succeeded",
+    async () => {
+      // Contacts, then scrolls that cannot move a short page: the no-progress last chance.
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "scroll_down" }, { op: "scroll_up" }, { op: "scroll_down" }, { op: "scroll_up" }, { op: "report" }]);
+      await run([], judge);
+      const history = judge.states.at(-1)?.history ?? [];
+      expect(history).toContain(LAST_CHANCE_NO_WRITE_NOTE);
+      expect(history).not.toContain(LAST_CHANCE_NOTE);
     },
     90_000,
   );

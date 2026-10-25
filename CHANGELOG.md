@@ -7,6 +7,10 @@ behaviour changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A write goal that stalls before anything was sent is told so (#680).** Since #667, a rejected `done` on a write goal before any write succeeded says so and points back to the control that submits the change. The same steer now reaches the run in two more places. One is a rejected `report`. The other is the no-progress last chance, whose note used to invite a report. A run that clicked through an import wizard to Contacts without pressing Import used to spend its last turn on a report that had to be rejected, then stop blocked; it is now sent back to the import page. On the accuracy lab's interleaved A/B (`j3-effort` goal, 14 runs per arm), goal false alarms were 1 of 14, against 5 of 28 on 0.24.0. Every phantom and dead-end was still caught, and clean J3 stayed clean. Most of that difference is how often a run wanders to Contacts at all. The one fixed run that wandered did return to Import, but did not redo the wizard, which had reset.
+
 ## [0.24.0] – 2026-10-24
 
 0.24.0 removes the usability false alarms 0.23.0 showed on import wizards, closes a silent-data-loss gap where retyping a sent message counted as the app keeping it, and ships Jevitate's repository-catalog contract with the CLI. On the accuracy lab at 6 replicates per cell (twice the usual), usability precision is 100% (83.3% on 0.23.0), goal precision is 96.2%, and all 24 phantom runs are caught. `docs/accuracy.md` has the measurements.
