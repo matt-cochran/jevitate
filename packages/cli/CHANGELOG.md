@@ -1,5 +1,17 @@
 # @jevitate/cli
 
+## 0.24.2
+
+### Patch Changes
+
+- efb9b3e: With an explicit `--job-wait-ms`, a busy region the app declares (`aria-busy="true"`) is waited out within that budget instead of ending as a `ui-no-progress` hang at the render ceiling (#687). A hang that stands before the budget is spent no longer says it is past the budget: its detail gives the budget used, the wall-clock time since the first deferral and when the app last completed a request (#689). `--ignore-no-progress` also matches a busy indicator's visible words, not only its description (#687).
+
+## 0.24.1
+
+### Patch Changes
+
+- 8e7c41b: A write goal that stalls before any write of the run succeeded is now told no write was made yet, on a rejected `report` and on the no-progress last chance, as a rejected `done` is since #667, so the run spends its last turn going back to submit the change instead of on a report that must be rejected (#680).
+
 ## 0.24.0
 
 ### Minor Changes

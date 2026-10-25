@@ -221,6 +221,35 @@ with `--settle-ignore`, `--long-poll-ms` and `--ignore-no-progress`):
 `*` matches any run of characters. A pattern containing `://` is matched against
 the full URL; any other pattern is matched against the path and query.
 
+An `ignoreNoProgress` pattern is matched against the route, the action label,
+and the busy indicator. The indicator matches by its description
+(`[data-testid=taste-busy]`, `role=status "Approving…"`) or by its visible words
+(`Approving*`), so a pattern may name either (#687).
+
+### Job-wait budget and the no-progress ceiling
+
+A busy state that outlasts the render ceiling (`ui-no-progress`) is a hang
+unless the page shows it is working. With an explicit `--job-wait-ms`, the
+budget, not the ceiling, decides how long that may take for the states below
+(#687, #689):
+
+- an in-progress status the page acknowledges (a Cancel control, the pressed
+  control disabled as "Analyzing…", a determinate progress bar);
+- a wait the page documents ("usually takes a minute"), which can raise the budget;
+- a busy indicator over an in-progress status while the app's requests keep
+  completing or its progress text changes;
+- a request still pending while the page shows an in-progress status;
+- a busy region the app declares with `aria-busy="true"` (only with an explicit
+  `--job-wait-ms`; a server-side job with nothing pending looks like this).
+
+Anything else (a spinner the app does not declare over a silent page, a frozen
+UI) still ends at the ceiling. The budget counts all time spent believing the
+page is working, across the run. When a hang stands after such a wait, its
+detail says why. Either the budget was spent ("past the 900s job-wait
+budget"), or the page stopped showing work code recognizes before then ("after
+376s of the 900s job-wait budget"). It also gives the wall-clock time since
+the first deferral and when the app last completed a request.
+
 ### Known limits of the hang heuristics
 
 - A request that runs longer than `longPollMs` on an interactive page is treated

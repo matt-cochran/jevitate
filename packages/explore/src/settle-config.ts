@@ -9,7 +9,7 @@
  *    a long-lived connection. A request pending that long on a page that is NOT interactive still
  *    counts: that is what a stuck page looks like.
  *  - `hangs.ignoreNoProgress`: patterns (matched against the route, the action label, or the busy
- *    indicator) for which `ui-no-progress` is never reported (a UI that legitimately returns to an
+ *    indicator: its description or, #687, its visible words) for which `ui-no-progress` is never reported (a UI that legitimately returns to an
  *    earlier state, a spinner that is decorative).
  *
  * Patterns: `*` matches any run of characters; a pattern containing `://` is matched against the
