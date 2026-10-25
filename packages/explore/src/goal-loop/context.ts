@@ -387,6 +387,8 @@ export interface RunContext {
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
    */
   hangWorkWaitedMs: number;
+  /** #689: when the run first deferred a hang for visible work (wall clock), or null — reported with the stop. */
+  hangWorkSince: number | null;
   /** #258: the longest wait the page has documented this run (its budget, ms); 0 when none. */
   documentedBudgetMs: number;
   readonly noteMutation: (label: string, descriptor: unknown, before: string, at: number, input?: { readonly field: string; readonly value: string; }, linkFromRoute?: string | null, clickFromRoute?: string | null) => void;

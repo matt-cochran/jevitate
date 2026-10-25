@@ -118,7 +118,7 @@ export const GOAL_RUN_OPTIONS = {
       "--job-wait-ms <ms>",
       "goal and usability: while the page shows an in-progress status (\"Simulating…\", aria-busy, a job \"is running\"), " +
         "waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); " +
-        "it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, " +
+        "it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) or declares (aria-busy, when this flag is set) before it is a hang, " +
         "and a wait the page documents (\"usually takes a minute\") can raise it",
     ).argParser(positiveIntArg),
   deny: () =>
@@ -186,7 +186,7 @@ export const GOAL_RUN_OPTIONS = {
       .default([] as string[])
       .argParser(collect),
   ignoreNoProgress: () =>
-    new Option("--ignore-no-progress <pattern>", "a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard)")
+    new Option("--ignore-no-progress <pattern>", "a route / action label / busy indicator (its description or visible words) where ui-no-progress is expected (repeatable, * wildcard)")
       .default([] as string[])
       .argParser(collect),
   allowSecretCmd: () =>
