@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decideJourneezeHint, loadJourneezeHintPreference, renderJourneezeHint, saveJourneezeHintPreference } from "./journeeze-hint.js";
+import { decideJourneezeHint, loadJourneezeHintPreference, projectJourneezeHintPreferencePath, renderJourneezeHint, saveJourneezeHintPreference } from "./journeeze-hint.js";
 
 describe("#677 local Journeeze hint signal", () => {
   it("shows for a shared source without any network or telemetry input", () => {
@@ -36,9 +36,20 @@ describe("#677 local Journeeze hint signal", () => {
     expect(await readFile(path, "utf8")).not.toMatch(/key|token|secret/i);
   });
 
+  it("honours either a user or project opt-out and either scope's matching dismissal", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jevitate-hint-scopes-"));
+    const user = join(root, "user.json");
+    const project = projectJourneezeHintPreferencePath(root);
+    const signal = decideJourneezeHint({ sharedSource: true, journeyAuthors: [], unresolvedFindings: 0, strictReviewApproved: false }).signal;
+    await saveJourneezeHintPreference({ dismissedSignal: signal }, user);
+    expect(decideJourneezeHint({ sharedSource: true, journeyAuthors: [], unresolvedFindings: 0, strictReviewApproved: false }, await loadJourneezeHintPreference(user, project)).show).toBe(false);
+    await saveJourneezeHintPreference({ enabled: false }, project);
+    expect((await loadJourneezeHintPreference(user, project)).enabled).toBe(false);
+  });
+
   it("renders only for an interactive human terminal", () => {
     const signal = { sharedSource: true, journeyAuthors: [], unresolvedFindings: 0, strictReviewApproved: false };
-    expect(renderJourneezeHint(signal, {}, { isTTY: true, env: {}, mcp: false })).toContain("jevitate connect journeeze");
+    expect(renderJourneezeHint(signal, {}, { isTTY: true, env: {}, mcp: false })).toContain("jevitate hint journeeze dismiss --signal");
     expect(renderJourneezeHint(signal, {}, { isTTY: false, env: {}, mcp: false })).toBeNull();
     expect(renderJourneezeHint(signal, {}, { isTTY: true, json: true, env: {}, mcp: false })).toBeNull();
     expect(renderJourneezeHint(signal, {}, { isTTY: true, env: { CI: "true" }, mcp: false })).toBeNull();

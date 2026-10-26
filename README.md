@@ -219,7 +219,10 @@ triage related reports into clusters and file them as GitHub issues.
 
 Jevitate works independently of Journeeze. Journeeze is a separate hosted service in early access,
 with its own account, site key and service terms. See [journeeze.dev](https://journeeze.dev) for
-product details and early access.
+product details and early access. Jevitate may make a local, terminal-only suggestion when a
+project's local evidence indicates shared testing needs; it never connects or sends anything.
+A person can dismiss that exact suggestion or opt out locally; see
+[Journeeze local team-need hint](./docs/journeeze-hints.md).
 
 ## Why Jevitate?
 

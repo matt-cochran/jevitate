@@ -501,6 +501,28 @@
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=target URL (must be an authorized origin)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
+# hint
+  description: local, human-only product hints; never contacts a service
+
+# hint journeeze
+  description: control the local Journeeze offer shown after report/review
+
+# hint journeeze disable
+  description: turn off Journeeze hints at one local preference scope
+  options:
+    - flags=--scope <project|user> required=true mandatory=false negate=false variadic=false default="project" description=where to store the preference
+
+# hint journeeze dismiss
+  description: hide one unchanged local Journeeze offer by its displayed signal hash
+  options:
+    - flags=--scope <project|user> required=true mandatory=false negate=false variadic=false default="project" description=where to store the dismissal
+    - flags=--signal <sha256> required=true mandatory=true negate=false variadic=false default=null description=the signal hash printed in the offer
+
+# hint journeeze enable
+  description: re-enable Journeeze hints at one local preference scope
+  options:
+    - flags=--scope <project|user> required=true mandatory=false negate=false variadic=false default="project" description=where to store the preference
+
 # inbox
   description: the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
 

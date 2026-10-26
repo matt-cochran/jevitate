@@ -108,6 +108,9 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_CONNECT_NEEDS_TTY", // `connect journeeze` without a terminal: a person connects (CI uses JOURNEEZE_UPLOAD_KEY)
   "E_CONNECT_NEEDS_HUMAN", // `connect journeeze` inside an MCP call
   "E_CONNECT_DECLINED", // the person declined the product at the confirmation — nothing was saved
+  "E_JOURNEEZE_HINT_NEEDS_TTY", // #677: preference changes are human-only terminal actions
+  "E_JOURNEEZE_HINT_NEEDS_HUMAN",
+  "E_JOURNEEZE_HINT_ARGS",
   "E_JOURNEY_ANCHOR_RULES", // #466: `journey promote` of a Journey breaking the 0.10 anchor rules — fix the Journey
   // 0.18.0: refused before anything runs.
   "E_PROJECT_DIR_MISSING", // #585: an explicit --project / --journeys-dir that does not exist

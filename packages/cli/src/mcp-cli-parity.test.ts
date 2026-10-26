@@ -41,6 +41,9 @@ const NATIVE_MCP_TO_CLI: Readonly<Record<string, readonly string[]>> = {
 
 /** CLI commands deliberately NOT reachable over MCP, and why. Nothing else may be missing. */
 const EXCLUDED: Readonly<Record<string, string>> = {
+  "hint journeeze dismiss": "#677: dismissing a local product hint is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
+  "hint journeeze disable": "#677: disabling local product hints is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
+  "hint journeeze enable": "#677: enabling local product hints is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
   "acceptance audit": "a local, read-only release-evidence audit over operator-selected files; it produces CI artifacts but does not drive an authorized target or offer an agent capability",
   mcp: "the MCP server itself (it owns stdin/stdout); an MCP client is already connected to it",
   ui: "the local human dashboard (loopback HTTP, opens a browser): where a person approves/cancels inbox items — human-only by design",
