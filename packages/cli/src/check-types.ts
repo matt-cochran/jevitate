@@ -18,6 +18,7 @@ import { type EngineInfo } from "./engine.js";
 import type { CheckSuite, SuiteBudget } from "./check-suite.js";
 import { type RunSummary } from "./report-api.js";
 import type { PrReviewCheckDeps } from "./approval-provenance.js";
+import type { EvidenceManifest, EvidenceKeyInput } from "./check-evidence.js";
 
 /**
  * `jevitate check --suite <file>` (#137): jevitate as a CI regression gate. Runs every suite item
@@ -97,6 +98,8 @@ export interface RunCheckOptions {
   readonly baselinesDir?: string;
   /** `--changed-routes`: only Journeys and goals touching these route globs run. */
   readonly changedRoutes?: readonly string[];
+  /** #704: caller-supplied immutable proof identity and prior manifest, checked before any gateway/browser work. */
+  readonly evidence?: { readonly input: EvidenceKeyInput; readonly manifest?: EvidenceManifest };
   readonly junitPath?: string;
   readonly sarifPath?: string;
   readonly jsonPath?: string;

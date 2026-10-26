@@ -24,6 +24,7 @@ import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
 import type { SelfHealer } from "@jevitate/runtime";
 import { type ExecContext, type Executed, caseDetail, execute } from "./check-execute.js";
 import { clock } from "@jevitate/domain";
+import { reuseDecision } from "./check-evidence.js";
 export { affectedBy } from "./check-plan.js";
 export { BudgetMeter } from "./check-budget.js";
 export { type BudgetReport, CheckAiSetupError, CheckArgsError, type CheckFinding, type CheckGateways, type CheckItemReport, CheckPreflightError, type CheckResult, type CheckRunners, type ItemKind, type RunCheckOptions } from "./check-types.js";
@@ -188,6 +189,10 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const prepared: PreparedTarget[] = [];
   for (const t of opts.suite.targets) prepared.push(await prepareTarget(t, opts));
   const items = plan(prepared, opts.changedRoutes, opts);
+  // #704: decide from immutable, validated proof inputs before a gateway is selected or a browser
+  // can open. A matching manifest turns every otherwise-runnable item into an explicit skip.
+  const evidence = opts.evidence === undefined ? undefined : reuseDecision(opts.evidence.input, opts.evidence.manifest);
+  const reuse = evidence?.decision === "skip";
   // #453: refuse a bad self-heal request and read the change scope ONCE, before the first browser opens.
   const heal = await prepareSelfHeal(opts);
   // #470: the opt-in locator gate and the convention it measures against, before anything runs.
@@ -206,7 +211,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     return gw;
   };
   // A missing/unselectable gateway throws here (typed), before any browser opens.
-  if (items.some((i) => i.needsAi && i.skipped === undefined)) await gateways();
+  if (!reuse && items.some((i) => i.needsAi && i.skipped === undefined)) await gateways();
   await mkdir(resultsDir, { recursive: true });
 
   const meter = new BudgetMeter(opts.suite.budget, { ...(opts.now === undefined ? {} : { now: opts.now }), costKnownZero: opts.aiMode === "fake" });
@@ -227,6 +232,10 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   let exceeded: string | undefined;
   const executed: Array<{ item: Planned; ex: Executed | undefined; durationMs: number }> = [];
   for (const item of items) {
+    if (reuse) {
+      executed.push({ item: { ...item, skipped: "reused matching evidence" }, ex: undefined, durationMs: 0 });
+      continue;
+    }
     if (item.skipped !== undefined) {
       executed.push({ item, ex: undefined, durationMs: 0 });
       continue;
