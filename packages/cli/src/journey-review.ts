@@ -460,7 +460,7 @@ function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | 
     verdict: rec.verdict,
     at: rec.at,
     // #523: an executable-content change stales the proof; an old record without it compares the full hash.
-    stale: rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHash(journey),
+    stale: rec.journeyId !== journey.metadata.id || (rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHash(journey)),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     summary: { ...rec.summary },
     ...(rec.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: rec.suggestedTargetedProofs.map((p) => ({ ...p, relax: [...p.relax] })) }),

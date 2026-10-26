@@ -70,6 +70,12 @@ describe("#708 shared mutation proof policy", () => {
     expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-proven", record: { ...record(), verdict: "proven" } }).passed).toBe(true);
     for (const r of [null, { ...record(), verdict: "insensitive" }, { ...record(), verdict: "proven", proofHash: "f".repeat(64) }]) expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-proven", record: r, waiver: waiver() }).passed).toBe(false);
   });
+  it("review and policy both reject a receipt recorded for another Journey", () => {
+    const review = buildJourneyReview(journey(), { proofPolicy: "require-proven", lastVerify: { ...record(), journeyId: "other", verdict: "proven" } });
+    expect(review.proof.verify.status === "recorded" && review.proof.verify.stale).toBe(true);
+    expect(review.proof.policy?.freshness).toBe("stale");
+    expect(renderReviewText(review)).not.toContain("mutation proof proven ✓");
+  });
   it("binds proof-plan changes even when the receipt and waiver are unchanged", () => {
     const j = journey(); j.metadata.endState = [{ kind: "page", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "Other" } }];
     const p = evaluateMutationProofPolicy({ journey: j, contentHash: journeyReviewHash(j), mode: "require-attempt", record: record(), waiver: waiver() });
