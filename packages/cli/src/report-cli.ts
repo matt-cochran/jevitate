@@ -1,10 +1,11 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { RunTagError, parseRunTagSpecs } from "@jevitate/domain";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { emitJsonOrRefusal } from "./cli-refusal.js";
 import { formatBaselineListHuman, formatBaselineShowHuman, formatBaselineTagHuman } from "./cli-output.js";
+import { loadJourneezeHintPreference, renderJourneezeHint } from "./journeeze-hint.js";
 import {
   ReportInputError,
   buildReport,
@@ -41,6 +42,30 @@ function failure(program: Command, err: unknown, code: string): void {
 
 const collect = (v: string, prev: string[]): string[] => [...prev, v];
 
+/** A project lock is sufficient local evidence of shared Journey work; parsing it never affects reporting. */
+async function hasSharedSource(): Promise<boolean> {
+  try {
+    const raw: unknown = JSON.parse(await readFile(join(process.cwd(), "jevitate.lock"), "utf8"));
+    return raw !== null && typeof raw === "object" && !Array.isArray(raw) && Array.isArray((raw as Record<string, unknown>).sources) && (raw as { sources: unknown[] }).sources.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function reportJourneezeHint(json: boolean | undefined): Promise<string> {
+  try {
+    return (
+      renderJourneezeHint(
+        { sharedSource: await hasSharedSource(), journeyAuthors: [], unresolvedFindings: 0, strictReviewApproved: false },
+        await loadJourneezeHintPreference(),
+        { isTTY: process.stdout.isTTY === true, json },
+      ) ?? ""
+    );
+  } catch {
+    return "";
+  }
+}
+
 export function registerReportCommands(program: Command, deps: ReportCliDeps): void {
   program
     .command("report")
@@ -72,7 +97,7 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
         }
         if (o.json) emit(program, ok(report), 0);
         else {
-          program.configureOutput().writeOut?.(report.markdown);
+          program.configureOutput().writeOut?.(`${report.markdown}${await reportJourneezeHint(o.json)}`);
           process.exitCode = 0;
         }
       } catch (err) {

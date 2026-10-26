@@ -26,6 +26,8 @@ export function initLoopState(ctx: MutableRunContext): void {
   ctx.fixtureAttached = false;
   ctx.hang = undefined;
   ctx.outcome = null;
+  /** #688 — the machine-readable terminal actionable-control outcome, set only at a blocked stop. */
+  ctx.actionableControl = null;
   /** Why the run ended incomplete, when a specific detector ended it. */
   ctx.incomplete = null;
   /** #209: stopped because every `done` the model proposed was rejected. */

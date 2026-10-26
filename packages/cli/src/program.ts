@@ -46,6 +46,7 @@ import { registerServeCommands } from "./serve-cli.js";
 import { registerUxCommands } from "./ux-cli.js";
 import { registerLogsCommands } from "./logs-cli.js";
 import { registerInboxCommands } from "./inbox-cli.js";
+import { registerAcceptanceAuditCommands } from "./acceptance-audit-cli.js";
 
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
 export { fakeDoneJudge } from "./cli-shared.js";
@@ -103,6 +104,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerMissionCommands(program, deps);
   registerServeCommands(program, deps, buildProgram);
   registerInboxCommands(program, deps); // #254: MCP inbox tools from the CLI
+  registerAcceptanceAuditCommands(program);
   registerUxCommands(program, deps);
   registerAiCommands(program, deps);
 

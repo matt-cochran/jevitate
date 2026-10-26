@@ -10,7 +10,7 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
-import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
+import type { ActionDeltaStats, ActionableControlOutcome, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
 import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
@@ -228,6 +228,8 @@ export interface RunExplorationResult {
    * (`incomplete` + reason)? `outcome` above is the mission verdict; this is the run's own account.
    */
   readonly runOutcome: RunOutcome;
+  /** #688: a blocked goal's safe, manager-resumable control, with the observed proof. */
+  readonly actionableControl?: ActionableControlOutcome;
   /** A find-out goal's answer (#101), present only when code grounded it on the observed pages. */
   readonly answer?: RunAnswer;
   /**
@@ -667,6 +669,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       timing: mission.run.timing,
       outcome: goalOutcome,
       runOutcome: mission.run.outcome,
+      ...(mission.run.actionableControl === undefined ? {} : { actionableControl: mission.run.actionableControl }),
       ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
       ...(mission.run.partialReport === undefined ? {} : { partialReport: mission.run.partialReport }),
       depth: mission.run.depth,

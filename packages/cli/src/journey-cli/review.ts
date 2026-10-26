@@ -1,7 +1,8 @@
 import { type CliDeps, JEV_PROVIDER_FLAG_HELP, emitUsageLine, jevProviderArg, emitJson, GatewaySelectionError } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
 import { READINESS_FLAG_HELP, REAL_JEV_FLAG_HELP, jevSetupFor } from "../catalog-cli.js";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Command } from "commander";
 import { MissingCredentialError } from "@jevitate/ai-core";
 import { EXIT_CODES } from "../exit-codes.js";
@@ -16,6 +17,22 @@ import { resolveCatalogDir } from "../catalog-api.js";
 import { CatalogInputError } from "../catalog.js";
 import { TargetConfigError } from "../target-config.js";
 import { FULL_FLAG_HELP, DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, targetsOpts } from "./shared.js";
+import { loadJourneezeHintPreference, renderJourneezeHint } from "../journeeze-hint.js";
+
+async function reviewJourneezeHint(json: boolean, outFile: string | undefined): Promise<string> {
+  if (json || outFile !== undefined) return "";
+  try {
+    const raw: unknown = JSON.parse(await readFile(join(process.cwd(), "jevitate.lock"), "utf8"));
+    const sharedSource = raw !== null && typeof raw === "object" && !Array.isArray(raw) && Array.isArray((raw as Record<string, unknown>).sources) && (raw as { sources: unknown[] }).sources.length > 0;
+    return renderJourneezeHint(
+      { sharedSource, journeyAuthors: [], unresolvedFindings: 0, strictReviewApproved: false },
+      await loadJourneezeHintPreference(),
+      { isTTY: process.stdout.isTTY === true, json },
+    ) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 /** Registers `jevitate journey review`. */
 export function registerJourneyReview(journey: Command, program: Command, deps: CliDeps): void {
@@ -79,7 +96,7 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
         } else if (outFile !== undefined) {
           program.configureOutput().writeOut?.(`review sheet for journey '${review.id}' written to ${outFile} (content hash ${review.contentHash})\n`);
         } else {
-          program.configureOutput().writeOut?.(rendered);
+          program.configureOutput().writeOut?.(`${rendered}${await reviewJourneezeHint(false, outFile)}`);
         }
         emitUsageLine(program, review.jev);
         // #434: a plain review never fails on its findings (readiness and Jev answers are advice).
