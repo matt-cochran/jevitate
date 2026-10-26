@@ -142,7 +142,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     nowIso: SEAM,
     changeGitExec: SEAM,
     approvalVerification: SEAM,
-    evidence: "#704: this internal evidence seam is exercised by CI/workflow integration; manifest-file CLI flags are added with the completed change-detector surface",
   },
   "mcp-api.ts runVerifyFix": {
     evidencePaceMs: EVIDENCE_PACE,
