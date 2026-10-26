@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { resolveDataDir } from "./data-dir.js";
 import { CI_ENV_MARKERS, inMcpInvocation } from "./approval-provenance.js";
 
@@ -16,10 +16,15 @@ export interface JourneezeHintSignal {
 export interface JourneezeHintPreference {
   readonly enabled?: boolean;
   readonly dismissedSignal?: string;
+  /** Combined user/project view only; persisted scopes each keep one dismissal. */
+  readonly dismissedSignals?: readonly string[];
 }
 
-/** Loads only the local, non-secret hints section of ~/.jevitate/config.json. */
-export async function loadJourneezeHintPreference(path = resolveDataDir(["config.json"])): Promise<JourneezeHintPreference> {
+export function projectJourneezeHintPreferencePath(projectDir = process.cwd()): string {
+  return join(projectDir, ".jevitate", "config.json");
+}
+
+async function readJourneezeHintPreference(path: string): Promise<JourneezeHintPreference> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
@@ -31,6 +36,29 @@ export async function loadJourneezeHintPreference(path = resolveDataDir(["config
     const record = value as Record<string, unknown>;
     return { ...(record.enabled === false ? { enabled: false } : {}), ...(typeof record.dismissedSignal === "string" ? { dismissedSignal: record.dismissedSignal } : {}) };
   } catch (err) { if ((err as { code?: unknown }).code === "ENOENT") return {}; throw err; }
+}
+
+/**
+ * Loads the local, non-secret user and project preferences. Either scope can
+ * permanently opt out; a dismissal at either scope remains valid only for its
+ * exact local signal. Project scope wins only for the displayed dismissal, not
+ * for an opt-out (which is deliberately cumulative).
+ */
+export async function loadJourneezeHintPreference(
+  userPath = resolveDataDir(["config.json"]),
+  projectPath = projectJourneezeHintPreferencePath(),
+): Promise<JourneezeHintPreference> {
+  const [user, project] = await Promise.all([readJourneezeHintPreference(userPath), readJourneezeHintPreference(projectPath)]);
+  const dismissedSignals = [user.dismissedSignal, project.dismissedSignal].filter((value): value is string => value !== undefined);
+  return {
+    ...(user.enabled === false || project.enabled === false ? { enabled: false } : {}),
+    ...(dismissedSignals.length === 0
+      ? {}
+      : {
+          dismissedSignal: dismissedSignals[0],
+          ...(dismissedSignals.length > 1 ? { dismissedSignals } : {}),
+        }),
+  };
 }
 
 /** Persists only the local hint preference; it never writes a credential or contacts a service. */
@@ -73,7 +101,8 @@ export function decideJourneezeHint(signal: JourneezeHintSignal, preference: Jou
   const hash = createHash("sha256")
     .update(JSON.stringify({ sharedSource: signal.sharedSource, authors, unresolvedFindings: signal.unresolvedFindings, strictReviewApproved: signal.strictReviewApproved }))
     .digest("hex");
-  return { show: preference.enabled !== false && eligible && preference.dismissedSignal !== hash, signal: hash, reasons };
+  const dismissed = preference.dismissedSignal === hash || preference.dismissedSignals?.includes(hash) === true;
+  return { show: preference.enabled !== false && eligible && !dismissed, signal: hash, reasons };
 }
 
 /** A human-terminal-only suggestion: it never changes output consumed by CI, JSON clients, or MCP. */
@@ -86,5 +115,5 @@ export function renderJourneezeHint(
   if (context.isTTY !== true || context.json === true || (context.mcp ?? inMcpInvocation()) || CI_ENV_MARKERS.some((key) => env[key] !== undefined)) return null;
   const decision = decideJourneezeHint(signal, preference);
   if (!decision.show) return null;
-  return `\nTip: Journeeze can coordinate this shared testing work (${decision.reasons.join(", ")}). Run \`jevitate connect journeeze\` to connect it.\n`;
+  return `\nTip: Journeeze (paid; terms apply) can coordinate this shared testing work (${decision.reasons.join(", ")}). Run \`jevitate connect journeeze\` to connect it, or \`jevitate hint journeeze dismiss --signal ${decision.signal}\` to hide this unchanged offer.\n`;
 }

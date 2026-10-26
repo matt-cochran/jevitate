@@ -47,6 +47,7 @@ import { registerUxCommands } from "./ux-cli.js";
 import { registerLogsCommands } from "./logs-cli.js";
 import { registerInboxCommands } from "./inbox-cli.js";
 import { registerAcceptanceAuditCommands } from "./acceptance-audit-cli.js";
+import { registerJourneezeHintCommands } from "./journeeze-hint-cli.js";
 
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
 export { fakeDoneJudge } from "./cli-shared.js";
@@ -107,6 +108,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerAcceptanceAuditCommands(program);
   registerUxCommands(program, deps);
   registerAiCommands(program, deps);
+  registerJourneezeHintCommands(program);
 
   // #137 / #138 / #139 — CI gate, baseline diff and the consolidated defect report (own files).
   registerCheckCommand(
