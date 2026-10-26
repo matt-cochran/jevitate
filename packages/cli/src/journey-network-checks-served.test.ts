@@ -170,6 +170,30 @@ describe("JourneyOutcomeChecks.lastFailures reports the failed assertion sites (
     });
   }, 120_000);
 
+  it("structured mutation evidence keeps a completed request check when a later action failed", async () => {
+    await withPage(async (page, actor) => {
+      const checks = new JourneyOutcomeChecks(
+        page,
+        journeyWithStepRequests("request-before-later-action", [{ kind: "requestMade", method: "POST", pathGlob: "/api/publish" }]),
+      );
+      const observer = checks.observer()!;
+      const recorded = { step: { kind: "click", target: { role: "button", name: "Save" } } } as never;
+      const result = await checks.run(
+        actor,
+        async () => {
+          await page.goto(origin);
+          await observer.beforeStep!({ actor, index: 1, recorded });
+          await observer.afterStep!({ actor, index: 1, recorded, outcome: "done" });
+          return { outcome: "quarantined", reason: "later action failed", at: 2 };
+        },
+        { collectStepFailuresOnReplayFailure: true },
+      );
+
+      expect(result).toMatchObject({ outcome: "quarantined", at: 2 });
+      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String) }]);
+    });
+  }, 120_000);
+
   it("#453: a step that runs again (a heal probe) restarts its request window — the earlier attempt's request does not count", async () => {
     await withPage(async (page, actor) => {
       const checks = new JourneyOutcomeChecks(page, journeyWithStepRequests("window-restart", [{ kind: "requestMade", method: "POST", pathGlob: "/api/save" }]));

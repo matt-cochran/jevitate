@@ -693,7 +693,9 @@ export async function runJourneyProgrammatically(
         // relaxed the only check naming an assertion-only `expected_*` param). The supplied set was
         // validated against the stored Journey above; the copy runs with the subset it still reads.
         const replayParams = replayed === journey ? params : prefixParams(journey, replayed, params);
-        const raw = await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params: replayParams, policy }));
+        const raw = await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params: replayParams, policy }), {
+          collectStepFailuresOnReplayFailure: mutation.structuredFailures === true,
+        });
         runSecrets = runSecretValues(secrets, raw);
         result = redactSecretValues(raw, runSecrets);
       } finally {

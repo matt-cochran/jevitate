@@ -30,13 +30,17 @@ function page(saved: string | undefined): string {
   <h1>Editor</h1>
   <label for="t">Text</label> <input id="t">
   <button type="button" id="save">Save</button>
+  <button type="button" id="continue" disabled>Continue</button>
   <p data-testid="status">${saved === undefined ? "Nothing saved" : `Saved: ${saved}`}</p>
   <script>
     document.getElementById("save").addEventListener("click", async () => {
       const text = document.getElementById("t").value;
       try {
         const r = await fetch("/api/save", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
-        if (r.ok) document.querySelector("[data-testid=status]").textContent = "Saved: " + text;
+        if (r.ok) {
+          document.querySelector("[data-testid=status]").textContent = "Saved: " + text;
+          document.getElementById("continue").disabled = false;
+        }
       } catch { /* aborted */ }
     });
   </script>
@@ -242,6 +246,22 @@ describe("journey verify --mutate (#402, served)", () => {
     });
     const { exitCode, report } = await verify(selfAsserting, ["--json"]);
     expect({ verdict: report.verdict, exitCode }).toEqual({ verdict: "proven", exitCode: 0 });
+  }, 240_000);
+
+  it("a request failure is sensitive when its missing write makes a later action fail", async () => {
+    const dependent = strong("request-before-later-action");
+    dependent.metadata.endState = [];
+    dependent.recording.pages[0]!.steps.push({
+      step: { kind: "click", target: { role: "button", name: "Continue" }, expect: { kind: "visible", target: { role: "button", name: "Continue" } } },
+    });
+
+    const { exitCode, report } = await verify(dependent, ["--json"]);
+    expect(verdictOf(report, "step-request:3:0")).toEqual({ verdict: "sensitive", provedBy: "skip:3" });
+    expect(report.mutations.find((m) => m.id === "skip:3")?.failedSites).toEqual(
+      expect.arrayContaining([{ where: "step-request", step: 3, checkIndex: 0 }, { where: "step", step: 4, postcondition: false }]),
+    );
+    expect(report.verdict).toBe("proven");
+    expect(exitCode).toBe(0);
   }, 240_000);
 
   it("block-write that did not block the step's own recorded write is not-applied, never a proof", async () => {

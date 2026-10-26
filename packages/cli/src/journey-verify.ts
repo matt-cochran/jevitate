@@ -184,10 +184,10 @@ function blockedOwnWrite(recorded: readonly string[], blocked: readonly BlockedW
 
 function failedSitesOf(result: { outcome: string; reason?: string; at?: number }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
   if (result.outcome !== "quarantined") return [];
-  if (result.at !== undefined) return [{ where: "step", step: result.at + 1, postcondition: /postcondition failed/.test(result.reason ?? "") }];
-  return failures.map((f): MutationFailedSite =>
+  const structured = failures.map((f): MutationFailedSite =>
     f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
   );
+  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: /postcondition failed/.test(result.reason ?? "") }];
 }
 
 /**
