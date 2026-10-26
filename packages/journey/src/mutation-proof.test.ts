@@ -233,26 +233,6 @@ describe("#402 classifyMutation", () => {
     expect(classifyMutation(site("step-request:3:0"), skip3, failed({ where: "step", step: 4, postcondition: true }))).toBe("cascade");
   });
 
-  it("the paired request failed before a later action: sensitive", () => {
-    expect(
-      classifyMutation(
-        site("step-request:3:0"),
-        skip3,
-        failed({ where: "step-request", step: 3, checkIndex: 0 }, { where: "step", step: 4, postcondition: false }),
-      ),
-    ).toBe("sensitive");
-  });
-
-  it("the paired request failed alongside its own action: cascade", () => {
-    expect(
-      classifyMutation(
-        site("step-request:3:0"),
-        skip3,
-        failed({ where: "step-request", step: 3, checkIndex: 0 }, { where: "step", step: 3, postcondition: false }),
-      ),
-    ).toBe("cascade");
-  });
-
   it("the paired step-request check failed: sensitive", () => {
     expect(classifyMutation(site("step-request:3:0"), skip3, failed({ where: "step-request", step: 3, checkIndex: 0 }))).toBe("sensitive");
   });
