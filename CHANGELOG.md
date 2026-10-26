@@ -16,10 +16,6 @@ acceptance-evidence gate, and preserves a safe, resumable handoff when a goal ru
 - **Audit release acceptance evidence without driving a target.** `jevitate acceptance audit` checks the supplied requirements, approval, Journey, verification and review artifacts, then writes deterministic Markdown, JUnit, SARIF and JSON receipts suitable for CI. Its approval proposal is bound to the inspected content hash.
 - **Blocked goals retain a safe actionable-control handoff (#688).** When a model stops beside a visible, enabled control that code classifies as safe, it receives one bounded recovery turn restricted to that named control. If it still cannot advance—or every candidate is unsafe—the result records the candidate's observed facts, screenshot and exact resume identity (page URL, state signature and locator) for a manager. Hidden, disabled, ambiguous, destructive, financial and approval controls are never selected or offered for recovery.
 
-### Fixed
-
-- **A request assertion keeps its proof when a later action fails (#701).** In structured mutation verification, a completed step's failed `expectRequests` check is retained even when the missing write makes a later dependent action abort the replay. The exact earlier request failure is sensitive evidence; the later failure remains a cascade for later assertions. Normal Journey runs keep their existing failure result, and checks for steps that never started are not judged.
-
 ## [0.24.2] – 2026-10-25
 
 0.24.1 was versioned on `dev` but never published; 0.24.2 combines its #680 correction with #687 and #689.

@@ -923,21 +923,13 @@ function classifyMutationPlain(site: JourneyAssertionSite, m: JourneyMutation, r
     const hit = fs.some((f) => f.where === "step" && f.step === site.step && f.postcondition);
     return hit && site.step >= m.step ? "sensitive" : "cascade";
   }
-  if (site.where === "step-request") {
-    const hit = fs.some((f) => f.where === "step-request" && f.step === site.step && f.checkIndex === site.checkIndex);
-    const earlierFailure = fs.some(
-      (f) =>
-        f.where === "unevaluable" ||
-        (f.where === "step" && f.step <= site.step) ||
-        (f.where === "step-request" && f.step < m.step),
-    );
-    // A later action can fail because this mutation removed the state it needed. That cascade does
-    // not erase an exact request-check failure already observed at the target step.
-    return hit && site.step >= m.step && !earlierFailure ? "sensitive" : "cascade";
-  }
   // A step failed (the outcome checks were never judged), or the end state could not be read.
   if (fs.some((f) => f.where === "step" || f.where === "unevaluable")) return "cascade";
   if (fs.some((f) => f.where === "step-request" && f.step < m.step)) return "cascade";
+  if (site.where === "step-request") {
+    if (site.step < m.step) return "cascade";
+    return fs.some((f) => f.where === "step-request" && f.step === site.step && f.checkIndex === site.checkIndex) ? "sensitive" : "cascade";
+  }
   return fs.some((f) => f.where === "end-state" && f.index === site.index) ? "sensitive" : "cascade";
 }
 
