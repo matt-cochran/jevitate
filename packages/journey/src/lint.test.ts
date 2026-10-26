@@ -23,6 +23,16 @@ const publishResponse = [{ kind: "responseStatus", method: "POST", pathGlob: "/p
 const reloadThen = [{ kind: "reloadThen", assertion: { kind: "textIncludes", target: { testId: "live" }, text: "published" } }] as const;
 
 describe("#401 lintJourney", () => {
+  it("rejects a role-only assertion target before replay", () => {
+    const findings = lintJourney(j([{ step: { kind: "assert", check: { kind: "textIncludes", target: { role: "status" }, text: "Published" } } }]));
+    expect(findings).toContainEqual(expect.objectContaining({ rule: "unusable-target", level: "error", step: 1 }));
+  });
+
+  it("accepts a role and exact accessible name assertion target", () => {
+    const findings = lintJourney(j([{ step: { kind: "assert", check: { kind: "textIncludes", target: { role: "status", name: "Publication status" }, text: "Published" } } }]));
+    expect(findings.some((f) => f.rule === "unusable-target")).toBe(false);
+  });
+
   it("flags own-target-visible for a step whose expect is its own target visible", () => {
     const journey = j([
       { step: { kind: "click", target: { testId: "publish" }, expect: { kind: "visible", target: { testId: "publish" } } } },
@@ -160,7 +170,7 @@ describe("#401 lintJourney", () => {
     const journey = j(
       [
         {
-          step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status" }, text: "Published" } },
+          step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status", name: "Publication status" }, text: "Published" } },
           expectRequests: [...publishResponse],
         },
       ],
@@ -204,7 +214,7 @@ describe("#401 lintJourney", () => {
     const journey = j(
       [
         {
-          step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status" }, text: "Published" } },
+          step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status", name: "Publication status" }, text: "Published" } },
           expectRequests: [...publishResponse],
         },
       ],
@@ -337,22 +347,24 @@ describe("#498 lintJourney: upload fixtures outside the project root", () => {
     expect(findings.some((f) => f.rule === "upload-outside-project")).toBe(true);
   });
 
-  it("does not flag an absolute path inside the root", async () => {
+  it("flags an absolute path inside the root because fixtures must be project-relative", async () => {
     const { root } = await project();
     const findings = lintJourney(j([uploadOf(join(root, "receipt.pdf"))]), { baseDir: root });
-    expect(findings.some((f) => f.rule.startsWith("upload-"))).toBe(false);
+    const finding = findings.find((f) => f.rule === "upload-outside-project");
+    expect(finding?.level).toBe("error");
+    expect(finding?.fix).toContain("relative to the project root");
   });
 
   it("names the path, the root and the fix", async () => {
     const { base, root } = await project();
     const finding = lintJourney(j([uploadOf(join(base, "secret.txt"))]), { baseDir: root }).find((f) => f.rule === "upload-outside-project");
-    expect(`${finding?.message} ${finding?.fix}`).toContain(`${join(base, "secret.txt")} is outside the project root ${root}`);
+    expect(`${finding?.message} ${finding?.fix}`).toContain("must be project-relative");
   });
 
   it("names the fix as moving the fixture into the project", async () => {
     const { base, root } = await project();
     const finding = lintJourney(j([uploadOf(join(base, "secret.txt"))]), { baseDir: root }).find((f) => f.rule === "upload-outside-project");
-    expect(finding?.fix).toContain("move the fixture into the project");
+    expect(finding?.fix).toContain("relative to the project root");
   });
 
   it("does not also report an outside fixture as missing", async () => {

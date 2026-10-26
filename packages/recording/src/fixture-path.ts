@@ -46,6 +46,16 @@ export function fixtureOutsideProject(path: string, root: string): FixturePathEr
   );
 }
 
+/** An upload fixture must be project-relative even when its absolute path happens to be inside the root. */
+export function fixtureAbsolutePath(path: string, root: string): FixturePathError {
+  return new FixturePathError(
+    "fixture-outside-project",
+    path,
+    root,
+    `upload fixture ${path} must be project-relative to ${root} — rewrite it as a path inside the project`,
+  );
+}
+
 /** No project root is known, so nothing can be confined to it: refused (fail-closed). */
 export function fixtureNoRoot(path: string): FixturePathError {
   return new FixturePathError(
@@ -144,6 +154,7 @@ export async function confineFixture(raw: string, root: string | undefined): Pro
   if (root === undefined) throw fixtureNoRoot(raw);
   const unsafe = fixtureRootRefusal(root);
   if (unsafe !== null) throw fixtureUnsafeRoot(raw, root, unsafe);
+  if (isAbsolute(raw)) throw fixtureAbsolutePath(raw, root);
   const candidate = fixtureCandidatePath(raw, root);
   let realRoot: string;
   try {

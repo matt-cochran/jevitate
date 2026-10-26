@@ -183,7 +183,8 @@ jevitate journey lint checkout --sarif lint.sarif
 | `http-check-without-reset` | warning | The Journey has an `http` end-state check but records no fixtures, so nothing resets its source (an earlier email can make it pass) |
 | `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion (a `waitFor` step's target and state count as its checked outcome, #659) |
 | `upload-file-missing` | error | An `upload` step's literal fixture path does not exist. Relative paths resolve against the project root (the folder holding `.jevitate/`), never the working directory; the message shows the resolved path |
-| `upload-outside-project` | error | An `upload` step's fixture resolves (after symlinks) outside the project root: an absolute path, a `../` path or a symlink that escapes. A run refuses it (`fixture-outside-project`), `journey promote` refuses it (`E_JOURNEY_WEAK`) and `--accept-weak` does not waive it — move the fixture into the project. There is no override flag |
+| `upload-outside-project` | error | An `upload` step's fixture is absolute, escapes through `../`, or resolves (after symlinks) outside the project root. Fixtures must be project-relative. A run refuses it (`fixture-outside-project`), `journey promote` refuses it (`E_JOURNEY_WEAK`) and `--accept-weak` does not waive it. There is no override flag |
+| `unusable-target` | error | An assertion target has no replayable selector (for example `role` without an exact accessible `name`). Record a test id, named role, label, text, or css selector. |
 
 Warnings never block promotion. `--accept-weak "<reason>"` records the reason and the waived error
 rules in the Journey's `metadata.acceptedWeak`.

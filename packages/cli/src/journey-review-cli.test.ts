@@ -35,9 +35,10 @@ function strongJourney(id = "strong", overrides: Partial<Journey["metadata"]> = 
         {
           url: "/editor",
           steps: [
-            { step: { kind: "fill", target: { label: "Access token" }, value: { redacted: false, value: SECRET_LITERAL }, expect: { kind: "textIncludes", target: { role: "status" }, text: "ready" } } },
+            { step: { kind: "fill", target: { label: "Access token" }, value: { redacted: false, value: SECRET_LITERAL }, expect: { kind: "textIncludes", target: { role: "status", name: "Publication status" }, text: "ready" } } },
             {
-              step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status" }, text: "Published" } },
+              stepId: "s-haxfhr",
+              step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status", name: "Publication status" }, text: "Published" } },
               expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/publish", status: { class: 2 } }],
             },
           ],
@@ -274,6 +275,16 @@ describe("#523 journey review --strict", () => {
 
   it("passes a clean Journey", async () => {
     expect((await strictCli(["journey", "review", "clean", "--json", "--strict"])).exitCode).toBe(0);
+  });
+
+  it("fails a role-only assertion target before replay", async () => {
+    const roleOnly = strongJourney("role-only", { goal: "Publish a post", successCriteria: [{ description: "The post is live" }], job: "publish-post", persona: "editor", anchors: [{ name: "published", step: 2, stepId: "s-haxfhr" }] });
+    const first = roleOnly.recording.pages[0]!.steps[0]!.step;
+    if ("expect" in first && first.expect.kind === "textIncludes") first.expect.target = { role: "status" };
+    await new FsJourneyStore(journeysDir).put(roleOnly);
+    const result = await strictCli(["journey", "review", "role-only", "--json", "--strict"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.json.data.proof.lint.findings).toContainEqual(expect.objectContaining({ rule: "unusable-target", level: "error" }));
   });
 
   it("ignores ○ items (not mutation-tested stays info)", async () => {
