@@ -40,7 +40,7 @@ import { describeCheck, type BlockedWrite } from "@jevitate/explore";
 import { clock } from "@jevitate/domain";
 import { journeyContentHash } from "./journey-annotate-api.js";
 import { journeyReviewHash } from "./journey-review.js";
-import { writeVerifyRecord } from "./journey-review-store.js";
+import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
 
@@ -197,6 +197,8 @@ function failedSitesOf(result: { outcome: string; reason?: string; at?: number }
 export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Run = runJourneyProgrammatically): Promise<JourneyVerifyReport> {
   const journey = await new JourneyRegistry(new FsJourneyStore(opts.dir)).get(opts.id);
   if (!journey) throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
+  // #711: receipt authority is proven before the first baseline/mutation replay spends a browser.
+  const receiptDestination = await preflightVerifyRecord(opts.dir, journey.metadata.id);
   const { readRequests, ...runOpts } = opts;
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
@@ -345,7 +347,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
   const redacted = redactSecretParams(report, journey, opts.params);
   // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
-  await writeVerifyRecord(opts.dir, {
+  await writePreflightedVerifyRecord(receiptDestination, {
     journeyId: journey.metadata.id,
     contentHash: journeyReviewHash(journey),
     proofHash: journeyProofHash(journey),
