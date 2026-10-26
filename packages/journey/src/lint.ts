@@ -52,6 +52,8 @@ export interface JourneyLintOptions {
    * resolves against. Absent: the upload existence rule is skipped (no project root to resolve to).
    */
   readonly baseDir?: string;
+  /** #696: strict review/readiness additionally rejects assertion targets that the replay interpreter cannot execute. */
+  readonly strictTargets?: boolean;
 }
 
 /**
@@ -290,13 +292,15 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
       fix: "record a test id, role with exact accessible name, label, text, or css selector",
     });
   };
-  for (const site of sites) {
-    if (site.check.kind !== "page") continue;
-    const { assertion } = site.check;
-    const where = site.where === "end-state" ? `end-state check ${site.index + 1}` : `step ${site.step} ${site.where === "step" ? site.field : "request check"}`;
-    const step = site.where === "end-state" ? undefined : site.step;
-    if ("target" in assertion) lintTarget(assertion.target, where, step);
-    if ("other" in assertion) lintTarget(assertion.other, where, step);
+  if (opts.strictTargets === true) {
+    for (const site of sites) {
+      if (site.check.kind !== "page") continue;
+      const { assertion } = site.check;
+      const where = site.where === "end-state" ? `end-state check ${site.index + 1}` : `step ${site.step} ${site.where === "step" ? site.field : "request check"}`;
+      const step = site.where === "end-state" ? undefined : site.step;
+      if ("target" in assertion) lintTarget(assertion.target, where, step);
+      if ("other" in assertion) lintTarget(assertion.other, where, step);
+    }
   }
 
   for (let i = 0; i < recorded.length; i += 1) {

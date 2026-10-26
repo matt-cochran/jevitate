@@ -109,6 +109,8 @@ export interface JourneyVerifyRecord {
 }
 
 export interface JourneyReviewContext {
+  /** #696: strict review/readiness includes replay-target compatibility in its lint attention. */
+  readonly strict?: boolean;
   /** The site's safety config (targets.json `safety` for the Journey's origin): `deny` / `paid` / `allowControl`. */
   readonly safety?: Pick<SafetyConfig, "deny" | "paid" | "allowControl">;
   /** The Journey as last approved (`.approved/<id>.json`), or null when there is none. */
@@ -480,7 +482,7 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
   const described = new Map((m.parameters ?? []).map((p) => [p.name, p.description]));
   const paramNames = [...new Set([...journeyRunParams(journey), ...(m.parameters ?? []).map((p) => p.name)])];
 
-  const findings = lintJourney(journey);
+  const findings = lintJourney(journey, ctx.strict === true ? { strictTargets: true } : {});
   const stepAssertions = journeyAssertions(journey).flatMap((site) => {
     if (site.where === "end-state") return [];
     const explained = explainCheck(site.check);

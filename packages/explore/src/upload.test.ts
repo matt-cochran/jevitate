@@ -353,7 +353,7 @@ describe("explore loop — upload is recorded and replays deterministically", ()
       expect(judge.states[1]?.controls).not.toContain(UPLOAD_OP_GUIDE);
       const steps: Step[] = run.recording.pages.flatMap((p) => p.steps.map((s) => s.step));
       const upload = steps.find((s) => s.kind === "upload");
-      expect(upload).toMatchObject({ kind: "upload", file: { redacted: false, value: fixture } });
+      expect(upload).toMatchObject({ kind: "upload", file: { redacted: false, value: "avatar.txt" } });
 
       await withSession(
         "explore-upload-replay-",
@@ -369,7 +369,7 @@ describe("explore loop — upload is recorded and replays deterministically", ()
       // Replay fails fast — naming the path — once the recorded fixture is gone,
       // never attaching some other file.
       const gone = join(fixtureDir, "deleted.txt");
-      const pointingAtGone = JSON.parse(JSON.stringify(run.recording).split(JSON.stringify(fixture)).join(JSON.stringify(gone)));
+      const pointingAtGone = JSON.parse(JSON.stringify(run.recording).split(JSON.stringify("avatar.txt")).join(JSON.stringify("deleted.txt")));
       await withSession(
         "explore-upload-replay-gone-",
         async (fresh) => {

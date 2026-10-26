@@ -1786,7 +1786,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (197 exports)
+# @jevitate/recording (198 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1965,6 +1965,7 @@
   TARGET_DISPLAY_NAME_MAX: variable
   TargetDescriptor: interface
   TargetDescriptorSchema: variable
+  targetDescriptorSelectorProblem: function
   TargetDisplay: interface
   TargetDisplaySchema: variable
   TextAnchor: type-alias

@@ -54,6 +54,7 @@ export async function reviewJourneyById(
   const proposalProblem = pending === null ? null : checkProposal(journey, pending);
   const approvedSnapshot = await readApprovedSnapshot(journeysDir, id);
   const review = buildJourneyReview(journey, {
+    ...(opts.strict === true ? { strict: true } : {}),
     anchorIssues: await journeyAnchorIssues(journey, { catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir, journeysDir, catalog }),
     locatorHealth: journeyLocatorHealth(journey, testIdAttributesOrDefault(findProjectDir())),
     stepIdOnly: isStepIdOnlyStale(journey, approvedSnapshot),

@@ -1125,7 +1125,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (123 exports)
+# @jevitate/recording (124 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -1244,6 +1244,7 @@
   strictSignature: function
   substituteCaptureRefs: function
   takeValueFor: function
+  targetDescriptorSelectorProblem: function
   textEditProblem: function
   urlTemplate: function
   validateInvariantSpec: function

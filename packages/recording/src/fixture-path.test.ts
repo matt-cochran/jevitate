@@ -40,8 +40,8 @@ describe("#498 confineFixture", () => {
     expect(await codeOf(confineFixture(outside, root))).toBe("fixture-outside-project");
   });
 
-  it("refuses an absolute path inside the root", async () => {
-    expect(await codeOf(confineFixture(join(root, "fixtures", "receipt.pdf"), root))).toBe("fixture-outside-project");
+  it("accepts an absolute path inside the root for non-Journey callers", async () => {
+    expect(await confineFixture(join(root, "fixtures", "receipt.pdf"), root)).toBe(join(root, "fixtures", "receipt.pdf"));
   });
 
   it("refuses a symlink inside the root that points outside", async () => {
@@ -82,7 +82,7 @@ describe("#498 confineFixture", () => {
   });
 
   it("names the path, the root and the fix in the outside-project message", async () => {
-    await expect(confineFixture(outside, root)).rejects.toThrow(`upload fixture ${outside} must be project-relative to ${root} — rewrite it as a path inside the project`);
+    await expect(confineFixture(outside, root)).rejects.toThrow(`upload fixture ${outside} is outside the project root ${root} — move the fixture into the project`);
   });
 });
 

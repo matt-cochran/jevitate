@@ -24,12 +24,12 @@ const reloadThen = [{ kind: "reloadThen", assertion: { kind: "textIncludes", tar
 
 describe("#401 lintJourney", () => {
   it("rejects a role-only assertion target before replay", () => {
-    const findings = lintJourney(j([{ step: { kind: "assert", check: { kind: "textIncludes", target: { role: "status" }, text: "Published" } } }]));
+    const findings = lintJourney(j([{ step: { kind: "assert", check: { kind: "textIncludes", target: { role: "status" }, text: "Published" } } }]), { strictTargets: true });
     expect(findings).toContainEqual(expect.objectContaining({ rule: "unusable-target", level: "error", step: 1 }));
   });
 
   it("accepts a role and exact accessible name assertion target", () => {
-    const findings = lintJourney(j([{ step: { kind: "assert", check: { kind: "textIncludes", target: { role: "status", name: "Publication status" }, text: "Published" } } }]));
+    const findings = lintJourney(j([{ step: { kind: "assert", check: { kind: "textIncludes", target: { role: "status", name: "Publication status" }, text: "Published" } } }]), { strictTargets: true });
     expect(findings.some((f) => f.rule === "unusable-target")).toBe(false);
   });
 
