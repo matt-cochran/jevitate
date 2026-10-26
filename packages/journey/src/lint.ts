@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
-import type { Assertion, RecordedStep, Step } from "@jevitate/recording";
-import { assertionRefs, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason, writeClassifier, type WriteClassifier } from "@jevitate/recording";
+import { isAbsolute, resolve } from "node:path";
+import type { Assertion, RecordedStep, Step, TargetDescriptor } from "@jevitate/recording";
+import { assertionRefs, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason, targetDescriptorSelectorProblem, writeClassifier, type WriteClassifier } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, isOwnTargetVisible, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { anchorLintIssues, type AnchorRuleCode } from "./anchor-rules.js";
@@ -26,6 +26,7 @@ export type JourneyLintRule =
   | "upload-file-missing"
   | "upload-outside-project"
   | "upload-sensitive-file"
+  | "unusable-target"
   | AnchorRuleCode
   | "anchor-job-step"
   | "serves-outcome"
@@ -51,6 +52,8 @@ export interface JourneyLintOptions {
    * resolves against. Absent: the upload existence rule is skipped (no project root to resolve to).
    */
   readonly baseDir?: string;
+  /** #696: strict review/readiness additionally rejects assertion targets that the replay interpreter cannot execute. */
+  readonly strictTargets?: boolean;
 }
 
 /**
@@ -78,6 +81,16 @@ export function lintUploadFixtures(journey: Journey, baseDir: string | undefined
         step: i + 1,
         message: `step ${i + 1}: upload fixture ${file.value} has no project root to confine it to (${rootProblem ?? "there is no project root"})`,
         fix: "run from a project (a folder holding .jevitate/) and move the fixture into the project",
+      });
+      continue;
+    }
+    if (isAbsolute(file.value)) {
+      findings.push({
+        rule: "upload-outside-project",
+        level: "error",
+        step: i + 1,
+        message: `step ${i + 1}: upload fixture must be project-relative, not an absolute path`,
+        fix: "rewrite the fixture path relative to the project root",
       });
       continue;
     }
@@ -267,6 +280,28 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
   const lastWrite = isWrite.lastIndexOf(true) + 1; // 0 when there is no write step
 
   const findings: JourneyLintFinding[] = [];
+
+  const lintTarget = (target: TargetDescriptor, where: string, step?: number): void => {
+    const problem = targetDescriptorSelectorProblem(target);
+    if (problem === null) return;
+    findings.push({
+      rule: "unusable-target",
+      level: "error",
+      ...(step === undefined ? {} : { step }),
+      message: `${where}: target cannot replay because ${problem}`,
+      fix: "record a test id, role with exact accessible name, label, text, or css selector",
+    });
+  };
+  if (opts.strictTargets === true) {
+    for (const site of sites) {
+      if (site.check.kind !== "page") continue;
+      const { assertion } = site.check;
+      const where = site.where === "end-state" ? `end-state check ${site.index + 1}` : `step ${site.step} ${site.where === "step" ? site.field : "request check"}`;
+      const step = site.where === "end-state" ? undefined : site.step;
+      if ("target" in assertion) lintTarget(assertion.target, where, step);
+      if ("other" in assertion) lintTarget(assertion.other, where, step);
+    }
+  }
 
   for (let i = 0; i < recorded.length; i += 1) {
     const n = i + 1;

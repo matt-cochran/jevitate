@@ -1,7 +1,8 @@
+import { isAbsolute } from "node:path";
 import type { Locator, Page } from "playwright";
 import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import type { AssertionRefLookup } from "@jevitate/recording";
-import { SECRET_PARAM_NAME_RE, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
+import { FixturePathError, SECRET_PARAM_NAME_RE, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
@@ -270,10 +271,22 @@ export async function runStep(
       // fast here with the path named, never attaching some other file.
       // #488: a relative path resolves against the project root (fixtureBaseDir), never the
       // process cwd — a Journey recorded on the project replays from any working directory.
-      // #498: and the fixture must be a file INSIDE that root once realpath'd (an absolute path,
-      // `../` or a symlink that escapes is refused; a `{var}` value is checked after binding). No
+      // #695/#498: a Journey records only a project-relative fixture path. The shared helper also
+      // serves trusted mission fixtures, which may already be absolute; enforce this stricter
+      // Journey contract here before resolving the file. A `../` or symlink that escapes is also refused. No
       // root ⇒ refused (fail-closed): every CLI/MCP run passes `journeyFixtureBaseDir()`.
       const raw = resolveValue(step.file, vars);
+      if (isAbsolute(raw)) {
+        const root = targetOpts.fixtureBaseDir;
+        throw new FixturePathError(
+          "fixture-outside-project",
+          raw,
+          root ?? null,
+          root === undefined
+            ? `upload fixture ${raw} refused: no project root to confine it to — run from a project (a folder holding .jevitate/) and move the fixture into the project`
+            : `upload fixture ${raw} must be project-relative to ${root} — rewrite it as a path inside the project`,
+        );
+      }
       const file = await confineFixture(raw, targetOpts.fixtureBaseDir);
       const page = actor.ability(BrowseTheWebToken).session.page;
       // Residual risk (accepted): the file could be swapped between confineFixture and setInputFiles (TOCTOU).

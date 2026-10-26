@@ -40,7 +40,7 @@ describe("#498 confineFixture", () => {
     expect(await codeOf(confineFixture(outside, root))).toBe("fixture-outside-project");
   });
 
-  it("accepts an absolute path inside the root", async () => {
+  it("accepts an absolute path inside the root for non-Journey callers", async () => {
     expect(await confineFixture(join(root, "fixtures", "receipt.pdf"), root)).toBe(join(root, "fixtures", "receipt.pdf"));
   });
 

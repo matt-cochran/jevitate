@@ -5,6 +5,7 @@
  */
 
 import type { ValueOrVar } from "@jevitate/recording";
+import { relative } from "node:path";
 import { act } from "../act.js";
 import { redactText } from "../redact.js";
 import type { RunContext } from "./context.js";
@@ -19,9 +20,10 @@ export async function handleUpload(ctx: RunContext, step: ActStep): Promise<Flow
     // The recorded path goes through the shared redaction seam: a path that
     // contains a registered secret is recorded redacted (replay then fails
     // closed) rather than persisting the secret into the artifact.
+    const recordedPath = relative(ctx.fixtureRoot!, ctx.fixture);
     const recordedFile: ValueOrVar =
       redactText(ctx.fixture, ctx.secrets) === ctx.fixture
-        ? { redacted: false, value: ctx.fixture }
+        ? { redacted: false, value: recordedPath }
         : { redacted: true, length: ctx.fixture.length };
     ctx.recorder.upload(control.descriptor, recordedFile, at);
   ctx.noteMutation(`upload into ${control.name}`, control.descriptor, snap.signature, at);

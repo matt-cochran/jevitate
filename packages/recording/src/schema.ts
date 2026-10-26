@@ -76,6 +76,17 @@ export interface TargetDescriptor {
   anchor?: { id?: string; name?: string };
 }
 
+/**
+ * The minimum target descriptor that replay can turn into a locator. `role`
+ * alone remains schema-valid for backwards-compatible parsing, but cannot be
+ * replayed safely without an exact accessible name.
+ */
+export function targetDescriptorSelectorProblem(d: TargetDescriptor): string | null {
+  if (d.testId || (d.role && d.name) || d.label || d.text || d.css) return null;
+  if (d.role) return `role ${JSON.stringify(d.role)} needs an exact accessible name`;
+  return "it has no replayable selector";
+}
+
 export type RedactedValue =
   | { redacted: true; length: number }
   | { redacted: false; value: string };

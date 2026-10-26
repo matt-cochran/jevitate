@@ -1,10 +1,12 @@
 import { clock } from "@jevitate/domain";
 import type { Browser } from "playwright";
 import { afterAll, describe, expect, test } from "vitest";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { BrowserCrashedError } from "./browser-pool.js";
 import { PlaywrightBrowserPort, createBrowserPool, type PlaywrightBrowserPool } from "./playwright-browser-port.js";
 import { createResourceSignals } from "./select-resource-signals.js";
@@ -26,6 +28,7 @@ afterAll(async () => {
 });
 
 const base = { headless: true, allowedOrigins: [], baseUrl: "about:blank" };
+const execFileAsync = promisify(execFile);
 
 /** Browser-process (not renderer) argvs carrying `marker`; Linux /proc only. */
 async function browserArgvsWith(marker: string): Promise<string[]> {
@@ -48,6 +51,15 @@ async function browserPid(browser: Browser): Promise<number> {
   } finally {
     await cdp.detach().catch(() => undefined);
   }
+}
+
+/** Force a browser crash. Windows Chromium survives a single-PID kill through child processes, so kill its process tree. */
+async function killBrowser(pid: number): Promise<void> {
+  if (process.platform === "win32") {
+    await execFileAsync("taskkill", ["/pid", String(pid), "/T", "/F"]);
+    return;
+  }
+  process.kill(pid, "SIGKILL");
 }
 
 /**
@@ -183,15 +195,15 @@ describe("[realtime] pooled PlaywrightBrowserPort crash + relaunch (real Chromiu
     const session = await step("open session", 30_000, () => port.open({ ...base, args: [marker] }));
     const browserBefore = session.page.context().browser();
     if (browserBefore === null) throw new Error("pooled session has no Browser");
-    // A real crash on every OS: kill the browser process. A CDP `Browser.close` was used off Linux
-    // before, but that polite shutdown stalled past 20 s on a CPU-starved Windows runner — a kill can't.
+    // A real crash on every OS: kill the browser process/tree. A CDP `Browser.close` was used off Linux
+    // before, but that polite shutdown stalled past 20 s on a CPU-starved Windows runner.
     const pid = await step("find browser pid (CDP)", 15_000, () => browserPid(browserBefore));
     if (process.platform === "linux") {
       // Cross-check the CDP pid against /proc: the argv-marked browser process is that very pid.
       expect((await browserProcsWith(marker)).map((p) => p.pid)).toEqual([pid]);
     }
     await step("kill + observe disconnect", 20_000, async () => {
-      process.kill(pid, "SIGKILL");
+      await killBrowser(pid);
       await expect.poll(() => browserBefore.isConnected(), { timeout: 18_000 }).toBe(false);
     });
     await step("crashed session.close() rejects", 10_000, () => expect(session.close()).rejects.toBeInstanceOf(BrowserCrashedError));

@@ -1088,13 +1088,13 @@ test("runStep upload: a relative file resolves against fixtureBaseDir", async ()
   expect(setInputFiles).toHaveBeenCalledWith(join(dir, "proj", "receipt.pdf"));
 });
 
-test("runStep upload: an absolute file inside the root is accepted", async () => {
+test("runStep upload: an absolute file inside the root is refused", async () => {
   const dir = await fixtureRoot();
   const { setInputFiles, actor } = uploadSpy();
 
-  await runStep(actor as any, uploadStep(join(dir, "proj", "receipt.pdf")), new Map(), 0, { fixtureBaseDir: join(dir, "proj") });
+  await expect(runStep(actor as any, uploadStep(join(dir, "proj", "receipt.pdf")), new Map(), 0, { fixtureBaseDir: join(dir, "proj") })).rejects.toThrow("must be project-relative");
 
-  expect(setInputFiles).toHaveBeenCalledWith(join(dir, "proj", "receipt.pdf"));
+  expect(setInputFiles).not.toHaveBeenCalled();
 });
 
 test("runStep upload: a missing relative file fails naming the resolved absolute path", async () => {
@@ -1139,9 +1139,7 @@ test("runStep upload #498: a {var}-bound path is checked after binding", async (
   const { actor } = uploadSpy();
   const step = { step: { ...uploadStep("x").step, file: { var: "doc" } } } as RecordedStep;
 
-  await expect(runStep(actor as any, step, new Map([["doc", join(dir, "secret.txt")]]), 0, { fixtureBaseDir: join(dir, "proj") })).rejects.toThrow(
-    "outside the project root",
-  );
+  await expect(runStep(actor as any, step, new Map([["doc", join(dir, "secret.txt")]]), 0, { fixtureBaseDir: join(dir, "proj") })).rejects.toThrow("must be project-relative");
 });
 
 test("runStep upload #498: with no fixtureBaseDir the upload is refused (fail-closed)", async () => {
