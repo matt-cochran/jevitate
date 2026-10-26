@@ -53,9 +53,9 @@ export class ReviewSidecarError extends Error {
 export interface VerifyReceiptDestination {
   readonly path: string;
   readonly parent: string;
-  readonly parentDevice: number;
-  readonly parentInode: number;
-  readonly existing?: { readonly device: number; readonly inode: number };
+  readonly parentDevice: number | bigint;
+  readonly parentInode: number | bigint;
+  readonly existing?: { readonly device: number | bigint; readonly inode: number | bigint };
 }
 
 /** #711: a receipt path that cannot be safely created/replaced fails before proof execution. */
@@ -63,11 +63,11 @@ export class VerifyReceiptPreflightError extends Error {
   readonly code = "E_VERIFY_RECEIPT_PREFLIGHT";
 }
 
-function mode(stat: { mode: number }): string {
-  return `0${(stat.mode & 0o777).toString(8).padStart(3, "0")}`;
+function mode(stat: { mode: number | bigint }): string {
+  return `0${(Number(stat.mode) & 0o777).toString(8).padStart(3, "0")}`;
 }
 
-function owner(stat: { uid: number; gid: number }): string {
+function owner(stat: { uid: number | bigint; gid: number | bigint }): string {
   return `${stat.uid}:${stat.gid}`;
 }
 
