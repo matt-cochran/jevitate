@@ -51,7 +51,7 @@ import { initPerception } from "./context/perception.js";
 import { initObservation } from "./context/observation.js";
 import { initGuards } from "./context/guards.js";
 import { initMutation } from "./context/mutation.js";
-import type { MutableRunContext } from "./context/types.js";
+import type { MutableRunContext, ActionableControlOutcome } from "./context/types.js";
 
 /** The goal loop's run state (#232): every closure variable of `explore()`, one field each, names unchanged. */
 export interface RunContext {
@@ -119,6 +119,12 @@ export interface RunContext {
   fixtureAttached: boolean;
   hang: ExploreRun["hang"];
   outcome: RunOutcome | null;
+  /**
+   * #688 — the machine-readable terminal outcome when a blocked run stops with an actionable control:
+   * the candidate a manager resumes through, its satisfaction facts, and the exact resume identity.
+   * Null unless the run ended `blocked` with recovery evidence. Set once, at the terminal stop.
+   */
+  actionableControl: ActionableControlOutcome | null;
   /** Why the run ended incomplete, when a specific detector ended it. */
   incomplete: string | null;
   /** #209: stopped because every `done` the model proposed was rejected. */
@@ -387,6 +393,8 @@ export interface RunContext {
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
    */
   hangWorkWaitedMs: number;
+  /** #689: when the run first deferred a hang for visible work (wall clock), or null — reported with the stop. */
+  hangWorkSince: number | null;
   /** #258: the longest wait the page has documented this run (its budget, ms); 0 when none. */
   documentedBudgetMs: number;
   readonly noteMutation: (label: string, descriptor: unknown, before: string, at: number, input?: { readonly field: string; readonly value: string; }, linkFromRoute?: string | null, clickFromRoute?: string | null) => void;

@@ -5,7 +5,28 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [Unreleased]
+## [0.25.0] – 2026-10-26
+
+0.25.0 makes Journey verification easier to review before a browser is opened, adds an auditable
+acceptance-evidence gate, and preserves a safe, resumable handoff when a goal run is blocked.
+
+### Added
+
+- **Preview a Journey's mutation proof without running it.** `jevitate journey verify <id> --plan` (and MCP `verify_journey` with `plan: true`) reports every planned mutation, its assertion pairings, unpaired assertions and the minimum replay count without opening a browser, target, fixture, hook or session. The promotion and recording skills now require this inexpensive preflight before a potentially long `--mutate` proof.
+- **Audit release acceptance evidence without driving a target.** `jevitate acceptance audit` checks the supplied requirements, approval, Journey, verification and review artifacts, then writes deterministic Markdown, JUnit, SARIF and JSON receipts suitable for CI. Its approval proposal is bound to the inspected content hash.
+- **Blocked goals retain a safe actionable-control handoff (#688).** When a model stops beside a visible, enabled control that code classifies as safe, it receives one bounded recovery turn restricted to that named control. If it still cannot advance—or every candidate is unsafe—the result records the candidate's observed facts, screenshot and exact resume identity (page URL, state signature and locator) for a manager. Hidden, disabled, ambiguous, destructive, financial and approval controls are never selected or offered for recovery.
+
+## [0.24.2] – 2026-10-25
+
+0.24.1 was versioned on `dev` but never published; 0.24.2 combines its #680 correction with #687 and #689.
+
+### Fixed
+
+- **An explicit job-wait budget owns a busy state the app declares (#687).** With `--job-wait-ms`, a busy region the page marks `aria-busy="true"` was still cut off by the generic 15 s `ui-no-progress` ceiling when nothing else showed the job running: no request pending, none completing, static text. A server-side approval job over "Approving… Working for 0:00" ended as a hang 15 s in, with most of a 900 s budget left. That state is now waited out within the budget. An undeclared spinner over a silent page, and any busy state without the flag, still end at the ceiling. `docs/exploration.md` lists which states the budget governs.
+- **A hang inside the job-wait budget says so (#687, #689).** A hang that stood after earlier waits always said "past the N s job-wait budget", even when the page had merely stopped showing work it recognized at 376 s of 900 s. The detail now says which happened. It gives the budget used, the wall-clock time since the first deferral, and how long ago the app last completed a request, so a stalled app or relay can be told apart from the runner's accounting.
+- **`--ignore-no-progress` matches what the indicator says (#687).** A busy indicator with a test id is described by it (`[data-testid=taste-busy]`), so a pattern on its words (`Approving*`) never matched. A pattern now matches either the description or the visible words.
+
+- **A write goal that stalls before anything was sent is told so (#680).** Since #667, a rejected `done` on a write goal before any write succeeded says so and points back to the control that submits the change. The same steer now reaches the run in two more places. One is a rejected `report`. The other is the no-progress last chance, whose note used to invite a report. A run that clicked through an import wizard to Contacts without pressing Import used to spend its last turn on a report that had to be rejected, then stop blocked; it is now sent back to the import page. On the accuracy lab's interleaved A/B (`j3-effort` goal, 14 runs per arm), goal false alarms were 1 of 14, against 5 of 28 on 0.24.0. Every phantom and dead-end was still caught, and clean J3 stayed clean. Most of that difference is how often a run wanders to Contacts at all. The one fixed run that wandered did return to Import, but did not redo the wizard, which had reset.
 
 ## [0.24.0] – 2026-10-24
 

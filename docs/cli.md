@@ -12,6 +12,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 
 ## Commands
 
+- [`acceptance`](#acceptance): read-only acceptance evidence tools
 - [`ai`](#ai): check or configure the model gateway credentials jevitate's AI features need
 - [`baseline`](#baseline): named baselines for `diff`, `report --baseline` and `check --baseline`
 - [`browser-path`](#browser-path): print the pinned browser revision(s), the browsers dir in use and the executable path
@@ -51,6 +52,36 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`ux`](#ux): offline UX review of a saved Recording — ranked, cited usability findings
 - [`verify-fix`](#verify-fix): replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay
 - [`where`](#where): #585: the resolved project layout — project, catalog, journeys and logs dirs, and where each came from; paths only, no file contents
+
+## acceptance
+
+```
+jevitate acceptance [command]
+```
+
+read-only acceptance evidence tools
+
+### acceptance audit
+
+```
+jevitate acceptance audit [options]
+```
+
+audit release acceptance evidence and emit CI artifacts
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--approval <file>` |  |  |  |  |  |
+| `--journey <file>` |  |  |  |  |  |
+| `--json` |  |  |  |  |  |
+| `--out <dir>` |  |  |  |  |  |
+| `--persona <file>` |  |  |  |  |  |
+| `--requirements <file>` |  |  |  | yes |  |
+| `--review <file>` |  |  |  |  |  |
+| `--suite <file>` |  |  |  | yes |  |
+| `--verify <file>` |  |  |  |  |  |
 
 ## ai
 
@@ -619,13 +650,13 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
-| `--ignore-no-progress <pattern>` | a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard) | `[]` |  |  |  |
+| `--ignore-no-progress <pattern>` | a route / action label / busy indicator (its description or visible words) where ui-no-progress is expected (repeatable, * wildcard) | `[]` |  |  |  |
 | `--ignore-overflow <selector>` | a CSS selector (repeatable) whose overflow or clipping is intentional — excluded from the horizontal-overflow and vertical-clipping signals, like --ignore-no-progress | `[]` |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON (repeatable; goal, coverage, exploratory, adversarial, --feature): checked around every action, a violation is a defect (exit 1). Validated before any browser opens; probes are GET/HEAD on an --allow origin only | `[]` |  |  |  |
 | `--issue-repo <owner/name>` | the system-under-test repo findings for THIS target are filed to |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--jevitate-repo <owner/name>` | where jevitate engine findings are filed (default matt-cochran/jevitate) |  |  |  |  |
-| `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
+| `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) or declares (aria-busy, when this flag is set) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
 | `--journeys-dir <path>` | with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
 | `--log-correlation-header <name>` | another request/response header that carries a correlation id (repeatable; built in: traceparent, x-request-id, x-correlation-id, request-id, x-amzn-trace-id, x-b3-traceid, x-cloud-trace-context). A log line carrying a request's id is attached to that exact request and the step that sent it, not by time (#204) | `[]` |  |  |  |
@@ -730,9 +761,9 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--id <id>` | journey id (used for the <id>.json filename in the store) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
-| `--ignore-no-progress <pattern>` | a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard) | `[]` |  |  |  |
+| `--ignore-no-progress <pattern>` | a route / action label / busy indicator (its description or visible words) where ui-no-progress is expected (repeatable, * wildcard) | `[]` |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
-| `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
+| `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) or declares (aria-busy, when this flag is set) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
 | `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--log-correlation-header <name>` | another request/response header that carries a correlation id (repeatable; built in: traceparent, x-request-id, x-correlation-id, request-id, x-amzn-trace-id, x-b3-traceid, x-cloud-trace-context). A log line carrying a request's id is attached to that exact request and the step that sent it, not by time (#204) | `[]` |  |  |  |
@@ -1672,7 +1703,7 @@ jevitate journey run [options] <id>
 jevitate journey verify [options] <id>
 ```
 
-prove each assertion of a Journey can fail: --mutate replays it with each write step skipped or blocked, and each checked fill emptied
+preview or prove that each Journey assertion fails when its outcome is absent
 
 **Arguments**
 
@@ -1703,8 +1734,9 @@ prove each assertion of a Journey can fail: --mutate replays it with each write 
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
-| `--mutate` | run the mutation proof (required) |  |  |  |  |
+| `--mutate` | run the mutation proof |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--plan` | print the static mutation/assertion plan without opening a browser |  |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
 

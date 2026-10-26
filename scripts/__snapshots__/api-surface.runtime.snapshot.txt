@@ -230,7 +230,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (455 exports)
+# @jevitate/explore (456 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -683,6 +683,7 @@
   verifyReplayVerdict: function
   visibleBusyIndicator: function
   visibleBusyIndicatorContainer: function
+  visibleBusyIndicatorText: function
   waivableRule: function
   withheldReason: function
   writeOf: function

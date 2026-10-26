@@ -228,6 +228,38 @@ export function visibleBusyIndicatorContainer(): string | null {
   return null;
 }
 
+/**
+ * BROWSER CODE — #687: the visible words of the element `visibleBusyIndicator` would report (same
+ * selection, same #419 exclusion): its aria-label or text, else its live-region container's text, so
+ * a declared `--ignore-no-progress` pattern can name what the page says ("Approving*") even when the
+ * indicator is described by its test id. Null when there is no indicator or it has no words.
+ * Self-contained for the same reason as `visibleBusyIndicator`.
+ */
+export function visibleBusyIndicatorText(): string | null {
+  const shown = (el: Element): boolean => {
+    const r = (el as HTMLElement).getBoundingClientRect();
+    const s = window.getComputedStyle(el as HTMLElement);
+    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
+  };
+  const progressbar = '[role="progressbar"]:not([aria-valuenow])';
+  const selectors = ['[aria-busy="true"]', progressbar, '[class*="spinner" i]', '[class*="animate-spin" i]'];
+  const notificationContainer = '[role="alert"], [data-sonner-toast], [class*="toast" i], [class*="snackbar" i], [class*="notification" i]';
+  const timerLabel = /timer|countdown|auto.?close/i;
+  const isNotificationTimer = (el: Element): boolean =>
+    el.closest(notificationContainer) !== null || timerLabel.test(`${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""}`);
+  const words = (el: Element | null): string => (el === null ? "" : (el.getAttribute("aria-label") ?? (el as HTMLElement).innerText ?? el.textContent ?? "").replace(/\s+/g, " ").trim());
+  for (const sel of selectors) {
+    for (const el of Array.from(document.querySelectorAll(sel))) {
+      if (!shown(el)) continue;
+      if (sel === progressbar && isNotificationTimer(el)) continue;
+      const own = words(el);
+      const text = own !== "" ? own : words(el.closest('[role="status"], [aria-live]:not([aria-live="off"])'));
+      return text === "" ? null : text.slice(0, 200);
+    }
+  }
+  return null;
+}
+
 /** Evidence for a hang signal: redacted pending requests with their ages. */
 export function pendingEvidence(pending: readonly InflightRequest[], now: number): PendingRequestEvidence[] {
   return [...pending]
