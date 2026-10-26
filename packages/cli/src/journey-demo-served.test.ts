@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
-import { DEMO_OVERLAY_ATTR, DEMO_OVERLAY_HIDE_STYLE } from "@jevitate/explore";
+import { DEMO_OVERLAY_ATTR, hideDemoOverlayForCapture } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 import { TITLE_CARD_MIN_MS, demoJourney } from "./journey-demo-api.js";
@@ -299,7 +299,14 @@ describe("[realtime] jevitate journey demo — served (#248)", () => {
             step: ctx.step,
             overlayInDom: await page.locator(`[${DEMO_OVERLAY_ATTR}]`).count(),
             raw: await page.screenshot({ animations: "disabled" }),
-            hidden: await page.screenshot({ animations: "disabled", style: DEMO_OVERLAY_HIDE_STYLE }),
+            hidden: await (async () => {
+              await hideDemoOverlayForCapture(page, true);
+              try {
+                return await page.screenshot({ animations: "disabled" });
+              } finally {
+                await hideDemoOverlayForCapture(page, false);
+              }
+            })(),
           });
         },
       };

@@ -32,6 +32,17 @@ pass or fail:
 - `--changed-routes '/settings/**,/cart/*'`: only Journeys and goals that touch those routes run.
   A Journey's routes are its Recording's pages, or the `routes` you give it. A goal's routes are
   its start URL's path, or its `routes`. Missions, invariant sweeps and verify-fix always run.
+- **Content-addressed evidence reuse (#704):** provide an immutable identity with
+  `--evidence-input proof-input.json`. A successful check can write
+  `--evidence-out proof-manifest.json`; a later check consumes it with
+  `--evidence-manifest proof-manifest.json`. Reuse requires an exact match of build, target and
+  origins, suite policy and changed routes, Journey hashes, fixtures, parameters, invariants,
+  goals and missions. Missing or digest-mismatched result artifacts, a non-passing manifest, a
+  stale approval (when `--require-approvals` is enabled), and every changed input cause a run.
+  `check.json`, JUnit and SARIF record the route selection and evidence decision/key.
+- **Scheduled change check:** `--evidence-decision-out decision.json` writes a machine-readable
+  `{ decision: "run" | "skip", changedInputs }` result and exits before browser or model work.
+  Schedules must run this detector first; a `skip` is successful and must not start a campaign.
 - `--target-build <id>` stamps your build/commit on every result, next to `engine`.
 - `--app-version <label>` (#479) stamps the app's release/version label (1-64 of
   `[A-Za-z0-9._+-]`, starting alphanumeric) on the result and the SARIF run properties, next to the
@@ -462,6 +473,32 @@ jobs:
 list); leave `--changed-routes` off to run everything. `--baseline` takes a committed `check.json`
 from a main-branch run, a `jevitate baseline tag` name, or `last`. With `last`, `--baseline-dir`
 points at a restored results cache.
+
+### Evidence reuse in PR, promotion, and scheduled workflows
+
+The evidence input is a non-secret JSON record supplied by your pipeline. Its hashes must cover
+the approved Journey content, fixture/parameter policy, suite/contract policy, and every campaign
+input; never place credentials or storage state in it. Keep the resulting manifest as a CI
+artifact and restore its referenced result artifacts before attempting reuse.
+
+```bash
+# PR: run affected deterministic proof and write immutable success evidence.
+jevitate check --suite ci/jevitate-suite.json --target-build "$GITHUB_SHA" \
+  --changed-routes "$ROUTE_GLOBS" --evidence-input ci/proof-input.json \
+  --evidence-out jevitate-check/proof-manifest.json
+
+# Promotion: only an exact build/input match may reuse proof; approvals are still verified.
+jevitate check --suite ci/jevitate-suite.json --require-approvals \
+  --evidence-input ci/proof-input.json --evidence-manifest restored/proof-manifest.json
+
+# Scheduled: no time-triggered campaign. Exit before any browser/model work when unchanged.
+jevitate check --suite ci/jevitate-suite.json --evidence-input ci/proof-input.json \
+  --evidence-manifest restored/proof-manifest.json \
+  --evidence-decision-out jevitate-check/evidence-decision.json
+```
+
+When the decision is `run`, inspect `changedInputs` and run the full campaign deliberately (or
+from that change-triggered job). Never schedule a campaign solely because time elapsed.
 
 ## Consolidated defect report and baseline diff
 

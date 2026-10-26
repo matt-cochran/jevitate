@@ -136,7 +136,13 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "regression-cli.ts runRegressionCapture": {},
   "regression-cli.ts runRegressionRun": {},
-  "check-cli.ts runCheck": { env: SEAM, now: SEAM, nowIso: SEAM, changeGitExec: SEAM, approvalVerification: SEAM },
+  "check-cli.ts runCheck": {
+    env: SEAM,
+    now: SEAM,
+    nowIso: SEAM,
+    changeGitExec: SEAM,
+    approvalVerification: SEAM,
+  },
   "mcp-api.ts runVerifyFix": {
     evidencePaceMs: EVIDENCE_PACE,
     browserPortFactory: SEAM,

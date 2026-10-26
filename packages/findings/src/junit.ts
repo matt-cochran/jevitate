@@ -32,6 +32,8 @@ export interface GateCase {
    * `warning` property each, and `WARNING:` lines in `<system-out>`.
    */
   readonly warnings?: readonly string[];
+  /** Additional machine-readable provenance emitted with this CI case. */
+  readonly properties?: Readonly<Record<string, string>>;
 }
 
 /** XML 1.0 text/attribute escape; strips characters XML 1.0 cannot carry at all. */
@@ -70,6 +72,7 @@ function testcase(c: GateCase): string {
     ...(c.resultPath === undefined ? [] : [`        <property ${attrs({ name: "result", value: c.resultPath })}/>`]),
     ...attachments.map((a) => `        <property ${attrs({ name: "attachment", value: a })}/>`),
     ...warnings.map((w) => `        <property ${attrs({ name: "warning", value: w })}/>`),
+    ...Object.entries(c.properties ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([name, value]) => `        <property ${attrs({ name, value })}/>`),
   ];
   const props = propList.length === 0 ? "" : `      <properties>\n${propList.join("\n")}\n      </properties>\n`;
   const outLines = [...attachments.map((a) => `[[ATTACHMENT|${a}]]`), ...warnings.map((w) => `WARNING: ${w}`)];
