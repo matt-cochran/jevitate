@@ -98,6 +98,9 @@ describe("check budget fails closed (#137)", () => {
     expect(f.calls).toEqual([]);
     expect(r.evidence).toMatchObject({ decision: "skip", reasons: ["matching-evidence"] });
     expect(r.items[0]).toMatchObject({ status: "skipped", verdict: "skipped", actions: 0 });
+    expect(r.changedRoutes).toEqual([]);
+    expect(JSON.parse(readFileSync(r.sarifPath, "utf8")).runs[0].properties).toMatchObject({ evidenceDecision: "skip", changedRoutes: [] });
+    expect(junit(r.junitPath)).toContain('<property name="evidenceDecision" value="skip"/>');
   });
 
   it("passes each item the remaining actions, and never runs an item once the budget is spent", async () => {

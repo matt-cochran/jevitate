@@ -99,7 +99,7 @@ export interface RunCheckOptions {
   /** `--changed-routes`: only Journeys and goals touching these route globs run. */
   readonly changedRoutes?: readonly string[];
   /** #704: caller-supplied immutable proof identity and prior manifest, checked before any gateway/browser work. */
-  readonly evidence?: { readonly input: EvidenceKeyInput; readonly manifest?: EvidenceManifest };
+  readonly evidence?: { readonly input: EvidenceKeyInput; readonly manifest?: EvidenceManifest; /** Evidence artifacts missing or digest-mismatched before reuse. */ readonly refusalReasons?: readonly string[] };
   readonly junitPath?: string;
   readonly sarifPath?: string;
   readonly jsonPath?: string;
@@ -309,9 +309,11 @@ export interface CheckResult {
   readonly targetBuild?: string;
   /** #479: the app's release/version label the check ran against (stamped next to `targetBuild`). */
   readonly appVersion?: string;
+  /** Route selection recorded in every machine-readable check output. */
+  readonly changedRoutes: readonly string[];
   readonly startedAt: string;
   /** #704: whether prior immutable evidence caused this check to run or to reuse proof. */
-  readonly evidence?: { readonly decision: "run" | "skip"; readonly reasons: readonly string[]; readonly key?: string };
+  readonly evidence?: { readonly decision: "run" | "skip"; readonly reasons: readonly string[]; readonly key: string };
   readonly budget: BudgetReport;
   /**
    * Model usage summed over every item that ran (#163): calls, tokens, `jevUsd` + `generationUsd` =

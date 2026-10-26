@@ -26,6 +26,8 @@ export interface SarifInput {
   readonly suiteUri: string;
   readonly automationId: string;
   readonly findings: readonly SarifFinding[];
+  /** Check-wide machine-readable provenance, e.g. evidence and route selection. */
+  readonly properties?: Readonly<Record<string, unknown>>;
 }
 
 export interface SarifLog {
@@ -125,6 +127,7 @@ export function renderSarif(input: SarifInput): SarifLog {
         properties: {
           ...(input.engineCommit === undefined ? {} : { engineCommit: input.engineCommit }),
           ...(input.targetBuild === undefined ? {} : { targetBuild: input.targetBuild }),
+          ...(input.properties ?? {}),
         },
       },
     ],

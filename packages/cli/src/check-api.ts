@@ -24,7 +24,7 @@ import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
 import type { SelfHealer } from "@jevitate/runtime";
 import { type ExecContext, type Executed, caseDetail, execute } from "./check-execute.js";
 import { clock } from "@jevitate/domain";
-import { reuseDecision } from "./check-evidence.js";
+import { evidenceKey, reuseDecision } from "./check-evidence.js";
 export { affectedBy } from "./check-plan.js";
 export { BudgetMeter } from "./check-budget.js";
 export { type BudgetReport, CheckAiSetupError, CheckArgsError, type CheckFinding, type CheckGateways, type CheckItemReport, CheckPreflightError, type CheckResult, type CheckRunners, type ItemKind, type RunCheckOptions } from "./check-types.js";
@@ -191,7 +191,12 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const items = plan(prepared, opts.changedRoutes, opts);
   // #704: decide from immutable, validated proof inputs before a gateway is selected or a browser
   // can open. A matching manifest turns every otherwise-runnable item into an explicit skip.
-  const evidence = opts.evidence === undefined ? undefined : reuseDecision(opts.evidence.input, opts.evidence.manifest);
+  const evidence = opts.evidence === undefined
+    ? undefined
+    : opts.evidence.refusalReasons !== undefined && opts.evidence.refusalReasons.length > 0
+      ? { decision: "run" as const, reasons: opts.evidence.refusalReasons }
+      : reuseDecision(opts.evidence.input, opts.evidence.manifest);
+  const evidenceKeyValue = opts.evidence === undefined ? undefined : evidenceKey(opts.evidence.input);
   const reuse = evidence?.decision === "skip";
   // #453: refuse a bad self-heal request and read the change scope ONCE, before the first browser opens.
   const heal = await prepareSelfHeal(opts);
@@ -429,7 +434,11 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
         ? { type: first.category, message: `${own.length} gating finding(s): ${first.title}`, detail: caseDetail(own) }
         : {}),
       ...(i.verdict === "error" && i.error !== undefined ? { type: i.error.type, message: i.error.message } : {}),
-      ...(i.verdict === "skipped" ? { message: "not affected by --changed-routes" } : {}),
+      ...(i.verdict === "skipped" ? { message: reuse ? "reused matching evidence" : "not affected by --changed-routes" } : {}),
+      properties: {
+        changedRoutes: JSON.stringify(opts.changedRoutes ?? []),
+        ...(evidenceKeyValue === undefined ? {} : { evidenceKey: evidenceKeyValue, evidenceDecision: evidence?.decision ?? "run" }),
+      },
     };
   });
   if (exceeded !== undefined && !cases.some((c) => c.type === "budget-exceeded")) {
@@ -461,7 +470,8 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     engine,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
     ...(opts.appVersion === undefined ? {} : { appVersion: opts.appVersion }),
-    ...(evidence === undefined ? {} : { evidence: { decision: evidence.decision, reasons: evidence.reasons, ...(evidence.decision === "skip" ? { key: evidence.manifest.key } : {}) } }),
+    changedRoutes: opts.changedRoutes ?? [],
+    ...(evidence === undefined || evidenceKeyValue === undefined ? {} : { evidence: { decision: evidence.decision, reasons: evidence.reasons, key: evidenceKeyValue } }),
     startedAt,
     budget: meter.report(finalUsage, exceeded),
     ...(suiteUsage === undefined ? {} : { usage: suiteUsage }),
@@ -495,6 +505,10 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     suiteUri: opts.suiteUri ?? opts.suite.path,
     automationId: `jevitate-check/${opts.suite.name}/`,
     findings: defects.map((d) => ({ defect: d, gating: gating.includes(d), ...(statusOf(d) === undefined ? {} : { status: statusOf(d) }) })),
+    properties: {
+      changedRoutes: opts.changedRoutes ?? [],
+      ...(evidenceKeyValue === undefined ? {} : { evidenceKey: evidenceKeyValue, evidenceDecision: evidence?.decision ?? "run", evidenceReasons: evidence?.reasons ?? [] }),
+    },
   }), opts.maxBrittleSteps === undefined ? combined.suggestions : [], opts.suiteUri ?? opts.suite.path), opts.appVersion);
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
   await writeFile(

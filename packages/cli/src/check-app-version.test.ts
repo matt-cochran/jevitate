@@ -136,4 +136,21 @@ describe("#479 the check CLI resolves the app version", () => {
     await cli(["--app-version", "2026.10.1"], { JEVITATE_APP_VERSION: "1.4.0" });
     expect(readJson(join(outDir("cli"), "check.json")).data.appVersion).toBe("2026.10.1");
   });
+
+  it("#704 writes a reusable evidence manifest and stamps its key in every output", async () => {
+    const input = join(dir, "evidence-input.json");
+    const manifest = join(dir, "evidence-manifest.json");
+    writeFileSync(input, JSON.stringify({
+      app: { build: "abc1234", target: "shop", origins: ["https://shop.example"] },
+      suite: { name: "s", policyHash: "sha256:policy", changedRoutes: [] },
+      inputs: { journeys: { pay: "sha256:journey" }, fixtures: "sha256:fixtures", parameters: "sha256:params", invariants: "sha256:invariants", goals: "sha256:goals", missions: "sha256:missions" },
+    }));
+    await cli(["--evidence-input", input, "--evidence-out", manifest]);
+    const evidence = readJson(manifest);
+    expect(evidence).toMatchObject({ version: 1, outcome: "pass", key: expect.stringMatching(/^sha256:/) });
+    const check = readJson(join(outDir("cli"), "check.json")).data;
+    expect(check.evidence).toMatchObject({ decision: "run", key: evidence.key });
+    expect(readFileSync(join(outDir("cli"), "junit.xml"), "utf8")).toContain(`name="evidenceKey" value="${evidence.key}"`);
+    expect(readJson(join(outDir("cli"), "jevitate.sarif")).runs[0].properties).toMatchObject({ evidenceKey: evidence.key, changedRoutes: [] });
+  });
 });

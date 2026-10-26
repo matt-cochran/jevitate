@@ -23,6 +23,52 @@ export type EvidenceDecision =
 
 type Json = null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };
 
+function record(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+function string(value: unknown, label: string): string {
+  if (typeof value !== "string" || value === "") throw new Error(`${label} must be a non-empty string`);
+  return value;
+}
+
+/** Parse a CLI evidence-input file before any gateway or browser is selected. */
+export function parseEvidenceKeyInput(value: unknown): EvidenceKeyInput {
+  const root = record(value, "evidence input");
+  const app = record(root.app, "evidence input.app");
+  const suite = record(root.suite, "evidence input.suite");
+  const inputs = record(root.inputs, "evidence input.inputs");
+  const origins = app.origins;
+  if (!Array.isArray(origins) || origins.some((origin) => typeof origin !== "string" || origin === "")) throw new Error("evidence input.app.origins must be non-empty strings");
+  const journeys = record(inputs.journeys, "evidence input.inputs.journeys");
+  for (const [id, hash] of Object.entries(journeys)) string(hash, `evidence input.inputs.journeys.${id}`);
+  const changedRoutes = suite.changedRoutes;
+  if (!Array.isArray(changedRoutes) || changedRoutes.some((route) => typeof route !== "string")) throw new Error("evidence input.suite.changedRoutes must be strings");
+  return {
+    app: { build: string(app.build, "evidence input.app.build"), target: string(app.target, "evidence input.app.target"), origins: [...origins] },
+    suite: { name: string(suite.name, "evidence input.suite.name"), policyHash: string(suite.policyHash, "evidence input.suite.policyHash"), changedRoutes: [...changedRoutes] },
+    inputs: {
+      journeys: journeys as Readonly<Record<string, string>>,
+      fixtures: string(inputs.fixtures, "evidence input.inputs.fixtures"),
+      parameters: string(inputs.parameters, "evidence input.inputs.parameters"),
+      invariants: string(inputs.invariants, "evidence input.inputs.invariants"),
+      goals: string(inputs.goals, "evidence input.inputs.goals"),
+      missions: string(inputs.missions, "evidence input.inputs.missions"),
+    },
+  };
+}
+
+/** Parse an untrusted manifest before comparing its content digest. */
+export function parseEvidenceManifest(value: unknown): EvidenceManifest {
+  const root = record(value, "evidence manifest");
+  if (root.version !== 1) throw new Error("evidence manifest.version must be 1");
+  const resultDigests = record(root.resultDigests, "evidence manifest.resultDigests");
+  for (const [path, digest] of Object.entries(resultDigests)) string(digest, `evidence manifest.resultDigests.${path}`);
+  if (root.outcome !== "pass") throw new Error("evidence manifest.outcome must be pass");
+  return { version: 1, key: string(root.key, "evidence manifest.key"), input: parseEvidenceKeyInput(root.input), contentDigest: string(root.contentDigest, "evidence manifest.contentDigest"), outcome: "pass", resultDigests: resultDigests as Readonly<Record<string, string>> };
+}
+
 /** Stable JSON, deliberately independent of object insertion order. */
 export function canonicalJson(value: Json): string {
   if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") return JSON.stringify(value);
@@ -43,6 +89,18 @@ export function createEvidenceManifest(input: EvidenceKeyInput, resultDigests: R
   const key = evidenceKey(input);
   const unsigned = { version: 1 as const, key, input, outcome: "pass" as const, resultDigests };
   return { ...unsigned, contentDigest: `sha256:${sha256(unsigned as unknown as Json)}` };
+}
+
+/** Returns an explicit reuse-refusal reason when a manifest's referenced proof is unavailable or changed. */
+export function evidenceArtifactsReason(manifest: EvidenceManifest, read: (path: string) => string): string | undefined {
+  try {
+    for (const [path, digest] of Object.entries(manifest.resultDigests)) {
+      if (`sha256:${sha256(read(path))}` !== digest) return "evidence-artifact-tampered";
+    }
+  } catch {
+    return "evidence-artifact-missing";
+  }
+  return undefined;
 }
 
 /** Refuses malformed, non-passing, mismatched, and content-tampered evidence. */

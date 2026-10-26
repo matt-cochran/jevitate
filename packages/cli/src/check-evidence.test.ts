@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createEvidenceManifest, evidenceKey, reuseDecision } from "./check-evidence.js";
+import { createEvidenceManifest, evidenceArtifactsReason, evidenceKey, reuseDecision, sha256 } from "./check-evidence.js";
 
 const input = {
   app: { build: "abc", target: "staging", origins: ["https://app.example"] },
@@ -17,5 +17,12 @@ describe("#704 evidence manifest", () => {
     expect(reuseDecision(input, manifest).decision).toBe("skip");
     expect(reuseDecision({ ...input, app: { ...input.app, build: "def" } }, manifest)).toMatchObject({ decision: "run", reasons: ["evidence-key-mismatch"] });
     expect(reuseDecision(input, { ...manifest, contentDigest: "sha256:forged" })).toMatchObject({ decision: "run", reasons: ["evidence-tampered"] });
+  });
+
+  it("refuses missing or changed result artifacts before reuse", () => {
+    const manifest = createEvidenceManifest(input, { "result.json": `sha256:${sha256("original")}` });
+    expect(evidenceArtifactsReason(manifest, (path) => (path === "result.json" ? "original" : ""))).toBeUndefined();
+    expect(evidenceArtifactsReason(manifest, () => "changed")).toBe("evidence-artifact-tampered");
+    expect(evidenceArtifactsReason(manifest, () => { throw new Error("ENOENT"); })).toBe("evidence-artifact-missing");
   });
 });
