@@ -1,6 +1,6 @@
 import { FsJourneyStore, JourneyReviewSchema, type Journey, type JourneyReview } from "@jevitate/journey";
 import { buildJourneyReview } from "./journey-review.js";
-import { readApprovedSnapshot, readVerifyRecord } from "./journey-review-store.js";
+import { readApprovedSnapshot, readVerifyRecord, readProofWaiver } from "./journey-review-store.js";
 import { UnknownJourneyError } from "./journey-api.js";
 import { loadCatalog, resolveCatalogDir } from "./catalog-api.js";
 import { catalogJourney, journeyLinks } from "./catalog.js";
@@ -13,6 +13,7 @@ import { journeyLocatorHealth, testIdAttributesOrDefault } from "./locator-healt
 import { isStepIdOnlyStale } from "./journey-stale-api.js";
 import { findProjectDir } from "./project-dir.js";
 import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
+import { loadProjectConfig } from "./project-config.js";
 
 /**
  * #432: loads one Journey and everything its review sheet needs — the targets.json safety config of
@@ -65,6 +66,8 @@ export async function reviewJourneyById(
     catalog: { links, findings },
     approvedSnapshot,
     lastVerify: await readVerifyRecord(journeysDir, id),
+    proofPolicy: loadProjectConfig(opts.catalogDir ?? findProjectDir()).mutationProofPolicy ?? "advisory",
+    proofWaiver: await readProofWaiver(journeysDir, id),
   });
   // Fail closed: what is emitted always matches the published schema.
   return { journey, review: JourneyReviewSchema.parse(opts.jev === undefined ? review : { ...review, jev: jevLayerOf(opts.jev) }) };

@@ -309,7 +309,8 @@ export function renderClear(r: JourneyReview, w: SheetWriter, opts: RenderOption
   const relatedCount = related.size > 0 ? related.size : (r.findings ?? []).filter((f) => f.analyzer === "catalog-analysis" && f.code.startsWith("pair:")).length;
   if (relatedCount > 0) clear.push(`${plural(relatedCount, "related Journey", "related Journeys")} share writes${full ? "" : " (--full for detail)"}`);
   const v = r.proof.verify;
-  if (v.status === "recorded" && !v.stale && v.verdict !== "insensitive") clear.push(`mutation proof ${v.verdict} ✓`);
+  if (v.status === "recorded" && !v.stale && v.verdict === "proven") clear.push("mutation proof proven ✓");
+  else if (r.proof.policy?.waiver.status === "valid" && r.proof.policy.mode !== "require-proven") clear.push(`mutation proof inconclusive — explicit waiver: ${r.proof.policy.waiver.reason}`);
   if (clear.length > 0) {
     if (w.md) w.out.push("## Clear", "", clear.join(" · "));
     else w.put("CLEAR    ", clear.join(" · "), 9);

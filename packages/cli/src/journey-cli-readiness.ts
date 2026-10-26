@@ -12,6 +12,7 @@ import { UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./j
 import { ReadinessError, runJourneyReadiness, type ReadinessMode, type ReadinessReceipt } from "./journey-readiness.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { flaggedCatalogDir, journeyLayout } from "./journey-cli/shared.js";
+import { ProjectConfigError } from "./project-config.js";
 
 /**
  * #581 — `jevitate journey readiness <id> [--with <toId>] --mode report|replay|prove`
@@ -150,7 +151,7 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
           },
         );
       } catch (err) {
-        if (err instanceof ReadinessError) {
+        if (err instanceof ReadinessError || err instanceof ProjectConfigError) {
           emitCommandResult(program, fail(err.code, err.message), { json: json === true, exitCode: EXIT_CODES.usage, command: "journey readiness" });
           return;
         }

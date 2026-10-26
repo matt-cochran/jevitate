@@ -1208,7 +1208,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (278 exports)
+# @jevitate/journey (282 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1409,6 +1409,8 @@
   MutationPair: interface
   mutationPairIssues: function
   MutationPlan: interface
+  MutationProofPolicyResult: type-alias
+  MutationProofPolicyResultSchema: variable
   mutationProofVerdict: function
   MutationProofVerdict: type-alias
   mutationReplay: function
@@ -1434,6 +1436,8 @@
   PersonaReviewSchema: variable
   planJourneyMutations: function
   prefixLandingPath: function
+  ProofWaiver: type-alias
+  ProofWaiverSchema: variable
   ProposalStep: type-alias
   ProposalStepSchema: variable
   PrReview: type-alias

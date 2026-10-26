@@ -74,6 +74,7 @@ export class JourneyOutcomeChecks {
   readonly #responseTimeoutMs: number;
   readonly #httpProbe: HttpProbe | undefined;
   readonly #resolveRef: HttpCheckRefResolver | undefined;
+  readonly #relaxedStepRequests: ReadonlySet<string>;
   #lastFailures: readonly OutcomeCheckFailure[] = [];
   #slowSteps: SlowStep[] = [];
 
@@ -82,6 +83,7 @@ export class JourneyOutcomeChecks {
     page: Page,
     journey: Journey | undefined,
     opts: {
+      readonly relaxedStepRequests?: readonly string[];
       readonly secrets?: readonly string[];
       readonly stepResponseTimeoutMs?: number;
       /** #543: makes the end state's `http` checks' requests; absent, they fail closed (unevaluable). */
@@ -95,6 +97,7 @@ export class JourneyOutcomeChecks {
     } = {},
   ) {
     this.#page = page;
+    this.#relaxedStepRequests = new Set(opts.relaxedStepRequests ?? []);
     this.#httpProbe = opts.httpProbe;
     this.#resolveRef = opts.resolveRef;
     this.#responseTimeoutMs = opts.stepResponseTimeoutMs ?? DEFAULT_STEP_RESPONSE_TIMEOUT_MS;
@@ -173,7 +176,11 @@ export class JourneyOutcomeChecks {
     const since = s.startedAt;
     const until = s.until;
     const out: JudgedCheck[] = [];
-    for (const c of s.checks) {
+    for (const [checkIndex, c] of s.checks.entries()) {
+      if (this.#relaxedStepRequests.has(`step-request:${s.index + 1}:${checkIndex}`)) {
+        out.push({ result: { check: `declared relaxation step-request:${s.index + 1}:${checkIndex}`, passed: true, detail: "not evaluated in this declared targeted proof" } });
+        continue;
+      }
       // #486: a request still awaiting its response (a cold start) is waited for, up to the bound.
       out.push(
         await evaluateNetworkCheckAwaiting(

@@ -1063,6 +1063,15 @@
     - flags=--project <path> required=true mandatory=false negate=false variadic=false default=null description=the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start each replay authenticated (as journey run)
 
+# journey waive-proof
+  description: record a person's reasoned waiver of one fresh inconclusive mutation attempt (interactive terminal only)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=the Journey store only; wins over --project for journeys, while the catalog still comes from --project
+    - flags=--project <path> required=true mandatory=false negate=false variadic=false default=null description=the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir
+    - flags=--reason <text> required=true mandatory=true negate=false variadic=false default=null description=why this exact inconclusive attempt is acceptable; stored beside the Journey
+
 # ledger
   description: keep each finding's repro material by fingerprint, so verify-fix works long after the run's output is gone
 

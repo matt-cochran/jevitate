@@ -41,6 +41,7 @@ const NATIVE_MCP_TO_CLI: Readonly<Record<string, readonly string[]>> = {
 
 /** CLI commands deliberately NOT reachable over MCP, and why. Nothing else may be missing. */
 const EXCLUDED: Readonly<Record<string, string>> = {
+  "journey waive-proof": "#708: a reasoned proof waiver requires typed human terminal confirmation and refuses MCP, CI and noninteractive channels",
   "hint journeeze dismiss": "#677: dismissing a local product hint is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
   "hint journeeze disable": "#677: disabling local product hints is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
   "hint journeeze enable": "#677: enabling local product hints is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
