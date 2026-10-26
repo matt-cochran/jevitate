@@ -221,7 +221,11 @@ export class JourneyOutcomeChecks {
    * Runs `replay` with the page's requests captured, then judges the checks. A replay that already
    * failed keeps its own reason. Without checks it just runs `replay`.
    */
-  async run(actor: Actor, replay: () => Promise<JourneyRunResult>): Promise<JourneyRunResult> {
+  async run(
+    actor: Actor,
+    replay: () => Promise<JourneyRunResult>,
+    opts: { readonly collectStepFailuresOnReplayFailure?: boolean } = {},
+  ): Promise<JourneyRunResult> {
     this.#lastFailures = [];
     this.#slowSteps = [];
     if (!this.active) return replay();
@@ -242,7 +246,8 @@ export class JourneyOutcomeChecks {
     let result: JourneyRunResult;
     try {
       result = await replay();
-      if (result.outcome === "quarantined" || result.outcome === "heal-exhausted") {
+      const replayFailed = result.outcome === "quarantined" || result.outcome === "heal-exhausted";
+      if (replayFailed && opts.collectStepFailuresOnReplayFailure !== true) {
         this.#stopCaptures(monitor, capture);
         return result;
       }
@@ -257,6 +262,9 @@ export class JourneyOutcomeChecks {
     const stepFailureSites: OutcomeCheckFailure[] = [];
     const stepFailureReasons: string[] = [];
     for (const s of this.#steps) {
+      // A structured mutation replay may stop at a later action. Preserve checks from windows that
+      // actually started, but never judge a future step over the whole-replay fallback capture.
+      if ((result.outcome === "quarantined" || result.outcome === "heal-exhausted") && s.startedAt === undefined && s.judged === undefined) continue;
       // Judged as the step ended (#526); else now — over the whole replay when the interpreter
       // reported no step boundaries. A request in flight when the step began (the previous step's
       // write) finishes inside its window: only requests SENT within the window count.
@@ -270,6 +278,10 @@ export class JourneyOutcomeChecks {
     }
     // The captures stay live through the waits above (#486): a pending request's response lands in them.
     this.#stopCaptures(monitor, capture);
+    if (result.outcome === "quarantined" || result.outcome === "heal-exhausted") {
+      this.#lastFailures = stepFailureSites;
+      return result;
+    }
     let end: SuccessCheckResult[] = [];
     if (this.#end.length > 0) {
       try {
