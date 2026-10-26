@@ -25,6 +25,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`doctor`](#doctor): resource governance on this machine (#205): host load, machine-wide browser slots, jevitate browsers and orphans left by a killed run
 - [`explore`](#explore): goal-directed exploration -> a deterministic Recording (authoring/test plane)
 - [`explore-author-journey`](#explore-author-journey): Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
+- [`hint`](#hint): local, human-only product hints; never contacts a service
 - [`inbox`](#inbox): the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
 - [`init`](#init): set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
 - [`install-browser`](#install-browser): install the Chromium revision jevitate pins into the shared browsers dir (never removes other revisions)
@@ -804,6 +805,65 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--type-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret | `[]` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+## hint
+
+```
+jevitate hint [command]
+```
+
+local, human-only product hints; never contacts a service
+
+### hint journeeze
+
+```
+jevitate hint journeeze [command]
+```
+
+control the local Journeeze offer shown after report/review
+
+#### hint journeeze disable
+
+```
+jevitate hint journeeze disable [options]
+```
+
+turn off Journeeze hints at one local preference scope
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--scope <project|user>` | where to store the preference | `project` |  |  |  |
+
+#### hint journeeze dismiss
+
+```
+jevitate hint journeeze dismiss [options]
+```
+
+hide one unchanged local Journeeze offer by its displayed signal hash
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--scope <project|user>` | where to store the dismissal | `project` |  |  |  |
+| `--signal <sha256>` | the signal hash printed in the offer |  |  | yes |  |
+
+#### hint journeeze enable
+
+```
+jevitate hint journeeze enable [options]
+```
+
+re-enable Journeeze hints at one local preference scope
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--scope <project|user>` | where to store the preference | `project` |  |  |  |
 
 ## inbox
 
