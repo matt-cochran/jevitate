@@ -3,6 +3,22 @@
   options:
     - flags=-V, --version required=false mandatory=false negate=false variadic=false default=null description=output the version number
 
+# acceptance
+  description: read-only acceptance evidence tools
+
+# acceptance audit
+  description: audit release acceptance evidence and emit CI artifacts
+  options:
+    - flags=--approval <file> required=true mandatory=false negate=false variadic=false default=null description=
+    - flags=--journey <file> required=true mandatory=false negate=false variadic=false default=null description=
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=
+    - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=
+    - flags=--persona <file> required=true mandatory=false negate=false variadic=false default=null description=
+    - flags=--requirements <file> required=true mandatory=true negate=false variadic=false default=null description=
+    - flags=--review <file> required=true mandatory=false negate=false variadic=false default=null description=
+    - flags=--suite <file> required=true mandatory=true negate=false variadic=false default=null description=
+    - flags=--verify <file> required=true mandatory=false negate=false variadic=false default=null description=
+
 # ai
   description: check or configure the model gateway credentials jevitate's AI features need
 

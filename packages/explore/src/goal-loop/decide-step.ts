@@ -6,6 +6,7 @@
 
 import { decide, type Decision } from "../decide.js";
 import type { RunContext } from "./context.js";
+import { takeRecoveryTurn } from "./handle-blocked.js";
 import { TOO_MANY_CHOICES, TOO_MANY_CHOICES_RETRY, firstLine, pageStatusOf } from "./helpers.js";
 import type { PageView } from "./page-view.js";
 import type { Perceived } from "./step.js";
@@ -13,7 +14,14 @@ import type { Perceived } from "./step.js";
 export async function decideStep(ctx: RunContext, step: Perceived, view: PageView): Promise<Decision | "stop"> {
   const { cfg } = ctx;
   const { perception, snap } = step;
-  const { modelControls, offered, unsubmitted, visibleText } = view;
+  const { offered, unsubmitted, visibleText } = view;
+  // #688 — the single recovery turn after a model `blocked`: the decision is restricted to the safe
+  // controls the recovery evidence named, so excluded controls are never offered — and a manager
+  // resuming this exact decision never sees a candidate the safety predicate rejected.
+  const recovery = takeRecoveryTurn(ctx);
+  const safeNames = new Set((recovery ?? []).map((e) => e.name).filter((n) => n !== ""));
+  const modelControls = recovery === null ? view.modelControls : view.modelControls.filter((c) => safeNames.has(c.name));
+  if (recovery !== null) ctx.history.push("recovery turn: act through one of the safe controls offered, or the run ends blocked");
   let decision: Awaited<ReturnType<typeof decide>>;
   // #338: once the goal's area is reached, navigation to sections the goal never names is off-goal
   // (listed last and marked — never removed: a goal may cross the sections it names).

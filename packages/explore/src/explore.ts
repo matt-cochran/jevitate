@@ -56,6 +56,9 @@ import {
 import {
   type RunOutcome,
 } from "./conversation.js";
+import type { ActionableControlOutcome } from "./goal-loop/context/types.js";
+
+export type { ActionableControlCandidate, ActionableControlOutcome } from "./goal-loop/context/types.js";
 import { ChromeTracker } from "./feature/relevance.js";
 import { type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
@@ -439,6 +442,13 @@ export interface ExploreRun {
    * Absent for a completed run and for every other stop.
    */
   readonly missCause?: MissCause;
+  /**
+   * #688 — the distinct, machine-readable terminal outcome when a blocked run stopped with an
+   * actionable control: the candidate a manager resumes through (locator, label, visible/enabled
+   * facts, screenshot, exact resume identity) and the safe-predicate clauses it satisfied and did
+   * not. Present only for that ending; `stop` stays `blocked` and `outcome.reason` keeps the prose.
+   */
+  readonly actionableControl?: ActionableControlOutcome;
   /**
    * #209: the run ended (stop `done`, #217) because the model kept proposing `done` and code rejected
    * every proposal (the success condition never held) — the model claimed the goal, it did not give up.

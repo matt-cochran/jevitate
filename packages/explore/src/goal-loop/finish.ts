@@ -151,6 +151,7 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ...(ctx.answer !== undefined && finalOutcome.status === "completed" ? { answer: ctx.answer } : {}),
     ...(cause === null ? {} : { blockingCause: cause }),
     ...(missCause === undefined ? {} : { missCause }),
+    ...(ctx.actionableControl === null ? {} : { actionableControl: ctx.actionableControl }),
     ...(ctx.endedOnRejectedDone && ctx.stop === "done" ? { doneRejected: true as const } : {}),
     ...(ctx.stop === "crashed" && ctx.failure !== undefined
       ? { crash: buildCrashReport(ctx.failure, ctx.crashWatch.signals(), ctx.heap.samples(), { host: await ctx.probeHost() }) }
