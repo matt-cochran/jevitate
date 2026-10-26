@@ -150,7 +150,7 @@ describe("journey readiness proof detail", () => {
 });
 
 describe("journey readiness nothing-to-mutate", () => {
-  it("ignores the targeted count when nothing could be paired", async () => {
+  it("keeps an unpaired receipt inconclusive even if it has a targeted counter", async () => {
     const verify = {
       status: "recorded" as const,
       verdict: "inconclusive",
@@ -160,6 +160,6 @@ describe("journey readiness nothing-to-mutate", () => {
       summary: { sensitive: 0, targeted: 1, unpaired: 1, insensitive: 0, cascade: 0, notApplied: 0, error: 0 },
     };
     const r = await receipt(journey("discover"), verify);
-    expect(proofOf(r)?.state).toBe("pass");
+    expect(proofOf(r)?.state).toBe("inconclusive");
   });
 });

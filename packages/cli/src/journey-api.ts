@@ -200,6 +200,8 @@ export interface RunJourneyProgrammaticallyOptions {
  * separate argument, never a surface option: no other caller passes it.
  */
 export interface MutationReplayOptions {
+  /** #708: declared proof only; original check indices/capture are preserved. Never a CLI/MCP flag. */
+  relaxedStepRequests?: readonly string[];
   /**
    * #402 `journey verify --mutate`: replay a MUTATED copy of the Journey. Applied after params are
    * validated against the stored Journey (a mutation may stop a step reading a param), and never to
@@ -648,6 +650,7 @@ export async function runJourneyProgrammatically(
       // fixture bindings — for the end state's checks and (#565) every step expectation's references.
       const refs = httpCheckRefs({ params, secretParams: secretParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) });
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, {
+        ...(mutation.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: mutation.relaxedStepRequests }),
         secrets,
         // #543: the end state's http checks: allowlist-bound requests.
         httpProbe: createHttpProbe({ allowlist: allowedOrigins }),

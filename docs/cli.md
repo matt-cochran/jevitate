@@ -1800,6 +1800,28 @@ preview or prove that each Journey assertion fails when its outcome is absent
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
 
+### journey waive-proof
+
+```
+jevitate journey waive-proof [options] <id>
+```
+
+record a person's reasoned waiver of one fresh inconclusive mutation attempt (interactive terminal only)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
+| `--reason <text>` | why this exact inconclusive attempt is acceptable; stored beside the Journey |  |  | yes |  |
+
 ## ledger
 
 ```

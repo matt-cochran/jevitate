@@ -3,7 +3,6 @@ import {
   MAX_DECLARED_RELAXATIONS,
   checkCompatibility,
   journeyParamSchema,
-  journeyWriteSteps,
   lintJourney,
   type HandbackOutcome,
   type Journey,
@@ -289,6 +288,12 @@ function catalogCheck(ctx: JourneyContext): { check: ReadinessCheck; blocker?: R
 function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { check: ReadinessCheck; blocker?: ReadinessBlocker } {
   const verify = ctx.review.proof.verify;
   const evidence = relativeEvidence(cwd, verifyRecordPath(journeysDir, ctx.id));
+  const policy = ctx.review.proof.policy;
+  if (policy !== undefined && (policy.mode !== "advisory" || policy.waiver.status === "valid")) {
+    return policy.passed
+      ? { check: { check: "proof", journey: ctx.id, state: "pass", detail: policy.reason, evidence } }
+      : { check: { check: "proof", journey: ctx.id, state: policy.freshness === "stale" ? "stale" : policy.freshness === "missing" ? "not-run" : policy.verdict === "insensitive" ? "fail" : "inconclusive", detail: policy.reason, evidence }, blocker: { check: "proof", journey: ctx.id, why: policy.reason, next: policy.next } };
+  }
   if (verify.status === "not-verified") {
     return {
       check: { check: "proof", journey: ctx.id, state: "not-run", detail: verify.hint },
@@ -314,12 +319,6 @@ function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { ch
       check: { check: "proof", journey: ctx.id, state: "fail", detail: verify.reason ?? "some checks cannot fail", evidence },
       blocker: { check: "proof", journey: ctx.id, why: verify.reason ?? "some checks cannot fail", next: `jevitate journey verify ${ctx.id} --mutate` },
     };
-  }
-  // A read-only Journey that takes no input has nothing a mutation could break: no write to skip or
-  // block, no typed value, no parameter. Its proof can never conclude, and that is not a doubt about
-  // its checks — only this case passes; any other inconclusive proof stays inconclusive (#579).
-  if (nothingToMutate(ctx.journey, verify.summary)) {
-    return { check: { check: "proof", journey: ctx.id, state: "pass", detail: "read-only with no inputs: nothing a mutation could break", evidence } };
   }
   // #609: an inconclusive proof stays inconclusive — the refusal names the authoring fix, not a pass.
   // #616: a recorded proof carries the declared plans the automatic bound refused.
@@ -362,15 +361,6 @@ function inconclusiveProofGuidance(reason: string, suggested?: readonly JourneyT
   if (unsound !== null) return `pair ${unsound[1]} with ${unsound[2]} (metadata.mutationPairs) or make it a real defense, then re-run verify`;
   if (refusal.includes("action failed")) return "the mutated value makes an earlier action impossible, so that target cannot be proven independently — keep the check; it stays inconclusive by design";
   return "inspect the cascade assertions in the verify report";
-}
-
-/** No mutation was paired at all (only unpaired checks), the Journey writes nothing and takes no param. */
-function nothingToMutate(journey: Journey, summary: Readonly<Record<string, number>>): boolean {
-  // #609: `targeted` is part of `sensitive`, so it is not a fresh pairing — counting it would make a
-  // read-only Journey look mutable.
-  const paired = Object.entries(summary).filter(([k]) => k !== "unpaired" && k !== "targeted").reduce((n, [, v]) => n + v, 0);
-  // At least one check was looked at and none could be paired (a proof with no counts proves nothing).
-  return (summary.unpaired ?? 0) > 0 && paired === 0 && journeyWriteSteps(journey).length === 0 && journeyParamSchema(journey).required.length === 0;
 }
 
 function relativeEvidence(cwd: string, path: string): string {

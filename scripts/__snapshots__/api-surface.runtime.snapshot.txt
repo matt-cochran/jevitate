@@ -776,7 +776,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (161 exports)
+# @jevitate/journey (163 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -839,6 +839,7 @@
   MAX_TARGETED_RELAXATIONS: const (number)
   METRIC_KINDS: array
   MetricSchema: object
+  MutationProofPolicyResultSchema: object
   OUTCOME_DIRECTIONS: array
   OUTCOME_GULFS: array
   OUTCOME_MEASURES: array
@@ -847,6 +848,7 @@
   ParamValidationError: class
   PersonaReviewSchema: object
   PrReviewSchema: object
+  ProofWaiverSchema: object
   ProposalStepSchema: object
   RejectedProposalSchema: object
   ReviewAnchorWarningSchema: object

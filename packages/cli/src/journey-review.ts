@@ -32,6 +32,7 @@ import {
   assertionRefsBound,
 } from "@jevitate/journey";
 import type { LocatorHealthDetail } from "./locator-health.js";
+import { evaluateMutationProofPolicy, type MutationProofPolicyMode, type ProofWaiver } from "./mutation-proof-policy.js";
 import { SafetyPolicy, describeCheck, explainCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
 import {
@@ -117,6 +118,8 @@ export interface JourneyReviewContext {
   readonly approvedSnapshot?: Journey | null;
   /** The last recorded mutation-proof verdict, or null when there is none. */
   readonly lastVerify?: JourneyVerifyRecord | null;
+  readonly proofPolicy?: MutationProofPolicyMode;
+  readonly proofWaiver?: ProofWaiver | null;
   /** #433: the Journey's catalog links and its pre-approval findings (the CLI loads the catalog). */
   readonly catalog?: { readonly links: JourneyCatalogLinks; readonly findings: readonly Finding[] };
   /** #453: the pending self-heal proposal, with whether it is stale and why it cannot be accepted. */
@@ -551,6 +554,7 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
       // #616: the declared targeted-proof plans, copied out of the metadata for review.
       ...(m.targetedProofs === undefined || m.targetedProofs.length === 0 ? {} : { targetedProofs: m.targetedProofs.map((p) => ({ check: p.check, mustFailWhen: p.mustFailWhen, relax: [...p.relax] })) }),
       verify: buildVerify(journey, hash, ctx.lastVerify),
+      policy: evaluateMutationProofPolicy({ journey, contentHash: hash, record: ctx.lastVerify, mode: ctx.proofPolicy, waiver: ctx.proofWaiver }),
     },
     changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot, ctx.stepIdOnly === true),
     ...(m.approval === undefined
@@ -651,6 +655,9 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
   if (v.status === "not-verified") info("Not mutation-tested", `jevitate journey verify ${r.id} --mutate`);
   else if (v.stale) warn("The mutation proof is out of date: the Journey changed after it ran", `jevitate journey verify ${r.id} --mutate`);
   else if (v.verdict === "insensitive") warn("Mutation proof: some checks cannot fail", `jevitate journey verify ${r.id} --mutate`);
+  const policy = r.proof.policy;
+  if (policy !== undefined && !policy.passed && !(v.status === "recorded" && (v.stale || v.verdict === "insensitive"))) warn(`Mutation proof policy (${policy.mode}): ${policy.reason}`, policy.next);
+  else if (v.status === "recorded" && !v.stale && v.verdict !== "proven" && v.verdict !== "insensitive") info(`Mutation proof (${policy?.mode ?? "advisory"}): ${policy?.reason ?? v.verdict}`, policy?.next);
   if (r.proof.acceptedWeak !== undefined) info(`Weak checks were accepted: "${r.proof.acceptedWeak.reason}"`);
   if (r.locatorHealth !== undefined && r.locatorHealth.brittle > 0) info(`${plural(r.locatorHealth.brittle, "step")} on brittle locators`, "--full lists the fixes");
   return [...out.filter((a) => a.severity === "warn"), ...out.filter((a) => a.severity === "info")];

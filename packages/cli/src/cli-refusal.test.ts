@@ -167,6 +167,7 @@ const TRAVERSAL = (): string[] => ["../x", "a/../../x", join(dir, "outside-root"
 
 /** Every leaf command, by path: its refusal paths, or why it has none beyond commander's own parse errors. */
 const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: string }>> => ({
+  "journey waive-proof": { cases: [["nope", "--reason", "reviewed"], ["nope", "--reason", " "]] },
   "acceptance audit": { cases: [[]] },
   // #677: local preference controls refuse automation before touching either preference store.
   "hint journeeze dismiss": { cases: [["--signal", "a".repeat(64)], ["--signal", "invalid"], ["--signal", "a".repeat(64), "--scope", "invalid"]] },

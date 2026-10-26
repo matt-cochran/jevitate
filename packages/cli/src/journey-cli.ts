@@ -17,6 +17,7 @@ import { registerJourneyAnchorCommands } from "./journey-anchor-cli.js";
 import { registerJourneyLinkCommand } from "./journey-link-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
 import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
+import { registerJourneyProofWaiver } from "./journey-proof-waiver-cli.js";
 
 /** Registers `jevitate journey`: `list|find|run|chain|promote|lint|verify|anchors|anchor|link|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
@@ -34,6 +35,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
 
   registerJourneyPromote(journey, program, deps);
   registerJourneyReview(journey, program, deps);
+  registerJourneyProofWaiver(journey, program, deps);
   registerJourneyMigrate(journey, program, deps);
   registerJourneyLint(journey, program, deps);
   registerJourneyVerify(journey, program, deps);

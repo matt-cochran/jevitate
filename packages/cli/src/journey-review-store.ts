@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { JourneySchema, type Journey } from "@jevitate/journey";
 import type { JourneyVerifyRecord } from "./journey-review.js";
+import { ProofWaiverSchema, type ProofWaiver } from "./mutation-proof-policy.js";
 
 /**
  * #432 — the review sheet's sidecars beside a journeys directory (dot-folders: never listed as a
@@ -23,6 +24,23 @@ export function approvedSnapshotPath(journeysDir: string, id: string): string {
 
 export function verifyRecordPath(journeysDir: string, id: string): string {
   return sidecarPath(journeysDir, ".verify", id);
+}
+
+export function proofWaiverPath(journeysDir: string, id: string): string {
+  return sidecarPath(journeysDir, ".proof-waivers", id);
+}
+
+export async function readProofWaiver(journeysDir: string, id: string): Promise<ProofWaiver | null> {
+  const path = proofWaiverPath(journeysDir, id);
+  const raw = await readJson(path);
+  if (raw === null) return null;
+  const parsed = ProofWaiverSchema.safeParse(raw);
+  if (!parsed.success || parsed.data.journeyId !== id) throw new ReviewSidecarError(`${path} is not a valid human mutation-proof waiver`);
+  return parsed.data;
+}
+
+export async function writeProofWaiver(journeysDir: string, waiver: ProofWaiver): Promise<void> {
+  await writeJson(proofWaiverPath(journeysDir, waiver.journeyId), ProofWaiverSchema.parse(waiver));
 }
 
 /** A sidecar that exists but cannot be read as what it should be — refused, never silently ignored. */
