@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,7 +22,9 @@ describe("#711 verify receipt destinations", () => {
     await writeVerifyRecord(dir, record());
     const path = verifyRecordPath(dir, "receipt");
     expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ verdict: "proven" });
-    expect((await lstat(path)).mode & 0o777).toBe(0o600);
+    const stat = await lstat(path);
+    expect(stat.mode & 0o777).toBe(0o600);
+    if (process.getuid !== undefined) expect(stat.uid).toBe(process.getuid());
   });
 
   it("refuses a symlink receipt without following it", async () => {
@@ -33,6 +35,17 @@ describe("#711 verify receipt destinations", () => {
     await symlink(target, path);
     await expect(preflightVerifyRecord(dir, "receipt")).rejects.toBeInstanceOf(VerifyReceiptPreflightError);
     expect(await readFile(target, "utf8")).toBe("preserve");
+  });
+
+  it("refuses a foreign-owned 0600 receipt before any proof spend", async () => {
+    const path = verifyRecordPath(dir, "receipt");
+    await mkdir(join(dir, ".verify"), { recursive: true });
+    await writeFile(path, "stale", { mode: 0o600 });
+    if (process.getuid === undefined) return;
+    const actual = (await lstat(path)).uid;
+    const getuid = vi.spyOn(process, "getuid").mockReturnValue(actual + 1);
+    await expect(preflightVerifyRecord(dir, "receipt")).rejects.toMatchObject({ code: "E_VERIFY_RECEIPT_PREFLIGHT" });
+    getuid.mockRestore();
   });
 
   it("refuses a concurrent destination replacement rather than clobbering it", async () => {
