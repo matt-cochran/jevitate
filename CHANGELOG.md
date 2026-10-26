@@ -5,11 +5,16 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [Unreleased]
+## [0.25.0] – 2026-10-26
+
+0.25.0 makes Journey verification easier to review before a browser is opened, adds an auditable
+acceptance-evidence gate, and preserves a safe, resumable handoff when a goal run is blocked.
 
 ### Added
 
 - **Preview a Journey's mutation proof without running it.** `jevitate journey verify <id> --plan` (and MCP `verify_journey` with `plan: true`) reports every planned mutation, its assertion pairings, unpaired assertions and the minimum replay count without opening a browser, target, fixture, hook or session. The promotion and recording skills now require this inexpensive preflight before a potentially long `--mutate` proof.
+- **Audit release acceptance evidence without driving a target.** `jevitate acceptance audit` checks the supplied requirements, approval, Journey, verification and review artifacts, then writes deterministic Markdown, JUnit, SARIF and JSON receipts suitable for CI. Its approval proposal is bound to the inspected content hash.
+- **Blocked goals retain a safe actionable-control handoff (#688).** When a model stops beside a visible, enabled control that code classifies as safe, it receives one bounded recovery turn restricted to that named control. If it still cannot advance—or every candidate is unsafe—the result records the candidate's observed facts, screenshot and exact resume identity (page URL, state signature and locator) for a manager. Hidden, disabled, ambiguous, destructive, financial and approval controls are never selected or offered for recovery.
 
 ### Fixed
 
