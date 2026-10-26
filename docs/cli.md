@@ -12,6 +12,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 
 ## Commands
 
+- [`acceptance`](#acceptance): read-only acceptance evidence tools
 - [`ai`](#ai): check or configure the model gateway credentials jevitate's AI features need
 - [`baseline`](#baseline): named baselines for `diff`, `report --baseline` and `check --baseline`
 - [`browser-path`](#browser-path): print the pinned browser revision(s), the browsers dir in use and the executable path
@@ -51,6 +52,36 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`ux`](#ux): offline UX review of a saved Recording — ranked, cited usability findings
 - [`verify-fix`](#verify-fix): replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay
 - [`where`](#where): #585: the resolved project layout — project, catalog, journeys and logs dirs, and where each came from; paths only, no file contents
+
+## acceptance
+
+```
+jevitate acceptance [command]
+```
+
+read-only acceptance evidence tools
+
+### acceptance audit
+
+```
+jevitate acceptance audit [options]
+```
+
+audit release acceptance evidence and emit CI artifacts
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--approval <file>` |  |  |  |  |  |
+| `--journey <file>` |  |  |  |  |  |
+| `--json` |  |  |  |  |  |
+| `--out <dir>` |  |  |  |  |  |
+| `--persona <file>` |  |  |  |  |  |
+| `--requirements <file>` |  |  |  | yes |  |
+| `--review <file>` |  |  |  |  |  |
+| `--suite <file>` |  |  |  | yes |  |
+| `--verify <file>` |  |  |  |  |  |
 
 ## ai
 

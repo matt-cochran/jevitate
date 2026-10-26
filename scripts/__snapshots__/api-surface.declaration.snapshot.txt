@@ -346,12 +346,14 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (708 exports)
+# @jevitate/explore (710 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
   ActArgs: interface
   ACTION_CAUSED_MS: variable
+  ActionableControlCandidate: other
+  ActionableControlOutcome: other
   ActionDelta: interface
   ActionDeltas: class
   ActionDeltasOptions: interface

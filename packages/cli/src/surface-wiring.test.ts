@@ -367,6 +367,7 @@ const ENVELOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     doneRejected: "folded into outcome.reason (the model proposed done N times…) and failure job-incomplete (#209)",
     partialReport: "#424: a usability review is judged by its UX findings and the job's checks, never by a reported answer",
     missCause: "not surfaced: a usability review carries no goalReason (its job outcome is advisory; reason names the miss)",
+    actionableControl: "not surfaced: actionable-control recovery is a goal-run handoff; a usability review stays advisory and does not offer a resume path",
   },
 };
 

@@ -9,7 +9,7 @@ import { ok, fail } from "./envelope.js";
 
 export function registerAcceptanceAuditCommands(program: Command): void {
   const acceptance = program.command("acceptance").description("read-only acceptance evidence tools");
-  acceptance.command("audit")
+  acceptance.command("audit").description("audit release acceptance evidence and emit CI artifacts")
     .requiredOption("--requirements <file>")
     .requiredOption("--suite <file>")
     .option("--persona <file>").option("--journey <file>").option("--approval <file>").option("--verify <file>").option("--review <file>")

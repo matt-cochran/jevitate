@@ -41,6 +41,7 @@ const NATIVE_MCP_TO_CLI: Readonly<Record<string, readonly string[]>> = {
 
 /** CLI commands deliberately NOT reachable over MCP, and why. Nothing else may be missing. */
 const EXCLUDED: Readonly<Record<string, string>> = {
+  "acceptance audit": "a local, read-only release-evidence audit over operator-selected files; it produces CI artifacts but does not drive an authorized target or offer an agent capability",
   mcp: "the MCP server itself (it owns stdin/stdout); an MCP client is already connected to it",
   ui: "the local human dashboard (loopback HTTP, opens a browser): where a person approves/cancels inbox items — human-only by design",
   where: "#585: reports where this shell's project, catalog and Journeys resolve; over MCP the stores are the server's (--dir/--project/--journeys-dir are never MCP arguments)",

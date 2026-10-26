@@ -167,6 +167,7 @@ const TRAVERSAL = (): string[] => ["../x", "a/../../x", join(dir, "outside-root"
 
 /** Every leaf command, by path: its refusal paths, or why it has none beyond commander's own parse errors. */
 const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: string }>> => ({
+  "acceptance audit": { cases: [[]] },
   init: { exempt: "no file, id or number input: it detects and writes" },
   // #221: a name is one safe path segment — never a path out of the profiles root.
   "profile create": { cases: TRAVERSAL().map((n) => [n]) },
