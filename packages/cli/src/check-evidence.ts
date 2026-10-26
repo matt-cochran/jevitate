@@ -85,6 +85,25 @@ export function evidenceKey(input: EvidenceKeyInput): string {
   return `sha256:${sha256(input as unknown as Json)}`;
 }
 
+/** The changed proof inputs are safe to expose to a scheduler; values and credentials never are. */
+export function evidenceMismatchReasons(input: EvidenceKeyInput, candidate: EvidenceKeyInput): readonly string[] {
+  const changed = (a: unknown, b: unknown): boolean => canonicalJson(a as Json) !== canonicalJson(b as Json);
+  const reasons = [
+    ...(input.app.build !== candidate.app.build ? ["application-build-changed"] : []),
+    ...(input.app.target !== candidate.app.target || changed(input.app.origins, candidate.app.origins) ? ["target-drift"] : []),
+    ...(input.suite.name !== candidate.suite.name ? ["suite-changed"] : []),
+    ...(input.suite.policyHash !== candidate.suite.policyHash ? ["suite-policy-changed"] : []),
+    ...(changed(input.suite.changedRoutes, candidate.suite.changedRoutes) ? ["changed-routes-changed"] : []),
+    ...(changed(input.inputs.journeys, candidate.inputs.journeys) ? ["journey-content-changed"] : []),
+    ...(input.inputs.fixtures !== candidate.inputs.fixtures ? ["fixtures-changed"] : []),
+    ...(input.inputs.parameters !== candidate.inputs.parameters ? ["parameters-changed"] : []),
+    ...(input.inputs.invariants !== candidate.inputs.invariants ? ["invariants-changed"] : []),
+    ...(input.inputs.goals !== candidate.inputs.goals ? ["goals-changed"] : []),
+    ...(input.inputs.missions !== candidate.inputs.missions ? ["missions-changed"] : []),
+  ];
+  return reasons;
+}
+
 export function createEvidenceManifest(input: EvidenceKeyInput, resultDigests: Readonly<Record<string, string>>): EvidenceManifest {
   const key = evidenceKey(input);
   const unsigned = { version: 1 as const, key, input, outcome: "pass" as const, resultDigests };
@@ -109,7 +128,10 @@ export function reuseDecision(input: EvidenceKeyInput, candidate: EvidenceManife
   if (candidate.version !== 1) return { decision: "run", reasons: ["unsupported-evidence-version"] };
   if (candidate.outcome !== "pass") return { decision: "run", reasons: ["evidence-not-successful"] };
   const expectedKey = evidenceKey(input);
-  if (candidate.key !== expectedKey) return { decision: "run", reasons: ["evidence-key-mismatch"] };
+  if (candidate.key !== expectedKey) {
+    const reasons = evidenceMismatchReasons(input, candidate.input);
+    return { decision: "run", reasons: reasons.length === 0 ? ["evidence-key-mismatch"] : reasons };
+  }
   const unsigned = { version: candidate.version, key: candidate.key, input: candidate.input, outcome: candidate.outcome, resultDigests: candidate.resultDigests };
   const expectedDigest = `sha256:${sha256(unsigned as unknown as Json)}`;
   const a = Buffer.from(expectedDigest);

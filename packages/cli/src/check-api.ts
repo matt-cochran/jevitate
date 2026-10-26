@@ -505,11 +505,15 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     suiteUri: opts.suiteUri ?? opts.suite.path,
     automationId: `jevitate-check/${opts.suite.name}/`,
     findings: defects.map((d) => ({ defect: d, gating: gating.includes(d), ...(statusOf(d) === undefined ? {} : { status: statusOf(d) }) })),
-    properties: {
+  }), opts.maxBrittleSteps === undefined ? combined.suggestions : [], opts.suiteUri ?? opts.suite.path), opts.appVersion);
+  const sarifRun = sarif.runs[0] as { properties?: Record<string, unknown> } | undefined;
+  if (sarifRun !== undefined) {
+    sarifRun.properties = {
+      ...sarifRun.properties,
       changedRoutes: opts.changedRoutes ?? [],
       ...(evidenceKeyValue === undefined ? {} : { evidenceKey: evidenceKeyValue, evidenceDecision: evidence?.decision ?? "run", evidenceReasons: evidence?.reasons ?? [] }),
-    },
-  }), opts.maxBrittleSteps === undefined ? combined.suggestions : [], opts.suiteUri ?? opts.suite.path), opts.appVersion);
+    };
+  }
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
   await writeFile(
     reportPath,

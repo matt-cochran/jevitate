@@ -18,7 +18,7 @@ import { brittleStepGate, locatorHealth, renderLocatorHealth } from "./locator-h
 import { ChangesArgsError, ChangesInputError } from "./change-context.js";
 import { CLI_HEAL_NAMES, JourneyHealArgsError, validateJourneyHeal, type JourneyHealRequest } from "./journey-heal.js";
 import type { SelfHealMode } from "@jevitate/domain";
-import { createEvidenceManifest, evidenceArtifactsReason, parseEvidenceKeyInput, parseEvidenceManifest, sha256 } from "./check-evidence.js";
+import { createEvidenceManifest, evidenceArtifactsReason, parseEvidenceKeyInput, parseEvidenceManifest, reuseDecision, sha256 } from "./check-evidence.js";
 
 /**
  * `jevitate check --suite <file.json>` (#137). Registered by `program.ts`; its model gateways and
@@ -104,6 +104,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
     .option("--evidence-input <file>", "#704 immutable proof identity JSON; required to consume or emit an evidence manifest")
     .option("--evidence-manifest <file>", "#704 prior content-addressed evidence manifest to reuse when its identity exactly matches")
     .option("--evidence-out <file>", "#704 write a content-addressed success manifest after this clean check")
+    .option("--evidence-decision-out <file>", "#704 write a machine-readable run|skip decision and changed-input reasons, then exit before browser/model work")
     .option("--out <dir>", "output dir: results/, junit.xml, jevitate.sarif, report.md, check.json", "jevitate-check")
     .option("--junit <path>", "JUnit XML path (default <out>/junit.xml)")
     .option("--sarif <path>", "SARIF path (default <out>/jevitate.sarif)")
@@ -142,6 +143,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         evidenceInput?: string;
         evidenceManifest?: string;
         evidenceOut?: string;
+        evidenceDecisionOut?: string;
         out: string;
         junit?: string;
         sarif?: string;
@@ -184,12 +186,20 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         }
         if (o.allowChannels !== undefined && o.requireApprovals !== true) throw new ApprovalArgsError("--allow-channels needs --require-approvals");
         const allowedChannels = o.requireApprovals === true ? parseAllowedChannels(o.allowChannels) : undefined;
-        if ((o.evidenceManifest !== undefined || o.evidenceOut !== undefined) && o.evidenceInput === undefined) {
-          throw new CheckArgsError("--evidence-manifest and --evidence-out each require --evidence-input");
+        if ((o.evidenceManifest !== undefined || o.evidenceOut !== undefined || o.evidenceDecisionOut !== undefined) && o.evidenceInput === undefined) {
+          throw new CheckArgsError("--evidence-manifest, --evidence-out, and --evidence-decision-out each require --evidence-input");
         }
         const evidenceInput = o.evidenceInput === undefined ? undefined : parseEvidenceKeyInput(readEvidenceJson(o.evidenceInput, "input"));
         const evidenceManifest = o.evidenceManifest === undefined ? undefined : parseEvidenceManifest(readEvidenceJson(o.evidenceManifest, "manifest"));
         const evidenceArtifactReason = evidenceManifest === undefined ? undefined : evidenceArtifactsReason(evidenceManifest, (path) => readFileSync(path, "utf8"));
+        if (o.evidenceDecisionOut !== undefined && evidenceInput !== undefined) {
+          const decision = evidenceArtifactReason === undefined ? reuseDecision(evidenceInput, evidenceManifest) : { decision: "run" as const, reasons: [evidenceArtifactReason] };
+          const data = { kind: "jevitate-evidence-decision", decision: decision.decision, reasons: decision.reasons, changedInputs: decision.decision === "run" ? decision.reasons : [] };
+          writeFileSync(o.evidenceDecisionOut, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+          if (o.json === true) emit(program, ok(data), true, 0);
+          else program.configureOutput().writeOut?.(`${decision.decision.toUpperCase()} ${decision.reasons.join(", ")} · ${o.evidenceDecisionOut}\n`);
+          return;
+        }
         // #470: the opt-in brittle-step gate, resolved before the suite is read or anything runs.
         const gate = o.maxBrittleSteps === undefined ? undefined : brittleStepGate(o.maxBrittleSteps);
         // #479: the app version is resolved (and an invalid one refused) before anything runs.

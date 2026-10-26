@@ -15,7 +15,8 @@ describe("#704 evidence manifest", () => {
   it("reuses only matching successful untampered evidence", () => {
     const manifest = createEvidenceManifest(input, { "result.json": "sha256:result" });
     expect(reuseDecision(input, manifest).decision).toBe("skip");
-    expect(reuseDecision({ ...input, app: { ...input.app, build: "def" } }, manifest)).toMatchObject({ decision: "run", reasons: ["evidence-key-mismatch"] });
+    expect(reuseDecision({ ...input, app: { ...input.app, build: "def" } }, manifest)).toMatchObject({ decision: "run", reasons: ["application-build-changed"] });
+    expect(reuseDecision({ ...input, inputs: { ...input.inputs, fixtures: "sha256:changed" } }, manifest)).toMatchObject({ decision: "run", reasons: ["fixtures-changed"] });
     expect(reuseDecision(input, { ...manifest, contentDigest: "sha256:forged" })).toMatchObject({ decision: "run", reasons: ["evidence-tampered"] });
   });
 

@@ -403,6 +403,10 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--change-note <text>` | #453: a change note that explains a break (repeatable) — needs --self-heal hybrid\|full | `[]` |  |  |  |
 | `--changed-routes <globs>` | only run Journeys and goals touching these route globs (comma list, repeatable), e.g. '/settings/**' | `[]` |  |  |  |
 | `--changes <range>` | #453: the git range that explains a break (e.g. main...HEAD; read once, in the journeys dir's repo) — needs --self-heal hybrid\|full |  |  |  |  |
+| `--evidence-decision-out <file>` | #704 write a machine-readable run\|skip decision and changed-input reasons, then exit before browser/model work |  |  |  |  |
+| `--evidence-input <file>` | #704 immutable proof identity JSON; required to consume or emit an evidence manifest |  |  |  |  |
+| `--evidence-manifest <file>` | #704 prior content-addressed evidence manifest to reuse when its identity exactly matches |  |  |  |  |
+| `--evidence-out <file>` | #704 write a content-addressed success manifest after this clean check |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--heal-max-attempts <n>` | #453: candidates tried per broken step (default 2) |  |  |  |  |

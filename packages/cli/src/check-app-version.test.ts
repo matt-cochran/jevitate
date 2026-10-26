@@ -153,4 +153,18 @@ describe("#479 the check CLI resolves the app version", () => {
     expect(readFileSync(join(outDir("cli"), "junit.xml"), "utf8")).toContain(`name="evidenceKey" value="${evidence.key}"`);
     expect(readJson(join(outDir("cli"), "jevitate.sarif")).runs[0].properties).toMatchObject({ evidenceKey: evidence.key, changedRoutes: [] });
   });
+
+  it("#704 change detector emits skip without opening a browser or model gateway", async () => {
+    const input = join(dir, "evidence-input.json");
+    const manifest = join(dir, "evidence-manifest.json");
+    const decision = join(dir, "evidence-decision.json");
+    writeFileSync(input, JSON.stringify({
+      app: { build: "abc1234", target: "shop", origins: ["https://shop.example"] },
+      suite: { name: "s", policyHash: "sha256:policy", changedRoutes: [] },
+      inputs: { journeys: { pay: "sha256:journey" }, fixtures: "sha256:fixtures", parameters: "sha256:params", invariants: "sha256:invariants", goals: "sha256:goals", missions: "sha256:missions" },
+    }));
+    await cli(["--evidence-input", input, "--evidence-out", manifest]);
+    await cli(["--evidence-input", input, "--evidence-manifest", manifest, "--evidence-decision-out", decision]);
+    expect(readJson(decision)).toEqual({ kind: "jevitate-evidence-decision", decision: "skip", reasons: ["matching-evidence"], changedInputs: [] });
+  });
 });
