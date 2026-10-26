@@ -310,6 +310,8 @@ export interface CheckResult {
   /** #479: the app's release/version label the check ran against (stamped next to `targetBuild`). */
   readonly appVersion?: string;
   readonly startedAt: string;
+  /** #704: whether prior immutable evidence caused this check to run or to reuse proof. */
+  readonly evidence?: { readonly decision: "run" | "skip"; readonly reasons: readonly string[]; readonly key?: string };
   readonly budget: BudgetReport;
   /**
    * Model usage summed over every item that ran (#163): calls, tokens, `jevUsd` + `generationUsd` =

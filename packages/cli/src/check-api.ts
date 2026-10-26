@@ -461,6 +461,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     engine,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
     ...(opts.appVersion === undefined ? {} : { appVersion: opts.appVersion }),
+    ...(evidence === undefined ? {} : { evidence: { decision: evidence.decision, reasons: evidence.reasons, ...(evidence.decision === "skip" ? { key: evidence.manifest.key } : {}) } }),
     startedAt,
     budget: meter.report(finalUsage, exceeded),
     ...(suiteUsage === undefined ? {} : { usage: suiteUsage }),
