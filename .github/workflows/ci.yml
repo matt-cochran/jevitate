@@ -110,7 +110,9 @@ jobs:
       run: pnpm -r build
     - name: Test
       if: env.REUSED != 'true'
-      run: pnpm exec vitest run
+      # Keep the complete workspace suite, but pass explicit roots: a bare
+      # Vitest invocation can hang under the repo's browser workspace setup.
+      run: pnpm exec vitest run packages apps scripts
     - name: Lint
       if: env.REUSED != 'true'
       run: pnpm lint
