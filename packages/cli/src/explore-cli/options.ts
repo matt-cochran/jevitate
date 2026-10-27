@@ -125,6 +125,7 @@ export function declareExploreCommand(program: Command): Command {
     .addOption(GOAL_RUN_OPTIONS.secretField())
     .addOption(GOAL_RUN_OPTIONS.totp())
     .addOption(GOAL_RUN_OPTIONS.typeFixture())
+    .addOption(GOAL_RUN_OPTIONS.uploadFixture())
     .addOption(GOAL_RUN_OPTIONS.fixture())
     .option(
       "--storage-state <file>",

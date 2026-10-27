@@ -16,6 +16,7 @@ import type { SaveProgress } from "../save-completion.js";
 import type { FieldValueLog, FillHelper } from "../fill.js";
 import type { SideEffectGuard, SideEffectLog } from "../side-effects.js";
 import type { Control } from "../snapshot.js";
+import type { UploadFixture } from "../type-fixtures.js";
 import type { ObservedPages, VetoedAnswers, RunAnswer, AnswerEvidence } from "../answer.js";
 import type { DepthLog, MinEffort } from "../run-depth.js";
 import type { UnsubmittedTypeTracker, RunOutcome } from "../conversation.js";
@@ -60,6 +61,7 @@ export interface RunContext {
   readonly fixture: string | null;
   /** #498: the project root the mission fixture must lie inside (`cfg.fixtureRoot`), or null. */
   readonly fixtureRoot: string | null;
+  readonly uploadFixtures: readonly UploadFixture[];
   readonly secrets: string[];
   /** #359: how many times each `cmd:` binding's command has run this run (by descriptor). */
   readonly secretCommandRuns: Map<string, number>;
@@ -414,6 +416,7 @@ export async function createRunContext(cfg: ExploreConfig): Promise<RunContext> 
   if (cfg.fixture !== undefined && cfg.fixtureRoot === undefined) throw fixtureNoRoot(cfg.fixture);
   ctx.fixture = cfg.fixture === undefined ? null : await resolveMissionFixture(cfg.fixture, cfg.fixtureRoot);
   ctx.fixtureRoot = cfg.fixtureRoot ?? null;
+  ctx.uploadFixtures = cfg.uploadFixtures === undefined ? [] : await Promise.all(cfg.uploadFixtures.map(async (fixture) => ({ ...fixture, path: await resolveMissionFixture(fixture.path, cfg.fixtureRoot) })));
 
   initSecrets(ctx, cfg);
   initTracking(ctx, cfg);

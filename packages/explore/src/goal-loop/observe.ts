@@ -9,7 +9,7 @@ import { hangRoute } from "../hang.js";
 import { monitorFor } from "../page-monitor.js";
 import { perceive } from "../perceive.js";
 import { maskSecretFields } from "../secret-fields.js";
-import { markTypeFixtures } from "../type-fixtures.js";
+import { markTypeFixtures, markUploadFixtures } from "../type-fixtures.js";
 import type { RunContext } from "./context.js";
 import type { Flow, Perceived } from "./step.js";
 import { documentOf } from "./helpers.js";
@@ -53,7 +53,7 @@ export async function perceiveStep(ctx: RunContext): Promise<Perceived> {
   // #158 — the action's window closes once the page settled: later writes are the app's own.
   if (ctx.readOnly?.settled() === true && ctx.readOnly.mode === "read-only") ctx.effectLog.markBackground();
   // A bound secret field shows the model its placeholder only (#72).
-  const snap = markTypeFixtures(maskSecretFields(perception.snapshot, cfg.secretFields), cfg.typeFixtures);
+  const snap = markUploadFixtures(markTypeFixtures(maskSecretFields(perception.snapshot, cfg.secretFields), cfg.typeFixtures), ctx.uploadFixtures);
   {
     const m = ctx.track.lastMutation;
     if (m !== null && snap.signature !== m.before && !m.seenBefore.has(snap.signature)) m.sawNewState = true;

@@ -346,6 +346,17 @@ describe("#281: run_exploration's typeFixture confines each bound file like ever
   });
 });
 
+describe("#720: run_exploration's uploadFixture confines each bound file", () => {
+  it("passes a descriptor-bound upload path and refuses an outside-root path", async () => {
+    const { buildCliArgv } = await import("./mcp-cli-tools.js");
+    const spec = CLI_TOOL_SPECS.find((t) => t.name === "run_exploration")!;
+    const root = process.cwd();
+    const argv = buildCliArgv(spec, { url: "http://127.0.0.1:1/", uploadFixture: ["label=Before photo=fixtures/before.png"] }, [root]);
+    expect(argv).toContain(`--upload-fixture=label=Before photo=${root}/fixtures/before.png`);
+    expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", uploadFixture: ["label=Before photo=/etc/passwd"] }, [root])).toThrow(/uploadFixture\[0\]/);
+  });
+});
+
 describe("#544: author_journey maps the fixture arguments", () => {
   it("passes fixtures as a confined --fixtures path", async () => {
     const { buildCliArgv } = await import("./mcp-cli-tools.js");

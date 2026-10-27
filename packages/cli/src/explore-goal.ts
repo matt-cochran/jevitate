@@ -12,7 +12,7 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, ActionableControlOutcome, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
 import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary } from "@jevitate/domain";
-import { runGoalBasedMission, assertAuthorizedExploreTarget, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
+import { runGoalBasedMission, assertAuthorizedExploreTarget, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type UploadFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, startedOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
@@ -105,6 +105,8 @@ export interface RunExplorationOptions {
   readonly secretCommandAttempts?: number;
   /** #281: fields typed with a file's exact text (CLI `--type-fixture`, read by the CLI). */
   readonly typeFixtures?: readonly TypeFixture[];
+  /** #720: selected upload controls receive their declared fixture by descriptor. */
+  readonly uploadFixtures?: readonly UploadFixture[];
   /**
    * Local file the `upload` op attaches (CLI `--fixture`). Validated before any
    * browser opens: a missing file throws `FixtureNotFoundError`.
@@ -564,6 +566,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(secretCommand === undefined ? {} : { secretCommand }),
       ...(opts.secretCommandAttempts === undefined ? {} : { secretCommandAttempts: opts.secretCommandAttempts }),
       ...(opts.typeFixtures === undefined ? {} : { typeFixtures: opts.typeFixtures }),
+      ...(opts.uploadFixtures === undefined ? {} : { uploadFixtures: opts.uploadFixtures }),
       site: origin,
       fixture,
       fixtureRoot: journeyFixtureBaseDir(),

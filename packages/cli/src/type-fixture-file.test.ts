@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TypeFixtureSpecError } from "@jevitate/explore";
-import { loadTypeFixtures, TYPE_FIXTURE_MAX_BYTES } from "./type-fixture-file.js";
+import { loadTypeFixtures, loadUploadFixtures, TYPE_FIXTURE_MAX_BYTES } from "./type-fixture-file.js";
 
 /** #281: `--type-fixture` files are read and checked before any browser opens; errors name the path, never the contents. */
 let dir: string;
@@ -41,5 +41,15 @@ describe("loadTypeFixtures (#281)", () => {
     expect(err("label=Body=bad.txt")).toMatch(/not UTF-8/);
     expect(err("label=Body=empty.txt")).toMatch(/is empty/);
     expect(err("Body=x.txt")).toMatch(/expects/);
+  });
+});
+
+describe("loadUploadFixtures (#720)", () => {
+  it("validates declared files without reading bytes and refuses duplicate descriptors", () => {
+    writeFileSync(join(dir, "before.png"), "not inspected as text");
+    const [fixture] = loadUploadFixtures(["label=Before photo=before.png"], dir);
+    expect(fixture).toMatchObject({ descriptor: "label=Before photo", name: "before.png", path: join(dir, "before.png") });
+    expect(() => loadUploadFixtures(["label=Before photo=before.png", "label=Before photo=before.png"], dir)).toThrow(/duplicate binding/);
+    expect(() => loadUploadFixtures(["label=Before photo=missing.png"], dir)).toThrow(/file not found/);
   });
 });

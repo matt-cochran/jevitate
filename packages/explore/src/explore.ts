@@ -64,7 +64,7 @@ import { type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { describeFailure, isPageUnresponsive, isTargetUnresponsive } from "./mission-failure.js";
 import { type SafetyConfig, type SafetyOverride } from "./safety.js";
-import { type TypeFixture } from "./type-fixtures.js";
+import { type TypeFixture, type UploadFixture } from "./type-fixtures.js";
 import { type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { type ActionDeltaStats } from "./action-delta.js";
@@ -343,6 +343,8 @@ export interface ExploreConfig {
    * bound control, code types the text verbatim (no value generator, no cap). See `type-fixtures.ts`.
    */
   readonly typeFixtures?: readonly TypeFixture[];
+  /** #720: upload controls bound to declared local files by descriptor. */
+  readonly uploadFixtures?: readonly UploadFixture[];
   /**
    * #202: called as an action (a control op, or a chosen `reload`) is about to be dispatched — at the
    * same point, on the same wall clock (`Date.now`), as the request→step attribution mark

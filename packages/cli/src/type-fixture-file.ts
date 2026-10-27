@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import { parseTypeFixtureSpec, TypeFixtureSpecError, type TypeFixture } from "@jevitate/explore";
+import { parseTypeFixtureSpec, parseUploadFixtureSpec, TypeFixtureSpecError, type TypeFixture, type UploadFixture } from "@jevitate/explore";
 
 /**
  * `--type-fixture '<label|testId|type|id|name>=<value>=<file>'` (#281): reads each bound file before
@@ -38,5 +38,22 @@ export function loadTypeFixtures(specs: readonly string[], cwd: string = process
     if (text.startsWith("﻿")) text = text.slice(1);
     if (text.trim() === "") throw new TypeFixtureSpecError(`--type-fixture ${descriptor}: ${path} is empty`);
     return { descriptor, matcher, name: basename(abs), text };
+  });
+}
+
+export function loadUploadFixtures(specs: readonly string[], cwd: string = process.cwd()): UploadFixture[] {
+  const seen = new Set<string>();
+  return specs.map((spec) => {
+    const { descriptor, matcher, path } = parseUploadFixtureSpec(spec);
+    if (seen.has(descriptor)) throw new TypeFixtureSpecError(`--upload-fixture ${descriptor}: duplicate binding`);
+    seen.add(descriptor);
+    const abs = resolve(cwd, path);
+    try {
+      if (!statSync(abs).isFile()) throw new TypeFixtureSpecError(`--upload-fixture ${descriptor}: ${path} is not a file`);
+    } catch (err) {
+      if (err instanceof TypeFixtureSpecError) throw err;
+      throw new TypeFixtureSpecError(`--upload-fixture ${descriptor}: file not found: ${path}`);
+    }
+    return { descriptor, matcher, name: basename(abs), path: abs };
   });
 }
