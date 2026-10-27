@@ -385,6 +385,40 @@ describe("explore loop — upload is recorded and replays deterministically", ()
   );
 
   it(
+    "uses the selected control's descriptor-bound fixture ahead of the generic fallback and records no absolute path",
+    async () => {
+      const bound = join(fixtureDir, "bound-avatar.txt");
+      await writeFile(bound, "bound fixture bytes\n", "utf8");
+      const judge = new ScriptedJudge([{ op: "upload", target: "0" }, { op: "done" }]);
+      const run = await withSession(
+        "explore-upload-bound-",
+        async (session) => {
+          const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
+          const r = await explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "attach an avatar",
+            allowlist: [origin],
+            startUrl: `${origin}/`,
+            fixture,
+            fixtureRoot: fixtureDir,
+            uploadFixtures: [{ descriptor: "label=Choose avatar", matcher: { key: "label", value: "Choose avatar" }, name: "bound-avatar.txt", path: bound }],
+          });
+          expect(await readAttachedName(session)).toBe("bound-avatar.txt");
+          return r;
+        },
+        origin,
+      );
+      const upload = run.recording.pages.flatMap((p) => p.steps.map((s) => s.step)).find((s) => s.kind === "upload");
+      expect(upload).toMatchObject({ file: { redacted: false, value: "bound-avatar.txt" } });
+      expect(JSON.stringify(judge.states)).toContain("«fixture:bound-avatar.txt»");
+      expect(JSON.stringify(judge.states)).not.toContain(bound);
+    },
+    120_000,
+  );
+
+  it(
     "never offers upload to the model when the mission has no fixture",
     async () => {
       const judge = new ScriptedJudge([{ op: "done" }]);
