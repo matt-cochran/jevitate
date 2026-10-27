@@ -16,9 +16,19 @@ export async function handleUpload(ctx: RunContext, step: ActStep): Promise<Flow
   const { cfg } = ctx;
   const { snap, decision, record, control, at } = step;
   let fixture = ctx.fixture;
+  let boundDescriptor: string | null = null;
   try {
     const bound = boundUploadFixture(control, ctx.uploadFixtures);
-    if (bound !== null) fixture = bound.path;
+    if (bound !== null) {
+      if (ctx.attachedUploadFixtures.has(bound.descriptor)) {
+        const reason = `upload fixture binding already attached: ${bound.descriptor}`;
+        ctx.history.push(`upload failed: ${reason}`);
+        record(false, reason);
+        return "next";
+      }
+      fixture = bound.path;
+      boundDescriptor = bound.descriptor;
+    }
   } catch (err) {
     const reason = err instanceof TypeFixtureSpecError ? err.message : String(err);
     ctx.history.push(`upload failed: ${reason}`);
@@ -41,6 +51,7 @@ export async function handleUpload(ctx: RunContext, step: ActStep): Promise<Flow
     ctx.tracker.countAction();
     ctx.history.push(`uploaded the fixture into ${control.name}`);
     ctx.fixtureAttached = true;
+    if (boundDescriptor !== null) ctx.attachedUploadFixtures.add(boundDescriptor);
     ctx.cleared(control);
   } else {
     ctx.history.push(`upload failed: ${ctx.failNote(r.reason, control)}`);

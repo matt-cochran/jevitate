@@ -23,6 +23,7 @@ export function initLoopState(ctx: MutableRunContext): void {
   ctx.lastChanceGiven = false;
   /** #172: this decision is the last-chance turn. */
   ctx.lastChanceTurn = false;
+  ctx.attachedUploadFixtures = new Set<string>();
   ctx.fixtureAttached = false;
   ctx.hang = undefined;
   ctx.outcome = null;

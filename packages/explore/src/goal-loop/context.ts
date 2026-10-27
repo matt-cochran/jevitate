@@ -118,6 +118,8 @@ export interface RunContext {
   lastChanceGiven: boolean;
   /** #172: this decision is the last-chance turn. */
   lastChanceTurn: boolean;
+  /** Descriptor-bound upload fixtures successfully attached this run. */
+  attachedUploadFixtures: Set<string>;
   fixtureAttached: boolean;
   hang: ExploreRun["hang"];
   outcome: RunOutcome | null;

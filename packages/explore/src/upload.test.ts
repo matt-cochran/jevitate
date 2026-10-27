@@ -32,6 +32,8 @@ const UPLOAD_PAGE = `<!doctype html><html><body>
   <h1>Profile</h1>
   <label for="avatar" style="display:inline-block;padding:2em;border:2px dashed #888">Choose avatar</label>
   <input id="avatar" type="file" accept="image/png,.txt" style="position:absolute;width:0;height:0;opacity:0" />
+  <label for="identity" style="display:inline-block;padding:2em;border:2px dashed #888">Choose identity document</label>
+  <input id="identity" type="file" accept="image/png,.txt" style="position:absolute;width:0;height:0;opacity:0" />
   <input id="nick" aria-label="Nickname" />
   <button type="button" style="display:none">Hidden button</button>
   <p id="status">nothing attached</p>
@@ -78,6 +80,12 @@ const readAttachedName = (s: { page: { evaluate: <R>(fn: () => R) => Promise<R> 
     return input?.files?.[0]?.name ?? null;
   });
 
+const readAttachedNames = (s: { page: { evaluate: <R>(fn: () => R) => Promise<R> } }): Promise<{ readonly avatar: string | null; readonly identity: string | null }> =>
+  s.page.evaluate(() => ({
+    avatar: document.querySelector<HTMLInputElement>("#avatar")?.files?.[0]?.name ?? null,
+    identity: document.querySelector<HTMLInputElement>("#identity")?.files?.[0]?.name ?? null,
+  }));
+
 describe("snapshot — hidden file inputs are targetable, nothing else hidden is", () => {
   it(
     "surfaces the visually-hidden <input type=file> as role file-input with its label and accept filter",
@@ -92,7 +100,7 @@ describe("snapshot — hidden file inputs are targetable, nothing else hidden is
           expect(file.summary).toBe('file-input "Choose avatar" (accept=image/png,.txt)');
           // The display:none button stays hidden from the model.
           expect(snap.controls.map((c) => c.name)).not.toContain("Hidden button");
-          expect(snap.controls.map((c) => c.role).sort()).toEqual(["file-input", "textbox"]);
+          expect(snap.controls.map((c) => c.role).sort()).toEqual(["file-input", "file-input", "textbox"]);
         },
         origin,
       );
@@ -439,6 +447,52 @@ describe("explore loop — upload is recorded and replays deterministically", ()
       );
       expect(judge.actionOptions[0]?.some((o) => o.startsWith("upload"))).toBe(false);
       expect(judge.states[0]?.controls.join("\n")).not.toContain("OP upload");
+    },
+    120_000,
+  );
+
+  it(
+    "offers and attaches each descriptor-bound fixture without a generic fallback",
+    async () => {
+      const avatar = join(fixtureDir, "bound-avatar-only.txt");
+      const identity = join(fixtureDir, "bound-identity-only.txt");
+      await writeFile(avatar, "avatar fixture bytes\n", "utf8");
+      await writeFile(identity, "identity fixture bytes\n", "utf8");
+      const judge = new ScriptedJudge([{ op: "upload", target: "0" }, { op: "upload", target: "1" }, { op: "done" }]);
+      const run = await withSession(
+        "explore-upload-two-bound-",
+        async (session) => {
+          const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
+          const result = await explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "attach avatar and identity document",
+            allowlist: [origin],
+            startUrl: `${origin}/`,
+            fixtureRoot: fixtureDir,
+            uploadFixtures: [
+              { descriptor: "label=Choose avatar", matcher: { key: "label", value: "Choose avatar" }, name: "bound-avatar-only.txt", path: avatar },
+              { descriptor: "label=Choose identity document", matcher: { key: "label", value: "Choose identity document" }, name: "bound-identity-only.txt", path: identity },
+            ],
+          });
+          expect(await readAttachedNames(session)).toEqual({ avatar: "bound-avatar-only.txt", identity: "bound-identity-only.txt" });
+          return result;
+        },
+        origin,
+      );
+      expect(run.stop).toBe("done");
+      expect(run.actions).toBe(2);
+      expect(judge.actionOptions[0]?.some((option) => option.startsWith("upload:"))).toBe(true);
+      expect(judge.actionOptions[1]?.some((option) => option.startsWith("upload:"))).toBe(true);
+      const uploads = run.recording.pages
+        .flatMap((page) => page.steps.map((step) => step.step))
+        .filter((step): step is Extract<Step, { kind: "upload" }> => step.kind === "upload")
+        .map((step) => step.file);
+      expect(uploads).toEqual([
+        { redacted: false, value: "bound-avatar-only.txt" },
+        { redacted: false, value: "bound-identity-only.txt" },
+      ]);
     },
     120_000,
   );
