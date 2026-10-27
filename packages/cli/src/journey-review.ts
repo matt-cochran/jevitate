@@ -4,7 +4,6 @@ import {
   SECRET_PARAM_NAME_RE,
   describeStep,
   flatJourneySteps,
-  journeyProofHash,
   isNoClaimExpect,
   isOwnTargetVisible,
   journeyAssertions,
@@ -35,6 +34,7 @@ import type { LocatorHealthDetail } from "./locator-health.js";
 import { evaluateMutationProofPolicy, type MutationProofPolicyMode, type ProofWaiver } from "./mutation-proof-policy.js";
 import { SafetyPolicy, describeCheck, explainCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
+import { journeyProofHashForContext, type JourneyProofContext } from "./journey-proof-context.js";
 import {
   createSheetWriter,
   finishSheet,
@@ -101,6 +101,8 @@ export interface JourneyVerifyRecord {
    * 0.14.0: those fall back to comparing `contentHash`.
    */
   readonly proofHash?: string;
+  /** #721: secret-free effective browser/emulation context included in `proofHash`. */
+  readonly proofContext?: JourneyProofContext;
   readonly verdict: string;
   readonly reason?: string;
   readonly summary: Readonly<Record<string, number>>;
@@ -460,7 +462,7 @@ function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | 
     verdict: rec.verdict,
     at: rec.at,
     // #523: an executable-content change stales the proof; an old record without it compares the full hash.
-    stale: rec.journeyId !== journey.metadata.id || (rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHash(journey)),
+    stale: rec.journeyId !== journey.metadata.id || (rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHashForContext(journey, rec.proofContext)),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     summary: { ...rec.summary },
     ...(rec.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: rec.suggestedTargetedProofs.map((p) => ({ ...p, relax: [...p.relax] })) }),

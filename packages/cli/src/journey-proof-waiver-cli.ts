@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { FsJourneyStore, journeyProofHash } from "@jevitate/journey";
+import { FsJourneyStore } from "@jevitate/journey";
 import { clock } from "@jevitate/domain";
 import { CI_ENV_MARKERS, inMcpInvocation, makeApprovalConfirm, approvalRefusal } from "./approval-provenance.js";
 import { type CliDeps } from "./cli-shared.js";
@@ -10,6 +10,7 @@ import { readVerifyRecord, writeProofWaiver, ReviewSidecarError } from "./journe
 import { evaluateMutationProofPolicy, mutationReceiptDigest, type ProofWaiver } from "./mutation-proof-policy.js";
 import { emitJsonOrRefusal } from "./cli-refusal.js";
 import { fail } from "./envelope.js";
+import { journeyProofHashForContext } from "./journey-proof-context.js";
 
 class ProofWaiverInputError extends Error {
   readonly code = "E_PROOF_WAIVER_ARGS";
@@ -48,7 +49,7 @@ export function registerJourneyProofWaiver(journey: Command, program: Command, d
         const latest = await new FsJourneyStore(layout.journeysDir).get(id);
         const latestRecord = await readVerifyRecord(layout.journeysDir, id);
         if (latest === null || latestRecord === null || journeyReviewHash(latest) !== contentHash || mutationReceiptDigest(latestRecord) !== mutationReceiptDigest(record)) throw new ProofWaiverInputError("Journey or proof changed during confirmation; review and retry");
-        const waiver: ProofWaiver = { v: 1, journeyId: id, contentHash, proofHash: journeyProofHash(stored), receiptDigest: mutationReceiptDigest(record), reason, at: clock.nowIso(), provenance: { channel: "tty", agentSignals: [...provenance.agentSignals], ...(provenance.user === undefined ? {} : { user: provenance.user }) } };
+        const waiver: ProofWaiver = { v: 1, journeyId: id, contentHash, proofHash: journeyProofHashForContext(stored, record.proofContext), receiptDigest: mutationReceiptDigest(record), reason, at: clock.nowIso(), provenance: { channel: "tty", agentSignals: [...provenance.agentSignals], ...(provenance.user === undefined ? {} : { user: provenance.user }) } };
         await writeProofWaiver(layout.journeysDir, waiver);
         program.configureOutput().writeOut?.(`waived this inconclusive proof for '${id}': ${reason}\n`);
         process.exitCode = 0;

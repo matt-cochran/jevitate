@@ -16,7 +16,6 @@ import {
   classifyMutation,
   declaredTargetedProofFor,
   journeyAssertions,
-  journeyProofHash,
   judgeAssertions,
   mutationProofVerdict,
   mutationReplay,
@@ -43,6 +42,7 @@ import { journeyReviewHash } from "./journey-review.js";
 import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
+import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
 
 /** `journey run`'s options a proof passes through to every replay (params, environment, auth, fixtures, browser, gate). */
 export type VerifyJourneyOptions = Omit<
@@ -346,11 +346,13 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
   const redacted = redactSecretParams(report, journey, opts.params);
+  const proofContext = journeyProofContext(opts.browser, opts.emulation);
   // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
   await writePreflightedVerifyRecord(receiptDestination, {
     journeyId: journey.metadata.id,
     contentHash: journeyReviewHash(journey),
-    proofHash: journeyProofHash(journey),
+    proofHash: journeyProofHashForContext(journey, proofContext),
+    ...(proofContext === undefined ? {} : { proofContext }),
     verdict: redacted.verdict,
     ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
     summary: { ...redacted.summary },
