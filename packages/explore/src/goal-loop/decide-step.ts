@@ -37,9 +37,11 @@ export async function decideStep(ctx: RunContext, step: Perceived, view: PageVie
         history: ctx.history,
         missionContext: ctx.missionContext,
         secrets: ctx.secrets,
-        // One fixture ⇒ one upload: once attached, upload actions leave the candidate set (the
-        // model had kept re-choosing it after a successful attach instead of proceeding).
-        uploadAvailable: ctx.fixture !== null && !ctx.fixtureAttached,
+        // A generic fixture is single-use, but each descriptor-bound fixture can attach once.
+        // That lets a mission bind separate files to separate inputs without exposing paths.
+        uploadAvailable:
+          (ctx.fixture !== null && !ctx.fixtureAttached) ||
+          ctx.uploadFixtures.some((fixture) => !ctx.attachedUploadFixtures.has(fixture.descriptor)),
         offered,
         unsubmitted,
         ...(ctx.conversation.latestReply === null && ctx.conversation.sent.length === 0

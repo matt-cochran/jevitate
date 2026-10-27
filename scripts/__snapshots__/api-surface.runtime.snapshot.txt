@@ -230,7 +230,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (456 exports)
+# @jevitate/explore (459 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -420,6 +420,7 @@
   blockedWriteCauses: function
   boundSecretField: function
   boundTypeFixture: function
+  boundUploadFixture: function
   boundaryValueCandidates: function
   breadthHint: function
   buildCrashReport: function
@@ -553,6 +554,7 @@
   judgeHttpResponse: function
   looksDestructiveRequest: function
   markTypeFixtures: function
+  markUploadFixtures: function
   markupCanary: function
   maskSecretFields: function
   matchGlob: function
@@ -580,6 +582,7 @@
   parseNumbers: function
   parseSecretField: function
   parseTypeFixtureSpec: function
+  parseUploadFixtureSpec: function
   pathGlob: function
   peekBlockedDeparture: function
   pendingEvidence: function

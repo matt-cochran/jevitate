@@ -126,9 +126,12 @@ describe("0.10 MCP tools: allowlisted, mirrored and key-free", () => {
   });
 
   it("no MCP tool takes a key, token, secret or password argument", () => {
+    // #720: a descriptor-bound upload fixture is a confined local file-path input, not a credential
+    // or an upload payload. `mcp-cli-tools` validates every bound path before the CLI sees it.
+    const benignPathArguments = new Set(["uploadFixture"]);
     const offending = [...tools().values()].flatMap((t) =>
       Object.keys(t.inputSchema.properties as Record<string, unknown>)
-        .filter((p) => /(^|[^a-z])(api)?key$|token|secret|password|credential|upload/i.test(p))
+        .filter((p) => /(^|[^a-z])(api)?key$|token|secret|password|credential|upload/i.test(p) && !benignPathArguments.has(p))
         .map((p) => `${t.name}.${p}`),
     );
     expect(offending).toEqual([]);

@@ -722,6 +722,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--target <id>` | the target this run was meant to cover, stamped as target.id in the result, its envelope and the run index (1-64 of [A-Za-z0-9_.-]; a sweep sets it per target); key on it to attribute a run |  |  |  |  |
 | `--totp <binding>` | goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk | `[]` |  |  |  |
 | `--type-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret | `[]` |  |  |  |
+| `--upload-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<file>' (repeatable). When the model chooses upload on a matching file input, code attaches that declared file; the model sees only its file name | `[]` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
@@ -807,6 +808,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--takes <n>` | corroborating takes incl. discovery (default 1) | `1` |  |  |  |
 | `--totp <binding>` | goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk | `[]` |  |  |  |
 | `--type-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret | `[]` |  |  |  |
+| `--upload-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<file>' (repeatable). When the model chooses upload on a matching file input, code attaches that declared file; the model sees only its file name | `[]` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 

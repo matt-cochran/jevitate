@@ -16,7 +16,7 @@ import type { ExploreRunContext } from "./shared.js";
 
 /** The default goal strategy: `--url` + `--goal` (+ `--success`), with fixtures (moved verbatim out of registerExploreCommands). */
 export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
-  const { deps, o, emitExplore, target, browser, screenshotsOpt, emulation, withInvariants, serverLog, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, prefixRequest, typeFixtures } = ctx;
+  const { deps, o, emitExplore, target, browser, screenshotsOpt, emulation, withInvariants, serverLog, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, prefixRequest, typeFixtures, uploadFixtures } = ctx;
   let { journeyPrefix } = ctx;
   // --success may be omitted for a find-out goal (#130d): the run is then verified by a grounded
   // `report` answer (#101) instead of an independent page/network check.
@@ -145,6 +145,7 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       ...(secretCommand === undefined ? {} : { secretCommand }),
       ...(o.secretCmdAttempts === undefined ? {} : { secretCommandAttempts: o.secretCmdAttempts }),
       ...(typeFixtures.length > 0 ? { typeFixtures } : {}),
+      ...(uploadFixtures.length > 0 ? { uploadFixtures } : {}),
       fixture: o.fixture,
       outDir: o.out,
       browserPortFactory: deps.explore?.browserPortFactory,
