@@ -1,5 +1,19 @@
 # @jevitate/cli
 
+## 0.26.0
+
+### Minor Changes
+
+- f570a65: Add repeatable descriptor-bound `--upload-fixture` bindings for deterministic multi-file Journey authoring. Matching file inputs receive only their declared, project-confined file after the model selects upload; CLI and MCP preserve filename-only model context, reject duplicate/ambiguous bindings, and retain `--fixture` as the backward-compatible fallback.
+- dca5552: Make inconclusive mutation proofs explicit with shared advisory/require-attempt/require-proven policy, human terminal waivers bound to Journey and proof receipts, and declared step-request defense relaxation. Review/readiness/JSON/MCP agree on policy and never label an unwaived inconclusive proof as proven.
+
+### Patch Changes
+
+- 0cefa0d: Restore a Journey's final same-document hash route after `reloadThen` when application bootstrap drops only the fragment, so persistence assertions run on the route the replay actually completed without masking server redirects.
+- 9c5a5f5: Reject absolute upload fixture paths and non-replayable assertion targets during Journey lint and strict review, matching replay's fail-closed behavior.
+- b097a84: `journey verify --mutate` now accepts the same viewport, device, and geolocation context as Journey replay and applies it to the baseline and every mutation replay. The `verify_journey` MCP tool exposes the same arguments, and verification receipts bind their proof hash to the effective browser and emulation context, so location- and device-dependent Journeys can produce mutation proof that cannot be reused under different coordinates or browser settings (#721).
+- 905f1c9: Preserve a completed step's request-check evidence when a later action fails during mutation verification, so an exact earlier failure is not misreported as a cascade.
+
 ## 0.25.0
 
 ### Minor Changes
