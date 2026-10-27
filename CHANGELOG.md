@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.26.0] – 2026-10-27
+
+0.26.0 makes multi-file Journey authoring deterministic and makes mutation-proof
+evidence and release verification more explicit.
+
+### Added
+
+- **Descriptor-bound upload fixtures.** Repeatable `--upload-fixture` bindings
+  provide only the declared project-confined file to each matching input after
+  the model selects upload; CLI and MCP retain filename-only model context and
+  reject ambiguous or duplicate bindings.
+- **Explicit mutation-proof policy.** Review, readiness, JSON, and MCP now
+  distinguish advisory, require-attempt, and require-proven proof policies;
+  terminal waivers are bound to the Journey and proof receipts.
+
+### Fixed
+
+- `reloadThen` restores the final same-document hash route when application
+  bootstrap drops only the fragment, without masking server redirects.
+- Journey lint and strict review reject absolute fixture paths and
+  non-replayable assertion targets.
+- Mutation verification carries replay viewport, device, and geolocation
+  context through its baseline and every replay, and preserves earlier
+  request-check evidence when a later action fails.
+
 ## [0.25.0] – 2026-10-26
 
 0.25.0 makes Journey verification easier to review before a browser is opened, adds an auditable
