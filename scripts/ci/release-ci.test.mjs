@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { findTreeArtifact, trustedRun } from "./find-tree-artifact.mjs";
+import { findStagedPublication, findTreeArtifact, trustedRun } from "./find-tree-artifact.mjs";
 import { verifyArtifact, writeArtifact } from "./release-artifact.mjs";
 import { planRelease } from "./release-plan.mjs";
 
@@ -60,6 +60,9 @@ describe("findTreeArtifact (#534)", () => {
   const artifact = (over = {}) => ({ id: 70, name: `jevitate-${TREE}`, expired: false, created_at: "2026-10-01T00:00:00Z", workflow_run: { id: 7 }, ...over });
   const fakeApi = ({ artifacts, runs, trees }) => async (path) => {
     if (path.includes("/actions/artifacts?")) return { artifacts };
+    if (path.includes("/actions/workflows/release.yml/runs?")) return { workflow_runs: Object.values(runs) };
+    const jobRunId = /\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs/.exec(path)?.[1];
+    if (jobRunId) return { jobs: runs[jobRunId]?.jobs ?? [] };
     const runId = /\/actions\/runs\/(\d+)$/.exec(path)?.[1];
     if (runId) return runs[runId];
     const sha = /\/git\/commits\/(\w+)$/.exec(path)?.[1];
@@ -98,6 +101,24 @@ describe("findTreeArtifact (#534)", () => {
   it("reports not-found (not an error) when nothing qualifies", async () => {
     const api = fakeApi({ artifacts: [], runs: {}, trees: {} });
     expect(await findTreeArtifact({ api, repo: REPO, tree: TREE })).toMatchObject({ found: false, artifact: `jevitate-${TREE}` });
+  });
+
+  it("uses the newest artifact available when staging actually published, not a later same-tree rebuild", async () => {
+    const api = fakeApi({
+      artifacts: [artifact({ id: 1, workflow_run: { id: 1 }, created_at: "2026-10-01T00:00:00Z" }), artifact({ id: 2, workflow_run: { id: 2 }, created_at: "2026-10-03T00:00:00Z" })],
+      runs: { 1: run({ id: 1, head_sha: "c1" }), 2: run({ id: 2, head_sha: "c2" }) },
+      trees: { c1: TREE, c2: TREE },
+    });
+    expect(await findTreeArtifact({ api, repo: REPO, tree: TREE, before: "2026-10-02T00:00:00Z" })).toMatchObject({ found: true, runId: 1, artifactId: 1 });
+  });
+
+  it("finds only a successful staging release that actually ran the npm publisher", async () => {
+    const api = fakeApi({
+      artifacts: [],
+      runs: { 7: run({ id: 7, path: ".github/workflows/release.yml", head_branch: "staging", created_at: "2026-10-02T00:00:00Z", run_attempt: 1, jobs: [{ name: "npm", status: "completed", conclusion: "success" }] }) },
+      trees: { c1: TREE },
+    });
+    expect(await findStagedPublication({ api, repo: REPO, tree: TREE })).toMatchObject({ found: true, runId: 7, publishedAt: "2026-10-02T00:00:00Z" });
   });
 });
 
