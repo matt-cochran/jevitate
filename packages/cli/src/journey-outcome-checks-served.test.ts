@@ -23,6 +23,7 @@ useSkippingTime({ per: "all" });
  */
 
 let saved = "draft";
+let hashRouteLoads = 0;
 const page = (): string => `<!doctype html><html><head><title>Editor</title></head><body><main data-saved="no">
   <h1>Editor</h1>
   <p id="live">Live: ${saved}</p>
@@ -48,6 +49,23 @@ const page = (): string => `<!doctype html><html><head><title>Editor</title></he
   </script>
 </main></body></html>`;
 
+const hashRoutePage = (): string => {
+  hashRouteLoads += 1;
+  return `<!doctype html><html><head><title>Owner portal</title></head><body>
+    <main><h1 id="home">Home</h1><section id="showcase" hidden><h1>Published examples</h1><article data-testid="showcase-published-item">Bathroom renovation</article></section></main>
+    <script>
+      ${hashRouteLoads > 1 ? `history.replaceState(null, '', '/hash-app');` : ""}
+      const render = () => {
+        const showcase = location.hash === '#/showcase';
+        document.getElementById('home').hidden = showcase;
+        document.getElementById('showcase').hidden = !showcase;
+      };
+      addEventListener('hashchange', render);
+      render();
+    </script>
+  </body></html>`;
+};
+
 let server: Server;
 let origin: string;
 let dir: string;
@@ -60,6 +78,10 @@ beforeAll(async () => {
         if (req.url === "/api/save") saved = body;
         res.writeHead(204).end();
       });
+      return;
+    }
+    if (req.url?.startsWith("/hash-app")) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(hashRoutePage());
       return;
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page());
@@ -171,6 +193,35 @@ describe("journey run judges a Journey's end state and step request expectations
     expect(r.data.reason).toMatch(/success check not met after the last step: reloadThen:textIncludes:css=#live\|Live: Hello two/);
     expect(r.data.reason).not.toMatch(/Saved: Hello two/);
     expect(r.exitCode).not.toBe(0);
+  }, 120_000);
+
+  it("reloadThen restores the final same-document hash route after bootstrap drops its fragment", async () => {
+    hashRouteLoads = 0;
+    const j: Journey = {
+      metadata: {
+        id: "hash-route-persistence",
+        name: "Published showcase survives reload",
+        promoted: false,
+        params: [],
+        createdAtIso: "2026-10-27T00:00:00.000Z",
+        endState: [
+          { kind: "reloadThen", assertion: { kind: "visible", target: { testId: "showcase-published-item" } } },
+          { kind: "reloadThen", assertion: { kind: "textIncludes", target: { css: "body" }, text: "Published examples" } },
+        ],
+      },
+      recording: {
+        version: "1",
+        site: origin,
+        pages: [{
+          url: "/hash-app#/showcase",
+          steps: [{ step: { kind: "navigate", url: "/hash-app#/showcase", expect: { kind: "visible", target: { testId: "showcase-published-item" } } } }],
+        }],
+      },
+    };
+    const r = await run(j);
+    expect(r.data).toMatchObject({ outcome: "ok" });
+    expect(r.exitCode ?? 0).toBe(0);
+    expect(hashRouteLoads).toBe(2);
   }, 120_000);
 
   it("a step whose expected write never went out fails, naming the step", async () => {

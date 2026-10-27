@@ -21,6 +21,31 @@ function quoteRead(s: string): string {
 }
 
 /**
+ * A hard reload can pass through an origin's canonical redirect or bootstrap code and lose only
+ * the client-side fragment. `reloadThen` still needs to judge the route the replay actually ended
+ * on: revisit that exact fragment after the new document commits. Never cross an origin, path or
+ * query boundary here — a real server redirect remains observable and its assertion can fail.
+ */
+async function restoreReloadFragment(page: Page, targetUrl: string, timeoutMs: number): Promise<string | undefined> {
+  let target: URL;
+  let current: URL;
+  try {
+    target = new URL(targetUrl);
+    current = new URL(page.url());
+  } catch {
+    return undefined;
+  }
+  const sameDocument = target.origin === current.origin && target.pathname === current.pathname && target.search === current.search;
+  if (!target.hash || !sameDocument || target.hash === current.hash) return undefined;
+  try {
+    await page.goto(target.href, { waitUntil: "commit", timeout: timeoutMs });
+    return undefined;
+  } catch (e) {
+    return `reload target could not be restored: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
+  }
+}
+
+/**
  * #335: an exact `text=` target that matched no element while some element CONTAINS that text —
  * the usual reason a visible text "did not hold" (`text=` compares an element's whole text). Says
  * so, with the substring form to use. Empty for any other target or failure.
@@ -118,18 +143,21 @@ export async function evaluateOutcomeChecks(checks: readonly SuccessCheck[], ctx
   const reloads = [...checks.entries()].filter(([, c]) => c.kind === "reloadThen");
   if (reloads.length > 0) {
     // Persistence: what the page shows after a reload came from the server, not local UI state.
+    const reloadTarget = page.url();
     const reloaded = await reloadPage(page);
+    let reloadFailure = reloaded.ok ? undefined : reloaded.reason ?? "unknown";
     if (reloaded.ok) {
       await page.waitForLoadState("domcontentloaded", { timeout: ceilingMs }).catch(() => undefined);
-      await monitorFor(page).waitSettled({ ceilingMs });
+      reloadFailure = await restoreReloadFragment(page, reloadTarget, ceilingMs);
+      if (reloadFailure === undefined) await monitorFor(page).waitSettled({ ceilingMs });
     }
     for (const [i, c] of reloads) {
       if (c.kind !== "reloadThen") continue;
       results.set(
         i,
-        reloaded.ok
+        reloaded.ok && reloadFailure === undefined
           ? await assertOn(c.assertion, "after a reload", c)
-          : { check: describeCheck(c), passed: false, detail: `the page could not be reloaded: ${reloaded.reason ?? "unknown"}` },
+          : { check: describeCheck(c), passed: false, detail: `the page could not be reloaded: ${reloadFailure ?? "unknown"}` },
       );
     }
   }
