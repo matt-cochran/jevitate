@@ -36,7 +36,9 @@ async function restoreReloadFragment(page: Page, targetUrl: string, timeoutMs: n
     return undefined;
   }
   const sameDocument = target.origin === current.origin && target.pathname === current.pathname && target.search === current.search;
-  if (!target.hash || !sameDocument || target.hash === current.hash) return undefined;
+  // Only repair a fragment that disappeared. A different non-empty fragment is an observed
+  // application redirect and must remain visible to the assertion instead of being overwritten.
+  if (!target.hash || !sameDocument || current.hash) return undefined;
   try {
     await page.goto(target.href, { waitUntil: "commit", timeout: timeoutMs });
     return undefined;

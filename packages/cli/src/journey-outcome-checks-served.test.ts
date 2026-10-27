@@ -24,6 +24,7 @@ useSkippingTime({ per: "all" });
 
 let saved = "draft";
 let hashRouteLoads = 0;
+let hashReloadTarget: "drop" | "home" = "drop";
 const page = (): string => `<!doctype html><html><head><title>Editor</title></head><body><main data-saved="no">
   <h1>Editor</h1>
   <p id="live">Live: ${saved}</p>
@@ -54,7 +55,7 @@ const hashRoutePage = (): string => {
   return `<!doctype html><html><head><title>Owner portal</title></head><body>
     <main><h1 id="home">Home</h1><section id="showcase" hidden><h1>Published examples</h1><article data-testid="showcase-published-item">Bathroom renovation</article></section></main>
     <script>
-      ${hashRouteLoads > 1 ? `history.replaceState(null, '', '/hash-app');` : ""}
+      ${hashRouteLoads > 1 ? `history.replaceState(null, '', '/hash-app${hashReloadTarget === "home" ? "#/home" : ""}');` : ""}
       const render = () => {
         const showcase = location.hash === '#/showcase';
         document.getElementById('home').hidden = showcase;
@@ -197,6 +198,7 @@ describe("journey run judges a Journey's end state and step request expectations
 
   it("reloadThen restores the final same-document hash route after bootstrap drops its fragment", async () => {
     hashRouteLoads = 0;
+    hashReloadTarget = "drop";
     const j: Journey = {
       metadata: {
         id: "hash-route-persistence",
@@ -221,6 +223,34 @@ describe("journey run judges a Journey's end state and step request expectations
     const r = await run(j);
     expect(r.data).toMatchObject({ outcome: "ok" });
     expect(r.exitCode ?? 0).toBe(0);
+    expect(hashRouteLoads).toBe(2);
+  }, 120_000);
+
+  it("reloadThen preserves a different non-empty hash chosen by the application", async () => {
+    hashRouteLoads = 0;
+    hashReloadTarget = "home";
+    const j: Journey = {
+      metadata: {
+        id: "hash-route-redirect",
+        name: "Application redirect remains observable after reload",
+        promoted: false,
+        params: [],
+        createdAtIso: "2026-10-27T00:00:00.000Z",
+        endState: [{ kind: "reloadThen", assertion: { kind: "visible", target: { testId: "showcase-published-item" } } }],
+      },
+      recording: {
+        version: "1",
+        site: origin,
+        pages: [{
+          url: "/hash-app#/showcase",
+          steps: [{ step: { kind: "navigate", url: "/hash-app#/showcase", expect: { kind: "visible", target: { testId: "showcase-published-item" } } } }],
+        }],
+      },
+    };
+    const r = await run(j);
+    expect(r.data.outcome).toBe("quarantined");
+    expect(r.data.reason).toMatch(/reloadThen:visible:testId=showcase-published-item/);
+    expect(r.exitCode).not.toBe(0);
     expect(hashRouteLoads).toBe(2);
   }, 120_000);
 
