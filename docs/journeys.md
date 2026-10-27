@@ -183,7 +183,8 @@ jevitate journey lint checkout --sarif lint.sarif
 | `http-check-without-reset` | warning | The Journey has an `http` end-state check but records no fixtures, so nothing resets its source (an earlier email can make it pass) |
 | `intent-uncovered` | warning | A step's documented `expectedResult` maps to no effect assertion (a `waitFor` step's target and state count as its checked outcome, #659) |
 | `upload-file-missing` | error | An `upload` step's literal fixture path does not exist. Relative paths resolve against the project root (the folder holding `.jevitate/`), never the working directory; the message shows the resolved path |
-| `upload-outside-project` | error | An `upload` step's fixture resolves (after symlinks) outside the project root: an absolute path, a `../` path or a symlink that escapes. A run refuses it (`fixture-outside-project`), `journey promote` refuses it (`E_JOURNEY_WEAK`) and `--accept-weak` does not waive it — move the fixture into the project. There is no override flag |
+| `upload-outside-project` | error | An `upload` step's fixture is absolute, escapes through `../`, or resolves (after symlinks) outside the project root. Fixtures must be project-relative. A run refuses it (`fixture-outside-project`), `journey promote` refuses it (`E_JOURNEY_WEAK`) and `--accept-weak` does not waive it. There is no override flag |
+| `unusable-target` | error | An assertion target has no replayable selector (for example `role` without an exact accessible `name`). Record a test id, named role, label, text, or css selector. |
 
 Warnings never block promotion. `--accept-weak "<reason>"` records the reason and the waived error
 rules in the Journey's `metadata.acceptedWeak`.
@@ -319,8 +320,8 @@ replay that must pass:
 Rules:
 
 - at most 8 `relax` entries; a plan that names more is refused when the Journey loads;
-- each entry is an earlier `step:<n>` page postcondition and never the target, a `handback`/resume
-  assertion, or a `step-request`/`end-state` site; the `check` is an assertion site of this Journey
+- each entry is an earlier `step:<n>` page postcondition or `step-request:<n>:<i>` request check,
+  never the target, a `handback`/resume assertion, or an `end-state` site; the `check` is an assertion site of this Journey
   and `mustFailWhen` resolves, or the plan is refused when the Journey loads;
 - every `relax` site must be paired with that mutation (derived, or declared with
   `metadata.mutationPairs`) and must itself be proven sensitive to it — transitively, through the
@@ -337,6 +338,40 @@ and in JSON as `proof.targetedProofs`. A declared proof's human line reads
 `(proved by swap-param:threadId, declared plan relaxed step:4, step:6, …)` and the assertion
 carries `declaredProof: true`. Relaxation exists only inside the cloned replays `verify` runs, so a
 production `journey run` is unaffected.
+
+**Request defenses (#708).** Automatic relaxation remains limited to page postconditions. When an
+earlier step-request check blocks an end-state proof, the report suggests a declared plan such as
+`{"check":"end-state:0","mustFailWhen":"swap-param:threadId","relax":["step-request:5:0"]}`.
+The request check must be paired with that mutation and independently proven sensitive. The
+verifier masks that exact check only in the declared mutated and control replays; it retains the
+original check array, indices, request capture, safety guards and response bounds. The same
+unmutated control must pass. Removing checks or relaxing a target is never a supported workaround.
+
+**Mutation-proof policy (#708).** Set `mutationProofPolicy` in `.jevitate/project.json`:
+
+| Mode | Strict review requirement |
+| --- | --- |
+| `advisory` (default) | Preserves existing exit behavior. Fresh inconclusive attempts appear as neutral attention, never as proven/CLEAR with a check mark. |
+| `require-attempt` | Requires a fresh proven receipt, or a fresh inconclusive attempt with an explicit current human waiver. Missing, stale, and insensitive receipts fail. |
+| `require-proven` | Requires a fresh `proven` receipt. A waiver cannot override this policy. |
+
+`journey review --json` and MCP `review_journey` expose the same `proof.policy`: mode, verdict,
+freshness, reason, counts, classification, `passed`, `waiverRequired`, waiver status and next
+command. `proof.policy.digest` is a versioned content hash of the policy, Journey review hash,
+executable/proof-plan hash, exact receipt digest and waiver record. Evidence consumers must include
+it in reuse identities. A read-only Journey with zero sensitive and only unpaired checks is
+explicitly `non-mutation-testable`; it needs no artificial write. Technical readiness keeps an
+unwaived inconclusive attempt inconclusive even under advisory policy.
+
+A person can accept a specific inconclusive attempt with
+`jevitate journey waive-proof <id> --reason "<reviewed reason>"` in their own interactive terminal.
+The person types the Journey id or review-hash prefix, then confirms the waiver. MCP, CI and
+noninteractive invocations are refused; there is no noninteractive waiver flag. The local sidecar
+`journeys/.proof-waivers/<id>.json` records timestamp, reason, terminal provenance and exact
+Journey/proof/receipt hashes. Changing executable content, proof plans, review content, or rerunning
+the proof invalidates the waiver. Review displays valid waivers by reason. These records provide
+auditable provenance, not cryptographic identity; commit/review them under the same branch policy
+as the Journey. Invalid sidecars fail closed.
 
 Each assertion gets one verdict:
 

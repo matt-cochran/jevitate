@@ -167,7 +167,12 @@ const TRAVERSAL = (): string[] => ["../x", "a/../../x", join(dir, "outside-root"
 
 /** Every leaf command, by path: its refusal paths, or why it has none beyond commander's own parse errors. */
 const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: string }>> => ({
+  "journey waive-proof": { cases: [["nope", "--reason", "reviewed"], ["nope", "--reason", " "]] },
   "acceptance audit": { cases: [[]] },
+  // #677: local preference controls refuse automation before touching either preference store.
+  "hint journeeze dismiss": { cases: [["--signal", "a".repeat(64)], ["--signal", "invalid"], ["--signal", "a".repeat(64), "--scope", "invalid"]] },
+  "hint journeeze disable": { cases: [[], ["--scope", "invalid"]] },
+  "hint journeeze enable": { cases: [[], ["--scope", "invalid"]] },
   init: { exempt: "no file, id or number input: it detects and writes" },
   // #221: a name is one safe path segment — never a path out of the profiles root.
   "profile create": { cases: TRAVERSAL().map((n) => [n]) },

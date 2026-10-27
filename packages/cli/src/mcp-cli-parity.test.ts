@@ -41,6 +41,10 @@ const NATIVE_MCP_TO_CLI: Readonly<Record<string, readonly string[]>> = {
 
 /** CLI commands deliberately NOT reachable over MCP, and why. Nothing else may be missing. */
 const EXCLUDED: Readonly<Record<string, string>> = {
+  "journey waive-proof": "#708: a reasoned proof waiver requires typed human terminal confirmation and refuses MCP, CI and noninteractive channels",
+  "hint journeeze dismiss": "#677: dismissing a local product hint is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
+  "hint journeeze disable": "#677: disabling local product hints is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
+  "hint journeeze enable": "#677: enabling local product hints is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
   "acceptance audit": "a local, read-only release-evidence audit over operator-selected files; it produces CI artifacts but does not drive an authorized target or offer an agent capability",
   mcp: "the MCP server itself (it owns stdin/stdout); an MCP client is already connected to it",
   ui: "the local human dashboard (loopback HTTP, opens a browser): where a person approves/cancels inbox items — human-only by design",
@@ -339,6 +343,17 @@ describe("#281: run_exploration's typeFixture confines each bound file like ever
     expect(argv).toContain(`--type-fixture=label=Paste your text=${root}/fixtures/import.txt`);
     expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["label=Body=/etc/passwd"] }, [root])).toThrow(/typeFixture\[0\]/);
     expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["no-file"] }, [root])).toThrow(/descriptor>=<file path>/);
+  });
+});
+
+describe("#720: run_exploration's uploadFixture confines each bound file", () => {
+  it("passes a descriptor-bound upload path and refuses an outside-root path", async () => {
+    const { buildCliArgv } = await import("./mcp-cli-tools.js");
+    const spec = CLI_TOOL_SPECS.find((t) => t.name === "run_exploration")!;
+    const root = process.cwd();
+    const argv = buildCliArgv(spec, { url: "http://127.0.0.1:1/", uploadFixture: ["label=Before photo=fixtures/before.png"] }, [root]);
+    expect(argv).toContain(`--upload-fixture=label=Before photo=${root}/fixtures/before.png`);
+    expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", uploadFixture: ["label=Before photo=/etc/passwd"] }, [root])).toThrow(/uploadFixture\[0\]/);
   });
 });
 

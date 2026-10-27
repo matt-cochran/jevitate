@@ -1,5 +1,18 @@
 # jevitate
 
+## 0.26.0
+
+### Patch Changes
+
+- b097a84: `journey verify --mutate` now accepts the same viewport, device, and geolocation context as Journey replay and applies it to the baseline and every mutation replay. The `verify_journey` MCP tool exposes the same arguments, and verification receipts bind their proof hash to the effective browser and emulation context, so location- and device-dependent Journeys can produce mutation proof that cannot be reused under different coordinates or browser settings (#721).
+- Updated dependencies [f570a65]
+- Updated dependencies [dca5552]
+- Updated dependencies [0cefa0d]
+- Updated dependencies [9c5a5f5]
+- Updated dependencies [b097a84]
+- Updated dependencies [905f1c9]
+  - @jevitate/cli@0.26.0
+
 ## 0.25.0
 
 ### Minor Changes

@@ -30,6 +30,14 @@ export interface TypeFixture {
   readonly text: string;
 }
 
+/** A file fixture bound to a selected upload control; its path never reaches the model. */
+export interface UploadFixture {
+  readonly descriptor: string;
+  readonly matcher: FieldMatcher;
+  readonly name: string;
+  readonly path: string;
+}
+
 export class TypeFixtureSpecError extends Error {
   readonly code = "E_EXPLORE_ARGS";
   constructor(message: string) {
@@ -58,6 +66,14 @@ export function parseTypeFixtureSpec(spec: string): { readonly descriptor: strin
   return { descriptor: `${key}=${value}`, matcher: { key: key as FieldMatcherKey, value }, path };
 }
 
+export function parseUploadFixtureSpec(spec: string): { readonly descriptor: string; readonly matcher: FieldMatcher; readonly path: string } {
+  try {
+    return parseTypeFixtureSpec(spec);
+  } catch {
+    throw new TypeFixtureSpecError("--upload-fixture expects '<label|testId|type|id|name>=<value>=<file>' (e.g. 'label=Before photo=./fixtures/before.png')");
+  }
+}
+
 /** The only form of a type fixture a model (or the history) sees. */
 export function typeFixturePlaceholder(f: TypeFixture): string {
   return `«fixture:${f.name}»`;
@@ -70,6 +86,13 @@ export function boundTypeFixture(c: Control, fixtures: readonly TypeFixture[] | 
   return fixtures.find((f) => fieldMatches(f.matcher, c)) ?? null;
 }
 
+export function boundUploadFixture(c: Control, fixtures: readonly UploadFixture[] | undefined): UploadFixture | null {
+  if (fixtures === undefined || fixtures.length === 0 || c.tag !== "input") return null;
+  const matches = fixtures.filter((f) => fieldMatches(f.matcher, c));
+  if (matches.length > 1) throw new TypeFixtureSpecError(`--upload-fixture bindings are ambiguous for ${c.name || c.summary}`);
+  return matches[0] ?? null;
+}
+
 /** The snapshot the model sees: a bound control says code types the fixture (never its contents). */
 export function markTypeFixtures(snap: Snapshot, fixtures: readonly TypeFixture[] | undefined): Snapshot {
   if (fixtures === undefined || fixtures.length === 0) return snap;
@@ -79,6 +102,19 @@ export function markTypeFixtures(snap: Snapshot, fixtures: readonly TypeFixture[
     if (f === null) return c;
     changed = true;
     return { ...c, summary: `${c.summary} (bound: ${typeFixturePlaceholder(f)} — choose \`type\` on it; code types the file's exact text)` };
+  });
+  return changed ? { ...snap, controls } : snap;
+}
+
+export function markUploadFixtures(snap: Snapshot, fixtures: readonly UploadFixture[] | undefined): Snapshot {
+  if (fixtures === undefined || fixtures.length === 0) return snap;
+  let changed = false;
+  const controls = snap.controls.map((c) => {
+    let fixture: UploadFixture | null;
+    try { fixture = boundUploadFixture(c, fixtures); } catch { return c; }
+    if (fixture === null) return c;
+    changed = true;
+    return { ...c, summary: `${c.summary} (bound upload: «fixture:${fixture.name}» — choose \`upload\`; code attaches the declared file)` };
   });
   return changed ? { ...snap, controls } : snap;
 }

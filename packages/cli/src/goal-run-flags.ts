@@ -13,13 +13,14 @@ import {
   type SecretField,
   type SuccessWhen,
   type TypeFixture,
+  type UploadFixture,
 } from "@jevitate/explore";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { intArg, nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
 import type { ConversationOptions } from "./conversation-options.js";
 import { LITERAL_SECRET_WARNING, resolveSecretArgs } from "./secret-args.js";
 import { secretCommandRunner } from "./secret-command.js";
-import { loadTypeFixtures } from "./type-fixture-file.js";
+import { loadTypeFixtures, loadUploadFixtures } from "./type-fixture-file.js";
 import { SessionFileInProjectError, assertSessionFileOutsideProject } from "./project-dir.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig, type TargetFlags } from "./target-config.js";
@@ -76,6 +77,13 @@ export const GOAL_RUN_OPTIONS = {
     new Option(
       "--type-fixture <binding>",
       "goal strategy: '<label|testId|type|id|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret",
+    )
+      .default([] as string[])
+      .argParser(collect),
+  uploadFixture: () =>
+    new Option(
+      "--upload-fixture <binding>",
+      "goal strategy: '<label|testId|type|id|name>=<file>' (repeatable). When the model chooses upload on a matching file input, code attaches that declared file; the model sees only its file name",
     )
       .default([] as string[])
       .argParser(collect),
@@ -213,6 +221,7 @@ export interface GoalRunFlags extends EmulationFlags, ScreenshotsFlags {
   allowSecretCmd?: boolean;
   secretCmdAttempts?: number;
   typeFixture: string[];
+  uploadFixture: string[];
   fixture?: string;
   saveStorageState?: string;
   replyWaitMs?: string | number;
@@ -341,6 +350,7 @@ export interface GoalRunShaping {
   readonly secretCommand?: SecretCommandRunner;
   readonly secretCommandAttempts?: number;
   readonly typeFixtures?: readonly TypeFixture[];
+  readonly uploadFixtures?: readonly UploadFixture[];
   readonly fixture?: string;
   readonly saveStorageState?: string;
   readonly screenshots?: ScreenshotsSpec;
@@ -379,6 +389,7 @@ export function resolveGoalRunFlags(o: GoalRunFlags, url: string, deps: ResolveG
     const emulation = emulationFromFlags(o);
     const secretFields = secretFieldsFromFlags(o, env);
     const typeFixtures = o.typeFixture.length === 0 ? [] : loadTypeFixtures(o.typeFixture);
+    const uploadFixtures = o.uploadFixture.length === 0 ? [] : loadUploadFixtures(o.uploadFixture);
     let target: TargetConfig | undefined;
     try {
       target = resolveTargetConfig(loadTargetsFile(deps.targetsConfigPath), new URL(url).origin, targetFlagsFromFlags(o, dialogs));
@@ -395,6 +406,7 @@ export function resolveGoalRunFlags(o: GoalRunFlags, url: string, deps: ResolveG
       ...(secretFields.some((f) => f.kind === "cmd") ? { secretCommand: secretCommandRunner() } : {}),
       ...(o.secretCmdAttempts === undefined ? {} : { secretCommandAttempts: o.secretCmdAttempts }),
       ...(typeFixtures.length === 0 ? {} : { typeFixtures }),
+      ...(uploadFixtures.length === 0 ? {} : { uploadFixtures }),
       ...(o.fixture === undefined ? {} : { fixture: o.fixture }),
       ...(o.saveStorageState === undefined ? {} : { saveStorageState: o.saveStorageState }),
       ...(screenshots === undefined ? {} : { screenshots }),

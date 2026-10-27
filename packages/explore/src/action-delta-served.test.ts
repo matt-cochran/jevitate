@@ -46,7 +46,7 @@ const PAGES: Record<string, string> = {
     setInterval(() => { document.getElementById("ad").textContent = "Ad: buy " + word(); }, 150);
     document.getElementById("b").onclick = () => { document.getElementById("far").textContent = "Result: done"; };</script>`,
   "/big": `<main><h1>Big</h1><button id="b">Refresh</button><div role="status" id="st"></div><table><tbody>${Array.from({ length: 400 }, (_, i) => `<tr><td>Row ${i}</td><td><a href="#r${i}">Open ${i}</a></td><td><button>Edit ${i}</button></td></tr>`).join("")}</tbody></table></main>
-    <script>document.getElementById("b").onclick = () => { document.getElementById("st").textContent = "Refreshed"; };</script>`,
+    <script>let refreshes = 0; document.getElementById("b").onclick = () => { document.getElementById("st").textContent = "Refreshed " + ++refreshes; };</script>`,
   "/reset": `<main><h1>Reset</h1><label>Nick <input id="n" aria-label="Nick"></label></main>
     <script>document.getElementById("n").addEventListener("input", (e) => { e.target.value = ""; });</script>`,
 };

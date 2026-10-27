@@ -346,7 +346,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (710 exports)
+# @jevitate/explore (714 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -419,6 +419,7 @@
   boundSecretField: function
   BoundsTracker: class
   boundTypeFixture: function
+  boundUploadFixture: function
   breadthHint: function
   BudgetActionInfo: interface
   BudgetGuardResult: interface
@@ -730,6 +731,7 @@
   markTypeFixtures: function
   markupCanary: function
   MarkupInjection: interface
+  markUploadFixtures: function
   maskSecretFields: function
   matchGlob: function
   matchOption: function
@@ -812,6 +814,7 @@
   parseNumbers: function
   parseSecretField: function
   parseTypeFixtureSpec: function
+  parseUploadFixtureSpec: function
   PartialReport: interface
   PartialReportAction: interface
   PartialReportState: interface
@@ -1028,6 +1031,7 @@
   unreadablePageTiming: function
   UNSAVED_WRITE_REASON: variable
   UPLOAD_OP_GUIDE: variable
+  UploadFixture: interface
   urlMatcher: function
   vacuousCheckMessage: function
   validateAllowControlPatterns: function
@@ -1208,7 +1212,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (278 exports)
+# @jevitate/journey (282 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1409,6 +1413,8 @@
   MutationPair: interface
   mutationPairIssues: function
   MutationPlan: interface
+  MutationProofPolicyResult: type-alias
+  MutationProofPolicyResultSchema: variable
   mutationProofVerdict: function
   MutationProofVerdict: type-alias
   mutationReplay: function
@@ -1434,6 +1440,8 @@
   PersonaReviewSchema: variable
   planJourneyMutations: function
   prefixLandingPath: function
+  ProofWaiver: type-alias
+  ProofWaiverSchema: variable
   ProposalStep: type-alias
   ProposalStepSchema: variable
   PrReview: type-alias
@@ -1786,7 +1794,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (197 exports)
+# @jevitate/recording (198 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1965,6 +1973,7 @@
   TARGET_DISPLAY_NAME_MAX: variable
   TargetDescriptor: interface
   TargetDescriptorSchema: variable
+  targetDescriptorSelectorProblem: function
   TargetDisplay: interface
   TargetDisplaySchema: variable
   TextAnchor: type-alias

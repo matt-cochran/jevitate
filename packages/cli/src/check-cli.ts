@@ -12,12 +12,13 @@ import { TargetConfigError, loadTargetsFile } from "./target-config.js";
 import { ApprovalArgsError, parseAllowedChannels } from "./approval-provenance.js";
 import { resolveCatalogDir } from "./catalog-api.js";
 import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { ALLOW_CHANNELS_HELP } from "./catalog-cli.js";
 import { brittleStepGate, locatorHealth, renderLocatorHealth } from "./locator-health-api.js";
 import { ChangesArgsError, ChangesInputError } from "./change-context.js";
 import { CLI_HEAL_NAMES, JourneyHealArgsError, validateJourneyHeal, type JourneyHealRequest } from "./journey-heal.js";
 import type { SelfHealMode } from "@jevitate/domain";
+import { createEvidenceManifest, evidenceArtifactsReason, parseEvidenceKeyInput, parseEvidenceManifest, reuseDecision, sha256 } from "./check-evidence.js";
 
 /**
  * `jevitate check --suite <file.json>` (#137). Registered by `program.ts`; its model gateways and
@@ -58,6 +59,15 @@ function emit(program: Command, envelope: JsonEnvelope<unknown>, json: boolean, 
 const collect = (v: string, prev: string[]): string[] => [...prev, v];
 const collectList = (v: string, prev: string[]): string[] => [...prev, ...v.split(",").map((s) => s.trim()).filter((s) => s !== "")];
 
+function readEvidenceJson(path: string, kind: "input" | "manifest"): ReturnType<typeof parseEvidenceKeyInput> | ReturnType<typeof parseEvidenceManifest> {
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return kind === "input" ? parseEvidenceKeyInput(value) : parseEvidenceManifest(value);
+  } catch (error) {
+    throw new CheckArgsError(`--evidence-${kind} ${JSON.stringify(path)} is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 /** #479: the app's release label — 1-64 of [A-Za-z0-9._+-], starting with a letter or digit. */
 const APP_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
 
@@ -91,6 +101,10 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
     .option("--baseline <run|tag|last>", "only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`)")
     .option("--baseline-dir <dir>", "results dir holding baseline runs (repeatable; default: this check's results, then ~/.jevitate)", collect, [] as string[])
     .option("--changed-routes <globs>", "only run Journeys and goals touching these route globs (comma list, repeatable), e.g. '/settings/**'", collectList, [] as string[])
+    .option("--evidence-input <file>", "#704 immutable proof identity JSON; required to consume or emit an evidence manifest")
+    .option("--evidence-manifest <file>", "#704 prior content-addressed evidence manifest to reuse when its identity exactly matches")
+    .option("--evidence-out <file>", "#704 write a content-addressed success manifest after this clean check")
+    .option("--evidence-decision-out <file>", "#704 write a machine-readable run|skip decision and changed-input reasons, then exit before browser/model work")
     .option("--out <dir>", "output dir: results/, junit.xml, jevitate.sarif, report.md, check.json", "jevitate-check")
     .option("--junit <path>", "JUnit XML path (default <out>/junit.xml)")
     .option("--sarif <path>", "SARIF path (default <out>/jevitate.sarif)")
@@ -126,6 +140,10 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         baseline?: string;
         baselineDir: string[];
         changedRoutes: string[];
+        evidenceInput?: string;
+        evidenceManifest?: string;
+        evidenceOut?: string;
+        evidenceDecisionOut?: string;
         out: string;
         junit?: string;
         sarif?: string;
@@ -168,6 +186,20 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         }
         if (o.allowChannels !== undefined && o.requireApprovals !== true) throw new ApprovalArgsError("--allow-channels needs --require-approvals");
         const allowedChannels = o.requireApprovals === true ? parseAllowedChannels(o.allowChannels) : undefined;
+        if ((o.evidenceManifest !== undefined || o.evidenceOut !== undefined || o.evidenceDecisionOut !== undefined) && o.evidenceInput === undefined) {
+          throw new CheckArgsError("--evidence-manifest, --evidence-out, and --evidence-decision-out each require --evidence-input");
+        }
+        const evidenceInput = o.evidenceInput === undefined ? undefined : parseEvidenceKeyInput(readEvidenceJson(o.evidenceInput, "input"));
+        const evidenceManifest = o.evidenceManifest === undefined ? undefined : parseEvidenceManifest(readEvidenceJson(o.evidenceManifest, "manifest"));
+        const evidenceArtifactReason = evidenceManifest === undefined ? undefined : evidenceArtifactsReason(evidenceManifest, (path) => readFileSync(path, "utf8"));
+        if (o.evidenceDecisionOut !== undefined && evidenceInput !== undefined) {
+          const decision = evidenceArtifactReason === undefined ? reuseDecision(evidenceInput, evidenceManifest) : { decision: "run" as const, reasons: [evidenceArtifactReason] };
+          const data = { kind: "jevitate-evidence-decision", decision: decision.decision, reasons: decision.reasons, changedInputs: decision.decision === "run" ? decision.reasons : [] };
+          writeFileSync(o.evidenceDecisionOut, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+          if (o.json === true) emit(program, ok(data), true, 0);
+          else program.configureOutput().writeOut?.(`${decision.decision.toUpperCase()} ${decision.reasons.join(", ")} · ${o.evidenceDecisionOut}\n`);
+          return;
+        }
         // #470: the opt-in brittle-step gate, resolved before the suite is read or anything runs.
         const gate = o.maxBrittleSteps === undefined ? undefined : brittleStepGate(o.maxBrittleSteps);
         // #479: the app version is resolved (and an invalid one refused) before anything runs.
@@ -192,6 +224,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           ...(o.baselineDir.length > 0 ? { baselineDirs: o.baselineDir } : o.baseline === undefined ? {} : { baselineDirs: [`${o.out}/results`, ...defaultResultDirs()] }),
           ...(deps.baselinesDir === undefined ? {} : { baselinesDir: deps.baselinesDir }),
           ...(o.changedRoutes.length > 0 ? { changedRoutes: o.changedRoutes } : {}),
+          ...(evidenceInput === undefined ? {} : { evidence: { input: evidenceInput, ...(evidenceManifest === undefined ? {} : { manifest: evidenceManifest }), ...(evidenceArtifactReason === undefined ? {} : { refusalReasons: [evidenceArtifactReason] }) } }),
           ...(o.junit === undefined ? {} : { junitPath: o.junit }),
           ...(o.sarif === undefined ? {} : { sarifPath: o.sarif }),
           ...(o.jsonOut === undefined ? {} : { jsonPath: o.jsonOut }),
@@ -204,6 +237,10 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           ...(gate === undefined ? {} : { maxBrittleSteps: gate.maxBrittleSteps }),
           projectDir: resolveCatalogDir(deps.catalogDir),
         });
+        if (o.evidenceOut !== undefined && result.exitCode === 0 && evidenceInput !== undefined) {
+          const resultDigests = Object.fromEntries(result.results.map((path) => [path, `sha256:${sha256(readFileSync(path, "utf8"))}`]));
+          writeFileSync(o.evidenceOut, `${JSON.stringify(createEvidenceManifest(evidenceInput, resultDigests), null, 2)}\n`, "utf8");
+        }
         if (o.json) emit(program, ok(result), true, result.exitCode);
         else {
           const out = program.configureOutput().writeOut;

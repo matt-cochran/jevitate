@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
-import { FsJourneyStore, JourneyReviewSchema, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, journeyProofHash, JourneyReviewSchema, type Journey } from "@jevitate/journey";
 import { buildProgram } from "./program.js";
 import { buildMcpTools, type McpApiDeps } from "./mcp-api.js";
 import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
-import { approvedSnapshotPath } from "./journey-review-store.js";
+import { approvedSnapshotPath, writeVerifyRecord, writeProofWaiver } from "./journey-review-store.js";
+import { journeyReviewHash } from "./journey-review.js";
+import { mutationReceiptDigest } from "./mutation-proof-policy.js";
 import type { CliDeps } from "./cli-shared.js";
 
 /** #432 — `journey review`, the promote sign-off binding, and MCP `review_journey`. No browser. */
@@ -35,9 +37,10 @@ function strongJourney(id = "strong", overrides: Partial<Journey["metadata"]> = 
         {
           url: "/editor",
           steps: [
-            { step: { kind: "fill", target: { label: "Access token" }, value: { redacted: false, value: SECRET_LITERAL }, expect: { kind: "textIncludes", target: { role: "status" }, text: "ready" } } },
+            { step: { kind: "fill", target: { label: "Access token" }, value: { redacted: false, value: SECRET_LITERAL }, expect: { kind: "textIncludes", target: { role: "status", name: "Publication status" }, text: "ready" } } },
             {
-              step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status" }, text: "Published" } },
+              stepId: "s-haxfhr",
+              step: { kind: "click", target: { testId: "publish" }, expect: { kind: "textIncludes", target: { role: "status", name: "Publication status" }, text: "Published" } },
               expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/publish", status: { class: 2 } }],
             },
           ],
@@ -276,6 +279,16 @@ describe("#523 journey review --strict", () => {
     expect((await strictCli(["journey", "review", "clean", "--json", "--strict"])).exitCode).toBe(0);
   });
 
+  it("fails a role-only assertion target before replay", async () => {
+    const roleOnly = strongJourney("role-only", { goal: "Publish a post", successCriteria: [{ description: "The post is live" }], job: "publish-post", persona: "editor", anchors: [{ name: "published", step: 2, stepId: "s-haxfhr" }] });
+    const first = roleOnly.recording.pages[0]!.steps[0]!.step;
+    if ("expect" in first && first.expect.kind === "textIncludes") first.expect.target = { role: "status" };
+    await new FsJourneyStore(journeysDir).put(roleOnly);
+    const result = await strictCli(["journey", "review", "role-only", "--json", "--strict"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.json.data.proof.lint.findings).toContainEqual(expect.objectContaining({ rule: "unusable-target", level: "error" }));
+  });
+
   it("ignores ○ items (not mutation-tested stays info)", async () => {
     const { json } = await strictCli(["journey", "review", "clean", "--json", "--strict"]);
     expect(json.data.attention).toContainEqual({ severity: "info", text: "Not mutation-tested", hint: "jevitate journey verify clean --mutate" });
@@ -293,5 +306,32 @@ describe("#523 journey review --strict", () => {
     const mcpDeps: McpApiDeps = { journeysDir, pathRoots: [root], runCli: makeInProcessCliRunner(() => buildProgram({ ...deps(), catalogDir })) };
     const tool = buildMcpTools(mcpDeps).find((t) => t.name === "review_journey")!;
     expect(JSON.parse((await tool.handler({ id: "strong", strict: true })).content[0]!.text).exitCode).toBe(1);
+  });
+
+  for (const summary of [{ sensitive: 0, unpaired: 5, cascade: 0 }, { sensitive: 6, unpaired: 0, cascade: 1 }]) {
+    for (const mode of ["advisory", "require-attempt", "require-proven"] as const) {
+      it(`#708 strict CLI and MCP agree for ${JSON.stringify(summary)} under ${mode}`, async () => {
+        const j = (await new FsJourneyStore(journeysDir).get("clean"))!;
+        await writeVerifyRecord(journeysDir, { journeyId: "clean", contentHash: journeyReviewHash(j), proofHash: journeyProofHash(j), at: "2026-10-08T00:00:00Z", verdict: "inconclusive", summary });
+        await writeFile(join(catalogDir, "project.json"), JSON.stringify({ mutationProofPolicy: mode }));
+        const cli = await strictCli(["journey", "review", "clean", "--json", "--strict"]);
+        expect(cli.exitCode).toBe(mode === "advisory" ? 0 : 1);
+        expect(cli.json.data.proof.policy.passed).toBe(mode === "advisory");
+        const tool = buildMcpTools({ journeysDir, pathRoots: [root], runCli: makeInProcessCliRunner(() => buildProgram({ ...deps(), catalogDir })) }).find((t) => t.name === "review_journey")!;
+        const mcp = JSON.parse((await tool.handler({ id: "clean", strict: true })).content[0]!.text);
+        expect(mcp.exitCode).toBe(cli.exitCode);
+        expect(mcp.data.proof.policy).toEqual(cli.json.data.proof.policy);
+      });
+    }
+  }
+  it("#708 strict require-attempt accepts a current waiver and rejects it after the proof changes", async () => {
+    const j = (await new FsJourneyStore(journeysDir).get("clean"))!;
+    const record = { journeyId: "clean", contentHash: journeyReviewHash(j), proofHash: journeyProofHash(j), at: "2026-10-08T00:00:00Z", verdict: "inconclusive", summary: { sensitive: 0, unpaired: 5 } };
+    await writeVerifyRecord(journeysDir, record);
+    await writeFile(join(catalogDir, "project.json"), JSON.stringify({ mutationProofPolicy: "require-attempt" }));
+    await writeProofWaiver(journeysDir, { v: 1, journeyId: "clean", contentHash: journeyReviewHash(j), proofHash: journeyProofHash(j), receiptDigest: mutationReceiptDigest(record), reason: "release owner reviewed alternative evidence", at: "2026-10-08T01:00:00Z", provenance: { channel: "tty", agentSignals: [], user: "owner" } });
+    expect((await strictCli(["journey", "review", "clean", "--json", "--strict"])).exitCode).toBe(0);
+    await writeVerifyRecord(journeysDir, { ...record, at: "2026-10-08T02:00:00Z" });
+    expect((await strictCli(["journey", "review", "clean", "--json", "--strict"])).exitCode).toBe(1);
   });
 });

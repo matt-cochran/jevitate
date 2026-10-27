@@ -2,7 +2,10 @@ import { GTWR_RULES, checkJobStory, checkPersona, type Finding, type JourneyRevi
 import type { Answer, JudgmentState, Question } from "@jevitate/ai-core";
 import { catalogJourney, findJob, findPersona, journeyLinks, type Catalog, type CatalogJob, type CatalogJourney, type CatalogPersona } from "./catalog.js";
 import { buildJourneyReview } from "./journey-review.js";
-import { readVerifyRecord } from "./journey-review-store.js";
+import { readVerifyRecord, readProofWaiver } from "./journey-review-store.js";
+import { dirname } from "node:path";
+import { findProjectDir } from "./project-dir.js";
+import { loadProjectConfig } from "./project-config.js";
 import { JEV_SKIPPED_PASS_REAL } from "./jev-advisor.js";
 import type { ApprovalSubject, PreApprovalAnalyzer, PreApprovalContext } from "./pre-approval.js";
 
@@ -131,7 +134,9 @@ async function journeyChecks(j: CatalogJourney, catalog: Catalog): Promise<Findi
     );
   }
   const lastVerify = catalog.journeysDir === undefined ? null : await readVerifyRecord(catalog.journeysDir, id);
-  const review = buildJourneyReview(j.journey, { lastVerify });
+  const catalogFile = catalog.personasFile ?? catalog.jobsFile;
+  const project = catalogFile === null ? findProjectDir() : dirname(catalogFile);
+  const review = buildJourneyReview(j.journey, { lastVerify, proofPolicy: loadProjectConfig(project).mutationProofPolicy ?? "advisory", proofWaiver: catalog.journeysDir === undefined ? null : await readProofWaiver(catalog.journeysDir, id) });
   // 3. the intent is complete: goal, success criteria, each step's objective and expected result
   const noExpected = review.steps.filter((s) => s.expectedResult === undefined).map((s) => s.number);
   const gaps = [...review.summary.missingIntent, ...(noExpected.length === 0 ? [] : [`${noExpected.length} of ${review.steps.length} step(s) have no expected result (step ${noExpected.join(", ")})`])];
@@ -156,6 +161,8 @@ async function journeyChecks(j: CatalogJourney, catalog: Catalog): Promise<Findi
 
 function verifyCheck(review: JourneyReview, id: string): Finding {
   const v = review.proof.verify;
+  const policy = review.proof.policy;
+  if (policy?.waiver.status === "valid" && policy.mode !== "require-proven") return check("readiness.verify", "info", policy.reason);
   const fix = `jevitate journey verify ${id} --mutate`;
   if (v.status === "not-verified") return check("readiness.verify", "warn", "its mutation proof is unknown: `journey verify --mutate` never ran", { fix, characteristic: "verifiable" });
   if (v.stale) return check("readiness.verify", "warn", `its mutation proof (${v.verdict}, ${v.at}) is for an older version: the Journey changed since`, { fix, characteristic: "verifiable" });

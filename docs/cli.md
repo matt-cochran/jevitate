@@ -25,6 +25,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`doctor`](#doctor): resource governance on this machine (#205): host load, machine-wide browser slots, jevitate browsers and orphans left by a killed run
 - [`explore`](#explore): goal-directed exploration -> a deterministic Recording (authoring/test plane)
 - [`explore-author-journey`](#explore-author-journey): Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
+- [`hint`](#hint): local, human-only product hints; never contacts a service
 - [`inbox`](#inbox): the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
 - [`init`](#init): set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
 - [`install-browser`](#install-browser): install the Chromium revision jevitate pins into the shared browsers dir (never removes other revisions)
@@ -402,6 +403,10 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--change-note <text>` | #453: a change note that explains a break (repeatable) — needs --self-heal hybrid\|full | `[]` |  |  |  |
 | `--changed-routes <globs>` | only run Journeys and goals touching these route globs (comma list, repeatable), e.g. '/settings/**' | `[]` |  |  |  |
 | `--changes <range>` | #453: the git range that explains a break (e.g. main...HEAD; read once, in the journeys dir's repo) — needs --self-heal hybrid\|full |  |  |  |  |
+| `--evidence-decision-out <file>` | #704 write a machine-readable run\|skip decision and changed-input reasons, then exit before browser/model work |  |  |  |  |
+| `--evidence-input <file>` | #704 immutable proof identity JSON; required to consume or emit an evidence manifest |  |  |  |  |
+| `--evidence-manifest <file>` | #704 prior content-addressed evidence manifest to reuse when its identity exactly matches |  |  |  |  |
+| `--evidence-out <file>` | #704 write a content-addressed success manifest after this clean check |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--heal-max-attempts <n>` | #453: candidates tried per broken step (default 2) |  |  |  |  |
@@ -717,6 +722,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--target <id>` | the target this run was meant to cover, stamped as target.id in the result, its envelope and the run index (1-64 of [A-Za-z0-9_.-]; a sweep sets it per target); key on it to attribute a run |  |  |  |  |
 | `--totp <binding>` | goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk | `[]` |  |  |  |
 | `--type-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret | `[]` |  |  |  |
+| `--upload-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<file>' (repeatable). When the model chooses upload on a matching file input, code attaches that declared file; the model sees only its file name | `[]` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
@@ -802,8 +808,68 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--takes <n>` | corroborating takes incl. discovery (default 1) | `1` |  |  |  |
 | `--totp <binding>` | goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk | `[]` |  |  |  |
 | `--type-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret | `[]` |  |  |  |
+| `--upload-fixture <binding>` | goal strategy: '<label\|testId\|type\|id\|name>=<file>' (repeatable). When the model chooses upload on a matching file input, code attaches that declared file; the model sees only its file name | `[]` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+## hint
+
+```
+jevitate hint [command]
+```
+
+local, human-only product hints; never contacts a service
+
+### hint journeeze
+
+```
+jevitate hint journeeze [command]
+```
+
+control the local Journeeze offer shown after report/review
+
+#### hint journeeze disable
+
+```
+jevitate hint journeeze disable [options]
+```
+
+turn off Journeeze hints at one local preference scope
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--scope <project|user>` | where to store the preference | `project` |  |  |  |
+
+#### hint journeeze dismiss
+
+```
+jevitate hint journeeze dismiss [options]
+```
+
+hide one unchanged local Journeeze offer by its displayed signal hash
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--scope <project|user>` | where to store the dismissal | `project` |  |  |  |
+| `--signal <sha256>` | the signal hash printed in the offer |  |  | yes |  |
+
+#### hint journeeze enable
+
+```
+jevitate hint journeeze enable [options]
+```
+
+re-enable Journeeze hints at one local preference scope
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--scope <project|user>` | where to store the preference | `project` |  |  |  |
 
 ## inbox
 
@@ -1723,11 +1789,13 @@ preview or prove that each Journey assertion fails when its outcome is absent
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
 | `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
@@ -1739,6 +1807,29 @@ preview or prove that each Journey assertion fails when its outcome is absent
 | `--plan` | print the static mutation/assertion plan without opening a browser |  |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
+| `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+### journey waive-proof
+
+```
+jevitate journey waive-proof [options] <id>
+```
+
+record a person's reasoned waiver of one fresh inconclusive mutation attempt (interactive terminal only)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
+| `--reason <text>` | why this exact inconclusive attempt is acceptable; stored beside the Journey |  |  | yes |  |
 
 ## ledger
 

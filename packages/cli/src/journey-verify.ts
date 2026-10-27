@@ -16,7 +16,6 @@ import {
   classifyMutation,
   declaredTargetedProofFor,
   journeyAssertions,
-  journeyProofHash,
   judgeAssertions,
   mutationProofVerdict,
   mutationReplay,
@@ -40,9 +39,10 @@ import { describeCheck, type BlockedWrite } from "@jevitate/explore";
 import { clock } from "@jevitate/domain";
 import { journeyContentHash } from "./journey-annotate-api.js";
 import { journeyReviewHash } from "./journey-review.js";
-import { writeVerifyRecord } from "./journey-review-store.js";
+import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
+import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
 
 /** `journey run`'s options a proof passes through to every replay (params, environment, auth, fixtures, browser, gate). */
 export type VerifyJourneyOptions = Omit<
@@ -184,10 +184,10 @@ function blockedOwnWrite(recorded: readonly string[], blocked: readonly BlockedW
 
 function failedSitesOf(result: { outcome: string; reason?: string; at?: number }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
   if (result.outcome !== "quarantined") return [];
-  if (result.at !== undefined) return [{ where: "step", step: result.at + 1, postcondition: /postcondition failed/.test(result.reason ?? "") }];
-  return failures.map((f): MutationFailedSite =>
+  const structured = failures.map((f): MutationFailedSite =>
     f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
   );
+  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: /postcondition failed/.test(result.reason ?? "") }];
 }
 
 /**
@@ -197,6 +197,8 @@ function failedSitesOf(result: { outcome: string; reason?: string; at?: number }
 export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Run = runJourneyProgrammatically): Promise<JourneyVerifyReport> {
   const journey = await new JourneyRegistry(new FsJourneyStore(opts.dir)).get(opts.id);
   if (!journey) throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
+  // #711: receipt authority is proven before the first baseline/mutation replay spends a browser.
+  const receiptDestination = await preflightVerifyRecord(opts.dir, journey.metadata.id);
   const { readRequests, ...runOpts } = opts;
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
@@ -223,6 +225,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         const how = describe(journey);
         const r = await run(how.params === undefined ? runOpts : { ...runOpts, params: { ...how.params } }, {
           structuredFailures: true,
+          ...(how.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: how.relaxedStepRequests }),
           ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j).journey }),
           ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
           ...(how.swapSelectAtStep === undefined ? {} : { selectAlternativeAtStep: how.swapSelectAtStep }),
@@ -343,11 +346,13 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
   const redacted = redactSecretParams(report, journey, opts.params);
+  const proofContext = journeyProofContext(opts.browser, opts.emulation);
   // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
-  await writeVerifyRecord(opts.dir, {
+  await writePreflightedVerifyRecord(receiptDestination, {
     journeyId: journey.metadata.id,
     contentHash: journeyReviewHash(journey),
-    proofHash: journeyProofHash(journey),
+    proofHash: journeyProofHashForContext(journey, proofContext),
+    ...(proofContext === undefined ? {} : { proofContext }),
     verdict: redacted.verdict,
     ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
     summary: { ...redacted.summary },

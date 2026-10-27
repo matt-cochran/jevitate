@@ -7,6 +7,7 @@ import { FsJourneyStore } from "@jevitate/journey";
 import { BudgetMeter, affectedBy, runCheck, type CheckGateways, type CheckRunners } from "./check-api.js";
 import { parseSuite, SuiteError } from "./check-suite.js";
 import { loadRunFile, tagBaseline } from "./report-api.js";
+import { createEvidenceManifest } from "./check-evidence.js";
 
 /**
  * #137 — the CI gate's decision logic over fake runners (no browser): the budget fails closed,
@@ -23,6 +24,7 @@ afterEach(() => {
 });
 
 const URL0 = "https://shop.example/app";
+const evidenceInput = { app: { build: "build-a", target: "shop", origins: ["https://shop.example"] }, suite: { name: "ci", policyHash: "sha256:policy", changedRoutes: ["/app"] }, inputs: { journeys: {}, fixtures: "sha256:fixtures", parameters: "sha256:params", invariants: "sha256:invariants", goals: "sha256:goals", missions: "sha256:missions" } } as const;
 
 /** A fake feature runner: writes a result like the real one, spending `spend` actions (capped by bounds unless `ignoreBounds`). */
 function featureRunner(script: Array<{ spend: number; defects?: unknown[]; advisories?: unknown[]; outcome?: string; ignoreBounds?: boolean }>): {
@@ -90,6 +92,17 @@ function junit(path: string): string {
 }
 
 describe("check budget fails closed (#137)", () => {
+  it("#704 reuses matching evidence before a runner can open a browser", async () => {
+    const f = featureRunner([{ spend: 1 }]);
+    const r = await runCheck({ suite: suite(1), outDir: join(dir, "out"), journeysDir: dir, runners: { feature: f.runner }, evidence: { input: evidenceInput, manifest: createEvidenceManifest(evidenceInput, {}) } });
+    expect(f.calls).toEqual([]);
+    expect(r.evidence).toMatchObject({ decision: "skip", reasons: ["matching-evidence"] });
+    expect(r.items[0]).toMatchObject({ status: "skipped", verdict: "skipped", actions: 0 });
+    expect(r.changedRoutes).toEqual([]);
+    expect(JSON.parse(readFileSync(r.sarifPath, "utf8")).runs[0].properties).toMatchObject({ evidenceDecision: "skip", changedRoutes: [] });
+    expect(junit(r.junitPath)).toContain('<property name="evidenceDecision" value="skip"/>');
+  });
+
   it("passes each item the remaining actions, and never runs an item once the budget is spent", async () => {
     const f = featureRunner([{ spend: 3 }, { spend: 3 }, { spend: 3 }]);
     const r = await runCheck({ suite: suite(3, { budget: { maxActions: 5 } }), outDir: join(dir, "out"), journeysDir: dir, runners: { feature: f.runner } });

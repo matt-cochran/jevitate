@@ -5,29 +5,53 @@
  */
 
 import type { ValueOrVar } from "@jevitate/recording";
+import { relative } from "node:path";
 import { act } from "../act.js";
 import { redactText } from "../redact.js";
+import { boundUploadFixture, TypeFixtureSpecError } from "../type-fixtures.js";
 import type { RunContext } from "./context.js";
 import type { ActStep, Flow } from "./step.js";
 
 export async function handleUpload(ctx: RunContext, step: ActStep): Promise<Flow> {
   const { cfg } = ctx;
   const { snap, decision, record, control, at } = step;
+  let fixture = ctx.fixture;
+  let boundDescriptor: string | null = null;
+  try {
+    const bound = boundUploadFixture(control, ctx.uploadFixtures);
+    if (bound !== null) {
+      if (ctx.attachedUploadFixtures.has(bound.descriptor)) {
+        const reason = `upload fixture binding already attached: ${bound.descriptor}`;
+        ctx.history.push(`upload failed: ${reason}`);
+        record(false, reason);
+        return "next";
+      }
+      fixture = bound.path;
+      boundDescriptor = bound.descriptor;
+    }
+  } catch (err) {
+    const reason = err instanceof TypeFixtureSpecError ? err.message : String(err);
+    ctx.history.push(`upload failed: ${reason}`);
+    record(false, reason);
+    return "next";
+  }
   // upload — act fails closed without a fixture.
-  const r = await act(cfg.actor, { op: "upload", control, fixture: ctx.fixture, fixtureRoot: ctx.fixtureRoot });
-  if (r.ok && ctx.fixture !== null) {
+  const r = await act(cfg.actor, { op: "upload", control, fixture, fixtureRoot: ctx.fixtureRoot });
+  if (r.ok && fixture !== null) {
     // The recorded path goes through the shared redaction seam: a path that
     // contains a registered secret is recorded redacted (replay then fails
     // closed) rather than persisting the secret into the artifact.
+    const recordedPath = relative(ctx.fixtureRoot!, fixture);
     const recordedFile: ValueOrVar =
-      redactText(ctx.fixture, ctx.secrets) === ctx.fixture
-        ? { redacted: false, value: ctx.fixture }
-        : { redacted: true, length: ctx.fixture.length };
+      redactText(fixture, ctx.secrets) === fixture
+        ? { redacted: false, value: recordedPath }
+        : { redacted: true, length: fixture.length };
     ctx.recorder.upload(control.descriptor, recordedFile, at);
   ctx.noteMutation(`upload into ${control.name}`, control.descriptor, snap.signature, at);
     ctx.tracker.countAction();
     ctx.history.push(`uploaded the fixture into ${control.name}`);
     ctx.fixtureAttached = true;
+    if (boundDescriptor !== null) ctx.attachedUploadFixtures.add(boundDescriptor);
     ctx.cleared(control);
   } else {
     ctx.history.push(`upload failed: ${ctx.failNote(r.reason, control)}`);

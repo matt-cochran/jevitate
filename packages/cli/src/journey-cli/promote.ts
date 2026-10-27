@@ -17,6 +17,7 @@ import { UnvettedLinksError, resolveCatalogDir } from "../catalog-api.js";
 import { CatalogInputError } from "../catalog.js";
 import { ApprovalFindingsError } from "../pre-approval.js";
 import { TargetConfigError } from "../target-config.js";
+import { ProjectConfigError } from "../project-config.js";
 import { FULL_FLAG_HELP, DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, lintFindingLine, targetsOpts } from "./shared.js";
 
 /** Registers `jevitate journey promote`. */
@@ -171,7 +172,7 @@ export function registerJourneyPromote(journey: Command, program: Command, deps:
           err instanceof JourneyProposalInvalidError
         ) {
           emitJson(program, fail(err.code, err.message));
-        } else if (err instanceof StaleReviewError || err instanceof ReviewSheetError || err instanceof ReviewSidecarError || err instanceof TargetConfigError) {
+        } else if (err instanceof StaleReviewError || err instanceof ReviewSheetError || err instanceof ReviewSidecarError || err instanceof TargetConfigError || err instanceof ProjectConfigError) {
           emitJson(program, fail(err instanceof TargetConfigError ? "E_TARGET_CONFIG" : err.code, err.message));
         } else if (err instanceof WeakJourneyError) {
           // #401: the findings printed before the refusal (human mode); the reason the gate is here.

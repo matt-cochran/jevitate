@@ -227,6 +227,7 @@ export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = 
   tag: "#426: tags are per check — `jevitate check --tag` stamps every item result; a suite item takes none of its own",
   authCheck: "#427: the pre-flight auth check runs before `explore` runs and queued missions; a check runs its items' missions directly, without it — mint the suite's sessions with `jevitate login` before `jevitate check`",
   typeFixture: "#281: a file typed verbatim into a field is an `explore --type-fixture` binding; a suite goal declares none",
+  uploadFixture: "#720: a descriptor-bound file upload is an explicit `explore --upload-fixture` binding; suite items declare no upload payloads",
 };
 
 /** Suite key of a generic option (the explore attribute name itself). */

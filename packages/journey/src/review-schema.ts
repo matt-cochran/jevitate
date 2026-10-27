@@ -145,6 +145,32 @@ export const ReviewVerifySchema = z.discriminatedUnion("status", [
 
 const DiffSchema = z.object({ added: z.array(z.string()), removed: z.array(z.string()) }).strict();
 
+/** #708: stable, code-computed policy identity, also consumed by evidence-reuse keys. */
+export const MutationProofPolicyResultSchema = z.object({
+  mode: z.enum(["advisory", "require-attempt", "require-proven"]),
+  verdict: z.string(),
+  freshness: z.enum(["missing", "stale", "fresh"]),
+  reason: z.string(),
+  counts: z.record(z.string(), z.number()),
+  classification: z.enum(["mutation-testable", "non-mutation-testable", "unknown"]),
+  passed: z.boolean(),
+  waiverRequired: z.boolean(),
+  waiver: z.object({ status: z.enum(["absent", "stale", "valid"]), reason: z.string().optional(), at: z.string().optional() }).strict(),
+  next: z.string(),
+  digest: z.string(),
+}).strict();
+export type MutationProofPolicyResult = z.infer<typeof MutationProofPolicyResultSchema>;
+
+export const ProofWaiverSchema = z.object({
+  v: z.literal(1), journeyId: z.string().min(1),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  proofHash: z.string().regex(/^[a-f0-9]{64}$/),
+  receiptDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  reason: z.string().trim().min(1).max(2048), at: z.string().datetime({ offset: true }),
+  provenance: z.object({ channel: z.literal("tty"), agentSignals: z.array(z.string()), user: z.string().optional() }).strict(),
+}).strict();
+export type ProofWaiver = z.infer<typeof ProofWaiverSchema>;
+
 export const ReviewChangeSchema = z.discriminatedUnion("kind", [
   /** Never approved, and nothing to diff against. */
   z.object({ kind: z.literal("first-approval") }).strict(),
@@ -226,6 +252,7 @@ export const JourneyReviewSchema = z
         /** #616: the declared targeted-proof plans (`metadata.targetedProofs`) a reviewer approves with the Journey. Additive. */
         targetedProofs: z.array(z.object({ check: z.string(), mustFailWhen: z.string(), relax: z.array(z.string()) }).strict()).optional(),
         verify: ReviewVerifySchema,
+        policy: MutationProofPolicyResultSchema.optional(),
       })
       .strict(),
     changeSinceApproval: ReviewChangeSchema,

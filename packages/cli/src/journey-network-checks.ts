@@ -74,6 +74,7 @@ export class JourneyOutcomeChecks {
   readonly #responseTimeoutMs: number;
   readonly #httpProbe: HttpProbe | undefined;
   readonly #resolveRef: HttpCheckRefResolver | undefined;
+  readonly #relaxedStepRequests: ReadonlySet<string>;
   #lastFailures: readonly OutcomeCheckFailure[] = [];
   #slowSteps: SlowStep[] = [];
 
@@ -82,6 +83,7 @@ export class JourneyOutcomeChecks {
     page: Page,
     journey: Journey | undefined,
     opts: {
+      readonly relaxedStepRequests?: readonly string[];
       readonly secrets?: readonly string[];
       readonly stepResponseTimeoutMs?: number;
       /** #543: makes the end state's `http` checks' requests; absent, they fail closed (unevaluable). */
@@ -95,6 +97,7 @@ export class JourneyOutcomeChecks {
     } = {},
   ) {
     this.#page = page;
+    this.#relaxedStepRequests = new Set(opts.relaxedStepRequests ?? []);
     this.#httpProbe = opts.httpProbe;
     this.#resolveRef = opts.resolveRef;
     this.#responseTimeoutMs = opts.stepResponseTimeoutMs ?? DEFAULT_STEP_RESPONSE_TIMEOUT_MS;
@@ -173,7 +176,11 @@ export class JourneyOutcomeChecks {
     const since = s.startedAt;
     const until = s.until;
     const out: JudgedCheck[] = [];
-    for (const c of s.checks) {
+    for (const [checkIndex, c] of s.checks.entries()) {
+      if (this.#relaxedStepRequests.has(`step-request:${s.index + 1}:${checkIndex}`)) {
+        out.push({ result: { check: `declared relaxation step-request:${s.index + 1}:${checkIndex}`, passed: true, detail: "not evaluated in this declared targeted proof" } });
+        continue;
+      }
       // #486: a request still awaiting its response (a cold start) is waited for, up to the bound.
       out.push(
         await evaluateNetworkCheckAwaiting(
@@ -221,7 +228,11 @@ export class JourneyOutcomeChecks {
    * Runs `replay` with the page's requests captured, then judges the checks. A replay that already
    * failed keeps its own reason. Without checks it just runs `replay`.
    */
-  async run(actor: Actor, replay: () => Promise<JourneyRunResult>): Promise<JourneyRunResult> {
+  async run(
+    actor: Actor,
+    replay: () => Promise<JourneyRunResult>,
+    opts: { readonly collectStepFailuresOnReplayFailure?: boolean } = {},
+  ): Promise<JourneyRunResult> {
     this.#lastFailures = [];
     this.#slowSteps = [];
     if (!this.active) return replay();
@@ -242,7 +253,8 @@ export class JourneyOutcomeChecks {
     let result: JourneyRunResult;
     try {
       result = await replay();
-      if (result.outcome === "quarantined" || result.outcome === "heal-exhausted") {
+      const replayFailed = result.outcome === "quarantined" || result.outcome === "heal-exhausted";
+      if (replayFailed && opts.collectStepFailuresOnReplayFailure !== true) {
         this.#stopCaptures(monitor, capture);
         return result;
       }
@@ -257,6 +269,9 @@ export class JourneyOutcomeChecks {
     const stepFailureSites: OutcomeCheckFailure[] = [];
     const stepFailureReasons: string[] = [];
     for (const s of this.#steps) {
+      // A structured mutation replay may stop at a later action. Preserve checks from windows that
+      // actually started, but never judge a future step over the whole-replay fallback capture.
+      if ((result.outcome === "quarantined" || result.outcome === "heal-exhausted") && s.startedAt === undefined && s.judged === undefined) continue;
       // Judged as the step ended (#526); else now — over the whole replay when the interpreter
       // reported no step boundaries. A request in flight when the step began (the previous step's
       // write) finishes inside its window: only requests SENT within the window count.
@@ -270,6 +285,10 @@ export class JourneyOutcomeChecks {
     }
     // The captures stay live through the waits above (#486): a pending request's response lands in them.
     this.#stopCaptures(monitor, capture);
+    if (result.outcome === "quarantined" || result.outcome === "heal-exhausted") {
+      this.#lastFailures = stepFailureSites;
+      return result;
+    }
     let end: SuccessCheckResult[] = [];
     if (this.#end.length > 0) {
       try {

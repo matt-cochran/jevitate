@@ -8,6 +8,18 @@ const GB = 1024 ** 3;
 const calm: HostPressure = { sample: { memAvailableBytes: 8 * GB, source: "test" }, overThreshold: null, loadPerCore: 0.4 };
 const stalled = { kind: "stalled", message: "the page stopped responding (no step completed in 120s)" };
 const noGovernor = { snapshot: () => ({ governance: "off" }) } as never;
+const limitedGovernor = {
+  snapshot: () => ({
+    governance: "on",
+    resourceLimit: {
+      kind: "memory",
+      measuredBytes: 1536 * 1024 ** 2,
+      ceilingBytes: 768 * 1024 ** 2,
+      metric: "pss",
+      message: "resource limit: browser memory exceeded the configured ceiling",
+    },
+  }),
+} as never;
 
 function sampler(over: { lag?: number; cdp?: number } = {}): HostHealthSampler {
   return new HostHealthSampler({
@@ -55,6 +67,17 @@ describe("finishHostHealth classifies a stall on a starved host (#452)", () => {
   it("host-starved explains the stall before the engine's own failure", () => {
     const own = { kind: "stalled", message: "m" };
     expect(failureWithHostStarved({ failure: { kind: "host-starved", message: "h" } }, own)?.kind).toBe("host-starved");
+  });
+
+  it("a governor memory breach overrides a provisional defect outcome", async () => {
+    const v = await finishHostHealth(sampler(), "defects-found", {}, limitedGovernor);
+    expect(v.outcome).toBe("inconclusive");
+    expect(v.failure).toEqual({ kind: "resource-limit", message: "resource limit: browser memory exceeded the configured ceiling" });
+  });
+
+  it("a governor memory breach explains the run before its incidental page-close error", () => {
+    const own = { kind: "page-closed", message: "page closed" };
+    expect(failureWithHostStarved({ failure: { kind: "resource-limit", message: "limit" } }, own)?.kind).toBe("resource-limit");
   });
 });
 
