@@ -87,6 +87,11 @@ describe("--geolocation (#329, served)", () => {
     expect((JSON.parse(r.out) as { data: { outcome: string } }).data.outcome, r.out).toBe("ok");
   }, 120_000);
 
+  it("journey verify applies the same geolocation to its baseline and mutation replays", async () => {
+    const r = await cli(["journey", "verify", "near", "--mutate", "--geolocation", "41.6376,-70.9036", "--json"]);
+    expect((JSON.parse(r.out) as { data: { base: { outcome: string } } }).data.base.outcome, r.out).toBe("ok");
+  }, 120_000);
+
   it("without it the page gets no position (unchanged)", async () => {
     const r = await cli(["journey", "run", "near", "--json"]);
     expect((JSON.parse(r.out) as { data: { outcome: string } }).data.outcome).toBe("quarantined");
@@ -95,6 +100,8 @@ describe("--geolocation (#329, served)", () => {
   it("a malformed value is refused before any browser opens", async () => {
     const r = await cli(["journey", "run", "near", "--geolocation", "north", "--json"]);
     expect(JSON.parse(r.out)).toMatchObject({ ok: false, error: { message: expect.stringMatching(/--geolocation expects <lat>,<lng>/) } });
+    const verify = await cli(["journey", "verify", "near", "--mutate", "--geolocation", "north", "--json"]);
+    expect(JSON.parse(verify.out)).toMatchObject({ ok: false, error: { code: "E_JOURNEY_VERIFY_ARGS", message: expect.stringMatching(/--geolocation expects <lat>,<lng>/) } });
     expect(() => parseGeolocation("91,0")).toThrow(/latitude must be within -90..90/);
     expect(() => parseGeolocation("0,181")).toThrow(/longitude must be within -180..180/);
     expect(parseGeolocation("41.6376, -70.9036, 25")).toEqual({ latitude: 41.6376, longitude: -70.9036, accuracy: 25 });

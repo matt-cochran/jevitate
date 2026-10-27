@@ -1050,11 +1050,13 @@
     - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
     - flags=--fixture-identity <name=storageState> required=true mandatory=false negate=false variadic=false default=[] description=#243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable)
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--geolocation <lat,lng> required=true mandatory=false negate=false variadic=false default=null description=place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
     - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=the Journey store only; wins over --project for journeys, while the catalog still comes from --project
@@ -1066,6 +1068,7 @@
     - flags=--plan required=false mandatory=false negate=false variadic=false default=null description=print the static mutation/assertion plan without opening a browser
     - flags=--project <path> required=true mandatory=false negate=false variadic=false default=null description=the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start each replay authenticated (as journey run)
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
 # journey waive-proof
   description: record a person's reasoned waiver of one fresh inconclusive mutation attempt (interactive terminal only)

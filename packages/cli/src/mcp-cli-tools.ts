@@ -393,6 +393,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         fixtures: path("--fixtures"),
         fixtureIdentity: FIXTURE_IDENTITY,
         ...ENVIRONMENT,
+        ...EMULATION,
       },
       omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
