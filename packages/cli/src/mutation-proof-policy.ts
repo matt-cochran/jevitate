@@ -1,6 +1,7 @@
 import { contentHash } from "@jevitate/domain";
-import { journeyProofHash, journeyWriteSteps, journeyParamSchema, ProofWaiverSchema, type ProofWaiver, type Journey, type JourneyReview } from "@jevitate/journey";
+import { journeyWriteSteps, journeyParamSchema, ProofWaiverSchema, type ProofWaiver, type Journey, type JourneyReview } from "@jevitate/journey";
 import type { JourneyVerifyRecord } from "./journey-review.js";
+import { journeyProofHashForContext } from "./journey-proof-context.js";
 
 export type MutationProofPolicyMode = "advisory" | "require-attempt" | "require-proven";
 export { ProofWaiverSchema, type ProofWaiver };
@@ -24,7 +25,7 @@ export function evaluateMutationProofPolicy(input: {
 }): NonNullable<JourneyReview["proof"]["policy"]> {
   const { journey, contentHash: reviewedHash, record, waiver } = input;
   const mode = input.mode ?? "advisory";
-  const proofHash = journeyProofHash(journey);
+  const proofHash = journeyProofHashForContext(journey, record?.proofContext);
   const freshness = record == null ? "missing" : (record.journeyId !== journey.metadata.id || (record.proofHash === undefined ? record.contentHash !== reviewedHash : record.proofHash !== proofHash)) ? "stale" : "fresh";
   const verdict = record?.verdict ?? "not-verified";
   const counts = { ...(record?.summary ?? {}) };

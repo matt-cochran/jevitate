@@ -3,6 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { JourneySchema, type Journey } from "@jevitate/journey";
 import type { JourneyVerifyRecord } from "./journey-review.js";
+import { JourneyProofContextSchema } from "./journey-proof-context.js";
 import { ProofWaiverSchema, type ProofWaiver } from "./mutation-proof-policy.js";
 
 /**
@@ -197,6 +198,7 @@ function isVerifyRecord(v: unknown): v is JourneyVerifyRecord {
     typeof o.journeyId === "string" &&
     typeof o.contentHash === "string" &&
     (o.proofHash === undefined || typeof o.proofHash === "string") &&
+    (o.proofContext === undefined || JourneyProofContextSchema.safeParse(o.proofContext).success) &&
     typeof o.verdict === "string" &&
     typeof o.at === "string" &&
     (o.reason === undefined || typeof o.reason === "string") &&
