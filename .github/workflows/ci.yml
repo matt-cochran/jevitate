@@ -66,10 +66,18 @@ jobs:
     needs: reuse
     if: ${{ !cancelled() && ((github.base_ref != 'main' && github.ref != 'refs/heads/main') || (needs.reuse.result
       == 'success' && needs.reuse.outputs.hit == 'true')) }}
+    name: test (${{ matrix.suite }})
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+        - unit
+        - browser
     runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       REUSED: ${{ needs.reuse.outputs.hit == 'true' }}
+      TEST_SUITE: ${{ matrix.suite }}
     steps:
     - name: Reused a tested build of this tree
       if: env.REUSED == 'true'
@@ -110,12 +118,18 @@ jobs:
       run: pnpm -r build
     - name: Test
       if: env.REUSED != 'true'
-      # Run each package root independently. A whole-workspace Vitest process
-      # can starve the browser scheduler under the shared workspace setup.
       run: |
-        for suite in packages/*/src apps/*/src scripts; do
-          pnpm exec vitest run "$suite"
-        done
+        if [ "$TEST_SUITE" = unit ]; then
+          # Unit suites retain package-root invocations: a whole-workspace
+          # process can starve the browser scheduler under shared setup.
+          for suite in packages/*/src apps/*/src scripts; do
+            pnpm exec vitest run --project unit "$suite"
+          done
+        else
+          # Browser is independently capped at two real-Chromium files by the
+          # browser Vitest project, so it can run beside the unit lane safely.
+          pnpm exec vitest run --project browser packages apps
+        fi
     - name: Lint
       if: env.REUSED != 'true'
       run: pnpm lint
