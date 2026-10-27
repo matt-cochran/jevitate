@@ -110,7 +110,12 @@ jobs:
       run: pnpm -r build
     - name: Test
       if: env.REUSED != 'true'
-      run: pnpm exec vitest run
+      # Run each package root independently. A whole-workspace Vitest process
+      # can starve the browser scheduler under the shared workspace setup.
+      run: |
+        for suite in packages/*/src apps/*/src scripts; do
+          pnpm exec vitest run "$suite"
+        done
     - name: Lint
       if: env.REUSED != 'true'
       run: pnpm lint
