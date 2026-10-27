@@ -65,6 +65,18 @@ jobs:
     - name: Resolve the tree
       id: tree
       run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+    - name: Find the successful staging publication
+      id: staged
+      if: steps.plan.outputs.mode == 'latest'
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: node scripts/ci/find-tree-artifact.mjs --staged "${{ steps.tree.outputs.tree }}"
+    - name: Require the staging publication source
+      if: steps.plan.outputs.mode == 'latest'
+      env:
+        FOUND: ${{ steps.staged.outputs.found }}
+      run: test "${FOUND}" = "true"
     - name: Find the tree's tested artifact
       id: find
       if: steps.plan.outputs.mode == 'next' || steps.plan.outputs.mode == 'latest'
@@ -72,6 +84,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
         TREE: ${{ steps.tree.outputs.tree }}
+        ARTIFACT_BEFORE: ${{ steps.staged.outputs.published_at }}
       run: node scripts/ci/find-tree-artifact.mjs "${TREE}"
     - name: Report the artifact source
       if: steps.plan.outputs.needs_artifact == 'true'
