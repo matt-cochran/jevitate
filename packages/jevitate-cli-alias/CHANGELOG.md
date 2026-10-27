@@ -1,5 +1,13 @@
 # jevitate
 
+## 0.26.1
+
+### Patch Changes
+
+- 398daf9: Bind production release verification to the release-candidate artifact that was available when staging published it, preventing a later same-tree rebuild from blocking an otherwise byte-verified promotion.
+- Updated dependencies [398daf9]
+  - @jevitate/cli@0.26.1
+
 ## 0.26.0
 
 ### Patch Changes
