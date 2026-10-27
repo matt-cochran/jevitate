@@ -183,6 +183,10 @@
     - flags=--change-note <text> required=true mandatory=false negate=false variadic=false default=[] description=#453: a change note that explains a break (repeatable) — needs --self-heal hybrid|full
     - flags=--changed-routes <globs> required=true mandatory=false negate=false variadic=false default=[] description=only run Journeys and goals touching these route globs (comma list, repeatable), e.g. '/settings/**'
     - flags=--changes <range> required=true mandatory=false negate=false variadic=false default=null description=#453: the git range that explains a break (e.g. main...HEAD; read once, in the journeys dir's repo) — needs --self-heal hybrid|full
+    - flags=--evidence-decision-out <file> required=true mandatory=false negate=false variadic=false default=null description=#704 write a machine-readable run|skip decision and changed-input reasons, then exit before browser/model work
+    - flags=--evidence-input <file> required=true mandatory=false negate=false variadic=false default=null description=#704 immutable proof identity JSON; required to consume or emit an evidence manifest
+    - flags=--evidence-manifest <file> required=true mandatory=false negate=false variadic=false default=null description=#704 prior content-addressed evidence manifest to reuse when its identity exactly matches
+    - flags=--evidence-out <file> required=true mandatory=false negate=false variadic=false default=null description=#704 write a content-addressed success manifest after this clean check
     - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
     - flags=--heal-max-attempts <n> required=true mandatory=false negate=false variadic=false default=null description=#453: candidates tried per broken step (default 2)
@@ -422,6 +426,7 @@
     - flags=--target <id> required=true mandatory=false negate=false variadic=false default=null description=the target this run was meant to cover, stamped as target.id in the result, its envelope and the run index (1-64 of [A-Za-z0-9_.-]; a sweep sets it per target); key on it to attribute a run
     - flags=--totp <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk
     - flags=--type-fixture <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal strategy: '<label|testId|type|id|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret
+    - flags=--upload-fixture <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal strategy: '<label|testId|type|id|name>=<file>' (repeatable). When the model chooses upload on a matching file input, code attaches that declared file; the model sees only its file name
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=target URL (must be an authorized origin)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
@@ -498,8 +503,31 @@
     - flags=--takes <n> required=true mandatory=false negate=false variadic=false default=1 description=corroborating takes incl. discovery (default 1)
     - flags=--totp <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk
     - flags=--type-fixture <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal strategy: '<label|testId|type|id|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret
+    - flags=--upload-fixture <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal strategy: '<label|testId|type|id|name>=<file>' (repeatable). When the model chooses upload on a matching file input, code attaches that declared file; the model sees only its file name
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=target URL (must be an authorized origin)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
+# hint
+  description: local, human-only product hints; never contacts a service
+
+# hint journeeze
+  description: control the local Journeeze offer shown after report/review
+
+# hint journeeze disable
+  description: turn off Journeeze hints at one local preference scope
+  options:
+    - flags=--scope <project|user> required=true mandatory=false negate=false variadic=false default="project" description=where to store the preference
+
+# hint journeeze dismiss
+  description: hide one unchanged local Journeeze offer by its displayed signal hash
+  options:
+    - flags=--scope <project|user> required=true mandatory=false negate=false variadic=false default="project" description=where to store the dismissal
+    - flags=--signal <sha256> required=true mandatory=true negate=false variadic=false default=null description=the signal hash printed in the offer
+
+# hint journeeze enable
+  description: re-enable Journeeze hints at one local preference scope
+  options:
+    - flags=--scope <project|user> required=true mandatory=false negate=false variadic=false default="project" description=where to store the preference
 
 # inbox
   description: the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
@@ -1024,11 +1052,13 @@
     - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
     - flags=--fixture-identity <name=storageState> required=true mandatory=false negate=false variadic=false default=[] description=#243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable)
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--geolocation <lat,lng> required=true mandatory=false negate=false variadic=false default=null description=place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
     - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=the Journey store only; wins over --project for journeys, while the catalog still comes from --project
@@ -1040,6 +1070,16 @@
     - flags=--plan required=false mandatory=false negate=false variadic=false default=null description=print the static mutation/assertion plan without opening a browser
     - flags=--project <path> required=true mandatory=false negate=false variadic=false default=null description=the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start each replay authenticated (as journey run)
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
+# journey waive-proof
+  description: record a person's reasoned waiver of one fresh inconclusive mutation attempt (interactive terminal only)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=the Journey store only; wins over --project for journeys, while the catalog still comes from --project
+    - flags=--project <path> required=true mandatory=false negate=false variadic=false default=null description=the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir
+    - flags=--reason <text> required=true mandatory=true negate=false variadic=false default=null description=why this exact inconclusive attempt is acceptable; stored beside the Journey
 
 # ledger
   description: keep each finding's repro material by fingerprint, so verify-fix works long after the run's output is gone

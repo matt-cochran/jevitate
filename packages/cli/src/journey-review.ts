@@ -4,7 +4,6 @@ import {
   SECRET_PARAM_NAME_RE,
   describeStep,
   flatJourneySteps,
-  journeyProofHash,
   isNoClaimExpect,
   isOwnTargetVisible,
   journeyAssertions,
@@ -32,8 +31,10 @@ import {
   assertionRefsBound,
 } from "@jevitate/journey";
 import type { LocatorHealthDetail } from "./locator-health.js";
+import { evaluateMutationProofPolicy, type MutationProofPolicyMode, type ProofWaiver } from "./mutation-proof-policy.js";
 import { SafetyPolicy, describeCheck, explainCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
+import { journeyProofHashForContext, type JourneyProofContext } from "./journey-proof-context.js";
 import {
   createSheetWriter,
   finishSheet,
@@ -100,6 +101,8 @@ export interface JourneyVerifyRecord {
    * 0.14.0: those fall back to comparing `contentHash`.
    */
   readonly proofHash?: string;
+  /** #721: secret-free effective browser/emulation context included in `proofHash`. */
+  readonly proofContext?: JourneyProofContext;
   readonly verdict: string;
   readonly reason?: string;
   readonly summary: Readonly<Record<string, number>>;
@@ -109,12 +112,16 @@ export interface JourneyVerifyRecord {
 }
 
 export interface JourneyReviewContext {
+  /** #696: strict review/readiness includes replay-target compatibility in its lint attention. */
+  readonly strict?: boolean;
   /** The site's safety config (targets.json `safety` for the Journey's origin): `deny` / `paid` / `allowControl`. */
   readonly safety?: Pick<SafetyConfig, "deny" | "paid" | "allowControl">;
   /** The Journey as last approved (`.approved/<id>.json`), or null when there is none. */
   readonly approvedSnapshot?: Journey | null;
   /** The last recorded mutation-proof verdict, or null when there is none. */
   readonly lastVerify?: JourneyVerifyRecord | null;
+  readonly proofPolicy?: MutationProofPolicyMode;
+  readonly proofWaiver?: ProofWaiver | null;
   /** #433: the Journey's catalog links and its pre-approval findings (the CLI loads the catalog). */
   readonly catalog?: { readonly links: JourneyCatalogLinks; readonly findings: readonly Finding[] };
   /** #453: the pending self-heal proposal, with whether it is stale and why it cannot be accepted. */
@@ -455,7 +462,7 @@ function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | 
     verdict: rec.verdict,
     at: rec.at,
     // #523: an executable-content change stales the proof; an old record without it compares the full hash.
-    stale: rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHash(journey),
+    stale: rec.journeyId !== journey.metadata.id || (rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHashForContext(journey, rec.proofContext)),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     summary: { ...rec.summary },
     ...(rec.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: rec.suggestedTargetedProofs.map((p) => ({ ...p, relax: [...p.relax] })) }),
@@ -480,7 +487,7 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
   const described = new Map((m.parameters ?? []).map((p) => [p.name, p.description]));
   const paramNames = [...new Set([...journeyRunParams(journey), ...(m.parameters ?? []).map((p) => p.name)])];
 
-  const findings = lintJourney(journey);
+  const findings = lintJourney(journey, ctx.strict === true ? { strictTargets: true } : {});
   const stepAssertions = journeyAssertions(journey).flatMap((site) => {
     if (site.where === "end-state") return [];
     const explained = explainCheck(site.check);
@@ -549,6 +556,7 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
       // #616: the declared targeted-proof plans, copied out of the metadata for review.
       ...(m.targetedProofs === undefined || m.targetedProofs.length === 0 ? {} : { targetedProofs: m.targetedProofs.map((p) => ({ check: p.check, mustFailWhen: p.mustFailWhen, relax: [...p.relax] })) }),
       verify: buildVerify(journey, hash, ctx.lastVerify),
+      policy: evaluateMutationProofPolicy({ journey, contentHash: hash, record: ctx.lastVerify, mode: ctx.proofPolicy, waiver: ctx.proofWaiver }),
     },
     changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot, ctx.stepIdOnly === true),
     ...(m.approval === undefined
@@ -649,6 +657,9 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
   if (v.status === "not-verified") info("Not mutation-tested", `jevitate journey verify ${r.id} --mutate`);
   else if (v.stale) warn("The mutation proof is out of date: the Journey changed after it ran", `jevitate journey verify ${r.id} --mutate`);
   else if (v.verdict === "insensitive") warn("Mutation proof: some checks cannot fail", `jevitate journey verify ${r.id} --mutate`);
+  const policy = r.proof.policy;
+  if (policy !== undefined && !policy.passed && !(v.status === "recorded" && (v.stale || v.verdict === "insensitive"))) warn(`Mutation proof policy (${policy.mode}): ${policy.reason}`, policy.next);
+  else if (v.status === "recorded" && !v.stale && v.verdict !== "proven" && v.verdict !== "insensitive") info(`Mutation proof (${policy?.mode ?? "advisory"}): ${policy?.reason ?? v.verdict}`, policy?.next);
   if (r.proof.acceptedWeak !== undefined) info(`Weak checks were accepted: "${r.proof.acceptedWeak.reason}"`);
   if (r.locatorHealth !== undefined && r.locatorHealth.brittle > 0) info(`${plural(r.locatorHealth.brittle, "step")} on brittle locators`, "--full lists the fixes");
   return [...out.filter((a) => a.severity === "warn"), ...out.filter((a) => a.severity === "info")];

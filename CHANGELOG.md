@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.26.0] – 2026-10-27
+
+0.26.0 makes multi-file Journey authoring deterministic and makes mutation-proof
+evidence and release verification more explicit.
+
+### Added
+
+- **Descriptor-bound upload fixtures.** Repeatable `--upload-fixture` bindings
+  provide only the declared project-confined file to each matching input after
+  the model selects upload; CLI and MCP retain filename-only model context and
+  reject ambiguous or duplicate bindings.
+- **Explicit mutation-proof policy.** Review, readiness, JSON, and MCP now
+  distinguish advisory, require-attempt, and require-proven proof policies;
+  terminal waivers are bound to the Journey and proof receipts.
+
+### Fixed
+
+- `reloadThen` restores the final same-document hash route when application
+  bootstrap drops only the fragment, without masking server redirects.
+- Journey lint and strict review reject absolute fixture paths and
+  non-replayable assertion targets.
+- Mutation verification carries replay viewport, device, and geolocation
+  context through its baseline and every replay, and preserves earlier
+  request-check evidence when a later action fails.
+
 ## [0.25.0] – 2026-10-26
 
 0.25.0 makes Journey verification easier to review before a browser is opened, adds an auditable
@@ -15,6 +40,10 @@ acceptance-evidence gate, and preserves a safe, resumable handoff when a goal ru
 - **Preview a Journey's mutation proof without running it.** `jevitate journey verify <id> --plan` (and MCP `verify_journey` with `plan: true`) reports every planned mutation, its assertion pairings, unpaired assertions and the minimum replay count without opening a browser, target, fixture, hook or session. The promotion and recording skills now require this inexpensive preflight before a potentially long `--mutate` proof.
 - **Audit release acceptance evidence without driving a target.** `jevitate acceptance audit` checks the supplied requirements, approval, Journey, verification and review artifacts, then writes deterministic Markdown, JUnit, SARIF and JSON receipts suitable for CI. Its approval proposal is bound to the inspected content hash.
 - **Blocked goals retain a safe actionable-control handoff (#688).** When a model stops beside a visible, enabled control that code classifies as safe, it receives one bounded recovery turn restricted to that named control. If it still cannot advance—or every candidate is unsafe—the result records the candidate's observed facts, screenshot and exact resume identity (page URL, state signature and locator) for a manager. Hidden, disabled, ambiguous, destructive, financial and approval controls are never selected or offered for recovery.
+
+### Fixed
+
+- **A request assertion keeps its proof when a later action fails (#701).** In structured mutation verification, a completed step's failed `expectRequests` check is retained even when the missing write makes a later dependent action abort the replay. The exact earlier request failure is sensitive evidence; the later failure remains a cascade for later assertions. Normal Journey runs keep their existing failure result, and checks for steps that never started are not judged.
 
 ## [0.24.2] – 2026-10-25
 

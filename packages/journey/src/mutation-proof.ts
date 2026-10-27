@@ -247,7 +247,7 @@ export function mutationPairIssues(journey: Journey): { readonly index: number; 
 
 /**
  * #616: what is wrong with `metadata.targetedProofs` — an unknown assertion site, an unresolvable
- * `mustFailWhen`, or a `relax` entry that is not a relaxable earlier `step:<n>` postcondition (a
+ * `mustFailWhen`, or a `relax` entry that is not an earlier page/request defense (a
  * resume/handback assertion, a step with no page postcondition, the target itself, a step at or
  * after a step target, a duplicate, or a missing step). Empty when every plan resolves.
  */
@@ -273,12 +273,13 @@ export function targetedProofPlanIssues(journey: Journey): { readonly index: num
     } catch (err) {
       out.push({ index, field: "mustFailWhen", message: `targetedProofs: ${err instanceof Error ? err.message : String(err)}` });
     }
-    const check = /^step:([1-9][0-9]*)$/.exec(plan.check);
+    const check = /^(?:step|step-request):([1-9][0-9]*)(?::[0-9]+)?$/.exec(plan.check);
     const targetStep = check === null ? null : Number(check[1]);
     const relaxed = new Set<string>();
     for (const entry of plan.relax) {
-      if (!/^step:[1-9][0-9]*$/.test(entry)) {
-        out.push({ index, field: "relax", message: `targetedProofs: ${JSON.stringify(entry)} is not a step assertion site — expected step:<n>` });
+      const request = /^step-request:([1-9][0-9]*):([0-9]+)$/.exec(entry);
+      if (!/^step:[1-9][0-9]*$/.test(entry) && request === null) {
+        out.push({ index, field: "relax", message: `targetedProofs: ${JSON.stringify(entry)} is not a step assertion site — expected step:<n> or step-request:<n>:<i>` });
         continue;
       }
       if (relaxed.has(entry)) {
@@ -286,13 +287,13 @@ export function targetedProofPlanIssues(journey: Journey): { readonly index: num
         continue;
       }
       relaxed.add(entry);
-      const n = Number(entry.slice("step:".length));
+      const n = Number(request?.[1] ?? entry.slice("step:".length));
       const recorded = steps[n - 1];
       if (recorded === undefined) {
         out.push({ index, field: "relax", message: `targetedProofs: the Journey has no step ${n}` });
         continue;
       }
-      if (targetStep === n) {
+      if (entry === plan.check) {
         out.push({ index, field: "relax", message: `targetedProofs: ${entry} is the target assertion — a declared proof never relaxes it` });
         continue;
       }
@@ -300,11 +301,19 @@ export function targetedProofPlanIssues(journey: Journey): { readonly index: num
         out.push({ index, field: "relax", message: `targetedProofs: ${entry} is not before the target step:${targetStep}` });
         continue;
       }
+      if (targetStep === n && request !== null) {
+        out.push({ index, field: "relax", message: `targetedProofs: ${entry} is not before the target ${plan.check}` });
+        continue;
+      }
       if (recorded.step.kind === "handback") {
         out.push({ index, field: "relax", message: `targetedProofs: ${entry} is a resume assertion — a declared proof never relaxes it` });
         continue;
       }
-      if (recorded.step.kind !== "assert" && !("expect" in recorded.step)) {
+      if (request !== null && !sites.has(entry)) {
+        out.push({ index, field: "relax", message: `targetedProofs: the Journey has no assertion at ${entry}` });
+        continue;
+      }
+      if (request === null && recorded.step.kind !== "assert" && !("expect" in recorded.step)) {
         out.push({ index, field: "relax", message: `targetedProofs: ${entry} has no page postcondition to relax` });
         continue;
       }
@@ -519,6 +528,8 @@ export type MutationReplayOptions = JourneyLintOptions & { readonly params?: Rea
  */
 export interface MutationReplay {
   readonly journey: Journey;
+  /** #708: private verifier mask; stored checks/indices and request capture remain unchanged. */
+  readonly relaxedStepRequests?: readonly string[];
   readonly skipIndex?: number;
   readonly blockIndex?: number;
   readonly blockRequests?: readonly string[];
@@ -645,9 +656,10 @@ function failedSiteKey(f: MutationFailedSite): string {
 
 /**
  * #609 — `relaxedMutationReplay` plus a weakened postcondition at every earlier step in
- * `relaxedSiteKeys` (only `step:<n>`): a step's `expect` becomes `relaxedExpect`, an `assert` step's
+ * `relaxedSiteKeys`: a step's `expect` becomes `relaxedExpect`, an `assert` step's
  * `check` becomes the no-claim `urlIncludes ""`, and each loses `waitFor`. The target assertion is
  * never relaxed, the input Journey is never modified, and no step is removed (indices hold).
+ * A declared `step-request:<n>:<i>` stays in the Journey and is masked by the private replay option.
  */
 export function targetedMutationReplay(
   journey: Journey,
@@ -659,7 +671,8 @@ export function targetedMutationReplay(
   if (relaxedSiteKeys.includes(targetSiteKey)) throw new Error(`${targetSiteKey} is the target assertion — a targeted proof never relaxes it`);
   const base = relaxedMutationReplay(journey, m, opts);
   if (relaxedSiteKeys.length === 0) return base;
-  return { ...base, journey: relaxStepSites(journey, base.journey, relaxedSiteKeys) };
+  const requests = relaxedSiteKeys.filter((k) => k.startsWith("step-request:"));
+  return { ...base, journey: relaxStepSites(journey, base.journey, relaxedSiteKeys), ...(requests.length === 0 ? {} : { relaxedStepRequests: requests }) };
 }
 
 /**
@@ -672,15 +685,20 @@ export function targetedMutationReplay(
 export function targetedControlReplay(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): MutationReplay {
   const own = flat(journey)[m.step - 1]?.step;
   const ownKey = own !== undefined && (own.kind === "assert" || "expect" in own) ? [`step:${m.step}`] : [];
-  return { journey: relaxStepSites(journey, journey, [...new Set([...ownKey, ...relaxedSiteKeys])]) };
+  const requests = relaxedSiteKeys.filter((k) => k.startsWith("step-request:"));
+  return { journey: relaxStepSites(journey, journey, [...new Set([...ownKey, ...relaxedSiteKeys])]), ...(requests.length === 0 ? {} : { relaxedStepRequests: requests }) };
 }
 
-/** #609: a clone of `from` with each `step:<n>` postcondition in `keys` weakened (sites read from `journey`). */
+/** Clone page defenses and validate request masks against original sites; request arrays are retained. */
 function relaxStepSites(journey: Journey, from: Journey, keys: readonly string[]): Journey {
   const byKey = new Map(journeyAssertions(journey).map((s) => [assertionSiteKey(s), s]));
   const copy = structuredClone(from);
   const steps = flat(copy);
   for (const key of keys) {
+    if (/^step-request:[1-9][0-9]*:[0-9]+$/.test(key)) {
+      if (byKey.get(key)?.where !== "step-request") throw new Error(`${key} is not an assertion site of this Journey`);
+      continue; // private replay mask; never remove checks or renumber assertion identities
+    }
     const match = /^step:([1-9][0-9]*)$/.exec(key);
     if (match === null) throw new Error(`${key} is not a step assertion site — a targeted proof only relaxes step:<n>`);
     const site = byKey.get(key);
@@ -818,8 +836,8 @@ export async function runDeclaredTargetedProof(
   const relaxedNow = [...relax];
   const run = await replay((j) => targetedMutationReplay(j, m, site, relaxedNow, opts), "targeted");
   const first = run.failedSites[0];
-  if (first !== undefined && first.where === "step" && first.postcondition && !relax.includes(`step:${first.step}`) && (target.where !== "step" || first.step < target.step)) {
-    const key = `step:${first.step}`;
+  if (first !== undefined && ((first.where === "step" && first.postcondition) || first.where === "step-request") && !relax.includes(failedSiteKey(first)) && (target.where === "end-state" || first.step < target.step)) {
+    const key = failedSiteKey(first);
     return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true, refused: `${key} blocked the declared proof (not in relax)` };
   }
   if (classifyMutationPlain(target, m, run) === "sensitive") {
@@ -847,10 +865,10 @@ export async function runDeclaredTargetedProof(
  * blocking step, or when the result would exceed `MAX_DECLARED_RELAXATIONS`.
  */
 export function suggestTargetedProofPlan(proof: TargetedProof, m: JourneyMutation): JourneyTargetedProofPlan | null {
-  if (proof.refused !== `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached`) return null;
+  if (proof.refused !== `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached` && !/^step-request:[1-9][0-9]*:[0-9]+ is not a step postcondition$/.test(proof.refused ?? "")) return null;
   const first = proof.failedSites[0];
-  if (first === undefined || first.where !== "step") return null;
-  const relax = [...proof.relaxedSites, `step:${first.step}`];
+  if (first === undefined || (first.where !== "step" && first.where !== "step-request")) return null;
+  const relax = [...proof.relaxedSites, failedSiteKey(first)];
   if (relax.length > MAX_DECLARED_RELAXATIONS) return null;
   return { check: proof.site, mustFailWhen: m.id, relax };
 }
@@ -923,13 +941,21 @@ function classifyMutationPlain(site: JourneyAssertionSite, m: JourneyMutation, r
     const hit = fs.some((f) => f.where === "step" && f.step === site.step && f.postcondition);
     return hit && site.step >= m.step ? "sensitive" : "cascade";
   }
+  if (site.where === "step-request") {
+    const hit = fs.some((f) => f.where === "step-request" && f.step === site.step && f.checkIndex === site.checkIndex);
+    const earlierFailure = fs.some(
+      (f) =>
+        f.where === "unevaluable" ||
+        (f.where === "step" && f.step <= site.step) ||
+        (f.where === "step-request" && f.step < m.step),
+    );
+    // A later action can fail because this mutation removed the state it needed. That cascade does
+    // not erase an exact request-check failure already observed at the target step.
+    return hit && site.step >= m.step && !earlierFailure ? "sensitive" : "cascade";
+  }
   // A step failed (the outcome checks were never judged), or the end state could not be read.
   if (fs.some((f) => f.where === "step" || f.where === "unevaluable")) return "cascade";
   if (fs.some((f) => f.where === "step-request" && f.step < m.step)) return "cascade";
-  if (site.where === "step-request") {
-    if (site.step < m.step) return "cascade";
-    return fs.some((f) => f.where === "step-request" && f.step === site.step && f.checkIndex === site.checkIndex) ? "sensitive" : "cascade";
-  }
   return fs.some((f) => f.where === "end-state" && f.index === site.index) ? "sensitive" : "cascade";
 }
 

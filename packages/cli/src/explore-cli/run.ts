@@ -4,8 +4,8 @@ import { Command } from "commander";
 import { type InvariantSpec, type TargetDescriptor } from "@jevitate/recording";
 import { envCredentialStore } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "../credentials-file.js";
-import { UnauthorizedExploreTargetError, TypeFixtureSpecError, validateAllowControlPatterns, validateDenyPatterns, type DialogPolicy, type SecretField, type TypeFixture } from "@jevitate/explore";
-import { loadTypeFixtures } from "../type-fixture-file.js";
+import { UnauthorizedExploreTargetError, TypeFixtureSpecError, validateAllowControlPatterns, validateDenyPatterns, type DialogPolicy, type SecretField, type TypeFixture, type UploadFixture } from "@jevitate/explore";
+import { loadTypeFixtures, loadUploadFixtures } from "../type-fixture-file.js";
 import { secretCommandRunner } from "../secret-command.js";
 import { ok, fail, type JsonEnvelope } from "../envelope.js";
 import { SessionFileInProjectError, assertSessionFileOutsideProject } from "../project-dir.js";
@@ -591,6 +591,7 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
 
       // #281: fields typed with a file's exact text — read (and checked) before any browser opens.
       let typeFixtures: TypeFixture[] = [];
+      let uploadFixtures: UploadFixture[] = [];
       if (o.typeFixture.length > 0) {
         if (o.feature !== undefined || strategy !== "goal") {
           emitExplore(fail("E_EXPLORE_ARGS", "--type-fixture is supported only with --strategy goal"));
@@ -598,6 +599,19 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         }
         try {
           typeFixtures = loadTypeFixtures(o.typeFixture);
+        } catch (err) {
+          if (!(err instanceof TypeFixtureSpecError)) throw err;
+          emitExplore(fail(err.code, err.message));
+          return;
+        }
+      }
+      if (o.uploadFixture.length > 0) {
+        if (o.feature !== undefined || strategy !== "goal") {
+          emitExplore(fail("E_EXPLORE_ARGS", "--upload-fixture is supported only with --strategy goal"));
+          return;
+        }
+        try {
+          uploadFixtures = loadUploadFixtures(o.uploadFixture);
         } catch (err) {
           if (!(err instanceof TypeFixtureSpecError)) throw err;
           emitExplore(fail(err.code, err.message));
@@ -631,7 +645,7 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       }
 
       const ctx: ExploreRunContext = {
-        deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures,
+        deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures, uploadFixtures,
       };
 
       if (strategy === "coverage" || strategy === "exploratory") {

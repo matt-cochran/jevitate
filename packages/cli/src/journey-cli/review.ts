@@ -18,6 +18,7 @@ import { CatalogInputError } from "../catalog.js";
 import { TargetConfigError } from "../target-config.js";
 import { FULL_FLAG_HELP, DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, targetsOpts } from "./shared.js";
 import { loadJourneezeHintPreference, renderJourneezeHint } from "../journeeze-hint.js";
+import { ProjectConfigError } from "../project-config.js";
 
 async function reviewJourneezeHint(json: boolean, outFile: string | undefined): Promise<string> {
   if (json || outFile !== undefined) return "";
@@ -105,7 +106,7 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
       } catch (err) {
         if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
-        } else if (err instanceof ReviewSidecarError || err instanceof CatalogInputError) {
+        } else if (err instanceof ReviewSidecarError || err instanceof CatalogInputError || err instanceof ProjectConfigError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof TargetConfigError) {
           emitJson(program, fail("E_TARGET_CONFIG", err.message));

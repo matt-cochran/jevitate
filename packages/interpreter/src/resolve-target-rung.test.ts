@@ -51,6 +51,18 @@ describe("test ids from another attribute resolve by [attr=value]", () => {
   });
 });
 
+describe("role-only descriptors are rejected", () => {
+  it("fails before attempting a broad role locator", async () => {
+    const outcome = await onPage(async (page) =>
+      resolveTarget(page, { role: "button" }, { timeoutMs: 500 }).then(
+        () => "resolved",
+        (err: Error) => err.message,
+      ),
+    );
+    expect(outcome).toContain("needs an exact accessible name");
+  });
+});
+
 describe("the rung a target resolved by is reported", () => {
   it("a role+name narrowed by an ordinal reports the rung and the ordinal", async () => {
     const seen: ResolvedTarget[] = [];

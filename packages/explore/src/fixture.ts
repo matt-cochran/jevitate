@@ -23,7 +23,7 @@ export class FixtureNotFoundError extends Error {
  * regular file. Throws `FixtureNotFoundError` otherwise — a directory is not a fixture.
  *
  * #498: with `root` (the project root), the fixture must also lie INSIDE it once realpath'd — an
- * absolute path, `../` or a symlink that escapes throws `FixturePathError`
+ * `../` or a symlink that escapes throws `FixturePathError`
  * (`fixture-outside-project`). The mission loop always passes its `fixtureRoot`; without one the
  * loop refuses the fixture (`fixture-no-root`).
  */

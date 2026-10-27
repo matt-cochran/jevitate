@@ -45,9 +45,12 @@ export function attachCdpProbe(health: HostHealthSampler, page: CdpPage): void {
   });
 }
 
-/** The failure to report: a `host-starved` verdict (#452) explains the stall before the engine's own failure does. */
+/** The failure to report: host-starvation (#452) and a governor resource limit (#713) explain incidental engine failures. */
 export function failureWithHostStarved<F extends { kind: string }>(host: { readonly failure?: F | undefined }, own: F | undefined): F | undefined {
-  return host.failure !== undefined && host.failure.kind === "host-starved" ? host.failure : own;
+  // A host-starved stall and a governor-terminated session both explain the run before any
+  // incidental engine failure that followed. In particular, a resource-limit close must not be
+  // rendered as an app defect merely because a parallel runner reached its aggregation first.
+  return host.failure !== undefined && (host.failure.kind === "host-starved" || host.failure.kind === "resource-limit") ? host.failure : own;
 }
 
 /** What every result carries from the sampler, and the degraded-environment verdict rule applied. */
@@ -74,6 +77,18 @@ export async function finishHostHealth<O extends string>(
   await health.sample();
   // #205: what resource governance did during this run (cap, slot, throttling, memory) rides along.
   const hostHealth: HostHealthSummary = { ...health.summary(), resources: governor.snapshot(runStarts.get(health) ?? 0) };
+  // #713: a governor breach is an authoritative end-of-run condition. It can arrive after a
+  // strategy's own aggregation has formed a provisional outcome, especially under parallel
+  // suites; that provisional value cannot be evidence about the app once the governor closed the
+  // page. Always surface one typed, inconclusive resource-limit result instead.
+  const resourceLimit = hostHealth.resources?.resourceLimit;
+  if (resourceLimit !== null && resourceLimit !== undefined) {
+    return {
+      outcome: "inconclusive",
+      failure: { kind: "resource-limit", message: resourceLimit.message },
+      fields: { hostHealth, environmentDegraded: health.findings() },
+    };
+  }
   // #452: a run that STALLED while the host showed starvation is `inconclusive` / `host-starved`, with the
   // measurements; a confirmed finding (defects-found, a hang) keeps its outcome.
   const starved = hostStarvedFailure(opts.failure, hostHealth);

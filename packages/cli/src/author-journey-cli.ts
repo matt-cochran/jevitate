@@ -40,7 +40,7 @@ import { LogClassesError } from "./log-classes.js";
  * run, so it can reproduce whatever setup the goal run needed (in `explore`'s own order).
  */
 const AUTHOR_GOAL_RUN_FLAGS = [
-  "successWhen", "allowVacuousChecks", "actionDeltas", "secret", "secretField", "totp", "typeFixture", "fixture",
+  "successWhen", "allowVacuousChecks", "actionDeltas", "secret", "secretField", "totp", "typeFixture", "uploadFixture", "fixture",
   "saveStorageState", "replyWaitMs", "replyQuietMs", "replyCeilingMs", "replyMaxChars", "jobWaitMs", "deny", "paid", "allowControl",
   "allowDestructive", "allowWrites", "dialogs", "readRpc", "hangReplays", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
   "allowSecretCmd", "secretCmdAttempts",

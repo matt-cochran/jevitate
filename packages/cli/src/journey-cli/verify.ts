@@ -13,7 +13,20 @@ import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../jou
 import { withEngine } from "../engine.js";
 import { planJourneyVerification, verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
-import { type CliDeps, resolveDbPath, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, type DemoFlags, collectParam, emitJson, environmentSeams } from "../cli-shared.js";
+import {
+  type CliDeps,
+  resolveDbPath,
+  type BrowserLaunchFlags,
+  withBrowserLaunchFlags,
+  browserRunFromFlags,
+  type DemoFlags,
+  type EmulationFlags,
+  withEmulationFlags,
+  emulationFromFlags,
+  collectParam,
+  emitJson,
+  environmentSeams,
+} from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
 import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 
@@ -22,7 +35,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
   // #402 — the negative proof: replay the Journey once as recorded, then once per mutation (skip a
   // write step, abort its writes, type an empty value into a checked fill); each assertion must fail
   // under its paired mutation. `--plan` previews that exact pairing without opening a browser.
-  withReplayAllowFlag(withEnvironmentFlags(withBrowserLaunchFlags(withFixtureFlags(withProjectFlags(journey.command("verify <id>"))))))
+  withReplayAllowFlag(withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(withProjectFlags(journey.command("verify <id>")))))))
     .description("preview or prove that each Journey assertion fails when its outcome is absent")
     .option("--mutate", "run the mutation proof")
     .option("--plan", "print the static mutation/assertion plan without opening a browser")
@@ -35,8 +48,8 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
       if (layout === null) return;
       const verifyJourneysDir = layout.journeysDir;
-      const { mutate, plan, param, storageState: storageStateFlag, json, env: envName, baseUrl } = this.opts<
-        { mutate?: boolean; plan?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags
+      const { mutate, plan, param, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<
+        { mutate?: boolean; plan?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags & EmulationFlags
       >();
       if ((mutate === true) === (plan === true)) {
         emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify needs exactly one of --plan or --mutate"));
@@ -85,8 +98,10 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         return;
       }
       let browser: ReturnType<typeof browserRunFromFlags>;
+      let emulation: ReturnType<typeof emulationFromFlags>;
       try {
         browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+        emulation = emulationFromFlags(emulationFlags);
       } catch (err) {
         emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
         return;
@@ -103,6 +118,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
             params: param,
             browserPortFactory: deps.explore?.browserPortFactory,
             ...(browser === undefined ? {} : { browser }),
+            ...(emulation === undefined ? {} : { emulation }),
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
             ...(allow.length === 0 ? {} : { allow }),

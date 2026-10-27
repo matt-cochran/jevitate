@@ -230,7 +230,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (456 exports)
+# @jevitate/explore (459 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -420,6 +420,7 @@
   blockedWriteCauses: function
   boundSecretField: function
   boundTypeFixture: function
+  boundUploadFixture: function
   boundaryValueCandidates: function
   breadthHint: function
   buildCrashReport: function
@@ -553,6 +554,7 @@
   judgeHttpResponse: function
   looksDestructiveRequest: function
   markTypeFixtures: function
+  markUploadFixtures: function
   markupCanary: function
   maskSecretFields: function
   matchGlob: function
@@ -580,6 +582,7 @@
   parseNumbers: function
   parseSecretField: function
   parseTypeFixtureSpec: function
+  parseUploadFixtureSpec: function
   pathGlob: function
   peekBlockedDeparture: function
   pendingEvidence: function
@@ -776,7 +779,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (161 exports)
+# @jevitate/journey (163 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -839,6 +842,7 @@
   MAX_TARGETED_RELAXATIONS: const (number)
   METRIC_KINDS: array
   MetricSchema: object
+  MutationProofPolicyResultSchema: object
   OUTCOME_DIRECTIONS: array
   OUTCOME_GULFS: array
   OUTCOME_MEASURES: array
@@ -847,6 +851,7 @@
   ParamValidationError: class
   PersonaReviewSchema: object
   PrReviewSchema: object
+  ProofWaiverSchema: object
   ProposalStepSchema: object
   RejectedProposalSchema: object
   ReviewAnchorWarningSchema: object
@@ -1125,7 +1130,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (123 exports)
+# @jevitate/recording (124 exports)
   ACTION_OPS: array
   ACTOR_NAME_RE: object
   ATTR_NAME_RE: object
@@ -1244,6 +1249,7 @@
   strictSignature: function
   substituteCaptureRefs: function
   takeValueFor: function
+  targetDescriptorSelectorProblem: function
   textEditProblem: function
   urlTemplate: function
   validateInvariantSpec: function

@@ -101,6 +101,7 @@ export type ExploreOpts = {
     allowSecretCmd?: boolean;
     secretCmdAttempts?: number;
     typeFixture: string[];
+    uploadFixture: string[];
     fixture?: string;
     storageState?: string;
     authCheck?: string;
@@ -168,6 +169,7 @@ export interface ExploreRunContext<S extends string = string> {
   journeyPrefix: JourneyPrefix | undefined;
   prefixRequest: Parameters<typeof resolveJourneyPrefix>[0] | undefined;
   typeFixtures: TypeFixture[];
+  uploadFixtures: import("@jevitate/explore").UploadFixture[];
 }
 
 /** The `--log-*` flags `serverLogOptionsFromFlags` reads (the same fields `ExploreOpts` carries). */

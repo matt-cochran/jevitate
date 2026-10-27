@@ -33,6 +33,7 @@ export class ProjectConfigError extends Error {
 
 export interface ProjectConfig {
   readonly testIdAttributes: readonly string[];
+  readonly mutationProofPolicy?: "advisory" | "require-attempt" | "require-proven";
 }
 
 /** Validates a `testIdAttributes` value; throws `ProjectConfigError` naming `where`. */
@@ -78,5 +79,9 @@ export function loadProjectConfig(projectDir: string | null): ProjectConfig {
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new ProjectConfigError(`${path}: must be a JSON object`);
   const value = (parsed as Record<string, unknown>).testIdAttributes;
-  return { testIdAttributes: value === undefined ? DEFAULT_TEST_ID_ATTRIBUTES : parseTestIdAttributes(value, path) };
+  const policy = (parsed as Record<string, unknown>).mutationProofPolicy;
+  if (policy !== undefined && policy !== "advisory" && policy !== "require-attempt" && policy !== "require-proven") {
+    throw new ProjectConfigError(`${path}: mutationProofPolicy must be advisory, require-attempt or require-proven`);
+  }
+  return { testIdAttributes: value === undefined ? DEFAULT_TEST_ID_ATTRIBUTES : parseTestIdAttributes(value, path), ...(policy === undefined ? {} : { mutationProofPolicy: policy }) };
 }

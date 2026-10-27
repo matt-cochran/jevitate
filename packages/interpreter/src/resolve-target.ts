@@ -1,5 +1,5 @@
 import type { Locator, Page } from "playwright";
-import type { TargetDescriptor } from "@jevitate/recording";
+import { targetDescriptorSelectorProblem, type TargetDescriptor } from "@jevitate/recording";
 import { clock } from "@jevitate/domain";
 
 /**
@@ -77,7 +77,7 @@ export function descriptorRung(d: TargetDescriptor): Exclude<ResolvedRung, "anch
   if (d.label) return "label";
   if (d.text) return "text";
   if (d.css) return "css";
-  throw new Error(`TargetDescriptor has no usable selector: ${JSON.stringify(d)}`);
+  throw new Error(`TargetDescriptor has no usable selector: ${targetDescriptorSelectorProblem(d)}`);
 }
 
 /** The rung's locator, BEFORE `ordinal` — exact name/label/text matching. */
@@ -91,7 +91,7 @@ export function rungLocator(page: Page, d: TargetDescriptor): Locator {
   // #335: `textMatch: "contains"` (a success check's `textContains=`) matches a substring.
   if (d.text) return page.getByText(d.text, { exact: d.textMatch !== "contains" });
   if (d.css) return page.locator(d.css);
-  throw new Error(`TargetDescriptor has no usable selector: ${JSON.stringify(d)}`);
+  throw new Error(`TargetDescriptor has no usable selector: ${targetDescriptorSelectorProblem(d)}`);
 }
 
 /** The locator for a recorded attribute anchor, or null when none was captured. */
