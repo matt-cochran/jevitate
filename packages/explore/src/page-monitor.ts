@@ -3,9 +3,11 @@ import type { Page, Request } from "playwright";
 import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
 import { visibleBusyIndicator } from "./hang.js";
 import { clock, isExternalSchemeUrl } from "@jevitate/domain";
+import { SECRET_PARAM_NAME_RE } from "@jevitate/recording";
 import { RPC_CONTENT, rpcStatusOfResponse, type RpcStatus } from "./rpc-status.js";
 import { clockBounded } from "./clock-bound.js";
 import { bodyValues } from "./request-body-values.js";
+import { classifyRequest } from "./timing.js";
 
 /** #378: how long a finished RPC's trailer read may hold its end back; past it the header status stands. */
 export const RPC_TRAILER_READ_MS = 2_000;
@@ -276,6 +278,95 @@ export interface CapturedRequest {
 /** Most requests a capture keeps; past it the oldest are dropped and `truncated` is set. */
 const MAX_CAPTURED = 20_000;
 
+/** #743: the JSON type of a declared request-body field; never a value. */
+export type DeclaredFieldType = "string" | "number" | "boolean" | "null" | "array" | "object";
+
+/** #743: one declared request-body field — its dotted JSON path / form key and the JSON type it held. */
+export interface DeclaredField {
+  readonly name: string;
+  readonly type: DeclaredFieldType;
+}
+
+/**
+ * The declared field names and JSON types one write sent in its request body, with the identity of
+ * the request that sent them. Fed to a {@link PageMonitor.onDeclaredFields} hook only: unlike the
+ * capture's records, these carry no values and are never stored on `CapturedRequest`.
+ */
+export interface DeclaredFields {
+  readonly method: string;
+  /** The redacted URL (sensitive query values masked). */
+  readonly url: string;
+  readonly path: string;
+  readonly fields: readonly DeclaredField[];
+}
+
+/** The longest body a declared-field read parses (the same bound `request-body-values` applies). */
+const MAX_DECLARED_BODY_CHARS = 64_000;
+/** Most declared fields one body contributes (matches #743's body-shape cap). */
+const MAX_DECLARED_FIELDS = 50;
+
+/** The JSON type of a parsed body value. */
+function declaredFieldType(value: unknown): DeclaredFieldType {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (typeof value === "string") return "string";
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "boolean";
+  return "object";
+}
+
+/** Appends `value`'s declared field under `name`, dropping credential-named fields and past the cap. */
+function pushDeclaredField(out: DeclaredField[], name: string, value: unknown): void {
+  if (out.length >= MAX_DECLARED_FIELDS || SECRET_PARAM_NAME_RE.test(name)) return;
+  out.push({ name, type: declaredFieldType(value) });
+}
+
+/** Walks a parsed JSON body, naming each field by its dotted path and its value's JSON type. */
+function walkDeclaredFields(out: DeclaredField[], path: string, node: unknown): void {
+  if (out.length >= MAX_DECLARED_FIELDS || node === null || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length && out.length < MAX_DECLARED_FIELDS; i++) {
+      const child = path === "" ? String(i) : `${path}.${i}`;
+      pushDeclaredField(out, child, node[i]);
+      walkDeclaredFields(out, child, node[i]);
+    }
+    return;
+  }
+  for (const [key, value] of Object.entries(node)) {
+    if (out.length >= MAX_DECLARED_FIELDS) return;
+    const child = path === "" ? key : `${path}.${key}`;
+    pushDeclaredField(out, child, value);
+    walkDeclaredFields(out, child, value);
+  }
+}
+
+/**
+ * The declared field names and JSON types a write's body declares — JSON (dotted paths, one entry
+ * per container and leaf) or form-encoded (one string-typed entry per key). Credential-named fields
+ * are dropped and no value is ever carried.
+ */
+function declaredFields(body: string | null, contentType: string | undefined): DeclaredField[] {
+  if (body === null || body === "" || body.length > MAX_DECLARED_BODY_CHARS) return [];
+  const type = (contentType ?? "").toLowerCase();
+  const out: DeclaredField[] = [];
+  if (type.includes("application/x-www-form-urlencoded")) {
+    for (const [key] of new URLSearchParams(body)) {
+      if (out.length >= MAX_DECLARED_FIELDS) break;
+      if (out.some((f) => f.name === key) || SECRET_PARAM_NAME_RE.test(key)) continue;
+      out.push({ name: key, type: "string" });
+    }
+    return out;
+  }
+  if (type === "" || type.includes("json")) {
+    try {
+      walkDeclaredFields(out, "", JSON.parse(body));
+    } catch {
+      return [];
+    }
+  }
+  return out;
+}
+
 /**
  * Every request that finishes on a page from `startCapture()` on — unlike the timing window, which
  * forgets requests once a perception has read them. Network assertions (`requestMade`,
@@ -358,6 +449,16 @@ export class RequestCapture {
 export const ACTION_CAUSED_MS = 1_500;
 const isRead = (r: Pick<InflightRequest, "method">): boolean => ["GET", "HEAD"].includes(r.method.toUpperCase());
 
+/**
+ * An asset-classified read settle may discount — a GET/HEAD whose resource type (or path /
+ * extension) marks it a static asset or a dev-server module. A write is never discounted, whatever
+ * it looks like: a pending write is always the app working on what the run did.
+ */
+function isDiscountedAsset(r: InflightRequest): boolean {
+  if (!isRead(r)) return false;
+  return classifyRequest({ url: r.url, resourceType: r.resourceType }) === "asset";
+}
+
 /** #383: how far back, and how often, a read must have completed to count as the page's own poll. */
 export const RECURRING_WINDOW_MS = 30_000;
 export const RECURRING_MIN_COMPLETIONS = 2;
@@ -424,6 +525,8 @@ export class PageMonitor {
   #documentNavStartedAt: number | null = null;
   #instrumented: Promise<void> | undefined;
   readonly #captures = new Set<RequestCapture>();
+  /** Consumers observing the declared field names and JSON types of each write request. */
+  readonly #declaredHooks = new Set<(fields: DeclaredFields) => void>();
 
   constructor(page: Page, now: () => number = clock.now) {
     this.#page = page;
@@ -454,6 +557,23 @@ export class PageMonitor {
         if (values.length > 0) {
           this.#writeBodies.push({ startedAt, url: r.url(), values });
           if (this.#writeBodies.length > MAX_WRITE_BODIES) this.#writeBodies.shift();
+        }
+        // Per-write declared-field capture hook: names and JSON types only (never values), parsed
+        // from the same body with credential-named fields dropped — so nothing lands on the record.
+        if (this.#declaredHooks.size > 0) {
+          let fields: DeclaredField[] = [];
+          try {
+            fields = declaredFields(r.postData(), requestContentType);
+          } catch {
+            // a body Playwright cannot decode declares no fields
+          }
+          for (const hook of this.#declaredHooks) {
+            try {
+              hook({ method: r.method().toUpperCase(), url: redactUrl(r.url()), path: pathOf(r.url()), fields });
+            } catch {
+              // a consumer's hook never breaks the monitor
+            }
+          }
         }
       }
       for (const c of this.#captures) {
@@ -599,6 +719,18 @@ export class PageMonitor {
       await this.#page.evaluate(INSTRUMENT).catch(() => undefined);
     })();
     return this.#instrumented;
+  }
+
+  /**
+   * Registers a per-request hook fed the declared field names and JSON types of each write's body
+   * (never values; credential-named fields are dropped by `SECRET_PARAM_NAME_RE`). Returns an
+   * unsubscribe function. Nothing is added to the capture's `CapturedRequest` records.
+   */
+  onDeclaredFields(hook: (fields: DeclaredFields) => void): () => void {
+    this.#declaredHooks.add(hook);
+    return () => {
+      this.#declaredHooks.delete(hook);
+    };
   }
 
   /** Starts keeping every request that finishes from now on (until `stopCapture`). */
@@ -864,9 +996,24 @@ export class PageMonitor {
    * `quietMs`, bounded by `ceilingMs`. `ignoreRequest` discounts requests that are not the awaited
    * work — the page's background polling (#241): neither pending nor activity.
    */
-  async waitSettled(opts: { quietMs?: number; ceilingMs: number; ignoreRequest?: (r: InflightRequest) => boolean }): Promise<SettleResult> {
+  async waitSettled(opts: {
+    quietMs?: number;
+    ceilingMs: number;
+    ignoreRequest?: (r: InflightRequest) => boolean;
+    /**
+     * Discount asset-classified reads (scripts, styles, images, fonts, dev modules) from
+     * settling — they are the page's own downloads, not the awaited work. A write is never
+     * discounted: while the app is committing what the run did, settle still waits.
+     */
+    discountAssets?: boolean;
+  }): Promise<SettleResult> {
     await this.instrument();
-    const ignore = opts.ignoreRequest;
+    const ignoreRequest = opts.ignoreRequest;
+    const discountAssets = opts.discountAssets === true;
+    const ignore =
+      ignoreRequest === undefined && !discountAssets
+        ? undefined
+        : (r: InflightRequest): boolean => (ignoreRequest?.(r) ?? false) || (discountAssets && isDiscountedAsset(r));
     const quietMs = opts.quietMs ?? SETTLE_QUIET_MS;
     const start = this.#now();
     const remaining = (): number => opts.ceilingMs - (this.#now() - start);
