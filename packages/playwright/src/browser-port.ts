@@ -4,6 +4,7 @@ import type { BlockedNavigation } from "./nav-guard.js";
 import type { GeolocationSpec, ViewportSize } from "./emulation.js";
 import type { UnpackedExtension } from "./extensions.js";
 import type { ResourceLimits } from "./resource-governor.js";
+import type { OriginReadiness } from "./reachability.js";
 
 export interface BrowserSession {
   readonly page: Page;
@@ -38,6 +39,13 @@ export interface BrowserSession {
    * the 30s navigation timeout. Optional: a test double without it is never probed.
    */
   probeReachable?(url: string): Promise<string | null>;
+  /**
+   * #742: the origin's HTTP readiness — which layer (dns/connect/http/ready) failed, the answered
+   * status when there was one, and a plain-words detail. Sweeps and campaign preflight use it to
+   * tell a missing host from an app that answers a non-ready status. Optional: a test double without
+   * it reports no readiness (read it as `session.probeOriginReadiness?.(url)`).
+   */
+  probeOriginReadiness?(url: string): Promise<OriginReadiness>;
   /**
    * #521: the off-allowlist navigations the navigation guard stopped since the last call (oldest
    * first), then forgets them — a mission drains it after each settle and treats a `main` entry as
