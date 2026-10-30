@@ -71,6 +71,7 @@ export type ExploreOpts = {
     settleIgnore: string[];
     apiPrefix: string[];
     longPollMs?: string;
+    devServer?: boolean;
     ignoreNoProgress: string[];
     jevitateRepo?: string;
     url?: string;

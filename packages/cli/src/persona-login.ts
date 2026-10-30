@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { Locator, Page } from "playwright";
 import { redactText, redactUrl } from "@jevitate/ai-core";
 import { clock } from "@jevitate/domain";
-import { assertAuthorizedExploreTarget, isLoginLikeUrl, UnauthorizedExploreTargetError } from "@jevitate/explore";
+import { assertAuthorizedExploreTarget, DESTRUCTIVE, isLoginLikeUrl, SESSION_END, UnauthorizedExploreTargetError } from "@jevitate/explore";
 import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
 import { sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { findGitRoot, sessionFileInProjectRefusal } from "./project-dir.js";
@@ -19,6 +19,10 @@ import { findGitRoot, sessionFileInProjectRefusal } from "./project-dir.js";
  *    (mode 0600, written atomically). The login session records nothing: no trace, no video, no HAR,
  *    no screenshot, no transcript — and no message this module produces carries a credential (every
  *    error text passes through `redactText` with both values first).
+ *  - `selectLoginContext` (#741): when the persona declares `context: {organization, role}`, the
+ *    login selects each value on the app page and asserts the control took it, BEFORE the state is
+ *    captured. An unavailable value fails with `LoginContextError` (`E_LOGIN_CONTEXT`); no state
+ *    file is written.
  *  - `checkSession` (the pre-flight auth check): opens the start URL with the storage state and
  *    decides, by code, whether the app bounced it to a sign-in page.
  *  - `ensurePersonaSession`: the check, plus ONE re-mint when the persona has `login` parameters.
@@ -69,6 +73,10 @@ export interface PersonaLogin {
   readonly submit?: string;
   /** `urlIncludes:<text>` | `selector:<css>` | `text:<text>`. Default: no password field and no login-like URL. */
   readonly success?: string;
+  /** #741: the organization selection control (a label, else a CSS selector). Default: found by label/role. */
+  readonly organizationField?: string;
+  /** #741: the role selection control (a label, else a CSS selector). Default: found by label/role. */
+  readonly roleField?: string;
 }
 
 export class LoginArgsError extends Error {
@@ -86,6 +94,21 @@ export class LoginFailedError extends Error {
     super(message);
     this.name = "LoginFailedError";
   }
+}
+
+/** #741: the persona's declared organization/role could not be selected and asserted. */
+export class LoginContextError extends Error {
+  readonly code = "E_LOGIN_CONTEXT" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "LoginContextError";
+  }
+}
+
+/** #741: a declared organization/role a login must select (and prove) before the state is captured. */
+export interface LoginContext {
+  readonly organization?: string;
+  readonly role?: string;
 }
 
 const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -114,9 +137,9 @@ function httpUrl(v: string, what: string): string {
   return u.href;
 }
 
-const LOGIN_KEYS = ["url", "api", "userEnv", "passwordEnv", "userField", "passwordField", "submit", "success"] as const;
+const LOGIN_KEYS = ["url", "api", "userEnv", "passwordEnv", "userField", "passwordField", "submit", "success", "organizationField", "roleField"] as const;
 /** The keys only a form sign-in uses (refused beside `api`). */
-const FORM_ONLY_KEYS = ["url", "userField", "passwordField", "submit", "success"] as const;
+const FORM_ONLY_KEYS = ["url", "userField", "passwordField", "submit", "success", "organizationField", "roleField"] as const;
 const API_KEYS = ["url", "userKey", "passwordKey", "tokenPath", "storageKey", "storage", "verifyUrl"] as const;
 
 /** A JSON body key: a plain identifier (letters, digits, `_`, `-`). */
@@ -257,6 +280,8 @@ export function parsePersonaLogin(v: unknown, where: string): PersonaLogin {
       ...optional("passwordField", str(o, "passwordField", `${where}.passwordField`, false)),
       ...optional("submit", str(o, "submit", `${where}.submit`, false)),
       ...optional("success", str(o, "success", `${where}.success`, false)),
+      ...optional("organizationField", str(o, "organizationField", `${where}.organizationField`, false)),
+      ...optional("roleField", str(o, "roleField", `${where}.roleField`, false)),
     };
   }
   assertEnvVarName(login.userEnv, `${where}.userEnv`);
@@ -279,6 +304,8 @@ export function loginFromFlags(f: {
   readonly passwordField?: string;
   readonly submit?: string;
   readonly success?: string;
+  readonly organizationField?: string;
+  readonly roleField?: string;
 }): PersonaLogin {
   if (f.api !== undefined) {
     if (f.url !== undefined) throw new LoginArgsError("--api and --url are two ways to sign in: pass one");
@@ -288,6 +315,8 @@ export function loginFromFlags(f: {
         ["--password-field", f.passwordField],
         ["--submit", f.submit],
         ["--success", f.success],
+        ["--organization-field", f.organizationField],
+        ["--role-field", f.roleField],
       ] as const
     )
       .filter(([, v]) => v !== undefined)
@@ -307,6 +336,8 @@ export function loginFromFlags(f: {
     ...optional("passwordField", f.passwordField),
     ...optional("submit", f.submit),
     ...optional("success", f.success),
+    ...optional("organizationField", f.organizationField),
+    ...optional("roleField", f.roleField),
   };
   assertEnvVarName(login.userEnv, "--user-env");
   assertEnvVarName(login.passwordEnv, "--password-env");
@@ -620,6 +651,140 @@ export async function performLogin(page: Page, login: PersonaLogin, secrets: Log
   }
 }
 
+/** The label a context control is found by when the login config does not name one. */
+const CONTEXT_CONTROL_LABEL: Readonly<Record<"organization" | "role", RegExp>> = {
+  organization: /organization|organisation|\borg\b|workspace|tenant|account/i,
+  role: /\brole\b/i,
+};
+
+/** #741: the roles a Choose-Your-Workspace chooser renders its cards as (not a `<select>`). */
+const CHOOSER_ROLES = ["button", "link", "option", "radio"] as const;
+/** How long the chooser path waits for the click to settle (load + quiet network). */
+const CHOOSER_SETTLE_MS = 3_000;
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The visible, enabled chooser elements whose accessible name matches (Playwright's name matching). */
+async function chooserMatches(page: Page, name: string | RegExp, exact = false): Promise<Locator[]> {
+  const out: Locator[] = [];
+  const query = exact && typeof name === "string" ? { name, exact: true } : { name };
+  for (const role of CHOOSER_ROLES) {
+    const found = page.getByRole(role, query).filter({ visible: true });
+    const count = await found.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const item = found.nth(i);
+      if (await item.isEnabled().catch(() => true)) out.push(item);
+    }
+  }
+  return out;
+}
+
+/** The names of every visible, enabled chooser card (for an error message that says what was offered). */
+async function chooserOffered(page: Page): Promise<string[]> {
+  const names: string[] = [];
+  for (const role of CHOOSER_ROLES) {
+    const found = page.getByRole(role).filter({ visible: true });
+    const count = await found.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const item = found.nth(i);
+      if (!(await item.isEnabled().catch(() => true))) continue;
+      const name = (await item.evaluate((el) => (el.getAttribute("aria-label") ?? el.textContent ?? "").replace(/\s+/g, " ").trim()).catch(() => "")) || "";
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * The visible, enabled chooser cards whose accessible name is exactly `value`, else contains it as a
+ * whole word. A whole-word match never selects a session-ending or destructive control ("Remove
+ * Admin" for the role "Admin"): only an exact name may.
+ */
+async function chooserCandidates(page: Page, value: string): Promise<Locator[]> {
+  const exact = await chooserMatches(page, value, true);
+  if (exact.length > 0) return exact;
+  const loose = await chooserMatches(page, new RegExp(`\\b${escapeRegExp(value)}\\b`, "i"));
+  const safe: Locator[] = [];
+  for (const card of loose) {
+    const name = (await card.evaluate((el) => (el.getAttribute("aria-label") ?? el.textContent ?? "").replace(/\s+/g, " ").trim()).catch(() => "")) || "";
+    if (!SESSION_END.test(name) && !DESTRUCTIVE.test(name)) safe.push(card);
+  }
+  return safe;
+}
+
+/**
+ * #741: a Choose-Your-Workspace chooser renders the organization/role as visible cards (a button,
+ * link, option or radio) rather than a `<select>`. Find exactly ONE card named `value` (exact, else
+ * a whole-word match), click it, wait for the page to settle, and prove the card is gone (or the URL
+ * changed) before the storage state is captured. Zero or several cards fail with `E_LOGIN_CONTEXT`,
+ * naming what the chooser offered.
+ */
+async function selectContextCard(page: Page, what: "organization" | "role", value: string, timeoutMs: number): Promise<void> {
+  const before = page.url();
+  const matches = await chooserCandidates(page, value);
+  if (matches.length === 0) {
+    const offered = await chooserOffered(page);
+    throw new LoginContextError(`the declared ${what} ${JSON.stringify(value)} is unavailable on ${pathOf(before)}: the chooser offers ${offered.length === 0 ? "nothing" : offered.map((n) => JSON.stringify(n)).join(", ")}`);
+  }
+  if (matches.length > 1) {
+    const offered = await Promise.all(matches.map(async (m) => (await m.evaluate((el) => (el.getAttribute("aria-label") ?? el.textContent ?? "").replace(/\s+/g, " ").trim()).catch(() => "")) || ""));
+    throw new LoginContextError(`the declared ${what} ${JSON.stringify(value)} is ambiguous on ${pathOf(before)}: ${matches.length} chooser cards match (${offered.map((n) => JSON.stringify(n)).join(", ")})`);
+  }
+  await matches[0]!.click({ timeout: timeoutMs });
+  // Let a client-side navigation finish: the page load, then a quiet network.
+  await page.waitForLoadState("load", { timeout: timeoutMs }).catch(() => undefined);
+  await page.waitForLoadState("networkidle", { timeout: Math.min(timeoutMs, CHOOSER_SETTLE_MS) }).catch(() => undefined);
+  if (page.url() !== before) return;
+  if ((await chooserCandidates(page, value)).length > 0) {
+    throw new LoginContextError(`the declared ${what} ${JSON.stringify(value)} was clicked on ${pathOf(page.url())}, but the chooser still offers it — the selection did not take`);
+  }
+}
+
+/**
+ * #741: selects each declared context value on the app page and asserts the control actually took
+ * it. Called after the sign-in and BEFORE the storage state is captured. A declared value the app
+ * does not offer throws {@link LoginContextError} (`E_LOGIN_CONTEXT`), so nothing is written.
+ */
+export async function selectLoginContext(page: Page, context: LoginContext, opts: { readonly login: Pick<PersonaLogin, "organizationField" | "roleField">; readonly timeoutMs: number }): Promise<void> {
+  await selectContextValue(page, "organization", context.organization, opts.login.organizationField, opts.timeoutMs);
+  await selectContextValue(page, "role", context.role, opts.login.roleField, opts.timeoutMs);
+}
+
+async function selectContextValue(page: Page, what: "organization" | "role", value: string | undefined, field: string | undefined, timeoutMs: number): Promise<void> {
+  if (value === undefined || value === "") return;
+  const candidates = field === undefined ? [page.getByLabel(CONTEXT_CONTROL_LABEL[what]), page.getByRole("combobox", { name: CONTEXT_CONTROL_LABEL[what] })] : fieldBySpec(page, field);
+  const control = await firstVisible(candidates);
+  if (control === undefined) {
+    // #741: no labelled select/combobox and no configured field — this may be a card chooser.
+    if (field !== undefined) throw new LoginContextError(`the declared ${what} ${JSON.stringify(value)} is unavailable: no ${what} control on ${pathOf(page.url())} matching ${JSON.stringify(field)}`);
+    await selectContextCard(page, what, value, timeoutMs);
+    return;
+  }
+  const labels = await control.evaluate((el: HTMLSelectElement) => (el.tagName === "SELECT" ? Array.from(el.options).map((o) => (o.textContent ?? "").trim()) : null)).catch(() => undefined);
+  if (labels == null) {
+    // A custom (non-`<select>`) control: open it and choose the option by its accessible name.
+    await control.click({ timeout: timeoutMs });
+    const option = page.getByRole("option", { name: value, exact: true }).first();
+    const visible = await option
+      .waitFor({ state: "visible", timeout: timeoutMs })
+      .then(() => true)
+      .catch(() => false);
+    if (!visible) throw new LoginContextError(`the declared ${what} ${JSON.stringify(value)} is unavailable on ${pathOf(page.url())}: the ${what} control does not offer it`);
+    await option.click({ timeout: timeoutMs });
+    return;
+  }
+  if (!labels.includes(value)) {
+    throw new LoginContextError(`the declared ${what} ${JSON.stringify(value)} is unavailable on ${pathOf(page.url())}: the ${what} control offers ${labels.length === 0 ? "nothing" : labels.map((l) => JSON.stringify(l)).join(", ")}`);
+  }
+  await control.selectOption({ label: value }, { timeout: timeoutMs });
+  const selected = await control.evaluate((el: HTMLSelectElement) => el.selectedOptions[0]?.textContent?.trim() ?? null);
+  if (selected !== value) {
+    throw new LoginContextError(`the declared ${what} ${JSON.stringify(value)} was not selected: the ${what} control shows ${JSON.stringify(selected)}`);
+  }
+}
+
 // ── saving the state ──────────────────────────────────────────────────────────────────────────
 
 /** Where a storage state goes: refused inside a repo's `.jevitate/`; a warning when it is in a repo and not ignored by git. */
@@ -675,6 +840,12 @@ export interface MintOptions {
   readonly browser?: BrowserRunOptions;
   readonly timeoutMs: number;
   /**
+   * #741: the persona's declared organization/role. When set, the login selects each on the app
+   * page and asserts the selection before capturing the storage state; an unavailable value fails
+   * with `E_LOGIN_CONTEXT` and writes nothing.
+   */
+  readonly context?: LoginContext;
+  /**
    * #449 (an API login only): prove the new session before it is saved — the state is checked against
    * this URL with this rule (`checkSession`), and nothing is written when the check fails.
    */
@@ -712,11 +883,13 @@ export async function mintStorageState(o: MintOptions): Promise<MintResult> {
   try {
     session = await o.port.open({ ...sessionLaunchOptions(launch), allowedOrigins: [...o.allowlist], baseUrl: o.login.url });
     const landed = await performLogin(session.page, o.login, secrets, { allowlist: o.allowlist, timeoutMs: o.timeoutMs });
+    if (o.context !== undefined) await selectLoginContext(session.page, o.context, { login: o.login, timeoutMs: o.timeoutMs });
     const state = session.captureStorageState !== undefined ? await session.captureStorageState() : JSON.stringify(await session.page.context().storageState());
     writeStorageStateFile(save, state);
     return { saved: save, landedUrl: scrub(redactUrl(landed), secrets) };
   } catch (err) {
     if (err instanceof LoginFailedError || err instanceof LoginArgsError) throw err;
+    if (err instanceof LoginContextError) throw new LoginContextError(scrub(err.message, secrets));
     throw new LoginFailedError(scrub(`the sign-in failed: ${err instanceof Error ? err.message.split("\n")[0]! : String(err)}`, secrets));
   } finally {
     await session?.close().catch(() => undefined);
@@ -793,6 +966,16 @@ async function mintApiStorageState(o: MintOptions, api: ApiLogin): Promise<MintR
       else if (typeof v === "string" && v !== "") token = v;
       else throw new LoginFailedError(`the sign-in endpoint's JSON response has no ${v === undefined || v === null ? "value" : "string value"} at --token-path ${api.tokenPath}`);
     }
+    if (o.context !== undefined) {
+      // #741: prove the declared organization/role on the app page BEFORE the state is captured.
+      await session.page.goto(appUrl, { waitUntil: "load", timeout: o.timeoutMs });
+      if (token !== undefined && api.storageKey !== undefined) {
+        await session.page.evaluate((args: readonly [string, string]) => window.localStorage.setItem(args[0], args[1]), [api.storageKey, token] as const);
+        await session.page.reload({ waitUntil: "load", timeout: o.timeoutMs });
+      }
+      assertPageAuthorized(session.page, o.allowlist);
+      await selectLoginContext(session.page, o.context, { login: o.login, timeoutMs: o.timeoutMs });
+    }
     const raw = session.captureStorageState !== undefined ? await session.captureStorageState() : JSON.stringify(await context.storageState());
     const state = JSON.parse(raw) as { cookies?: unknown[]; origins?: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }> };
     if (token === undefined && (state.cookies ?? []).length === 0) {
@@ -825,6 +1008,7 @@ async function mintApiStorageState(o: MintOptions, api: ApiLogin): Promise<MintR
   } catch (err) {
     if (err instanceof LoginFailedError) throw new LoginFailedError(scrub(err.message, secrets, token));
     if (err instanceof LoginArgsError) throw new LoginArgsError(scrub(err.message, secrets, token));
+    if (err instanceof LoginContextError) throw new LoginContextError(scrub(err.message, secrets, token));
     throw new LoginFailedError(scrub(`the sign-in failed: ${err instanceof Error ? err.message.split("\n")[0]! : String(err)}`, secrets, token));
   } finally {
     if (tmp !== undefined) rmSync(tmp, { force: true });
@@ -964,6 +1148,8 @@ export interface EnsureSessionOptions extends Omit<SessionCheckOptions, "storage
   readonly storageState: string;
   /** The persona's login parameters: an expired session is re-minted ONCE from them. */
   readonly login?: PersonaLogin;
+  /** #741: the persona's declared organization/role, selected and asserted on a re-mint. */
+  readonly context?: LoginContext;
   readonly env: Readonly<Record<string, string | undefined>>;
   /** A line for the operator (stderr): a refresh happened. */
   readonly note?: (line: string) => void;
@@ -984,7 +1170,7 @@ export async function ensurePersonaSession(o: EnsureSessionOptions): Promise<Ens
   const landedUrl = first !== undefined && !first.ok ? first.landedUrl : undefined;
   if (o.login === undefined) return { ok: false, reason: expired, ...(landedUrl === undefined ? {} : { landedUrl }) };
   try {
-    await mintStorageState({ login: o.login, save: o.storageState, allowlist: o.allowlist, env: o.env, port: o.port, ...(o.browser === undefined ? {} : { browser: o.browser }), timeoutMs: o.timeoutMs });
+    await mintStorageState({ login: o.login, save: o.storageState, allowlist: o.allowlist, env: o.env, port: o.port, ...(o.browser === undefined ? {} : { browser: o.browser }), ...(o.context === undefined ? {} : { context: o.context }), timeoutMs: o.timeoutMs });
   } catch (err) {
     if (!(err instanceof LoginFailedError) && !(err instanceof LoginArgsError)) throw err;
     return { ok: false, reason: `${expired}; re-signing in ${who} failed: ${err.message}`, ...(landedUrl === undefined ? {} : { landedUrl }) };

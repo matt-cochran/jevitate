@@ -19,6 +19,13 @@
 export interface SettleConfig {
   readonly ignoreRequests?: readonly string[];
   readonly longPollMs?: number;
+  /**
+   * #745: opt-in dev-server (Vite/HMR) policy — discount a read classified as an `asset` (a script,
+   * style, font, image or Vite dev-server module) from settling, so module/HMR churn is not mistaken
+   * for the awaited work. A write is never discounted, and a configured `timing.apiPrefixes` path
+   * still wins over a Vite-shaped one. Default `false` (production/staging behavior unchanged).
+   */
+  readonly devServer?: boolean;
 }
 
 export interface HangConfig {

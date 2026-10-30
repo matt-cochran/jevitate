@@ -5,7 +5,7 @@
  */
 
 import { redactUrl } from "@jevitate/ai-core";
-import { Navigate } from "@jevitate/screenplay";
+import { navigateWithStartupRetry } from "../../startup-retry.js";
 import { readIdentity } from "../../adversarial/identity.js";
 import { assertSeedReachable, describeUnreachable, isUnreachableTarget } from "../../mission-failure.js";
 import { monitorFor } from "../../page-monitor.js";
@@ -30,7 +30,7 @@ export async function loadSeed(ctx: HuntState, params: AdversarialMissionParams)
   try {
     if (params.startInPlace !== true) {
       await assertSeedReachable(ctx.sessions.actor, params.seedUrl);
-      await Navigate.to(params.seedUrl).performAs(ctx.sessions.actor);
+      await navigateWithStartupRetry(ctx.sessions.actor, params.seedUrl);
     }
   } catch (e) {
     const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);

@@ -134,6 +134,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     hangReplayWrites: { kind: "goal", set: true },
     settleIgnore: { kind: "coverage", set: ["*/poll*"] },
     longPollMs: { kind: "coverage", set: 9000 },
+    devServer: { kind: "goal", set: true },
     apiPrefix: { kind: "coverage", set: ["/api/"] },
     ignoreNoProgress: { kind: "coverage", set: ["/busy/*"] },
     hangReplays: { kind: "adversarial", set: 0 },

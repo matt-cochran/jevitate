@@ -42,7 +42,7 @@ import { LogClassesError } from "./log-classes.js";
 const AUTHOR_GOAL_RUN_FLAGS = [
   "successWhen", "allowVacuousChecks", "actionDeltas", "secret", "secretField", "totp", "typeFixture", "uploadFixture", "fixture",
   "saveStorageState", "replyWaitMs", "replyQuietMs", "replyCeilingMs", "replyMaxChars", "jobWaitMs", "deny", "paid", "allowControl",
-  "allowDestructive", "allowWrites", "dialogs", "readRpc", "hangReplays", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
+  "allowDestructive", "allowWrites", "dialogs", "readRpc", "hangReplays", "settleIgnore", "longPollMs", "devServer", "apiPrefix", "ignoreNoProgress",
   "allowSecretCmd", "secretCmdAttempts",
 ] as const satisfies readonly (keyof typeof GOAL_RUN_OPTIONS)[];
 
@@ -84,6 +84,56 @@ export function formatAuthorJourneyHuman(data: unknown): string {
   if (r.outcome === "authored") (r.corroboratingTakes ?? []).forEach((d, i) => lines.push(...takeLines(`take ${i + 2}`, d)));
   for (const w of r.linkWarnings ?? []) lines.push(`  ${lintFindingLine(w)}`);
   return `${lines.join("\n")}\n`;
+}
+
+/** #744: the flags every `explore-author-journey` needs, with the placeholder a corrected line uses. */
+const REQUIRED_AUTHOR_ARGS = [
+  { flag: "--url", attr: "url", placeholder: "<url>" },
+  { flag: "--goal", attr: "goal", placeholder: "<text>" },
+  { flag: "--success", attr: "success", placeholder: "<spec>" },
+  { flag: "--id", attr: "id", placeholder: "<id>" },
+  { flag: "--name", attr: "name", placeholder: "<name>" },
+] as const;
+
+/** #744: flags whose VALUES are (or may carry) secrets — never echoed in a corrected invocation. */
+const SECRET_ARG_FLAGS: ReadonlySet<string> = new Set(["--secret", "--secret-field", "--totp"]);
+
+/** A copy-pasteable token: whitespace or shell punctuation is JSON-quoted. */
+function quoteArg(v: string): string {
+  return /[\s"'`$\\|&;<>(){}*?!#]/.test(v) ? JSON.stringify(v) : v;
+}
+
+/** The required flags absent from the parsed options (an empty `--success` counts as absent). */
+function missingAuthorArgs(opts: Record<string, unknown>): { readonly flag: string; readonly placeholder: string }[] {
+  return REQUIRED_AUTHOR_ARGS.filter((a) => {
+    const v = opts[a.attr];
+    return v === undefined || v === "" || (Array.isArray(v) && v.length === 0);
+  });
+}
+
+/**
+ * #744: the invocation the user most likely meant — the flags they already gave (secret values
+ * redacted), plus a placeholder for each missing required flag. Every flag the command accepts is
+ * rendered by its own long form, so the corrected line is complete and copy-pasteable.
+ */
+function authorCorrectedInvocation(cmd: Command, opts: Record<string, unknown>, missing: readonly { readonly flag: string; readonly placeholder: string }[]): string {
+  const parts = ["jevitate", "explore-author-journey"];
+  for (const opt of cmd.options) {
+    if (opt.long === undefined || opt.long === "--json") continue;
+    const value = opts[opt.attributeName()];
+    if (value === undefined || value === false) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) parts.push(opt.long, SECRET_ARG_FLAGS.has(opt.long) ? "<redacted>" : quoteArg(String(item)));
+      continue;
+    }
+    if (value === true) {
+      parts.push(opt.long);
+      continue;
+    }
+    parts.push(opt.long, SECRET_ARG_FLAGS.has(opt.long) ? "<redacted>" : quoteArg(String(value)));
+  }
+  for (const m of missing) parts.push(m.flag, m.placeholder);
+  return parts.join(" ");
 }
 
 /** Registers `jevitate explore-author-journey` (Jev authors an unpromoted, parameterized Journey). */
@@ -167,13 +217,27 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         storageState?: string;
         out?: string;
       } & BrowserLaunchFlags & GoalRunFlags & FixtureFlags & ServerLogFlags>();
+      const optsRecord = o as unknown as Record<string, unknown>;
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
-        emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
+        emitJson(
+          program,
+          fail(
+            "E_EXPLORE_AUTHOR_JOURNEY_ARGS",
+            `--storage-state <file> not found: ${o.storageState} — corrected invocation: ${authorCorrectedInvocation(this, optsRecord, missingAuthorArgs(optsRecord))}`,
+          ),
+        );
         return;
       }
 
       if (!o.url || !o.goal || o.success.length === 0 || !o.id || !o.name) {
-        emitJson(program, fail("E_AUTHOR_ARGS", "--url, --goal, --success, --id and --name are all required"));
+        const missingArgs = missingAuthorArgs(optsRecord);
+        emitJson(
+          program,
+          fail(
+            "E_EXPLORE_AUTHOR_JOURNEY_ARGS",
+            `${missingArgs.map((m) => m.flag).join(", ")} ${missingArgs.length === 1 ? "is" : "are"} required — corrected invocation: ${authorCorrectedInvocation(this, optsRecord, missingArgs)}`,
+          ),
+        );
         return;
       }
       // #322/#400: every kind `explore --success` takes — page, reloadThen and network checks.

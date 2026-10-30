@@ -190,7 +190,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (154 exports)
+# @jevitate/domain (161 exports)
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
@@ -333,6 +333,13 @@
   SitePolicy: type-alias
   SitePolicySchema: variable
   startedOutcome: function
+  STARTUP_ATTEMPT_ERROR_CLASSES: variable
+  StartupAttempt: type-alias
+  StartupAttemptErrorClass: type-alias
+  StartupAttempts: type-alias
+  StartupAttemptSchema: variable
+  startupAttemptsOf: function
+  StartupAttemptsSchema: variable
   targetsFor: function
   ThrottlePolicy: type-alias
   TimedStep: interface
@@ -346,7 +353,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (714 exports)
+# @jevitate/explore (719 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -484,6 +491,9 @@
   decide: function
   DecideInput: interface
   Decision: interface
+  DeclaredField: interface
+  DeclaredFields: interface
+  DeclaredFieldType: type-alias
   DeclaredRun: interface
   decodeBase32: function
   DEFAULT_ADVERSARIAL_TIME_BUDGET_MS: variable
@@ -699,6 +709,7 @@
   isAuthorizedExploreTarget: function
   isBookkeepingRequest: function
   isDestructiveRequest: function
+  isDevServerAssetRead: function
   isDisclosureControl: function
   isExercisable: function
   isInScope: function
@@ -974,6 +985,7 @@
   srOnlyLabelOf: function
   Stability: type-alias
   startRouteGlobs: function
+  startupErrorClass: function
   STARVATION_WINDOW_MS: variable
   starvationAttributionFromEnv: function
   starvationMeasurements: function
@@ -1579,7 +1591,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (161 exports)
+# @jevitate/playwright (164 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1673,6 +1685,7 @@
   MemoryWatchedPage: interface
   NavigationGuard: class
   OpenOptions: interface
+  OriginReadiness: interface
   OrphanCleanup: interface
   orphanReason: function
   OwnBrowserTeardown: interface
@@ -1704,10 +1717,12 @@
   PooledBrowser: interface
   PooledContext: interface
   PressureThresholds: type-alias
+  probeOriginReadiness: function
   probeReachable: function
   processAlive: function
   ProcessInfo: interface
   ProcessTable: interface
+  ReachabilityClass: type-alias
   ReachabilityDeps: interface
   readUnpackedExtension: function
   readUnpackedExtensions: function
@@ -1794,7 +1809,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (198 exports)
+# @jevitate/recording (202 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1817,6 +1832,8 @@
   AuthoringTakeSchema: variable
   BaseFillStep: interface
   BinOp: type-alias
+  BodyFieldPredicate: type-alias
+  BodyFieldShape: interface
   boundVariables: function
   BudgetDeclaration: interface
   BudgetGuard: interface
@@ -1906,6 +1923,7 @@
   NavigateUrlParamError: class
   navigateUrlParams: function
   NetworkCheck: type-alias
+  NetworkCheckCount: type-alias
   NetworkCheckSchema: variable
   NetworkObservable: interface
   NeverResponse: interface
@@ -1943,6 +1961,7 @@
   RecordingStore: interface
   RedactedValue: type-alias
   ReferenceDiffResult: interface
+  RequestBodyShape: interface
   RequestShape: interface
   resolveAssertionRefs: function
   resolveHttpUrl: function

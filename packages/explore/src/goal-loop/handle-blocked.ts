@@ -9,7 +9,7 @@ import { controlRisk } from "../safety.js";
 import { snapshot } from "../snapshot.js";
 import { awaitWrites } from "../side-effects.js";
 import { readInProgressStatus } from "../status.js";
-import type { Control } from "../snapshot.js";
+import type { Control, Snapshot } from "../snapshot.js";
 import type { RunContext } from "./context.js";
 import type { ActionableControlEvidence, ActionableControlKind, ActionableControlOutcome, ActionableControlResume } from "./context/types.js";
 import { terms } from "./goal-focus.js";
@@ -38,6 +38,18 @@ export function takeRecoveryTurn(ctx: RunContext): readonly ActionableControlEvi
   if (turn === undefined || !turn.pending) return null;
   turn.pending = false;
   return turn.safe;
+}
+
+/**
+ * #747 — arm the one bounded #688 recovery turn from beside the #172 last-chance turn: a unique safe
+ * forward control makes that last chance the targeted recovery decision. Idempotent and additive: a
+ * turn already given is never replaced, so the run still gets at most one recovery decision.
+ */
+export function armRecoveryTurn(ctx: RunContext, safe: readonly ActionableControlEvidence[]): boolean {
+  const turn = RECOVERY_TURNS.get(ctx);
+  if (turn !== undefined && turn.given) return false;
+  RECOVERY_TURNS.set(ctx, { safe, given: true, pending: true });
+  return true;
 }
 
 /** #688 — the durable, JSON-encoded resume identity the blocked outcome carries for a manager. */
@@ -77,12 +89,16 @@ function instructionText(controls: readonly Control[], visibleText: string): str
  * name. Deterministic: the page text minus the controls' labels must be an instruction containing
  * every content word of the control's name, and at least one of those words must be in the goal.
  */
-function primaryForwardControl(ctx: RunContext, step: Step): Control | null {
+export function forwardControls(
+  ctx: RunContext,
+  step: { readonly snap: Snapshot; readonly modelControls: readonly Control[]; readonly visibleText: string },
+): Control[] {
   const goalTerms = terms(ctx.goalText);
-  if (goalTerms.size === 0) return null;
+  if (goalTerms.size === 0) return [];
   const instruction = instructionText(step.modelControls, step.visibleText);
   const instructionTerms = terms(instruction);
-  if (instructionTerms.size === 0 || !DIRECTIVE.test(instruction)) return null;
+  if (instructionTerms.size === 0 || !DIRECTIVE.test(instruction)) return [];
+  const out: Control[] = [];
   for (const control of step.modelControls) {
     if (!control.enabled) continue;
     const name = control.name.trim();
@@ -90,9 +106,17 @@ function primaryForwardControl(ctx: RunContext, step: Step): Control | null {
     if (ctx.depth.tried(step.snap.url, name)) continue;
     const controlTerms = terms(name);
     if (controlTerms.size === 0) continue;
-    if ([...controlTerms].some((t) => goalTerms.has(t)) && [...controlTerms].every((t) => instructionTerms.has(t))) return control;
+    if ([...controlTerms].some((t) => goalTerms.has(t)) && [...controlTerms].every((t) => instructionTerms.has(t))) out.push(control);
   }
-  return null;
+  return out;
+}
+
+/** The first #693 forward control, or null — the single obvious control a model `blocked` is refused beside. */
+export function primaryForwardControl(
+  ctx: RunContext,
+  step: { readonly snap: Snapshot; readonly modelControls: readonly Control[]; readonly visibleText: string },
+): Control | null {
+  return forwardControls(ctx, step)[0] ?? null;
 }
 
 export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> {
@@ -192,9 +216,7 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
   // actionable-control outcome with the exact resume identity a manager resumes from.
   const evidence = await collectActionableControlEvidence(ctx.page, { screenshots: false }).catch(() => [] as ActionableControlEvidence[]);
   const safe = evidence.filter((e) => e.kind === "safe" && e.name !== "");
-  const turn = RECOVERY_TURNS.get(ctx);
-  if ((turn === undefined || !turn.given) && safe.length > 0) {
-    RECOVERY_TURNS.set(ctx, { safe, given: true, pending: true });
+  if (safe.length > 0 && armRecoveryTurn(ctx, safe)) {
     const note = `blocked: one recovery turn is available through the safe control(s) ${safe
       .map((e) => `${quote(e.name, 40)} (${e.locator})`)
       .join(", ")} — act through one of them or the run ends blocked`;
@@ -205,6 +227,7 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
   record(true, "model blocked");
   // #688 — the candidate the terminal outcome names: the safe control whose recovery turn was spent,
   // or the best real excluded control a manager could still act on (never merely hidden/unusable).
+  const turn = RECOVERY_TURNS.get(ctx);
   const turnSafe = turn !== undefined && turn.given && turn.safe.length > 0 ? turn.safe : null;
   const excluded = evidence.filter((e) => e.kind !== "safe");
   const classes = [...new Set(excluded.map((e) => e.kind))].join(", ");

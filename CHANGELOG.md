@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.27.0] – 2026-10-30
+
+0.27.0 makes sessions workspace-aware, retries flaky first loads within a fixed bound, and lets
+network success checks count requests and check request-body shapes without storing values.
+
+### Added
+
+- **Workspace-aware persona sessions (#741).** A persona may declare `context: { organization, role }`.
+  `jevitate login` selects it (a `<select>`, a combobox, or a Choose-Your-Workspace card) and asserts
+  it before writing the storage state, so the saved state reopens in that workspace. An unavailable
+  context fails with `E_LOGIN_CONTEXT` before anything is written. New `--organization-field` /
+  `--role-field`.
+- **Bounded startup retry and origin readiness (#742).** The first navigation of a goal, feature,
+  adversarial or induction run is retried a bounded number of times (default 3 × 15 s, at most 60 s;
+  never after the first action). Goal results carry `attempts[]`. `probeOriginReadiness` tells a
+  missing host, a refused connect and an HTTP error apart.
+- **Counted and body-shape network checks (#743).** `requestMade` / `responseStatus` accept
+  `|count=exact:N|min:N|max:N` and `|body=field:predicate,…`. Body shapes are judged on field names
+  and JSON types captured at request time; request values are never stored, and credential-named
+  fields are refused.
+- **Opt-in dev-server settle (#745).** `--dev-server` (or `settle.devServer` in targets.json, MCP,
+  check-suite items) stops Vite/HMR asset reads from holding up settle. Writes are always awaited,
+  and API prefixes still win.
+- **Campaign preflight context and readiness (#746).** `campaign run` refuses a session whose persona
+  context disagrees with the Journey's, and a start origin that is down (DNS, connect, or 5xx; a 4xx
+  auth wall passes). New `--ignore-host-load` (CLI and MCP). A starved host stays `E_HOST_STARVED`.
+
+### Changed
+
+- **Targeted no-progress recovery (#747).** Beside a unique safe forward control, the last-chance turn
+  before a no-progress stop names that control: one model-mediated turn, never an automatic click.
+- **Self-correcting `explore-author-journey` errors (#744).** Argument errors name the missing flag
+  and print a corrected invocation, with secrets redacted. They now use the command's own
+  `E_EXPLORE_AUTHOR_JOURNEY_ARGS` (previously `E_AUTHOR_ARGS` / `E_EXPLORE_ARGS`), exit 64.
+
 ## [0.26.0] – 2026-10-27
 
 0.26.0 makes multi-file Journey authoring deterministic and makes mutation-proof

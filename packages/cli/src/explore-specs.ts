@@ -2,13 +2,17 @@
 import {
   AssertionSchema,
   HttpCheckSchema,
+  SECRET_PARAM_NAME_RE,
   STYLE_CHANNELS,
   STYLE_PROPERTIES,
   COMPARE_OPS,
   type Assertion,
+  type BodyFieldPredicate,
   type CompareOp,
   type HttpCheck,
   type HttpJsonAssertion,
+  type NetworkCheckCount,
+  type RequestBodyShape,
   type StyleChannel,
   type StyleProperty,
   type TargetDescriptor,
@@ -249,12 +253,65 @@ function parseStatusSpec(text: string): StatusSpec {
   throw new Error(`responseStatus expects 2xx, 4xx … or a status code, got ${JSON.stringify(text)}`);
 }
 
+/** #743: the body-field predicates a declared shape may use (`exists`/`absent` plus the JSON types). */
+const BODY_PREDICATES: ReadonlySet<string> = new Set(["exists", "absent", "string", "number", "boolean", "null", "array", "object"]);
+
+/** #743: `count=exact:<n>` / `count=min:<n>` / `count=max:<n>` — one non-negative bound. */
+function parseCountSpec(kind: string, value: string): NetworkCheckCount {
+  const m = /^(exact|min|max):(\d+)$/.exec(value);
+  if (m === null) throw new Error(`${kind}: count expects exact:<n>, min:<n> or max:<n>, got ${JSON.stringify(value)}`);
+  const n = Number(m[2]);
+  if (n > 1000) throw new Error(`${kind}: count bound must be 0..1000, got ${n}`);
+  const bound = m[1];
+  return bound === "exact" ? { exact: n } : bound === "min" ? { min: n } : { max: n };
+}
+
+/** #743: `body=name:predicate[,name:predicate…]` — field names and predicates only, never a value. */
+function parseBodyShapeSpec(kind: string, value: string): RequestBodyShape {
+  const fields = value.split(",").map((part) => {
+    const idx = part.lastIndexOf(":");
+    if (idx <= 0) throw new Error(`${kind}: body expects name:predicate, got ${JSON.stringify(part)}`);
+    const name = part.slice(0, idx);
+    const predicate = part.slice(idx + 1);
+    if (!BODY_PREDICATES.has(predicate)) throw new Error(`${kind}: body predicate must be one of ${[...BODY_PREDICATES].join(", ")}, got ${JSON.stringify(predicate)}`);
+    if (SECRET_PARAM_NAME_RE.test(name)) {
+      throw new Error(`${kind}: body field ${JSON.stringify(name)} names a credential — a body shape declares field names and predicates only`);
+    }
+    return { name, predicate: predicate as BodyFieldPredicate };
+  });
+  return { fields };
+}
+
+/** #743: splits a network-check spec's trailing `|count=…`/`|body=…` from its request/status core. */
+function splitNetworkSuffixes(kind: string, text: string): { core: string; count?: NetworkCheckCount; bodyShape?: RequestBodyShape } {
+  const parts = text.split("|");
+  const core = parts[0] ?? "";
+  const out: { core: string; count?: NetworkCheckCount; bodyShape?: RequestBodyShape } = { core };
+  for (const part of parts.slice(1)) {
+    const eq = part.indexOf("=");
+    const key = eq === -1 ? part : part.slice(0, eq);
+    const value = eq === -1 ? undefined : part.slice(eq + 1);
+    if (key === "count") {
+      if (out.count !== undefined) throw new Error(`${kind}: count declared more than once`);
+      if (value === undefined) throw new Error(`${kind}: count expects exact:<n>, min:<n> or max:<n>`);
+      out.count = parseCountSpec(kind, value);
+    } else if (key === "body") {
+      if (out.bodyShape !== undefined) throw new Error(`${kind}: body declared more than once`);
+      if (value === undefined) throw new Error(`${kind}: body expects name:predicate,…`);
+      out.bodyShape = parseBodyShapeSpec(kind, value);
+    } else {
+      throw new Error(`${kind}: unknown option ${JSON.stringify(part)} (expected count=… or body=…)`);
+    }
+  }
+  return out;
+}
+
 /**
  * The goal mission's `--success` spec parser (repeatable: every check must hold). Besides every
  * page assertion `parseAssertionSpec` reads:
  *   reloadThen:<assertion>                     — reload the page, then check (persistence)
- *   requestMade:<METHOD> <path-glob>           — the run issued this request
- *   responseStatus:<METHOD> <path-glob>=<2xx|4xx|code> — and it got this status
+ *   requestMade:<METHOD> <path-glob>[|count=…][|body=…] — the run issued this request (#743 bounds it)
+ *   responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>[|count=…][|body=…] — and it got this status (#743)
  *   http:GET <url>|<assertion>[|<assertion>…]  — (#543) a GET to an allow-listed origin answers so
  * `<path-glob>` uses the route-glob syntax (`*` within a segment, `**` across segments) against
  * the request's path; `*` as METHOD matches any method.
@@ -267,14 +324,17 @@ export function parseSuccessSpec(spec: string): SuccessCheck {
     case "reloadThen":
       if (rest.startsWith("reloadThen:")) throw new Error("reloadThen cannot be nested");
       return { kind: "reloadThen", assertion: parseAssertionSpec(rest) };
-    case "requestMade":
-      return { kind: "requestMade", ...parseRequestSpec(kind, rest) };
+    case "requestMade": {
+      const { core, ...extras } = splitNetworkSuffixes(kind, rest);
+      return { kind: "requestMade", ...parseRequestSpec(kind, core), ...extras };
+    }
     case "http":
       return parseHttpCheckSpec(rest);
     case "responseStatus": {
-      const eq = rest.lastIndexOf("=");
+      const { core, ...extras } = splitNetworkSuffixes(kind, rest);
+      const eq = core.lastIndexOf("=");
       if (eq === -1) throw new Error('responseStatus requires "<METHOD> <path-glob>=<2xx|4xx|code>"');
-      return { kind: "responseStatus", ...parseRequestSpec(kind, rest.slice(0, eq)), status: parseStatusSpec(rest.slice(eq + 1)) };
+      return { kind: "responseStatus", ...parseRequestSpec(kind, core.slice(0, eq)), status: parseStatusSpec(core.slice(eq + 1)), ...extras };
     }
     default:
       return { kind: "page", assertion: parseAssertionSpec(spec) };

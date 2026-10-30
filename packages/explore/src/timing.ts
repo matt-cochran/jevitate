@@ -64,6 +64,23 @@ export function classifyRequest(
   return "other";
 }
 
+/**
+ * #745: the opt-in dev-server (Vite/HMR) settle policy's per-request predicate. A read (`GET`/
+ * `HEAD`) classified as an `asset` — a script, style, font, image, or a dev-server module such as
+ * Vite's `/src/…`, `/@vite/…` and `/node_modules/…` — is discounted from settling: it is the
+ * page's own download, not the awaited work. A write is NEVER discounted (a pending write is the
+ * app committing what the run did), and a configured API prefix wins over a Vite-shaped path: an
+ * `/api/src/…` read stays `api` when `/api/` is a `timing.apiPrefixes` entry.
+ */
+export function isDevServerAssetRead(
+  r: Pick<InflightRequest, "url" | "method" | "resourceType">,
+  apiPrefixes: readonly string[] = [],
+): boolean {
+  const method = r.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD") return false;
+  return classifyRequest({ url: r.url, resourceType: r.resourceType }, apiPrefixes) === "asset";
+}
+
 export interface RequestTiming {
   /** `METHOD /normalized/path` — the endpoint pattern (query dropped, ids collapsed). */
   readonly endpoint: string;

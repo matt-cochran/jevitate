@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
-import { Navigate } from "@jevitate/screenplay";
+import { navigateWithStartupRetry } from "../startup-retry.js";
 import {
   RecordingSchema,
   type Assertion,
@@ -409,7 +409,7 @@ async function runFeatureFrontier(
     sessions.page.on("requestfailed", onFirstNavRequestFailed);
     try {
       await guard(assertSeedReachable(sessions.actor, params.seedUrl));
-      await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
+      await guard(navigateWithStartupRetry(sessions.actor, params.seedUrl));
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
       // #521: a seed load cut short by a navigation the opt-in guard stopped is no unreachable target —

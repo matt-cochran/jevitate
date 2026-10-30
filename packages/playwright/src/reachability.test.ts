@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
+import { createServer as createHttpServer } from "node:http";
 import { createServer, type Socket } from "node:net";
 import { describe, expect, it } from "vitest";
-import { probeReachable } from "./reachability.js";
+import { probeOriginReadiness, probeReachable } from "./reachability.js";
 
 /** A fake socket that emits `event` (with `payload`) on the next tick, or never. */
 function fakeSocket(event?: "connect" | "error", payload?: unknown): () => Socket {
@@ -44,6 +45,96 @@ describe("probeReachable (#213: fail fast when nothing is listening)", () => {
     }
     expect(await probeReachable("about:blank")).toBeNull();
     expect(await probeReachable("not a url")).toBeNull();
+  });
+});
+
+describe("probeOriginReadiness (#742: HTTP origin readiness)", () => {
+  const ready = { connect: fakeSocket("connect"), httpRequest: async () => ({ status: 204 }) };
+
+  it("a DNS failure is class dns", async () => {
+    const lookup = () => Promise.reject(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }));
+    const r = await probeOriginReadiness("https://nosuch.example.invalid/", { lookup, connect: fakeSocket("connect") });
+    expect(r.class).toBe("dns");
+  });
+
+  it("a refused connection is class connect", async () => {
+    const err = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const r = await probeOriginReadiness("http://127.0.0.1:59123/", { connect: fakeSocket("error", err) });
+    expect(r.class).toBe("connect");
+  });
+
+  it("an HTTP non-ready status is class http", async () => {
+    const r = await probeOriginReadiness("http://127.0.0.1:59124/", { connect: fakeSocket("connect"), httpRequest: async () => ({ status: 503 }) });
+    expect(r.class).toBe("http");
+  });
+
+  it("an HTTP non-ready result reports its status code", async () => {
+    const r = await probeOriginReadiness("http://127.0.0.1:59124/", { connect: fakeSocket("connect"), httpRequest: async () => ({ status: 503 }) });
+    expect(r.status).toBe(503);
+  });
+
+  it("a ready origin is class ready", async () => {
+    const r = await probeOriginReadiness("http://127.0.0.1:59124/", ready);
+    expect(r.class).toBe("ready");
+  });
+
+  it("a ready result reports the answered status", async () => {
+    const r = await probeOriginReadiness("http://127.0.0.1:59124/", ready);
+    expect(r.status).toBe(204);
+  });
+
+  it("an HTTP transport error after the connect is class http", async () => {
+    const r = await probeOriginReadiness("http://127.0.0.1:59124/", { connect: fakeSocket("connect"), httpRequest: async () => ({ error: "socket hang up" }) });
+    expect(r.class).toBe("http");
+  });
+
+  it("probes the origin root, not the full path", async () => {
+    let requested = "";
+    await probeOriginReadiness("http://127.0.0.1:59124/app/deep", {
+      connect: fakeSocket("connect"),
+      httpRequest: async (url) => {
+        requested = url;
+        return { status: 200 };
+      },
+    });
+    expect(requested).toBe("http://127.0.0.1:59124/");
+  });
+
+  it("the TCP-only probeReachable ignores an HTTP non-ready status", async () => {
+    const r = await probeReachable("http://127.0.0.1:59124/", { connect: fakeSocket("connect"), httpRequest: async () => ({ status: 503 }) });
+    expect(r).toBeNull();
+  });
+});
+
+describe("probeOriginReadiness over a real HTTP server", () => {
+  const serve = (status: number): Promise<{ url: string; close: () => void }> =>
+    new Promise((resolve) => {
+      const srv = createHttpServer((_req, res) => {
+        res.statusCode = status;
+        res.end();
+      });
+      srv.listen(0, "127.0.0.1", () => {
+        const port = (srv.address() as { port: number }).port;
+        resolve({ url: `http://127.0.0.1:${port}/`, close: () => srv.close() });
+      });
+    });
+
+  it("classifies a 204 origin as ready", async () => {
+    const s = await serve(204);
+    try {
+      expect((await probeOriginReadiness(s.url)).class).toBe("ready");
+    } finally {
+      s.close();
+    }
+  });
+
+  it("classifies a 503 origin as http", async () => {
+    const s = await serve(503);
+    try {
+      expect((await probeOriginReadiness(s.url)).class).toBe("http");
+    } finally {
+      s.close();
+    }
   });
 });
 

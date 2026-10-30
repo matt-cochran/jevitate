@@ -2,7 +2,7 @@ import type { Assertion, Recording } from "@jevitate/recording";
 import { installFlashRecorder } from "@jevitate/interpreter";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import type { Page } from "playwright";
-import type { MissionFailure } from "@jevitate/domain";
+import type { MissionFailure, StartupAttempt } from "@jevitate/domain";
 import { DEFAULT_ORACLE_SETTLE_MS } from "../outcome-checks.js";
 import type { HttpCheckRefResolver, HttpProbe } from "../http-check.js";
 import { monitorFor, type RequestCapture } from "../page-monitor.js";
@@ -28,6 +28,7 @@ import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { type MinEffortRequest } from "../run-depth.js";
 
 import { demoOverlayFor } from "../demo-overlay.js";
+import { startupAttemptsFor } from "../startup-retry.js";
 import { secretFieldSecrets } from "../secret-fields.js";
 import { act } from "./goal-based/act.js";
 import { adjudicate } from "./goal-based/adjudicate.js";
@@ -205,6 +206,13 @@ export interface GoalBasedResult {
   /** Each check's verdict and what the oracle saw — the failing one names what caught the run. */
   readonly checks: SuccessCheckResult[];
   readonly run: ExploreRun;
+  /**
+   * #742: the recorded bounded first-navigation startup attempts, oldest first — one entry per try,
+   * with its error class and clock timings (`null` class for the try that reached the target).
+   * Absent when the run tried no startup navigation (an anchored/in-place run, or a pre-flight probe
+   * that refused a definitely-down target before any try).
+   */
+  readonly attempts?: StartupAttempt[];
   readonly recording: Recording;
   readonly transcript: TranscriptEntry[];
   readonly finalUrl: string;
@@ -425,6 +433,21 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
  * independent oracle, the adjudication, and the report.
  */
 async function adjudicatedRun(
+  cfg: GoalBasedMissionConfig,
+  checks: readonly SuccessCheck[],
+  page: Page,
+  capture: RequestCapture | null,
+  declared: DeclaredHooks | null,
+): Promise<GoalBasedResult> {
+  const result = await assembleGoalResult(cfg, checks, page, capture, declared);
+  // #742: the bounded first-navigation retry's evidence, attached to the run result so a failed
+  // first try is visible even though the run carried on. Absent when no startup navigation ran.
+  const attempts = startupAttemptsFor(cfg.actor);
+  return attempts.length === 0 ? result : { ...result, attempts: [...attempts] };
+}
+
+/** The goal mission's phases and verdict, unchanged; {@link adjudicatedRun} adds the startup attempts. */
+async function assembleGoalResult(
   cfg: GoalBasedMissionConfig,
   checks: readonly SuccessCheck[],
   page: Page,

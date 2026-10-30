@@ -19,8 +19,10 @@ import { redactUrl } from "../redact.js";
 import { describeStatus, isEmptyStatus, readFormText, readPageStatus, statusDelta } from "../status.js";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { RunContext } from "./context.js";
+import type { ActionableControlEvidence } from "./context/types.js";
+import { armRecoveryTurn, collectActionableControlEvidence, forwardControls } from "./handle-blocked.js";
 import { EXPECTED_RETURN, savedAndLeft, settledNavigation } from "./helpers.js";
-import { LAST_CHANCE_NOTE, LAST_CHANCE_NO_WRITE_NOTE, MAX_MOVING_SCROLLS } from "./limits.js";
+import { LAST_CHANCE_NOTE, LAST_CHANCE_NO_WRITE_NOTE, MAX_MOVING_SCROLLS, NO_PROGRESS_RECOVERY_NOTE } from "./limits.js";
 import type { Flow, Perceived } from "./step.js";
 import { clock } from "@jevitate/domain";
 
@@ -197,9 +199,12 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
       // reports, or says done/blocked. For a find-out goal an idle choice becomes a report.
       ctx.lastChanceGiven = true;
       ctx.lastChanceTurn = true;
+      // #747: beside a unique safe forward control the last chance becomes the targeted #688-style
+      // recovery turn; otherwise the generic #680/#172 note is unchanged.
+      const targeted = await targetedRecoveryNote(ctx, snap, text);
       // #680: a write goal with nothing sent yet is told so here — its last turn otherwise goes to a
       // report or done that code must reject, and the run stops before it can act on the rejection.
-      ctx.history.push(ctx.writeGoal && !ctx.wroteOk ? LAST_CHANCE_NO_WRITE_NOTE : LAST_CHANCE_NOTE);
+      ctx.history.push(targeted ?? (ctx.writeGoal && !ctx.wroteOk ? LAST_CHANCE_NO_WRITE_NOTE : LAST_CHANCE_NOTE));
     } else {
       ctx.stop = "no-progress";
       return "stop";
@@ -219,6 +224,23 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   if (ctx.noProgress.streak === 0) ctx.lastChanceGiven = false;
   ctx.seen.add(snap.signature);
   return "next";
+}
+
+/**
+ * #747 — when the page offers a unique safe forward control, the #172 last-chance turn becomes the
+ * #688-style targeted recovery: one bounded decision restricted to that control. Observation only —
+ * the evidence is read and the turn armed, never clicked; with anything but one unique safe forward
+ * control this returns null and the generic last chance stands.
+ */
+async function targetedRecoveryNote(ctx: RunContext, snap: Perceived["snap"], text: string): Promise<string | null> {
+  const evidence = await collectActionableControlEvidence(ctx.page, { screenshots: false }).catch(() => [] as ActionableControlEvidence[]);
+  const safeNames = new Set(evidence.filter((e) => e.kind === "safe" && e.name !== "").map((e) => e.name));
+  if (safeNames.size === 0) return null;
+  const forward = forwardControls(ctx, { snap, modelControls: snap.controls, visibleText: text }).filter((c) => safeNames.has(c.name.trim()));
+  if (forward.length !== 1) return null;
+  const target = evidence.find((e) => e.kind === "safe" && e.name === forward[0].name.trim());
+  if (target === undefined || !armRecoveryTurn(ctx, [target])) return null;
+  return NO_PROGRESS_RECOVERY_NOTE(target.name, target.locator);
 }
 
 /**
