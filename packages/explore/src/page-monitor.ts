@@ -7,7 +7,7 @@ import { SECRET_PARAM_NAME_RE } from "@jevitate/recording";
 import { RPC_CONTENT, rpcStatusOfResponse, type RpcStatus } from "./rpc-status.js";
 import { clockBounded } from "./clock-bound.js";
 import { bodyValues } from "./request-body-values.js";
-import { classifyRequest } from "./timing.js";
+import { isDevServerAssetRead } from "./timing.js";
 
 /** #378: how long a finished RPC's trailer read may hold its end back; past it the header status stands. */
 export const RPC_TRAILER_READ_MS = 2_000;
@@ -449,16 +449,6 @@ export class RequestCapture {
 export const ACTION_CAUSED_MS = 1_500;
 const isRead = (r: Pick<InflightRequest, "method">): boolean => ["GET", "HEAD"].includes(r.method.toUpperCase());
 
-/**
- * An asset-classified read settle may discount — a GET/HEAD whose resource type (or path /
- * extension) marks it a static asset or a dev-server module. A write is never discounted, whatever
- * it looks like: a pending write is always the app working on what the run did.
- */
-function isDiscountedAsset(r: InflightRequest): boolean {
-  if (!isRead(r)) return false;
-  return classifyRequest({ url: r.url, resourceType: r.resourceType }) === "asset";
-}
-
 /** #383: how far back, and how often, a read must have completed to count as the page's own poll. */
 export const RECURRING_WINDOW_MS = 30_000;
 export const RECURRING_MIN_COMPLETIONS = 2;
@@ -522,6 +512,10 @@ export class PageMonitor {
   readonly #background = new Map<Request, "stream" | "ignored" | "long-poll">();
   #ignore: (url: string) => boolean = () => false;
   #longPollMs = DEFAULT_LONG_POLL_MS;
+  /** #745: the target opted into the dev-server (Vite/HMR) settle policy. */
+  #devServer = false;
+  /** #745: `timing.apiPrefixes` — a configured API path is never read as a dev-server asset. */
+  #apiPrefixes: readonly string[] = [];
   #documentNavStartedAt: number | null = null;
   #instrumented: Promise<void> | undefined;
   readonly #captures = new Set<RequestCapture>();
@@ -745,10 +739,16 @@ export class PageMonitor {
     this.#captures.delete(capture);
   }
 
-  /** Applies the target's settle configuration (idempotent; the latest call wins). */
-  configure(cfg: SettleConfig | undefined): void {
+  /**
+   * Applies the target's settle configuration (idempotent; the latest call wins). `apiPrefixes` is
+   * `timing.apiPrefixes` (#745): perceive re-applies only the settle config before every wait, so
+   * the prefixes a caller with the timing config sets here are kept rather than cleared.
+   */
+  configure(cfg: SettleConfig | undefined, apiPrefixes?: readonly string[]): void {
     this.#ignore = urlMatcher(cfg?.ignoreRequests);
     this.#longPollMs = cfg?.longPollMs ?? DEFAULT_LONG_POLL_MS;
+    this.#devServer = cfg?.devServer === true;
+    if (apiPrefixes !== undefined) this.#apiPrefixes = apiPrefixes;
     for (const [r] of this.#inflight) if (this.#ignore(r.url())) this.#background.set(r, "ignored");
   }
 
@@ -1009,11 +1009,13 @@ export class PageMonitor {
   }): Promise<SettleResult> {
     await this.instrument();
     const ignoreRequest = opts.ignoreRequest;
-    const discountAssets = opts.discountAssets === true;
+    // #745: the per-call option or the target's opt-in settle policy. Asset reads are discounted via
+    // `isDevServerAssetRead`, so a write never is and a configured API path keeps precedence.
+    const discountAssets = opts.discountAssets === true || this.#devServer;
     const ignore =
       ignoreRequest === undefined && !discountAssets
         ? undefined
-        : (r: InflightRequest): boolean => (ignoreRequest?.(r) ?? false) || (discountAssets && isDiscountedAsset(r));
+        : (r: InflightRequest): boolean => (ignoreRequest?.(r) ?? false) || (discountAssets && isDevServerAssetRead(r, this.#apiPrefixes));
     const quietMs = opts.quietMs ?? SETTLE_QUIET_MS;
     const start = this.#now();
     const remaining = (): number => opts.ceilingMs - (this.#now() - start);
