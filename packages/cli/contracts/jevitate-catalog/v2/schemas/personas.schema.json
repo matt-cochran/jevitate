@@ -70,20 +70,6 @@
           "extensions": {
             "type": "object",
             "maxProperties": 16
-          },
-          "context": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "organization": {
-                "type": "string",
-                "maxLength": 200
-              },
-              "role": {
-                "type": "string",
-                "maxLength": 200
-              }
-            }
           }
         },
         "additionalProperties": true
@@ -163,20 +149,6 @@
               "extensions": {
                 "type": "object",
                 "maxProperties": 16
-              },
-              "context": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "organization": {
-                    "type": "string",
-                    "maxLength": 200
-                  },
-                  "role": {
-                    "type": "string",
-                    "maxLength": 200
-                  }
-                }
               }
             },
             "additionalProperties": true
@@ -240,20 +212,6 @@
               "extensions": {
                 "type": "object",
                 "maxProperties": 16
-              },
-              "context": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "organization": {
-                    "type": "string",
-                    "maxLength": 200
-                  },
-                  "role": {
-                    "type": "string",
-                    "maxLength": 200
-                  }
-                }
               }
             },
             "additionalProperties": true
