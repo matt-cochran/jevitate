@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /**
  * The typed verdict every mission run ends with — CLI and MCP alike. Finding a defect is the
  * mission's SUCCESS case, so it is data (`defects-found`), never an exception; a mission that
@@ -374,4 +376,54 @@ export function goalReasonOf(i: GoalReasonInput): GoalReason | undefined {
     case "defects-found":
       return "defects";
   }
+}
+
+/**
+ * #742 — one bounded browser startup attempt, recorded on the run result's `attempts[]`. A direct
+ * target can refuse a first navigation (a DNS miss, a refused connect, a navigation timeout, a
+ * browser launch failure) before any response, even while a plain HTTP probe answers 200; the runner
+ * retries the first navigation/launch a short, bounded number of times before finalizing
+ * `target-unreachable`, and these records are the evidence of what each try did. Additive: a result
+ * written before #742 has no `attempts` and parses unchanged (see `docs/outcomes.md`).
+ */
+export const STARTUP_ATTEMPT_ERROR_CLASSES = [
+  /** The host name did not resolve (`net::ERR_NAME_NOT_RESOLVED`, `ENOTFOUND`). */
+  "dns",
+  /** The host resolved but nothing accepted the connection (refused, reset, unreachable). */
+  "connectivity",
+  /** The navigation itself did not answer in time (`Timeout …ms exceeded`). */
+  "navigation-timeout",
+  /** The browser or its context could not be launched. */
+  "browser-launch",
+  /** The browser navigation failed although the origin answered the readiness probe. */
+  "origin-readiness",
+  /** No more specific cause could be attributed. */
+  "unclassified",
+] as const;
+export type StartupAttemptErrorClass = (typeof STARTUP_ATTEMPT_ERROR_CLASSES)[number];
+
+/** One startup attempt (#742): its position, error class (null when it succeeded), reason and timing. */
+export const StartupAttemptSchema = z.object({
+  /** 0-based position in the attempt sequence. */
+  index: z.number().int().nonnegative(),
+  /** The browser error class, or null when this attempt reached the target. */
+  errorClass: z.enum(STARTUP_ATTEMPT_ERROR_CLASSES).nullable(),
+  /** Plain-words, redacted reason (empty for a successful attempt). */
+  message: z.string(),
+  /** Epoch milliseconds the attempt began (from `clock.now()`). */
+  startedAt: z.number().int().nonnegative(),
+  /** Epoch milliseconds the attempt ended. */
+  endedAt: z.number().int().nonnegative(),
+});
+export type StartupAttempt = z.infer<typeof StartupAttemptSchema>;
+
+/** The `attempts[]` a run result may carry (#742); absent means none was recorded. */
+export const StartupAttemptsSchema = z.array(StartupAttemptSchema);
+export type StartupAttempts = z.infer<typeof StartupAttemptsSchema>;
+
+/** The startup attempts a result carries (`result.attempts`), or `[]` — a result written before #742 names none. */
+export function startupAttemptsOf(result: unknown): StartupAttempt[] {
+  if (result === null || typeof result !== "object") return [];
+  const parsed = StartupAttemptsSchema.safeParse((result as { attempts?: unknown }).attempts);
+  return parsed.success ? parsed.data : [];
 }

@@ -225,6 +225,29 @@ goal, usability, adversarial, coverage/exploratory and feature runs:
 - **Inconclusive probes don't count.** A probe that fails for any other reason (a TLS or DNS quirk
   of the probe itself) proves nothing, and the finding is judged as before.
 
+### Bounded startup retries (`attempts[]`, #742)
+
+A direct target can refuse the FIRST navigation before any response even while the origin answers a
+plain HTTP probe with 200 — a slow dev server, a transient DNS or connect hiccup. Instead of
+finalizing `target-unreachable` on the first try, the run retries the first navigation/browser launch
+a short, bounded number of times, before any action or write; a retry never hides a policy refusal
+and never widens the target's allowed origins. Every run that tries a startup records what each try
+did in `attempts[]` — one entry per attempt, oldest first:
+
+| Field | Meaning |
+|---|---|
+| `index` | the attempt's 0-based position in the sequence |
+| `errorClass` | the browser error class: `dns`, `connectivity`, `navigation-timeout`, `browser-launch`, `origin-readiness`, or `unclassified` — or `null` for the attempt that reached the target |
+| `message` | a plain-words, redacted reason (empty when the attempt succeeded) |
+| `startedAt` / `endedAt` | epoch milliseconds (from `clock.now()`) the attempt began and ended |
+
+`origin-readiness` is the distinct class for a healthy HTTP probe beside a failed browser
+navigation; `dns` is a name that did not resolve, `connectivity` a host that did not accept the
+connection, `navigation-timeout` a navigation that never answered, `browser-launch` a browser or
+context that would not start, and `unclassified` anything else. `attempts[]` is additive: a result
+written before #742 has no `attempts` and parses unchanged (`startupAttemptsOf` and
+`StartupAttemptSchema`, `packages/domain/src/mission-outcome.ts`).
+
 ### A starved host (`hostHealth`, `environmentDegraded`)
 
 On a saturated machine (parallel builds, a busy CI runner) a run's hangs, click timeouts and
