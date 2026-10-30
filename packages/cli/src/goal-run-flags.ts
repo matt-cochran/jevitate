@@ -189,6 +189,11 @@ export const GOAL_RUN_OPTIONS = {
       .argParser(collect),
   longPollMs: () =>
     new Option("--long-poll-ms <n>", "a request pending this long on an interactive page is a long-poll (default 5000)").argParser(nonNegativeIntArg),
+  devServer: () =>
+    new Option(
+      "--dev-server",
+      "opt-in (#745): a Vite/HMR dev target discounts asset-classified reads (its own modules, scripts, styles, images) from settling. A non-asset write still keeps settle waiting and stays tracked, and a configured --api-prefix still wins over a Vite-shaped path",
+    ).default(false),
   apiPrefix: () =>
     new Option("--api-prefix <path>", "a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/")
       .default([] as string[])
@@ -238,6 +243,7 @@ export interface GoalRunFlags extends EmulationFlags, ScreenshotsFlags {
   hangReplays?: number;
   settleIgnore: string[];
   longPollMs?: string | number;
+  devServer?: boolean;
   apiPrefix: string[];
   ignoreNoProgress: string[];
   allowWrites?: boolean;
@@ -337,6 +343,7 @@ export function targetFlagsFromFlags(o: Partial<GoalRunFlags>, dialogs: DialogPo
     allowWrite: o.allowWrite ?? [],
     ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
     ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
+    ...(o.devServer === true ? { devServer: true } : {}),
   };
 }
 

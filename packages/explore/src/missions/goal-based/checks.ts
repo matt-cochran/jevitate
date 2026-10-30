@@ -3,7 +3,7 @@ import { checkAssertion } from "@jevitate/interpreter";
 import type { Actor } from "@jevitate/screenplay";
 import type { Page } from "playwright";
 import { DEFAULT_ORACLE_SETTLE_MS, evaluateOutcomeChecks } from "../../outcome-checks.js";
-import type { CapturedRequest, RequestCapture } from "../../page-monitor.js";
+import { monitorFor, type CapturedRequest, type DeclaredFields, type RequestCapture } from "../../page-monitor.js";
 import {
   describeCheck,
   evaluateNetworkCheck,
@@ -58,6 +58,36 @@ function sentSinceFirstAction(requests: readonly CapturedRequest[], firstActionA
   return firstActionAt === null ? [] : requests.filter((r) => r.startedAt !== undefined && r.startedAt >= firstActionAt);
 }
 
+/** #743: how many declared-field records one page keeps (the oldest are dropped). */
+const MAX_DECLARED_FIELDS = 500;
+/** #743: per page, each write request's declared field names/types (never values), captured live. */
+const declaredFieldsByPage = new WeakMap<Page, DeclaredFields[]>();
+
+/**
+ * #743: starts keeping each write request's declared field names and JSON types for `page` —
+ * captured at request time (the body is gone by the oracle), never values. Idempotent, so the
+ * goal mission may install it before the run and the oracle may call it again.
+ */
+export function captureDeclaredBodyFields(page: Page): void {
+  if (declaredFieldsByPage.has(page)) return;
+  const fields: DeclaredFields[] = [];
+  declaredFieldsByPage.set(page, fields);
+  monitorFor(page).onDeclaredFields((declared) => {
+    fields.push(declared);
+    if (fields.length > MAX_DECLARED_FIELDS) fields.shift();
+  });
+}
+
+/** The declared fields captured for `page` so far (empty when the capture was never installed). */
+function declaredFieldsFor(page: Page): readonly DeclaredFields[] {
+  return declaredFieldsByPage.get(page) ?? [];
+}
+
+/** #743: the declared-field records whose method and path match a request in `requests`. */
+function declaredWithin(declared: readonly DeclaredFields[], requests: readonly CapturedRequest[]): DeclaredFields[] {
+  return declared.filter((d) => requests.some((r) => r.method === d.method && r.path === d.path));
+}
+
 /**
  * #202: a network check counts only requests sent after the run's first action — a page-load or
  * polling request that matched before anything was done proves nothing. A check matched ONLY by such
@@ -70,9 +100,11 @@ export function judgeNetworkCheck(
   truncated: boolean,
   scope: NetworkScope,
   onVacuous?: (spec: string) => void,
+  declared: readonly DeclaredFields[] = [],
 ): SuccessCheckResult {
-  const after = evaluateNetworkCheck(c, sentSinceFirstAction(requests, scope.firstActionAt), truncated);
-  const all = evaluateNetworkCheck(c, requests, truncated);
+  const scoped = sentSinceFirstAction(requests, scope.firstActionAt);
+  const after = evaluateNetworkCheck(c, scoped, truncated, declaredWithin(declared, scoped));
+  const all = evaluateNetworkCheck(c, requests, truncated, declaredWithin(declared, requests));
   const vacuous = !after.passed && all.passed;
   if (vacuous) onVacuous?.(after.check);
   if (scope.allowVacuous) return all;
@@ -98,6 +130,8 @@ export async function evaluateChecks(
   scope: NetworkScope,
   onVacuous?: (spec: string) => void,
 ): Promise<SuccessCheckResult[]> {
+  captureDeclaredBodyFields(page);
+  const declared = declaredFieldsFor(page);
   return evaluateOutcomeChecks(checks, {
     actor: cfg.actor,
     page,
@@ -105,7 +139,7 @@ export async function evaluateChecks(
     ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
     timeoutMs: cfg.oracleTimeoutMs ?? 3000,
     settleMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS,
-    judgeNetwork: (c, requests, truncated) => judgeNetworkCheck(c, requests, truncated, scope, onVacuous),
+    judgeNetwork: (c, requests, truncated) => judgeNetworkCheck(c, requests, truncated, scope, onVacuous, declared),
     ...(cfg.httpProbe === undefined ? {} : { httpProbe: cfg.httpProbe }),
     ...(cfg.httpRefs === undefined ? {} : { resolveRef: cfg.httpRefs }),
   });

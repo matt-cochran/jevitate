@@ -13,7 +13,7 @@ import { goalAsksForReport } from "../../answer.js";
 import { resolveMinEffort } from "../../run-depth.js";
 import { resolveBounds } from "../../bounds.js";
 import type { GoalBasedMissionConfig } from "../goal-based.js";
-import { HELD_CHECK_TIMEOUT_MS, isDeferredCheck, type NetworkScope } from "./checks.js";
+import { captureDeclaredBodyFields, HELD_CHECK_TIMEOUT_MS, isDeferredCheck, type NetworkScope } from "./checks.js";
 import type { DeclaredHooks } from "./declared-hooks.js";
 
 /** The run's mutable tracking state: reset at the start of every attempt (#126), read by the verdict. */
@@ -104,6 +104,9 @@ export function setupAdjudication(
   const networkChecks = checks.filter(
     (c): c is Extract<SuccessCheck, { kind: "requestMade" | "responseStatus" }> => c.kind === "requestMade" || c.kind === "responseStatus",
   );
+  // #743: a bodyShape is judged on field names/types captured at request time, and the body is gone
+  // by the oracle — install the capture now, before the mission's first navigation or action.
+  if (networkChecks.some((c) => c.bodyShape !== undefined)) captureDeclaredBodyFields(page);
   // #174: under `held`, once every check has held the run stops — it never keeps acting (or writing)
   // past a met goal. `reloadThen` (and #543 `http`) is final-only, so a run that declares one keeps the model's `done`.
   // #286: a goal that also asks for a report needs its grounded answer — checks holding never stop it.

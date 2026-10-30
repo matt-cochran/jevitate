@@ -262,6 +262,7 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--evidence-video` | per defect: a captioned repro clip and before/at screenshots (forwarded to every mission, as explore's) |  |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each of the spec's before/after hooks (default 60000; the process group is killed) |  |  |  |  |
+| `--ignore-host-load` | start even when the host is starved (the campaign-start check and every mission) instead of refusing with E_HOST_STARVED; the runs are throttled and their results record it |  |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--journeys-dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
@@ -636,6 +637,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--check-overflow` | check the horizontal-overflow (#149) and vertical-clipping (#302: text cut off by a fixed-height box or above the page top) hard signals even at a desktop (>=1024px) viewport — --strategy coverage/exploratory (a defect), adversarial (a defect) or usability (a signal finding). On by default whenever --viewport/--device emulates a viewport narrower than 1024px |  |  |  |  |
 | `--deny <pattern>` | a control no mission may click (repeatable): an accessible-name regex (/Archive/i or Archive) or a descriptor role=button;name=Archive. Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Run simulation, Generate, Send invite) controls are refused by default | `[]` |  |  |  |
+| `--dev-server` | opt-in (#745): a Vite/HMR dev target discounts asset-classified reads (its own modules, scripts, styles, images) from settling. A non-asset write still keeps settle waiting and stays tracked, and a configured --api-prefix still wins over a Vite-shaped path | `false` |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dialogs <policy>` | native window.confirm/prompt dialogs: dismiss (default) or accept. accept still dismisses one whose message names a session-ending, destructive or paid action the run may not take (without --allow-destructive or a goal asking for it); every dialog is logged |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
@@ -754,6 +756,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--deny <pattern>` | a control no mission may click (repeatable): an accessible-name regex (/Archive/i or Archive) or a descriptor role=button;name=Archive. Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Run simulation, Generate, Send invite) controls are refused by default | `[]` |  |  |  |
+| `--dev-server` | opt-in (#745): a Vite/HMR dev target discounts asset-classified reads (its own modules, scripts, styles, images) from settling. A non-asset write still keeps settle waiting and stays tracked, and a configured --api-prefix still wins over a Vite-shaped path | `false` |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dialogs <policy>` | native window.confirm/prompt dialogs: dismiss (default) or accept. accept still dismisses one whose message names a session-ending, destructive or paid action the run may not take (without --allow-destructive or a goal asking for it); every dialog is logged |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
@@ -1992,10 +1995,12 @@ jevitate login [options]
 | `--api-user-key <key>` | with --api: the JSON body key the username is sent under (default username) |  |  |  |  |
 | `--auth-check <check>` | with --api: how --verify-url proves the session: off \| auto \| urlExcludes:<text> \| selector:<css> (default auto) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--organization-field <field>` | #741: the organization selection control: its label, else a CSS selector (default: a control labelled organization/workspace/tenant/account, else a chooser card) |  |  |  |  |
 | `--password-env <VAR>` | environment variable holding the password (its NAME — the value is read from the environment) |  |  |  |  |
 | `--password-field <field>` | the password field: its label, else a CSS selector (default: the visible password input) |  |  |  |  |
 | `--persona <name>` | the persona being signed in (names it in the result); with a declared persona (--personas or .jevitate/personas.json) its login parameters and storage state path are the defaults |  |  |  |  |
 | `--personas <file>` | personas JSON to read --persona's login parameters from (default: the project's .jevitate/personas.json) |  |  |  |  |
+| `--role-field <field>` | #741: the role selection control: its label, else a CSS selector (default: a control labelled role, else a chooser card) |  |  |  |  |
 | `--save <file>` | where to write the storage state (parent directory created; mode 0600; never inside a repo's .jevitate/) |  |  |  |  |
 | `--storage <where>` | with --token-path: local (the only choice — a Playwright storage state has no sessionStorage) |  |  |  |  |
 | `--storage-key <key>` | with --token-path: the localStorage key the token is written under (default: the path's last segment) |  |  |  |  |

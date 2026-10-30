@@ -4,7 +4,7 @@ import { BrowserPool, DEFAULT_OPEN_TIMEOUT_MS, withOpenDeadline, type BrowserPoo
 import { PageLivenessWatchdog, pageUnresponsiveMsFromEnv } from "./page-liveness.js";
 import { createResourceSignals } from "./select-resource-signals.js";
 import { emulationContextOptions, resolveEmulation } from "./emulation.js";
-import { probeReachable } from "./reachability.js";
+import { probeOriginReadiness, probeReachable, type OriginReadiness } from "./reachability.js";
 import { ExtensionLoadError, extensionLaunchArgs, extensionOrigin, type UnpackedExtension } from "./extensions.js";
 import { ownerMarkerArg } from "./browser-processes.js";
 import { NavigationGuard, type BlockedNavigation } from "./nav-guard.js";
@@ -170,6 +170,8 @@ export interface PlaywrightBrowserPortDeps {
   readonly openTimeoutMs?: number;
   /** #213: testing seam for the sessions' pre-flight reachability probe (default `probeReachable`). */
   readonly probe?: (url: string) => Promise<string | null>;
+  /** #742: testing seam for the sessions' HTTP origin-readiness probe (default `probeOriginReadiness`). */
+  readonly originProbe?: (url: string) => Promise<OriginReadiness>;
   /** #205: the resource governor every session is admitted by (default: the process-wide `sharedResourceGovernor()`). */
   readonly governor?: ResourceGovernor;
 }
@@ -228,6 +230,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
   readonly #liveness: { readonly unresponsiveMs?: number } | false;
   readonly #openTimeoutMs: number;
   readonly #probe: (url: string) => Promise<string | null>;
+  readonly #originProbe: (url: string) => Promise<OriginReadiness>;
   readonly #governor: ResourceGovernor | undefined;
 
   constructor(deps: PlaywrightBrowserPortDeps = {}) {
@@ -239,6 +242,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
     this.#platform = deps.platform ?? process.platform;
     this.#pool = deps.pool;
     this.#probe = deps.probe ?? ((url) => probeReachable(url));
+    this.#originProbe = deps.originProbe ?? ((url) => probeOriginReadiness(url));
   }
 
   async open(opts: OpenOptions): Promise<BrowserSession> {
@@ -317,7 +321,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
       await lease.release().catch(() => undefined);
       throw err;
     }
-    return pooledSession(lease, page, this.#watch(page), this.#probe, await videoPathOf(page), navGuard);
+    return pooledSession(lease, page, this.#watch(page), this.#probe, this.#originProbe, await videoPathOf(page), navGuard);
   }
 
   /**
@@ -381,6 +385,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
         return JSON.stringify(await context.storageState());
       },
       probeReachable: this.#probe,
+      probeOriginReadiness: this.#originProbe,
       drainBlockedNavigations: () => navGuard?.drain() ?? [],
       async close() {
         watchdog?.stop();
@@ -494,6 +499,7 @@ function pooledSession(
   page: Page,
   watchdog: PageLivenessWatchdog | undefined,
   probe: (url: string) => Promise<string | null>,
+  originProbe: (url: string) => Promise<OriginReadiness>,
   videoPath: string | undefined,
   navGuard: NavigationGuard | undefined,
 ): BrowserSession {
@@ -523,6 +529,7 @@ function pooledSession(
       return JSON.stringify(await context.storageState());
     },
     probeReachable: probe,
+    probeOriginReadiness: originProbe,
     drainBlockedNavigations: (): readonly BlockedNavigation[] => navGuard?.drain() ?? [],
     async close() {
       watchdog?.stop();

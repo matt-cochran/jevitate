@@ -223,7 +223,7 @@ interface ItemSetup {
 }
 
 const TARGET_FLAG_KEYS = [
-  "deny", "paid", "allowControl", "allowDestructive", "dialogs", "allowWrites", "allowWrite", "readRpc", "hangReplayWrites", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
+  "deny", "paid", "allowControl", "allowDestructive", "dialogs", "allowWrites", "allowWrite", "readRpc", "hangReplayWrites", "settleIgnore", "longPollMs", "devServer", "apiPrefix", "ignoreNoProgress",
 ] as const;
 
 function envSecret(ref: string, env: Readonly<Record<string, string | undefined>>): string {
@@ -276,6 +276,7 @@ function itemSetup(
       ...(x.allowWrite === undefined ? {} : { allowWrite: x.allowWrite }),
       ...(x.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
       ...(x.longPollMs === undefined ? {} : { longPollMs: x.longPollMs }),
+      ...(x.devServer === true ? { devServer: true } : {}),
     });
   }
   // #142: an item's (or its target's) log sources replace targets.json's, as `--log-source` does.

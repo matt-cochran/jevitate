@@ -202,6 +202,7 @@ export function declareExploreCommand(program: Command): Command {
     )
     .addOption(GOAL_RUN_OPTIONS.settleIgnore())
     .addOption(GOAL_RUN_OPTIONS.longPollMs())
+    .addOption(GOAL_RUN_OPTIONS.devServer())
     .addOption(GOAL_RUN_OPTIONS.apiPrefix())
     .addOption(GOAL_RUN_OPTIONS.ignoreNoProgress())
     .option("--jevitate-repo <owner/name>", "where jevitate engine findings are filed (default matt-cochran/jevitate)")

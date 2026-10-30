@@ -130,7 +130,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (98 exports)
+# @jevitate/domain (102 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEFECT_OUTCOME_STATUSES: array
@@ -169,7 +169,10 @@
   ResultUsageSchema: object
   RunTagError: class
   RunTagsSchema: object
+  STARTUP_ATTEMPT_ERROR_CLASSES: array
   SitePolicySchema: object
+  StartupAttemptSchema: object
+  StartupAttemptsSchema: object
   TimeSkippingClock: class
   UnsafeNameError: class
   assertInsideRoot: function
@@ -225,12 +228,13 @@
   sha256: function
   simulateTiming: function
   startedOutcome: function
+  startupAttemptsOf: function
   targetsFor: function
   urlSchemeOf: function
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (459 exports)
+# @jevitate/explore (461 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -531,6 +535,7 @@
   isAuthorizedExploreTarget: function
   isBookkeepingRequest: function
   isDestructiveRequest: function
+  isDevServerAssetRead: function
   isDisclosureControl: function
   isExercisable: function
   isInScope: function
@@ -657,6 +662,7 @@
   snapshot: function
   srOnlyLabelOf: function
   startRouteGlobs: function
+  startupErrorClass: function
   starvationAttributionFromEnv: function
   starvationMeasurements: function
   starvedHostSentence: function
@@ -997,7 +1003,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (99 exports)
+# @jevitate/playwright (100 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -1083,6 +1089,7 @@
   parseVmStatAvailableBytes: function
   pinnedBrowserReport: function
   pinnedBrowsers: function
+  probeOriginReadiness: function
   probeReachable: function
   processAlive: function
   readUnpackedExtension: function

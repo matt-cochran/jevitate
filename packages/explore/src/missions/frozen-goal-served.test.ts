@@ -229,6 +229,9 @@ describe("#213 — a page-load timeout on a starved host is degraded-environment
           startUrl: `${origin}/cold`,
           successAssertion: { kind: "visible", target: { text: "Cold" } },
           oracleTimeoutMs: 200,
+          // #742: one 3s try, so the cold start's late answer stays a page-load timeout to classify
+          // (the bounded retry would otherwise rescue it on its second try).
+          startupRetry: { maxAttempts: 1, perAttemptTimeoutMs: 3_000 },
           ...FAST,
           ...(hostHealth === undefined ? {} : { hostHealth }),
         });

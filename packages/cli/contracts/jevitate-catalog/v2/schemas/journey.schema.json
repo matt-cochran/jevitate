@@ -631,6 +631,94 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 2000
+                  },
+                  "count": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "exact": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "exact"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "min": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "min"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "max": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "max"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "bodyShape": {
+                    "type": "object",
+                    "properties": {
+                      "fields": {
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "predicate": {
+                              "type": "string",
+                              "enum": [
+                                "exists",
+                                "absent",
+                                "string",
+                                "number",
+                                "boolean",
+                                "null",
+                                "array",
+                                "object"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "predicate"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "fields"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -707,6 +795,94 @@
                         "additionalProperties": false
                       }
                     ]
+                  },
+                  "count": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "exact": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "exact"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "min": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "min"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "max": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "max"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "bodyShape": {
+                    "type": "object",
+                    "properties": {
+                      "fields": {
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "predicate": {
+                              "type": "string",
+                              "enum": [
+                                "exists",
+                                "absent",
+                                "string",
+                                "number",
+                                "boolean",
+                                "null",
+                                "array",
+                                "object"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "predicate"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "fields"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -1495,6 +1671,94 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 2000
+                  },
+                  "count": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "exact": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "exact"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "min": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "min"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "max": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "max"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "bodyShape": {
+                    "type": "object",
+                    "properties": {
+                      "fields": {
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "predicate": {
+                              "type": "string",
+                              "enum": [
+                                "exists",
+                                "absent",
+                                "string",
+                                "number",
+                                "boolean",
+                                "null",
+                                "array",
+                                "object"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "predicate"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "fields"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -1571,6 +1835,94 @@
                         "additionalProperties": false
                       }
                     ]
+                  },
+                  "count": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "exact": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "exact"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "min": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "min"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "max": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "max"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "bodyShape": {
+                    "type": "object",
+                    "properties": {
+                      "fields": {
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "predicate": {
+                              "type": "string",
+                              "enum": [
+                                "exists",
+                                "absent",
+                                "string",
+                                "number",
+                                "boolean",
+                                "null",
+                                "array",
+                                "object"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "predicate"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "fields"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -2904,6 +3256,94 @@
                                 "type": "string",
                                 "minLength": 1,
                                 "maxLength": 2000
+                              },
+                              "count": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "exact": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000
+                                      }
+                                    },
+                                    "required": [
+                                      "exact"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "min": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000
+                                      }
+                                    },
+                                    "required": [
+                                      "min"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "max": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000
+                                      }
+                                    },
+                                    "required": [
+                                      "max"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              },
+                              "bodyShape": {
+                                "type": "object",
+                                "properties": {
+                                  "fields": {
+                                    "minItems": 1,
+                                    "maxItems": 50,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        },
+                                        "predicate": {
+                                          "type": "string",
+                                          "enum": [
+                                            "exists",
+                                            "absent",
+                                            "string",
+                                            "number",
+                                            "boolean",
+                                            "null",
+                                            "array",
+                                            "object"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "name",
+                                        "predicate"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "fields"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -2980,6 +3420,94 @@
                                     "additionalProperties": false
                                   }
                                 ]
+                              },
+                              "count": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "exact": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000
+                                      }
+                                    },
+                                    "required": [
+                                      "exact"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "min": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000
+                                      }
+                                    },
+                                    "required": [
+                                      "min"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "max": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000
+                                      }
+                                    },
+                                    "required": [
+                                      "max"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              },
+                              "bodyShape": {
+                                "type": "object",
+                                "properties": {
+                                  "fields": {
+                                    "minItems": 1,
+                                    "maxItems": 50,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        },
+                                        "predicate": {
+                                          "type": "string",
+                                          "enum": [
+                                            "exists",
+                                            "absent",
+                                            "string",
+                                            "number",
+                                            "boolean",
+                                            "null",
+                                            "array",
+                                            "object"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "name",
+                                        "predicate"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "fields"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
