@@ -654,6 +654,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         evidenceVideo: b("--evidence-video"),
         // #485: like run_exploration authCheck "off" — an explicit opt-out, recorded on the report (preflight.skipped).
         skipPreflight: b("--skip-preflight"),
+        // #205/#746: start on a starved host (the campaign-start check and every mission) instead of E_HOST_STARVED.
+        ignoreHostLoad: b("--ignore-host-load"),
         ...JEV_AI,
       },
       omitted: {
