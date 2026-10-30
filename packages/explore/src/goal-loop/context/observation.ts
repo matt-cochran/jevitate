@@ -14,6 +14,10 @@ import type { MutableRunContext } from "./types.js";
 export function initObservation(ctx: MutableRunContext, cfg: ExploreConfig): void {
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   ctx.timings = [];
+  // #745: apply the target's opt-in dev-server settle policy (and its API prefixes) to this run's
+  // monitor before the first perception, so every settle wait — perceive's and the loop's own —
+  // discounts Vite/HMR asset reads while a write still waits. No devServer: nothing changes.
+  monitorFor(ctx.page).configure(cfg.settle, cfg.timingConfig?.apiPrefixes);
   // A write is classified by the shared classifier (#110): a gRPC-web/Connect read is never guarded.
   ctx.isWrite = writeClassifier(cfg.safety?.readRequests === undefined ? {} : { readRequests: cfg.safety.readRequests });
   /** The shared safety policy (#116): session-ending / destructive / paid / denied controls. */

@@ -98,6 +98,7 @@ export const SUITE_EXPLORE_OPTIONS = {
   hangReplayWrites: { shape: "boolean", appliesTo: ALL_KINDS },
   settleIgnore: { shape: "strings", appliesTo: ALL_KINDS },
   longPollMs: { shape: "integer", appliesTo: ALL_KINDS },
+  devServer: { shape: "boolean", appliesTo: ALL_KINDS },
   apiPrefix: { shape: "strings", appliesTo: ALL_KINDS },
   ignoreNoProgress: { shape: "strings", appliesTo: ALL_KINDS },
   hangReplays: { shape: "count", appliesTo: ["goal", "adversarial"] },

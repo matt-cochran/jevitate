@@ -11,7 +11,7 @@ import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, ActionableControlOutcome, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
-import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary } from "@jevitate/domain";
+import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary, StartupAttempt } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type UploadFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, startedOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
@@ -246,6 +246,8 @@ export interface RunExplorationResult {
   readonly checks: SuccessCheckResult[];
   /** Warnings about the verdict (#174: a `--success-when held` check that already held on the start page). */
   readonly checkWarnings?: string[];
+  /** #742: the bounded first-navigation startup attempts (one per try, its error class and clock timings); absent when no startup navigation ran. */
+  readonly attempts?: StartupAttempt[];
   readonly stop: StopReason;
   readonly finalUrl: string;
   readonly decisions: number;
@@ -679,6 +681,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       assertionPassed: mission.assertionPassed,
       checks: mission.checks,
       ...(mission.warnings === undefined ? {} : { checkWarnings: mission.warnings }),
+      ...(mission.attempts === undefined ? {} : { attempts: mission.attempts }),
       ...((): { sessionLost?: { reason: string } } => {
         const lost = sessionLostReason({
           target: primaryState === undefined ? {} : { storageStatePath: resolvePath(primaryState) },

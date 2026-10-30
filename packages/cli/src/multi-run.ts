@@ -47,6 +47,12 @@ export class MultiRunArgsError extends Error {
   }
 }
 
+/** #741: a persona's optional descriptive context (the organization it acts for, and its role). */
+export interface PersonaContext {
+  readonly organization?: string;
+  readonly role?: string;
+}
+
 export interface Persona {
   readonly name: string;
   /** Absolute path of the persona's Playwright storageState file (its contents are never read). */
@@ -56,6 +62,8 @@ export interface Persona {
    * re-minted ONCE from it by the pre-flight auth check. Environment variable NAMES only.
    */
   readonly login?: PersonaLogin;
+  /** #741: the top-level `context` a personas file entry may declare. Absent when it does not. */
+  readonly context?: PersonaContext;
 }
 
 export interface MultiRunPlan {
@@ -71,7 +79,7 @@ export interface MultiRunPlan {
 export const MAX_REPEAT = 20;
 const PERSONA_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
-function persona(name: string, storageState: string, base: string, noun = "persona", login?: PersonaLogin): Persona {
+function persona(name: string, storageState: string, base: string, noun = "persona", login?: PersonaLogin, context?: PersonaContext): Persona {
   if (!PERSONA_NAME.test(name)) {
     throw new MultiRunArgsError(`${noun} name ${JSON.stringify(name)} must be 1-64 of [A-Za-z0-9_.-], starting alphanumeric`);
   }
@@ -79,7 +87,30 @@ function persona(name: string, storageState: string, base: string, noun = "perso
   const path = isAbsolute(storageState) ? storageState : resolve(base, storageState);
   // #427: a persona with login parameters may not have a session yet — the pre-flight mints it.
   if (login === undefined && !existsSync(path)) throw new MultiRunArgsError(`${noun} ${name}: storage state not found: ${path}`);
-  return { name, storageState: path, ...(login === undefined ? {} : { login }) };
+  return {
+    name,
+    storageState: path,
+    ...(login === undefined ? {} : { login }),
+    ...(context === undefined ? {} : { context }),
+  };
+}
+
+/** #741: a personas file entry's optional `context` — only `organization` and `role`, both text. */
+function entryContext(v: unknown, where: string): PersonaContext | undefined {
+  if (v === undefined) return undefined;
+  if (!isRecord(v)) throw new MultiRunArgsError(`${where} must be an object {"organization"?: string, "role"?: string}`);
+  for (const key of Object.keys(v)) {
+    if (key !== "organization" && key !== "role") {
+      throw new MultiRunArgsError(`${where} has unknown key ${JSON.stringify(key)} — allowed keys are "organization" and "role"`);
+    }
+  }
+  const { organization, role } = v;
+  if (organization !== undefined && typeof organization !== "string") throw new MultiRunArgsError(`${where}: organization must be text`);
+  if (role !== undefined && typeof role !== "string") throw new MultiRunArgsError(`${where}: role must be text`);
+  return {
+    ...(organization === undefined ? {} : { organization }),
+    ...(role === undefined ? {} : { role }),
+  };
 }
 
 /** #427: a personas file entry's optional `login` (env variable NAMES only; validated, never echoed). */
@@ -193,7 +224,16 @@ export function loadPersonasFile(path: string, opts: { readonly requireRunnable?
       continue;
     }
     if (typeof value.storageState === "string") {
-      out.push(persona(name, value.storageState, base, "persona", entryLogin(value.login, `personas file ${path}: ${name}.login`)));
+      out.push(
+        persona(
+          name,
+          value.storageState,
+          base,
+          "persona",
+          entryLogin(value.login, `personas file ${path}: ${name}.login`),
+          entryContext(value.context, `personas file ${path}: ${name}.context`),
+        ),
+      );
       continue;
     }
     // #433: a catalog-only persona (description/role/approval, no session yet) is not a run persona.
@@ -211,7 +251,7 @@ export function loadPersonasFile(path: string, opts: { readonly requireRunnable?
 }
 
 /** #433: the catalog keys that make a session-less personas file entry a catalog-only persona. */
-const CATALOG_ONLY_KEYS = ["description", "role", "approval"] as const;
+const CATALOG_ONLY_KEYS = ["description", "role", "approval", "context"] as const;
 
 export interface MultiRunFlags {
   readonly repeat?: string;

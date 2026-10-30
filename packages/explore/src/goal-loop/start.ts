@@ -4,13 +4,13 @@
  * first navigation and arm a read-only run's guard. Moved out of `explore.ts` unchanged (#232).
  */
 
-import { Navigate } from "@jevitate/screenplay";
 import {
   assertSeedReachable,
   describeUnreachable,
   isUnreachableTarget,
   targetStoppedAnswering,
 } from "../mission-failure.js";
+import { navigateWithStartupRetry } from "../startup-retry.js";
 import { monitorFor } from "../page-monitor.js";
 import { NO_DESTRUCTIVE_NOTE, READ_ONLY_NOTE } from "../read-only.js";
 import { installDialogPolicy } from "../native-dialogs.js";
@@ -32,7 +32,7 @@ export async function openRun(ctx: RunContext): Promise<void> {
     // #293: an anchored run starts on the live page its Journey prefix left — never a fresh load.
     if (cfg.startInPlace !== true) {
       await assertSeedReachable(cfg.actor, cfg.startUrl);
-      await Navigate.to(cfg.startUrl).performAs(cfg.actor);
+      await navigateWithStartupRetry(cfg.actor, cfg.startUrl, cfg.startupRetry === undefined ? {} : { policy: cfg.startupRetry });
     }
   } catch (e) {
     const message = firstLine(e);

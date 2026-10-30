@@ -207,13 +207,17 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   if (o.settle !== undefined) {
     if (o.settle === null || typeof o.settle !== "object") throw new TargetConfigError(`${where}.settle must be an object`);
     const s = o.settle as Record<string, unknown>;
-    const settle: { ignoreRequests?: string[]; longPollMs?: number } = {};
+    const settle: { ignoreRequests?: string[]; longPollMs?: number; devServer?: boolean } = {};
     if (s.ignoreRequests !== undefined) settle.ignoreRequests = strings(s.ignoreRequests, `${where}.settle.ignoreRequests`);
     if (s.longPollMs !== undefined) {
       if (typeof s.longPollMs !== "number" || !(s.longPollMs > 0)) {
         throw new TargetConfigError(`${where}.settle.longPollMs must be a positive number`);
       }
       settle.longPollMs = s.longPollMs;
+    }
+    if (s.devServer !== undefined) {
+      if (typeof s.devServer !== "boolean") throw new TargetConfigError(`${where}.settle.devServer must be a boolean`);
+      settle.devServer = s.devServer;
     }
     out.settle = settle;
   }
@@ -293,6 +297,8 @@ export function loadTargetsFile(path = resolveDataDir(["targets.json"])): Readon
 export interface TargetFlags {
   readonly settleIgnore?: readonly string[];
   readonly longPollMs?: number;
+  /** `--dev-server` (#745): opt-in dev-server (Vite/HMR) asset-discount settle policy. */
+  readonly devServer?: boolean;
   readonly ignoreNoProgress?: readonly string[];
   readonly apiPrefixes?: readonly string[];
   /** `--deny` patterns (added to the file's). */
@@ -324,6 +330,7 @@ export function resolveTargetConfig(
   const base = file[origin] ?? {};
   const ignoreRequests = [...(base.settle?.ignoreRequests ?? []), ...(flags.settleIgnore ?? [])];
   const longPollMs = flags.longPollMs ?? base.settle?.longPollMs;
+  const devServer = flags.devServer === true || base.settle?.devServer === true;
   const ignoreNoProgress = [...(base.hangs?.ignoreNoProgress ?? []), ...(flags.ignoreNoProgress ?? [])];
   const apiPrefixes = [...(base.timing?.apiPrefixes ?? []), ...(flags.apiPrefixes ?? [])];
   const deny = [...(base.safety?.deny ?? []), ...(flags.deny ?? [])];
@@ -349,7 +356,7 @@ export function resolveTargetConfig(
   return {
     ...(Object.keys(safety).length === 0 ? {} : { safety }),
     timing: apiPrefixes.length === 0 ? {} : { apiPrefixes },
-    settle: { ...(ignoreRequests.length === 0 ? {} : { ignoreRequests }), ...(longPollMs === undefined ? {} : { longPollMs }) },
+    settle: { ...(ignoreRequests.length === 0 ? {} : { ignoreRequests }), ...(longPollMs === undefined ? {} : { longPollMs }), ...(devServer ? { devServer } : {}) },
     hangs: ignoreNoProgress.length === 0 ? {} : { ignoreNoProgress },
     ...(base.fixtures === undefined ? {} : { fixtures: base.fixtures }),
     // #142 follow-up: pass-through only — no CLI flag merges into these (a `--log-source` on the

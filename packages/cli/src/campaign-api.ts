@@ -35,12 +35,14 @@ import type { RunRecord } from "@jevitate/findings";
 import {
   allowOriginProblems,
   checkCampaignTargets,
+  CampaignHostStarvedError,
   CampaignPreflightError,
   preflightOf,
   type CampaignPreflight,
   type CampaignPreflightDeps,
   type PreflightProblem,
 } from "./campaign-preflight.js";
+import { projectPersonas, type PersonaContext } from "./multi-run.js";
 
 /**
  * #293 — `jevitate campaign run <spec.json>`: many journey-anchored missions, run in order, read as
@@ -92,6 +94,8 @@ export interface CampaignJobPlan {
   readonly startUrl?: string;
   /** #485: the origins this job's runs may reach (the environment's allow list, else the Journey's site). */
   readonly allowlist?: readonly string[];
+  /** #746: the persona context the Journey declares (its linked persona's, else its `role`). */
+  readonly declaredContext?: PersonaContext;
   readonly anchors: readonly CampaignAnchor[];
   readonly strategies: readonly AnchoredStrategy[];
   readonly goal?: string;
@@ -271,6 +275,7 @@ export async function validateCampaignSpec(raw: unknown, specPath: string, opts:
       }
     }
     totalRuns += anchors.length * job.strategies.length;
+    const declaredContext = declaredContextOf(full.metadata);
     jobs.push({
       id: job.id,
       journey: job.journey,
@@ -278,6 +283,7 @@ export async function validateCampaignSpec(raw: unknown, specPath: string, opts:
       ...(session === undefined ? {} : { storageState: session }),
       startUrl: journeyStartUrl(full.recording),
       allowlist: environment === undefined ? [new URL(full.recording.site).origin] : [...environment.allowedOrigins],
+      ...(declaredContext === undefined ? {} : { declaredContext }),
       anchors,
       strategies: job.strategies,
       ...(job.goal === undefined ? {} : { goal: job.goal }),
@@ -310,6 +316,18 @@ function journeyStartUrl(recording: { readonly site: string; readonly pages: Rea
   } catch {
     return recording.site;
   }
+}
+
+/**
+ * #746: the persona context a Journey declares — its linked persona's `context` from the project's
+ * personas file when that persona is known, else its own `role`. `undefined`: it declares none.
+ */
+function declaredContextOf(metadata: { readonly persona?: string; readonly role?: string }): PersonaContext | undefined {
+  if (metadata.persona !== undefined) {
+    const context = projectPersonas().find((p) => p.name === metadata.persona)?.context;
+    if (context !== undefined) return context;
+  }
+  return metadata.role === undefined ? undefined : { role: metadata.role };
 }
 
 // ── Running ───────────────────────────────────────────────────────────────────────────────────
@@ -379,6 +397,8 @@ export interface RunCampaignOptions {
    * (`--skip-preflight`: recorded as skipped). Absent: no preflight (an `explore --at-step` sweep).
    */
   readonly preflight?: CampaignPreflightDeps | "skip";
+  /** #746: `--ignore-host-load`: start even when the host is starved (the campaign-start host check). */
+  readonly ignoreHostLoad?: boolean;
 }
 
 interface ChildRun {
@@ -467,8 +487,13 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
     startUrl: job.startUrl ?? "",
     allowlist: job.allowlist ?? [],
     ...(job.storageState === undefined ? {} : { storageState: job.storageState }),
+    ...(job.declaredContext === undefined ? {} : { declaredContext: job.declaredContext }),
   }));
   if (opts.preflight !== undefined && opts.preflight !== "skip") {
+    // #746: the campaign-start host readiness — a starved host is E_HOST_STARVED, never a preflight
+    // problem; `--ignore-host-load` starts anyway (the default deps already pass it to resourcePreflight).
+    const starved = opts.ignoreHostLoad === true || opts.preflight.hostReadiness === undefined ? null : await opts.preflight.hostReadiness();
+    if (starved !== null) throw new CampaignHostStarvedError(`the host is starved, so no mission would give a trustworthy result: ${starved}`);
     const targets = await checkCampaignTargets(preflightJobs.filter((j) => j.startUrl !== ""), opts.preflight);
     preflightProblems.push(...targets.problems);
     blocked = new Set(targets.problems.map((p) => p.job));
@@ -635,7 +660,7 @@ function campaignMarkdown(r: CampaignResult, reportMarkdown: string): string {
     "",
     `${r.missions.length} anchored mission(s) · outcome ${r.missionOutcome} (exit ${r.exitCode}) · ${r.report.summary.defects} deduped defect(s), ${r.report.summary.advisory} advisory.`,
     "",
-    ...(r.preflight === undefined ? [] : ["## Preflight", "", r.preflight.skipped === true ? "Skipped (--skip-preflight)." : "Passed: every start URL reachable, every session signed in, no allow-list mismatch.", ""]),
+    ...(r.preflight === undefined ? [] : ["## Preflight", "", r.preflight.skipped === true ? "Skipped (--skip-preflight)." : "Passed: every start URL ready, every session signed in and from the declared persona context, no allow-list mismatch.", ""]),
     "## Discovery",
     "",
     ...(r.discovery.length === 0 ? ["Skipped (discovery: false)."] : ["| job | journey | outcome | reason |", "| --- | --- | --- | --- |", ...r.discovery.map((d) => `| ${d.job} | ${d.journeyId} | ${d.outcome} | ${(d.reason ?? "").replace(/\|/g, "\\|")} |`)]),

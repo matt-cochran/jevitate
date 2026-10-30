@@ -33,6 +33,7 @@ import type { PartialReport } from "./partial-report.js";
 import type { Actor } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
 import { type Recording } from "@jevitate/recording";
+import type { StartupRetryPolicy } from "./startup-retry.js";
 import {
   type Bounds,
   type StopReason,
@@ -250,6 +251,11 @@ export interface ExploreConfig {
    * the hang's `host` evidence. Without one, hangs are judged as before.
    */
   readonly hostHealth?: HostHealthSampler;
+  /**
+   * #742: overrides for the bounded first-navigation retry (`DEFAULT_STARTUP_RETRY`); the merged
+   * policy must stay within the 60s startup bound. Absent: the default policy.
+   */
+  readonly startupRetry?: Partial<StartupRetryPolicy>;
   /** The target's timing configuration (API path prefixes). */
   readonly timingConfig?: TimingConfig;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */

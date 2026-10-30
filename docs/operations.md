@@ -165,6 +165,28 @@ a starved host is better fixed by running fewer missions at once than by a longe
 whose server stops answering navigation is not this case: that ends `inconclusive` with
 `failure.kind: "target-unresponsive"` ([outcomes](./outcomes.md#an-app-that-stops-answering-target-unresponsive)).
 
+## Bounded startup retries
+
+A direct target can refuse the FIRST navigation before it ever answers — a slow dev server, a
+transient DNS or connect hiccup, a navigation timeout — even while a plain HTTP probe to its origin
+answers 200. JeVitate does not finalize `target-unreachable` on that first try: the seed load retries
+the first navigation a short, bounded number of times, BEFORE any action or write (#742).
+
+- Only the first navigation/launch is retried. Once the seed is loaded the run acts, so an action is
+  never replayed and a mid-run navigation failure keeps its existing behaviour.
+- The retry is bounded: 3 tries with a 15 s navigation bound each and a 0.5 s clock backoff —
+  46 s worst case, inside the 60 s startup budget. Backoff runs on the injected clock, never a wall
+  sleep.
+- It never widens the target's allowed origins, and a seed load cut short by the opt-in navigation
+  guard (`--block-off-allowlist-navigation`) is a departure, not an unreachable target: it is never
+  retried.
+- Every try is recorded on the run result as `attempts[]` (oldest first): the 0-based `index`, the
+  browser error class (`dns`, `connectivity`, `navigation-timeout`, `browser-launch`,
+  `origin-readiness` or `unclassified`, `null` for the try that reached the target), a plain-words
+  redacted `message`, and `startedAt`/`endedAt` epoch milliseconds. `origin-readiness` is the
+  distinct class for a healthy HTTP origin whose browser navigation still failed. See
+  [outcomes](./outcomes.md#bounded-startup-retries-attempts-742).
+
 ## Shared machines: resource governance
 
 jevitate often runs next to builds, test suites, dev servers and other agents. A browser run that

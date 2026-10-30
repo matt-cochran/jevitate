@@ -5,7 +5,7 @@
  */
 
 import { redactUrl } from "@jevitate/ai-core";
-import { Navigate } from "@jevitate/screenplay";
+import { navigateWithStartupRetry } from "../../startup-retry.js";
 import { chromeClassifier } from "../../coverage/chrome.js";
 import { stateFingerprint } from "../../coverage/fingerprint.js";
 import { Frontier } from "../../coverage/frontier.js";
@@ -35,7 +35,7 @@ export async function loadSeed(ctx: FrontierState): Promise<InductionRunResult |
   try {
     if (params.startInPlace !== true) {
       await ctx.guard(assertSeedReachable(ctx.sessions.actor, params.seedUrl));
-      await ctx.guard(ctx.sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
+      await ctx.guard(navigateWithStartupRetry(ctx.sessions.actor, params.seedUrl));
     }
   } catch (e) {
     const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);

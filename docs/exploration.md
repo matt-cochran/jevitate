@@ -206,15 +206,22 @@ These do not count:
   a write that one of the run's clicks sent is still tracked until it ends, though: a
   `wait` (or a `blocked`) observes it within the job-wait budget instead of reporting
   that nothing is pending;
+- a dev-server asset, when the target opts in with `settle.devServer` / `--dev-server`
+  (#745): a `GET`/`HEAD` classified as `asset` (a script, style, font, image or a Vite
+  module such as `/src/…`, `/@vite/…`, `/node_modules/…`) is the dev server's own
+  cold-load/HMR churn, not the awaited work. A write is never discounted — a POST the
+  run fired keeps settling waiting and stays tracked — and a configured
+  `timing.apiPrefixes` / `--api-prefix` still wins over a Vite-shaped path, so
+  `/api/src/…` is the API. Off by default (production/staging is unchanged);
 - text-only updates of existing nodes (a clock, a live counter) and inline-style
   animation.
 
 Configure a target in `~/.jevitate/targets.json`, keyed by origin (or per run
-with `--settle-ignore`, `--long-poll-ms` and `--ignore-no-progress`):
+with `--settle-ignore`, `--long-poll-ms`, `--dev-server` and `--ignore-no-progress`):
 
 ```json
 { "https://app.example.test": {
-    "settle": { "ignoreRequests": ["/api/notifications/poll*", "/hub/*"], "longPollMs": 5000 },
+    "settle": { "ignoreRequests": ["/api/notifications/poll*", "/hub/*"], "longPollMs": 5000, "devServer": true },
     "hangs": { "ignoreNoProgress": ["click Refresh*", "/dashboard"] } } }
 ```
 

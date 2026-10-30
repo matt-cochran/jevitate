@@ -160,6 +160,24 @@ describe("campaign run preflight (#485)", () => {
   });
 });
 
+describe("campaign start-URL readiness (#746)", () => {
+  /** A preflight whose only seam is the raw origin readiness (so the class/status rule is exercised). */
+  const readiness = (r: { readonly class: "http"; readonly status?: number; readonly detail: string }): CampaignPreflightDeps => ({
+    readiness: async () => r,
+    checkSession: async () => ({ ok: true }),
+  });
+
+  it("a 401 origin behind an auth wall passes preflight", async () => {
+    const result = (await run(plan([job("checkout")]), fakeCli(), readiness({ class: "http", status: 401, detail: "origin answered HTTP 401 (not ready)" }))) as CampaignResult;
+    expect(result.preflight).toEqual({ ok: true, problems: [] });
+  });
+
+  it("a 503 origin is refused", async () => {
+    const result = await run(plan([job("checkout")]), fakeCli(), readiness({ class: "http", status: 503, detail: "origin answered HTTP 503 (not ready)" }));
+    expect((result as CampaignPreflightError).problems.map((p) => p.check)).toEqual(["reachability"]);
+  });
+});
+
 describe("a journey replay observes off-allow-list writes (#485)", () => {
   function session(): { s: BrowserSession; context: EventEmitter } {
     const context = new EventEmitter();

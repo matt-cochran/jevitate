@@ -38,7 +38,9 @@ APP_API_TOKEN=… jevitate explore --url https://app.example.test/ --goal "…" 
 - **Mint the state from credentials: `jevitate login`.** It signs in with a username and
   password read from environment variables it names (`--user-env`/`--password-env`), either by
   driving the sign-in form (`--url`) or, with no form at all, by POSTing them as JSON to a sign-in
-  endpoint (`--api`, #449). It saves the storage state with mode 0600. See
+  endpoint (`--api`, #449). It saves the storage state with mode 0600. A persona may declare a
+  `context` (`organization`, `role`); login selects and asserts it before saving, so the state
+  reopens into that workspace without a chooser (#741). See
   [Persona sessions](./multi-run.md#persona-sessions-jevitate-login-the-pre-flight-auth-check-and-refresh).
 - **Rotating refresh tokens.** When the app rotates its refresh token on every use,
   a saved state goes stale after the first run that refreshes it. Pass

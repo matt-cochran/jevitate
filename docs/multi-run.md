@@ -187,7 +187,8 @@ once, saves the state over the old one, and checks again. If either step fails, 
 The map form takes `{"admin": {"storageState": "…", "login": {…}}}`, and a plain path still works.
 The `login` keys are `url`, `userEnv`, `passwordEnv`, `userField`, `passwordField`, `submit` and
 `success`, or, for a sign-in through an HTTP endpoint (#449), `api` with `userEnv` and
-`passwordEnv`. `api` is the endpoint URL, or an object `{url, userKey?, passwordKey?, tokenPath?,
+`passwordEnv`. A form login may also name `organizationField` and `roleField` for the declared
+context below. `api` is the endpoint URL, or an object `{url, userKey?, passwordKey?, tokenPath?,
 storageKey?, storage?, verifyUrl?}` with the meanings of the `--api` flags above. A refresh then
 POSTs to the endpoint instead of driving a form:
 
@@ -203,6 +204,28 @@ commit it as the project's `.jevitate/personas.json`. With that file:
 - A single run's `--storage-state` that is a declared persona's state is checked and refreshed as
   that persona.
 - `jevitate login --persona admin` re-mints it from the declared parameters.
+
+**Declared workspace context (#741).** A persona may declare the organization and role its session
+acts for. `jevitate login` selects them on the app page and asserts each selection took BEFORE it
+captures the storage state, so the saved state reopens directly in that context — the app's
+workspace chooser is not shown again. A value is found by its control's label (`Organization`,
+`Role`; `login.organizationField`/`login.roleField` name a label or a CSS selector), or, when the
+app renders a "Choose your workspace" chooser, by clicking the one card whose accessible name is
+the value. A value the app does not offer fails the login with `E_LOGIN_CONTEXT`, and nothing is
+saved.
+
+```json
+{
+  "personas": [
+    {
+      "name": "admin",
+      "storageState": "../.auth/admin.json",
+      "context": { "organization": "Acme", "role": "admin" },
+      "login": { "url": "http://localhost:3000/login", "userEnv": "ADMIN_USER", "passwordEnv": "ADMIN_PASSWORD" }
+    }
+  ]
+}
+```
 
 The storage states themselves must live outside `.jevitate/`.
 

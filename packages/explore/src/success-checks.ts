@@ -1,8 +1,16 @@
 import { clock } from "@jevitate/domain";
-import type { Assertion, OutcomeCheck, StatusSpec as RecordingStatusSpec, TargetDescriptor } from "@jevitate/recording";
+import type {
+  Assertion,
+  NetworkCheckCount,
+  OutcomeCheck,
+  RequestBodyShape,
+  StatusSpec as RecordingStatusSpec,
+  TargetDescriptor,
+} from "@jevitate/recording";
 import { describeOperand } from "@jevitate/recording";
 import { matchGlob } from "./feature/capability-scope.js";
-import type { CapturedRequest } from "./page-monitor.js";
+import type { CapturedRequest, DeclaredFields } from "./page-monitor.js";
+import { bodyShapeMismatches } from "./request-body-values.js";
 import { classifyRequest } from "./timing.js";
 import { describeStatusWithRpc, effectiveStatus } from "./rpc-status.js";
 
@@ -109,12 +117,33 @@ export function describeCheck(c: SuccessCheck): string {
     case "reloadThen":
       return `reloadThen:${describeAssertionSpec(c.assertion)}`;
     case "requestMade":
-      return `requestMade:${c.method} ${c.pathGlob}`;
     case "responseStatus":
-      return `responseStatus:${c.method} ${c.pathGlob}=${describeStatus(c.status)}`;
+      return describeNetworkCheck(c);
     case "http":
       return describeHttpCheck(c);
   }
+}
+
+/** #743: an exact/min/max count in the `--success` grammar (`count=exact:1`). */
+function describeCount(count: NetworkCheckCount): string {
+  if ("exact" in count) return `exact:${count.exact}`;
+  if ("min" in count) return `min:${count.min}`;
+  return `max:${count.max}`;
+}
+
+/** #743: a declared body shape in the `--success` grammar (`body=name:predicate,…`). */
+function describeBodyShape(shape: RequestBodyShape): string {
+  return shape.fields.map((f) => `${f.name}:${f.predicate}`).join(",");
+}
+
+/** #743: a `requestMade`/`responseStatus` in the `--success` grammar, with its count and body shape. */
+function describeNetworkCheck(c: Extract<SuccessCheck, { kind: "requestMade" | "responseStatus" }>): string {
+  const base =
+    c.kind === "requestMade" ? `requestMade:${c.method} ${c.pathGlob}` : `responseStatus:${c.method} ${c.pathGlob}=${describeStatus(c.status)}`;
+  const extras: string[] = [];
+  if (c.count !== undefined) extras.push(`count=${describeCount(c.count)}`);
+  if (c.bodyShape !== undefined) extras.push(`body=${describeBodyShape(c.bodyShape)}`);
+  return [base, ...extras].join("|");
 }
 
 /** #543: an assertion value in the `http:` grammar — `\` and `|` escaped. */
@@ -137,6 +166,13 @@ export function describeHttpCheck(c: Extract<SuccessCheck, { kind: "http" }>): s
 
 function statusMatches(status: number, spec: StatusSpec): boolean {
   return "class" in spec ? Math.floor(status / 100) === spec.class : status === spec.code;
+}
+
+/** #743: whether a matching request count satisfies an exact/min/max bound. */
+function countHolds(count: NetworkCheckCount, n: number): boolean {
+  if ("exact" in count) return n === count.exact;
+  if ("min" in count) return n >= count.min;
+  return n <= count.max;
 }
 
 function matching(requests: readonly CapturedRequest[], method: string, pathGlob: string): CapturedRequest[] {
@@ -211,10 +247,37 @@ function nearMissHint(requests: readonly CapturedRequest[], method: string, path
  * dropped its oldest requests: a check that fails then says so, since the request may have been
  * among them.
  */
+/** #743: the declared body fields captured for requests matching this check's method and path. */
+function declaredMatching(declared: readonly DeclaredFields[], method: string, pathGlob: string): DeclaredFields[] {
+  const m = method.toUpperCase();
+  return declared.filter((d) => (m === "*" || d.method === m) && matchGlob(pathGlob, d.path));
+}
+
+/** #743: how a declared count bound reads in a failure detail. */
+function describeCountExpectation(count: NetworkCheckCount): string {
+  if ("exact" in count) return `exactly ${count.exact}`;
+  if ("min" in count) return `at least ${count.min}`;
+  return `at most ${count.max}`;
+}
+
+/** #743: the declared body fields no matching request satisfied, from the most-complete candidate. */
+function missingBodyFields(shape: RequestBodyShape, candidates: readonly DeclaredFields[]): string[] {
+  if (candidates.length === 0) return bodyShapeMismatches(shape.fields, []);
+  const lists = candidates.map((d) => bodyShapeMismatches(shape.fields, d.fields));
+  return lists.reduce((best, cur) => (cur.length < best.length ? cur : best));
+}
+
+/**
+ * Evaluates a network check over the captured requests (pure). `truncated` says the capture
+ * dropped its oldest requests: a check that fails then says so, since the request may have been
+ * among them. #743: `declared` is the per-request field names/types captured at request time
+ * (never values), so a `bodyShape` is judged without any raw body.
+ */
 export function evaluateNetworkCheck(
   check: Extract<SuccessCheck, { kind: "requestMade" | "responseStatus" }>,
   requests: readonly CapturedRequest[],
   truncated = false,
+  declared: readonly DeclaredFields[] = [],
 ): SuccessCheckResult {
   const spec = describeCheck(check);
   const hits = matching(requests, check.method, check.pathGlob);
@@ -229,6 +292,22 @@ export function evaluateNetworkCheck(
         hint === null ? "" : `; ${hint}`
       }`,
     };
+  }
+  // #743: a count bound is judged on the matching requests, before any status/body judgement.
+  if (check.count !== undefined && !countHolds(check.count, hits.length)) {
+    return { check: spec, passed: false, detail: `expected ${describeCountExpectation(check.count)} matching request(s), saw ${hits.length}${note}` };
+  }
+  // #743: a declared body shape must be carried by at least one matching request, or the check fails
+  // and names every declared field that no matching request satisfied.
+  if (check.bodyShape !== undefined) {
+    const candidates = declaredMatching(declared, check.method, check.pathGlob);
+    if (!candidates.some((d) => bodyShapeMismatches(check.bodyShape!.fields, d.fields).length === 0)) {
+      return {
+        check: spec,
+        passed: false,
+        detail: `none of the ${hits.length} matching request(s) declared the required body shape: ${missingBodyFields(check.bodyShape, candidates).join("; ")}${note}`,
+      };
+    }
   }
   // #283: a request counts as MADE once it was sent — a unary RPC the server holds open for minutes
   // has no response yet, but the app did issue it.

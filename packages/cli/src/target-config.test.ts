@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig } from "./target-config.js";
+import { targetFlagsFromFlags } from "./goal-run-flags.js";
 
 let dir: string | undefined;
 afterEach(async () => {
@@ -10,6 +11,10 @@ afterEach(async () => {
 });
 
 describe("per-target settle/hang config (~/.jevitate/targets.json)", () => {
+  it("the --dev-server flag reaches the run's settle config (#745)", () => {
+    expect(resolveTargetConfig({}, "http://localhost:5173", targetFlagsFromFlags({ devServer: true }, undefined)).settle.devServer).toBe(true);
+  });
+
   it("is keyed by origin; flags add patterns and override numbers", async () => {
     dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
     const p = join(dir, "targets.json");

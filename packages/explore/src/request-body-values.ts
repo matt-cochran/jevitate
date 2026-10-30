@@ -7,7 +7,15 @@
  *
  * Kept in memory only and compared against page text; never persisted, never told to the model
  * unless a page already shows them. A value under a key that names a credential is never kept.
+ *
+ * #743 reuses the same credential-key filter to match a declared body SHAPE: the capture parses a
+ * write's body in memory, keeps only each field's name and JSON type (never a value), and this
+ * module compares those names/types against a check's declared fields.
  */
+import type { BodyFieldShape } from "@jevitate/recording";
+import type { DeclaredField } from "./page-monitor.js";
+
+export type { BodyFieldShape } from "@jevitate/recording";
 
 /** Values shorter than this identify nothing on a page (ids, flags, single letters). */
 const MIN_VALUE_CHARS = 3;
@@ -42,6 +50,34 @@ function walk(out: string[], key: string | null, node: unknown): void {
       walk(out, k, v);
     }
   }
+}
+
+/** Whether a declared body-field predicate holds for a captured field's JSON type. */
+function predicateSatisfied(predicate: BodyFieldShape["predicate"], type: DeclaredField["type"] | undefined): boolean {
+  if (predicate === "exists") return type !== undefined;
+  if (predicate === "absent") return type === undefined;
+  return type === predicate;
+}
+
+/**
+ * #743: each declared body field a request did NOT satisfy, described for a failure detail
+ * (`provider (missing)`, `items (expected array, got string)`). The capture carries only a field's
+ * name and JSON type — never a value — and a credential-named shape field is ignored by the same
+ * key filter `bodyValues` applies (a secret is never named or compared here).
+ */
+export function bodyShapeMismatches(shape: readonly BodyFieldShape[], fields: readonly DeclaredField[]): string[] {
+  const types = new Map<string, DeclaredField["type"]>();
+  for (const f of fields) types.set(f.name, f.type);
+  const out: string[] = [];
+  for (const declared of shape) {
+    if (sensitive(declared.name)) continue;
+    const type = types.get(declared.name);
+    if (predicateSatisfied(declared.predicate, type)) continue;
+    if (declared.predicate === "absent") out.push(`${declared.name} (expected absent, got ${type})`);
+    else if (type === undefined) out.push(`${declared.name} (missing)`);
+    else out.push(`${declared.name} (expected ${declared.predicate}, got ${type})`);
+  }
+  return out;
 }
 
 /** The string values a write's request body sent (empty when it sent none this can read). */
