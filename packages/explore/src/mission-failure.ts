@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { request as playwrightRequest } from "playwright";
 import type { GenerationPort } from "@jevitate/ai-core";
-import type { MissionFailure } from "@jevitate/domain";
+import type { MissionFailure, StartupAttemptErrorClass } from "@jevitate/domain";
 import { pageLostReason, pageResourceLimit } from "@jevitate/playwright";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 
@@ -91,6 +91,39 @@ export function describeUnreachable(message: string, netErrorText?: string | nul
   if (/ECONNREFUSED/i.test(netErrorText ?? "") || /ECONNREFUSED/i.test(message)) return "connection refused";
   if (/Timeout \d+ms exceeded/i.test(message)) return "timed out before any response";
   return messageOf(new Error(message));
+}
+
+/**
+ * #742: the browser error class of a FIRST-navigation/startup failure — the typed reason the retry
+ * records for an attempt. Reads the thrown message AND the real network evidence seen on the wire
+ * (a `requestfailed` `errorText`): a name that did not resolve is `dns`, a host that did not accept
+ * the connection is `connectivity`, a navigation that never answered is `navigation-timeout`, a
+ * browser/context that would not start is `browser-launch`, and — when the origin answered a healthy
+ * readiness probe but the browser navigation still failed — `origin-readiness`. Anything else is
+ * `unclassified`; the class is never fabricated without evidence.
+ */
+export function startupErrorClass(input: {
+  readonly message: string;
+  readonly netErrorText?: string | null;
+  /** True when a readiness probe answered HTTP 2xx/3xx for the origin. */
+  readonly originReady?: boolean;
+}): StartupAttemptErrorClass {
+  const text = `${input.message}\n${input.netErrorText ?? ""}`;
+  if (input.originReady === true && isUnreachableTarget(input.message)) return "origin-readiness";
+  const code = netErrorCode(text);
+  if (code === "ERR_NAME_NOT_RESOLVED" || /ENOTFOUND|EAI_NONAME|EAI_FAIL/i.test(text)) return "dns";
+  if (
+    code === "ERR_CONNECTION_REFUSED" ||
+    code === "ERR_CONNECTION_RESET" ||
+    code === "ERR_CONNECTION_CLOSED" ||
+    code === "ERR_CONNECTION_TIMED_OUT" ||
+    code === "ERR_ADDRESS_UNREACHABLE" ||
+    /ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH/i.test(text)
+  )
+    return "connectivity";
+  if (/Timeout \d+ms exceeded|timed out/i.test(text)) return "navigation-timeout";
+  if (/browserType\.launch|Executable doesn't exist|Failed to launch/i.test(text)) return "browser-launch";
+  return "unclassified";
 }
 
 /**
