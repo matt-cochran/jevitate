@@ -1,5 +1,21 @@
 # @jevitate/cli
 
+## 0.27.0
+
+### Minor Changes
+
+- 8d3c0e8: Add an opt-in dev-server (Vite/HMR) settle policy (#745). `settle.devServer` / `--dev-server` discounts asset-classified reads — a Vite dev server's modules, scripts, styles, fonts and images — from settling, so cold-load and HMR churn is no longer mistaken for a hang. A non-asset write still keeps settling waiting and stays tracked, and a configured `timing.apiPrefixes` / `--api-prefix` still wins over a Vite-shaped path (an `/api/src/…` read is the API). Default behavior is unchanged.
+- f281118: When no-progress fires beside a unique safe forward control, the #172 last-chance turn becomes a targeted #688-style recovery turn: the model gets exactly one bounded decision restricted to that control, while hidden, disabled, ambiguous, destructive, financial and approval controls stay excluded and code never clicks a candidate. Without a unique safe forward control the generic last chance is unchanged (#747).
+
+### Patch Changes
+
+- cd2ae45: `explore-author-journey` argument errors name the missing flag and print a corrected, copy-pasteable invocation (secret values redacted), under the command's own `E_EXPLORE_AUTHOR_JOURNEY_ARGS` and exit 64 (#744).
+- 5500221: `campaign run`'s preflight also checks the session's declared persona context and the host's readiness before any mission (#746): a job whose session's personas-file `context` (`{organization, role}`) does not match the context its Journey declares is refused with `E_CAMPAIGN_PREFLIGHT` (only the session file's basename is reported), and a starved host is refused with `E_HOST_STARVED` rather than folded into the campaign preflight. The default start-URL probe is now the HTTP origin-readiness probe: only DNS/connect failures and HTTP 5xx (or no response) are unreachable, so a 401/403 auth wall on the origin root still passes. `campaign run` also takes `--ignore-host-load` (MCP `run_campaign` `ignoreHostLoad`, forwarded to every mission) to start on a starved host. `--skip-preflight`/`skipPreflight` still records `preflight.skipped`.
+- 3b6314b: Network success checks may bound how many requests matched (`count=exact|min|max:<n>`) and declare the JSON request-body fields a matching write must carry (`body=name:predicate,…`). Matching compares field names and JSON types captured in memory — never values — and a failed run names each declared shape it did not see (#743).
+- 5896b01: `jevitate login` selects and asserts a persona's declared `context: {organization, role}` before it captures the storage state — a labelled control or a "Choose your workspace" card — so the saved state reopens directly in that organization and role, with no chooser (#741).
+- 4db543e: Personas files may declare an optional top-level `context: { organization, role }`; `loadPersonasFile` exposes it as typed `PersonaContext` and refuses unknown keys inside `context`, while personas without it are unchanged (#741).
+- f40fb80: Retry the first navigation a short, bounded number of times before any action or write (#742). A target that refuses the first navigation while its origin answers a plain HTTP probe is no longer finalized `target-unreachable`: the bounded retry records what each try did in the run result's `attempts[]`, runs its backoff on the injected clock, stays within a 60 s worst-case budget, and never retries a guard-blocked departure.
+
 ## 0.26.1
 
 ### Patch Changes
