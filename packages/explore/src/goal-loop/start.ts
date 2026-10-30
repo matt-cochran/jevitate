@@ -32,7 +32,7 @@ export async function openRun(ctx: RunContext): Promise<void> {
     // #293: an anchored run starts on the live page its Journey prefix left — never a fresh load.
     if (cfg.startInPlace !== true) {
       await assertSeedReachable(cfg.actor, cfg.startUrl);
-      await navigateWithStartupRetry(cfg.actor, cfg.startUrl);
+      await navigateWithStartupRetry(cfg.actor, cfg.startUrl, cfg.startupRetry === undefined ? {} : { policy: cfg.startupRetry });
     }
   } catch (e) {
     const message = firstLine(e);
