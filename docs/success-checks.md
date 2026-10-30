@@ -21,8 +21,8 @@ decides it. `--success` can be repeated, and every check must hold:
 | `attr:<d>\|<name>=<value>` | the first match's attribute equals the value (`attr:<d>\|<name>`: present; `attr:<d>\|!<name>`: absent) |
 | `flashed:<d>\|class=<cls>[\|withinMs=<n>]` | a match **gained** the class (or `attr=<name>`, or `animation`) after the last user input — a transient flash that is gone by the time the page settles |
 | `reloadThen:<check>` | the page is reloaded first, then the check holds (proves the value persisted) |
-| `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing). A request counts once it is sent, even when its response has not arrived (a long-running RPC the server holds open) |
-| `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status (requests still awaiting a response are not judged; the check fails if none has answered) |
+| `requestMade:<METHOD> <path-glob>[\|count=…][\|body=…]` | the run sent matching request(s) (catches a save that sends nothing). A request counts once it is sent, even when its response has not arrived (a long-running RPC the server holds open). `count=` bounds how many matched; `body=` declares the JSON fields they must carry (#743) |
+| `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>[\|count=…][\|body=…]` | there was at least one matching request, and every matching response had that status (requests still awaiting a response are not judged; the check fails if none has answered). `count=` bounds how many matched; `body=` declares the JSON fields they must carry (#743) |
 | `http:GET <url>\|<assertion>[\|…]` | a GET to an allow-listed origin (a dev mail outbox, an audit endpoint) answers so that every assertion holds — polled, judged after the run. See [HTTP end-state checks](#http-end-state-checks) |
 
 ## HTTP end-state checks
@@ -138,6 +138,21 @@ In these specs:
   A method of `*` matches any method. **The glob must start with `/`** (it matches the
   request's path, not a full URL) — `requestMade:POST */Foo` is rejected with
   `path glob must start with "/" (got "*/Foo")`, not the generic shape error.
+- **Counted network checks (#743).** Add one bound to a `requestMade` or `responseStatus` check:
+  `count=exact:<n>`, `count=min:<n>` or `count=max:<n>` (`n` a non-negative integer). It judges how
+  many requests matched method and path. Without it the check keeps its old meaning (at least one).
+  A failed bound names both numbers, e.g. `expected at least 5 matching request(s), saw 3`.
+- **Request-body-aware network checks (#743).** Add `body=<name>:<predicate>[,<name>:<predicate>…]`
+  to require that a matching request carried those JSON fields. The predicates are `exists`,
+  `absent`, `string`, `number`, `boolean`, `null`, `array` and `object` — field **names and
+  predicates only, never a value**, so the shape is safe to persist in a Journey. A write's body is
+  parsed in memory at request time; only each field's name and JSON type are kept, and the
+  credential-key filter the read-back uses drops a field that names a credential (the schema refuses
+  such a name in a shape too). Raw bodies are never persisted and never sent to a model. A shape no
+  matching request satisfied fails and lists every declared field the write did not send (or sent
+  with a different type), e.g. `provider (missing)`. Match several expected payloads in one goal by
+  declaring one `requestMade` check per shape; a failed run names each check that was missing.
+  Example: `--success 'requestMade:POST /api/preview|count=exact:5|body=voiceId:string,tone:string'`.
 - Network checks look only at the requests the run itself made: those sent **after the run's
   first action** (a click, a type, a select… or a `reload` the run chose). A request the page load, a poll or
   anything before that first action sent is not counted (there is no `since:<step>` qualifier;
