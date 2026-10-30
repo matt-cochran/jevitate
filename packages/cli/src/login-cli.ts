@@ -6,7 +6,7 @@ import { fail, ok } from "./envelope.js";
 import { emitCommandResult, type CliDeps } from "./cli-shared.js";
 import { positiveIntArg } from "./cli-args.js";
 import { loadPersonasFile, MultiRunArgsError, projectPersonas, type Persona } from "./multi-run.js";
-import { apiVerifyUrl, checkSaveTarget, LoginArgsError, LoginFailedError, loginFromFlags, mintStorageState, parseAuthCheck, type AuthCheck, type PersonaLogin } from "./persona-login.js";
+import { apiVerifyUrl, checkSaveTarget, LoginArgsError, LoginContextError, LoginFailedError, loginFromFlags, mintStorageState, parseAuthCheck, type AuthCheck, type LoginContext, type PersonaLogin } from "./persona-login.js";
 
 /**
  * #427 `jevitate login`: mint a persona's Playwright storage state from credentials held in
@@ -55,6 +55,8 @@ export interface LoginResult {
   readonly landedUrl: string;
   readonly userEnv: string;
   readonly passwordEnv: string;
+  /** #741: the declared organization/role the login selected and asserted, when a persona declared one. */
+  readonly context?: LoginContext;
   readonly warnings: readonly string[];
 }
 
@@ -108,11 +110,12 @@ export function registerLoginCommand(program: Command, deps: CliDeps): void {
       let save: string;
       let warnings: string[];
       let authCheck: AuthCheck;
+      let declared: Persona | undefined;
       try {
         if (o.persona !== undefined && !PERSONA_NAME.test(o.persona)) {
           throw new LoginArgsError(`--persona ${JSON.stringify(o.persona)} must be 1-64 of [A-Za-z0-9_.-], starting alphanumeric`);
         }
-        const declared = o.persona === undefined ? undefined : declaredPersona(o.persona, o.personas);
+        declared = o.persona === undefined ? undefined : declaredPersona(o.persona, o.personas);
         if (o.personas !== undefined && o.persona === undefined) throw new LoginArgsError("--personas reads a declared persona's login parameters: pass --persona <name> too");
         if (o.personas !== undefined && declared === undefined) throw new LoginArgsError(`persona ${o.persona} is not declared in ${o.personas}`);
         const base = declared?.login;
@@ -167,6 +170,8 @@ export function registerLoginCommand(program: Command, deps: CliDeps): void {
           ...pick("passwordField", o.passwordField ?? (viaApi ? undefined : base?.passwordField)),
           ...pick("submit", o.submit ?? (viaApi ? undefined : base?.submit)),
           ...pick("success", o.success ?? (viaApi ? undefined : base?.success)),
+          ...pick("organizationField", viaApi ? undefined : base?.organizationField),
+          ...pick("roleField", viaApi ? undefined : base?.roleField),
         });
         ({ path: save, warnings } = checkSaveTarget(target!, "--save"));
       } catch (err) {
@@ -187,6 +192,7 @@ export function registerLoginCommand(program: Command, deps: CliDeps): void {
           env: deps.explore?.env ?? process.env,
           port: (deps.explore?.browserPortFactory ?? (() => new PlaywrightBrowserPort()))(),
           timeoutMs: (o.timeout ?? DEFAULT_TIMEOUT_S) * 1000,
+          ...(declared?.context === undefined ? {} : { context: declared.context }),
           ...(login.api === undefined ? {} : { verify: { url: apiVerifyUrl(login.api), check: authCheck } }),
         });
         const result: LoginResult = {
@@ -197,11 +203,13 @@ export function registerLoginCommand(program: Command, deps: CliDeps): void {
           landedUrl: minted.landedUrl,
           userEnv: login.userEnv,
           passwordEnv: login.passwordEnv,
+          ...(declared?.context === undefined ? {} : { context: declared.context }),
           warnings,
         };
         emit(ok(result));
       } catch (err) {
         if (err instanceof LoginArgsError) emit(fail("E_LOGIN_ARGS", err.message));
+        else if (err instanceof LoginContextError) emit(fail("E_LOGIN_CONTEXT", err.message));
         else if (err instanceof LoginFailedError) emit(fail("E_LOGIN_FAILED", err.message));
         else throw err;
       }
