@@ -39,3 +39,9 @@ export const LAST_CHANCE_NOTE =
  */
 export const LAST_CHANCE_NO_WRITE_NOTE =
   "no progress: the last steps left the page unchanged and you have seen the whole page, but no write of this run has succeeded yet — the goal asks for a change the app must receive: go back and press the control that submits it (Import, Save, Send…), or say blocked if the app offers none";
+/**
+ * #747: the #172 last-chance turn when the page offers a unique safe forward control — the generic
+ * "act on a visible control" note becomes a targeted recovery turn through that one control.
+ */
+export const NO_PROGRESS_RECOVERY_NOTE = (name: string, locator: string): string =>
+  `no progress: the last steps left the page unchanged — the unique safe forward control ${JSON.stringify(name)} (${locator}) is the way on: act through it now, or the run ends`;

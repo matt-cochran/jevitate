@@ -76,6 +76,13 @@ security bug, and how to report one.
   The paid classifier reads only short, verb-led button and link labels: a chat question card or
   a radio/checkbox answer that merely contains "pay", "trial" or "upgrade" is not refused unless
   its label names a charge. A refused control is not offered to the model again in that run.
+- **No-progress recovery (#747).** When the no-progress detector fires and the page still offers a
+  *unique safe forward control* — one visible, enabled, uniquely named control that the goal and the
+  page's own instruction both name, and that is not destructive, financial or approval — the run's one
+  last-chance turn becomes a targeted recovery turn: the model is offered **only** that control, code
+  never clicks it, and the turn is still bounded to exactly one. Hidden, disabled, ambiguous,
+  destructive, financial and approval controls are never offered as the recovery candidate. Without a
+  unique safe forward control the generic last-chance turn is unchanged.
 - Native dialogs (`window.confirm`, `prompt`) raised by an action are dismissed by default, as
   Playwright does, but each one is now logged in the transcript (`dialogs`) and told to the model.
   `--dialogs accept` (or `"dialogs": "accept"` in a target's `safety`) confirms them, except a
