@@ -42,7 +42,7 @@ import { LogClassesError } from "./log-classes.js";
 const AUTHOR_GOAL_RUN_FLAGS = [
   "successWhen", "allowVacuousChecks", "actionDeltas", "secret", "secretField", "totp", "typeFixture", "uploadFixture", "fixture",
   "saveStorageState", "replyWaitMs", "replyQuietMs", "replyCeilingMs", "replyMaxChars", "jobWaitMs", "deny", "paid", "allowControl",
-  "allowDestructive", "allowWrites", "dialogs", "readRpc", "hangReplays", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
+  "allowDestructive", "allowWrites", "dialogs", "readRpc", "hangReplays", "settleIgnore", "longPollMs", "devServer", "apiPrefix", "ignoreNoProgress",
   "allowSecretCmd", "secretCmdAttempts",
 ] as const satisfies readonly (keyof typeof GOAL_RUN_OPTIONS)[];
 

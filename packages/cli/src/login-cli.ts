@@ -96,6 +96,8 @@ export function registerLoginCommand(program: Command, deps: CliDeps): void {
     .option("--password-env <VAR>", "environment variable holding the password (its NAME — the value is read from the environment)")
     .option("--user-field <field>", "the username field: its label, else a CSS selector (default: found by autocomplete/type/name)")
     .option("--password-field <field>", "the password field: its label, else a CSS selector (default: the visible password input)")
+    .option("--organization-field <field>", "#741: the organization selection control: its label, else a CSS selector (default: a control labelled organization/workspace/tenant/account, else a chooser card)")
+    .option("--role-field <field>", "#741: the role selection control: its label, else a CSS selector (default: a control labelled role, else a chooser card)")
     .option("--submit <name>", "the submit button's accessible name (default: the form's submit button, else Enter)")
     .option("--success <check>", "how a successful sign-in is recognised: urlIncludes:<text> | selector:<css> | text:<text> (default: the page leaves the sign-in form — no login-like URL, no password field)")
     .option("--save <file>", "where to write the storage state (parent directory created; mode 0600; never inside a repo's .jevitate/)")

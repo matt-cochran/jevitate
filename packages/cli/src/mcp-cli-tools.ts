@@ -588,6 +588,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         checkOverflow: b("--check-overflow"),
         apiPrefix: many("--api-prefix"),
         longPollMs: n("--long-poll-ms"),
+        devServer: b("--dev-server"),
         jobWaitMs: n("--job-wait-ms"),
         replyWaitMs: n("--reply-wait-ms"),
         replyQuietMs: n("--reply-quiet-ms"),
@@ -769,6 +770,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         hangReplays: n("--hang-replays"),
         settleIgnore: many("--settle-ignore"),
         longPollMs: n("--long-poll-ms"),
+        devServer: b("--dev-server"),
         apiPrefix: many("--api-prefix"),
         ignoreNoProgress: many("--ignore-no-progress"),
         // #544: mission fixtures set up before / restored after every take; the Journey records the file.
