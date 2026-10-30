@@ -1,6 +1,7 @@
 import { z, ZodType } from "zod";
 import { navigateTemplateProblem } from "./navigate-params.js";
 import { jsonPathProblem } from "./json-path.js";
+import { SECRET_PARAM_NAME_RE } from "./assertion-refs.js";
 
 // === Interfaces - TypeScript types matching the brief exactly ===
 
@@ -372,10 +373,38 @@ export interface RecordedStep {
 /** #400: an expected HTTP status — a class (`2xx`) or an exact code (`201`). */
 export type StatusSpec = { class: 1 | 2 | 3 | 4 | 5 } | { code: number };
 
+/**
+ * #743: how many matching requests a network check requires — exactly `exact`, at least `min`, or at
+ * most `max`. Exactly one bound is declared; absent, the check keeps its pre-#743 meaning (at least
+ * one match).
+ */
+export type NetworkCheckCount = { exact: number } | { min: number } | { max: number };
+
+/**
+ * #743: what a declared request-body field's value must satisfy. A predicate is a kind of value,
+ * never a literal — a body shape declares NAMES and PREDICATES only, so no request value is stored.
+ */
+export type BodyFieldPredicate = "exists" | "absent" | "string" | "number" | "boolean" | "null" | "array" | "object";
+
+/** #743: one declared request-body field: its name and a value predicate (never a value). */
+export interface BodyFieldShape {
+  name: string;
+  predicate: BodyFieldPredicate;
+}
+
+/**
+ * #743: a declared request-body field shape — the field names and the predicates their values must
+ * satisfy. It stores no values; a credential-named field is refused, so no secret can be named (and
+ * the shape is safe to persist in a Journey).
+ */
+export interface RequestBodyShape {
+  fields: BodyFieldShape[];
+}
+
 /** #400: a network check (the `requestMade` / `responseStatus` success-check kinds). */
 export type NetworkCheck =
-  | { kind: "requestMade"; method: string; pathGlob: string }
-  | { kind: "responseStatus"; method: string; pathGlob: string; status: StatusSpec };
+  | { kind: "requestMade"; method: string; pathGlob: string; count?: NetworkCheckCount; bodyShape?: RequestBodyShape }
+  | { kind: "responseStatus"; method: string; pathGlob: string; status: StatusSpec; count?: NetworkCheckCount; bodyShape?: RequestBodyShape };
 
 /**
  * #400: an outcome check — the goal mission's success-check kinds, as a Journey keeps them:
@@ -915,9 +944,48 @@ export const StatusSpecSchema: ZodType<StatusSpec> = z.union([
 
 const METHOD = z.string().min(1).max(20);
 const PATH_GLOB = z.string().min(1).max(2000);
-const RequestMadeSchema = z.object({ kind: z.literal("requestMade"), method: METHOD, pathGlob: PATH_GLOB }).strict();
+
+/** #743: exactly one of an exact/min/max request count; non-negative (0 means "none"). */
+const COUNT_BOUND = z.number().int().min(0).max(1000);
+const NetworkCheckCountSchema = z.union([
+  z.object({ exact: COUNT_BOUND }).strict(),
+  z.object({ min: COUNT_BOUND }).strict(),
+  z.object({ max: COUNT_BOUND }).strict(),
+]);
+
+/** #743: a declared request-body field — a name and a value predicate, never a stored value. */
+const BodyFieldShapeSchema = z
+  .object({ name: z.string().min(1).max(200), predicate: z.enum(["exists", "absent", "string", "number", "boolean", "null", "array", "object"]) })
+  .strict();
+
+/** #743: a declared request-body field shape; fields only, no values, and no credential-named field. */
+const RequestBodyShapeSchema = z
+  .object({ fields: z.array(BodyFieldShapeSchema).min(1).max(50) })
+  .strict()
+  .superRefine((shape, ctx) => {
+    shape.fields.forEach((field, index) => {
+      if (SECRET_PARAM_NAME_RE.test(field.name)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `bodyShape field ${JSON.stringify(field.name)} names a credential — a body shape declares field names only`,
+          path: ["fields", index, "name"],
+        });
+      }
+    });
+  });
+
+const RequestMadeSchema = z
+  .object({ kind: z.literal("requestMade"), method: METHOD, pathGlob: PATH_GLOB, count: NetworkCheckCountSchema.optional(), bodyShape: RequestBodyShapeSchema.optional() })
+  .strict();
 const ResponseStatusSchema = z
-  .object({ kind: z.literal("responseStatus"), method: METHOD, pathGlob: PATH_GLOB, status: StatusSpecSchema })
+  .object({
+    kind: z.literal("responseStatus"),
+    method: METHOD,
+    pathGlob: PATH_GLOB,
+    status: StatusSpecSchema,
+    count: NetworkCheckCountSchema.optional(),
+    bodyShape: RequestBodyShapeSchema.optional(),
+  })
   .strict();
 
 /** #400: a `requestMade` / `responseStatus` check. */
