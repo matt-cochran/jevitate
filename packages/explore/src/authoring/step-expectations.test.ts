@@ -89,6 +89,27 @@ describe("#400 deriveStepExpectations: a step's expect comes from what it change
     expect(out.step).toMatchObject({ expect: { kind: "attr", target, name: "aria-selected", value: "true" } });
   });
 
+  it("#756: without a delta, a click on a tab's display role still asserts aria-selected=true", () => {
+    const target = { testId: "tabs-trigger-voices", display: { role: "tab", name: "Voices" } };
+    const out = only(deriveStepExpectations(rec({ step: click(target) })));
+    expect(out.step).toMatchObject({ expect: { kind: "attr", target, name: "aria-selected", value: "true" } });
+  });
+
+  it("#756: without a delta, a tab role on the target itself asserts aria-selected=true", () => {
+    const target = { role: "tab", name: "Voices" };
+    const out = only(deriveStepExpectations(rec({ step: click(target) })));
+    expect(out.step).toMatchObject({ expect: { kind: "attr", name: "aria-selected", value: "true" } });
+  });
+
+  it("#756: a bracketed ARIA state marker is never emitted as visible text", () => {
+    const out = only(
+      deriveStepExpectations(
+        rec({ step: click({ testId: "toggle" }), delta: delta({ verdict: "relevant-change", changes: ['~ button "Toggle": "off" → "[expanded]"'] }) }),
+      ),
+    );
+    expect(out.step).not.toMatchObject({ expect: { target: { text: "[expanded]" } } });
+  });
+
   it("skips volatile (digits), redacted, removed and summarised changes, and the target's own name", () => {
     const out = only(
       deriveStepExpectations(
