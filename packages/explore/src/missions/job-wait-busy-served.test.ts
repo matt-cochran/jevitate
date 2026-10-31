@@ -36,13 +36,14 @@ const approvePage = html(`<nav><a href="/approve">Taste</a></nav><h1>Taste</h1><
   };
 </script>`);
 
-/** Approve answers at once; a spinner (not declared busy) + status stay while the page polls a job for 4s, then polling stops and they stay. */
+/** Approve answers at once; a spinner (not declared busy) + status stay while the page polls a job four times (1s apart), then polling stops and they stay. */
 const pollThenSilentPage = html(`<nav><a href="/poll-then-silent">Taste</a></nav><h1>Taste</h1><button type="button" id="go">Approve</button><div id="st"></div><script>
   document.getElementById("go").onclick = () => fetch("/api/approve-now", { method: "POST", body: "{}" }).then(() => {
     document.getElementById("go").remove();
     document.getElementById("st").innerHTML = '<span class="animate-spin" data-testid="taste-busy" style="display:inline-block;width:12px;height:12px"></span><span role="status">Generating designs…</span>';
-    const started = Date.now();
-    const t = setInterval(() => { if (Date.now() - started > 4000) clearInterval(t); else fetch("/api/job"); }, 1000);
+    // #753: a fixed poll count — not Date.now — keeps the 4s window deterministic under page.clock.
+    let polls = 0;
+    const t = setInterval(() => { if (++polls > 4) clearInterval(t); else fetch("/api/job"); }, 1000);
   });
 </script>`);
 
