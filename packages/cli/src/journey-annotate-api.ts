@@ -1,4 +1,4 @@
-import { expectedResultFromDelta } from "@jevitate/explore";
+import { explainCheck, expectedResultFromDelta } from "@jevitate/explore";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   describeStep,
   flatJourneySteps,
   intentCoverage,
+  journeyAssertions,
   secretParamValues,
   type AnnotationChange,
   type AnnotationDraft,
@@ -89,6 +90,54 @@ async function capture(actor: Actor, secrets: readonly string[]): Promise<PageEv
   };
 }
 
+/**
+ * #755 — the corpus a drafted success criterion must be grounded in: the final page as replayed (URL,
+ * heading, visible text) plus every assertion the Journey already makes. A criterion may quote that
+ * page text or restate an assertion; a claim the evidence does not show is unverifiable.
+ */
+interface GroundingCorpus {
+  readonly text: string;
+  readonly words: ReadonlySet<string>;
+}
+
+/** Filler words that carry no claim of their own, so they need no evidence on the page. */
+const GROUNDING_STOPWORDS = new Set([
+  "the", "and", "for", "with", "that", "this", "from", "into", "onto", "when", "then", "than",
+  "are", "was", "were", "has", "have", "had", "its", "their", "there", "here", "all", "any",
+  "not", "only", "what", "which", "who", "now", "also", "page", "final", "shows", "show",
+  "showing", "displays", "display", "displayed", "lists", "listed", "list", "contains", "contain",
+  "includes", "include", "exists", "exist", "success", "criterion", "criteria", "after", "before",
+]);
+
+function foldText(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function wordsOf(s: string): string[] {
+  return foldText(s).split(/[^a-z0-9]+/).filter((w) => w !== "");
+}
+
+/** The excerpts a criterion quotes (double/single/curly quotes or backticks), folded for comparison. */
+function quotedExcerpts(text: string): string[] {
+  const out: string[] = [];
+  const re = /["'“”‘’`]([^"'“”‘’`]{1,300})["'“”‘’`]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const q = foldText(m[1]!);
+    if (q !== "") out.push(q);
+  }
+  return out;
+}
+
+/** #755 — does the final page or an existing assertion show what `criterion` claims? */
+function criterionIsGrounded(criterion: string, corpus: GroundingCorpus): boolean {
+  const quotes = quotedExcerpts(criterion);
+  if (quotes.length > 0) return quotes.every((q) => corpus.text.includes(q));
+  const words = wordsOf(criterion).filter((w) => w.length >= 3 && !GROUNDING_STOPWORDS.has(w));
+  if (words.length === 0) return false;
+  return words.every((w) => corpus.words.has(w));
+}
+
 export interface AnnotateJourneyOptions
   extends Omit<RunJourneyProgrammaticallyOptions, "interpreter" | "policy" | "selfHealer"> {
   /** The generation gateway that drafts the text (`--real` / `--fake-ai`). */
@@ -105,6 +154,8 @@ export interface AnnotateJourneyResult {
   /** What approving the draft would change (the same diff `--approve` shows). */
   readonly proposed: AnnotationChange[];
   readonly coverage: IntentCoverage;
+  /** #755: drafted success criteria dropped because the final page and the assertions do not show them. */
+  readonly unverifiableCriteria: string[];
   /** #251 `--screenshots`: the replay's masked screenshots and their `index.md`. */
   readonly screenshotPaths?: string[];
   readonly screenshotIndex?: string;
@@ -200,6 +251,10 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
 
   let goal: string | undefined;
   let successCriteria: string[] | undefined;
+  const unverifiableCriteria: string[] = [];
+  // #755: the assertions the Journey already makes (step postconditions and end state) — shown to the
+  // model and the only other evidence a drafted success criterion may claim besides the final page.
+  const assertionTexts = journeyAssertions(journey).map((site) => redactText(explainCheck(site.check).text, secrets));
   const needGoal = (m.goal ?? "").trim() === "";
   const needCriteria = (m.successCriteria ?? []).length === 0;
   if (needGoal || needCriteria) {
@@ -210,6 +265,7 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
       ...(m.description === undefined ? {} : { description: redactText(m.description, secrets).slice(0, 2000) }),
       ...(journey.recording.intent === undefined ? {} : { intent: redactText(journey.recording.intent, secrets).slice(0, 2000) }),
       steps: stepLines.slice(0, 200),
+      assertions: assertionTexts.map((a) => a.slice(0, 500)).slice(0, 200),
       finalPage,
     };
     assertNoSecretInPayload(input, secrets);
@@ -217,8 +273,20 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
     provenance = p;
     if (needGoal) goal = clean(output.goal);
     if (needCriteria) {
-      const criteria = output.successCriteria.map((c) => clean(c)).filter((c): c is string => c !== undefined);
-      if (criteria.length > 0) successCriteria = criteria;
+      const corpusText = foldText([finalPage?.url ?? "", finalPage?.heading ?? "", finalPage?.text ?? "", ...assertionTexts].join("\n"));
+      const corpus: GroundingCorpus = { text: corpusText, words: new Set(wordsOf(corpusText)) };
+      const drafted = output.successCriteria.map((c) => clean(c)).filter((c): c is string => c !== undefined);
+      const kept: string[] = [];
+      for (const criterion of drafted) {
+        if (criterionIsGrounded(criterion, corpus)) kept.push(criterion);
+        else unverifiableCriteria.push(criterion);
+      }
+      if (kept.length > 0) successCriteria = kept;
+      else if (drafted.length > 0 && assertionTexts.length > 0) {
+        // #755: nothing drafted was shown by the evidence — fall back to one minimal, truthful assertion.
+        const fallback = clean(assertionTexts[assertionTexts.length - 1]);
+        if (fallback !== undefined) successCriteria = [fallback];
+      }
     }
   }
 
@@ -253,6 +321,7 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
     },
     proposed: applyAnnotationDraft(journey, draft).changes,
     coverage: intentCoverage(journey),
+    unverifiableCriteria,
     ...(run.screenshotPaths === undefined ? {} : { screenshotPaths: run.screenshotPaths }),
     ...(run.screenshotIndex === undefined ? {} : { screenshotIndex: run.screenshotIndex }),
     ...(run.screenshotsSkipped === undefined ? {} : { screenshotsSkipped: run.screenshotsSkipped }),
