@@ -251,6 +251,12 @@ export interface OutcomeWait {
 
 export type Step =
   | { kind: "navigate"; label?: string; url: string; expect: Assertion; waitFor?: OutcomeWait }
+  /**
+   * Re-load the page the run is currently on (the LIVE URL, query string kept — no recorded URL is
+   * substituted), then check `expect` like `navigate`. Use it when a client-side route change must
+   * survive a full document load.
+   */
+  | { kind: "reload"; label?: string; expect: Assertion; waitFor?: OutcomeWait }
   | { kind: "click"; label?: string; target: TargetDescriptor; expect: Assertion; waitFor?: OutcomeWait }
   | { kind: "fill"; label?: string; target: TargetDescriptor; value: ValueOrVar; expect: Assertion; waitFor?: OutcomeWait }
   | { kind: "waitFor"; label?: string; target: TargetDescriptor; state: "visible" | "hidden" | "attached" }
@@ -772,6 +778,14 @@ export const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       kind: z.literal("navigate"),
       label: z.string().optional(),
       url: NavigateUrlSchema,
+      expect: AssertionSchema,
+      waitFor: OutcomeWaitSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("reload"),
+      label: z.string().optional(),
       expect: AssertionSchema,
       waitFor: OutcomeWaitSchema.optional(),
     })

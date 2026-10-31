@@ -177,6 +177,7 @@ export function strictSignature(step: Step, pageUrl: string): string {
 function strictKey(step: Step): string {
   switch (step.kind) {
     case "navigate":
+    case "reload":
     case "press":
       return "";
     case "click":
@@ -230,6 +231,8 @@ function structuralKey(step: Step): string {
   switch (step.kind) {
     case "navigate":
       return `url:${urlTemplate(step.url)}`;
+    case "reload":
+      return "reload";
     case "click":
     case "fill":
     case "select":

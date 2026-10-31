@@ -89,6 +89,8 @@ export function describeStep(step: Step): string {
   switch (step.kind) {
     case "navigate":
       return `navigate to ${describeNavigateUrl(step.url)}${label}`;
+    case "reload":
+      return `reload the page${label}`;
     case "click":
       return `click ${describeTarget(step.target)}${label}`;
     case "fill":

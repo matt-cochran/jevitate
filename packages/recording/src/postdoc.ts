@@ -391,6 +391,7 @@ function convertToHandback(current: Recording, ref: StepRef, prompt: string): Re
 function deriveResumeAssertion(step: Step): Assertion {
   switch (step.kind) {
     case "navigate":
+    case "reload":
     case "click":
     case "fill":
     case "extract":
