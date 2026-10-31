@@ -76,6 +76,19 @@ describe("#400 deriveStepExpectations: a step's expect comes from what it change
     expect(changed.step).toMatchObject({ expect: { kind: "visible", target: { text: "Saved", textMatch: "contains" } } });
   });
 
+  it("#756: an activated ARIA tab asserts its selected state, never the snapshot marker as text", () => {
+    const target = { testId: "tabs-trigger-voices", display: { role: "tab", name: "Voices" } };
+    const out = only(
+      deriveStepExpectations(
+        rec({
+          step: click(target),
+          delta: delta({ verdict: "relevant-change", changes: ['~ tab "Voices": "" → "[selected]"'] }),
+        }),
+      ),
+    );
+    expect(out.step).toMatchObject({ expect: { kind: "attr", target, name: "aria-selected", value: "true" } });
+  });
+
   it("skips volatile (digits), redacted, removed and summarised changes, and the target's own name", () => {
     const out = only(
       deriveStepExpectations(
