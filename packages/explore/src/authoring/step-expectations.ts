@@ -173,10 +173,26 @@ function sameName(a: string | undefined, b: string | undefined): boolean {
 /** The first change line (closest to the action first, as the delta lists them) that names an outcome. */
 function fromDelta(changes: readonly string[], own: TargetDescriptor): Assertion | null {
   for (const line of changes) {
+    const tab = selectedTabAssertion(line, own);
+    if (tab !== null) return tab;
     const a = changeAssertion(line, own);
     if (a !== null) return a;
   }
   return null;
+}
+
+/**
+ * An ARIA snapshot renders an active tab as `[selected]`. That marker is
+ * state, not user-visible text, so it must become an attribute assertion.
+ * The target stays the action's recorded locator (often a test id), while
+ * `display.role` covers descriptors whose role is metadata only.
+ */
+function selectedTabAssertion(line: string, own: TargetDescriptor): Assertion | null {
+  const role = own.role ?? own.display?.role;
+  if (role !== "tab" && !/^~ tab(?:\s|:)/.test(line)) return null;
+  const arrow = line.lastIndexOf(" → ");
+  if (arrow < 0 || !line.slice(arrow + 3).includes("[selected]")) return null;
+  return { kind: "attr", target: { ...own }, name: "aria-selected", value: "true" };
 }
 
 function changeAssertion(line: string, own: TargetDescriptor): Assertion | null {

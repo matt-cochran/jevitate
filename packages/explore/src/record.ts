@@ -55,6 +55,21 @@ export function toPath(raw: string): string {
   return redactUrl(raw.startsWith("/") || /^https?:\/\//.test(raw) ? raw : `/${raw}`);
 }
 
+/**
+ * The replayable form of a live URL. Unlike `toPath`, this retains a query
+ * because an SPA can put the identity of a just-created record there. The
+ * shared redactor still masks sensitive parameter values before persistence.
+ */
+function toReplayPath(raw: string): string {
+  try {
+    const u = new URL(raw);
+    if (u.protocol === "http:" || u.protocol === "https:") return redactUrl(`${u.pathname || "/"}${u.search}`);
+  } catch {
+    // not absolute — fall through
+  }
+  return redactUrl(raw.startsWith("/") || /^https?:\/\//.test(raw) ? raw : `/${raw}`);
+}
+
 function setExpect(step: Step, assertion: Assertion): void {
   if ("expect" in step) step.expect = assertion;
 }
@@ -131,7 +146,7 @@ export class RunRecorder {
   }
 
   #path(url: string): string {
-    return redactText(toPath(url), this.#secrets);
+    return redactText(toReplayPath(url), this.#secrets);
   }
 
   /**

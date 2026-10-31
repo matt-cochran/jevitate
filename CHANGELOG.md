@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [Unreleased]
+
+### Fixed
+
+- Authoring now retains redacted dynamic query state needed to replay a create-then-edit workflow, and turns an activated ARIA tab into an `aria-selected=true` assertion rather than a literal `[selected]` text check.
+
 ## [0.27.0] – 2026-10-30
 
 0.27.0 makes sessions workspace-aware, retries flaky first loads within a fixed bound, and lets

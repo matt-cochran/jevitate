@@ -23,6 +23,21 @@ describe("record — append RecordedStep -> replayable Recording (Task 8)", () =
     expect(toPath("/inbox")).toBe("/inbox");
   });
 
+  it("keeps a redacted query string when a live navigation creates the replay context", () => {
+    const rec = new RunRecorder("example-site");
+    rec.navigate("https://app.test/workflow", 0);
+    rec.click({ testId: "create-campaign" }, 1);
+    rec.observed("https://app.test/workflow?campaignId=generated-123&newWorkflow=1", 2);
+    rec.fill({ testId: "workflow-name" }, "Welcome", 3);
+
+    const recording = rec.finish();
+    expect(recording.pages.map((page) => page.url)).toEqual(["/workflow", "/workflow?campaignId=generated-123&newWorkflow=1"]);
+    expect(recording.pages[0]?.steps[1]?.step).toMatchObject({
+      kind: "click",
+      expect: { kind: "urlIncludes", text: "/workflow?campaignId=generated-123&newWorkflow=1" },
+    });
+  });
+
   it(
     "a recording assembled from executed steps validates and replays on the fixture",
     async () => {
