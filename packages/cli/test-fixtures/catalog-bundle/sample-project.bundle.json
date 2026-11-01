@@ -10,7 +10,7 @@
   "catalogContract": {
     "kind": "jevitate.catalog-contract",
     "version": "2.0.0",
-    "manifestSha256": "c0fa630296bfb654da15d3949b77e7ce19a984846baa147ea9d4a0ce3b2d438a"
+    "manifestSha256": "481a4dc41ef6d619539500b2d141a07ceb003e9d83bc1f5cd11214360c83dbbd"
   },
   "product": {
     "name": "journeeze-board"

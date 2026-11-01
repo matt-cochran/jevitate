@@ -224,6 +224,19 @@ export class RunRecorder {
     this.#append({ kind: "navigate", url: path, expect: { kind: "urlIncludes", text: path } }, atMs);
   }
 
+  /**
+   * #754: record a reload of the page the run is on (the LIVE URL, query string kept). The step
+   * names no URL — replay re-loads whatever page it actually reached — so a server-generated query
+   * value (e.g. `?id=<fresh>`) is never written into the Recording; `expect` checks only the path.
+   * Like `navigate`, it opens the segment for the current URL so a client-side route change the
+   * preceding action caused is materialized before the reload is appended to it.
+   */
+  reload(url: string, atMs: number, durationMs = 0): void {
+    this.#ensureSegment(url);
+    const path = this.#path(url);
+    this.#append({ kind: "reload", expect: { kind: "urlIncludes", text: path } }, atMs, durationMs);
+  }
+
   /** Record a click on a control. Provisional postcondition: target visible. */
   click(rawDescriptor: TargetDescriptor, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");

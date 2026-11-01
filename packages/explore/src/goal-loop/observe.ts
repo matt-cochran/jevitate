@@ -106,7 +106,7 @@ export async function captureDelta(ctx: RunContext, step: Perceived): Promise<Fl
         delta = { ...delta, persisted: p.persisted, persistedWhy: p.why };
         if (p.persisted === "no") ctx.notPersisted.push({ step: d.step, action: delta.action, why: p.why });
         reloaded = true;
-        ctx.recorder.navigate(url, ctx.now());
+        ctx.recorder.reload(url, ctx.now());
         ctx.history.push(`persistence check after ${delta.action}: ${p.persisted} — ${p.why}`);
       }
       ctx.transcript.attachDelta(d.step, delta);

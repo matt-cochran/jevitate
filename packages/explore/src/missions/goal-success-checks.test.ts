@@ -195,7 +195,7 @@ describe("goal mission — a correct save passes every check (#65)", () => {
   );
 
   it(
-    "the goal loop can choose reload itself; it is recorded as a navigation and the checks still hold",
+    "the goal loop can choose reload itself; it is recorded as a reload step (#754) and the checks still hold",
     async () => {
       const result = await save("good", [SAVE_SENT, PERSISTED], [
         { op: "type", target: "0" },
@@ -207,7 +207,7 @@ describe("goal mission — a correct save passes every check (#65)", () => {
       const reload = result.transcript.find((e) => e.op === "reload");
       expect(reload?.actOk).toBe(true);
       const kinds = result.recording.pages.flatMap((p) => p.steps.map((s) => s.step.kind));
-      expect(kinds).toEqual(["navigate", "fill", "click", "navigate"]);
+      expect(kinds).toEqual(["navigate", "fill", "click", "reload"]);
     },
     120_000,
   );

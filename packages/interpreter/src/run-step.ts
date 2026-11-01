@@ -173,7 +173,7 @@ async function postcondition(
  * an action whose expected outcome didn't materialize must never be
  * swallowed.
  *
- * Handles all 11 `Step` kinds: `navigate | click | fill | waitFor | assert |
+ * Handles all 12 `Step` kinds: `navigate | reload | click | fill | waitFor | assert |
  * extract | select | upload | press | forEach` resolve to `{kind:"done"}` on success
  * (or throw); `handback` performs no action and resolves to
  * `{kind:"awaiting_human"}` without checking its `resume` assertion — see
@@ -220,6 +220,14 @@ export async function runStep(
         throw url === step.url ? err : withoutNavigateValues(err, step.url, vars);
       }
       await postcondition(actor, expected(step.expect), step.waitFor, `navigate to ${describeNavigateUrl(step.url)}`, index, targetOpts);
+      return { kind: "done" };
+    }
+    case "reload": {
+      // The live current URL (including a runtime query string) is re-loaded as-is: the step records
+      // no URL, so nothing can be substituted for what the page actually navigated to.
+      const page = actor.ability(BrowseTheWebToken).session.page;
+      await page.reload();
+      await postcondition(actor, expected(step.expect), step.waitFor, "reload", index, targetOpts);
       return { kind: "done" };
     }
     case "click": {
