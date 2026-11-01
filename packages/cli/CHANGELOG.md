@@ -1,5 +1,16 @@
 # @jevitate/cli
 
+## 0.28.0
+
+### Minor Changes
+
+- ff95aee: Record a goal run's reload — the #303 persistence re-check after a write and the model's reload op — as the `reload` Step, not a `navigate` to the query-free pathname (#754). Replay now re-loads the live page (`page.reload()`), so a server-generated query value (e.g. `?id=<fresh>`) is never written into the Recording and the steps after the reload find the page the replay actually created.
+
+### Patch Changes
+
+- 6659028: Ground `journey annotate` goal and success-criteria drafts in replay evidence (#755). The `journey.goal` brief now receives the Journey's existing assertions (step postconditions and end-state checks) alongside the final page, and code drops any drafted success criterion whose quoted text or claimed state neither the final page nor an assertion shows — reporting it as `unverifiableCriteria` in the JSON result. When every drafted criterion is unsupported, the draft falls back to one minimal criterion derived from an existing assertion (or none).
+- 5d60a8d: Authoring asserts an activated ARIA tab as `aria-selected=true`, with or without an action delta, instead of the unreplayable `[selected]` text check or a vacuous `count … min=0` (#756). ARIA snapshot state markers (`[selected]`, `[checked]`, `[expanded]`) are never serialized as literal text.
+
 ## 0.27.0
 
 ### Minor Changes
