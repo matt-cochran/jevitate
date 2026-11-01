@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assertEnvVarName,
@@ -21,12 +21,46 @@ import {
 import { loadPersonasFile, MultiRunArgsError, parsePersonaSpec, projectPersonaFor } from "./multi-run.js";
 
 let dir: string;
+const ORIGINAL_PATH = process.env.PATH;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "jev-persona-login-"));
 });
 afterEach(() => {
+  process.env.PATH = ORIGINAL_PATH;
   rmSync(dir, { recursive: true, force: true });
 });
+
+/**
+ * A fake `git` first on PATH that exits with `statuses[n]` on its (n+1)th call (the last status
+ * repeats). It simulates a transient spawn failure (a non-0/1 status) without touching a real repo.
+ */
+function useFakeGit(statuses: readonly number[]): void {
+  const bin = join(dir, "fake-git");
+  mkdirSync(bin, { recursive: true });
+  const calls = join(dir, "fake-git-calls");
+  const script = [
+    "#!/bin/sh",
+    `n=$(cat "${calls}" 2>/dev/null || echo 0)`,
+    "n=$((n + 1))",
+    `echo "$n" > "${calls}"`,
+    'case "$n" in',
+    ...statuses.map((status, i) => `  ${i + 1}) exit ${status} ;;`),
+    `  *) exit ${statuses[statuses.length - 1]} ;;`,
+    "esac",
+    "",
+  ].join("\n");
+  const git = join(bin, "git");
+  writeFileSync(git, script);
+  chmodSync(git, 0o755);
+  process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
+}
+
+/** A real git repository under the test's temp dir, so `check-ignore` answers for real. */
+function realRepo(): string {
+  const repo = join(dir, "repo");
+  execFileSync("git", ["init", "-q", repo]);
+  return repo;
+}
 
 const LOGIN = { url: "http://127.0.0.1:3000/login", userEnv: "APP_USER", passwordEnv: "APP_PASSWORD" };
 
@@ -175,15 +209,47 @@ describe("#427 saving a storage state", () => {
     expect(readFileSync(f, "utf8")).toBe('{"cookies":[1]}');
   });
 
-  it("refuses a repo's .jevitate/, and warns for a path in a repo that git does not ignore", () => {
-    const repo = join(dir, "repo");
+  it("refuses a repo's .jevitate/ as a save target", () => {
+    const repo = realRepo();
     mkdirSync(join(repo, ".jevitate"), { recursive: true });
-    execFileSync("git", ["init", "-q", repo]);
     expect(() => checkSaveTarget(join(repo, ".jevitate", "s.json"), "--save")).toThrow(/never holds storage states/);
+  });
+
+  it("warns for a path inside a repo that git does not ignore", () => {
+    const repo = realRepo();
     expect(checkSaveTarget(join(repo, "auth", "s.json"), "--save").warnings[0]).toMatch(/is not gitignored/);
+  });
+
+  it("does not warn for a path inside a repo that git ignores", () => {
+    const repo = realRepo();
     writeFileSync(join(repo, ".gitignore"), "auth/\n");
     expect(checkSaveTarget(join(repo, "auth", "s.json"), "--save").warnings).toEqual([]);
-    expect(checkSaveTarget(join(dir, "outside.json"), "--save").warnings).toEqual([]);
+  });
+
+  it("does not warn for a path outside any git repository", () => {
+    // #753: the run's temp root lives under /tmp, where a concurrent test can drop a stray `.git`
+    // that would make every /tmp path look "inside a repo". /var/tmp has no such ancestor, so this
+    // case stays deterministic under parallel load.
+    const away = mkdtempSync(join(existsSync("/var/tmp") ? "/var/tmp" : tmpdir(), "jev-persona-login-away-"));
+    try {
+      expect(checkSaveTarget(join(away, "outside.json"), "--save").warnings).toEqual([]);
+    } finally {
+      rmSync(away, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a transient git check-ignore failure once instead of warning", () => {
+    const repo = join(dir, "repo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    useFakeGit([128, 0]);
+    expect(checkSaveTarget(join(repo, "auth", "s.json"), "--save").warnings).toEqual([]);
+  });
+
+  it("warns 'could not be checked' when git check-ignore fails on both attempts", () => {
+    const repo = join(dir, "repo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    useFakeGit([128, 128]);
+    expect(checkSaveTarget(join(repo, "auth", "s.json"), "--save").warnings[0]).toMatch(/could not be checked against \.gitignore/);
   });
 });
 

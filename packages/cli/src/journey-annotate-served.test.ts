@@ -242,3 +242,130 @@ describe("jevitate journey annotate — served (#246)", () => {
   );
 });
 
+/** #755: a one-step read-only Journey landing on /settings (the final page's text is "Settings"). */
+function groundingJourney(id: string): Journey {
+  return {
+    metadata: {
+      id,
+      name: "Open settings",
+      promoted: false,
+      params: [],
+      createdAtIso: "2026-09-28T00:00:00.000Z",
+      endState: [{ kind: "page", assertion: { kind: "urlIncludes", text: "/settings" } }],
+    },
+    recording: {
+      version: "1",
+      site: origin,
+      pages: [
+        {
+          url: "/settings",
+          steps: [
+            { step: { kind: "navigate", url: "/settings", expect: { kind: "visible", target: { role: "heading", name: "Settings" } } } },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/** A generator that returns canned success criteria for journey.goal and records what the model was shown. */
+function cannedGoal(criteria: string[]): { gen: GenerationPort; seen: unknown[] } {
+  const fake = new FakeGenerationGateway({ "journey.goal": { goal: null, successCriteria: criteria } });
+  const seen: unknown[] = [];
+  return {
+    seen,
+    gen: {
+      generate: async (kind, input) => {
+        seen.push({ kind, input });
+        return fake.generate(kind, input);
+      },
+    },
+  };
+}
+
+/** Runs a grounded annotate for `id` and returns the CLI envelope, the draft and what journey.goal was shown. */
+async function groundedRun(journeysDir: string, id: string, criteria: string[]) {
+  await new FsJourneyStore(journeysDir).put(groundingJourney(id));
+  const { gen, seen } = cannedGoal(criteria);
+  const r = await cli(journeysDir, ["journey", "annotate", id, "--json"], gen);
+  if (r.exitCode !== 0) throw new Error(`annotate failed for ${id}: ${r.err || r.out}`);
+  const draft = JSON.parse(await readFile(annotationDraftPath(journeysDir, id), "utf8")) as { successCriteria?: string[] };
+  return { r, seen, draft, env: JSON.parse(r.out) as { data: { unverifiableCriteria: string[] } } };
+}
+
+describe("jevitate journey annotate — grounded goal/success drafts (#755)", () => {
+  it(
+    "shows the journey.goal model the Journey's existing assertions",
+    async () => {
+      const journeysDir = join(dir, "g1");
+      const { seen } = await groundedRun(journeysDir, "g1", ['The final page shows "Settings".']);
+      const goalInput = (seen.find((s) => (s as { kind: string }).kind === "journey.goal") as { input: { assertions: string[] } }).input;
+      expect(goalInput.assertions).toContain('the "Settings" heading is visible');
+    },
+    120_000,
+  );
+
+  it(
+    "keeps a success criterion grounded in the final page text",
+    async () => {
+      const journeysDir = join(dir, "g2");
+      const { draft } = await groundedRun(journeysDir, "g2", ['The final page shows "Settings".']);
+      expect(draft.successCriteria).toEqual(['The final page shows "Settings".']);
+    },
+    120_000,
+  );
+
+  it(
+    "shows the journey.goal model the Journey's end-state assertions",
+    async () => {
+      const journeysDir = join(dir, "g7");
+      const { seen } = await groundedRun(journeysDir, "g7", ['The final page shows "Settings".']);
+      const goalInput = (seen.find((s) => (s as { kind: string }).kind === "journey.goal") as { input: { assertions: string[] } }).input;
+      expect(goalInput.assertions).toContain('the URL contains "/settings"');
+    },
+    120_000,
+  );
+
+  it(
+    "keeps a success criterion grounded in an existing assertion",
+    async () => {
+      const journeysDir = join(dir, "g6");
+      const { draft } = await groundedRun(journeysDir, "g6", ['The "heading" is visible.']);
+      expect(draft.successCriteria).toEqual(['The "heading" is visible.']);
+    },
+    120_000,
+  );
+
+  it(
+    "drops a success criterion neither the final page nor the assertions support",
+    async () => {
+      const journeysDir = join(dir, "g3");
+      const unsupported = 'The page shows "ACTIVE" with no campaigns.';
+      const { draft } = await groundedRun(journeysDir, "g3", [unsupported]);
+      expect(draft.successCriteria ?? []).not.toContain(unsupported);
+    },
+    120_000,
+  );
+
+  it(
+    "reports an unsupported success criterion as unverifiable",
+    async () => {
+      const journeysDir = join(dir, "g4");
+      const unsupported = 'The page shows "ACTIVE" with no campaigns.';
+      const { env } = await groundedRun(journeysDir, "g4", [unsupported]);
+      expect(env.data.unverifiableCriteria).toContain(unsupported);
+    },
+    120_000,
+  );
+
+  it(
+    "falls back to a minimal criterion derived from an existing assertion",
+    async () => {
+      const journeysDir = join(dir, "g5");
+      const { draft } = await groundedRun(journeysDir, "g5", ['The page shows "ACTIVE" with no campaigns.']);
+      expect(draft.successCriteria).toEqual(['the URL contains "/settings"']);
+    },
+    120_000,
+  );
+});
+

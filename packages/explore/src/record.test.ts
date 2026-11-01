@@ -87,3 +87,17 @@ describe("RunRecorder — a plain value holding a registered secret (#219)", () 
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 });
+
+describe("RunRecorder — a live-page reload (#754)", () => {
+  it("records a `reload` step after a client-side route change, never a `navigate` to its pathname", () => {
+    const rec = new RunRecorder("example-site");
+    rec.navigate("/", 0);
+    rec.observed("/", 0);
+    rec.click({ role: "button", name: "Create" }, 10);
+    // Re-observe: the click client-side-routed to a fresh, server-generated id.
+    rec.observed("/item?id=1", 10);
+    rec.reload("/item?id=1", 20);
+    const kinds = rec.finish().pages.flatMap((p) => p.steps.map((s) => s.step.kind));
+    expect(kinds).toEqual(["navigate", "click", "reload"]);
+  });
+});

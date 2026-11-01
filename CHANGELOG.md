@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.28.0] – 2026-11-01
+
+0.28.0 makes recorded create-then-edit Journeys replay, keeps ARIA tab postconditions replayable,
+grounds `journey annotate` drafts in evidence, and removes two load-sensitive test flakes.
+
+### Added
+
+- **`reload` step kind (#754).** A Journey step `{ kind: "reload", expect, waitFor? }` re-loads the
+  live page (`page.reload()`), keeping its query. Goal runs now record their persistence re-check
+  and the model's reload op as `reload`, not a `navigate` to the query-free path, so a
+  server-generated id (`?id=<fresh>`) is never baked into the Recording and replay edits the record
+  it just created. The catalog contract is regenerated for the new step.
+
+### Fixed
+
+- **Replayable tab postconditions (#756).** Authoring asserts an activated ARIA tab as
+  `aria-selected=true`, with or without an action delta, instead of the unreplayable `[selected]`
+  text check or a vacuous `count … min=0`. ARIA snapshot state markers (`[selected]`, `[checked]`,
+  `[expanded]`) are never serialized as literal text.
+- **Grounded `journey annotate` drafts (#755).** The goal brief receives the Journey's existing
+  assertions, and code drops any drafted success criterion that neither the final page nor an
+  assertion supports, reporting it as `unverifiableCriteria`. If every criterion is unsupported,
+  the draft falls back to one criterion derived from an existing assertion.
+- **Load-sensitive test flakes (#753).** The persona-login `git check-ignore` check retries once,
+  and the #689 job-wait fixture polls a fixed number of times instead of racing wall time.
+
 ## [0.27.0] – 2026-10-30
 
 0.27.0 makes sessions workspace-aware, retries flaky first loads within a fixed bound, and lets
