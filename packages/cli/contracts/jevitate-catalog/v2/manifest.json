@@ -66,8 +66,8 @@
     },
     {
       "path": "schemas/journey.schema.json",
-      "bytes": 383676,
-      "sha256": "4b59e02b5138d592e6fbddba0e2f44543236511d550033adda915b9ac452ad0c"
+      "bytes": 409783,
+      "sha256": "583d900123f92d39487d193fabe3b752aaef26360ffb0ce8f4427785ad88e164"
     },
     {
       "path": "schemas/personas.schema.json",

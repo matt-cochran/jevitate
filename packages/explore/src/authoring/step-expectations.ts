@@ -20,9 +20,10 @@ import { expectedResultFromDelta } from "../replay-deltas.js";
  *    `secretVars`, or one that reads as a secret) claims no value: it would be model-visible;
  *  - a navigation postcondition (`urlIncludes`, set by the recorder) is kept as is.
  *
- * A click/type/select step left with nothing to claim gets the explicit "no claim" `count … min 0`
- * (always true; the lint #401 reads it as "no assertion here") — never `visible` of its own target,
- * which holds before and after the action and so proves nothing.
+ * A click on an ARIA tab proves its activation as `aria-selected=true` even without a delta
+ * (#756). Any other click/type/select step left with nothing to claim gets the explicit "no claim"
+ * `count … min 0` (always true; the lint #401 and strict review read it as "no assertion here") —
+ * never `visible` of its own target, which holds before and after the action and so proves nothing.
  *
  * #400: when the step has a delta, its blank `expectedResult` (RecordedStep, #246) is filled from
  * `expectedResultFromDelta` so the reviewer sees, in words, what the step is supposed to prove.
@@ -126,6 +127,11 @@ function withDerivedExpect(recorded: RecordedStep, secret: ReadonlySet<string>):
   if (step.expect.kind === "urlIncludes" && step.expect.text !== "") return step;
   const derived = step.kind === "fill" ? fillExpect(step, secret) : recorded.delta?.verdict === "relevant-change" ? fromDelta(recorded.delta.changes, step.target) : null;
   if (derived !== null) return { ...step, expect: derived };
+  // #756: no delta claim. An ARIA tab's activation is still provable from its role alone.
+  if (step.kind === "click") {
+    const tab = tabAssertion(step.target);
+    if (tab !== null) return { ...step, expect: tab };
+  }
   return isOwnTargetVisible(step) ? { ...step, expect: noClaim(step.target) } : step;
 }
 
@@ -159,11 +165,14 @@ function unquote(s: string): string {
   return t;
 }
 
+/** ARIA snapshot state notation (`[selected]`, `[checked]`, `[expanded]`): state, never literal text. */
+const ARIA_STATE_MARKER = /\[[a-z][a-z-]*(?:=[^\]]*)?\]/;
+
 /** Text worth asserting: present, bounded, no digits (a count, a time, an id is volatile), unredacted. */
 function usable(text: string | undefined): text is string {
   if (text === undefined) return false;
   const t = text.trim();
-  return t.length >= 2 && t.length <= 120 && !/\d/.test(t) && !t.includes(REDACTION_MASK) && !t.includes("…");
+  return t.length >= 2 && t.length <= 120 && !/\d/.test(t) && !ARIA_STATE_MARKER.test(t) && !t.includes(REDACTION_MASK) && !t.includes("…");
 }
 
 function sameName(a: string | undefined, b: string | undefined): boolean {
@@ -173,10 +182,33 @@ function sameName(a: string | undefined, b: string | undefined): boolean {
 /** The first change line (closest to the action first, as the delta lists them) that names an outcome. */
 function fromDelta(changes: readonly string[], own: TargetDescriptor): Assertion | null {
   for (const line of changes) {
+    const tab = selectedTabAssertion(line, own);
+    if (tab !== null) return tab;
     const a = changeAssertion(line, own);
     if (a !== null) return a;
   }
   return null;
+}
+
+/**
+ * An ARIA snapshot renders an active tab as `[selected]`. That marker is
+ * state, not user-visible text, so it must become an attribute assertion.
+ * The target stays the action's recorded locator (often a test id), while
+ * `display.role` covers descriptors whose role is metadata only.
+ */
+function selectedTabAssertion(line: string, own: TargetDescriptor): Assertion | null {
+  const role = own.role ?? own.display?.role;
+  if (role !== "tab" && !/^~ tab(?:\s|:)/.test(line)) return null;
+  const arrow = line.lastIndexOf(" → ");
+  if (arrow < 0 || !line.slice(arrow + 3).includes("[selected]")) return null;
+  return { kind: "attr", target: { ...own }, name: "aria-selected", value: "true" };
+}
+
+/** #756: a click on an ARIA tab proves its activation by `aria-selected`, role from either field. */
+function tabAssertion(own: TargetDescriptor): Assertion | null {
+  const role = own.role ?? own.display?.role;
+  if (role !== "tab") return null;
+  return { kind: "attr", target: { ...own }, name: "aria-selected", value: "true" };
 }
 
 function changeAssertion(line: string, own: TargetDescriptor): Assertion | null {

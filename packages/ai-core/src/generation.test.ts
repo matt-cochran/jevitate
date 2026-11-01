@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { toJSONSchema } from "zod/v4/core";
-import { FakeGenerationGateway, GEN_TASKS, type GenerationPort } from "./index.js";
+import { FakeGenerationGateway, GEN_TASKS, JOURNEY_GOAL_INSTRUCTIONS, type GenerationPort } from "./index.js";
 
 const g: GenerationPort = new FakeGenerationGateway();
 const input = { fieldLabel: "email", goal: "log in", visibleContext: "form", history: [] };
@@ -56,6 +56,26 @@ function objectNodes(node: unknown, path: string, out: ObjectNode[]): void {
     objectNodes(n.additionalProperties, `${path}.additionalProperties`, out);
   }
 }
+
+describe("#755 — the journey.goal brief is grounded in finalPage and the Journey's assertions", () => {
+  it("asks for success criteria grounded only in finalPage and the given assertions", () => {
+    expect(JOURNEY_GOAL_INSTRUCTIONS).toMatch(/finalPage[\s\S]*assertions|assertions[\s\S]*finalPage/i);
+  });
+
+  it("bumps the journey.goal prompt version", () => {
+    expect(GEN_TASKS["journey.goal"].promptVersion).toBe("2");
+  });
+
+  it("accepts the Journey's existing assertions in the journey.goal input", () => {
+    const parsed = GEN_TASKS["journey.goal"].input.parse({
+      name: "Open settings",
+      steps: ["1. navigate to /settings"],
+      assertions: ["the Settings heading is visible"],
+      finalPage: null,
+    });
+    expect(parsed.assertions).toEqual(["the Settings heading is visible"]);
+  });
+});
 
 /**
  * #460 — the converter `@ai-sdk/provider-utils` uses to turn a zod output schema into the JSON

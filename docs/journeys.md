@@ -841,9 +841,12 @@ key is refused when the file is read.
 | `targetedProofs` | no | `[{ "check", "mustFailWhen", "relax" }]`: declared targeted-proof plans for `journey verify --mutate` (#616) — a human-reviewed list of at most 8 earlier `step:<n>` page postconditions the target at `check` may relax while proving it fails under `mustFailWhen`. Every `relax` site must be paired with that mutation and itself proven sensitive to it (transitively); a plan naming an unknown site, step, target, resume, duplicate or more than 8 entries is refused at load. Part of the proof hash, so it needs re-approval. See [Proving assertions can fail](#proving-assertions-can-fail) |
 
 `recording` holds `version`, `site` (the origin it runs on), optional `intent`, and `pages[]`, each
-with `url` and `steps[]`. Every step is `{ "step": {…}, … }`: the action (`navigate`, `click`,
-`fill`, `select`, `press`, `upload`, `editText`, `waitFor`, `extract`, `forEach`, `assert`,
-`handback`) with its `expect` assertion, plus optional metadata:
+with `url` and `steps[]`. Every step is `{ "step": {…}, … }`: the action (`navigate`, `reload`,
+`click`, `fill`, `select`, `press`, `upload`, `editText`, `waitFor`, `extract`, `forEach`, `assert`,
+`handback`) with its `expect` assertion, plus optional metadata. A `reload` step names no URL: it
+reloads the page the replay is on, so a query value the app generated during this replay (for
+example `?campaignId=<new id>` after a create) is kept. Authoring records the persistence re-check
+and a model reload this way, never as a `navigate` to the recorded path.
 
 | Step field | Meaning |
 |---|---|
@@ -1099,8 +1102,10 @@ jevitate journey annotate checkout --approve                    # the human gate
 3. The model sees each step's value-free description, the page before and after it, and the
    Journey's goal (or its name and intent when there is no goal yet). It drafts the step's
    `objective` and `expectedResult` where they are missing. It then drafts `goal` and
-   `successCriteria` when those are missing. These are the versioned `journey.step` and
-   `journey.goal` generation tasks.
+   `successCriteria` when those are missing, from the final page and the checks the Journey
+   already makes. A drafted criterion whose quoted text or claimed state is on neither is dropped
+   and listed as unverifiable; when none survives, the draft falls back to one existing check.
+   These are the versioned `journey.step` and `journey.goal` generation tasks.
 4. The drafts go to a sidecar, `.jevitate/journeys/.drafts/<id>.annotations.json`, and never into
    the Journey. The command prints the diff that approving would apply.
 

@@ -41,7 +41,7 @@ export async function handleReload(ctx: RunContext, step: Step): Promise<Flow> {
   ctx.readOnly?.beginAction();
   const r = await act(cfg.actor, { op: "reload", control: null });
   if (r.ok) {
-    ctx.recorder.navigate(ctx.page.url(), at);
+    ctx.recorder.reload(ctx.page.url(), at);
     ctx.track.lastMutation = { at, before: snap.signature, seenBefore: new Set(ctx.seen), label: "reload", recordIndex: ctx.recorder.stepCount - 1, sawNewState: false };
     ctx.refusedSinceMutation = 0;
     ctx.scrollsSinceMutation = 0;

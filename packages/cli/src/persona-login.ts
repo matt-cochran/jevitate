@@ -797,14 +797,18 @@ export function checkSaveTarget(file: string, what: string): { readonly path: st
   if (root !== null) {
     const rel = relative(root, path);
     if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) {
-      let ignored: boolean | undefined;
-      try {
-        execFileSync("git", ["check-ignore", "-q", "--no-index", "--", rel], { cwd: root, stdio: "ignore" });
-        ignored = true;
-      } catch (err) {
-        const status = (err as { status?: number }).status;
-        ignored = status === 1 ? false : undefined;
-      }
+      // #753: under load a spawn can fail transiently (git killed, a null status) — retry once
+      // before warning "could not be checked". A real git failure (twice) still warns.
+      const checkIgnored = (): boolean | undefined => {
+        try {
+          execFileSync("git", ["check-ignore", "-q", "--no-index", "--", rel], { cwd: root, stdio: "ignore" });
+          return true;
+        } catch (err) {
+          return (err as { status?: number }).status === 1 ? false : undefined;
+        }
+      };
+      let ignored = checkIgnored();
+      if (ignored === undefined) ignored = checkIgnored();
       if (ignored !== true) {
         warnings.push(
           `${what} ${path} is inside the git repository ${root} and ${ignored === false ? "is not gitignored" : "could not be checked against .gitignore"}: it holds live session tokens — add it to .gitignore or save it outside the repo`,
