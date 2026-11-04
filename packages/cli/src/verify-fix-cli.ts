@@ -3,7 +3,7 @@ import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js"
 import { Command } from "commander";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
-import { runVerifyFix, VerifyFixInputError } from "./verify-fix-api.js";
+import { runVerifyFix, verifyFixArtifactPath, VerifyFixInputError } from "./verify-fix-api.js";
 import { LedgerError, ledgerEntryFor } from "./ledger-api.js";
 import { TargetConfigError, loadTargetsFile } from "./target-config.js";
 import { withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
@@ -13,10 +13,8 @@ import { positiveIntArg } from "./cli-args.js";
 import { formatVerifyFixHuman } from "./cli-output.js";
 import { DEFAULT_ADMISSION_TIMEOUT_MS, type EmulationSpec } from "@jevitate/playwright";
 import { clock } from "@jevitate/domain";
-import { dirname as dirnameOf, join as joinPath, resolve as resolveFile } from "node:path";
 import { artifactStamp } from "./mission-journal.js";
-import { registerTerminalResult, type TerminalResultDeps } from "./terminal-result.js";
-import { redactSecretValues } from "./journey-api.js";
+import { redactSensitiveText, registerTerminalResult, type TerminalResultDeps } from "./terminal-result.js";
 import {
   type CliDeps,
   type BrowserLaunchFlags,
@@ -153,6 +151,9 @@ export function registerVerifyFixCommands(
         emitVerify(fail("E_VERIFY_FIX_ARGS", err.message));
         return;
       }
+      const secrets = [...o.secret, ...Object.values(o.param).filter((v) => v !== "")];
+      // What this run's own error messages mask: `secrets`, plus what the run learns as it goes.
+      const known = [...secrets];
       let verifyFixEmulation: EmulationSpec | undefined;
       // #245: demo mode, resolved (a headed run without a display refused) before any browser opens.
       let browser: ReturnType<typeof browserRunFromFlags>;
@@ -167,7 +168,7 @@ export function registerVerifyFixCommands(
           throw new Error(`two different fingerprints given (${positional} and --fingerprint ${o.fingerprint})`);
         }
       } catch (err) {
-        emitVerify(fail("E_VERIFY_FIX_ARGS", err instanceof Error ? err.message : String(err)));
+        emitVerify(fail("E_VERIFY_FIX_ARGS", redactSensitiveText(err instanceof Error ? err.message : String(err), known)));
         return;
       }
       // #195: without --result, the fingerprint's ledger entry is the repro material (the run's output may be long gone).
@@ -176,17 +177,16 @@ export function registerVerifyFixCommands(
         resultPath = o.result ?? ledgerEntryFor(fingerprint, o.regressionsDir);
       } catch (err) {
         if (err instanceof LedgerError) {
-          emitVerify(fail(err.code, err.message));
+          emitVerify(fail(err.code, redactSensitiveText(err.message, known)));
           return;
         }
-        emitVerify(fail("E_VERIFY_FIX", String(err instanceof Error ? err.message : err)));
+        emitVerify(fail("E_VERIFY_FIX", redactSensitiveText(String(err instanceof Error ? err.message : err), known)));
         return;
       }
-      const secrets = [...o.secret, ...Object.values(o.param).filter((v) => v !== "")];
       // #767: one stamped path, shared by the report writer and the terminal layer, so a signal or
       // parent death overwrites the same artifact instead of leaving two.
       const stamp = artifactStamp(clock.nowIso());
-      const vfArtifact = joinPath(dirnameOf(resolveFile(resultPath)), `verify-fix-${stamp}.json`);
+      const vfArtifact = verifyFixArtifactPath(resultPath, stamp);
       const handle = registerTerminalResult(
         {
           command: "verify-fix",
@@ -207,6 +207,10 @@ export function registerVerifyFixCommands(
           resultArtifact: true,
           resultStamp: stamp,
           onReplay: (replay) => handle.progress({ replay }),
+          onSecrets: (values) => {
+            known.push(...values);
+            handle.addSecrets(values);
+          },
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
@@ -228,10 +232,10 @@ export function registerVerifyFixCommands(
         handle.complete();
       } catch (err) {
         if (err instanceof VerifyFixInputError || err instanceof TargetConfigError || err instanceof LedgerError) {
-          emitVerify(fail(err.code, redactSecretValues(err.message, secrets)));
+          emitVerify(fail(err.code, redactSensitiveText(err.message, known)));
           handle.complete();
         } else if (err instanceof UnauthorizedExploreTargetError) {
-          emitVerify(fail("E_UNAUTHORIZED_EXPLORE_TARGET", redactSecretValues(err.message, secrets)));
+          emitVerify(fail("E_UNAUTHORIZED_EXPLORE_TARGET", redactSensitiveText(err.message, known)));
           handle.complete();
         } else {
           // #767: an internal error is the terminal layer's: it redacts, writes one artifact, emits

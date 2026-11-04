@@ -3,7 +3,7 @@ import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { __resetKillSwitchForTests, armMissionKillSwitch, installMissionKillSwitch, setKillSummary, setKillSwitchOutput, type KillSwitchDeps } from "./kill-signal.js";
 import { EventEmitter } from "node:events";
 import { runAsMcpInvocation } from "./approval-provenance.js";
-import { __resetTerminalResultForTests, installBrokenPipePolicy, registerTerminalResult, reportCommandRejection, type TerminalResultDeps, type TerminalResultRegistration } from "./terminal-result.js";
+import { __resetTerminalResultForTests, installBrokenPipePolicy, redactSensitivePath, registerTerminalResult, reportCommandRejection, type TerminalResultDeps, type TerminalResultRegistration } from "./terminal-result.js";
 
 const SECRET = "hunter2-very-secret-value";
 
@@ -822,5 +822,255 @@ describe("inside an MCP tool call", () => {
       return () => handle.fail(new Error("from the shared process"));
     });
     await expect(runAsMcpInvocation(async () => failure())).rejects.toThrow("from the shared process");
+  });
+});
+
+describe("the text of a thrown error", () => {
+  /** The stdout envelope of a command whose run threw `message`. */
+  function reportedFor(message: string): string {
+    const p = fakeProcess();
+    p.register({ artifactPath: "/tmp/run.json" }).fail(new Error(message));
+    return p.stdout.join("");
+  }
+
+  it("loses a token in a URL on stdout", () => {
+    expect(reportedFor("goto https://app.test/reset?token=shortTok1 failed")).not.toContain("shortTok1");
+  });
+
+  it("loses a session in a URL on stdout", () => {
+    expect(reportedFor("goto https://app.test/a?x=1&session=sess77 failed")).not.toContain("sess77");
+  });
+
+  it("loses a code in a URL on stdout", () => {
+    expect(reportedFor("goto https://app.test/cb?code=4242 failed")).not.toContain("4242");
+  });
+
+  it("loses a token in a URL carried inside another URL", () => {
+    expect(reportedFor("goto https://app.test/login?next=https%3A%2F%2Fapp.test%2Fcb%3Ftoken%3DshortTok1 failed")).not.toContain("shortTok1");
+  });
+
+  it("loses a token named outside any URL", () => {
+    expect(reportedFor("refused token=shortTok1 by the server")).not.toContain("shortTok1");
+  });
+
+  it("loses a one-time code named outside any URL", () => {
+    expect(reportedFor("refused code=4242 by the server")).not.toContain("4242");
+  });
+
+  it("loses the password in a URL's user info", () => {
+    expect(reportedFor("goto https://admin:Winter2026!@app.test/ failed")).not.toContain("Winter2026!");
+  });
+
+  it("loses a Cookie header's value", () => {
+    expect(reportedFor("request\nCookie: sid=cookie-value-1; other=2\nAccept: */*")).not.toContain("cookie-value-1");
+  });
+
+  it("loses a later pair of a Cookie header", () => {
+    expect(reportedFor("request\nCookie: sid=cookie-value-1; other=second-pair\nAccept: */*")).not.toContain("second-pair");
+  });
+
+  it("loses an Authorization header's value", () => {
+    expect(reportedFor("request\nAuthorization: Basic dXNlcjpwYXNz\nAccept: */*")).not.toContain("dXNlcjpwYXNz");
+  });
+
+  it("loses a password in a JSON body", () => {
+    expect(reportedFor('posted {"user":"a","password":"Winter2026!"}')).not.toContain("Winter2026!");
+  });
+
+  it("loses a password with a space in a JSON body", () => {
+    expect(reportedFor('posted {"password":"Winter 2026!"}')).not.toContain("2026!");
+  });
+
+  it("loses a password in JSON quoted inside a string", () => {
+    expect(reportedFor('posted "{\\"password\\":\\"Winter2026!\\"}"')).not.toContain("Winter2026!");
+  });
+
+  it("loses a password in a printed object", () => {
+    expect(reportedFor("posted { user: 'a', password: 'Winter2026!' }")).not.toContain("Winter2026!");
+  });
+
+  it("loses an unquoted password", () => {
+    expect(reportedFor("login with password: Winter2026! failed")).not.toContain("Winter2026!");
+  });
+
+  it("keeps a query parameter that is no credential", () => {
+    expect(reportedFor("goto https://app.test/list?page=7 failed")).toContain("page=7");
+  });
+
+  it("keeps a JSON field that is no credential", () => {
+    expect(reportedFor('posted {"user":"alice"}')).toContain("alice");
+  });
+
+  it("keeps an exit status named code", () => {
+    expect(reportedFor("the hook ended with code=3")).toContain("code=3");
+  });
+
+  it("keeps the text of an error constant named code", () => {
+    expect(reportedFor('got {"code":"E_NOT_FOUND"}')).toContain("E_NOT_FOUND");
+  });
+
+  it("loses a URL token from the artifact too", () => {
+    const p = fakeProcess();
+    p.register({ artifactPath: "/tmp/run.json" }).fail(new Error("goto https://app.test/?token=shortTok1"));
+    expect(JSON.stringify(p.results[0]?.result)).not.toContain("shortTok1");
+  });
+
+  it("loses a URL token from the error's cause", () => {
+    const p = fakeProcess();
+    p.register({ artifactPath: "/tmp/run.json" }).fail(new Error("outer", { cause: new Error("goto https://app.test/?token=shortTok1") }));
+    expect(JSON.stringify(p.results[0]?.result)).not.toContain("shortTok1");
+  });
+
+  it("loses a URL token from the human error line", () => {
+    const p = fakeProcess();
+    p.register({ json: false }).fail(new Error("goto https://app.test/?token=shortTok1"));
+    expect(p.stderr.join("")).not.toContain("shortTok1");
+  });
+
+  it("loses a URL token from the error rethrown inside an MCP tool call", () => {
+    const p = fakeProcess();
+    p.shareProcess();
+    const handle = p.register();
+    expect(() => handle.fail(new Error("goto https://app.test/?token=shortTok1"))).toThrow(/token=«redacted»/);
+  });
+});
+
+describe("a registered secret holding a credential shape", () => {
+  const SHAPED = `pass-sk-${"a".repeat(24)}`;
+
+  it("leaves no prefix on stdout", () => {
+    const p = fakeProcess();
+    p.register({ secrets: [SHAPED] }).fail(new Error(`login failed with ${SHAPED}`));
+    expect(p.stdout.join("")).not.toContain("pass-");
+  });
+
+  it("leaves no prefix in the artifact", () => {
+    const p = fakeProcess();
+    p.register({ secrets: [SHAPED], artifactPath: "/tmp/run.json" }).fail(new Error(`login failed with ${SHAPED}`));
+    expect(JSON.stringify(p.results[0]?.result)).not.toContain("pass-");
+  });
+
+  it("leaves no prefix on a progress line", () => {
+    const p = fakeProcess();
+    p.register({ secrets: [SHAPED] }).progress({ mutation: SHAPED });
+    expect(p.stderr.join("")).not.toContain("pass-");
+  });
+});
+
+describe("what a command reports as progress", () => {
+  it("loses a URL token on the progress line", () => {
+    const p = fakeProcess();
+    p.register().progress({ phase: "goto https://app.test/?token=shortTok1" });
+    expect(p.stderr.join("")).not.toContain("shortTok1");
+  });
+
+  it("loses a URL token in the diagnostic", () => {
+    const p = fakeProcess();
+    p.register({ progress: { phase: "goto https://app.test/?token=shortTok1" } }).fail(new Error("boom"));
+    expect(p.stdout.join("")).not.toContain("shortTok1");
+  });
+
+  it("loses the value of a detail field named for a credential", () => {
+    const p = fakeProcess();
+    p.register({ progress: { detail: { password: "plainword" } } }).fail(new Error("boom"));
+    expect(p.stdout.join("")).not.toContain("plainword");
+  });
+});
+
+describe("a secret added during the run", () => {
+  it("is masked from a later signal's envelope", () => {
+    const p = fakeProcess();
+    const handle = p.register({ progress: { phase: "start" } });
+    handle.addSecrets(["learned-token-value"]);
+    handle.progress({ phase: "using learned-token-value" });
+    p.signal("SIGTERM");
+    expect(p.stdout.join("")).not.toContain("learned-token-value");
+  });
+});
+
+describe("the path of the artifact", () => {
+  it("keeps a folder whose name equals a short registered value", () => {
+    const p = fakeProcess();
+    p.register({ secrets: ["logs"], artifactPath: "/repo/.jevitate/logs/run.json" }).fail(new Error("boom"));
+    expect(p.envelopes()[0]?.data["resultPath"]).toBe("/repo/.jevitate/logs/run.result.json");
+  });
+
+  it("keeps a file name shaped like a credential", () => {
+    const name = "a".repeat(40);
+    expect(redactSensitivePath(`/logs/${name}.webm`, [SECRET])).toBe(`/logs/${name}.webm`);
+  });
+
+  it("masks a real secret", () => {
+    expect(redactSensitivePath(`/logs/${SECRET}/run.json`, [SECRET])).toBe("/logs/«redacted»/run.json");
+  });
+});
+
+describe("an uncaught error after the command completed", () => {
+  it("prints its registered secret masked", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    p.throwFatal(new Error(`teardown failed with ${SECRET}`));
+    expect(p.stderr.join("")).not.toContain(SECRET);
+  });
+
+  it("prints a URL token in its stack masked", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    p.throwFatal(new Error("teardown of https://app.test/?token=shortTok1"));
+    expect(p.stderr.join("")).not.toContain("shortTok1");
+  });
+
+  it("masks a secret added during the run", () => {
+    const p = fakeProcess();
+    const handle = p.register();
+    handle.addSecrets(["learned-token-value"]);
+    handle.complete();
+    p.throwFatal(new Error("teardown failed with learned-token-value"));
+    expect(p.stderr.join("")).not.toContain("learned-token-value");
+  });
+
+  it("still names the error", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    p.throwFatal(new Error("teardown failed"));
+    expect(p.stderr.join("")).toContain("teardown failed");
+  });
+
+  it("keeps the exit code the command set", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    process.exitCode = 4;
+    p.throwFatal(new Error("teardown failed"));
+    expect(p.events.at(-1)).toBe("exit 4");
+  });
+
+  it("keeps an exit code of zero the command set", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    process.exitCode = 0;
+    p.throwFatal(new Error("teardown failed"));
+    expect(p.events.at(-1)).toBe("exit 0");
+  });
+
+  it("exits inconclusive when the command set no code", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    p.throwFatal(new Error("teardown failed"));
+    expect(p.events.at(-1)).toBe("exit 2");
+  });
+
+  it("prints no second envelope", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    p.throwFatal(new Error("teardown failed"));
+    expect(p.stdout).toEqual([]);
+  });
+
+  it("is the next command's own when one has registered since", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    p.register();
+    p.throwFatal(new Error("uncaught"));
+    expect(p.envelopes()[0]?.error.code).toBe("E_TERMINAL_INTERNAL");
   });
 });

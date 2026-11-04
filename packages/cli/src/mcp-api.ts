@@ -5,7 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } fr
 import { ALLOWED_TOOLS, FORBIDDEN_TOOLS, findCapabilities, type AiGenerateTextArgs, type AiGenerateTextResult } from "@jevitate/mcp-facade";
 import { MissionTargetRegistry, FsMissionQueueStore } from "@jevitate/missions";
 import { FsInboxStore } from "@jevitate/inbox";
-import { envCredentialStore, type CredentialStore, type GenerationPort, type SetupRequiredResult } from "@jevitate/ai-core";
+import { ALL_CREDENTIAL_KEYS, envCredentialStore, type CredentialStore, type GenerationPort, type SetupRequiredResult } from "@jevitate/ai-core";
 import type { JudgmentPort, UsageTracker } from "@jevitate/ai-core";
 import type { ChangeScope, SelfHealer } from "@jevitate/runtime";
 import type { EmulationSpec } from "@jevitate/playwright";
@@ -263,6 +263,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         // #767: the tool's report is persisted too (the terminal layer does nothing inside an MCP
         // call, by design) — the returned `resultPath` names it.
         resultArtifact: true,
+        // Masked from the report and its artifact, as the CLI masks `--secret`: a tool call has no such
+        // argument, and runVerifyFix adds what it resolves itself (invariant auth tokens, fixture secrets).
+        secrets: ALL_CREDENTIAL_KEYS.flatMap((key) => credentialStore.read(key) ?? []),
         ...(a.storageState === undefined ? {} : { storageState: a.storageState }),
         ...(a.browser === undefined ? {} : { browser: a.browser }),
         ...(a.replays === undefined ? {} : { replays: a.replays }),

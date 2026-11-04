@@ -1,7 +1,7 @@
 import { mkdirSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { Command } from "commander";
-import { redactCredentialShapes } from "@jevitate/ai-core";
+import { isWeakSecret, redactCredentialShapes, redactText, redactUrl, REDACTION_MASK, SENSITIVE_URL_PARAMS } from "@jevitate/ai-core";
 import { clock, MISSION_RESULT_SCHEMA_VERSION, type MissionOutcome, type TimerHandle } from "@jevitate/domain";
 import { terminateOwnBrowsersSync } from "@jevitate/playwright";
 import { inMcpInvocation } from "./approval-provenance.js";
@@ -9,7 +9,6 @@ import { emitCommandResult } from "./cli-shared.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { fail, type JsonEnvelope } from "./envelope.js";
 import { EXIT_CODES, exitCodeForOutcome } from "./exit-codes.js";
-import { redactSecretValues } from "./journey-api.js";
 import { installMissionKillSwitch, PARENT_GONE_HINT, setKillTerminalReporter, type KillCause, type KillSignal } from "./kill-signal.js";
 import { resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { currentRunMetadata, type RunMetadata } from "./run-metadata.js";
@@ -29,7 +28,9 @@ import { currentRunMetadata, type RunMetadata } from "./run-metadata.js";
  *  | uncaught error | E_TERMINAL_INTERNAL    | 2 (crashed; an unhandled rejection arrives this way)  |
  *  | process exit   | E_TERMINAL_UNSETTLED   | 2 (a `process.exit` or a drained event loop, no result) |
  *
- * Exactly once: the first trigger wins and every later one is a no-op.
+ * Exactly once: the first trigger wins and every later one is a no-op. An uncaught error after
+ * `complete()` is no trigger, since the result is already out: one redacted stderr report, then an
+ * exit that keeps the code the command set.
  *
  * What cannot be handled in process (SIGKILL, a caller's limit that kills the whole group) leaves
  * only what was already printed, so each `progress()` also prints one short redacted line to stderr.
@@ -104,7 +105,7 @@ export interface TerminalResultHandle {
    * never throws.
    */
   progress(update: TerminalProgress): void;
-  /** Adds secrets learned during the run (a resolved auth token). Synchronous; never throws. */
+  /** Adds secrets learned during the run (a resolved auth token), so a later trigger masks them too. Synchronous; never throws. */
   addSecrets(values: readonly string[]): void;
   /**
    * An internal error: reports it, then exits. A no-op once the command has settled. Inside an MCP
@@ -217,6 +218,8 @@ let terminated = false;
 const completedSecrets: string[] = [];
 let completedAny = false;
 let removeReporter: (() => void) | undefined;
+/** The listener for an uncaught error after the last command completed. */
+let removeLateReporter: (() => void) | undefined;
 
 /** What the kill switch calls on a signal; it does the teardown and the exit itself. */
 function reportKill({ cause, exitCode }: { cause: KillCause; exitCode: number }): void {
@@ -235,14 +238,99 @@ function longestFirst(secrets: readonly string[]): string[] {
   return [...new Set(secrets)].filter((s) => typeof s === "string").sort((a, b) => b.length - a.length);
 }
 
-/** Every string in `value`, object keys included, with each secret masked. */
-function scrub(value: unknown, secrets: readonly string[]): unknown {
-  if (typeof value === "string") return redactSecretValues(value, secrets);
-  if (Array.isArray(value)) return value.map((v) => scrub(v, secrets));
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [redactSecretValues(k, secrets), scrub(v, secrets)]));
-  }
-  return value;
+/** The name of a value that is itself a credential. `code` and `key` are too common as plain field names to be here. */
+const CREDENTIAL_KEY = /^(?:sid|session|otp|jwt)$|(?:pass(?:word|wd|phrase|code)|pwd|secret|token|apikey|authorization|cookie|sessionid|csrf|xsrf)$/;
+
+/** Whether a field, header or parameter of this name holds a credential, however it is cased or separated. */
+function isCredentialKey(name: string): boolean {
+  return CREDENTIAL_KEY.test(name.toLowerCase().replace(/[-_.]/g, ""));
+}
+
+/** `key: "value"`, quoted or not, including JSON inside a string (`\\"password\\":\\"x\\"`): the value runs to its own closing quote. */
+const QUOTED_FIELD = /(?<![\w-])(\\*["']?)([A-Za-z][\w-]*)\1\s*:\s*(\\*)(["'])((?:(?!\3\4)(?:\\.|[^\n]))*)\3\4/g;
+const NUMERIC_FIELD = /(?<![\w-])(\\*["'])([A-Za-z][\w-]*)\1\s*:\s*\d+/g;
+/** `name=value` outside a URL's own query, where `redactUrl` stops: its separators, plus a quoted value. */
+const ASSIGNMENT = /(?<![\w.%-])([A-Za-z][\w.-]*)=("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^&;#\s"'<>]*)/g;
+/** A header holds its credential to the end of the line (`Cookie: a=1; b=2`). A quoted value is QUOTED_FIELD's. */
+const CREDENTIAL_HEADER = /(?<![\w-])((?:set-)?cookie|(?:proxy-)?authorization|x-api-key|x-auth-token|x-csrf-token)\s*:\s*(?!\\*["'])[^\r\n]*/gi;
+const PASSWORD_FIELD = /(?<![\w-])(pass(?:word|wd|phrase|code)|pwd|secret|api[-_ ]?key)\s*:\s*(?!\\*["'«])\S+/gi;
+const BEARER = /\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+const URL_USERINFO = /(\/\/)[^\s/@:"'<>]+:[^\s/@"'<>]*@/g;
+/** A URL carried inside another URL's parameter (`?next=https%3A%2F%2Fapp%3Ftoken%3Dabc`). */
+const ENCODED_PARAM = /(%3F|%26|%23|%3B)([\w.-]+)%3D((?:(?!%26|%23|%3B)[^&;#\s"'<>])*)/gi;
+/** A status or exit code, or a named constant: `code=` that is not a one-time code. */
+const PLAIN_CODE_VALUE = /^(?:\d{1,3}|[A-Z][A-Z0-9_]*)$/;
+
+function isCredentialParam(name: string, value: string): boolean {
+  const lower = name.toLowerCase();
+  if (lower === "code" && PLAIN_CODE_VALUE.test(value)) return false;
+  return SENSITIVE_URL_PARAMS.has(lower) || isCredentialKey(name);
+}
+
+/** What `redactUrl` does not reach: named credentials outside a URL query, and in headers, bodies and URL userinfo. */
+function redactCredentialContext(text: string): string {
+  return text
+    .replace(QUOTED_FIELD, (whole: string, q: string, name: string, vq: string, quote: string) =>
+      isCredentialKey(name) ? `${q}${name}${q}: ${vq}${quote}${REDACTION_MASK}${vq}${quote}` : whole,
+    )
+    .replace(NUMERIC_FIELD, (whole: string, q: string, name: string) => (isCredentialKey(name) ? `${q}${name}${q}: ${REDACTION_MASK}` : whole))
+    .replace(ASSIGNMENT, (whole: string, name: string, value: string) => (value !== "" && value !== REDACTION_MASK && isCredentialParam(name, value) ? `${name}=${REDACTION_MASK}` : whole))
+    .replace(CREDENTIAL_HEADER, (_whole: string, name: string) => `${name}: ${REDACTION_MASK}`)
+    .replace(PASSWORD_FIELD, (_whole: string, name: string) => `${name}: ${REDACTION_MASK}`)
+    .replace(BEARER, (_whole: string, word: string) => `${word} ${REDACTION_MASK}`)
+    .replace(URL_USERINFO, (_whole: string, slashes: string) => `${slashes}${REDACTION_MASK}@`)
+    .replace(ENCODED_PARAM, (whole: string, sep: string, name: string, value: string) => (value !== "" && isCredentialParam(name, value) ? `${sep}${name}%3D${REDACTION_MASK}` : whole));
+}
+
+/**
+ * The one rule for text leaving a command: registered secrets first and whole, so no part of one is
+ * left for a later rule to half-mask, then URL parameters, named credentials and credential shapes.
+ */
+export function redactSensitiveText(text: string, secrets: readonly string[]): string {
+  return redactCredentialShapes(redactCredentialContext(redactUrl(redactText(text, longestFirst(secrets)))));
+}
+
+/**
+ * A path this process wrote must still open: only a real secret is masked, never a shape (a video's
+ * file name is 32 hex digits) and never a short value (`--param dir=logs` is not `.jevitate/logs`).
+ */
+export function redactSensitivePath(path: string, secrets: readonly string[]): string {
+  return redactText(path, longestFirst(secrets).filter((s) => !isWeakSecret(s)));
+}
+
+/** How a field keeps its value: `verbatim` (no secret can be there), or `path` (see `redactSensitivePath`). */
+export type RedactionFieldRule = (key: string) => "verbatim" | "path" | undefined;
+
+/**
+ * Every string in `value`, object keys included, through `redactSensitiveText`. A field named for a
+ * credential loses its whole value, whatever it looks like. `rule` exempts a caller's known fields.
+ */
+export function redactSensitiveValue(value: unknown, secrets: readonly string[], rule: RedactionFieldRule = () => undefined): unknown {
+  const walk = (v: unknown, field: "verbatim" | "path" | "credential" | undefined): unknown => {
+    if (typeof v === "string") {
+      if (field === "verbatim") return v;
+      if (field === "path") return redactSensitivePath(v, secrets);
+      return field === "credential" && v !== "" ? REDACTION_MASK : redactSensitiveText(v, secrets);
+    }
+    if (Array.isArray(v)) return v.map((item) => walk(item, field));
+    if (v !== null && typeof v === "object") {
+      return Object.fromEntries(
+        Object.entries(v).map(([k, item]) => [redactSensitiveText(k, secrets), walk(item, rule(k) ?? (field === "credential" || isCredentialKey(k) ? "credential" : undefined))]),
+      );
+    }
+    return v;
+  };
+  return walk(value, undefined);
+}
+
+/** `err` with its text redacted: the same object and class, so a caller's `instanceof` still decides. */
+export function redactThrown(err: unknown, secrets: readonly string[], depth = 0): unknown {
+  if (typeof err === "string") return redactSensitiveText(err, secrets);
+  if (!(err instanceof Error)) return err;
+  err.message = redactSensitiveText(err.message, secrets);
+  if (err.stack !== undefined) err.stack = redactSensitiveText(err.stack, secrets);
+  if (depth < MAX_CAUSE_DEPTH && err.cause !== undefined) err.cause = redactThrown(err.cause, secrets, depth + 1);
+  return err;
 }
 
 function printable(value: unknown): string {
@@ -256,10 +344,10 @@ function printable(value: unknown): string {
 
 /**
  * A thrown value as text. Only its text is carried: an error's own properties can hold anything. A
- * thrown error may also hold a credential nobody registered, so its text loses credential shapes too.
+ * thrown error may also hold a credential nobody registered, so its text gets the whole rule.
  */
-function describeError(err: unknown, depth = 0): Record<string, unknown> {
-  const text = (s: string): string => redactCredentialShapes(s);
+function describeError(err: unknown, secrets: readonly string[], depth = 0): Record<string, unknown> {
+  const text = (s: string): string => redactSensitiveText(s, secrets);
   if (!(err instanceof Error)) return { message: text(printable(err)) };
   const code = (err as NodeJS.ErrnoException).code;
   return {
@@ -267,7 +355,7 @@ function describeError(err: unknown, depth = 0): Record<string, unknown> {
     message: text(err.message),
     ...(err.stack === undefined ? {} : { stack: text(err.stack) }),
     ...(typeof code === "string" ? { code: text(code) } : {}),
-    ...(err.cause === undefined || depth >= MAX_CAUSE_DEPTH ? {} : { cause: describeError(err.cause, depth + 1) }),
+    ...(err.cause === undefined || depth >= MAX_CAUSE_DEPTH ? {} : { cause: describeError(err.cause, secrets, depth + 1) }),
   };
 }
 
@@ -308,15 +396,15 @@ const ERROR_CODES = {
 /** The redacted diagnostic. Throws only when caller-supplied values cannot be read or serialized. */
 function buildDiagnostic(command: ActiveCommand, trigger: Trigger, exitCode: number, secrets: readonly string[]): { message: string; diagnostic: Record<string, unknown> } {
   const { progress, registration, startedMs } = command;
-  const error = trigger.kind === "internal-error" ? describeError(trigger.error) : undefined;
+  const error = trigger.kind === "internal-error" ? describeError(trigger.error, secrets) : undefined;
   const where = progressPhrase(progress);
   const reason = `${registration.command}: ${headline(trigger, registration)}${where === undefined ? " before any progress was reported" : ` at ${where}`}`;
   const detail = error === undefined ? reason : `${reason}: ${printable(error["message"])}`;
   return {
-    message: redactSecretValues(detail, secrets),
+    message: redactSensitiveText(detail, secrets),
     // A JSON round trip first: a cycle or a BigInt throws here, inside the caller's guard, and a
     // `toJSON` runs here rather than while the artifact is being written.
-    diagnostic: scrub(
+    diagnostic: redactSensitiveValue(
       JSON.parse(
         JSON.stringify({
           command: registration.command,
@@ -384,18 +472,18 @@ function report(command: ActiveCommand, trigger: Trigger): number {
           defectOutcome: { status: "none", byKind: {} },
           hangs: [],
           recordingPaths: [],
-          resultPath: redactSecretValues(resultPathFor(registration.artifactPath), secrets),
+          resultPath: redactSensitivePath(resultPathFor(registration.artifactPath), secrets),
           ...(engine === undefined ? {} : { engine }),
           diagnostic: built.diagnostic,
         },
         command.meta,
       );
     } catch (err) {
-      artifactError = redactSecretValues(redactCredentialShapes(printable(err instanceof Error ? err.message : err)), secrets);
+      artifactError = redactSensitiveText(printable(err instanceof Error ? err.message : err), secrets);
     }
   }
 
-  const shownPath = resultPath === undefined ? undefined : redactSecretValues(resultPath, secrets);
+  const shownPath = resultPath === undefined ? undefined : redactSensitivePath(resultPath, secrets);
   const envelope: JsonEnvelope<Record<string, unknown>> = {
     ...fail(ERROR_CODES[trigger.kind], shownPath === undefined ? built.message : `${built.message} (result: ${shownPath})`),
     data: {
@@ -448,7 +536,7 @@ function progressLine(command: ActiveCommand): string {
   const { progress, registration, secrets, startedMs } = command;
   const elapsedS = Math.round((clock.monotonicMs() - startedMs) / 1_000);
   const raw = `progress ${registration.command}: ${progressPhrase(progress) ?? "running"} (${elapsedS}s)`;
-  const redacted = redactSecretValues(redactCredentialShapes(raw), longestFirst(secrets));
+  const redacted = redactSensitiveText(raw, secrets);
   return `${redacted.replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, MAX_PROGRESS_LINE)}\n`;
 }
 
@@ -471,11 +559,30 @@ function sharedProcessHandle(registration: TerminalResultRegistration): Terminal
       secrets.push(...values);
     },
     fail: (err) => {
-      const message = printable(describeError(err)["message"]);
-      throw new Error(redactSecretValues(message, longestFirst(secrets)));
+      throw new Error(printable(describeError(err, secrets)["message"]));
     },
     complete: () => {},
   };
+}
+
+/**
+ * An uncaught error once every command has completed (a late teardown failure, say). Node's own
+ * printer would show the raw stack and replace the code with 1, so this reports it redacted and ends
+ * the process as the command said it should. Listening means Node no longer ends it, so this must.
+ */
+function reportLateError(err: unknown, deps: TerminalResultDeps): void {
+  try {
+    const raw = err instanceof Error ? (err.stack ?? String(err)) : printable(err);
+    deps.writeStderr(`${redactSensitiveText(raw, completedSecrets)}\n`);
+  } catch {
+    // Best-effort: stderr may already be gone. The exit below still stands.
+  }
+  try {
+    deps.terminateBrowsers();
+  } catch {
+    // Best-effort, as in terminateAndExit.
+  }
+  deps.exit(Number(process.exitCode ?? EXIT_CODES.inconclusive));
 }
 
 /**
@@ -490,6 +597,8 @@ export function registerTerminalResult(registration: TerminalResultRegistration,
     throw new RangeError(`inactivityMs must be a positive integer of at most ${MAX_TIMER_MS}, got ${registration.inactivityMs}`);
   }
   if (deps.sharedProcess()) return sharedProcessHandle(registration);
+  removeLateReporter?.();
+  removeLateReporter = undefined;
   // Only a fake `exit` can get here with a finished process behind it (a later test in one worker).
   if (active.length === 0) terminated = false;
   deps.installKillSwitch();
@@ -548,6 +657,7 @@ export function registerTerminalResult(registration: TerminalResultRegistration,
       if (active.length === 0) {
         removeReporter?.();
         removeReporter = undefined;
+        removeLateReporter = deps.onFatalError((err) => reportLateError(err, deps));
       }
     },
   };
@@ -596,7 +706,7 @@ export function reportCommandRejection(err: unknown, writeStderr: (text: string)
   if (!completedAny) return false;
   process.exitCode = EXIT_CODES.inconclusive;
   try {
-    writeStderr(`${redactSecretValues(redactCredentialShapes(String(err)), longestFirst(completedSecrets))}\n`);
+    writeStderr(`${redactSensitiveText(String(err), completedSecrets)}\n`);
   } catch {
     // Best-effort: stderr may already be gone. The exit code above still stands.
   }
@@ -612,4 +722,6 @@ export function __resetTerminalResultForTests(): void {
   completedSecrets.length = 0;
   removeReporter?.();
   removeReporter = undefined;
+  removeLateReporter?.();
+  removeLateReporter = undefined;
 }
