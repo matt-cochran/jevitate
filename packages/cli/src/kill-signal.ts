@@ -210,6 +210,14 @@ export interface KilledMission {
  */
 export type KillSummary = (killed: { signal: KillSignal; exitCode: number; missions: readonly KilledMission[] }) => string | undefined;
 
+/**
+ * A registered command's terminal result (`terminal-result.ts`). While one is set it OWNS stdout for
+ * the kill: armed missions still flush their results, but their output and a summary's text are not
+ * printed, so the command prints one envelope. It MUST be synchronous: it runs on the kill path, in
+ * the same turn as the exit below, and must not yield the event loop (see `onKillSignal`).
+ */
+export type KillTerminalReporter = (killed: { signal: KillSignal; exitCode: number }) => void;
+
 let installed = false;
 /** Every armed mission, in arming order, with the kill listener scoped to the context that ran it. */
 const armed = new Map<KillableMission, KilledListener | undefined>();
@@ -218,6 +226,7 @@ const armedMeta = new Map<KillableMission, RunMetadata | undefined>();
 let terminating = false;
 let output: KillSwitchOutput = "none";
 let summary: KillSummary | undefined;
+let terminalReporter: KillTerminalReporter | undefined;
 /** Process-wide listeners: told about every killed mission. */
 const killedListeners = new Set<KilledListener>();
 /** The listener for missions armed inside `runWithMissionKillListener` (e.g. one queue-drain item). */
@@ -337,7 +346,7 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     if (partial !== undefined) killed.push({ partial, ...(resultPath === undefined ? {} : { resultPath }) });
     // A `--json` caller gets its envelope even from a killed run (#120) — one line per mission,
     // written synchronously, before the exit below. An orchestrator's summary (#220) replaces them.
-    if (summary === undefined && partial !== undefined && output !== "none" && deps.writeStdout !== undefined) {
+    if (terminalReporter === undefined && summary === undefined && partial !== undefined && output !== "none" && deps.writeStdout !== undefined) {
       try {
         deps.writeStdout(output === "envelope" ? `${JSON.stringify(ok(partial))}\n` : formatMissionHuman(partial));
       } catch {
@@ -352,10 +361,16 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
   if (summary !== undefined) {
     try {
       const text = summary({ signal, exitCode: code, missions: killed });
-      if (text !== undefined && deps.writeStdout !== undefined) deps.writeStdout(text);
+      if (terminalReporter === undefined && text !== undefined && deps.writeStdout !== undefined) deps.writeStdout(text);
     } catch {
       // Best-effort, like the flush: a failed summary must never keep the process from exiting.
     }
+  }
+  // A registered command's one envelope, after the missions flushed and before anything can block.
+  try {
+    terminalReporter?.({ signal, exitCode: code });
+  } catch {
+    // Best-effort, like the flush: a failed report must never keep the process from exiting.
   }
   deps.closeBrowsers().catch(() => {
     // Best-effort: a failed teardown must never keep the process from having honored the signal.
@@ -451,6 +466,17 @@ export function setKillSummary(fn: KillSummary): () => void {
 }
 
 /**
+ * Installs the reporter of a command registered through `terminal-result.ts`. Returns the function
+ * that removes it. With none set, a signal behaves exactly as it does without this layer.
+ */
+export function setKillTerminalReporter(fn: KillTerminalReporter): () => void {
+  terminalReporter = fn;
+  return () => {
+    if (terminalReporter === fn) terminalReporter = undefined;
+  };
+}
+
+/**
  * Registers a process-wide SYNCHRONOUS listener told where EVERY killed mission's partial result was
  * written, just before the process exits. A runner that owns one specific mission should use
  * `runWithMissionKillListener` instead, so it never records another mission's result. Returns the
@@ -471,5 +497,6 @@ export function __resetKillSwitchForTests(): void {
   terminating = false;
   output = "none";
   summary = undefined;
+  terminalReporter = undefined;
   killedListeners.clear();
 }
