@@ -11,7 +11,7 @@ behaviour changes).
 
 - **`verify-fix` result file (#767).** Over the CLI and MCP, `verify-fix` writes one
   `verify-fix-<stamp>.result.json` per run and names it in its result, inconclusive and internal-error
-  endings included.
+  endings included. A run from the ledger writes it to the logs directory, not the committed ledger.
 - **Progress for long proofs (#766).** `journey verify --mutate` and `verify-fix` print one line per
   replay to stderr, while stdout stays one JSON envelope.
 - **Pending drafts in review (#765).** `journey review` shows an annotation draft as current or stale,
@@ -29,6 +29,8 @@ behaviour changes).
   ending as no-progress, and the hint ranks a control the goal names first.
 - **Discovery and lint (#770, #763).** `journey find` matches a Journey's goal, and `journey lint`
   honours `safety.readRequests`.
+- **Redaction on every surface.** `verify-fix` stdout, result file and MCP return come from one redacted
+  report, and terminal diagnostics mask URL tokens, cookies and body passwords.
 - **Bystander signals (#764).** Browser teardown signals only processes with this process's exact owner
   marker as a whole argument.
 

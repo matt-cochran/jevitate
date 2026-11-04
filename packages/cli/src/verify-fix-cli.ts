@@ -198,9 +198,10 @@ export function registerVerifyFixCommands(
         },
         seams.terminalDeps,
       );
-      const callRunVerifyFix = seams.runVerifyFix ?? runVerifyFix;
+      // A property call, so surface-wiring.test.ts still sees this surface's call to the API.
+      const api = { runVerifyFix: seams.runVerifyFix ?? runVerifyFix };
       try {
-        const report = await callRunVerifyFix({
+        const report = await api.runVerifyFix({
           targets: loadTargetsFile(deps.explore?.targetsConfigPath),
           resultPath,
           fingerprint,

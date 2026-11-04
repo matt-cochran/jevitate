@@ -323,7 +323,7 @@ recorded the same way.
 
 - **Videos.** A run's videos go in its own folder, `<run>.videos/`, next to the run's result (or
   under `--record-video <dir>`): `explore-<stamp>.videos/`, `usability-<stamp>.videos/`,
-  `verify-fix-<stamp>.videos/` beside the mission result, `journey-<id>-<stamp>.videos/` in the logs
+  `verify-fix-<stamp>.videos/` beside its result file (in the logs dir for a run from the ledger), `journey-<id>-<stamp>.videos/` in the logs
   dir. The run closes its browser contexts before it writes its result, so every listed video is
   complete. The paths are in the result as `videoPaths` (an additive field of the unified result
   schema, `schemaVersion` 1) and in the human summary as `VIDEO` lines. A run killed by

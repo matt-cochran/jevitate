@@ -40,7 +40,9 @@ same **git tree**, so the tree hash names the build everywhere: the artifact is
 (`0.15.0 (commit abc1234, tree def5678, built …)`; compare `git rev-parse --short main^{tree}`).
 
 Only `scripts/ci/pack-release.sh` makes a release build: it bundles under a signal naming the exact
-tree, refuses modified tracked files, and checks the packed `--version` against the manifest. Every
+tree, refuses modified tracked files, and runs the tarball's bin on the frozen lockfile's dependencies
+to check its `--version` against the manifest. The publish job, which holds `id-token`, only verifies
+those bytes and runs no package code. Every
 other build reports `x.y.z-source-<commit>`, a semver prerelease rather than `+build` metadata, because
 semver ignores build metadata when comparing and such a build would equal the published version.
 

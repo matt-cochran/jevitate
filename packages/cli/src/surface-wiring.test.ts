@@ -51,6 +51,13 @@ const RUNNER_KEYS: Readonly<Record<string, string>> = {
 };
 
 const SEAM = "test seam (clock / injected ports) — never a user setting";
+/** #767: what only `verify-fix`'s own command and MCP tool need; a batch re-check neither reports replays nor writes a result per finding. */
+const VERIFY_FIX_INVOCATION = {
+  onReplay: "#767: progress for the CLI's terminal layer, which only the verify-fix command registers",
+  onSecrets: "#767: feeds the CLI's terminal layer, which only the verify-fix command registers",
+  resultArtifact: "#767: one result file per verify-fix invocation; a batch re-check writes none",
+  resultStamp: "#767: only the CLI shares a stamped path with its terminal layer",
+};
 const MCP_NARROW = "#255: MCP verify_fix takes the CLI's replay options, but operator-only settings (cmd: log sources, re-sending paid/destructive hang writes, redaction literals) come from targets.json, never an MCP argument";
 const QUEUE_NO_ENV_SECRETS = "a queued spec's authFrom.secret is refused at enqueue: a request never chooses which env var is sent";
 const SITE_ACCOUNT = "the site-policy account is `primary`, the `jevitate site policy` default";
@@ -121,6 +128,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     fixture: "offline review: nothing to upload",
   },
   "ledger-cli.ts runLedgerVerify": {
+    ...VERIFY_FIX_INVOCATION,
     actionDeltas: NO_DELTAS_HERE,
     evidencePaceMs: EVIDENCE_PACE,
     screenshots: NO_SCREENSHOTS_HERE,
@@ -144,12 +152,14 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     approvalVerification: SEAM,
   },
   "mcp-api.ts runVerifyFix": {
+    onReplay: VERIFY_FIX_INVOCATION.onReplay,
+    onSecrets: VERIFY_FIX_INVOCATION.onSecrets,
+    resultStamp: VERIFY_FIX_INVOCATION.resultStamp,
     evidencePaceMs: EVIDENCE_PACE,
     browserPortFactory: SEAM,
     settleCeilingMs: "verify-fix reuses the recorded run's render wait",
     allowLogCmd: MCP_NARROW,
     hangReplayWrites: MCP_NARROW,
-    secrets: MCP_NARROW,
     journeyPrefix: BRANCH_RECORDED,
   },
 
@@ -326,6 +336,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariantAuthTokens: "usability refuses declared invariants (#150)",
   },
   "check-execute.ts runVerifyFix": {
+    ...VERIFY_FIX_INVOCATION,
     ...STORED_ALLOWLIST,
     actionDeltas: NO_DELTAS_HERE,
     evidencePaceMs: EVIDENCE_PACE,
