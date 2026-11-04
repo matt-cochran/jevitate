@@ -142,6 +142,7 @@ describe("#488 journeyFixtureBaseDir", () => {
   it("is undefined inside a git repo with no .jevitate directory", async () => {
     const root = await mkdtemp(join(tmpdir(), "jev-base-"));
     await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
     const nested = join(root, "a", "b");
     await mkdir(nested, { recursive: true });
     expect(journeyFixtureBaseDir({ cwd: () => nested })).toBeUndefined();

@@ -31,6 +31,8 @@ behaviour changes).
   honours `safety.readRequests`.
 - **Redaction on every surface.** `verify-fix` stdout, result file and MCP return come from one redacted
   report, and terminal diagnostics mask URL tokens, cookies and body passwords.
+- **Empty `.git` directories.** A directory counts as a git root only when `.git` is a file or holds
+  `HEAD`, so a sandbox's empty placeholder no longer makes its parent a project.
 - **Bystander signals (#764).** Browser teardown signals only processes with this process's exact owner
   marker as a whole argument.
 

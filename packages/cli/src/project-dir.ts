@@ -102,11 +102,16 @@ export function allResultDirs(deps: LayoutDeps = {}): string[] {
   return [...dated, ...legacyResultDirs(deps)];
 }
 
-/** The nearest directory holding `.git` (a directory, or a worktree's file), walking up from `cwd`. */
+/**
+ * The nearest directory holding a real `.git`, walking up from `cwd`: a worktree/submodule pointer
+ * (a file), or a directory containing a `HEAD` entry. An empty `.git` directory (e.g. a sandbox
+ * placeholder under /tmp) is not a repository, so the walk continues past it.
+ */
 export function findGitRoot(cwd: string): string | null {
   let dir = resolve(cwd);
   for (;;) {
-    if (existsSync(join(dir, ".git"))) return dir;
+    const git = join(dir, ".git");
+    if (existsSync(git) && (!isDir(git) || existsSync(join(git, "HEAD")))) return dir;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
