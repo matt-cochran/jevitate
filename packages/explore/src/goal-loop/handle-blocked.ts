@@ -108,7 +108,24 @@ export function forwardControls(
     if (controlTerms.size === 0) continue;
     if ([...controlTerms].some((t) => goalTerms.has(t)) && [...controlTerms].every((t) => instructionTerms.has(t))) out.push(control);
   }
-  return out;
+  // #769 — rank by how explicitly the goal names the control: a control the goal itself states
+  // (`Show the demo`, from 'press Show the demo') precedes one the page instruction merely suggests
+  // (`Check in`). The set of forward controls is unchanged; only the order is.
+  const goal = normalized(ctx.goalText);
+  return out.sort((a, b) => goalNaming(goal, b.name, goalTerms) - goalNaming(goal, a.name, goalTerms));
+}
+
+/**
+ * #769 — how explicitly `goal` names `name`: a whole-name phrase in the goal outranks mere term
+ * overlap, then the fraction of the name the goal names, then the raw count. A stable sort keeps the
+ * page's own order for equal ranks.
+ */
+function goalNaming(goal: string, name: string, goalTerms: ReadonlySet<string>): number {
+  const controlTerms = terms(name);
+  if (controlTerms.size === 0) return 0;
+  const hits = [...controlTerms].filter((t) => goalTerms.has(t)).length;
+  const phrase = new RegExp(`\\b${escaped(normalized(name))}\\b`).test(goal);
+  return (phrase ? 1_000 : 0) + (hits / controlTerms.size) * 100 + hits;
 }
 
 /** The first #693 forward control, or null — the single obvious control a model `blocked` is refused beside. */
@@ -174,6 +191,9 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
       const reason = `blocked refused: nothing was tried yet — ${untried.length} control(s) on this page are untried (e.g. ${names}); explore them (the navigation, settings, menus) before giving up`;
       ctx.history.push(reason);
       record(false, reason, { origin: "engine" });
+      // #769 — the refusal took no action: the next no-progress check must not recount the last
+      // real action, or the refusal itself would end the run no-progress.
+      ctx.lastActedOp = null;
       return "continue";
     }
     record(false, "model blocked before trying any action", { origin: "engine" });
@@ -193,6 +213,9 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
       const reason = `blocked refused: ${quote(forward.name || forward.summary, 60)} is an obvious forward control, still untried on this page, and it matches the goal and the page's instruction — use it before giving up`;
       ctx.history.push(reason);
       record(false, reason, { origin: "engine" });
+      // #769 — the refusal took no action: the next no-progress check must not recount the last
+      // real action, or the refusal itself would end the run no-progress.
+      ctx.lastActedOp = null;
       return "continue";
     }
     record(false, `model blocked while ${quote(forward.name || forward.summary, 60)} remained untried`, { origin: "engine" });
@@ -207,6 +230,8 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
   const deferred = deferEnding(ctx, step, "blocked");
   if (deferred !== null) {
     record(false, deferred, { origin: "engine" });
+    // #769 — deferred, not acted: the next no-progress check must not recount the last real action.
+    ctx.lastActedOp = null;
     return "continue";
   }
   // #688 — before the model's blocked stands, look once for a safe control to recover through. The
@@ -222,6 +247,8 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
       .join(", ")} — act through one of them or the run ends blocked`;
     ctx.history.push(note);
     record(false, note, { origin: "engine" });
+    // #769 — the recovery turn took no action yet: do not let the refusal itself stop no-progress.
+    ctx.lastActedOp = null;
     return "continue";
   }
   record(true, "model blocked");
