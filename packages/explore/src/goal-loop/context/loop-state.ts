@@ -7,6 +7,7 @@ export function initLoopState(ctx: MutableRunContext): void {
   ctx.stop = "exhausted";
   ctx.failure = undefined;
   ctx.lastActedOp = null;
+  ctx.refusedTurn = false;
   /** #172: did the last scroll move the page, and how many moved scrolls in a row on one state. */
   ctx.lastScrollMoved = false;
   ctx.movingScrolls = 0;
