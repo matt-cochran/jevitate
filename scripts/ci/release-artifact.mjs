@@ -6,16 +6,16 @@
 //
 //   node scripts/ci/release-artifact.mjs write  <dir>   (after scripts/ci/pack-release.sh)
 //   node scripts/ci/release-artifact.mjs verify <dir> --tree <sha> --version <x.y.z>
-//   node scripts/ci/release-artifact.mjs identity <dir>   (installs the cli tarball; needs npm)
+//   node scripts/ci/release-artifact.mjs identity <dir>   (pack time only: runs the packed cli)
 //
 // <dir> holds exactly: jevitate-cli-<v>.tgz, jevitate-<v>.tgz, manifest.json, SHA256SUMS.
 // SHA256SUMS uses `sha256sum` format, so `sha256sum -c SHA256SUMS` also works by hand.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** The two public packages, in publish order (the alias depends on the cli). */
 export const PACKAGES = [
@@ -24,6 +24,8 @@ export const PACKAGES = [
 ];
 
 export const artifactName = (tree) => `jevitate-${tree}`;
+
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
@@ -112,22 +114,64 @@ export function checkVersionIdentity(line, manifest) {
 }
 
 /**
- * Installs the artifact's cli tarball into a throwaway prefix, as a user would but without lifecycle
- * scripts, and checks what the installed `jevitate --version` reports against the manifest. Any
- * failure to install or run throws; there is no path that skips the check.
+ * Requires `root`'s node_modules to be the install of its pnpm-lock.yaml: pnpm records what it
+ * installed in node_modules/.pnpm/lock.yaml, so a stale, hand-changed or missing install differs.
  */
-export function verifyInstalledIdentity(dir) {
+function requireFrozenInstall(root) {
+  const read = (path) => {
+    try {
+      return readFileSync(join(root, path));
+    } catch (err) {
+      throw new Error(`no frozen install to run the packed cli with: ${err.message}`);
+    }
+  };
+  if (!read("pnpm-lock.yaml").equals(read(join("node_modules", ".pnpm", "lock.yaml")))) {
+    throw new Error("no frozen install to run the packed cli with: node_modules does not match pnpm-lock.yaml; run pnpm install --frozen-lockfile");
+  }
+}
+
+/**
+ * Runs the packed cli tarball's `--version` and checks it against the manifest (#784). No unpinned
+ * code runs (H1): nothing is installed. The tarball is extracted to a throwaway prefix laid out like
+ * an install, whose node_modules holds only links to the dependencies the tarball declares, each the
+ * copy the frozen lockfile installed in `root`. An undeclared import therefore fails as it would for
+ * a user, and `root`'s working dist is out of reach. Any failure throws; no path skips the check.
+ *
+ * Runs third-party code, however pinned, so it belongs at pack time and never in a job holding
+ * `id-token: write`. There, `verifyArtifact` proves these same bytes.
+ */
+export function verifyPackedIdentity(dir, { root = REPO_ROOT } = {}) {
   const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
   const name = PACKAGES[0].name;
+  requireFrozenInstall(root);
   const prefix = mkdtempSync(join(tmpdir(), "jevitate-identity-"));
   try {
-    execFileSync("npm", ["install", "--prefix", prefix, "--ignore-scripts", "--no-audit", "--no-fund", join(resolve(dir), manifest.files[name])], { cwd: prefix, stdio: ["ignore", "ignore", "inherit"] });
-    const installed = join(prefix, "node_modules", name);
-    const { bin } = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
-    const line = execFileSync(process.execPath, [join(installed, bin.jevitate), "--version"], { cwd: prefix, encoding: "utf8" }).trim();
+    const modules = join(prefix, "node_modules");
+    const packed = join(modules, name);
+    mkdirSync(packed, { recursive: true });
+    execFileSync("tar", ["-xzf", join(resolve(dir), manifest.files[name]), "-C", packed, "--strip-components=1"], { stdio: ["ignore", "ignore", "pipe"] });
+    const { bin, dependencies } = JSON.parse(readFileSync(join(packed, "package.json"), "utf8"));
+    for (const dep of Object.keys(dependencies ?? {})) {
+      const link = join(modules, dep);
+      mkdirSync(dirname(link), { recursive: true });
+      symlinkSync(lockfileInstalled(root, dep), link);
+    }
+    const binPath = realpathSync(join(packed, bin.jevitate));
+    if (!binPath.startsWith(realpathSync(packed) + sep)) throw new Error(`${name}'s bin ${bin.jevitate} is outside the tarball`);
+    const { NODE_PATH: _ignored, ...env } = process.env;
+    const line = execFileSync(process.execPath, [binPath, "--version"], { cwd: prefix, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
     return checkVersionIdentity(line, manifest);
   } finally {
     rmSync(prefix, { recursive: true, force: true });
+  }
+}
+
+/** The real directory of a dependency the frozen install gave the cli; throws if it has none. */
+function lockfileInstalled(root, dep) {
+  try {
+    return realpathSync(join(root, PACKAGES[0].dir, "node_modules", dep));
+  } catch {
+    throw new Error(`the packed cli depends on ${dep}, which the frozen lockfile did not install for ${PACKAGES[0].dir}`);
   }
 }
 
@@ -153,8 +197,8 @@ function main(argv) {
     return 0;
   }
   if (cmd === "identity" && dir) {
-    const { version, commit, tree } = verifyInstalledIdentity(resolve(dir));
-    console.log(`installed --version matches the manifest: ${version} (commit ${commit}, tree ${tree})`);
+    const { version, commit, tree } = verifyPackedIdentity(resolve(dir));
+    console.log(`packed --version matches the manifest: ${version} (commit ${commit}, tree ${tree})`);
     return 0;
   }
   console.error("usage: release-artifact.mjs write <dir> | verify <dir> --tree <sha> --version <x.y.z> | identity <dir>");

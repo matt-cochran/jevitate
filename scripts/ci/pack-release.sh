@@ -8,6 +8,9 @@
 # refuses modified tracked files, whose bytes the manifest's tree would misname, proves the packed
 # --version against the manifest, and puts the working dist back to a source build on the way out.
 #
+# That proof is the only one: it runs the tarball's bin on the frozen lockfile's dependencies, here,
+# with no id-token. The publish job checks these bytes against SHA256SUMS and runs no package code.
+#
 # Each package is packed from its own directory: pnpm 9 can't `--filter … pack`. `pnpm pack`
 # rewrites the alias's `workspace:*` dependency on @jevitate/cli to the exact version.
 #
