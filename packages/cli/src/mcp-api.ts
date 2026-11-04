@@ -260,6 +260,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         targets: loadTargetsFile(deps.targetsConfigPath),
         resultPath: a.resultPath,
         fingerprint: a.fingerprint,
+        // #767: the tool's report is persisted too (the terminal layer does nothing inside an MCP
+        // call, by design) — the returned `resultPath` names it.
+        resultArtifact: true,
         ...(a.storageState === undefined ? {} : { storageState: a.storageState }),
         ...(a.browser === undefined ? {} : { browser: a.browser }),
         ...(a.replays === undefined ? {} : { replays: a.replays }),

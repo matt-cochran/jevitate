@@ -37,6 +37,8 @@ import { verifyServerLogDefect } from "./server-log-verify.js";
 import { defectSignalText, persistedDefect, replayWithEvidence, signalCheckable, type DefectEvidence } from "./defect-evidence.js";
 import { RunScreenshots, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
 import { clock, isRecord } from "@jevitate/domain";
+import { writeMissionResult } from "./mission-journal.js";
+import { redactSecretValues } from "./journey-api.js";
 
 /**
  * The programmatic surface behind `jevitate verify-fix` and the MCP `verify_fix` tool: loads a
@@ -126,6 +128,21 @@ export interface RunVerifyFixOptions {
   readonly env?: string;
   /** The environments file `env` is read from (default: the repo's `.jevitate/environments.json`). */
   readonly environmentsFile?: string;
+  /**
+   * #767: opt-in — write this run's `VerifyFixReport` as `<dir>/verify-fix-<stamp>.result.json` and
+   * return its path on the report. Default off, so a ledger/check caller writes nothing.
+   */
+  readonly resultArtifact?: boolean;
+  /**
+   * #767: the stamp both this writer and the CLI's terminal layer use (`verify-fix-<stamp>.json`), so
+   * a signal or parent death overwrites the same path instead of leaving two artifacts. Default: now.
+   */
+  readonly resultStamp?: string;
+  /**
+   * #767: called just before each replay session opens, so the CLI's terminal layer can report one
+   * `progress()` per replay (the inactivity bound restarts). Never called outside a replay.
+   */
+  readonly onReplay?: (replay: number) => void;
 }
 
 /** #484: the replay ran with an allow list other than the one stored with the result — which, and where from. */
@@ -204,6 +221,8 @@ export interface VerifyFixReport extends VerifyFixResult {
   readonly screenshotsSkipped?: ScreenshotsResult["screenshotsSkipped"];
   /** #484: present only when `--allow`/`--env` replaced the stored allow list — the origins used, and what changed. */
   readonly allowlistOverride?: AllowlistOverride;
+  /** #767: the `<vfArtifact stem>.result.json` this run wrote, when `resultArtifact` was requested. */
+  readonly resultPath?: string;
 }
 
 export class VerifyFixInputError extends Error {
@@ -445,7 +464,8 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   // #245: every replay (and observer) session is shown/recorded alike — videos in
   // `verify-fix-<stamp>.videos/` beside the mission result (or under `--record-video <dir>`).
-  const vfArtifact = joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${artifactStamp(clock.nowIso())}.json`);
+  // #767: the CLI supplies the stamp so its terminal-layer artifact and this report share one path.
+  const vfArtifact = joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${opts.resultStamp ?? artifactStamp(clock.nowIso())}.json`);
   const videoDir = runVideoDir(opts.browser, vfArtifact);
   const shown = sessionLaunchOptions(opts.browser, videoDir);
   const perceiveOpts = {
@@ -538,7 +558,11 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
           ...(primaryActor === undefined ? {} : { primaryActor }),
         }
       : undefined;
+  let replayOpened = 0;
   const openSession = async (): Promise<VerifySession> => {
+    // #767: one progress report per replay, so the terminal layer's inactivity bound restarts.
+    replayOpened += 1;
+    opts.onReplay?.(replayOpened);
     const session = await portFactory().open({
       ...shown,
       allowedOrigins: [...mission.target.allowlist],
@@ -664,7 +688,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     };
     shotFields = shots === undefined ? {} : await shots.finish();
   }
-  return {
+  const report: VerifyFixReport = {
     ...result,
     exitCode: VERIFY_FIX_EXIT_CODES[result.verdict],
     ...(branch === undefined ? {} : { branch }),
@@ -677,6 +701,11 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     // Every replay closed its own session (finalizing its video) before verifyFix returned.
     ...(videoDir === undefined ? {} : { videoPaths: listVideos(videoDir) }),
   };
+  // #767: opt-in. The report itself is redacted first (a `reason` can quote a secret the caller
+  // registered), then written through the mission result writer so it lands next to the mission's.
+  if (opts.resultArtifact !== true) return report;
+  const written = writeMissionResult(vfArtifact, report.verdict, report.exitCode, redactSecretValues(report, opts.secrets ?? []));
+  return { ...report, resultPath: written };
 }
 
 /**
