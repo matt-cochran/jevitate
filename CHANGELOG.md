@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.28.2] – 2026-11-04
+
+### Fixed
+
+- **Read-only query Journey linting (#763).** Journey lint and strict review now consistently
+  honor explicitly configured read-only request endpoints, so browser flows that only query data
+  are not incorrectly required to prove persistence.
+
 ## [0.28.1] – 2026-11-03
 
 ### Fixed
