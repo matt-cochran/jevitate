@@ -26,4 +26,18 @@ describe("JourneyRegistry.find", () => {
     await reg.promote("login");
     expect((await reg.find("log")).map((m) => m.id)).toEqual(["login"]);
   });
+  it("finds a promoted journey by exact id and unordered name terms", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jr-"));
+    const reg = new JourneyRegistry(new FsJourneyStore(dir));
+    await reg.put({
+      ...mk("production-pilot-agency", true),
+      metadata: {
+        ...mk("production-pilot-agency", true).metadata,
+        name: "Production pilot: provider approves, shares, launches, and sees the lead",
+      },
+    } as any);
+
+    expect((await reg.find("production-pilot-agency")).map((m) => m.id)).toEqual(["production-pilot-agency"]);
+    expect((await reg.find("provider launches lead")).map((m) => m.id)).toEqual(["production-pilot-agency"]);
+  });
 });
