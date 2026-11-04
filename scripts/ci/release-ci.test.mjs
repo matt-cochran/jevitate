@@ -18,9 +18,16 @@ describe("planRelease (#534)", () => {
     expect(planRelease({ ...base, onNpm: { cli: true, alias: false } })).toMatchObject({ mode: "next", needsArtifact: true });
   });
 
-  it("staging with the version already on npm, or changesets pending, does nothing", () => {
+  it("staging with the version already on npm does nothing", () => {
     expect(planRelease({ ...base, onNpm: { cli: true, alias: true } }).mode).toBe("none");
-    expect(planRelease({ ...base, pending: 2 }).mode).toBe("none");
+  });
+
+  it("a push to staging with pending changesets fails naming the count and dev first", () => {
+    expect(() => planRelease({ ...base, pending: 2 })).toThrow(/2 changeset\(s\) pending.*version them on dev first/);
+  });
+
+  it("a manual plan-only run on staging with pending changesets does nothing", () => {
+    expect(planRelease({ ...base, event: "workflow_dispatch", pending: 2 }).mode).toBe("none");
   });
 
   it("a push to main never promotes: it reports the tag to push", () => {
