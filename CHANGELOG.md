@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.28.3] – 2026-11-04
+
+### Fixed
+
+- **Targeted mutation-proof request pairing (#768, #778).** Automatic targeted proofs now
+  relax an earlier paired request assertion through the existing bounded request mask when a
+  page postcondition still proves the user-visible effect. Journeys no longer remain
+  inconclusive solely because that auxiliary request assertion is not a step postcondition.
+
 ## [0.28.2] – 2026-11-04
 
 ### Fixed
