@@ -111,6 +111,17 @@ export interface JourneyVerifyRecord {
   readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
 }
 
+/**
+ * #765: a pending annotation draft, as a review sheet shows it — its status, sidecar path and the
+ * next command only, never the drafted text. `current` means the Journey is unchanged since the
+ * draft was made (so `--approve` applies it); `stale` means re-drafting is required.
+ */
+export interface JourneyAnnotationDraft {
+  readonly status: "current" | "stale";
+  readonly path: string;
+  readonly next: string;
+}
+
 export interface JourneyReviewContext {
   /** #696: strict review/readiness includes replay-target compatibility in its lint attention. */
   readonly strict?: boolean;
@@ -137,6 +148,8 @@ export interface JourneyReviewContext {
   readonly locatorHealth?: LocatorHealthDetail;
   /** #467: the approval is stale and the only change is minted step ids (`isStepIdOnlyChange`), computed by the caller. */
   readonly stepIdOnly?: boolean;
+  /** #765: the pending annotation draft status (`journey-review-api` loads it; `buildJourneyReview` stays pure). */
+  readonly annotationDraft?: JourneyAnnotationDraft;
 }
 
 function targetOf(step: Step): TargetDescriptor | undefined {
@@ -483,7 +496,11 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
   const flat = flatJourneySteps(journey);
 
   const missingIntent: string[] = [];
-  const annotate = `draft it with \`jevitate journey annotate ${m.id}\``;
+  // #765: with a current draft there is nothing left to draft — point at the approval instead.
+  const annotate =
+    ctx.annotationDraft?.status === "current"
+      ? `approve it with \`jevitate journey annotate ${m.id} --approve\``
+      : `draft it with \`jevitate journey annotate ${m.id}\``;
   if ((m.goal ?? "").trim() === "") missingIntent.push(`no goal — ${annotate}`);
   if ((m.successCriteria ?? []).length === 0) missingIntent.push(`no success criteria — ${annotate}`);
   const withoutObjective = steps.filter((s) => s.objective === undefined).length;
@@ -590,6 +607,8 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
     ...(ctx.locatorHealth === undefined ? {} : { locatorHealth: locatorHealthOf(ctx.locatorHealth) }),
     ...(ctx.proposal === undefined ? {} : { proposal: buildProposal(ctx.proposal, m.id) }),
     ...(anchors.length === 0 ? {} : { anchors }),
+    // #765: the pending draft's status, when the API loaded one (the drafted text is never here).
+    ...(ctx.annotationDraft === undefined ? {} : { annotationDraft: ctx.annotationDraft }),
     contentHash: hash,
   };
   return { ...review, attention: buildAttention(review, endStateExplained.filter((e) => e.weak).map((e) => e.text), m.goal) };
@@ -615,7 +634,7 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
   else if (weakSteps.length > 1) warn(`Steps ${stepRanges(weakSteps)} prove nothing: their checks pass even if the step fails`);
   for (const t of weakEndState) warn(`An end-state check proves nothing: ${t}`);
 
-  const annotate = `jevitate journey annotate ${r.id}`;
+  const annotate = r.annotationDraft?.status === "current" ? r.annotationDraft.next : `jevitate journey annotate ${r.id}`;
   const noGoal = (goal ?? "").trim() === "";
   const noCriteria = r.summary.successCriteria.length === 0;
   if (noGoal && noCriteria) warn("No goal or success criteria written", annotate);
@@ -662,6 +681,12 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
     const p = r.proposal;
     if (p.stale || p.problem !== undefined) warn(`A self-heal proposal is pending but cannot be accepted: ${p.stale ? "the Journey changed since" : p.problem}`);
     else warn(`A self-heal proposal changes ${plural(p.steps.length, "step")}`, p.acceptCommand);
+  }
+  // #765: a draft awaiting approval (or one staled by a changed Journey) is surfaced with its next
+  // command — never the drafted text. Advisory: it must not turn a plain review or --strict into a failure.
+  if (r.annotationDraft !== undefined) {
+    if (r.annotationDraft.status === "current") info("An annotation draft is pending — approve it to write the reviewed goal and step objectives", r.annotationDraft.next);
+    else info("An annotation draft is stale: the Journey changed since it was made — re-draft it", r.annotationDraft.next);
   }
   const v = r.proof.verify;
   if (v.status === "not-verified") info("Not mutation-tested", `jevitate journey verify ${r.id} --mutate`);
