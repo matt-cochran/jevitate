@@ -1,5 +1,11 @@
 # @jevitate/cli
 
+## 0.28.2
+
+### Patch Changes
+
+- 1d68ac9: Classify explicitly configured read-only POST requests consistently during Journey lint and strict review, so query-only browser flows are not required to prove persistence.
+
 ## 0.28.1
 
 ### Patch Changes

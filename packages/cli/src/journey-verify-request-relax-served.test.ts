@@ -26,16 +26,16 @@ beforeAll(async () => {
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`; dir = await mkdtemp(join(tmpdir(), "jev-708-served-"));
 });
 afterAll(async () => { await new Promise<void>((resolve) => server.close(() => resolve())); });
-describe("#708 declared request defense through actual Chromium", () => {
-  it("keeps automatic refusal, then proves the cascade with a declared request relaxation and passing control", async () => {
+describe("#768 automatic request defense through actual Chromium", () => {
+  it("proves the cascade automatically and still accepts a declared request relaxation", async () => {
     const store = new FsJourneyStore(dir);
     const verify = async (declared: boolean) => {
       const j = journey(declared ? "declared" : "automatic", declared); await store.put(j);
       return verifyJourneyMutations({ dir, id: j.metadata.id, params: { threadId: "thread-001" }, browserPortFactory: () => new PlaywrightBrowserPort() });
     };
     const automatic = await verify(false);
-    expect(automatic.assertions.find((a) => a.site === "end-state:0")?.targetedRefusal, JSON.stringify(automatic)).toBe("step-request:2:0 is not a step postcondition");
-    expect(automatic.suggestedTargetedProofs).toContainEqual({ check: "end-state:0", mustFailWhen: "swap-param:threadId", relax: ["step-request:2:0"] });
+    expect(automatic.assertions.find((a) => a.site === "end-state:0"), JSON.stringify(automatic)).toMatchObject({ verdict: "sensitive", relaxedSites: ["step-request:2:0", "step:3"] });
+    expect(automatic.verdict).toBe("proven");
     const declared = await verify(true);
     expect(declared.assertions.find((a) => a.site === "end-state:0")).toMatchObject({ verdict: "sensitive", declaredProof: true, relaxedSites: ["step-request:2:0", "step:3"] });
     expect(declared.verdict).toBe("proven");
