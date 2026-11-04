@@ -169,6 +169,13 @@ function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests
   if (requests.length > 0) return true;
   // (b) a step's own request expectation names a write method for its path.
   if ((recorded.expectRequests ?? []).some((check) => classify({ method: check.method, path: check.pathGlob }))) return true;
+  // A recorded request is stronger evidence than a page delta.  When every
+  // recorded request is an explicitly configured read, do not turn the step
+  // back into a write merely because loading data changed the page.  Keep the
+  // conservative delta fallback only where there is no parseable network
+  // evidence at all: an unknown or malformed request must never become safe.
+  const hasRecordedRequest = (recorded.delta?.requests ?? []).some((line) => REQUEST_LINE.test(line.trim()));
+  if (hasRecordedRequest || (recorded.expectRequests?.length ?? 0) > 0) return false;
   // (c) a state-changing step whose delta changed the page, even if the request was not recorded.
   return recorded.delta?.verdict === "relevant-change" && STATE_CHANGING.has(recorded.step.kind);
 }

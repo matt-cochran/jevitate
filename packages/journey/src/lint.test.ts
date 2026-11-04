@@ -252,6 +252,16 @@ describe("#401 lintJourney", () => {
     ]);
     expect(lintJourney(journey, { readRequests: ["Estimate*"] }).some((f) => f.rule === "no-persistence-check")).toBe(false);
   });
+
+  it("does not override an explicitly configured read-only REST POST with the page-delta fallback", () => {
+    const journey = j([
+      {
+        step: { kind: "click", target: { testId: "companies" }, expect: { kind: "textIncludes", target: { role: "heading" }, text: "Companies" } },
+        delta: { verdict: "relevant-change", why: "query rendered companies", changes: ["Companies heading"], requests: ["POST /api/v1/tool/crm-companies/query → 200"], overheadMs: 1 },
+      },
+    ]);
+    expect(lintJourney(journey, { readRequests: ["/api/v1/tool/crm-companies/query"] }).some((f) => f.rule === "no-persistence-check")).toBe(false);
+  });
 });
 
 describe("#466 lintJourney: the 0.10 anchor rules", () => {

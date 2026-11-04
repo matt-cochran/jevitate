@@ -114,8 +114,13 @@ export interface JourneyVerifyRecord {
 export interface JourneyReviewContext {
   /** #696: strict review/readiness includes replay-target compatibility in its lint attention. */
   readonly strict?: boolean;
-  /** The site's safety config (targets.json `safety` for the Journey's origin): `deny` / `paid` / `allowControl`. */
-  readonly safety?: Pick<SafetyConfig, "deny" | "paid" | "allowControl">;
+  /**
+   * The site's safety config (targets.json `safety` for the Journey's origin).
+   * `readRequests` must reach every review-time request classifier too: otherwise a
+   * configured read-only POST is shown as a write and strict review invents a
+   * persistence obligation the runtime guard does not have.
+   */
+  readonly safety?: Pick<SafetyConfig, "deny" | "paid" | "allowControl" | "readRequests">;
   /** The Journey as last approved (`.approved/<id>.json`), or null when there is none. */
   readonly approvedSnapshot?: Journey | null;
   /** The last recorded mutation-proof verdict, or null when there is none. */
@@ -287,8 +292,9 @@ function buildSteps(journey: Journey): JourneyReviewStep[] {
 
 const REQUEST_LINE = /^(\S+)\s+(\S+)/;
 
-function buildWriteRequests(journey: Journey): JourneyReviewWriteRequest[] {
-  const classify = writeClassifier();
+function buildWriteRequests(journey: Journey, safety?: JourneyReviewContext["safety"]): JourneyReviewWriteRequest[] {
+  const classifierOptions = safety?.readRequests === undefined ? {} : { readRequests: safety.readRequests };
+  const classify = writeClassifier(classifierOptions);
   const out: JourneyReviewWriteRequest[] = [];
   const seen = new Set<string>();
   const add = (w: JourneyReviewWriteRequest): void => {
@@ -297,7 +303,7 @@ function buildWriteRequests(journey: Journey): JourneyReviewWriteRequest[] {
     seen.add(key);
     out.push(w);
   };
-  for (const w of journeyWriteSteps(journey)) {
+  for (const w of journeyWriteSteps(journey, classifierOptions)) {
     for (const line of w.requests) {
       const m = REQUEST_LINE.exec(line.trim());
       if (m !== null) add({ method: m[1]!.toUpperCase(), endpoint: m[2]!, source: "recorded", step: w.step });
@@ -487,7 +493,11 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
   const described = new Map((m.parameters ?? []).map((p) => [p.name, p.description]));
   const paramNames = [...new Set([...journeyRunParams(journey), ...(m.parameters ?? []).map((p) => p.name)])];
 
-  const findings = lintJourney(journey, ctx.strict === true ? { strictTargets: true } : {});
+  const lintOptions = {
+    ...(ctx.strict === true ? { strictTargets: true } : {}),
+    ...(ctx.safety?.readRequests === undefined ? {} : { readRequests: ctx.safety.readRequests }),
+  };
+  const findings = lintJourney(journey, lintOptions);
   const stepAssertions = journeyAssertions(journey).flatMap((site) => {
     if (site.where === "end-state") return [];
     const explained = explainCheck(site.check);
@@ -507,7 +517,7 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
     return (c.kind === "page" || c.kind === "reloadThen") && !assertionRefsBound(journey, c.assertion) ? { ...e, weak: true } : e;
   });
   const anchors = (m.anchors ?? []).map((a) => ({ name: a.name, step: a.step }));
-  const writeRequests = buildWriteRequests(journey);
+  const writeRequests = buildWriteRequests(journey, ctx.safety);
   const enriched = steps.map((st) => {
     const checks = stepAssertions.filter((a) => a.step === st.number).map((a) => ({ text: a.text, weak: a.weak }));
     const mine = anchors.filter((a) => a.step === st.number).map((a) => a.name);
