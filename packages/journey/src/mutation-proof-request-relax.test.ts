@@ -4,14 +4,19 @@ import { JourneySchema, assertionSiteKey, journeyAssertions, planJourneyMutation
 function fixture(declared = true): Journey {
   return JourneySchema.parse({ metadata: { id: "publish", name: "Publish", promoted: false, params: [], createdAtIso: "2026-10-26T00:00:00Z", endState: [{ kind: "page", assertion: { kind: "textIncludes", target: { testId: "result" }, text: "Saved" } }], mutationPairs: [{ check: "end-state:0", mustFailWhen: "block-write:1" }], ...(declared ? { targetedProofs: [{ check: "end-state:0", mustFailWhen: "block-write:1", relax: ["step-request:1:0"] }] } : {}) }, recording: { version: "1", site: "https://example.test", pages: [{ url: "/", steps: [{ step: { kind: "click", target: { testId: "save" }, expect: { kind: "textIncludes", target: { testId: "result" }, text: "Saved" } }, expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/save", status: { class: 2 } }, { kind: "requestMade", method: "GET", pathGlob: "/other" }], delta: { verdict: "relevant-change", why: "saved", changes: [], requests: ["POST /save → 200"], overheadMs: 0 } }] }] } });
 }
-describe("#708 declared step-request relaxation", () => {
+describe("#768 step-request relaxation", () => {
   const setup = () => { const j = fixture(); const plan = planJourneyMutations(j); const m = plan.mutations.find((x) => x.id === "block-write:1")!; const target = journeyAssertions(j).find((x) => assertionSiteKey(x) === "end-state:0")!; return { j, plan, m, target }; };
-  it("keeps automatic relaxation conservative and proposes the exact declared workflow", () => {
-    const { j, plan, m } = setup();
+  it.each(["skip:1", "block-write:1"])("automatically relaxes the paired request assertion for %s", (mutationId) => {
+    const { j, plan } = setup();
+    const m = plan.mutations.find((candidate) => candidate.id === mutationId)!;
     const run = { outcome: "failed" as const, failedSites: [{ where: "step-request" as const, step: 1, checkIndex: 0 }] };
     const next = nextTargetedRelaxation(j, plan, m, "end-state:0", run, []);
-    expect(next).toEqual({ refuse: "step-request:1:0 is not a step postcondition" });
-    expect(suggestTargetedProofPlan({ site: "end-state:0", relaxedSites: [], ...run, refused: "step-request:1:0 is not a step postcondition" }, m)).toEqual(j.metadata.targetedProofs![0]);
+    expect(next).toEqual({ relax: "step-request:1:0" });
+  });
+  it("does not suggest a declared plan for an automatically relaxable request assertion", () => {
+    const { m } = setup();
+    const run = { outcome: "failed" as const, failedSites: [{ where: "step-request" as const, step: 1, checkIndex: 0 }] };
+    expect(suggestTargetedProofPlan({ site: "end-state:0", relaxedSites: [], ...run }, m)).toBeNull();
   });
   it("preserves all request checks and their indices in both mutated and control replays", () => {
     const { j, m } = setup(); const original = structuredClone(j);
