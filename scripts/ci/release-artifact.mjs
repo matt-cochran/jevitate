@@ -6,12 +6,14 @@
 //
 //   node scripts/ci/release-artifact.mjs write  <dir>   (after scripts/ci/pack-release.sh)
 //   node scripts/ci/release-artifact.mjs verify <dir> --tree <sha> --version <x.y.z>
+//   node scripts/ci/release-artifact.mjs identity <dir>   (installs the cli tarball; needs npm)
 //
 // <dir> holds exactly: jevitate-cli-<v>.tgz, jevitate-<v>.tgz, manifest.json, SHA256SUMS.
 // SHA256SUMS uses `sha256sum` format, so `sha256sum -c SHA256SUMS` also works by hand.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -87,6 +89,48 @@ export function verifyArtifact(dir, { tree, version }) {
   return manifest;
 }
 
+/** A release build's `--version`, and nothing looser: this is the format downstream tools parse. */
+const RELEASE_VERSION_LINE = /^(\S+) \(commit ([0-9a-f]{7,40}), tree ([0-9a-f]{7,40}), built (\S+)\)$/;
+
+/**
+ * Checks a `--version` line against the manifest and returns its identity (#784); throws unless it
+ * is exactly the manifest's cli version, commit and tree. A source build's version has a marker, so
+ * it never matches. The line's hashes are short, the manifest's full.
+ */
+export function checkVersionIdentity(line, manifest) {
+  const fail = (msg) => {
+    throw new Error(`--version ${JSON.stringify(line)}: ${msg}`);
+  };
+  const m = RELEASE_VERSION_LINE.exec(line);
+  if (!m) fail("is not in the release format x.y.z (commit <sha>, tree <tree>, built <iso>)");
+  const [, version, commit, tree, builtAt] = m;
+  const expected = manifest.versions?.[PACKAGES[0].name];
+  if (version !== expected) fail(`reports version ${version}, the manifest says ${expected}`);
+  if (!manifest.commit?.startsWith(commit)) fail(`reports commit ${commit}, the manifest says ${manifest.commit}`);
+  if (!manifest.tree?.startsWith(tree)) fail(`reports tree ${tree}, the manifest says ${manifest.tree}`);
+  return { version, commit, tree, builtAt };
+}
+
+/**
+ * Installs the artifact's cli tarball into a throwaway prefix, as a user would but without lifecycle
+ * scripts, and checks what the installed `jevitate --version` reports against the manifest. Any
+ * failure to install or run throws; there is no path that skips the check.
+ */
+export function verifyInstalledIdentity(dir) {
+  const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+  const name = PACKAGES[0].name;
+  const prefix = mkdtempSync(join(tmpdir(), "jevitate-identity-"));
+  try {
+    execFileSync("npm", ["install", "--prefix", prefix, "--ignore-scripts", "--no-audit", "--no-fund", join(resolve(dir), manifest.files[name])], { cwd: prefix, stdio: ["ignore", "ignore", "inherit"] });
+    const installed = join(prefix, "node_modules", name);
+    const { bin } = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
+    const line = execFileSync(process.execPath, [join(installed, bin.jevitate), "--version"], { cwd: prefix, encoding: "utf8" }).trim();
+    return checkVersionIdentity(line, manifest);
+  } finally {
+    rmSync(prefix, { recursive: true, force: true });
+  }
+}
+
 function main(argv) {
   const [cmd, dir, ...rest] = argv;
   const opt = (name) => {
@@ -108,7 +152,12 @@ function main(argv) {
     console.log(`verified ${Object.values(manifest.files).join(", ")} (tree ${manifest.tree}, commit ${manifest.commit}, run ${manifest.runId})`);
     return 0;
   }
-  console.error("usage: release-artifact.mjs write <dir> | verify <dir> --tree <sha> --version <x.y.z>");
+  if (cmd === "identity" && dir) {
+    const { version, commit, tree } = verifyInstalledIdentity(resolve(dir));
+    console.log(`installed --version matches the manifest: ${version} (commit ${commit}, tree ${tree})`);
+    return 0;
+  }
+  console.error("usage: release-artifact.mjs write <dir> | verify <dir> --tree <sha> --version <x.y.z> | identity <dir>");
   return 64;
 }
 

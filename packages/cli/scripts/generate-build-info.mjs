@@ -54,6 +54,22 @@ export function currentTree() {
   }
 }
 
+/** The env var only `scripts/ci/pack-release.sh` sets, to the full tree hash it is packing (#784). */
+export const RELEASE_SIGNAL = "JEVITATE_RELEASE_PACK_TREE";
+
+/**
+ * Whether this bundle is the release pack's (#784). Never inferred: no signal means an unreleased
+ * source build. The signal names the full git tree, so one that leaked from another checkout or
+ * commit, or that a checkout without git cannot confirm, stops the build instead of stamping it.
+ */
+export function isReleaseBuild(env = process.env) {
+  const signalled = env[RELEASE_SIGNAL];
+  if (signalled === undefined) return false;
+  const tree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: here, encoding: "utf8" }).trim();
+  if (signalled !== tree) throw new Error(`${RELEASE_SIGNAL} is ${JSON.stringify(signalled)}, but this checkout's tree is ${tree}`);
+  return true;
+}
+
 /** Computes {commit, tree, builtAt} and writes the generated module `tsc --build` compiles. */
 export function writeBuildInfoModule() {
   const commit = currentCommit();

@@ -176,6 +176,9 @@ jobs:
     - name: Verify checksums, tree and versions
       if: needs.plan.outputs.needs_artifact == 'true'
       run: node scripts/ci/release-artifact.mjs verify "${RUNNER_TEMP}/release" --tree "${TREE}" --version "${VERSION}"
+    - name: Require the installed --version to match the manifest
+      if: needs.plan.outputs.needs_artifact == 'true'
+      run: node scripts/ci/release-artifact.mjs identity "${RUNNER_TEMP}/release"
     - name: Publish (${{ needs.plan.outputs.mode }}) and set dist-tags
       run: "PKGS=\"${RUNNER_TEMP}/release\"\nfor pkg in \"@jevitate/cli\" \"jevitate\"; do\n  if [ -z \"$(npm view\
         \ \"${pkg}@${VERSION}\" version 2>/dev/null || true)\" ]; then\n    if [ ! -f \"${PKGS}/manifest.json\"\
