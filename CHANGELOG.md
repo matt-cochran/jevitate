@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.28.1] – 2026-11-03
+
+### Fixed
+
+- **Promoted Journey discovery (#770).** `journey find` and the matching MCP capability now find
+  promoted Journeys by exact ID and by search terms appearing anywhere across the Journey ID,
+  name, or description. Production regression runners no longer lose an approved Journey merely
+  because its terms are noncontiguous in the display name.
+
 ## [0.28.0] – 2026-11-01
 
 0.28.0 makes recorded create-then-edit Journeys replay, keeps ARIA tab postconditions replayable,
