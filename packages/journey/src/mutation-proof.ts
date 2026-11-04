@@ -718,9 +718,9 @@ function relaxStepSites(journey: Journey, from: Journey, keys: readonly string[]
 /**
  * #609 — the next earlier postcondition a targeted proof should weaken to reach `targetSiteKey`, or
  * `{refuse}` when there is no defensible one, or null when the target is no longer a cascade. A
- * relaxable failure is the FIRST failed site, at a `step` with `postcondition: true`, at or after the
- * mutated step, before the target, paired with `m` (its own sensitivity evidence), not already
- * relaxed, and within `MAX_TARGETED_RELAXATIONS`.
+ * relaxable failure is the FIRST failed site, either a page postcondition or request assertion, at
+ * or after the mutated step, before the target, paired with `m` (its own sensitivity evidence), not
+ * already relaxed, and within `MAX_TARGETED_RELAXATIONS`.
  */
 export function nextTargetedRelaxation(
   journey: Journey,
@@ -736,14 +736,16 @@ export function nextTargetedRelaxation(
   const first = result.failedSites[0];
   if (first === undefined) return { refuse: "no failed site to relax" };
   if (first.where === "unevaluable") return { refuse: "unevaluable end state" };
-  if (first.where !== "step") return { refuse: `${failedSiteKey(first)} is not a step postcondition` };
-  const key = `step:${first.step}`;
-  if (!first.postcondition) return { refuse: `${key} action failed (not a postcondition)` };
+  if (first.where === "end-state") return { refuse: `${failedSiteKey(first)} is not an earlier step assertion` };
+  const key = failedSiteKey(first);
+  if (first.where === "step" && !first.postcondition) return { refuse: `${key} action failed (not a postcondition)` };
   if (first.step < m.step) return { refuse: "failure before the mutated step" };
   const step = flat(journey)[first.step - 1]?.step;
   if (step === undefined) return { refuse: `${key} does not exist` };
-  if (step.kind === "handback") return { refuse: `${key} is a resume assertion (not a relaxable page postcondition)` };
-  if (target.where === "step" && target.step <= first.step) return { refuse: `${key} is not before the target ${targetSiteKey}` };
+  if (first.where === "step" && step.kind === "handback") return { refuse: `${key} is a resume assertion (not a relaxable page postcondition)` };
+  if ((target.where === "step" || target.where === "step-request") && target.step <= first.step) {
+    return { refuse: `${key} is not before the target ${targetSiteKey}` };
+  }
   if (!plan.pairs.some((p) => p.site === key && p.mutation === m.id)) return { refuse: `${key} is not paired with ${m.id}` };
   if (relaxedSoFar.includes(key)) return { refuse: `${key} is already relaxed` };
   if (relaxedSoFar.length >= MAX_TARGETED_RELAXATIONS) return { refuse: `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached` };
