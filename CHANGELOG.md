@@ -36,6 +36,9 @@ behaviour changes).
 
 ### Changed
 
+- **A proof with an errored replay is not proven (#766).** If any mutated replay errored, for example
+  on a browser-slot admission timeout, `journey verify --mutate` reads `inconclusive` (exit 2), even when
+  other mutations covered the same assertions. An insensitive assertion still reads `insensitive`.
 - **Source builds identify themselves (#784).** An unreleased build reports `x.y.z-source-<commit>` from
   `--version`. Release builds are unchanged.
 - **Release plan (#782).** A staging Release run with pending changesets fails rather than concluding
