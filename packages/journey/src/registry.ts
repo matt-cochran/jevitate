@@ -16,8 +16,13 @@ export class JourneyRegistry {
   }
   async find(query: string): Promise<JourneyMetadata[]> {
     const q = query.trim().toLowerCase();
+    const terms = q.split(/\s+/).filter(Boolean);
     const all = await this.store.list();
     return all.filter((m) => m.promoted)
-      .filter((m) => q === "" || m.name.toLowerCase().includes(q) || (m.description ?? "").toLowerCase().includes(q));
+      .filter((m) => {
+        if (q === "") return true;
+        const fields = [m.id, m.name, m.description ?? ""].map((value) => value.toLowerCase());
+        return fields.some((value) => value.includes(q)) || terms.every((term) => fields.some((value) => value.includes(term)));
+      });
   }
 }
