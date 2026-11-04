@@ -1,5 +1,13 @@
 # jevitate
 
+## 0.28.1
+
+### Patch Changes
+
+- e8ffa56: Find promoted Journeys by exact ID and by noncontiguous search terms.
+- Updated dependencies [e8ffa56]
+  - @jevitate/cli@0.28.1
+
 ## 0.28.0
 
 ### Minor Changes
