@@ -9,9 +9,26 @@ import { currentEngineInfo } from "../engine.js";
 import { renderJourneyLintSarif } from "../journey-lint-sarif.js";
 import { type CliDeps, emitJson } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
-import { DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, lintFindingLine } from "./shared.js";
-import { FsJourneyStore } from "@jevitate/journey";
+import { DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, lintFindingLine, targetsOpts } from "./shared.js";
+import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { journeyLinkWarnings } from "../journey-link-hints.js";
+import { loadTargetsFile, resolveTargetConfig, TargetConfigError } from "../target-config.js";
+
+/**
+ * #763: the target's `safety.readRequests` for the Journey's site, resolved exactly as
+ * `journey review` resolves its safety config. A Journey with no resolvable origin has no target
+ * config, so it lints as before (no read-request policy).
+ */
+function journeyReadRequests(journey: Journey, opts: { targetsFile?: string }): readonly string[] | undefined {
+  let origin: string | null = null;
+  try {
+    origin = new URL(journey.recording.site).origin;
+  } catch {
+    origin = null;
+  }
+  if (origin === null) return undefined;
+  return resolveTargetConfig(loadTargetsFile(opts.targetsFile), origin).safety?.readRequests;
+}
 
 /** Registers `jevitate journey lint`. */
 export function registerJourneyLint(journey: Command, program: Command, deps: CliDeps): void {
@@ -44,9 +61,11 @@ export function registerJourneyLint(journey: Command, program: Command, deps: Cl
         // #507: stamping a promoted Journey makes its approval stale — say so, with the re-approval command.
         const reapproval = fixResult?.needsReapproval === true ? { needsReapproval: true as const, reapproveCommand: fixResult.reapproveCommand } : {};
         const catalogDir = resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout));
-        const linted = await lintJourneyById(resolvedJourneysDir, id, { catalogDir });
-        // #523: catalog-aware, advisory: a missing job / persona link is a warning with its fix.
+        // #763: the targets.json safety config supplies the read-request policy for the write classifier.
         const stored = await new FsJourneyStore(resolvedJourneysDir).get(id);
+        const readRequests = stored === null ? undefined : journeyReadRequests(stored, targetsOpts(deps));
+        const linted = await lintJourneyById(resolvedJourneysDir, id, { catalogDir, ...(readRequests === undefined ? {} : { readRequests }) });
+        // #523: catalog-aware, advisory: a missing job / persona link is a warning with its fix.
         const linkFindings = stored === null ? [] : await journeyLinkWarnings(catalogDir, stored);
         const result = { ...linted, findings: [...linted.findings, ...linkFindings], warnings: linted.warnings + linkFindings.length };
         if (sarif !== undefined) {
@@ -72,6 +91,9 @@ export function registerJourneyLint(journey: Command, program: Command, deps: Cl
       } catch (err) {
         if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof TargetConfigError) {
+          // #763: an invalid targets file is refused exactly as `journey review` refuses it.
+          emitJson(program, fail("E_TARGET_CONFIG", err.message));
         } else {
           emitJson(program, fail("E_JOURNEY_LINT_ARGS", String(err instanceof Error ? err.message : err)));
         }
