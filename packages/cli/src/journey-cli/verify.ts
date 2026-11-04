@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { Command } from "commander";
-import { ParamValidationError } from "@jevitate/journey";
+import { clock } from "@jevitate/domain";
+import { ParamValidationError, secretParamValues } from "@jevitate/journey";
 import { ok, fail } from "../envelope.js";
 import { SiteGateRefusedError } from "@jevitate/runtime";
 import { UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
@@ -11,7 +13,12 @@ import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFla
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { withEngine } from "../engine.js";
-import { planJourneyVerification, verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
+import { JourneyVerifyStalledError, loadJourneyToVerify, planJourneyVerification, proofInactivityMs, verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
+import { VerifyReceiptPreflightError } from "../journey-review-store.js";
+import { EXIT_CODES } from "../exit-codes.js";
+import { artifactStamp } from "../mission-journal.js";
+import { logsDirFor } from "../project-dir.js";
+import { registerTerminalResult, type TerminalResultDeps, type TerminalResultHandle } from "../terminal-result.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 import {
   type CliDeps,
@@ -30,8 +37,14 @@ import {
 import { withProjectFlags } from "../project-layout.js";
 import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
 
+/** Test seams: the replay `verifyJourneyMutations` runs, and the terminal layer's process. */
+export interface JourneyVerifySeams {
+  readonly run?: Parameters<typeof verifyJourneyMutations>[1];
+  readonly terminal?: TerminalResultDeps;
+}
+
 /** Registers `jevitate journey verify`. */
-export function registerJourneyVerify(journey: Command, program: Command, deps: CliDeps): void {
+export function registerJourneyVerify(journey: Command, program: Command, deps: CliDeps, seams: JourneyVerifySeams = {}): void {
   // #402 — the negative proof: replay the Journey once as recorded, then once per mutation (skip a
   // write step, abort its writes, type an empty value into a checked fill); each assertion must fail
   // under its paired mutation. `--plan` previews that exact pairing without opening a browser.
@@ -106,39 +119,57 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
+      let terminal: TerminalResultHandle | undefined;
       try {
+        // Before any browser opens: from here on, every way of not finishing still ends with a result.
+        const proved = await loadJourneyToVerify(verifyJourneysDir, id);
+        terminal = registerTerminalResult(
+          {
+            command: "journey verify",
+            json: json === true,
+            secrets: secretParamValues(proved, param),
+            artifactPath: join(logsDirFor(), `journey-verify-${id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(clock.nowIso())}.json`),
+            inactivityMs: proofInactivityMs(proved),
+          },
+          seams.terminal,
+        );
+        const progress = terminal;
         // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
         const recorded = await withRecordedFixtures(fixtureFlags, { dir: verifyJourneysDir, id });
         let fixtureDrift: FixtureDrift | undefined;
         const report = await withSiteGate(resolveDbPath(deps), (siteGate) =>
-          verifyJourneyMutations({
-            ...(siteGate === undefined ? {} : { siteGate }),
-            dir: verifyJourneysDir,
-            id,
-            params: param,
-            browserPortFactory: deps.explore?.browserPortFactory,
-            ...(browser === undefined ? {} : { browser }),
-            ...(emulation === undefined ? {} : { emulation }),
-            ...(storageState !== undefined ? { storageState } : {}),
-            ...(environment === undefined ? {} : { environment }),
-            ...(allow.length === 0 ? {} : { allow }),
-            // Fixtures run around EVERY replay, so each mutation starts from the same state as the base.
-            fixtures: (site, allowedOrigins, sourceSite) => {
-              // #543: the replay's effective allowlist (#542), so a fixture can reset an allowed outbox.
-              fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: [...allowedOrigins], baseUrl: site });
-              // #561: fixture step URLs on a named secondary origin move with the environment's origins.
-              const rebaseUrl = fixtureRebaseUrl(environment, sourceSite);
-              const fx = buildMissionFixtures(recorded.flags, {
-                allowlist: [...allowedOrigins],
-                baseUrl: site,
-                ...(rebaseUrl === undefined ? {} : { rebaseUrl }),
-                ...(storageState !== undefined ? { storageState } : {}),
-                ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
-              });
-              checkSetupRefs({ "--param": Object.values(param) }, fx);
-              return fx;
+          verifyJourneyMutations(
+            {
+              ...(siteGate === undefined ? {} : { siteGate }),
+              dir: verifyJourneysDir,
+              id,
+              params: param,
+              onProgress: ({ replay, mutation }) => progress.progress({ phase: mutation === undefined ? "as recorded" : undefined, replay, mutation }),
+              browserPortFactory: deps.explore?.browserPortFactory,
+              ...(browser === undefined ? {} : { browser }),
+              ...(emulation === undefined ? {} : { emulation }),
+              ...(storageState !== undefined ? { storageState } : {}),
+              ...(environment === undefined ? {} : { environment }),
+              ...(allow.length === 0 ? {} : { allow }),
+              // Fixtures run around EVERY replay, so each mutation starts from the same state as the base.
+              fixtures: (site, allowedOrigins, sourceSite) => {
+                // #543: the replay's effective allowlist (#542), so a fixture can reset an allowed outbox.
+                fixtureDrift = fixtureDriftFor(recorded.recorded, { allowlist: [...allowedOrigins], baseUrl: site });
+                // #561: fixture step URLs on a named secondary origin move with the environment's origins.
+                const rebaseUrl = fixtureRebaseUrl(environment, sourceSite);
+                const fx = buildMissionFixtures(recorded.flags, {
+                  allowlist: [...allowedOrigins],
+                  baseUrl: site,
+                  ...(rebaseUrl === undefined ? {} : { rebaseUrl }),
+                  ...(storageState !== undefined ? { storageState } : {}),
+                  ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
+                });
+                checkSetupRefs({ "--param": Object.values(param) }, fx);
+                return fx;
+              },
             },
-          }),
+            seams.run,
+          ),
         );
         const code = verifyExitCode(report.verdict);
         if (json) {
@@ -155,8 +186,16 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
           );
         }
         process.exitCode = code;
+        terminal.complete();
       } catch (err) {
-        if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
+        if (err instanceof JourneyVerifyStalledError) {
+          // Only where the terminal layer stays out (an MCP call) does this run: elsewhere it ended the process first.
+          emitJson(program, {
+            ...fail(err.code, err.message),
+            data: { trigger: "watchdog", inactivityMs: err.inactivityMs, progress: err.where, sessionsClosed: err.sessionsClosed, exitCode: EXIT_CODES.inconclusive },
+          });
+          process.exitCode = EXIT_CODES.inconclusive;
+        } else if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
@@ -170,9 +209,13 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
           emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
         } else if (err instanceof FixtureSetupError) {
           emitJson(program, fail("E_JOURNEY_VERIFY", `fixture setup failed — nothing verified: ${err.message}`));
-        } else {
+        } else if (err instanceof VerifyReceiptPreflightError || terminal === undefined) {
           emitJson(program, fail("E_JOURNEY_VERIFY", String(err instanceof Error ? err.message : err)));
+        } else {
+          terminal.fail(err);
+          return;
         }
+        terminal?.complete();
       }
     });
 }

@@ -15,7 +15,9 @@ import {
   assertionSiteKey,
   classifyMutation,
   declaredTargetedProofFor,
+  flatJourneySteps,
   journeyAssertions,
+  journeyEndState,
   judgeAssertions,
   mutationProofVerdict,
   mutationReplay,
@@ -35,8 +37,9 @@ import {
   type MutationRunResult,
   type TargetedProof,
 } from "@jevitate/journey";
-import { describeCheck, type BlockedWrite } from "@jevitate/explore";
+import { DEFAULT_STEP_RESPONSE_TIMEOUT_MS, describeCheck, type BlockedWrite } from "@jevitate/explore";
 import { clock } from "@jevitate/domain";
+import { DEFAULT_ADMISSION_TIMEOUT_MS, DEFAULT_CLOSE_TIMEOUT_MS, DEFAULT_OPEN_TIMEOUT_MS, PlaywrightBrowserPort, pageUnresponsiveMsFromEnv, type BrowserPort, type BrowserSession } from "@jevitate/playwright";
 import { journeyContentHash } from "./journey-annotate-api.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
@@ -51,7 +54,156 @@ export type VerifyJourneyOptions = Omit<
 > & {
   /** Read patterns for the write classifier (as `journey lint`). */
   readonly readRequests?: readonly string[];
+  /** Called as each replay starts, in order, targeted proofs' replays included. */
+  readonly onProgress?: (progress: JourneyVerifyProgress) => void;
 };
+
+/** The replay a proof is starting. Names only: never a parameter value. */
+export interface JourneyVerifyProgress {
+  /** 1-based over the whole proof; replay 1 is the Journey as recorded. */
+  readonly replay: number;
+  /** The mutation this replay runs under. Absent on replay 1. */
+  readonly mutation?: string;
+}
+
+/** Hands a proof's bound the Journey it is sized from. */
+export async function loadJourneyToVerify(dir: string, id: string): Promise<Journey> {
+  const journey = await new JourneyRegistry(new FsJourneyStore(dir)).get(id);
+  if (!journey) throw new UnknownJourneyError(`unknown journey '${id}'`);
+  return journey;
+}
+
+// What one replay can legally wait for, by the bounds of the code it runs.
+const ACTION_BOUND_MS = 30_000; // `page.goto` and default actions (Playwright's default).
+const RELOAD_BOUND_MS = 15_000; // `outcome-wait.ts`, `act.ts`.
+const SITE_GATE_WAIT_MS = 5_000; // `site-gate.ts`.
+/** A hook's default limit, before and after a replay. A spec that sets longer limits leans on the rest of the budget. */
+const FIXTURE_ALLOWANCE_MS = 120_000;
+/** The least a replay is given, however short its Journey. */
+const REPLAY_FLOOR_MS = 360_000;
+const MAX_TIMER_MS = 2_147_483_647;
+/** How long after the inactivity limit the in-process bound fires, so a CLI's terminal layer ends the run first. */
+const STALL_MARGIN_MS = 30_000;
+/** How long a stalled replay's session close and its own unwinding (fixture restore) may take. */
+const STALL_TEARDOWN_MS = 90_000;
+
+function admissionBoundMs(env: NodeJS.ProcessEnv = process.env): number {
+  const set = Number(env["JEVITATE_ADMISSION_TIMEOUT_MS"]);
+  return Number.isInteger(set) && set > 0 ? set : DEFAULT_ADMISSION_TIMEOUT_MS;
+}
+
+/**
+ * The longest a proof can legally go between two replays' progress: a machine-slot admission wait,
+ * then the longest legal single replay of THIS Journey, each step at its worst. A sum of worst cases,
+ * so it is far above a typical replay. It limits silence and never the whole run: a proof whose
+ * replays keep starting is never ended, however long it takes (#778).
+ */
+export function proofInactivityMs(journey: Journey, opts: Pick<VerifyJourneyOptions, "stepResponseTimeoutMs"> = {}): number {
+  const responseDefault = opts.stepResponseTimeoutMs ?? DEFAULT_STEP_RESPONSE_TIMEOUT_MS;
+  let replay = DEFAULT_OPEN_TIMEOUT_MS + pageUnresponsiveMsFromEnv() + DEFAULT_CLOSE_TIMEOUT_MS + FIXTURE_ALLOWANCE_MS;
+  for (const { recorded } of flatJourneySteps(journey)) {
+    const wait = "waitFor" in recorded.step ? recorded.step.waitFor : undefined;
+    replay += ACTION_BOUND_MS + SITE_GATE_WAIT_MS + RELOAD_BOUND_MS + (recorded.responseTimeoutMs ?? responseDefault);
+    // A wait's last poll can start just before `maxMs` and still reload.
+    if (wait !== undefined) replay += wait.maxMs + ACTION_BOUND_MS;
+  }
+  replay += journeyEndState(journey).length * (ACTION_BOUND_MS + RELOAD_BOUND_MS);
+  return Math.min(admissionBoundMs() + Math.max(REPLAY_FLOOR_MS, replay), MAX_TIMER_MS - STALL_MARGIN_MS);
+}
+
+/**
+ * A replay went past the proof's inactivity limit: the proof ended with no verdict and no receipt.
+ * A CLI run normally ends at the terminal layer's own limit first, so this is what an MCP call (where
+ * that layer stays out) and `journey readiness` get. Its text carries names only, never a value.
+ */
+export class JourneyVerifyStalledError extends Error {
+  readonly code = "E_TERMINAL_WATCHDOG";
+  constructor(
+    readonly where: JourneyVerifyProgress,
+    readonly inactivityMs: number,
+    /** Every session this replay opened has closed. False: its close was still pending when the teardown bound ran out. */
+    readonly sessionsClosed: boolean,
+  ) {
+    const at = where.mutation === undefined ? `replay ${where.replay}` : `replay ${where.replay}, mutation ${where.mutation}`;
+    super(`journey verify: no progress for the ${inactivityMs}ms inactivity limit at ${at}; no verdict, and any earlier receipt stands${sessionsClosed ? "" : ". Its browser session did not close in time"}`);
+    this.name = "JourneyVerifyStalledError";
+  }
+}
+
+/**
+ * The sessions one replay opens, so a stalled replay can be ended from outside: `runJourneyProgrammatically`
+ * takes no cancel signal, but closing its session makes every page call it is waiting on reject, and
+ * it then unwinds by its own paths, fixture restore included. An open still pending at the stall is
+ * closed the moment it lands.
+ */
+function trackedPortFactory(factory: () => BrowserPort): { factory: () => BrowserPort; abandon: () => Promise<void> } {
+  const pending = new Set<Promise<unknown>>();
+  const opened = new Set<BrowserSession>();
+  let abandoned = false;
+  const closeOf = (session: BrowserSession): Promise<unknown> => session.close().catch(() => undefined);
+  const openOn = async (port: BrowserPort, o: Parameters<BrowserPort["open"]>[0]): Promise<BrowserSession> => {
+    const session = await port.open(o);
+    if (abandoned) {
+      await closeOf(session);
+      throw new Error("the replay was abandoned while its browser session opened");
+    }
+    opened.add(session);
+    return session;
+  };
+  return {
+    factory: () => {
+      const port = factory();
+      return {
+        open: (o) => {
+          const opening = openOn(port, o);
+          const done = (): void => void pending.delete(opening);
+          pending.add(opening);
+          opening.then(done, done);
+          return opening;
+        },
+      };
+    },
+    abandon: async () => {
+      abandoned = true;
+      await Promise.allSettled([...[...opened].map(closeOf), ...pending]);
+    },
+  };
+}
+
+/** `start` under the limit. Past it: close what the replay opened, give it a bounded time to unwind, and throw. */
+async function replayWithinBound<T>(
+  start: (factory: () => BrowserPort) => Promise<T>,
+  portFactory: () => BrowserPort,
+  where: JourneyVerifyProgress,
+  inactivityMs: number,
+): Promise<T> {
+  const tracked = trackedPortFactory(portFactory);
+  const running = start(tracked.factory);
+  let timer: ReturnType<typeof clock.setTimeout> | undefined;
+  const stalled = new Promise<{ readonly stalled: true }>((resolve) => {
+    // Ref'd: a replay with nothing else left to hold the process open still reaches this bound.
+    timer = clock.setTimeout(() => resolve({ stalled: true }), inactivityMs + STALL_MARGIN_MS);
+  });
+  try {
+    const first = await Promise.race([running.then((value) => ({ stalled: false as const, value })), stalled]);
+    if (!first.stalled) return first.value;
+  } finally {
+    clock.clearTimeout(timer);
+  }
+  let sessionsClosed = false;
+  let teardownTimer: ReturnType<typeof clock.setTimeout> | undefined;
+  const closing = tracked.abandon().then(() => {
+    sessionsClosed = true;
+  });
+  await Promise.race([
+    Promise.allSettled([closing, running]),
+    new Promise<void>((resolve) => {
+      teardownTimer = clock.setTimeout(resolve, STALL_TEARDOWN_MS);
+    }),
+  ]);
+  clock.clearTimeout(teardownTimer);
+  throw new JourneyVerifyStalledError(where, inactivityMs, sessionsClosed);
+}
 
 export interface JourneyVerifyMutation {
   readonly kind: JourneyMutation["kind"];
@@ -195,15 +347,24 @@ function failedSitesOf(result: { outcome: string; reason?: string; at?: number }
  * refuses a step, a site-gate refusal) throw exactly as `journey run`'s do, before any mutation.
  */
 export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Run = runJourneyProgrammatically): Promise<JourneyVerifyReport> {
-  const journey = await new JourneyRegistry(new FsJourneyStore(opts.dir)).get(opts.id);
-  if (!journey) throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
+  const journey = await loadJourneyToVerify(opts.dir, opts.id);
   // #711: receipt authority is proven before the first baseline/mutation replay spends a browser.
   const receiptDestination = await preflightVerifyRecord(opts.dir, journey.metadata.id);
-  const { readRequests, ...runOpts } = opts;
+  const { readRequests, onProgress, ...runOpts } = opts;
+  const inactivityMs = proofInactivityMs(journey, opts);
+  const portFactory = opts.browserPortFactory ?? ((): BrowserPort => new PlaywrightBrowserPort());
+  let replays = 0;
+  // Every replay of the proof goes through here: it is reported, and it is bounded.
+  const boundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: JourneyMutation): ReturnType<Run> => {
+    replays += 1;
+    const where: JourneyVerifyProgress = { replay: replays, ...(m === undefined ? {} : { mutation: m.id }) };
+    onProgress?.(where);
+    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, mutation), portFactory, where, inactivityMs);
+  };
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
 
-  const base = await run(runOpts, { structuredFailures: true });
+  const base = await boundedRun(runOpts, { structuredFailures: true });
   const baseFields = { outcome: base.outcome, ...(base.outcome === "quarantined" ? { reason: base.reason } : {}) };
   const sites = journeyAssertions(journey);
   const checkOf = new Map(sites.map((s) => [assertionSiteKey(s), describeCheck(s.check)]));
@@ -223,14 +384,18 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay): Promise<Replayed> => {
       try {
         const how = describe(journey);
-        const r = await run(how.params === undefined ? runOpts : { ...runOpts, params: { ...how.params } }, {
-          structuredFailures: true,
-          ...(how.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: how.relaxedStepRequests }),
-          ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j).journey }),
-          ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
-          ...(how.swapSelectAtStep === undefined ? {} : { selectAlternativeAtStep: how.swapSelectAtStep }),
-          ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
-        });
+        const r = await boundedRun(
+          how.params === undefined ? runOpts : { ...runOpts, params: { ...how.params } },
+          {
+            structuredFailures: true,
+            ...(how.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: how.relaxedStepRequests }),
+            ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j).journey }),
+            ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
+            ...(how.swapSelectAtStep === undefined ? {} : { selectAlternativeAtStep: how.swapSelectAtStep }),
+            ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
+          },
+          m,
+        );
         const blocked = r.blockedWrites ?? [];
         const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
         // #579: a select mutation found no other enabled live option — not applied, never proof.
@@ -252,6 +417,8 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
           ...(r.outcome === "quarantined" ? { reason: r.reason } : {}),
         };
       } catch (err) {
+        // A stall ends the proof: it never reads as one mutation's error, which could still end `proven`.
+        if (err instanceof JourneyVerifyStalledError) throw err;
         return { outcome: "error", failedSites: [], reason: err instanceof Error ? err.message : String(err) };
       }
     };
