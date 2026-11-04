@@ -4,12 +4,13 @@ import { Command } from "commander";
 import { redactCredentialShapes } from "@jevitate/ai-core";
 import { clock, MISSION_RESULT_SCHEMA_VERSION, type MissionOutcome, type TimerHandle } from "@jevitate/domain";
 import { terminateOwnBrowsersSync } from "@jevitate/playwright";
+import { inMcpInvocation } from "./approval-provenance.js";
 import { emitCommandResult } from "./cli-shared.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { fail, type JsonEnvelope } from "./envelope.js";
-import { exitCodeForOutcome } from "./exit-codes.js";
+import { EXIT_CODES, exitCodeForOutcome } from "./exit-codes.js";
 import { redactSecretValues } from "./journey-api.js";
-import { installMissionKillSwitch, setKillTerminalReporter, type KillSignal } from "./kill-signal.js";
+import { installMissionKillSwitch, PARENT_GONE_HINT, setKillTerminalReporter, type KillCause, type KillSignal } from "./kill-signal.js";
 import { resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { currentRunMetadata, type RunMetadata } from "./run-metadata.js";
 
@@ -19,15 +20,27 @@ import { currentRunMetadata, type RunMetadata } from "./run-metadata.js";
  * it goes, and calls `complete()` when it has emitted its own result. If it ends any other way, this
  * layer writes a redacted diagnostic artifact, prints one envelope and exits:
  *
- *  | trigger        | code                 | exit                                                  |
- *  |----------------|----------------------|-------------------------------------------------------|
- *  | signal         | E_TERMINAL_SIGNAL    | 129/130/143, by the kill switch (kill-signal.ts)      |
- *  | watchdog       | E_TERMINAL_WATCHDOG  | 2 (inconclusive: it proves nothing)                   |
- *  | `fail(err)`    | E_TERMINAL_INTERNAL  | 2 (crashed)                                           |
- *  | uncaught error | E_TERMINAL_INTERNAL  | 2 (crashed; an unhandled rejection arrives this way)  |
- *  | process exit   | E_TERMINAL_UNSETTLED | 2 (a `process.exit` or a drained event loop, no result) |
+ *  | trigger        | code                   | exit                                                  |
+ *  |----------------|------------------------|-------------------------------------------------------|
+ *  | signal         | E_TERMINAL_SIGNAL      | 129/130/143, by the kill switch (kill-signal.ts)      |
+ *  | parent gone    | E_TERMINAL_PARENT_GONE | 129, by the kill switch; no signal was sent           |
+ *  | inactivity     | E_TERMINAL_WATCHDOG    | 2 (inconclusive: it proves nothing)                   |
+ *  | `fail(err)`    | E_TERMINAL_INTERNAL    | 2 (crashed)                                           |
+ *  | uncaught error | E_TERMINAL_INTERNAL    | 2 (crashed; an unhandled rejection arrives this way)  |
+ *  | process exit   | E_TERMINAL_UNSETTLED   | 2 (a `process.exit` or a drained event loop, no result) |
  *
  * Exactly once: the first trigger wins and every later one is a no-op.
+ *
+ * What cannot be handled in process (SIGKILL, a caller's limit that kills the whole group) leaves
+ * only what was already printed, so each `progress()` also prints one short redacted line to stderr.
+ * stdout stays exactly one envelope. A stderr that stops accepting them only ends the printing.
+ *
+ * A broken output pipe never decides a result: see `installBrokenPipePolicy`.
+ *
+ * Inside an MCP tool call (`mcp-cli-runner.ts`) the process is the shared server and fd 1 is the MCP
+ * protocol channel, so this layer stays out: nothing is printed, nothing is armed, and nothing
+ * exits. The tool's result is still the command's own captured envelope. `fail` rethrows there, and
+ * the runner turns that into its own `E_CLI_INTERNAL` result.
  *
  * SYNCHRONOUS BY CONTRACT. Everything from a trigger to the exit runs in one turn and never yields
  * the event loop, for the reason `onKillSignal` documents: Playwright's own signal handler closes
@@ -42,13 +55,18 @@ import { currentRunMetadata, type RunMetadata } from "./run-metadata.js";
  * delays them until it returns.
  */
 
-/** Where the command was when it ended: what a diagnostic names. All text is redacted before use. */
+/**
+ * Where the command is now: what a progress line and a diagnostic name. All text is redacted before
+ * use. An update merges into what was reported, so pass `undefined` to clear a field that no longer
+ * applies (the mutation, once the replay under it has finished).
+ */
 export interface TerminalProgress {
-  readonly phase?: string;
-  readonly replay?: number | string;
-  readonly mutation?: string;
-  readonly step?: number | string;
-  readonly detail?: Readonly<Record<string, unknown>>;
+  readonly phase?: string | undefined;
+  readonly replay?: number | string | undefined;
+  readonly mutation?: string | undefined;
+  readonly step?: number | string | undefined;
+  /** Carried in the diagnostic only, never in a progress line. */
+  readonly detail?: Readonly<Record<string, unknown>> | undefined;
 }
 
 export interface TerminalResultRegistration {
@@ -64,18 +82,35 @@ export interface TerminalResultRegistration {
    * earlier proof stored there. Absent: the envelope is the only result.
    */
   readonly artifactPath?: string;
-  /** The command's whole-run limit, in milliseconds: a positive integer a timer can represent. */
-  readonly watchdogMs: number;
+  /**
+   * The longest the command may go without calling `progress()`, in milliseconds: a positive integer
+   * a timer can represent. Each `progress()` starts this limit again, so it does not bound the whole
+   * run: legal runs range from seconds to over 100 minutes (#778).
+   *
+   * Derive it from what one uninterrupted stretch can legally take, not from a typical run. If
+   * `progress()` is called per replay, it must cover the 300 s machine-slot admission bound
+   * (`DEFAULT_ADMISSION_TIMEOUT_MS`) plus the longest legal single replay of this command's plan,
+   * since both can fall between two calls.
+   */
+  readonly inactivityMs: number;
   /** The progress known at registration. */
   readonly progress?: TerminalProgress;
 }
 
 export interface TerminalResultHandle {
-  /** Merges what the command knows now into the progress a diagnostic reports. Synchronous; never throws. */
+  /**
+   * Merges what the command knows now into the progress a diagnostic reports, prints one redacted line
+   * to stderr, and starts `inactivityMs` again. A no-op once the command has settled. Synchronous;
+   * never throws.
+   */
   progress(update: TerminalProgress): void;
   /** Adds secrets learned during the run (a resolved auth token). Synchronous; never throws. */
   addSecrets(values: readonly string[]): void;
-  /** An internal error: reports it, then exits. A no-op once the command has settled. */
+  /**
+   * An internal error: reports it, then exits. A no-op once the command has settled. Inside an MCP
+   * tool call it throws the redacted error instead, so call it where a throw reaches the command's
+   * caller (a `catch` that ends the action).
+   */
   fail(err: unknown): void;
   /**
    * The command has emitted its own result: nothing more is reported. Call it in the same synchronous
@@ -99,6 +134,8 @@ export interface TerminalResultDeps {
   /** Listens for the process ending on any path. Returns the remover. */
   readonly onProcessExit: (listener: () => void) => () => void;
   readonly installKillSwitch: () => void;
+  /** True when this process is shared with other work and is not this command's to print on or end. */
+  readonly sharedProcess: () => boolean;
 }
 
 /** Steps of `RETRY_SLEEP_MS`: a reader that drains nothing for this long no longer holds up the exit. */
@@ -106,6 +143,8 @@ const WRITE_RETRIES = 200;
 const RETRY_SLEEP_MS = 5;
 const MAX_TIMER_MS = 2_147_483_647;
 const MAX_CAUSE_DEPTH = 5;
+/** A progress line is one short line: a caller may keep only the tail of its stderr. */
+const MAX_PROGRESS_LINE = 200;
 
 /** Writes all of `text` to `fd`, blocking. `writeSync` can write part of it, or throw EAGAIN on a full non-blocking pipe. */
 function writeAllSync(fd: number, text: string): void {
@@ -145,10 +184,12 @@ const realDeps: TerminalResultDeps = {
     return () => process.off("exit", listener);
   },
   installKillSwitch: installMissionKillSwitch,
+  sharedProcess: inMcpInvocation,
 };
 
 type Trigger =
   | { readonly kind: "signal"; readonly signal: KillSignal; readonly exitCode: number }
+  | { readonly kind: "parent-gone"; readonly exitCode: number }
   | { readonly kind: "watchdog" }
   | { readonly kind: "internal-error"; readonly error: unknown }
   | { readonly kind: "unsettled-exit" };
@@ -162,6 +203,8 @@ interface ActiveCommand {
   readonly startedMs: number;
   readonly secrets: string[];
   progress: TerminalProgress;
+  /** stderr refused a progress line (a closed pipe, a reader that stopped draining): no more are tried. */
+  progressSilenced: boolean;
   timer?: TimerHandle;
   removeListeners?: () => void;
 }
@@ -170,12 +213,16 @@ interface ActiveCommand {
 const active: ActiveCommand[] = [];
 /** The process is ending and its one result was written. */
 let terminated = false;
+/** Secrets of commands that already completed: an error after their result is still theirs to redact. */
+const completedSecrets: string[] = [];
+let completedAny = false;
 let removeReporter: (() => void) | undefined;
 
 /** What the kill switch calls on a signal; it does the teardown and the exit itself. */
-function reportSignal({ signal, exitCode }: { signal: KillSignal; exitCode: number }): void {
+function reportKill({ cause, exitCode }: { cause: KillCause; exitCode: number }): void {
   const newest = active.at(-1);
-  if (newest !== undefined) terminate(newest, { kind: "signal", signal, exitCode });
+  if (newest === undefined) return;
+  terminate(newest, cause === "parent-gone" ? { kind: "parent-gone", exitCode } : { kind: "signal", signal: cause, exitCode });
 }
 
 function release(command: ActiveCommand): void {
@@ -239,8 +286,10 @@ function headline(trigger: Trigger, registration: TerminalResultRegistration): s
   switch (trigger.kind) {
     case "signal":
       return `interrupted by ${trigger.signal}`;
+    case "parent-gone":
+      return `the parent process went away, no signal was sent (${PARENT_GONE_HINT})`;
     case "watchdog":
-      return `no result within the ${registration.watchdogMs}ms watchdog limit`;
+      return `no progress for the ${registration.inactivityMs}ms inactivity limit`;
     case "internal-error":
       return "internal error";
     case "unsettled-exit":
@@ -250,6 +299,7 @@ function headline(trigger: Trigger, registration: TerminalResultRegistration): s
 
 const ERROR_CODES = {
   signal: "E_TERMINAL_SIGNAL",
+  "parent-gone": "E_TERMINAL_PARENT_GONE",
   watchdog: "E_TERMINAL_WATCHDOG",
   "internal-error": "E_TERMINAL_INTERNAL",
   "unsettled-exit": "E_TERMINAL_UNSETTLED",
@@ -272,8 +322,8 @@ function buildDiagnostic(command: ActiveCommand, trigger: Trigger, exitCode: num
           command: registration.command,
           trigger: trigger.kind,
           ...(trigger.kind === "signal" ? { signal: trigger.signal } : {}),
-          ...(trigger.kind === "watchdog" ? { watchdogMs: registration.watchdogMs } : {}),
-          elapsedMs: clock.monotonicMs() - startedMs,
+          ...(trigger.kind === "watchdog" ? { inactivityMs: registration.inactivityMs } : {}),
+          elapsedMs: Math.round(clock.monotonicMs() - startedMs),
           exitCode,
           progress,
           ...(error === undefined ? {} : { error }),
@@ -300,7 +350,7 @@ function missionOutcomeOf(trigger: Trigger): MissionOutcome {
 function report(command: ActiveCommand, trigger: Trigger): number {
   const { deps, registration } = command;
   const missionOutcome = missionOutcomeOf(trigger);
-  const exitCode = trigger.kind === "signal" ? trigger.exitCode : exitCodeForOutcome(missionOutcome);
+  const exitCode = trigger.kind === "signal" || trigger.kind === "parent-gone" ? trigger.exitCode : exitCodeForOutcome(missionOutcome);
   const secrets = longestFirst(command.secrets);
   let built: { message: string; diagnostic: Record<string, unknown> };
   try {
@@ -328,7 +378,7 @@ function report(command: ActiveCommand, trigger: Trigger): number {
           outcome: missionOutcome,
           missionOutcome,
           reason: built.message,
-          stop: trigger.kind === "signal" ? "terminated" : trigger.kind,
+          stop: trigger.kind === "signal" || trigger.kind === "parent-gone" ? "terminated" : trigger.kind,
           exitCode,
           defects: [],
           defectOutcome: { status: "none", byKind: {} },
@@ -384,17 +434,62 @@ function terminateAndExit(command: ActiveCommand, trigger: Trigger): void {
   command.deps.exit(exitCode);
 }
 
+/** (Re)starts the command's inactivity limit. */
+function armInactivity(command: ActiveCommand): void {
+  if (command.timer !== undefined) clock.clearTimeout(command.timer);
+  // Unref'd: this timer alone must not hold a finished process open. If the event loop drains, the
+  // exit listener reports it at once.
+  command.timer = clock.setTimeout(() => terminateAndExit(command, { kind: "watchdog" }), command.registration.inactivityMs);
+  command.timer.unref();
+}
+
+/** All redaction first: cutting or rewriting the text before it could leave part of a secret readable. */
+function progressLine(command: ActiveCommand): string {
+  const { progress, registration, secrets, startedMs } = command;
+  const elapsedS = Math.round((clock.monotonicMs() - startedMs) / 1_000);
+  const raw = `progress ${registration.command}: ${progressPhrase(progress) ?? "running"} (${elapsedS}s)`;
+  const redacted = redactSecretValues(redactCredentialShapes(raw), longestFirst(secrets));
+  return `${redacted.replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, MAX_PROGRESS_LINE)}\n`;
+}
+
+/** Nothing here may reach the run: a stderr that refuses a line ends the printing, and only that. */
+function printProgress(command: ActiveCommand): void {
+  if (command.progressSilenced) return;
+  try {
+    command.deps.writeStderr(progressLine(command));
+  } catch {
+    command.progressSilenced = true;
+  }
+}
+
+/** The handle inside a shared process: see this module's doc. */
+function sharedProcessHandle(registration: TerminalResultRegistration): TerminalResultHandle {
+  const secrets = [...registration.secrets];
+  return {
+    progress: () => {},
+    addSecrets: (values) => {
+      secrets.push(...values);
+    },
+    fail: (err) => {
+      const message = printable(describeError(err)["message"]);
+      throw new Error(redactSecretValues(message, longestFirst(secrets)));
+    },
+    complete: () => {},
+  };
+}
+
 /**
  * Registers how a long-running command produces its terminal result. Call it before the command's
  * first browser launch, and keep the returned handle for the run. See this module's doc for what ends
  * a command, and for the synchronous contract everything reachable from a trigger keeps.
  *
- * Throws a `RangeError` on an unusable `watchdogMs`: a command never runs without its bound.
+ * Throws a `RangeError` on an unusable `inactivityMs`: a command never runs without its bound.
  */
 export function registerTerminalResult(registration: TerminalResultRegistration, deps: TerminalResultDeps = realDeps): TerminalResultHandle {
-  if (!Number.isInteger(registration.watchdogMs) || registration.watchdogMs <= 0 || registration.watchdogMs > MAX_TIMER_MS) {
-    throw new RangeError(`watchdogMs must be a positive integer of at most ${MAX_TIMER_MS}, got ${registration.watchdogMs}`);
+  if (!Number.isInteger(registration.inactivityMs) || registration.inactivityMs <= 0 || registration.inactivityMs > MAX_TIMER_MS) {
+    throw new RangeError(`inactivityMs must be a positive integer of at most ${MAX_TIMER_MS}, got ${registration.inactivityMs}`);
   }
+  if (deps.sharedProcess()) return sharedProcessHandle(registration);
   // Only a fake `exit` can get here with a finished process behind it (a later test in one worker).
   if (active.length === 0) terminated = false;
   deps.installKillSwitch();
@@ -407,9 +502,10 @@ export function registerTerminalResult(registration: TerminalResultRegistration,
     startedMs: clock.monotonicMs(),
     secrets: [...registration.secrets],
     progress: registration.progress ?? {},
+    progressSilenced: false,
   };
   active.push(command);
-  removeReporter = setKillTerminalReporter(reportSignal);
+  removeReporter = setKillTerminalReporter(reportKill);
 
   const removeFatal = deps.onFatalError((err) => terminateAndExit(command, { kind: "internal-error", error: err }));
   const removeExit = deps.onProcessExit(() => {
@@ -426,15 +522,16 @@ export function registerTerminalResult(registration: TerminalResultRegistration,
     removeFatal();
     removeExit();
   };
-  // Unref'd: this timer alone must not hold a finished process open. If the event loop drains, the
-  // exit listener above reports it at once.
-  command.timer = clock.setTimeout(() => terminateAndExit(command, { kind: "watchdog" }), registration.watchdogMs);
-  command.timer.unref();
+  armInactivity(command);
 
   const settled = (): boolean => !active.includes(command);
   return {
     progress: (update) => {
+      if (settled()) return;
       command.progress = { ...command.progress, ...update };
+      // Any command's progress shows the process is working, and an outer command waits on the inner.
+      for (const c of active) armInactivity(c);
+      printProgress(command);
     },
     addSecrets: (values) => {
       command.secrets.push(...values);
@@ -446,6 +543,8 @@ export function registerTerminalResult(registration: TerminalResultRegistration,
       if (settled()) return;
       active.splice(active.indexOf(command), 1);
       release(command);
+      completedAny = true;
+      completedSecrets.push(...command.secrets);
       if (active.length === 0) {
         removeReporter?.();
         removeReporter = undefined;
@@ -454,11 +553,63 @@ export function registerTerminalResult(registration: TerminalResultRegistration,
   };
 }
 
+/**
+ * What an EPIPE on an output stream means. A closed reader is not a verdict, and exit 0 here once
+ * reported `still-reproduces` as a pass, so:
+ *
+ *  - stderr: nothing. It carries progress and diagnostics, and `2>&1 | head` must not end a proof.
+ *  - stdout, a registered command still running: nothing. It goes on to its real result and exit code.
+ *  - stdout otherwise: the process exits quietly (#213) with whatever `process.exitCode` the command
+ *    set, 0 when it set none. `emitEnvelope` writes before it sets the code, but a stream reports
+ *    the error on a later tick than the write, so the code is set by the time this runs. And a
+ *    registered command calls `complete()` in that same turn, so if the error ever came first, the
+ *    "still running" rule above would keep its code.
+ *
+ * `process.exit()` takes no code on purpose: it keeps the one the command set.
+ */
+export function installBrokenPipePolicy(
+  streams: { readonly stdout: NodeJS.EventEmitter; readonly stderr: NodeJS.EventEmitter } = process,
+  exit: () => void = () => process.exit(),
+): void {
+  const rethrowUnlessEpipe = (err: NodeJS.ErrnoException): void => {
+    if (err.code !== "EPIPE") throw err;
+  };
+  streams.stderr.on("error", rethrowUnlessEpipe);
+  streams.stdout.on("error", (err: NodeJS.ErrnoException) => {
+    rethrowUnlessEpipe(err);
+    if (active.length === 0) exit();
+  });
+}
+
+/**
+ * A command's promise rejected up to the entry point. With a command registered in this process the
+ * layer handles it, so its secrets are redacted: a running one gets the usual E_TERMINAL_INTERNAL
+ * ending, and a completed one (its result already out, so no second envelope) a redacted stderr line
+ * and exit 2. Returns false when nothing was registered: the caller reports it itself.
+ */
+export function reportCommandRejection(err: unknown, writeStderr: (text: string) => void = realDeps.writeStderr): boolean {
+  const newest = active.at(-1);
+  if (newest !== undefined) {
+    terminateAndExit(newest, { kind: "internal-error", error: err });
+    return true;
+  }
+  if (!completedAny) return false;
+  process.exitCode = EXIT_CODES.inconclusive;
+  try {
+    writeStderr(`${redactSecretValues(redactCredentialShapes(String(err)), longestFirst(completedSecrets))}\n`);
+  } catch {
+    // Best-effort: stderr may already be gone. The exit code above still stands.
+  }
+  return true;
+}
+
 /** Test seam: resets all module state (a real run never needs this: one process, one exit). */
 export function __resetTerminalResultForTests(): void {
   for (const c of active) release(c);
   active.length = 0;
   terminated = false;
+  completedAny = false;
+  completedSecrets.length = 0;
   removeReporter?.();
   removeReporter = undefined;
 }

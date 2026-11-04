@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { __resetKillSwitchForTests, armMissionKillSwitch, installMissionKillSwitch, setKillSummary, setKillSwitchOutput, type KillSwitchDeps } from "./kill-signal.js";
-import { __resetTerminalResultForTests, registerTerminalResult, type TerminalResultDeps, type TerminalResultRegistration } from "./terminal-result.js";
+import { EventEmitter } from "node:events";
+import { runAsMcpInvocation } from "./approval-provenance.js";
+import { __resetTerminalResultForTests, installBrokenPipePolicy, registerTerminalResult, reportCommandRejection, type TerminalResultDeps, type TerminalResultRegistration } from "./terminal-result.js";
 
 const SECRET = "hunter2-very-secret-value";
 
@@ -14,6 +16,9 @@ function fakeProcess() {
   const signals: Record<string, () => void> = {};
   let fatal: ((err: unknown) => void) | undefined;
   let processExit: (() => void) | undefined;
+  let parentGone: (() => void) | undefined;
+  let stderrBroken = false;
+  let shared = false;
   const killDeps: KillSwitchDeps = {
     exit: (code) => events.push(`exit ${code}`),
     closeBrowsers: async () => {},
@@ -22,6 +27,9 @@ function fakeProcess() {
     readTranscript: () => ({ steps: 0, transcript: [] }),
     onSignal: (signal, handler) => {
       signals[signal] = handler;
+    },
+    watchParent: (onGone) => {
+      parentGone = onGone;
     },
     writeStdout: (text) => {
       events.push("stdout");
@@ -36,6 +44,10 @@ function fakeProcess() {
       stdout.push(text);
     },
     writeStderr: (text) => {
+      if (stderrBroken) {
+        events.push("stderr-refused");
+        throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+      }
       events.push("stderr");
       stderr.push(text);
     },
@@ -58,9 +70,10 @@ function fakeProcess() {
       };
     },
     installKillSwitch: () => installMissionKillSwitch(killDeps),
+    sharedProcess: () => shared,
   };
   const register = (over: Partial<TerminalResultRegistration> = {}) =>
-    registerTerminalResult({ command: "journey verify", json: true, secrets: [SECRET], watchdogMs: 1_000, ...over }, deps);
+    registerTerminalResult({ command: "journey verify", json: true, secrets: [SECRET], inactivityMs: 1_000, ...over }, deps);
   return {
     events,
     stdout,
@@ -69,6 +82,13 @@ function fakeProcess() {
     killDeps,
     register,
     signal: (name: "SIGTERM" | "SIGINT" | "SIGHUP") => signals[name]?.(),
+    loseParent: () => parentGone?.(),
+    breakStderr: () => {
+      stderrBroken = true;
+    },
+    shareProcess: () => {
+      shared = true;
+    },
     throwFatal: (err: unknown) => fatal?.(err),
     endProcess: () => processExit?.(),
     envelopes: () => stdout.map((line) => JSON.parse(line) as { ok: boolean; error: { code: string; message: string }; data: Record<string, unknown> }),
@@ -148,49 +168,294 @@ describe("a signal", () => {
   });
 });
 
-describe("the watchdog", () => {
+describe("the inactivity limit", () => {
   it("emits a diagnostic naming the replay, mutation and step reached", async () => {
     const p = fakeProcess();
-    const handle = p.register({ watchdogMs: 1_000 });
+    const handle = p.register({ inactivityMs: 1_000 });
     handle.progress({ replay: 2, mutation: "drop-save", step: 3 });
     await fakeClock.advanceBy(1_000);
     expect(p.envelopes()[0]?.error).toEqual({
       code: "E_TERMINAL_WATCHDOG",
-      message: "journey verify: no result within the 1000ms watchdog limit at replay 2, mutation drop-save, step 3",
+      message: "journey verify: no progress for the 1000ms inactivity limit at replay 2, mutation drop-save, step 3",
     });
   });
 
   it("exits inconclusive after ending the process's browsers", async () => {
     const p = fakeProcess();
-    p.register({ watchdogMs: 1_000 });
+    p.register({ inactivityMs: 1_000 });
     await fakeClock.advanceBy(1_000);
     expect(p.events).toEqual(["stdout", "terminate-browsers", "exit 2"]);
   });
 
+  it("carries its limit in the diagnostic", async () => {
+    const p = fakeProcess();
+    p.register({ inactivityMs: 1_000 });
+    await fakeClock.advanceBy(1_000);
+    expect(p.envelopes()[0]?.data).toMatchObject({ trigger: "watchdog", inactivityMs: 1_000 });
+  });
+
+  it("does not end a run far longer than the limit while progress keeps coming", async () => {
+    const p = fakeProcess();
+    const handle = p.register({ inactivityMs: 1_000 });
+    for (let replay = 0; replay < 50; replay += 1) {
+      await fakeClock.advanceBy(999);
+      handle.progress({ replay });
+    }
+    expect(p.events).not.toContain("exit 2");
+  });
+
+  it("fires one limit after the last progress", async () => {
+    const p = fakeProcess();
+    const handle = p.register({ inactivityMs: 1_000 });
+    await fakeClock.advanceBy(900);
+    handle.progress({ replay: 1 });
+    await fakeClock.advanceBy(1_000);
+    expect(p.envelopes()[0]?.error.code).toBe("E_TERMINAL_WATCHDOG");
+  });
+
+  it("does not fire earlier for the limit already running when progress arrived", async () => {
+    const p = fakeProcess();
+    const handle = p.register({ inactivityMs: 1_000 });
+    await fakeClock.advanceBy(900);
+    handle.progress({ replay: 1 });
+    await fakeClock.advanceBy(999);
+    expect(p.stdout).toEqual([]);
+  });
+
+  it("is not restarted by progress after the command completed", async () => {
+    const p = fakeProcess();
+    const handle = p.register({ inactivityMs: 1_000 });
+    handle.complete();
+    handle.progress({ replay: 1 });
+    await fakeClock.advanceBy(1_000);
+    expect(p.stdout).toEqual([]);
+  });
+
+  it("an inner command's progress keeps the command around it from firing", async () => {
+    const p = fakeProcess();
+    p.register({ command: "outer", inactivityMs: 1_000 });
+    const inner = p.register({ command: "inner", inactivityMs: 1_000 });
+    await fakeClock.advanceBy(900);
+    inner.progress({ replay: 1 });
+    await fakeClock.advanceBy(900);
+    expect(p.stdout).toEqual([]);
+  });
+
   it("does not fire before its limit", async () => {
     const p = fakeProcess();
-    p.register({ watchdogMs: 1_000 });
+    p.register({ inactivityMs: 1_000 });
     await fakeClock.advanceBy(999);
     expect(p.events).toEqual([]);
   });
 
   it("does not fire after the command completed", async () => {
     const p = fakeProcess();
-    p.register({ watchdogMs: 1_000 }).complete();
+    p.register({ inactivityMs: 1_000 }).complete();
     await fakeClock.advanceBy(1_000);
     expect(p.events).toEqual([]);
   });
 
-  it.each([0, -1, Number.NaN, 1.5, Number.POSITIVE_INFINITY, 2_147_483_648])("refuses a limit of %s", (watchdogMs) => {
+  it.each([0, -1, Number.NaN, 1.5, Number.POSITIVE_INFINITY, 2_147_483_648])("refuses a limit of %s", (inactivityMs) => {
     const p = fakeProcess();
-    expect(() => p.register({ watchdogMs })).toThrow(RangeError);
+    expect(() => p.register({ inactivityMs })).toThrow(RangeError);
+  });
+});
+
+describe("a progress line", () => {
+  it("goes to stderr, naming the command and where it is", async () => {
+    const p = fakeProcess();
+    const handle = p.register();
+    await fakeClock.advanceBy(500);
+    handle.progress({ phase: "proof", replay: 2, mutation: "drop-save", step: 3 });
+    expect(p.stderr).toEqual(["progress journey verify: proof, replay 2, mutation drop-save, step 3 (1s)\n"]);
+  });
+
+  it("is printed once per call", () => {
+    const p = fakeProcess();
+    const handle = p.register();
+    handle.progress({ replay: 1 });
+    handle.progress({ replay: 2 });
+    expect(p.stderr).toHaveLength(2);
+  });
+
+  it("leaves stdout alone", () => {
+    const p = fakeProcess();
+    p.register().progress({ replay: 1 });
+    expect(p.stdout).toEqual([]);
+  });
+
+  it("merges into what was reported before", () => {
+    const p = fakeProcess();
+    const handle = p.register();
+    handle.progress({ replay: 1, mutation: "drop-save" });
+    handle.progress({ step: 4 });
+    expect(p.stderr[1]).toContain("replay 1, mutation drop-save, step 4");
+  });
+
+  it("drops a field cleared with undefined", () => {
+    const p = fakeProcess();
+    const handle = p.register();
+    handle.progress({ replay: 1, mutation: "drop-save" });
+    handle.progress({ mutation: undefined });
+    expect(p.stderr[1]).not.toContain("mutation");
+  });
+
+  it("masks a registered secret", () => {
+    const p = fakeProcess();
+    p.register().progress({ step: `type ${SECRET}` });
+    expect(p.stderr.join("")).not.toContain(SECRET);
+  });
+
+  it("masks a URL-encoded secret", () => {
+    const p = fakeProcess();
+    const secret = "pass word/with&chars-long";
+    p.register({ secrets: [secret] }).progress({ step: `GET /x?p=${encodeURIComponent(secret)}` });
+    expect(p.stderr.join("")).not.toContain(encodeURIComponent(secret));
+  });
+
+  it("masks a secret added during the run", () => {
+    const p = fakeProcess();
+    const handle = p.register({ secrets: [] });
+    handle.addSecrets(["late-learned-auth-token"]);
+    handle.progress({ step: "sent late-learned-auth-token" });
+    expect(p.stderr.join("")).not.toContain("late-learned-auth-token");
+  });
+
+  it("masks a credential nobody registered", () => {
+    const p = fakeProcess();
+    const token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    p.register({ secrets: [] }).progress({ step: `push ${token}` });
+    expect(p.stderr.join("")).not.toContain(token);
+  });
+
+  it("masks a secret in the command's name", () => {
+    const p = fakeProcess();
+    p.register({ command: `verify ${SECRET}` }).progress({ replay: 1 });
+    expect(p.stderr.join("")).not.toContain(SECRET);
+  });
+
+  it("masks a secret that has a line break in it", () => {
+    const p = fakeProcess();
+    const secret = "first-line-of-secret\nsecond-line-of-secret";
+    p.register({ secrets: [secret] }).progress({ step: `type ${secret}` });
+    expect(p.stderr.join("")).not.toContain("second-line-of-secret");
+  });
+
+  it("stays one line whatever a label holds", () => {
+    const p = fakeProcess();
+    p.register().progress({ step: "a\nforged line\r\u001b[2Kb" });
+    expect(p.stderr[0]?.trimEnd()).not.toMatch(/[\r\n\u001b]/);
+  });
+
+  it("stays short whatever a label holds", () => {
+    const p = fakeProcess();
+    p.register().progress({ step: "x".repeat(10_000) });
+    expect(p.stderr[0]?.length).toBeLessThanOrEqual(201);
+  });
+
+  it("leaves out the free-form detail", () => {
+    const p = fakeProcess();
+    p.register().progress({ replay: 1, detail: { note: "only-for-the-diagnostic" } });
+    expect(p.stderr.join("")).not.toContain("only-for-the-diagnostic");
+  });
+
+  it("is not printed after the command completed", () => {
+    const p = fakeProcess();
+    const handle = p.register();
+    handle.complete();
+    handle.progress({ replay: 1 });
+    expect(p.stderr).toEqual([]);
+  });
+});
+
+describe("a stderr that refuses a progress line", () => {
+  it("does not throw into the run", () => {
+    const p = fakeProcess();
+    const handle = p.register();
+    p.breakStderr();
+    expect(() => handle.progress({ replay: 1 })).not.toThrow();
+  });
+
+  it("is not tried again", () => {
+    const p = fakeProcess();
+    const handle = p.register();
+    p.breakStderr();
+    handle.progress({ replay: 1 });
+    handle.progress({ replay: 2 });
+    expect(p.events.filter((e) => e === "stderr-refused")).toHaveLength(1);
+  });
+
+  it("does not end the run", () => {
+    const p = fakeProcess();
+    const handle = p.register();
+    p.breakStderr();
+    handle.progress({ replay: 1 });
+    expect(p.events).toEqual(["stderr-refused"]);
+  });
+
+  it("still restarts the inactivity limit", async () => {
+    const p = fakeProcess();
+    const handle = p.register({ inactivityMs: 1_000 });
+    p.breakStderr();
+    await fakeClock.advanceBy(900);
+    handle.progress({ replay: 1 });
+    await fakeClock.advanceBy(900);
+    expect(p.stdout).toEqual([]);
+  });
+
+  it("still lets a later trigger report on stdout", async () => {
+    const p = fakeProcess();
+    const handle = p.register({ inactivityMs: 1_000 });
+    p.breakStderr();
+    handle.progress({ replay: 1 });
+    await fakeClock.advanceBy(1_000);
+    expect(p.envelopes()[0]?.error.code).toBe("E_TERMINAL_WATCHDOG");
+  });
+});
+
+describe("the parent going away", () => {
+  it("exits 129 after ending the process's browsers", () => {
+    const p = fakeProcess();
+    p.register();
+    p.loseParent();
+    expect(p.events).toEqual(["stdout", "terminate-browsers", "exit 129"]);
+  });
+
+  it("has its own code, apart from a real signal", () => {
+    const p = fakeProcess();
+    p.register();
+    p.loseParent();
+    expect(p.envelopes()[0]?.error.code).toBe("E_TERMINAL_PARENT_GONE");
+  });
+
+  it("says so, and names the switch that keeps a detached run going", () => {
+    const p = fakeProcess();
+    p.register();
+    p.loseParent();
+    expect(p.envelopes()[0]?.error.message).toBe(
+      "journey verify: the parent process went away, no signal was sent (set JEVITATE_PARENT_WATCHDOG=off to keep a detached run going) before any progress was reported",
+    );
+  });
+
+  it("claims no signal in the diagnostic", () => {
+    const p = fakeProcess();
+    p.register();
+    p.loseParent();
+    expect(p.envelopes()[0]?.data).not.toHaveProperty("signal");
+  });
+
+  it("marks the artifact inconclusive and terminated", () => {
+    const p = fakeProcess();
+    p.register({ artifactPath: "/out/a.json" });
+    p.loseParent();
+    expect(p.results[0]).toMatchObject({ missionOutcome: "inconclusive", exitCode: 129, result: { stop: "terminated" } });
   });
 });
 
 describe("exactly once", () => {
   it("a second trigger of another kind writes nothing more", async () => {
     const p = fakeProcess();
-    p.register({ artifactPath: "/out/a.json", watchdogMs: 1_000 });
+    p.register({ artifactPath: "/out/a.json", inactivityMs: 1_000 });
     p.signal("SIGTERM");
     const after = [...p.events];
     p.throwFatal(new Error("late"));
@@ -256,7 +521,7 @@ describe("an internal error", () => {
   it("an artifact that cannot be written still leaves the envelope, naming why", () => {
     const p = fakeProcess();
     const failing = registerTerminalResult(
-      { command: "c", json: true, secrets: [], watchdogMs: 1_000, artifactPath: "/out/a.json" },
+      { command: "c", json: true, secrets: [], inactivityMs: 1_000, artifactPath: "/out/a.json" },
       {
         exit: () => {},
         terminateBrowsers: () => {},
@@ -269,6 +534,7 @@ describe("an internal error", () => {
         onFatalError: () => () => {},
         onProcessExit: () => () => {},
         installKillSwitch: () => {},
+        sharedProcess: () => false,
       },
     );
     failing.fail(new Error("boom"));
@@ -392,5 +658,169 @@ describe("a command that registered nothing", () => {
     p.register().complete();
     p.signal("SIGTERM");
     expect(p.events).toEqual(["terminate-browsers", "exit 143"]);
+  });
+});
+
+describe("a broken output pipe", () => {
+  const EPIPE = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+
+  function pipes() {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    let exits = 0;
+    installBrokenPipePolicy({ stdout, stderr }, () => {
+      exits += 1;
+    });
+    return { stdout, stderr, exits: () => exits };
+  }
+
+  it("on stderr does not end a plain command", () => {
+    const pipe = pipes();
+    pipe.stderr.emit("error", EPIPE);
+    expect(pipe.exits()).toBe(0);
+  });
+
+  it("on stderr does not end a running registered command", () => {
+    const p = fakeProcess();
+    p.register();
+    const pipe = pipes();
+    pipe.stderr.emit("error", EPIPE);
+    expect(pipe.exits()).toBe(0);
+  });
+
+  it("on stdout ends a plain command", () => {
+    const pipe = pipes();
+    pipe.stdout.emit("error", EPIPE);
+    expect(pipe.exits()).toBe(1);
+  });
+
+  it("on stdout does not end a running registered command", () => {
+    const p = fakeProcess();
+    p.register();
+    const pipe = pipes();
+    pipe.stdout.emit("error", EPIPE);
+    expect(pipe.exits()).toBe(0);
+  });
+
+  it("on stdout ends a registered command that completed", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    const pipe = pipes();
+    pipe.stdout.emit("error", EPIPE);
+    expect(pipe.exits()).toBe(1);
+  });
+
+  it("on stdout does not end the command around one that completed", () => {
+    const p = fakeProcess();
+    p.register({ command: "outer" });
+    p.register({ command: "inner" }).complete();
+    const pipe = pipes();
+    pipe.stdout.emit("error", EPIPE);
+    expect(pipe.exits()).toBe(0);
+  });
+
+  it.each(["stdout", "stderr"] as const)("any other error on %s is still thrown", (name) => {
+    const pipe = pipes();
+    expect(() => pipe[name].emit("error", Object.assign(new Error("boom"), { code: "EIO" }))).toThrow("boom");
+  });
+});
+
+describe("a rejection reaching the entry point", () => {
+  it("is left to the caller when nothing was registered", () => {
+    expect(reportCommandRejection(new Error("plain"), () => {})).toBe(false);
+  });
+
+  it("ends a running command through the layer", () => {
+    const p = fakeProcess();
+    p.register();
+    reportCommandRejection(new Error("boom"));
+    expect(p.envelopes()[0]?.error.code).toBe("E_TERMINAL_INTERNAL");
+  });
+
+  it("is redacted for a running command", () => {
+    const p = fakeProcess();
+    p.register();
+    reportCommandRejection(new Error(`failed with ${SECRET}`));
+    expect(p.stdout.join("")).not.toContain(SECRET);
+  });
+
+  it("is redacted for a command that already completed", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    const printed: string[] = [];
+    reportCommandRejection(new Error(`cleanup failed with ${SECRET}`), (text) => printed.push(text));
+    expect(printed).toEqual(["Error: cleanup failed with «redacted»\n"]);
+  });
+
+  it("prints no second envelope for a command that already completed", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    reportCommandRejection(new Error("cleanup failed"), () => {});
+    expect(p.stdout).toEqual([]);
+  });
+
+  it("exits inconclusive for a command that already completed", () => {
+    const p = fakeProcess();
+    p.register().complete();
+    reportCommandRejection(new Error("cleanup failed"), () => {});
+    expect(process.exitCode).toBe(2);
+  });
+});
+
+describe("inside an MCP tool call", () => {
+  it("prints no progress", () => {
+    const p = fakeProcess();
+    p.shareProcess();
+    p.register().progress({ replay: 1 });
+    expect(p.events).toEqual([]);
+  });
+
+  it("the inactivity limit does not end the shared server", async () => {
+    const p = fakeProcess();
+    p.shareProcess();
+    p.register({ inactivityMs: 1_000 });
+    await fakeClock.advanceBy(1_000);
+    expect(p.events).toEqual([]);
+  });
+
+  it("a signal leaves the protocol channel alone", () => {
+    const p = fakeProcess();
+    installMissionKillSwitch(p.killDeps);
+    p.shareProcess();
+    p.register();
+    p.signal("SIGTERM");
+    expect(p.stdout).toEqual([]);
+  });
+
+  it("fail throws to the runner instead of exiting", () => {
+    const p = fakeProcess();
+    p.shareProcess();
+    expect(() => p.register().fail(new Error("boom"))).toThrow("boom");
+  });
+
+  it("fail's error is redacted", () => {
+    const p = fakeProcess();
+    p.shareProcess();
+    let message = "";
+    try {
+      p.register().fail(new Error(`boom ${SECRET}`));
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).not.toContain(SECRET);
+  });
+
+  it("still refuses an unusable limit", () => {
+    const p = fakeProcess();
+    p.shareProcess();
+    expect(() => p.register({ inactivityMs: 0 })).toThrow(RangeError);
+  });
+
+  it("the real seam recognises the runner's scope", async () => {
+    const failure = await runAsMcpInvocation(async () => {
+      const handle = registerTerminalResult({ command: "c", json: true, secrets: [], inactivityMs: 1_000 });
+      return () => handle.fail(new Error("from the shared process"));
+    });
+    await expect(runAsMcpInvocation(async () => failure())).rejects.toThrow("from the shared process");
   });
 });
