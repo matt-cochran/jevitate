@@ -1,5 +1,15 @@
 # @jevitate/cli
 
+## 0.29.0
+
+### Minor Changes
+
+- A refused `blocked` in goal exploration leads to another model decision instead of ending the run as no-progress, and the refusal hint ranks a control the goal names first (#769).
+- `journey find` also matches terms from a Journey's goal (#770), and `journey lint` honours a target's `safety.readRequests` as `journey review` does (#763).
+- An unreleased source build now reports `x.y.z-source-<commit>` from `--version`, so it can no longer pass as a published version; release builds are unchanged, and the release flow checks the packed tarball's `--version` against its manifest (#784). A staging Release run with pending changesets now fails instead of concluding success without publishing (#782). Browser teardown signals only processes carrying this process's exact owner marker as a whole argument (#764).
+- `journey review` shows a pending annotation draft as current or stale, with the command to approve or re-draft it (#765).
+- Long-running commands end with a result. `journey verify --mutate` and `verify-fix` now report each replay on stderr, end with one JSON envelope on a signal, parent death, internal error or a run that has stopped making progress (`E_TERMINAL_SIGNAL`, `E_TERMINAL_PARENT_GONE`, `E_TERMINAL_INTERNAL`, `E_TERMINAL_WATCHDOG`, `E_TERMINAL_UNSETTLED`), and a closed output pipe can no longer turn a failing verdict into exit 0 (#764, #766, #767). `verify-fix` over the CLI and MCP writes a `verify-fix-<stamp>.result.json` and names it in its result.
+
 ## 0.28.3
 
 ### Patch Changes

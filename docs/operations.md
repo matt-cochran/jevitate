@@ -27,12 +27,16 @@ moment the run starts, while the browser is still launching (0 steps) included.
 
 SIGHUP (a closed terminal, or one forwarded by the `jevitate` alias) is handled the same way and
 exits 129. So is the death of the CLI's parent: if the process that started jevitate is killed
-without forwarding a signal, jevitate notices within about a second and exits 129 with
-`signal: "SIGHUP"`. Set `JEVITATE_PARENT_WATCHDOG=off` for a run you leave behind on purpose
+without forwarding a signal, jevitate notices within about a second and exits 129. A mission's result
+has `signal: "SIGHUP"` and `parentGone: true`; `journey verify` and `verify-fix` report
+`E_TERMINAL_PARENT_GONE`. Set `JEVITATE_PARENT_WATCHDOG=off` for a run you leave behind on purpose
 (`nohup jevitate explore … &`). Before any of these exits, jevitate closes every browser it
 launched. It sends each browser's process tree SIGTERM, waits up to 1 s, then sends SIGKILL, so a
 signal sent only to the CLI's pid (Node's `spawnSync(…, { timeout })`, `kill <pid>`) leaves no
 Chromium running.
+
+`journey verify --mutate` and `verify-fix` print one progress line to stderr per replay, so a caller's own
+time limit or a SIGKILL, which jevitate cannot catch, still leaves evidence of how far the run got.
 
 ## Usage accounting
 

@@ -16,7 +16,18 @@ command's codes only as a reminder; this is the reference.
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
 | `5` | pending-review | a self-heal produced a proposed Journey revision; nothing passes until a person accepts it (`journey promote <id> --proposal <pid>`) |
 | `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …) or number (`--max-actions abc`, `--replays 0`: refused while the command line is parsed), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_UX_INPUT`, `E_TARGET_CONFIG`, …), an unknown id (`E_UNKNOWN_JOURNEY`, `E_REGRESSION_NOT_FOUND`, `E_BASELINE_NOT_FOUND`, …), a `journey annotate --approve` draft that is missing, invalid or stale (`E_JOURNEY_ANNOTATIONS_STALE`: the Journey changed since the draft), missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist — including a `check` suite item whose start URL is off its target's allowlist, or whose `verifyFix` fingerprint is not in its result (refused up front, like a missing result file) |
-| `129` / `130` / `143` | killed | SIGHUP (or the parent died) / SIGINT / SIGTERM; the partial result is still written and every browser is closed (see [operations](./operations.md)) |
+| `129` / `130` / `143` | killed | SIGHUP (or the parent died) / SIGINT / SIGTERM. A mission writes its partial result; `journey verify` and `verify-fix` print one envelope (`E_TERMINAL_SIGNAL`, or `E_TERMINAL_PARENT_GONE` for a parent that died) and write a result file; every browser is closed (see [operations](./operations.md)) |
+
+`journey verify` and `verify-fix` always end with a result. Besides the signal codes above, they report
+`E_TERMINAL_WATCHDOG` (2) when no replay has started for the run's inactivity limit, `E_TERMINAL_INTERNAL` (2)
+for an unexpected error, and `E_TERMINAL_UNSETTLED` (2) if the process would otherwise have exited without a
+verdict. The limit measures silence, not length: a proof whose replays keep starting is never ended. A run
+ended this way has no verdict, leaves any earlier mutation-proof receipt as it was, and does not run `after`
+fixtures, so state a fixture would have restored may remain.
+
+A closed output pipe never becomes a result. A closed stderr only stops progress lines. With stdout closed, a
+command keeps the exit code it set; one still running finishes first; and if no verdict was reached, it exits
+2. Only a command with no code to keep (`jevitate <cmd> | head -1`) exits 0.
 
 `64` is `EX_USAGE` from `sysexits.h`. It is deliberately not a small integer, so a new outcome code
 (such as `5`) never collides with it. A refused command's code comes from its error code: `_ARGS`, `_INPUT`,

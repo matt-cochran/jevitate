@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.29.0] – 2026-11-04
+
+### Added
+
+- **`verify-fix` result file (#767).** Over the CLI and MCP, `verify-fix` writes one
+  `verify-fix-<stamp>.result.json` per run and names it in its result, inconclusive and internal-error
+  endings included.
+- **Progress for long proofs (#766).** `journey verify --mutate` and `verify-fix` print one line per
+  replay to stderr, while stdout stays one JSON envelope.
+- **Pending drafts in review (#765).** `journey review` shows an annotation draft as current or stale,
+  with the command to approve or re-draft it. Draft binding and review hashes are unchanged.
+
+### Fixed
+
+- **False green on a closed pipe.** `verify-fix` with stdout's reader gone exited 0 on a run that still
+  reproduced. A closed pipe no longer becomes a command's result.
+- **Silent endings (#764, #766, #767).** `journey verify` and `verify-fix` now end with a result on a
+  signal, parent death, internal error or a run that stops progressing, including a bound on a stuck
+  `verify_journey` over MCP. The caller termination reported in #764 was not reproduced as Jevitate
+  signalling its caller: it appears when something outside ends the caller's process group.
+- **Refused `blocked` (#769).** Goal exploration takes another decision after a refusal instead of
+  ending as no-progress, and the hint ranks a control the goal names first.
+- **Discovery and lint (#770, #763).** `journey find` matches a Journey's goal, and `journey lint`
+  honours `safety.readRequests`.
+- **Bystander signals (#764).** Browser teardown signals only processes with this process's exact owner
+  marker as a whole argument.
+
+### Changed
+
+- **Source builds identify themselves (#784).** An unreleased build reports `x.y.z-source-<commit>` from
+  `--version`. Release builds are unchanged.
+- **Release plan (#782).** A staging Release run with pending changesets fails rather than concluding
+  success without publishing.
+- `verify-fix` and `journey verify` report an unexpected internal error as `E_TERMINAL_INTERNAL` on the
+  CLI, and `journey lint` refuses an invalid targets file as `journey review` does.
+
 ## [0.28.3] – 2026-11-04
 
 ### Fixed
