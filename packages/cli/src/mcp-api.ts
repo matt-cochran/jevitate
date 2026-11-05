@@ -11,6 +11,9 @@ import type { ChangeScope, SelfHealer } from "@jevitate/runtime";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { safeRunPolicy as defaultRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { runJourneyProgrammatically } from "./journey-api.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
+import { runAsMcpInvocation } from "./approval-provenance.js";
+import { withJourneyRunRecord } from "./journey-run-record.js";
 import { runVerifyFix, type RunVerifyFixOptions, type VerifyFixReport } from "./verify-fix-api.js";
 import { type BrowserRunOptions } from "./browser-run-options.js";
 import { type ResolvedJourneyEnvironment } from "./environments.js";
@@ -109,6 +112,8 @@ export interface McpApiDeps {
   environmentsFile?: string;
   /** `~/.jevitate/targets.json` override (environment sessions, verify_fix target config). */
   targetsConfigPath?: string;
+  /** #790: test seam for the logs root run records go under (default: the project's `.jevitate/logs`). */
+  runRecordLogsRoot?: string;
   /**
    * #255 (`run_journey {selfHeal: hybrid|full}`): builds the self-heal gateways exactly as the CLI's
    * `--real`/`--fake-ai` do (`buildExploreGateways`). Absent: a heal mode is refused (setup_required).
@@ -226,11 +231,16 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   const runJourney =
     deps.runJourney ??
     ((id: string, params: Record<string, string>, storageState?: string, o?: McpJourneyRunOptions) =>
-      withSiteGate(deps.sitePolicyDbPath, (siteGate) =>
+      // #789: an MCP invocation, so the run guard applies (and an approval made here would say `mcp`).
+      runAsMcpInvocation(() => withJourneyRunRecord({ channel: "mcp", id, params, logsRoot: deps.runRecordLogsRoot }, (runRecorder) => withSiteGate(deps.sitePolicyDbPath, (siteGate) =>
         runJourneyProgrammatically({
           dir: deps.journeysDir,
           id,
           params,
+          runRecorder,
+          // #788: only a promoted Journey with a current approval runs over MCP, refused before any browser.
+          assertRunnable: (stored) => assertMcpRunnable(stored, deps.journeysDir),
+          ...(deps.targetsConfigPath === undefined ? {} : { runGuardTargetsFile: deps.targetsConfigPath }),
           policy: o?.policy ?? defaultRunPolicy(),
           ...(storageState !== undefined ? { storageState } : {}),
           ...(siteGate === undefined ? {} : { siteGate }),
@@ -244,7 +254,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           ...(o?.actionDeltas === true ? { actionDeltas: true } : {}),
           ...(o?.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: o.stepResponseTimeoutMs }),
         }),
-      ));
+      ))));
   const pathRoots = deps.pathRoots ?? defaultMcpPathRoots();
   const credentialStore = deps.credentialStore ?? envCredentialStore();
 

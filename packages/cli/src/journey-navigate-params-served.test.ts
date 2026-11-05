@@ -1,3 +1,4 @@
+import { journeyReviewHash } from "./journey-review.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -71,6 +72,9 @@ beforeAll(async () => {
   await store.put(journey("accept-then-fail", "/accept?token=${inviteToken}", [
     { step: { kind: "assert", check: { kind: "urlIncludes", text: "/nowhere" } } },
   ]));
+  // #788: MCP runs a promoted Journey whose approval is current: approved as stored (saving mints step ids).
+  const saved = (await store.get("accept-invite"))!;
+  await store.put({ ...saved, metadata: { ...saved.metadata, approval: { contentHash: journeyReviewHash(saved), at: "2026-10-07T00:00:00.000Z" } } });
   await store.put(journey("drop", "/drop?token=${inviteToken}", [], { kind: "urlIncludes", text: "/drop" }));
   await store.put({
     ...journey("go", "/${dest}", [], { kind: "urlIncludes", text: "/" }),

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
@@ -141,6 +141,21 @@ describe("runVerifyFix result artifact (#767)", () => {
     const resultPath = await writeMission(dir);
     const report = await runVerifyFix({ resultPath, fingerprint: FINGERPRINT, resultArtifact: true, resultStamp: "STAMP" });
     expect(report.resultPath).toBe(join(dir, "verify-fix-STAMP.result.json"));
+  });
+
+  it("keeps the verdict and names the problem when the folder takes no result file", async () => {
+    const resultPath = await writeMission(dir);
+    const expected = await runVerifyFix({ resultPath, fingerprint: FINGERPRINT });
+    await chmod(dir, 0o555);
+    try {
+      const report = await runVerifyFix({ resultPath, fingerprint: FINGERPRINT, resultArtifact: true, resultStamp: "RO" });
+      expect(report.verdict).toBe(expected.verdict);
+      expect(report.exitCode).toBe(expected.exitCode);
+      expect(report.resultPath).toBeUndefined();
+      expect(report.artifactError).toMatch(/EACCES|permission/i);
+    } finally {
+      await chmod(dir, 0o755);
+    }
   });
 
   it("writes no artifact when the caller does not opt in", async () => {

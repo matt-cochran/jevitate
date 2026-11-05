@@ -353,7 +353,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (719 exports)
+# @jevitate/explore (720 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -857,6 +857,7 @@
   quoteSpans: function
   RawChange: interface
   READ_ONLY_NOTE: variable
+  readControlIdentity: function
   ReadOnlyGuard: class
   ReadOnlyMode: type-alias
   recordCoverageHang: function
@@ -1164,7 +1165,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (58 exports)
+# @jevitate/interpreter (60 exports)
   anchorLocator: other
   applyTextEdit: other
   attrOf: other
@@ -1197,6 +1198,8 @@
   readFlashes: other
   RecordingInterpreter: other
   RecordingSink: other
+  ReplayActionGuard: other
+  ReplayRefusal: other
   ReplayTargetError: other
   ReplayTargetFailure: other
   ResolvedRung: other
@@ -1545,11 +1548,12 @@
   RunModeledCapacityConfig: interface
   UnauthorizedLoadTargetError: class
 
-# @jevitate/mcp-facade (34 exports)
+# @jevitate/mcp-facade (38 exports)
   aiGenerateText: function
   AiGenerateTextArgs: interface
   AiGenerateTextResult: interface
   ALLOWED_TOOLS: variable
+  assertJourneyRunnable: function
   Capability: interface
   facadeApproveAction: function
   facadeCancelCommand: function
@@ -1567,6 +1571,9 @@
   InvalidArgsError: interface
   isMissionResultId: function
   isQueuedMissionId: function
+  JourneyApprovalState: type-alias
+  JourneyRunRefusalCode: type-alias
+  JourneyRunRefusedError: class
   listNamedJourneyTools: function
   listToolNames: function
   McpMissionStatus: interface

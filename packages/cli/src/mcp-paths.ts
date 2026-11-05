@@ -75,6 +75,10 @@ export function confineMcpPath(value: unknown, what: string, roots: readonly str
       `'${what}' ${JSON.stringify(value)} resolves outside the paths an MCP tool may use (${roots.join(", ")}): put the file in the project or under ~/.jevitate/`,
     );
   }
+  // #789: what lifts an MCP run's refusals is written by a person; no path argument reaches that file, read or written.
+  if ([abs, real].some((p) => p === join(homeDataRoot(), "targets.json"))) {
+    throw new McpPathError(`'${what}' names ~/.jevitate/targets.json, the operator's own file, which no MCP tool may touch`);
+  }
   if (opts.session === true) {
     const refusal = sessionFileInProjectRefusal(abs, `'${what}'`);
     if (refusal !== undefined) throw new McpPathError(refusal);

@@ -33,6 +33,8 @@ import {
   resolveDbPath,
 } from "./cli-shared.js";
 
+const MIN_MASKED_PARAM_LENGTH = 6;
+
 /**
  * #767: how long one replay may run without a progress report. Progress comes only when a replay
  * opens, so this has to outlast a long but legal replay of a many-step recording: it is a backstop
@@ -151,7 +153,9 @@ export function registerVerifyFixCommands(
         emitVerify(fail("E_VERIFY_FIX_ARGS", err.message));
         return;
       }
-      const secrets = [...o.secret, ...Object.values(o.param).filter((v) => v !== "")];
+      // `--secret` is the channel for a secret. A `--param` may still hold one by mistake, so it's masked
+      // too, unless it's too short to be one: masking "acme" or "1" everywhere ruins the diagnosis.
+      const secrets = [...o.secret, ...Object.values(o.param).filter((v) => v.length >= MIN_MASKED_PARAM_LENGTH)];
       // What this run's own error messages mask: `secrets`, plus what the run learns as it goes.
       const known = [...secrets];
       let verifyFixEmulation: EmulationSpec | undefined;

@@ -1,5 +1,5 @@
 import { SiteGateRefusedError } from "@jevitate/runtime";
-import { findCapabilities } from "@jevitate/mcp-facade";
+import { findCapabilities, JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { type GenerationPort } from "@jevitate/ai-core";
 import { existsSync } from "node:fs";
@@ -22,6 +22,8 @@ import { ChangesArgsError, ChangesInputError } from "../change-context.js";
 import { MAX_STEP_RESPONSE_TIMEOUT_MS } from "../journey-network-checks.js";
 import { McpArgError, argErrorBody, optBool, optEnum, optInt, optNamedSessions, optPath, optExtensions, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "../mcp-args.js";
 import { resourcePreflight } from "../resource-preflight.js";
+import { runRecordErrorOf } from "../journey-run-record.js";
+import { RunGuardRefusedError, runGuardRefusalBody } from "../mcp-run-guard.js";
 import type { McpToolCtx, McpToolGroup } from "./shared.js";
 import { jsonResult, errorResult, governanceArgs, withJourneyExitCode, SetupRequired, redactCredentials, tagsArg } from "./shared.js";
 import type { McpJourneyRunOptions } from "../mcp-api.js";
@@ -162,6 +164,8 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     run_journey: {
       description:
         "Run a PUBLISHED Journey by id with string params (fail-closed policy) — `jevitate journey run`. Never accepts inline steps. " +
+        "#788: an unpromoted Journey, or one changed since its approval, is refused before any browser ({error: refused, code: E_JOURNEY_NOT_PROMOTED | E_JOURNEY_APPROVAL_STALE | E_JOURNEY_APPROVAL_UNKNOWN, fix}): promote it with promote_journey, or try a draft on the CLI (`jevitate journey run`). " +
+        "#789: a click on a session-ending, destructive or paid control, a write to an origin outside the run's allowlist and a production environment are refused before anything is sent ({error: refused, outcome: refused, code: E_RUN_REFUSED_DESTRUCTIVE | E_RUN_REFUSED_OFF_ALLOWLIST_WRITE | E_RUN_REFUSED_PRODUCTION, setting, retryable: false}): do not retry; only a person lifts it, in the target's mcpRun section of ~/.jevitate/targets.json. " +
         "Optional 'storageState': a PATH (on the machine running this MCP server; inside the project or ~/.jevitate, never a repo's .jevitate/) to a Playwright storageState " +
         "JSON file, for a Journey authored behind a login (#118) — the file's contents are read only by the " +
         "server's own browser, never returned or logged. A Journey that declares metadata.requiresAuth refuses " +
@@ -237,20 +241,25 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
           // #453: the CLI's exit code for the outcome — 0 ok, 5 healed-pending-review (a proposed revision, never a pass), 1 otherwise.
           return jsonResult(stampRunMetadata(withJourneyExitCode(withUsage), { tags: tagged.tags }));
         } catch (err) {
+          // #790: a record that could not be written is reported beside the answer, never instead of it.
+          const recordProblem = runRecordErrorOf(err);
+          const failed = (body: Record<string, unknown>) => errorResult(recordProblem === undefined ? body : { ...body, runRecordError: recordProblem });
           // A site-policy refusal (throttle, budget, quiet hours) is an answer the agent acts on — when to retry.
           if (err instanceof SiteGateRefusedError) {
-            return errorResult({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
+            return failed({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
           }
-          if (err instanceof UnknownJourneyError) return errorResult({ error: "not_found", id: args.id, message: err.message });
-          if (err instanceof JourneyRequiresAuthError) return errorResult({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });
-          if (err instanceof ExtensionMismatchError) return errorResult({ error: "invalid_args", code: err.code, message: err.message });
-          if (err instanceof ParamValidationError) return errorResult({ error: "invalid_args", code: "E_INVALID_PARAMS", message: err.message });
+          if (err instanceof RunGuardRefusedError) return failed(runGuardRefusalBody(err));
+          if (err instanceof JourneyRunRefusedError) return failed({ error: "refused", outcome: "refused", code: err.code, id: args.id, message: err.message, fix: err.fix, tryDraft: err.tryDraft, retryable: false });
+          if (err instanceof UnknownJourneyError) return failed({ error: "not_found", id: args.id, message: err.message });
+          if (err instanceof JourneyRequiresAuthError) return failed({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });
+          if (err instanceof ExtensionMismatchError) return failed({ error: "invalid_args", code: err.code, message: err.message });
+          if (err instanceof ParamValidationError) return failed({ error: "invalid_args", code: "E_INVALID_PARAMS", message: err.message });
           if (isEnvironmentError(err) || err instanceof FixtureSpecError || err instanceof UnboundSetupRefError) {
-            return errorResult({ error: "invalid_args", code: err.code, message: err.message });
+            return failed({ error: "invalid_args", code: err.code, message: err.message });
           }
           // Never run on unknown state: inconclusive (exit 2) — proves nothing, so an error result.
           if (err instanceof FixtureSetupError) {
-            return errorResult({ outcome: "inconclusive", reason: err.message, failure: { kind: "configuration", message: err.message }, attribution: "configuration", exitCode: 2 });
+            return failed({ outcome: "inconclusive", reason: err.message, failure: { kind: "configuration", message: err.message }, attribution: "configuration", exitCode: 2 });
           }
           throw err;
         }

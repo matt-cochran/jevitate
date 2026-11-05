@@ -22,6 +22,10 @@ import type { BrowserSession } from "@jevitate/playwright";
 import { SiteGateRefusedError } from "@jevitate/runtime";
 import { applyJourneyEnvironment, environmentFromFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import { JourneyRequiresAuthError, UnknownJourneyError, prefixParams, runJourneyProgrammatically } from "./journey-api.js";
+import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
+import { inMcpInvocation } from "./approval-provenance.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
+import { RunGuardRefusedError } from "./mcp-run-guard.js";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { parseDescriptorSpec } from "./explore-specs.js";
@@ -189,6 +193,15 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
       `journey '${opts.id}' is not promoted — missions branch only off promoted Journeys (a person promotes it: jevitate journey promote ${opts.id})`,
     );
   }
+  // #788: over MCP a stale approval refuses as run_journey's does: a mission does not branch off content nobody approved.
+  if (inMcpInvocation()) {
+    try {
+      await assertMcpRunnable(stored, opts.dir);
+    } catch (err) {
+      if (err instanceof JourneyRunRefusedError) throw new JourneyPrefixArgsError(`${err.code}: ${err.message}`);
+      throw err;
+    }
+  }
   const full = applyJourneyEnvironment(stored, opts.environment);
   let resolved: ReturnType<typeof resolveJourneyStep>;
   try {
@@ -257,7 +270,7 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
       } catch (err) {
         // The site policy's own refusal keeps its code; anything else that stopped the replay means
         // the Journey did not reach its anchor — typed, never a restart from a URL.
-        if (err instanceof SiteGateRefusedError) throw err;
+        if (err instanceof SiteGateRefusedError || err instanceof RunGuardRefusedError) throw err;
         const message = err instanceof Error ? (err.message.split("\n")[0] ?? err.message) : String(err);
         throw new JourneyPrefixStaleError(`journey '${opts.id}' did not replay to ${where}: ${message}`, branch, undefined, await stalePageEvidence(session.page, secretValues));
       }

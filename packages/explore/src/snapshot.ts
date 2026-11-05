@@ -1,4 +1,4 @@
-import type { ElementHandle, Page } from "playwright";
+import type { ElementHandle, Locator, Page } from "playwright";
 import { descriptorLocator } from "@jevitate/interpreter";
 import { computeDescriptor, isSecretField, targetDisplay } from "@jevitate/recorder";
 import type { TargetDescriptor, TargetDisplay } from "@jevitate/recording";
@@ -775,6 +775,15 @@ const CONTROL_DISPLAY = new WeakMap<TargetDescriptor, TargetDisplay>();
 /** The display perceived for the control whose descriptor this is, if any (#497). */
 export function controlDisplay(descriptor: TargetDescriptor): TargetDisplay | undefined {
   return CONTROL_DISPLAY.get(descriptor);
+}
+
+/**
+ * #789: the role and accessible name of one resolved element, read exactly as a mission reads a
+ * control's (`readControlFacts`), so a replay's refusals judge what a mission's judge.
+ */
+export async function readControlIdentity(locator: Locator): Promise<{ readonly name: string; readonly role: string }> {
+  const { name, role } = await locator.evaluate(readControlFacts);
+  return { name, role };
 }
 
 export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snapshot> {

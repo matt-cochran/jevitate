@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Recording, RecordedStep } from "@jevitate/recording";
-import { lintJourney, lintUploadFixtures, type Journey } from "./index.js";
+import { journeyWriteSteps, lintJourney, lintUploadFixtures, type Journey } from "./index.js";
 
 // #401 Part A — the pure assertion-strength lint. Fixtures are small inline Journeys (see
 // assertions.test.ts / journey.test.ts for the shape).
@@ -251,6 +251,16 @@ describe("#401 lintJourney", () => {
       },
     ]);
     expect(lintJourney(journey, { readRequests: ["Estimate*"] }).some((f) => f.rule === "no-persistence-check")).toBe(false);
+  });
+
+  it("keeps the page-delta fallback for a step whose only recorded request is a GET", () => {
+    const steps = [
+      {
+        step: { kind: "click", target: { testId: "save" }, expect: { kind: "textIncludes", target: { css: "#status" }, text: "Saved" } },
+        delta: { verdict: "relevant-change", why: "saved", changes: ["Saved"], requests: ["GET /api/status → 200"] },
+      },
+    ];
+    expect(journeyWriteSteps(j(steps as never)).map((w) => w.step)).toEqual([1]);
   });
 
   it("does not override an explicitly configured read-only REST POST with the page-delta fallback", () => {

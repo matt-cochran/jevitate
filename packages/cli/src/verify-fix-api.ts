@@ -211,6 +211,8 @@ export interface VerifyFixEvidence {
 
 export interface VerifyFixReport extends VerifyFixResult {
   readonly exitCode: number;
+  /** The result file could not be written; the verdict above still stands (#767). */
+  readonly artifactError?: string;
   /** #293: the Journey step the finding branched from, when its replays went through that prefix. */
   readonly branch?: RecordedBranch;
   /** #293: why the replays proved nothing — `journey-stale` when the prefix no longer replays. */
@@ -795,9 +797,14 @@ async function replayFinding(opts: RunVerifyFixOptions, known: ReadonlySet<strin
   const redacted = redactSensitiveValue(report, secrets, reportFieldRule) as VerifyFixReport;
   // #767: opt-in, through the mission result writer.
   if (opts.resultArtifact !== true) return redacted;
-  mkdirSync(dirnameOf(vfArtifact), { recursive: true });
-  const written = writeMissionResult(vfArtifact, report.verdict, report.exitCode, redacted);
-  return { ...redacted, resultPath: redactSensitivePath(written, secrets) };
+  // The verdict is what the replays paid for: a folder that can't take the file must not cost it.
+  try {
+    mkdirSync(dirnameOf(vfArtifact), { recursive: true });
+    const written = writeMissionResult(vfArtifact, report.verdict, report.exitCode, redacted);
+    return { ...redacted, resultPath: redactSensitivePath(written, secrets) };
+  } catch (err) {
+    return { ...redacted, artifactError: redactSensitiveValue(err instanceof Error ? err.message : String(err), secrets) as string };
+  }
 }
 
 /**
