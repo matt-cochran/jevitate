@@ -478,6 +478,16 @@ describe("a resumed proof and an uninterrupted one", () => {
     expect(reusedProofFields(checkpointPairOf(original, []))).toMatchObject({ atBaseTime: { outcome: "passed" }, relaxed: { atBaseTime: { outcome: "failed" } } });
   });
 
+  it("keep the one refusal a suggestion reads, by class, and no other wording", () => {
+    const pair = { kind: "skip" as const, step: 3, id: "skip:3", outcome: "failed" as const, failedSites: [] };
+    const proof = (refused: string): typeof pair & { targeted: [{ site: string; relaxedSites: string[]; outcome: "failed"; failedSites: []; refused: string }] } => ({ ...pair, targeted: [{ site: "end-state:0", relaxedSites: [], outcome: "failed", failedSites: [], refused }] });
+    const bound = "relaxation bound 4 reached";
+    expect(checkpointPairOf(proof(bound), []).targeted?.[0]?.refused).toBe("relaxation-bound");
+    expect(reusedProofFields(checkpointPairOf(proof(bound), [])).targeted?.[0]?.refused).toBe(bound);
+    expect(checkpointPairOf(proof(`app said ${APP_TEXT}`), []).targeted?.[0]?.refused).toBe("other");
+    expect(reusedProofFields(checkpointPairOf(proof(`app said ${APP_TEXT}`), [])).targeted?.[0]?.refused).toBe(REFUSAL_NOT_KEPT);
+  });
+
   it("feed mutationProofVerdict the same input: a stored result reads as the original does", () => {
     const journey = journeyOf();
     const plan = planJourneyMutations(journey, {});
@@ -865,6 +875,7 @@ describe("resume refuses, by name, and never starts over", () => {
       (b) => ({ ...b, total: 9 }),
       (b) => ({ ...b, taint: { ...b.taint, notIsolatedBy: "skip:99" } }),
       (b) => ({ ...b, completed: b.completed.map((p) => ({ ...p, targeted: [{ site: "end-state:77", relaxedSites: [], outcome: "failed" as const, failedSites: [] }] })) }),
+      (b) => ({ ...b, completed: b.completed.map((p) => ({ ...p, targeted: [{ site: "end-state:0", relaxedSites: [], outcome: "failed" as const, failedSites: [], refused: APP_TEXT }] })) }) as unknown as CheckpointBody,
     ];
     for (const edit of cases) {
       writeSigned(() => edit(original));

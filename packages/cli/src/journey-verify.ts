@@ -1299,7 +1299,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
       const kept = resuming?.pairs.get(m.id);
       if (kept !== undefined) {
         mutations.push(reusedMutation(kept));
-        for (const proof of kept.targeted ?? []) noteSuggestion(proof as TargetedProof, m);
+        for (const proof of reusedProofFields(kept).targeted ?? []) noteSuggestion(proof, m);
         continue;
       }
       checkpoint?.startPair(m.id);

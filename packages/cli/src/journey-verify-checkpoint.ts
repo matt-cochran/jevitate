@@ -6,6 +6,7 @@ import { z } from "zod";
 import { clock } from "@jevitate/domain";
 import {
   assertionSiteKey,
+  MAX_TARGETED_RELAXATIONS,
   classifyMutation,
   mutationErrored,
   needsRelaxedReplay,
@@ -56,8 +57,9 @@ const WRITE_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | 
 export const REFUSAL_NOT_KEPT = "refused before the resume; its wording is not kept in the checkpoint";
 /** What a retry's error says on a reused pair: errors can quote the app, so only their count is stored. */
 export const RETRY_REASON_NOT_KEPT = "not kept in the checkpoint";
-/** The only refusal wordings `suggestTargetedProofPlan` reads. They hold a number or a site key, nothing the app wrote. */
-const REFUSALS_KEPT: readonly RegExp[] = [/^relaxation bound [0-9]+ reached$/, /^step-request:[1-9][0-9]*:[0-9]+ is not a step postcondition$/];
+/** What a refused targeted proof keeps, by class: the bound is the one refusal `suggestTargetedProofPlan` reads, and the app wrote nothing in it. */
+const REFUSAL_CLASSES = ["relaxation-bound", "other"] as const;
+const BOUND_REFUSAL = `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached`;
 
 const SITE_KEY = /^(?:step:[1-9][0-9]*|step-request:[1-9][0-9]*:[0-9]+|end-state:[0-9]+)$/;
 const siteKey = z.string().regex(SITE_KEY);
@@ -120,10 +122,7 @@ const pairRecord = z.strictObject({
         relaxedSites: z.array(siteKey),
         outcome,
         failedSites,
-        refused: z
-          .string()
-          .refine((s) => s === REFUSAL_NOT_KEPT || REFUSALS_KEPT.some((kept) => kept.test(s)))
-          .optional(),
+        refused: z.enum(REFUSAL_CLASSES).optional(),
         control: outcome.optional(),
         declared: z.literal(true).optional(),
       }),
@@ -756,9 +755,9 @@ export async function openProofCheckpoint(
   return {};
 }
 
-/** The storable form of a refusal: the wordings `suggestTargetedProofPlan` reads, else none of it. */
-function storableRefusal(refused: string): string {
-  return REFUSALS_KEPT.some((kept) => kept.test(refused)) ? refused : REFUSAL_NOT_KEPT;
+/** The storable form of a refusal: its class, and none of its wording. */
+function storableRefusal(refused: string): (typeof REFUSAL_CLASSES)[number] {
+  return refused === BOUND_REFUSAL ? "relaxation-bound" : "other";
 }
 
 /** A finished pair's result as `journey-verify` reports it, field by field: anything not named here cannot reach the file. */
@@ -838,7 +837,10 @@ export function reusedProofFields(pair: CheckpointPair): Pick<MutationRunResult,
     ...optional("relaxed", pair.relaxed),
     ...optional("control", pair.control),
     ...optional("atBaseTime", pair.atBaseTime),
-    ...optional("targeted", pair.targeted),
+    ...optional(
+      "targeted",
+      pair.targeted?.map(({ refused, ...t }) => ({ ...t, ...optional("refused", refused === undefined ? undefined : refused === "relaxation-bound" ? BOUND_REFUSAL : REFUSAL_NOT_KEPT) })),
+    ),
   };
 }
 
