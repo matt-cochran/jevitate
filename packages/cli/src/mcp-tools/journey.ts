@@ -22,6 +22,7 @@ import { ChangesArgsError, ChangesInputError } from "../change-context.js";
 import { MAX_STEP_RESPONSE_TIMEOUT_MS } from "../journey-network-checks.js";
 import { McpArgError, argErrorBody, optBool, optEnum, optInt, optNamedSessions, optPath, optExtensions, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "../mcp-args.js";
 import { resourcePreflight } from "../resource-preflight.js";
+import { runRecordErrorOf } from "../journey-run-record.js";
 import { RunGuardRefusedError, runGuardRefusalBody } from "../mcp-run-guard.js";
 import type { McpToolCtx, McpToolGroup } from "./shared.js";
 import { jsonResult, errorResult, governanceArgs, withJourneyExitCode, SetupRequired, redactCredentials, tagsArg } from "./shared.js";
@@ -240,22 +241,25 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
           // #453: the CLI's exit code for the outcome — 0 ok, 5 healed-pending-review (a proposed revision, never a pass), 1 otherwise.
           return jsonResult(stampRunMetadata(withJourneyExitCode(withUsage), { tags: tagged.tags }));
         } catch (err) {
+          // #790: a record that could not be written is reported beside the answer, never instead of it.
+          const recordProblem = runRecordErrorOf(err);
+          const failed = (body: Record<string, unknown>) => errorResult(recordProblem === undefined ? body : { ...body, runRecordError: recordProblem });
           // A site-policy refusal (throttle, budget, quiet hours) is an answer the agent acts on — when to retry.
           if (err instanceof SiteGateRefusedError) {
-            return errorResult({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
+            return failed({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
           }
-          if (err instanceof RunGuardRefusedError) return errorResult(runGuardRefusalBody(err));
-          if (err instanceof JourneyRunRefusedError) return errorResult({ error: "refused", outcome: "refused", code: err.code, id: args.id, message: err.message, fix: err.fix, tryDraft: err.tryDraft, retryable: false });
-          if (err instanceof UnknownJourneyError) return errorResult({ error: "not_found", id: args.id, message: err.message });
-          if (err instanceof JourneyRequiresAuthError) return errorResult({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });
-          if (err instanceof ExtensionMismatchError) return errorResult({ error: "invalid_args", code: err.code, message: err.message });
-          if (err instanceof ParamValidationError) return errorResult({ error: "invalid_args", code: "E_INVALID_PARAMS", message: err.message });
+          if (err instanceof RunGuardRefusedError) return failed(runGuardRefusalBody(err));
+          if (err instanceof JourneyRunRefusedError) return failed({ error: "refused", outcome: "refused", code: err.code, id: args.id, message: err.message, fix: err.fix, tryDraft: err.tryDraft, retryable: false });
+          if (err instanceof UnknownJourneyError) return failed({ error: "not_found", id: args.id, message: err.message });
+          if (err instanceof JourneyRequiresAuthError) return failed({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });
+          if (err instanceof ExtensionMismatchError) return failed({ error: "invalid_args", code: err.code, message: err.message });
+          if (err instanceof ParamValidationError) return failed({ error: "invalid_args", code: "E_INVALID_PARAMS", message: err.message });
           if (isEnvironmentError(err) || err instanceof FixtureSpecError || err instanceof UnboundSetupRefError) {
-            return errorResult({ error: "invalid_args", code: err.code, message: err.message });
+            return failed({ error: "invalid_args", code: err.code, message: err.message });
           }
           // Never run on unknown state: inconclusive (exit 2) — proves nothing, so an error result.
           if (err instanceof FixtureSetupError) {
-            return errorResult({ outcome: "inconclusive", reason: err.message, failure: { kind: "configuration", message: err.message }, attribution: "configuration", exitCode: 2 });
+            return failed({ outcome: "inconclusive", reason: err.message, failure: { kind: "configuration", message: err.message }, attribution: "configuration", exitCode: 2 });
           }
           throw err;
         }

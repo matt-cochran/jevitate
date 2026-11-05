@@ -70,6 +70,7 @@ const EVIDENCE_PACE = "#250: the after-clip's caption pace is fixed (EVIDENCE_PA
 const NO_DELTAS_HERE = "#303: --action-deltas is a per-run opt-in on explore items, journey run/annotate/demo and verify-fix; this batch/suite/candidate replay only needs its verdict";
 const MCP_RUN_GATE = "#788: run_journey's own gate; this surface has its decision (a CLI draft, a proof or readiness replay) or its own check";
 const GUARD_TARGETS_SEAM = "#789: a test seam of run_journey; everywhere else the guard reads ~/.jevitate/targets.json";
+const RUN_RECORD_ELSEWHERE = "#790: only run_journey and journey run leave a run record";
 const NO_SCREENSHOTS_HERE = "#251: this surface takes no --screenshots (a batch/queued/MCP/suite-journey run: none asked for)";
 const WHOLE_JOURNEY = "#293: only an anchored mission replays a Journey PREFIX into its own open session (journey-prefix.ts); this surface replays the whole Journey in a browser of its own";
 const PREFIX_IN_SESSION = "#293: a Journey prefix replays INTO the mission's already-open session — the mission's own browser, emulation and capture apply";
@@ -174,6 +175,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "journey-prefix.ts runJourneyProgrammatically": {
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
+    runRecorder: RUN_RECORD_ELSEWHERE,
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
@@ -204,6 +206,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "demo-aspect-api.ts runJourneyProgrammatically": {
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
+    runRecorder: RUN_RECORD_ELSEWHERE,
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
@@ -234,6 +237,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "check-execute.ts runJourneyProgrammatically": {
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
+    runRecorder: RUN_RECORD_ELSEWHERE,
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,

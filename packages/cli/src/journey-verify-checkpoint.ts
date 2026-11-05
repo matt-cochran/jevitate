@@ -449,6 +449,12 @@ export function verifierStateOf(body: Pick<CheckpointBody, "state" | "verifier">
   return token === body.verifier.startToken ? "live" : "stale";
 }
 
+/** True when a live verifier is still writing this receipt: `logs prune` leaves it, however old. */
+export function isLiveVerifyReceipt(path: string): boolean {
+  const found = readCheckpointFile(path);
+  return found.kind === "read" && verifierStateOf(found.body) === "live";
+}
+
 /** The oldest time a reused result was measured at. */
 function oldestResultMs(body: CheckpointBody): number {
   return Math.min(Date.parse(body.updatedAt), ...body.completed.map((p) => Date.parse(p.finishedAt)));

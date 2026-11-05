@@ -1,3 +1,4 @@
+import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, describeStep, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
@@ -91,6 +92,8 @@ export interface RunJourneyProgrammaticallyOptions {
   assertRunnable?: (stored: Journey) => Promise<void>;
   /** #789: the `targets.json` an MCP run's guard reads (default: `~/.jevitate/targets.json`). */
   runGuardTargetsFile?: string;
+  /** #790: told what the run resolved to and watches its writes, for its value-free record. */
+  runRecorder?: JourneyRunRecorder;
   /** Defaults to `safeRunPolicy()` (Slice 1: fail-closed secret mode) when omitted. */
   policy?: RunPolicy;
   /**
@@ -551,11 +554,13 @@ export async function runJourneyProgrammatically(
   if (!stored) {
     throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
   }
+  opts.runRecorder?.noteJourney(stored);
   await opts.assertRunnable?.(stored);
   // #247: onto the chosen environment (a step on an origin it does not allow is refused here).
   const full = applyJourneyEnvironment(stored, opts.environment);
   // #293: only the prefix up to the anchor runs (its params are the ones those steps take).
   const journey = opts.stopAfterStep === undefined ? full : journeyPrefix(full, opts.stopAfterStep);
+  opts.runRecorder?.noteJourney(journey);
   const allowedOrigins = effectiveAllowedOrigins(journey, opts.environment, opts.allow);
   // #543: an http end-state check reads only an origin the replay allows — refused before any
   // fixture or browser (the probe re-checks every request after substitution).
@@ -646,7 +651,8 @@ export async function runJourneyProgrammatically(
     // #485: the origins outside the run's allow list that the page sent a write to (origins only —
     // never a path, query or body). The campaign preflight reads them for an allow-list slip.
     const offAllowlist = watchOffAllowlistWrites(session, allowedOrigins);
-    await runGuard?.arm(session, params);
+    opts.runRecorder?.attach(session);
+    await runGuard?.arm(session, params, opts.runRecorder?.noteRefusedWrite);
     // #583 §3: a declared boundary watches every first-party write for the whole run (aborting them
     // only with `blockWrites`), so the typed handback state is decided from the run's own evidence.
     const handbackObserver =

@@ -18,6 +18,7 @@ import { ok, fail } from "../envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
 import { resolveCatalogDir } from "../catalog-api.js";
 import { journeyDraftWarning } from "../journey-stale-api.js";
+import { runRecordErrorOf, withJourneyRunRecord } from "../journey-run-record.js";
 import { ExtensionMismatchError } from "../browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
 import { withSiteGate } from "../site-gate-cli.js";
@@ -217,7 +218,9 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         const unapproved = await journeyDraftWarning(runJourneysDir, id, resolveCatalogDir(deps.catalogDir));
         if (unapproved !== undefined) program.configureOutput().writeErr?.(unapproved);
         let fixtureDrift: FixtureDrift | undefined;
-        const result = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
+        // #790: every run leaves one value-free record, whatever it comes to.
+        const result = await withJourneyRunRecord({ channel: "cli", id, params: param, logsRoot: deps.logs?.logsRoot }, (runRecorder) => withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
+          runRecorder,
           ...(siteGate === undefined ? {} : { siteGate }),
           dir: runJourneysDir,
           id,
@@ -252,7 +255,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
             checkSetupRefs({ "--param": Object.values(param) }, fx);
             return fx;
           },
-        })).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
+        }))).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
+        if (result.runRecordError !== undefined) program.configureOutput().writeErr?.(`warning: ${result.runRecordError}\n`);
         if (fixtureDrift !== undefined && !json) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
         // #246 (informational, never failing): how many steps say why — `journey annotate` drafts the rest.
         const intent = await journeyIntentCoverage(runJourneysDir, id);
@@ -277,6 +281,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           process.exitCode = code;
         }
       } catch (err) {
+        const recordProblem = runRecordErrorOf(err);
+        if (recordProblem !== undefined) program.configureOutput().writeErr?.(`warning: ${recordProblem}\n`);
         if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
