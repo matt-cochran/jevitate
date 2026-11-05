@@ -165,17 +165,19 @@ function writeRequestsOf(recorded: RecordedStep, classify: WriteClassifier): Wri
   return out;
 }
 
+const READ_METHODS = /^(?:GET|HEAD|OPTIONS)$/i;
+
 function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests: readonly WriteRequest[]): boolean {
   if (requests.length > 0) return true;
   // (b) a step's own request expectation names a write method for its path.
   if ((recorded.expectRequests ?? []).some((check) => classify({ method: check.method, path: check.pathGlob }))) return true;
-  // A recorded request is stronger evidence than a page delta.  When every
-  // recorded request is an explicitly configured read, do not turn the step
-  // back into a write merely because loading data changed the page.  Keep the
-  // conservative delta fallback only where there is no parseable network
-  // evidence at all: an unknown or malformed request must never become safe.
-  const hasRecordedRequest = (recorded.delta?.requests ?? []).some((line) => REQUEST_LINE.test(line.trim()));
-  if (hasRecordedRequest || (recorded.expectRequests?.length ?? 0) > 0) return false;
+  // A request the configuration calls a read outranks a page delta: loading data changes the page,
+  // and that must not turn a configured read POST back into a write. Only such a request does: a GET
+  // says nothing about what else the step did, so it keeps the conservative fallback below (#763).
+  const configuredRead = (method: string, path: string): boolean => !READ_METHODS.test(method) && !classify({ method, path });
+  const recordedLines = (recorded.delta?.requests ?? []).map((line) => REQUEST_LINE.exec(line.trim()));
+  if (recordedLines.some((m) => m !== null && configuredRead(m[1]!, m[2]!))) return false;
+  if ((recorded.expectRequests ?? []).some((check) => configuredRead(check.method, check.pathGlob))) return false;
   // (c) a state-changing step whose delta changed the page, even if the request was not recorded.
   return recorded.delta?.verdict === "relevant-change" && STATE_CHANGING.has(recorded.step.kind);
 }
