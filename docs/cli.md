@@ -1809,6 +1809,8 @@ preview or prove that each Journey assertion fails when its outcome is absent
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--plan` | print the static mutation/assertion plan without opening a browser |  |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
+| `--resume` | with --mutate: continue an interrupted proof of the same Journey and configuration, reusing finished pairs after the base replay passes again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused and never starts over |  |  |  |  |
+| `--status` | read a proof's durable progress and whether its verifier is live, exited or stale; no browser, no hook, nothing of the app's |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
