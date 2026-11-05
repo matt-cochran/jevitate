@@ -76,8 +76,14 @@ A `proven` verdict holds if all of these are true. Each one that fails can produ
 - **State from one replay reaches the next only where the independence replay would meet it.** A job that
   lands after the independence replay ends, and changes what a site reads only inside one mutated replay, reads
   `sensitive` if that replay has no sibling that passes. So does a change made to the app from outside the proof.
-- **A control and a mutated replay see the same app.** A control running near a mutated replay is taken as speaking for
-  it, including when siblings share one. An app that changes between them is outside the proof.
+- **A control and a mutated replay see the same app.** A control that passes says the hold did not break the claim. It
+  cannot say the mutated replay was not unluckily slow, so a job slow only in that replay reads `sensitive` even when a
+  control ran. Siblings that share a control may reach a site up to the margin apart, so a claim that decays in that
+  gap is not told apart.
+- **Sibling mutations of a step are the cross-check.** Disagreement is looked for only between mutations of the same
+  step. Two siblings that both fail for a reason other than the mutation read `sensitive`.
+- **A resumed proof's reused results still describe the app.** A resume measures a new base and runs the independence
+  replay again, but a reused pair ran against the app as it was then.
 - **A blocked write's retry uses a recorded line.** A retry on a path the step never recorded is a new write and gets
   through. The site then reads `insensitive`, or `sensitive` for what remains, on an app the block no longer describes.
 - **An aborted write ends soon.** A write the browser gave up on keeps its replay open for 2 s. A server still working
