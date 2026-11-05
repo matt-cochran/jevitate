@@ -84,20 +84,26 @@ function instructionText(controls: readonly Control[], visibleText: string): str
   return text;
 }
 
+/** The control's whole name stands in the goal as a phrase: `Show`, from 'press Show the demo'. */
+const goalNames = (goal: string, name: string): boolean => new RegExp(`\\b${escaped(normalized(name))}\\b`).test(goal);
+
 /**
  * #693 — an enabled, untried forward control that the goal and the page's own instruction both
  * name. Deterministic: the page text minus the controls' labels must be an instruction containing
  * every content word of the control's name, and at least one of those words must be in the goal.
+ * #769 — with `goalNamed`, a control whose whole name the goal states need not be in that instruction.
  */
 export function forwardControls(
   ctx: RunContext,
   step: { readonly snap: Snapshot; readonly modelControls: readonly Control[]; readonly visibleText: string },
+  { goalNamed = false }: { readonly goalNamed?: boolean } = {},
 ): Control[] {
   const goalTerms = terms(ctx.goalText);
   if (goalTerms.size === 0) return [];
   const instruction = instructionText(step.modelControls, step.visibleText);
   const instructionTerms = terms(instruction);
   if (instructionTerms.size === 0 || !DIRECTIVE.test(instruction)) return [];
+  const goal = normalized(ctx.goalText);
   const out: Control[] = [];
   for (const control of step.modelControls) {
     if (!control.enabled) continue;
@@ -106,12 +112,11 @@ export function forwardControls(
     if (ctx.depth.tried(step.snap.url, name)) continue;
     const controlTerms = terms(name);
     if (controlTerms.size === 0) continue;
-    if ([...controlTerms].some((t) => goalTerms.has(t)) && [...controlTerms].every((t) => instructionTerms.has(t))) out.push(control);
+    const instructed = [...controlTerms].some((t) => goalTerms.has(t)) && [...controlTerms].every((t) => instructionTerms.has(t));
+    if (instructed || (goalNamed && goalNames(goal, name))) out.push(control);
   }
   // #769 — rank by how explicitly the goal names the control: a control the goal itself states
-  // (`Show the demo`, from 'press Show the demo') precedes one the page instruction merely suggests
-  // (`Check in`). The set of forward controls is unchanged; only the order is.
-  const goal = normalized(ctx.goalText);
+  // (`Show the demo`, from 'press Show the demo') precedes one the page instruction merely suggests (`Check in`).
   return out.sort((a, b) => goalNaming(goal, b.name, goalTerms) - goalNaming(goal, a.name, goalTerms));
 }
 
@@ -124,8 +129,7 @@ function goalNaming(goal: string, name: string, goalTerms: ReadonlySet<string>):
   const controlTerms = terms(name);
   if (controlTerms.size === 0) return 0;
   const hits = [...controlTerms].filter((t) => goalTerms.has(t)).length;
-  const phrase = new RegExp(`\\b${escaped(normalized(name))}\\b`).test(goal);
-  return (phrase ? 1_000 : 0) + (hits / controlTerms.size) * 100 + hits;
+  return (goalNames(goal, name) ? 1_000 : 0) + (hits / controlTerms.size) * 100 + hits;
 }
 
 /** The first #693 forward control, or null — the single obvious control a model `blocked` is refused beside. */
@@ -133,7 +137,7 @@ export function primaryForwardControl(
   ctx: RunContext,
   step: { readonly snap: Snapshot; readonly modelControls: readonly Control[]; readonly visibleText: string },
 ): Control | null {
-  return forwardControls(ctx, step)[0] ?? null;
+  return forwardControls(ctx, step, { goalNamed: true })[0] ?? null;
 }
 
 export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> {

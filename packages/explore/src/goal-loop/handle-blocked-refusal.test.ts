@@ -32,6 +32,16 @@ const STEP_HTML = `<!doctype html><html><body>
 <button type="button">Check in</button>
 <a href="/shown">Show the demo</a>
 </body></html>`;
+// #769's page: its instruction names `Check in` and never the goal's `Show`, whose name is a phrase of the goal.
+const OFF_INSTRUCTION_HTML = `<!doctype html><html><body>
+<h1>Prospect</h1>
+<p>Check in to continue.</p>
+<button type="button">Refresh</button>
+<button type="button">Check in</button>
+<a href="/shown">Show</a>
+<button type="button">Share</button>
+<button type="button">Business info</button>
+</body></html>`;
 const SHOWN_HTML = `<!doctype html><html><body>
 <h1>Demo shown</h1>
 </body></html>`;
@@ -40,7 +50,8 @@ let server: Server;
 let origin: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const html = req.url === "/step" ? STEP_HTML : req.url === "/shown" ? SHOWN_HTML : START_HTML;
+    const pages: Readonly<Record<string, string>> = { "/step": STEP_HTML, "/off": OFF_INSTRUCTION_HTML, "/shown": SHOWN_HTML };
+    const html = pages[req.url ?? ""] ?? START_HTML;
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -51,6 +62,7 @@ afterAll(async () => {
 });
 
 interface RunOptions {
+  readonly startPath?: string;
   readonly maxDecisions?: number;
   readonly successChecks?: SuccessCheck[];
 }
@@ -71,7 +83,7 @@ async function run(prefs: (n: number, s: JudgmentState) => readonly Preference[]
         gen: new FakeGenerationGateway(),
         goal: GOAL,
         allowlist: [origin],
-        startUrl: `${origin}/start`,
+        startUrl: `${origin}${opts.startPath ?? "/start"}`,
         waitOpMs: 300,
         bounds: { maxDecisions: opts.maxDecisions ?? 12 },
         successChecks: opts.successChecks ?? [DEMO_SHOWN],
@@ -111,6 +123,36 @@ describe("#769 — a refused blocked always yields another model decision", () =
       const result = await run((n) => (n === 0 ? [{ op: "click", name: "Start" }] : []));
       const reasons = result.transcript.filter((e) => e.op === "blocked").map((e) => e.reason ?? "");
       expect(reasons.some((r) => /blocked refused: "Show the demo"/.test(r))).toBe(true);
+    },
+    90_000,
+  );
+
+  it(
+    "refuses a blocked beside the control the goal names when the page's instruction names another",
+    async () => {
+      const result = await run((n) => (n === 0 ? [{ op: "click", name: "Refresh" }] : []), { startPath: "/off" });
+      const reasons = result.transcript.filter((e) => e.op === "blocked").map((e) => e.reason ?? "");
+      expect(reasons.some((r) => /blocked refused: "Show"/.test(r))).toBe(true);
+    },
+    90_000,
+  );
+
+  it(
+    "goes on to the goal's control, and passes only when the success check holds, when the page's instruction does not name it",
+    async () => {
+      const result = await run((n) => (n === 0 ? [{ op: "click", name: "Refresh" }] : n === 2 ? [{ op: "click", name: "Show" }] : []), { startPath: "/off" });
+      expect(actedOn(result, "Show")).toBe(true);
+      expect(result.outcome).toBe("succeeded");
+    },
+    90_000,
+  );
+
+  it(
+    "does not treat a shared word as the goal naming a control the page's instruction does not name",
+    async () => {
+      const result = await run((n) => (n === 0 ? [{ op: "click", name: "Refresh" }] : []), { startPath: "/off" });
+      const reasons = result.transcript.filter((e) => e.op === "blocked").map((e) => e.reason ?? "");
+      expect(reasons.some((r) => /blocked refused: "Share"|blocked refused: "Business info"/.test(r))).toBe(false);
     },
     90_000,
   );
