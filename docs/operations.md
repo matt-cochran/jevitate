@@ -212,8 +212,9 @@ naming the processes that hold the slots. Within one process, the browser pool's
 (`JEVITATE_BROWSER_MAX_CONTEXTS`) still applies.
 
 A `journey verify --mutate` proof keeps its slot between replays unless another run is waiting for one; it
-then yields and competes again. Waiters announce themselves with `waiter-*.json` beside the slots; a dead or
-stale one is ignored.
+then yields and competes again, also while a hook runs between replays. Waiters announce themselves with
+`waiter-*.json` beside the slots; a dead or stale one is ignored. A run from a build older than 0.29.0 announces
+nothing, so a proof does not yield to it.
 
 **Memory ceiling.** The memory of the browsers a run launched (browser, renderers and helper
 processes, summed as Linux PSS, or RSS on macOS) is sampled every 2 s. Past the ceiling, the

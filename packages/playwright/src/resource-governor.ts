@@ -257,6 +257,9 @@ export interface ResourceGovernorOptions {
  */
 const YIELD_GRACE_MS = 5_000;
 
+/** How often a kept slot with no open session looks for a waiter. */
+const KEPT_SLOT_WATCH_MS = 1_000;
+
 /** Ticket for one open session: release it when the session closes. */
 export interface GovernorTicket {
   release(): void;
@@ -303,6 +306,8 @@ export class ResourceGovernor {
   #admitting = 0;
   /** The slot index a hold just yielded, for the next acquire to leave to the waiter. */
   #yieldedIndex: number | undefined;
+  /** Looks for a waiter while a kept slot has no open session: a hook can fill that gap for as long as its limit allows. */
+  #keptWatch: ReturnType<typeof setInterval> | undefined;
 
   readonly #watched = new Map<MemoryWatchedPage, { ceiling: number; openedAt: number }>();
   readonly #memory: Array<{ at: number; bytes: number }> = [];
@@ -369,6 +374,7 @@ export class ResourceGovernor {
   async enter(limits: ResourceLimits = {}): Promise<GovernorTicket> {
     this.#limits = limits;
     const cap = limits.maxBrowsers ?? (this.config.enabled ? this.config.maxBrowsers : undefined);
+    this.#stopKeptWatch();
     if (this.config.enabled) await this.decide();
     if (this.#open === 0 && this.#slot !== undefined) this.#settleKeptSlot(cap);
     if (cap !== undefined && this.#slot === undefined) {
@@ -405,7 +411,10 @@ export class ResourceGovernor {
         if (this.#open > 0) return;
         const slot = this.#slot;
         if (this.#holds > 0 && slot !== undefined) {
-          if (!this.#someoneWaits(slot.index)) return;
+          if (!this.#someoneWaits(slot.index)) {
+            this.#startKeptWatch();
+            return;
+          }
           this.#yieldedIndex = slot.index;
         }
         this.#releaseSlot();
@@ -416,7 +425,7 @@ export class ResourceGovernor {
   /**
    * Scopes a multi-replay proof: until the returned function is called, this process's slot outlives
    * its last open session, so the next session needs no new admission. It is given up as soon as another
-   * process waits for it (checked at each session's close and before the next one opens), and then
+   * process waits for it (checked at each session's close, through the gap, and as the next one opens), and then
    * competed for as before. The caller must end the scope however the proof ends. A slot's crash safety
    * does not change: it stays a heartbeated file, removed on exit and reclaimed once its pid is gone.
    */
@@ -442,6 +451,22 @@ export class ResourceGovernor {
     }
   }
 
+  #startKeptWatch(): void {
+    if (this.#keptWatch !== undefined) return;
+    this.#keptWatch = clock.setInterval(() => {
+      const slot = this.#slot;
+      if (slot === undefined || !this.#someoneWaits(slot.index)) return;
+      this.#yieldedIndex = slot.index;
+      this.#releaseSlot();
+    }, KEPT_SLOT_WATCH_MS);
+    this.#keptWatch.unref();
+  }
+
+  #stopKeptWatch(): void {
+    clock.clearInterval(this.#keptWatch);
+    this.#keptWatch = undefined;
+  }
+
   /** A slot kept across sessions, as the next session opens: reused, or given up as a new admission would decide. */
   #settleKeptSlot(cap: number | undefined): void {
     const slot = this.#slot!;
@@ -464,6 +489,7 @@ export class ResourceGovernor {
   }
 
   #releaseSlot(): void {
+    this.#stopKeptWatch();
     const slot = this.#slot;
     this.#slot = undefined;
     if (slot === undefined) return;

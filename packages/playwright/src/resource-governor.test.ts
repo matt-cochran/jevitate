@@ -312,6 +312,35 @@ describe("a hold on the machine slot between sessions (#766)", () => {
     expect(g.snapshot(0).machineSlot).toEqual({ index: 0, waitedMs: 0 });
   });
 
+  it("goes to a process that starts waiting during the gap, as a long hook runs between sessions", async () => {
+    const g = proof();
+    cleanup.push(g.holdSlotBetweenSessions());
+    (await g.enter(ONE)).release();
+    let got = false;
+    const waiting = anotherProcessWaits();
+    void waiting.then(() => void (got = true));
+    await fake.advanceBy(10_000);
+    await Promise.resolve();
+    expect(got).toBe(true);
+    expect((await waiting).index).toBe(0);
+  });
+
+  it("stops looking for waiters once a new session opens or the hold ends", async () => {
+    const g = proof();
+    const endHold = g.holdSlotBetweenSessions();
+    (await g.enter(ONE)).release();
+    const second = await g.enter(ONE);
+    const token = slotToken();
+    const waiting = anotherProcessWaits();
+    await fake.advanceBy(10_000);
+    expect(slotToken()).toBe(token);
+    second.release();
+    await fake.advanceBy(1_000);
+    (await waiting).release();
+    endHold();
+    expect(fake.pending()).toBe(0);
+  });
+
   it("yields the slot at a session's close when another process waits", async () => {
     const g = proof();
     cleanup.push(g.holdSlotBetweenSessions());
