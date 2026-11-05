@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { afterAll } from "vitest";
 import { closeSharedBrowserPool, configureSharedBrowserPool } from "@jevitate/playwright";
 
@@ -18,6 +19,9 @@ configureSharedBrowserPool({
   },
   maxContexts: 4,
 });
+
+// This project runs on threads: its files must get the run's home too (`test/global-temp-cleanup.ts`).
+if (homedir() === process.env.JEVITATE_TEST_REAL_HOME) throw new Error("a browser test file is running with the real home");
 
 afterAll(async () => {
   await closeSharedBrowserPool();

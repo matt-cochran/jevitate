@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { homedir as osHomedir } from "node:os";
+import { homedir as osHomedir, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { clock } from "@jevitate/domain";
 
@@ -33,13 +33,23 @@ export function homeDataRoot(deps: LayoutDeps = {}): string {
   return join((deps.homedir ?? osHomedir)(), ".jevitate");
 }
 
-/** The nearest `.jevitate/` walking up from the working directory — never the per-user one. */
+/** The account's own `~/.jevitate`, from the system's user record: `HOME` may point elsewhere. Null where there is no such record. */
+function accountDataRoot(): string | null {
+  try {
+    return join(userInfo().homedir, ".jevitate");
+  } catch {
+    return null;
+  }
+}
+
+/** The nearest `.jevitate/` walking up from the working directory — never the per-user one, wherever `HOME` points. */
 export function findProjectDir(deps: LayoutDeps = {}): string | null {
   const home = homeDataRoot(deps);
+  const account = accountDataRoot();
   let dir = resolve((deps.cwd ?? (() => process.cwd()))());
   for (;;) {
     const candidate = join(dir, ".jevitate");
-    if (candidate !== home && isDir(candidate)) return candidate;
+    if (candidate !== home && candidate !== account && isDir(candidate)) return candidate;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
