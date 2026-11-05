@@ -234,7 +234,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (461 exports)
+# @jevitate/explore (462 exports)
   ACTION_CAUSED_MS: const (number)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
@@ -600,6 +600,7 @@
   quoteIsOnlyControlNames: function
   quoteSpanAt: function
   quoteSpans: function
+  readControlIdentity: function
   recordCoverageHang: function
   recordingStepCount: function
   redactAriaLine: function
@@ -746,12 +747,13 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (37 exports)
+# @jevitate/interpreter (38 exports)
   BufferingSink: class
   DEFAULT_IN_VIEWPORT_MIN: const (number)
   PLAYWRIGHT_TEST_ID_ATTRIBUTE: const (string)
   PostconditionFailed: class
   RecordingInterpreter: class
+  ReplayRefusal: class
   ReplayTargetError: class
   SelectAlternativeUnavailableError: class
   TFLOW_ID_ATTRIBUTE: const (string)
@@ -975,10 +977,12 @@
   percentile: function
   runLoadTest: function
 
-# @jevitate/mcp-facade (22 exports)
+# @jevitate/mcp-facade (24 exports)
   ALLOWED_TOOLS: array
   FORBIDDEN_TOOLS: array
+  JourneyRunRefusedError: class
   aiGenerateText: function
+  assertJourneyRunnable: function
   facadeApproveAction: function
   facadeCancelCommand: function
   facadeGetCommand: function
