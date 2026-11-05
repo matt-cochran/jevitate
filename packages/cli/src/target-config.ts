@@ -333,6 +333,15 @@ export function journeyReadRequests(journey: { readonly recording: { readonly si
   return resolveTargetConfig(loadTargetsFile(opts.targetsFile), origin).safety?.readRequests;
 }
 
+/** `journeyReadRequests` for advice about a proof, where a targets file that cannot be read is another command's refusal. */
+export function advisoryReadRequests(journey: { readonly recording: { readonly site: string } }): readonly string[] | undefined {
+  try {
+    return journeyReadRequests(journey);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Reads the whole targets file, keyed by origin. */
 export function loadTargetsFile(path = resolveDataDir(["targets.json"])): Readonly<Record<string, TargetConfig>> {
   let raw: string;

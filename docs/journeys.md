@@ -504,6 +504,7 @@ and Jev never fail it. `--stale --strict` is refused. MCP: `review_journey` with
   an approval still binds to the full review hash, so annotating re-stales an approval. One
   exception: annotating drops a success criterion's code `check` when that criterion is reworded,
   which changes executable content and does stale the proof.
+  Changing the target's `safety.readRequests` stales it too: they decide which steps the proof treats as writes.
 - **Linking.** `jevitate journey link <id> --job <jobId> --persona <personaId>` (MCP `journey_link`)
   sets `metadata.job` / `metadata.persona` without hand-editing the file; `--unlink-job` /
   `--unlink-persona` clear them. Each id is checked against the catalog: an unknown one is refused

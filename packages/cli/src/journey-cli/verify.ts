@@ -178,7 +178,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
                 build: { ...currentEngineInfo(), tree: currentBuildTree() },
                 config: {
                   hook: hookBindingOf(recorded.flags, environment?.fixtures),
-                  origin: { name: environment?.name, baseUrl: environment?.baseUrl, allowedOrigins: environment?.allowedOrigins, origins: environment?.origins, sourceOrigins: environment?.sourceOrigins, allow },
+                  origin: { readRequests, name: environment?.name, baseUrl: environment?.baseUrl, allowedOrigins: environment?.allowedOrigins, origins: environment?.origins, sourceOrigins: environment?.sourceOrigins, allow },
                   browser: browserBindingOf(browser, emulation, storageState, environment?.secretFields),
                 },
                 onNotice: (text) => program.configureOutput().writeErr?.(`${text}\n`),

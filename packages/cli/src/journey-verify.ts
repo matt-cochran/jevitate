@@ -1372,7 +1372,7 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
   const redacted = redactSecretParams(report, journey, opts.params);
-  const proofContext = journeyProofContext(opts.browser, opts.emulation);
+  const proofContext = journeyProofContext(opts.browser, opts.emulation, opts.readRequests);
   // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
   await writePreflightedVerifyRecord(receiptDestination, {
     journeyId: journey.metadata.id,

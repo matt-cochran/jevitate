@@ -724,7 +724,7 @@ export async function openProofCheckpoint(
     if (body.planDigest !== planDigest) return refuse("mutation-plan", "the mutation plan changed since the checkpoint");
     if (body.bindings.params !== bindings.params) return refuse("params", "the parameters differ from the checkpoint's");
     if (body.bindings.hook !== bindings.hook) return refuse("hook", "the hooks or fixtures differ from the checkpoint's");
-    if (body.bindings.origin !== bindings.origin) return refuse("origin", "the environment, base URL or allowed origins differ from the checkpoint's");
+    if (body.bindings.origin !== bindings.origin) return refuse("origin", "the environment, base URL, allowed origins or read requests differ from the checkpoint's");
     if (body.bindings.browser !== bindings.browser) return refuse("browser", "the browser, emulation or session settings differ from the checkpoint's");
     if (req.build.commit === "unknown" || req.build.builtAt === "unknown") return refuse("cli-build", "this build cannot say which build it is, so it cannot be shown to be the checkpoint's");
     if (canonicalJson(body.build) !== canonicalJson(req.build)) return refuse("cli-build", `the checkpoint was written by ${body.build.version} (${body.build.commit}, built ${body.build.builtAt}) and this is ${req.build.version} (${req.build.commit}, built ${req.build.builtAt})`);
