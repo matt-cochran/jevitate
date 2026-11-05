@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { clock } from "@jevitate/domain";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { AdmissionTimeoutError, PlaywrightBrowserPort } from "@jevitate/playwright";
-import { controlFailureIndications, verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
+import { verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
 import { MissionFixtures } from "./mission-fixtures.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
@@ -169,9 +169,6 @@ describe("#785 a control whose POST is never answered", () => {
     const diagnostics = endStateProof(report, "skip:2")?.controlDiagnostics;
     expect(diagnostics?.failedSites).toEqual(["end-state:0"]);
     expect(diagnostics?.control.relaxedWaits).toContainEqual(expect.objectContaining({ site: "step-request:2:0", ending: "timeout" }));
-  });
-  it("is told apart as end-state timing", () => {
-    expect(endStateProof(report, "skip:2")?.controlDiagnostics?.indicates).toContain("end-state-timing");
   });
   it("reports the base replay's storage as a count", () => {
     expect(endStateProof(report, "skip:2")?.controlDiagnostics?.base?.storageBeforeEndState?.sessionStorageKeys).toBe(1);
@@ -543,37 +540,5 @@ describe("a fixture restore failing during a proof", () => {
     it("is inconclusive, not proven", () => {
       expect(report.verdict).toBe("inconclusive");
     });
-  });
-});
-
-type Diagnostics = Parameters<typeof controlFailureIndications>[0];
-const replayed = (over: Partial<Diagnostics> = {}): Diagnostics => ({
-  stepsTotal: 3,
-  stepsCompleted: 3,
-  sessionsOpened: 1,
-  pageReplaced: false,
-  writesSent: 1,
-  writesAnswered: 1,
-  writesAborted: 0,
-  writesUnfinished: 0,
-  storageBeforeEndState: { sessionStorageKeys: 1, localStorageKeys: 0, cookies: 0 },
-  storageAfterEndState: { sessionStorageKeys: 1, localStorageKeys: 0, cookies: 0 },
-  relaxedWaits: [],
-  ...over,
-});
-const none = { sessionStorageKeys: 0, localStorageKeys: 0, cookies: 0 };
-
-describe("#785 a failed control is told apart", () => {
-  it.each([
-    ["a step that did not complete", replayed({ stepsCompleted: 2 }), true, ["action-omission"]],
-    ["a write that was never sent", replayed({ writesSent: 0, writesAnswered: 0 }), true, ["action-omission"]],
-    ["a replaced page", replayed({ pageReplaced: true }), true, ["browser-context-replacement"]],
-    ["a session opened differently", replayed(), false, ["browser-context-replacement"]],
-    ["a write still unanswered", replayed({ writesAnswered: 0, writesUnfinished: 1, storageBeforeEndState: none, storageAfterEndState: none }), true, ["end-state-timing"]],
-    ["storage not yet written before the reload", replayed({ storageBeforeEndState: none, storageAfterEndState: none }), true, ["end-state-timing"]],
-    ["storage lost across the reload", replayed({ storageAfterEndState: none }), true, ["storage-clearing"]],
-    ["a replay matching the base", replayed(), true, []],
-  ] as const)("%s", (_name, control, sameOptions, indicates) => {
-    expect(controlFailureIndications(control, replayed(), sameOptions)).toEqual(indicates);
   });
 });

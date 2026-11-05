@@ -278,27 +278,6 @@ type StorageCounts = NonNullable<ReplayDiagnostics["storageBeforeEndState"]>;
 type RelaxedSiteWait = NonNullable<MutationReplay["relaxedSiteWaits"]>[number];
 type RelaxedWaitEnding = ReplayDiagnostics["relaxedWaits"][number]["ending"];
 
-/**
- * #785: code's reading of a failed control against the base replay. A request short of the base's, or
- * storage short of it before the reload, is timing; storage that was there before the reload and gone
- * after it, against a base that kept it, is clearing.
- */
-export function controlFailureIndications(control: ReplayDiagnostics, base: ReplayDiagnostics | undefined, contextOptionsMatchBase: boolean | undefined): TargetedControlDiagnostics["indicates"][number][] {
-  const out: TargetedControlDiagnostics["indicates"][number][] = [];
-  if (control.stepsCompleted < control.stepsTotal || (base !== undefined && control.writesSent < base.writesSent)) out.push("action-omission");
-  if (control.pageReplaced || control.sessionsOpened > 1 || contextOptionsMatchBase === false) out.push("browser-context-replacement");
-  const keys = (c: StorageCounts | null): number | null => (c === null ? null : c.sessionStorageKeys + c.localStorageKeys + c.cookies);
-  const before = keys(control.storageBeforeEndState);
-  const baseBefore = base === undefined ? null : keys(base.storageBeforeEndState);
-  const after = keys(control.storageAfterEndState);
-  const baseAfter = base === undefined ? null : keys(base.storageAfterEndState);
-  const writesShort = base !== undefined && control.writesSent >= base.writesSent && control.writesAnswered < base.writesAnswered;
-  const storageShort = before !== null && baseBefore !== null && before < baseBefore;
-  if (writesShort || storageShort) out.push("end-state-timing");
-  else if (before !== null && baseBefore !== null && after !== null && baseAfter !== null && after < baseAfter) out.push("storage-clearing");
-  return out;
-}
-
 const siteKeyOf = (f: MutationFailedSite): string =>
   f.where === "step" ? `step:${f.step}` : f.where === "step-request" ? `step-request:${f.step}:${f.checkIndex}` : f.where === "end-state" ? `end-state:${f.index}` : "unevaluable";
 
@@ -1188,7 +1167,6 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
                   control,
                   ...(baseDiagnostics === undefined ? {} : { base: baseDiagnostics }),
                   ...(contextOptionsMatchBase === undefined ? {} : { contextOptionsMatchBase }),
-                  indicates: controlFailureIndications(control, baseDiagnostics, contextOptionsMatchBase),
                 },
               }),
         };

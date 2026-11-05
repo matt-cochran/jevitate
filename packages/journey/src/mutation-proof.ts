@@ -128,9 +128,6 @@ interface StorageCounts {
 /** `unresolved`: the assertion names a value only the replay holds (an `extract` output, `setup.x`), so it could not be waited on. */
 type RelaxedWaitEnding = "held" | "timeout" | "hang" | "unresolved" | "not-run";
 
-/** #785: what the evidence points to when a targeted control fails. Empty: none of the four. */
-type ControlFailureIndication = "action-omission" | "browser-context-replacement" | "storage-clearing" | "end-state-timing";
-
 interface TargetedControlDiagnostics {
   /** Where the control failed, as site keys. */
   readonly failedSites: readonly string[];
@@ -139,7 +136,6 @@ interface TargetedControlDiagnostics {
   readonly base?: ReplayDiagnostics;
   /** Both replays opened their session with the same options (false: a different browser context). */
   readonly contextOptionsMatchBase?: boolean;
-  readonly indicates: readonly ControlFailureIndication[];
 }
 
 /** What a targeted proof's replay reports back; `diagnostics` only from a control that did not pass. */

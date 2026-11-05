@@ -147,7 +147,6 @@ describe("#785 a failed control", () => {
     const diagnostics: NonNullable<TargetedProof["controlDiagnostics"]> = {
       failedSites: ["end-state:0"],
       control: { stepsTotal: 2, stepsCompleted: 2, sessionsOpened: 1, pageReplaced: false, writesSent: 1, writesAnswered: 1, writesAborted: 0, writesUnfinished: 0, storageBeforeEndState: stored, storageAfterEndState: stored, relaxedWaits: [] },
-      indicates: [],
     };
     expect((await proveWithControl({ diagnostics })).proof.controlDiagnostics).toEqual(diagnostics);
   });
