@@ -40,6 +40,13 @@ behaviour changes).
   skipped step with a write unanswered) is refused. A failed fixture restore makes a proof `inconclusive`.
   Storage diagnostics hold only real counts, and the admission timeout and `jevitate doctor` name a
   non-regular slot file.
+- **A sturdier mutation proof (#785, #766).** A `sensitive` reading now stands on a closer experiment.
+  A control replay waits exactly as the mutated replay did and must reach the site at about the same time.
+  One replay as recorded runs straight after the base, so a job left running can be seen crossing replays.
+  When one mutation of a step fails a site and another passes it, the failure must reproduce. A blocked write
+  stays blocked for the rest of the replay, and open writes are waited for before anything is judged. Proofs
+  of a claim that decays or a write that retries can read differently from earlier versions. Replays that can
+  no longer change the verdict are skipped. `docs/outcomes.md` lists what a proof assumes.
 - **Empty `.git` directories.** A directory counts as a git root only when `.git` is a file or holds
   `HEAD`, so a sandbox's empty placeholder no longer makes its parent a project.
 - **Bystander signals (#764).** Browser teardown signals only processes with this process's exact owner

@@ -456,7 +456,7 @@ class WriteScope {
 }
 
 /** A request as the context reports it; a test double may have less. */
-type WatchedRequest = { method(): string; url(): string; failure?(): { errorText: string } | null };
+type WatchedRequest = { method(): string; url(): string; failure?(): { errorText: string } | null; isNavigationRequest?(): boolean };
 
 /**
  * #785: watches one replay for the counts a failed control's diagnostics compare with the base
@@ -478,7 +478,9 @@ class ReplayProbe {
   readonly #relaxedWaits: ReplayDiagnostics["relaxedWaits"][number][] = [];
   readonly #beforeClose: ((writesSent: number) => Promise<void>) | undefined;
   readonly #scope: WriteScope | undefined;
-  readonly #open = new Map<unknown, string>();
+  readonly #open = new Map<unknown, { readonly line: string; readonly seq: number }>();
+  #requestSeq = 0;
+  #navigationSeq = 0;
   readonly #sent = new Map<string, number>();
   #lastAbortAt: number | undefined;
   #openAtClose: readonly string[] = [];
@@ -505,7 +507,7 @@ class ReplayProbe {
   }
 
   #openInScope(): string[] {
-    return [...this.#open.values()].filter((line) => this.#scope?.isBackground(line, this.#sent.get(line) ?? 0) !== true);
+    return [...this.#open.values()].map((o) => o.line).filter((line) => this.#scope?.isBackground(line, this.#sent.get(line) ?? 0) !== true);
   }
 
   /**
@@ -537,12 +539,24 @@ class ReplayProbe {
     if (typeof source?.on !== "function") return;
     const isWrite = (r: WatchedRequest): boolean => !READ_METHODS.has(r.method().toUpperCase());
     source.on("request", (r) => {
+      this.#requestSeq += 1;
+      if (r.isNavigationRequest?.() === true) this.#navigationSeq = this.#requestSeq;
       if (!isWrite(r)) return;
       this.#writesSent += 1;
       const line = lineOfRequest(r.method(), r.url());
       this.#sent.set(line, (this.#sent.get(line) ?? 0) + 1);
-      if (this.#scope?.counts(line, r.url()) === true) this.#open.set(r, line);
+      if (this.#scope?.counts(line, r.url()) === true) this.#open.set(r, { line, seq: this.#requestSeq });
     });
+    // A new document drops what the old one had open, and the browser may report nothing: that is an abort too.
+    if (typeof page?.on === "function") {
+      page.on("domcontentloaded", () => {
+        for (const [r, o] of this.#open) {
+          if (o.seq >= this.#navigationSeq) continue;
+          this.#open.delete(r);
+          this.#lastAbortAt = clock.monotonicMs();
+        }
+      });
+    }
     source.on("requestfinished", (r) => {
       if (!isWrite(r)) return;
       this.#writesAnswered += 1;
@@ -644,6 +658,8 @@ class ReplayPacer {
     readonly floor: (index: number) => number | undefined,
     /** How long the base took to reach the origin: what a replay that stopped before it is measured against. */
     readonly beforeOriginMs: number = 0,
+    /** A step nothing reads the time after: it is not held, and counts as if it had been. */
+    readonly notHeld: (index: number) => boolean = () => false,
   ) {}
 
   /** Ms since this replay's first step began. */
@@ -695,8 +711,10 @@ class ReplayPacer {
       },
       afterStep: async ({ index, outcome }) => {
         if (this.#originAt === undefined) return;
-        if (outcome === "done") await this.hold(this.floor(index));
-        this.reachedMs[index] = clock.monotonicMs() - this.#originAt;
+        const floor = this.floor(index);
+        if (outcome === "done" && !this.notHeld(index)) await this.hold(floor);
+        const reached = clock.monotonicMs() - this.#originAt;
+        this.reachedMs[index] = outcome === "done" && this.notHeld(index) ? Math.max(reached, floor ?? 0) : reached;
       },
     };
   }
@@ -1051,7 +1069,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
         // Nothing reads the time after a last step with no end state, so holding it would only cost.
         // A control also gets to each site no sooner than the mutated replay it answers for did, dead waits included.
         const atLeast = (floor: number | undefined, arrival: number | undefined): number | undefined => (floor === undefined || arrival === undefined ? (floor ?? arrival) : Math.max(floor, arrival));
-        const pacer = new ReplayPacer(m.step - 1, (index) => (index === lastIndex && noEndState ? undefined : atLeast(paceFloorMs(pace, m, index, withMargin), matchTo?.arrivedMs?.[index + 1])), paceBeforeMutationMs(pace, m));
+        const pacer = new ReplayPacer(m.step - 1, (index) => atLeast(paceFloorMs(pace, m, index, withMargin), matchTo?.arrivedMs?.[index + 1]), paceBeforeMutationMs(pace, m), (index) => index === lastIndex && noEndState);
         // #785: a control's counts say, on failure, what it did against the base replay. Any replay that
         // sent a write stays open as long as the base did, then until its writes have settled, so what it
         // started lands before its restore.

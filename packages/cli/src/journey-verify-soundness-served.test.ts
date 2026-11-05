@@ -9,7 +9,7 @@ import { FsJourneyStore, assertionSiteKey, classifyMutation, journeyAssertions, 
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { appendFile } from "node:fs/promises";
 import { runJourneyProgrammatically } from "./journey-api.js";
-import { verifyJourneyMutations, type JourneyVerifyReport, type VerifyJourneyOptions } from "./journey-verify.js";
+import { planJourneyVerification, verifyJourneyMutations, type JourneyVerifyReport, type VerifyJourneyOptions } from "./journey-verify.js";
 import { MissionFixtures } from "./mission-fixtures.js";
 import { composeObservers } from "./run-screenshots.js";
 
@@ -82,7 +82,7 @@ const MATRIX: readonly (readonly [Kind, Relation, string, string, string, string
 const ROWS = MATRIX.flatMap(([kind, relation, ...cells]) => COLUMNS.map((timing, i) => ({ kind, relation, timing, expected: cells[i]! })));
 
 /** How many proofs of this file run at once. */
-const PROOF_POOL = 6;
+const PROOF_POOL = 8;
 /** With this set, every proof appends what each replay took, by kind and step, as one JSON line. */
 const COST_LOG = process.env["JEV_PROOF_COST_LOG"];
 
@@ -110,7 +110,16 @@ async function proveMeasured(name: string, opts: VerifyJourneyOptions): Promise<
       }
     },
   );
-  await appendFile(COST_LOG, `${JSON.stringify({ name, ms: Math.round(clock.monotonicMs() - startedAt), replays, verdict: report.verdict, assertions: report.assertions.map((a) => [a.site, a.verdict, a.provedBy]), mutations: report.mutations.map((m) => [m.id, m.step, m.outcome]) })}\n`);
+  // Each pair's reading, on what the mutation alone saw, for what stopping a step's siblings early would have cost.
+  const planned = await planJourneyVerification({ dir: opts.dir, id: opts.id, params: opts.params });
+  const stored = await new FsJourneyStore(opts.dir).get(opts.id);
+  const sitesOf = stored === null || stored === undefined ? [] : journeyAssertions(stored);
+  const readings = planned.pairs.flatMap((p) => {
+    const m = report.mutations.find((x) => x.id === p.mutation);
+    const site = sitesOf.find((x) => assertionSiteKey(x) === p.site);
+    return m === undefined || site === undefined ? [] : [[p.mutation, m.step, p.site, classifyMutation(site, m, m)]];
+  });
+  await appendFile(COST_LOG, `${JSON.stringify({ name, ms: Math.round(clock.monotonicMs() - startedAt), replays, verdict: report.verdict, assertions: report.assertions.map((a) => [a.site, a.verdict, a.provedBy]), readings })}\n`);
   return report;
 }
 
@@ -654,8 +663,8 @@ const crossing = (opts: { readonly fixtures: boolean; readonly method?: "GET" | 
     if (p === "/api/save") {
       if (opts.fixtures) after(3_000, () => void (gone = true));
       else {
-        busyFrom = now + 3_000;
-        busyTo = now + 5_500;
+        busyFrom = now + 1_600;
+        busyTo = now + 5_300;
       }
       return json(res);
     }
@@ -676,11 +685,11 @@ $('hello').onclick=async()=>{await fetch('/api/hello',{method:'POST'});${ownToas
 $('ack').onclick=async()=>{await fetch('/api/ack',{method:'POST'});${ownToast ? show : ""}};</script>`);
 };
 const toastJourney = (site: string, ownToast: boolean): Journey =>
-  J(site, [NAV_TO("#hello"), { step: { kind: "click", target: { css: "#hello" }, expect: ownToast ? vis("#hello") : text("#toast", "Welcome") }, ...WROTE("/api/hello") }, { step: { kind: "click", target: { css: "#ack" }, expect: NOCLAIM }, ...WROTE("/api/ack") }], {
+  J(site, [NAV_TO("#hello"), { step: { kind: "click", target: { css: "#hello" }, expect: ownToast ? NOCLAIM : text("#toast", "Welcome") }, ...WROTE("/api/hello") }, { step: { kind: "click", target: { css: "#ack" }, expect: NOCLAIM }, ...WROTE("/api/ack") }], {
     endState: [{ kind: "page", assertion: text("#toast", "Welcome") }],
   });
 
-/** Ack's claim reads only Start's job, which takes 7 s the first time `slowIn` starts it and 800 ms otherwise. */
+/** Ack's claim reads only Start's job, which takes 14 s (past any wait on the way to the claim) the first time `slowIn` starts it and 800 ms otherwise. */
 const oneSlow = (slowIn: string) => (ctx: RowContext) => {
   const at = new Map<string, number>();
   const s = sessions();
@@ -690,7 +699,7 @@ const oneSlow = (slowIn: string) => (ctx: RowContext) => {
     const p = pathOfUrl(req);
     const now = clock.monotonicMs();
     if (p === "/api/start") {
-      at.set(sid, now + (ctx.label === slowIn && ctx.firstOf(slowIn) ? 7_000 : 800));
+      at.set(sid, now + (ctx.label === slowIn && ctx.firstOf(slowIn) ? 14_000 : 800));
       return json(res);
     }
     if (p === "/api/ack") return json(res);
@@ -750,18 +759,18 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reason: /cross into the next/,
   },
   {
-    name: "H1: the base's job opens a time-limited window in the next replay, no fixture",
+    name: "H1: a job's time-limited window that a held replay's own job also reaches, no fixture",
     serve: crossing({ fixtures: false }),
     journey: (site) => crossingJourney(site),
-    verdict: "inconclusive",
-    reason: /cross into the next/,
+    verdict: "insensitive",
+    reading: ["end-state:0", "insensitive"],
   },
   {
     name: "M4: the same job started by a GET, with no write to see",
     serve: crossing({ fixtures: false, method: "GET" }),
     journey: (site) => crossingJourney(site, { mutationPairs: [{ check: "end-state:0", mustFailWhen: "skip:2" }] }, {}),
-    verdict: "inconclusive",
-    reason: /cross into the next/,
+    verdict: "insensitive",
+    reading: ["end-state:0", "insensitive"],
   },
   {
     name: "H2: the pacing hold outlasts a toast an earlier step showed",
@@ -816,7 +825,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reading: ["step:2", "sensitive"],
   },
   {
-    name: "M3: a write still open as the base would have closed, its effect cleared by the restore",
+    name: "M3: a write the end state's reload drops as the base closes, its effect landing in the next replay",
     fixtures: true,
     serve: () => {
       let gone = false;
@@ -859,7 +868,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
   {
     name: "stated limit, today's reading: a claim that really depends on the write but decays inside the hold cannot be told from one the hold broke",
     limit: true,
-    serve: toastServer(1_300, true),
+    serve: toastServer(1_000, true),
     journey: (site) => toastJourney(site, true),
     verdict: "inconclusive",
     reading: ["end-state:0", "cascade"],
