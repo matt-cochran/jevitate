@@ -232,7 +232,7 @@ real writes. Which guards apply depends on who starts it. These are the ones in 
 | Guard | MCP (`run_journey`, `chain_journeys`, `load run`, `source run`) | CLI (`journey run`) |
 | --- | --- | --- |
 | Only a promoted Journey with a current approval runs | Yes. Refused before any browser opens with `E_JOURNEY_NOT_PROMOTED`, `E_JOURNEY_APPROVAL_STALE` or `E_JOURNEY_APPROVAL_UNKNOWN`. Promote it, or re-approve it, to lift it | No. It runs anyway and prints a `warning:` line on stderr with the same code. (`load run` on the CLI refuses an unpromoted Journey; `journey chain` runs promoted Journeys unless you pass `--allow-draft`) |
-| No click on a session-ending, destructive or paid control | Yes: `E_RUN_REFUSED_DESTRUCTIVE`. Lifted by `mcpRun.allowDestructive`; a target's own `safety.deny` is never lifted | No |
+| No click on a session-ending, destructive or paid control, and no Enter in a field whose form's default button is one | Yes: `E_RUN_REFUSED_DESTRUCTIVE`. Lifted by `mcpRun.allowDestructive`; a target's own `safety.deny` is never lifted | No |
 | No write to an origin outside the run's allowlist | Yes, at the browser context (popups, form posts and WebSocket frames included): `E_RUN_REFUSED_OFF_ALLOWLIST_WRITE`. Lifted by `mcpRun.allowOffAllowlistWrites` | No. The write is sent and listed in `offAllowlistWrites` in the result |
 | No replay on an environment flagged `production: true` | Yes: `E_RUN_REFUSED_PRODUCTION`. Lifted by `mcpRun.allowProduction` | No |
 | Site policy (pacing, minimum interval, budgets, quiet hours) | Yes, `{error: throttled}` | Yes. With no policy set, nothing is limited |
@@ -245,6 +245,8 @@ the run with `outcome: refused` and exit code 2. It is not a failed step, is nev
 retried, and names the setting that lifts it. If `targets.json` or `environments.json` cannot be read,
 an MCP run refuses with `E_RUN_GUARD_CONFIG` rather than run unguarded. A redirect from an allowed
 origin to a disallowed one cannot be stopped in the browser; the write may have been sent, and the run ends.
+The destructive check reads a control's name, so it cannot judge what has none: Enter in a form with no
+submit button, or a key the page's own script turns into a write.
 
 What does not guard a run today:
 

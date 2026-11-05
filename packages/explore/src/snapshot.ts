@@ -781,8 +781,8 @@ export function controlDisplay(descriptor: TargetDescriptor): TargetDisplay | un
  * #789: the role and accessible name of one resolved element, read exactly as a mission reads a
  * control's (`readControlFacts`), so a replay's refusals judge what a mission's judge.
  */
-export async function readControlIdentity(locator: Locator): Promise<{ readonly name: string; readonly role: string }> {
-  const { name, role } = await locator.evaluate(readControlFacts);
+export async function readControlIdentity(element: Locator | ElementHandle): Promise<{ readonly name: string; readonly role: string }> {
+  const { name, role } = await (element as Locator).evaluate(readControlFacts);
   return { name, role };
 }
 

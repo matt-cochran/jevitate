@@ -147,6 +147,25 @@ const INTERACTIVE_ANCESTOR = 'xpath=ancestor-or-self::*[self::button or self::a 
 const ACTIVATING_KEY = /(?:^|\+)(?:Enter|NumpadEnter|Space| )$/i;
 /** A key press in a text field types or submits; the field's name says nothing about what it does. */
 const TEXT_ROLES: ReadonlySet<string> = new Set(["textbox", "searchbox", "combobox"]);
+/** A key press that submits the focused field's form (HTML's implicit submission). */
+const SUBMITTING_KEY = /(?:^|\+)(?:Enter|NumpadEnter)$/i;
+
+/**
+ * BROWSER CODE. The button that Enter in this field clicks: its form's default button, the first submit
+ * button in tree order, a `form=` associated one included. Null where Enter clicks no such button: not a
+ * field that submits (a textarea, a button, which activates itself), no form, or a disabled default
+ * button, which HTML says submits nothing. A form with no submit button can still submit, with no
+ * control to judge; it is not refused here.
+ */
+function defaultButtonOf(field: Element): Element | null {
+  const selfActivating = field instanceof HTMLInputElement && ["submit", "image", "button", "reset"].includes(field.type);
+  if ((!(field instanceof HTMLInputElement) && !(field instanceof HTMLSelectElement)) || selfActivating || field.form === null) return null;
+  const { form } = field;
+  const button = [...document.querySelectorAll("button, input")].find(
+    (e) => (e instanceof HTMLButtonElement && e.form === form && e.type === "submit") || (e instanceof HTMLInputElement && e.form === form && (e.type === "submit" || e.type === "image")),
+  );
+  return button === undefined || button.matches(":disabled") ? null : button;
+}
 
 export class McpRunGuard implements ReplayActionGuard {
   readonly #origin: string;
@@ -264,6 +283,15 @@ export class McpRunGuard implements ReplayActionGuard {
     const { locator } = ctx;
     if (typeof locator.evaluate !== "function") return; // A test double's locator has no element to read.
     if (ctx.key !== undefined && (await locator.count()) === 0) return; // No element holds focus: the key activates nothing.
+    if (ctx.key !== undefined && SUBMITTING_KEY.test(ctx.key)) {
+      // What Enter submits is named on the form's default button, whatever the field is called.
+      const button = (await locator.evaluateHandle(defaultButtonOf)).asElement();
+      if (button !== null) {
+        const { name, role } = await readControlIdentity(button);
+        const verdict = this.#judge(name, role, ctx.recorded);
+        if (verdict !== null) this.#refuseControl(verdict, ctx.index);
+      }
+    }
     const element = await readControlIdentity(locator);
     if (ctx.key !== undefined && TEXT_ROLES.has(element.role)) return;
     // What a click activates may be an ancestor of what resolved (`<button>Delete <span>…</span></button>`).

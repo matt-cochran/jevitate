@@ -16,7 +16,8 @@ export class ReplayRefusal extends Error {
 export interface ReplayActionGuard {
   /**
    * Awaited once the target is resolved, right before a click or a key press acts on it (`key` set: the
-   * focused element). Throwing a `ReplayRefusal` keeps the action from running.
+   * focused element; a key can act past it, as Enter in a field clicks its form's default button, so the
+   * guard judges what the key reaches). Throwing a `ReplayRefusal` keeps the action from running.
    */
   beforeAction(ctx: { readonly index: number; readonly recorded: RecordedStep; readonly locator: Locator; readonly key?: string }): Promise<void>;
   /** After every step, and after a failed one (a refused write can be why it failed): throws what ended the run. */

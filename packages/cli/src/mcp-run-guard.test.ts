@@ -74,6 +74,10 @@ beforeAll(async () => {
       send(res, "<p data-testid=gone>deleted</p>");
       return;
     }
+    if (req.method === "POST" && req.url === "/save") {
+      send(res, "<p data-testid=saved>saved</p>");
+      return;
+    }
     if (req.method === "POST" && req.url === "/redirect") {
       res.writeHead(307, { location: `${otherOrigin}/after-redirect` });
       res.end();
@@ -92,6 +96,13 @@ beforeAll(async () => {
       <form method=post action="${otherOrigin}/ext"><button data-testid=ext>Export</button></form>
       <form method=post action=/redirect><button data-testid=redir>Continue</button></form>
       <button data-testid=noop onclick="document.body.insertAdjacentHTML('beforeend','<p data-testid=clicked>clicked</p>')">Open panel</button>
+      <form method=post action=/delete><input data-testid=enter-del-field aria-label="Type the name"><button>Delete account</button></form>
+      <form method=post action=/delete><input data-testid=enter-first-field aria-label="First field"><button type=button>Help</button><button>Delete it</button><button>Keep it</button></form>
+      <form method=post action=/delete id=assoc><input data-testid=enter-assoc-field aria-label="Assoc field"></form><button form=assoc>Delete everything</button>
+      <form method=post action=/delete><input type=checkbox data-testid=enter-check-field aria-label="Sure"><button>Delete now</button></form>
+      <form method=post action=/save><input data-testid=enter-plain-field aria-label="Plain field"><button>Save</button></form>
+      <form method=post action=/delete><input data-testid=enter-disabled-field aria-label="Other"><input aria-label="Second"><button disabled>Delete disabled</button></form>
+      <form method=post action=/delete><textarea data-testid=enter-area-field aria-label="Notes"></textarea><button>Delete notes</button></form>
       <input data-testid=tenant aria-label="Tenant">
       <button data-testid=named onclick="document.title=1">Delete customer-xyz</button>
       <a href="/fetch-off" data-testid=fetch-link>fetch page</a>`,
@@ -162,6 +173,58 @@ describe("#789 destructive controls over MCP", () => {
     const r = await run("del-enter");
     expect(r.body.code, r.text).toBe("E_RUN_REFUSED_DESTRUCTIVE");
     expect(hits.delete).toBe(0);
+  });
+
+  describe("Enter in a field submits its form through the form's default button", () => {
+    const focusThenEnter = (field: string, done: string): RecordedStep[] => [
+      { step: { kind: "click", target: { testId: field }, expect: { kind: "visible", target: { testId: field } } } } as RecordedStep,
+      { step: { kind: "press", key: "Enter", expect: { kind: "visible", target: { testId: done } } } } as RecordedStep,
+    ];
+
+    it("refuses by default: the POST never reaches the server, and the refusal is the destructive one", async () => {
+      seed(journey("enter-del", focusThenEnter("enter-del-field", "gone")));
+      const r = await run("enter-del");
+      expect(r.body, r.text).toMatchObject({ error: "refused", code: "E_RUN_REFUSED_DESTRUCTIVE", at: 3, setting: `targets.json["${appOrigin}"].mcpRun.allowDestructive` });
+      expect(hits.delete).toBe(0);
+    });
+
+    it("reaches the server once a person sets mcpRun.allowDestructive", async () => {
+      seed(journey("enter-del-ok", focusThenEnter("enter-del-field", "gone")));
+      configure({ allowDestructive: true });
+      const r = await run("enter-del-ok");
+      expect(r.body.outcome, r.text).toBe("ok");
+      expect(hits.delete).toBe(1);
+    });
+
+    it("the default button is the form's first submit button in tree order, an associated one outside the form too", async () => {
+      seed(journey("enter-del-second", focusThenEnter("enter-first-field", "gone")));
+      expect((await run("enter-del-second")).body.code).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+      seed(journey("enter-del-assoc", focusThenEnter("enter-assoc-field", "gone")));
+      expect((await run("enter-del-assoc")).body.code).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+      expect(hits.delete).toBe(0);
+    });
+
+    it("a field that is no text box submits the same way", async () => {
+      seed(journey("enter-del-check", focusThenEnter("enter-check-field", "gone")));
+      expect((await run("enter-del-check")).body.code).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+      expect(hits.delete).toBe(0);
+    });
+
+    it("what Enter does not submit is not refused: a harmless default button, a disabled one, a textarea, Space in the field", async () => {
+      seed(journey("enter-plain", focusThenEnter("enter-plain-field", "saved")));
+      const plain = await run("enter-plain");
+      expect(plain.body.outcome, plain.text).toBe("ok");
+      seed(journey("enter-disabled", focusThenEnter("enter-disabled-field", "enter-disabled-field")));
+      const disabled = await run("enter-disabled");
+      expect(disabled.body.outcome, disabled.text).toBe("ok");
+      seed(journey("enter-area", focusThenEnter("enter-area-field", "enter-area-field")));
+      const area = await run("enter-area");
+      expect(area.body.outcome, area.text).toBe("ok");
+      seed(journey("space-field", [focusThenEnter("enter-del-field", "enter-del-field")[0]!, { step: { kind: "press", key: "Space", expect: { kind: "visible", target: { testId: "enter-del-field" } } } } as RecordedStep]));
+      const space = await run("space-field");
+      expect(space.body.outcome, space.text).toBe("ok");
+      expect(hits.delete).toBe(0);
+    });
   });
 
   it("the target's own safety.deny holds even with allowDestructive", async () => {
