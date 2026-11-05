@@ -5,6 +5,12 @@ A **Journey** is Jevitate's deterministic, replayable browser flow: a Recording 
 nondeterministic, but a Journey replays the same way every time, and a replay never clicks a
 guess ([how replay finds elements](./verification.md#replay-finds-the-recorded-element-exactly)).
 
+A Journey is also a parameterized flow you can run: `journey run <id> --param k=v`, or MCP
+`run_journey`, does the real work (it types, clicks and sends real requests) and returns what it
+extracted. Its purpose is to prove that users can meet their objectives in your app. You can use it to
+automate a flow, to test one, or both. What stops a run from doing damage differs between MCP and the
+CLI: see [what guards a Journey run](./safety.md).
+
 ## Author a Journey from a goal (needs model keys)
 
 ```bash
@@ -16,8 +22,9 @@ jevitate journey run checkout
 ```
 
 The authored Journey carries its `--success` checks as its end state, so a replay fails when the
-flow stops reaching its goal. It is written unpromoted: promotion is always a deliberate human
-act. `--takes <n>` corroborates the flow over several takes.
+flow stops reaching its goal. It is written unpromoted. `journey promote` is a deliberate human act
+at a terminal; an agent can also promote over MCP (`promote_journey`), recorded as an agent's approval.
+MCP refuses to run an unpromoted Journey; the CLI runs it with a warning. `--takes <n>` corroborates the flow over several takes.
 
 `--success` is repeatable (every check must hold) and takes every kind `explore --success` takes:
 page checks (`textIncludes`, `valueEquals`, `count`, `attr`, `flashed`, …), `reloadThen:<check>`
@@ -617,7 +624,7 @@ steps, each take's captured values and the steps' recorded expectations, it deci
 |---|---|
 | **params** | a typed or selected value that varies across takes (`reply`, `account`), and a `navigate` path segment that varies (`/threads/${thread}`) |
 | **constants** | a value equal in every take. A credential is never a constant |
-| **handbacks** | a credential field (password, one-time code, token, PIN, …), and a username or email field on the same page as one. A person types it at replay. It is never a value, a constant or a parameter |
+| **handbacks** | a credential field (password, one-time code, token, PIN, …), and a username or email field on the same page as one. A replay is meant to pause for a person to type it, but no surface turns that mode on yet ([#798](https://github.com/matt-cochran/jevitate/issues/798)), so today a run that reaches a `handback` step is `quarantined` (`secret step reached under fail-closed/unattended secretMode`). It is never a value, a constant or a parameter |
 | **outputs** | an identifier the page shows **before** the first write that matches exactly one parameter in every take, for example `data-thread-id`. It becomes an `extract` step |
 | **checks** | a `pre-write` identity check. The page must show the supplied identifier, or still be at the supplied thread's URL, so a changed source context fails before anything is typed. Also a `post-write` `valueEquals { "var": … }` on each filled or selected parameter |
 | **stopBefore** | the first send/submit/post/publish click after the first write, else the last click after the last write. The draft ends **before** it |
