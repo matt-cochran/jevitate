@@ -613,6 +613,8 @@ document.getElementById('ack').onclick = async () => { await fetch('/api/ack', {
 interface RowContext {
   /** The kind of replay running now, by its progress label. */
   label: string;
+  /** Which replay of the proof is running, 1-based. */
+  replay: number;
   /** True the first time it is asked for this label. */
   firstOf(label: string): boolean;
 }
@@ -651,7 +653,7 @@ const sessions = (): { sid: (req: IncomingMessage, res: Record<string, string>) 
 };
 
 /** Save answers at once and its job goes on; `onLanded` is its effect, `path` how it was started. */
-const crossing = (opts: { readonly fixtures: boolean; readonly method?: "GET" | "POST"; readonly landsMs?: number }): ((ctx: RowContext) => (req: IncomingMessage, res: ServerResponse) => void) => () => {
+const crossing = (opts: { readonly fixtures: boolean; readonly method?: "GET" | "POST" }): ((ctx: RowContext) => (req: IncomingMessage, res: ServerResponse) => void) => () => {
   let busyFrom = Number.POSITIVE_INFINITY;
   let busyTo = 0;
   let gone = false;
@@ -665,7 +667,7 @@ const crossing = (opts: { readonly fixtures: boolean; readonly method?: "GET" | 
     if (p === "/api/save") {
       if (opts.fixtures) after(3_000, () => void (gone = true));
       else {
-        busyFrom = now + (opts.landsMs ?? 1_600);
+        busyFrom = now + 1_600;
         busyTo = busyFrom + 3_500;
       }
       return json(res);
@@ -761,11 +763,14 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reason: /cross into the next/,
   },
   {
-    name: "H1: the base's job opens a time-limited window, no fixture",
-    serve: crossing({ fixtures: false, landsMs: 3_000 }),
+    name: "H1: the base's job opens a time-limited window over the replay after it, no fixture",
+    serve: (ctx) => (req, res) => {
+      if (pathOfUrl(req).startsWith("/api/")) return json(res);
+      html(res, `<button id="save">Save</button><p id="row">row: ${ctx.replay === 2 ? "gone" : "present"}</p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).catch(()=>{})</script>`);
+    },
     journey: (site) => crossingJourney(site),
-    verdict: "insensitive",
-    reading: ["end-state:0", "insensitive"],
+    verdict: "inconclusive",
+    reason: /cross into the next/,
   },
   {
     name: "M4: the same job started by a GET, with no write to see",
@@ -895,6 +900,7 @@ describe("[realtime] the experiment's rows", () => {
       const seen = new Set<string>();
       const ctx: RowContext = {
         label: "base",
+        replay: 0,
         firstOf: (label) => {
           if (seen.has(label)) return false;
           seen.add(label);
@@ -910,7 +916,10 @@ describe("[realtime] the experiment's rows", () => {
         id: journey.metadata.id,
         params: {},
         browserPortFactory: () => new PlaywrightBrowserPort(),
-        onProgress: (p) => void (ctx.label = p.mutation ?? "base"),
+        onProgress: (p) => {
+          ctx.label = p.mutation ?? "base";
+          ctx.replay = p.replay;
+        },
         ...(row.fixtures === true
           ? { fixtures: (at: string) => new MissionFixtures({ spec: { setup: [{ method: "POST", url: "/seed" }], restore: [{ method: "DELETE", url: "/seed" }] }, auth: {}, site: at, seedUrl: `${at}/`, baseUrl: at, allowlist: [at], secrets: [] }) }
           : {}),
@@ -919,16 +928,19 @@ describe("[realtime] the experiment's rows", () => {
     });
   }, 1_800_000);
 
-  it.each(ROWS_EXPERIMENT)("$name: $verdict", ({ name, verdict, reading: site, reason, under }) => {
-    const proof = proofs.get(name);
-    if (proof === undefined || proof instanceof Error) throw proof ?? new Error("no proof");
-    const seen = site === undefined ? proof.report.verdict : `${proof.report.assertions.find((a) => a.site === site[0])?.verdict}, ${proof.report.verdict}`;
-    expect(seen).toBe(site === undefined ? verdict : `${site[1]}, ${verdict}`);
-    if (reason !== undefined) expect(proof.report.reason).toMatch(reason);
-    if (under !== undefined) {
-      const mutation = proof.report.mutations.find((m) => m.id === under[0])!;
-      const target = journeyAssertions(proof.journey).find((a) => assertionSiteKey(a) === under[1])!;
-      expect(classifyMutation(target, mutation, mutation)).toBe(under[2]);
-    }
-  });
+  // Named in full, so a stated limit's row says so wherever it is listed.
+  for (const { name, verdict, reading: site, reason, under } of ROWS_EXPERIMENT) {
+    it(`${name}: ${verdict}`, () => {
+      const proof = proofs.get(name);
+      if (proof === undefined || proof instanceof Error) throw proof ?? new Error("no proof");
+      const seen = site === undefined ? proof.report.verdict : `${proof.report.assertions.find((a) => a.site === site[0])?.verdict}, ${proof.report.verdict}`;
+      expect(seen).toBe(site === undefined ? verdict : `${site[1]}, ${verdict}`);
+      if (reason !== undefined) expect(proof.report.reason).toMatch(reason);
+      if (under !== undefined) {
+        const mutation = proof.report.mutations.find((m) => m.id === under[0])!;
+        const target = journeyAssertions(proof.journey).find((a) => assertionSiteKey(a) === under[1])!;
+        expect(classifyMutation(target, mutation, mutation)).toBe(under[2]);
+      }
+    });
+  }
 });

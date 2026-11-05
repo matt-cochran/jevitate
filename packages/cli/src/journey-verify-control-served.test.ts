@@ -164,8 +164,11 @@ describe("#785 a control whose POST is never answered", () => {
   it("is refused at its bound instead of hanging", () => {
     expect(endStateProof(report, "skip:2")?.control).toBe("failed");
   });
-  it("fails at its bounded response check", () => {
-    expect(endStateProof(report, "skip:2")?.controlDiagnostics?.failedSites).toContain("step-request:2:0");
+  // The proof relaxes the request check here, so its wait stays, bounded, and the end state it was waiting for is what fails.
+  it("gives up its bounded response wait, then fails at what that wait was for", () => {
+    const diagnostics = endStateProof(report, "skip:2")?.controlDiagnostics;
+    expect(diagnostics?.failedSites).toEqual(["end-state:0"]);
+    expect(diagnostics?.control.relaxedWaits).toContainEqual(expect.objectContaining({ site: "step-request:2:0", ending: "timeout" }));
   });
   it("is told apart as end-state timing", () => {
     expect(endStateProof(report, "skip:2")?.controlDiagnostics?.indicates).toContain("end-state-timing");
