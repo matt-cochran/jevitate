@@ -1,7 +1,9 @@
 # Safety model
 
-Jevitate drives a real browser against a real app, sometimes under a model's direction. These are
-the guardrails that hold whatever a model proposes. Each is enforced in code, to the extent each
+Jevitate drives a real browser against a real app, sometimes under a model's direction. It is an
+automation platform that also works as a testing tool: a Journey is a parameterized flow that does
+real work, and its purpose is to prove that users can meet their objectives. Both uses send real
+requests, so both need guardrails. These are the guardrails that hold whatever a model proposes. Each is enforced in code, to the extent each
 bullet states (and no further), and covered by tests that assert the refusal. [SECURITY.md](../SECURITY.md) lists the invariants whose regression is a
 security bug, and how to report one.
 
@@ -48,8 +50,11 @@ security bug, and how to report one.
   images, fonts, frames, fetch/XHR reads, WebSockets, workers) — third-party CDNs and APIs are
   normal and load as usual — and, outside the two cases above, third-party writes (listed in
   `sideEffects`, below).
-- MCP missions can only target a *promoted* mission target, a human act
-  (`jevitate mission target promote`).
+- MCP missions can only target a *promoted* mission target. `jevitate mission target promote`
+  promotes one on the CLI, and the `mission_targets` MCP tool can promote one too, so an agent can
+  promote its own target. The same is true of `site_policy` (an agent can set a looser policy) and
+  `promote_journey` (recorded as an agent's approval, `provenance.channel: "mcp"`). Tracked in
+  [#799](https://github.com/matt-cochran/jevitate/issues/799).
 - `load run` refuses to start without `--authorized-origin`.
 - `jevitate demo` explores and writes, so it needs a named environment (`--env`) and refuses one
   flagged `production: true` in `.jevitate/environments.json`, before anything runs. `demo approve`
@@ -220,6 +225,40 @@ security bug, and how to report one.
   step's invariants are not judged against the new identity, the control is never clicked again,
   and the run returns to the original identity in a fresh session (or stops `inconclusive`,
   `identity-changed`).
+
+**What guards a Journey run.** A Journey is a flow that does real work in your app, so a run can send
+real writes. Which guards apply depends on who starts it. These are the ones in code today:
+
+| Guard | MCP (`run_journey`, `chain_journeys`, `load run`, `source run`) | CLI (`journey run`) |
+| --- | --- | --- |
+| Only a promoted Journey with a current approval runs | Yes. Refused before any browser opens with `E_JOURNEY_NOT_PROMOTED`, `E_JOURNEY_APPROVAL_STALE` or `E_JOURNEY_APPROVAL_UNKNOWN`. Promote it, or re-approve it, to lift it | No. It runs anyway and prints a `warning:` line on stderr with the same code. (`load run` on the CLI refuses an unpromoted Journey; `journey chain` runs promoted Journeys unless you pass `--allow-draft`) |
+| No click on a session-ending, destructive or paid control | Yes: `E_RUN_REFUSED_DESTRUCTIVE`. Lifted by `mcpRun.allowDestructive`; a target's own `safety.deny` is never lifted | No |
+| No write to an origin outside the run's allowlist | Yes, at the browser context (popups, form posts and WebSocket frames included): `E_RUN_REFUSED_OFF_ALLOWLIST_WRITE`. Lifted by `mcpRun.allowOffAllowlistWrites` | No. The write is sent and listed in `offAllowlistWrites` in the result |
+| No replay on an environment flagged `production: true` | Yes: `E_RUN_REFUSED_PRODUCTION`. Lifted by `mcpRun.allowProduction` | No |
+| Site policy (pacing, minimum interval, budgets, quiet hours) | Yes, `{error: throttled}` | Yes. With no policy set, nothing is limited |
+| A value-free record of the run in `logs/<date>/journey-run-*.json` | Yes | Yes |
+
+The `mcpRun` settings live in a target's entry in `~/.jevitate/targets.json`:
+`"mcpRun": { "allowDestructive": true, "allowOffAllowlistWrites": ["https://api.example.com"], "allowProduction": true }`.
+No MCP tool takes these as arguments, and MCP path arguments cannot name that file. A refusal ends
+the run with `outcome: refused` and exit code 2. It is not a failed step, is never healed or
+retried, and names the setting that lifts it. If `targets.json` or `environments.json` cannot be read,
+an MCP run refuses with `E_RUN_GUARD_CONFIG` rather than run unguarded. A redirect from an allowed
+origin to a disallowed one cannot be stopped in the browser; the write may have been sent, and the run ends.
+
+What does not guard a run today:
+
+- A CLI run has none of the refusals above. The person at the terminal is the guard.
+- Nothing asks for approval before a write. `queue_action` writes an inbox item and no run waits for
+  its answer ([#793](https://github.com/matt-cochran/jevitate/issues/793)).
+- A Journey's parameters are names with string values; nothing checks their type
+  ([#796](https://github.com/matt-cochran/jevitate/issues/796)).
+- There is no reconcile or per-write receipt after a write whose outcome is unknown
+  ([#795](https://github.com/matt-cochran/jevitate/issues/795)).
+- An agent can loosen the limits that are not in `targets.json`: it can set the site policy, promote a
+  target and promote a Journey over MCP ([#799](https://github.com/matt-cochran/jevitate/issues/799)).
+- The MCP and CLI rules above are separate; one trust model for both is
+  [#792](https://github.com/matt-cochran/jevitate/issues/792).
 
 **Runs change the app's state — reset it between runs.** The guardrails above keep a run from
 clicking what it must not; they do not undo what it legitimately did. An adversarial run submits

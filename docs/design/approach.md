@@ -20,7 +20,7 @@
 > [#799](https://github.com/matt-cochran/jevitate/issues/799) (an agent can loosen its own limits),
 > [#800](https://github.com/matt-cochran/jevitate/issues/800) (job-level done checks) and
 > [#801](https://github.com/matt-cochran/jevitate/issues/801) (shorter paths with Jev-guided search).
-> What the run guards do today is in [safety.md](../safety.md#what-guards-a-journey-run).
+> What the run guards do today is in the "What guards a Journey run" part of [safety.md](../safety.md).
 
 Yes. A Screenplay-inspired model fits this system well—especially if we adapt it for durable production automation instead of copying a UI-testing framework literally.
 
