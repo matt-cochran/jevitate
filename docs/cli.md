@@ -2,7 +2,7 @@
 
 > Generated from the CLI — do not edit by hand; run `pnpm docs:cli`.
 
-Autonomous browser testing that turns discovered bugs into deterministic regression tests
+Browser automation and testing in one tool: parameterized Journeys that do real work in your app, and autonomous exploration that turns discovered bugs into deterministic regression tests
 
 **Options**
 
