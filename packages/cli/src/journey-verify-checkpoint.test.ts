@@ -7,7 +7,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
-import { FsJourneyStore, assertionSiteKey, journeyAssertions, judgeAssertions, mutationProofVerdict, planJourneyMutations, type Journey, type JourneyAssertionSite, type MutationPlan, type ReplayPace } from "@jevitate/journey";
+import { FsJourneyStore, ParamValidationError, assertionSiteKey, journeyAssertions, judgeAssertions, mutationProofVerdict, planJourneyMutations, type Journey, type JourneyAssertionSite, type MutationPlan, type ReplayPace } from "@jevitate/journey";
 import { registerJourneyVerify, type JourneyVerifySeams } from "./journey-cli/verify.js";
 import { JourneyVerifyStalledError, verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
 import {
@@ -255,7 +255,10 @@ describe("the progress receipt", () => {
   it("is not replaced by a command the replay would refuse for its params", async () => {
     await interruptAt(3);
     const before = readFileSync(path, "utf8");
-    await expect(prove(scripted(proofResult).run, request(false), { params: { typo: "x" } })).rejects.toThrow("param mismatch");
+    // As the real replay does: the seam's replay does not check params itself.
+    const refusing = scripted(() => new ParamValidationError("param mismatch"));
+    await expect(prove(refusing.run, request(false), { params: { typo: "x" } })).rejects.toThrow("param mismatch");
+    expect(refusing.calls()).toBe(1);
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 

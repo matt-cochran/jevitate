@@ -41,7 +41,7 @@ unmutated control with the same cap passes. Any failed fixture restore during a 
 after each pair (one planned mutation with all its replays). `journey verify <id> --status` reads it: live, exited
 or stale verifier (pid plus the kernel's start time, so a reused pid is `stale`), pairs finished of the total, the
 current pair, and whether a resume could run. It opens no browser, runs no hook and reads nothing of the app's.
-MCP: `verify_journey` with `status: true`.
+MCP: `verify_journey` with `status: true`, which answers even while the same server is running that proof.
 
 `journey verify <id> --mutate --resume` (MCP: `mutate: true, resume: true`) continues an interrupted proof with the
 same flags. The base replay runs again and must pass, the pair that was interrupted runs again, later pairs run,
@@ -70,9 +70,15 @@ counts. It holds no hook text, parameter value, failure message, blocked request
 `reason`, `blockedWrites` and `controlDiagnostics` are therefore absent, and a targeted refusal's or a retry's wording
 says it was not kept. The verdict reads none of these. Hooks, params, origin and browser settings are compared by
 HMAC-SHA-256 under a random key in `~/.jevitate/verify-checkpoint.key` (mode 0600), which also signs the file. Only
-the bytes of a `--fixtures` file and the text of a hook are bound: a script a hook calls, and a new deploy of the app
-between the two runs, cannot be detected, beyond the base and closing replays having to pass. Receipts stay until the
-next proof of that Journey replaces them; `logs prune` does not remove them.
+the bytes of a fixture file and a `--storage-state` file and the text of a hook are bound: a script a hook calls, and a
+new deploy of the app between the two runs, cannot be detected, beyond the base and closing replays having to pass.
+Receipts stay until the next proof of that Journey replaces them; `logs prune` does not remove them.
+
+The key protects against a change to the file, not against everything. Someone who can write `.jevitate/` but cannot
+read the key cannot make up a result, but can delete the checkpoint, or put back an older one this user's own run wrote
+for the same configuration within the 24 hours, which forgets any later pairs and any later taint such as a failed
+restore. That person can also edit the Journey and the proof receipt in `.jevitate/journeys/` directly, so treat
+`.jevitate/` as you treat the rest of the repository. A process running as you can read the key and sign anything.
 
 A coordinator that dies takes a verifier with it unless the run set `JEVITATE_PARENT_WATCHDOG=off`; either way the
 finished pairs stay on disk. A killed verifier never ran its `after` hook, so use a `--before` that resets the app.

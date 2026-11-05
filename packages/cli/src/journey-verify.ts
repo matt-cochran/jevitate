@@ -17,6 +17,7 @@ import {
   declaredTargetedProofFor,
   flatJourneySteps,
   journeyAssertions,
+  ParamValidationError,
   journeyEndState,
   journeyParamSchema,
   judgeAssertions,
@@ -711,6 +712,16 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   }
 }
 
+function paramsAccepted(journey: Journey, params: Record<string, string>): boolean {
+  try {
+    validateParams(journeyParamSchema(journey), params);
+    return true;
+  } catch (err) {
+    if (err instanceof ParamValidationError) return false;
+    throw err;
+  }
+}
+
 /** Why a replay that closed with more writes open than the base may have decided another. Named by mutation id only. */
 function notIsolatedBy(id: string): string {
   return `a replay of ${id} closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided`;
@@ -747,9 +758,8 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   const sites = journeyAssertions(journey);
   const plan = planJourneyMutations(journey, { ...lintOpts, params: opts.params });
   // #787: claimed before the first replay: a refused resume spends no browser and runs no hook.
-  // Bad params are the replay's own refusal, raised here too so a mistyped command cannot replace a checkpoint.
-  if (checkpointRequest !== undefined) validateParams(journeyParamSchema(journey), opts.params);
-  const opened = checkpointRequest === undefined ? {} : await openProofCheckpoint(checkpointRequest, { journey, journeyHash, plan, params: opts.params, sites });
+  // Params the replay will refuse keep no progress, so a mistyped command cannot replace a checkpoint. The replay raises its own refusal.
+  const opened = checkpointRequest === undefined || (!checkpointRequest.resume && !paramsAccepted(journey, opts.params)) ? {} : await openProofCheckpoint(checkpointRequest, { journey, journeyHash, plan, params: opts.params, sites });
   const checkpoint = opened.session;
   if (checkpoint !== undefined) owned.session = checkpoint;
   const resuming = opened.resume;

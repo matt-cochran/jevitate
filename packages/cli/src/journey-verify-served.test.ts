@@ -297,9 +297,9 @@ describe("journey verify --mutate (#402, served)", () => {
     const r = await cli(journeysDir, ["journey", "verify", "refuse", "--json"]);
     expect(r.exitCode).toBe(64);
     expect(r.out).toMatch(/E_JOURNEY_VERIFY_ARGS/);
-    expect(r.out).toMatch(/exactly one of --plan or --mutate/);
+    expect(r.out).toMatch(/exactly one of --plan, --mutate or --status/);
     const both = await cli(journeysDir, ["journey", "verify", "refuse", "--plan", "--mutate", "--json"]);
     expect(both.exitCode).toBe(64);
-    expect(both.out).toMatch(/exactly one of --plan or --mutate/);
+    expect(both.out).toMatch(/exactly one of --plan, --mutate or --status/);
   });
 });

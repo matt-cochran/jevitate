@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
+import { ALLOWED_TOOLS } from "@jevitate/mcp-facade";
 import { OWNER_MARKER_SWITCH } from "@jevitate/playwright";
 
 /**
@@ -284,6 +285,74 @@ describe("[realtime] a mutation proof that loses its observer or its verifier", 
     writeFileSync(path, before.replace('"completed":[{', '"completed":[{"forged":true,'));
     expect(JSON.parse(cli(...proofArgs("--resume")).stdout)).toMatchObject({ data: { reason: "corrupt" } });
   }, 240_000);
+
+  /** A real `jevitate mcp` over stdio, as a client drives one. */
+  function mcpServer(): { pid: number; call: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>; tools: () => Promise<string[]>; kill: () => Promise<void> } {
+    const child = spawn(process.execPath, [BIN, "mcp"], { cwd: dir, env: { ...env, JEVITATE_PARENT_WATCHDOG: "off" }, stdio: ["pipe", "pipe", "ignore"] });
+    started.push(child.pid as number);
+    let nextId = 1;
+    let buffered = "";
+    const waiting = new Map<number, (result: unknown) => void>();
+    child.stdout.on("data", (chunk: Buffer) => {
+      buffered += chunk.toString("utf8");
+      for (let at = buffered.indexOf("\n"); at >= 0; at = buffered.indexOf("\n")) {
+        const message = JSON.parse(buffered.slice(0, at)) as { id?: number; result?: unknown; error?: unknown };
+        buffered = buffered.slice(at + 1);
+        if (message.id !== undefined) waiting.get(message.id)?.(message.result ?? message.error);
+      }
+    });
+    const request = (method: string, params: unknown): Promise<unknown> =>
+      new Promise((resolve) => {
+        const id = nextId++;
+        waiting.set(id, resolve);
+        child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      });
+    const ready = request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "1" } }).then(() => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`));
+    return {
+      pid: child.pid as number,
+      tools: async () => {
+        await ready;
+        return ((await request("tools/list", {})) as { tools: { name: string }[] }).tools.map((t) => t.name);
+      },
+      call: async (name, args) => {
+        await ready;
+        const result = (await request("tools/call", { name, arguments: args })) as { content: { text: string }[] };
+        return JSON.parse(result.content[0]!.text) as Record<string, unknown>;
+      },
+      kill: async () => {
+        child.kill("SIGKILL");
+        await new Promise((resolve) => child.once("close", resolve));
+      },
+    };
+  }
+
+  it("over a real `jevitate mcp`: no new tool, status answers during that server's own proof, and a new server resumes it after a SIGKILL", async () => {
+    reset();
+    const first = mcpServer();
+    expect((await first.tools()).sort()).toEqual([...ALLOWED_TOOLS].sort());
+    const params = { apiToken: SECRET };
+    void first.call("verify_journey", { id: ID, mutate: true, params }).catch(() => undefined);
+    type Seen = { data: Status };
+    const statusOf = async (server: ReturnType<typeof mcpServer>): Promise<Status> => ((await server.call("verify_journey", { id: ID, status: true })) as unknown as Seen).data;
+    let seen = await statusOf(first);
+    const deadline = performance.now() + 120_000;
+    while ((seen.progress?.completed ?? 0) < 1) {
+      if (performance.now() > deadline) throw new Error("timed out waiting for a first finished pair over MCP");
+      await pause(200);
+      seen = await statusOf(first);
+    }
+    expect(seen).toMatchObject({ receipt: "valid", verifier: "live", progress: { verifierPid: first.pid, state: "running" } });
+    await first.kill();
+    killMarkedBrowsers(first.pid);
+
+    const second = mcpServer();
+    const dead = await statusOf(second);
+    expect(dead).toMatchObject({ verifier: "exited", resume: { possible: true } });
+    const resumed = (await second.call("verify_journey", { id: ID, mutate: true, resume: true, params })) as unknown as { exitCode: number; data: Report };
+    expect(resumed.data.reusedPairs).toBeGreaterThanOrEqual(dead.progress!.completed);
+    expect({ verdict: resumed.data.verdict, summary: resumed.data.summary, assertions: resumed.data.assertions }).toEqual({ verdict: whole.verdict, summary: whole.summary, assertions: whole.assertions });
+    await second.kill();
+  }, 420_000);
 
   it("with the parent watchdog on, a dead parent ends the verifier, and what it finished is still there", async () => {
     reset();
