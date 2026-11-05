@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { type Stats, closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { AdmissionTimeoutError } from "./browser-pool.js";
@@ -35,6 +35,11 @@ import { clock } from "@jevitate/domain";
  * waiter counts while its process runs and its file is refreshed, each poll; a dead one's file is
  * ignored and removed, so it cannot make holders yield for ever. A jevitate older than this file
  * announces nothing, and waits as it always did.
+ *
+ * Only a small regular file is ever read: every holder reads these on its main thread, where a FIFO
+ * or a link to a device at one of these names would stop the kill switch and the heartbeat too.
+ * Anything else at a slot's name occupies that index and at a waiter's name is no waiter; neither is
+ * removed, since this process did not write it.
  */
 
 export const DEFAULT_SLOT_HEARTBEAT_MS = 20_000;
@@ -51,6 +56,10 @@ const UNREADABLE_GRACE_MS = 10_000;
  * one missed yield: the waiter's next poll refreshes it.
  */
 const DEFAULT_WAITER_STALE_MS = 15_000;
+/** Far above any holder or waiter record. A larger file is not one, and reads as unparseable. */
+const MAX_SLOT_FILE_BYTES = 4 * 1024;
+/** Opening what `lstat` just called a file must not block or follow a link, if it was swapped since. Absent on Windows. */
+const SLOT_OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
 
 /** `~/.jevitate/run/browser-slots` (the directory every jevitate on this machine shares). */
 export function defaultSlotDir(home: string = homedir()): string {
@@ -119,14 +128,33 @@ export function isTransientSlotError(err: unknown, platform: NodeJS.Platform = p
   return platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY");
 }
 
-function readHolder(path: string): SlotHolder | null | undefined {
-  let text: string;
+/** The file's text; null when what is there is not a small regular file; undefined when nothing is. */
+function readSlotFile(path: string): string | null | undefined {
+  let fd: number | undefined;
   try {
-    text = readFileSync(path, "utf8");
+    if (!lstatSync(path).isFile()) return null;
+    fd = openSync(path, SLOT_OPEN_FLAGS);
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.size > MAX_SLOT_FILE_BYTES) return null;
+    const bytes = Buffer.alloc(MAX_SLOT_FILE_BYTES);
+    return bytes.toString("utf8", 0, readSync(fd, bytes, 0, MAX_SLOT_FILE_BYTES, 0));
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT" || isTransientSlotError(err)) return undefined;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || isTransientSlotError(err)) return undefined;
+    if (code === "ELOOP") return null; // swapped for a link since the lstat
     throw err;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
+}
+
+function readHolder(path: string): SlotHolder | null | undefined {
+  const text = readSlotFile(path);
+  return text === undefined ? undefined : parseHolder(text);
+}
+
+function parseHolder(text: string | null): SlotHolder | null {
+  if (text === null) return null;
   try {
     const h = JSON.parse(text) as Partial<SlotHolder>;
     if (typeof h.pid === "number" && typeof h.host === "string" && typeof h.token === "string") {
@@ -157,12 +185,15 @@ interface SlotWaiter {
 
 function readWaiter(path: string): SlotWaiter | undefined {
   try {
-    const holder = readHolder(path);
-    if (holder === undefined) return undefined;
-    const { cap, since } = holder === null ? ({} as { cap?: unknown; since?: unknown }) : (JSON.parse(readFileSync(path, "utf8")) as { cap?: unknown; since?: unknown });
-    return { holder, cap: typeof cap === "number" ? cap : 0, since: typeof since === "number" ? since : 0, heartbeatAt: statSync(path).mtimeMs };
+    const seen = lstatSync(path);
+    if (!seen.isFile()) return undefined;
+    const text = readSlotFile(path);
+    if (text === undefined) return undefined;
+    const holder = parseHolder(text);
+    const { cap, since } = holder === null || text === null ? ({} as { cap?: unknown; since?: unknown }) : (JSON.parse(text) as { cap?: unknown; since?: unknown });
+    return { holder, cap: typeof cap === "number" ? cap : 0, since: typeof since === "number" ? since : 0, heartbeatAt: seen.mtimeMs };
   } catch {
-    return undefined; // gone between the two reads
+    return undefined; // gone while it was read
   }
 }
 
@@ -235,13 +266,14 @@ export class MachineBrowserSlots {
     const path = this.#path(index);
     const holder = readHolder(path);
     if (holder === undefined) return undefined;
-    let heartbeatAt: number;
+    let seen: Stats;
     try {
-      heartbeatAt = statSync(path).mtimeMs;
+      seen = lstatSync(path);
     } catch {
       return undefined;
     }
-    return { index, path, holder, heartbeatAt, stale: this.#staleReason(holder, heartbeatAt) };
+    // Not a file any holder wrote, so not a holder's to reclaim: it keeps this index.
+    return { index, path, holder, heartbeatAt: seen.mtimeMs, stale: seen.isFile() ? this.#staleReason(holder, seen.mtimeMs) : null };
   }
 
   /** Removes every stale slot; returns what was removed. */

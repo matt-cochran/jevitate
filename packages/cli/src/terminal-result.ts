@@ -239,7 +239,7 @@ function longestFirst(secrets: readonly string[]): string[] {
 }
 
 /** The name of a value that is itself a credential. `code` and `key` are too common as plain field names to be here. */
-const CREDENTIAL_KEY = /^(?:sid|session|otp|jwt)$|(?:pass(?:word|wd|phrase|code)|pwd|secret|token|apikey|authorization|cookie|sessionid|csrf|xsrf)$/;
+const CREDENTIAL_KEY = /^(?:sid|session|otp|jwt)$|(?:pass(?:word|wd|phrase|code)|pwd|secret|token|apikey|authorization|cookies?|sessionid|csrf|xsrf)$/;
 
 /** Whether a field, header or parameter of this name holds a credential, however it is cased or separated. */
 function isCredentialKey(name: string): boolean {
@@ -247,36 +247,74 @@ function isCredentialKey(name: string): boolean {
 }
 
 /** `key: "value"`, quoted or not, including JSON inside a string (`\\"password\\":\\"x\\"`): the value runs to its own closing quote. */
-const QUOTED_FIELD = /(?<![\w-])(\\*["']?)([A-Za-z][\w-]*)\1\s*:\s*(\\*)(["'])((?:(?!\3\4)(?:\\.|[^\n]))*)\3\4/g;
-const NUMERIC_FIELD = /(?<![\w-])(\\*["'])([A-Za-z][\w-]*)\1\s*:\s*\d+/g;
+const QUOTED_FIELD = /(?<![\w-])((?:(?<!\\)\\*["'])?)([A-Za-z][\w-]*)\1\s*:\s*(\\*)(["'])((?:(?!\3\4)(?:\\.|[^\n\\]))*)\3\4/g;
+/** `"set-cookie":[` : the opening of an array, whose values have no one shape. */
+const ARRAY_FIELD = /(?<![\w-])((?:(?<!\\)\\*["'])?)([A-Za-z][\w-]*)\1\s*:\s*\[/g;
+const NUMERIC_FIELD = /(?<![\w-])((?<!\\)\\*["'])([A-Za-z][\w-]*)\1\s*:\s*\d+/g;
 /** `name=value` outside a URL's own query, where `redactUrl` stops: its separators, plus a quoted value. */
+/** `Authorization=Bearer abc`: the scheme and its token are one value, and a space does not end it. */
+const AUTHORIZATION_ASSIGNMENT = /(?<![\w.%-])((?:proxy-)?authorization)[ \t]*=[ \t]*(?!«)[^\r\n]*/gi;
 const ASSIGNMENT = /(?<![\w.%-])([A-Za-z][\w.-]*)=("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^&;#\s"'<>]*)/g;
 /** A header holds its credential to the end of the line (`Cookie: a=1; b=2`). A quoted value is QUOTED_FIELD's. */
 const CREDENTIAL_HEADER = /(?<![\w-])((?:set-)?cookie|(?:proxy-)?authorization|x-api-key|x-auth-token|x-csrf-token)\s*:\s*(?!\\*["'])[^\r\n]*/gi;
 const PASSWORD_FIELD = /(?<![\w-])(pass(?:word|wd|phrase|code)|pwd|secret|api[-_ ]?key)\s*:\s*(?!\\*["'«])\S+/gi;
+/** `token: abc`: any credential name, unquoted, or with a quote the text was cut before closing. */
+const UNQUOTED_FIELD = /(?<![\w.-])([A-Za-z][\w.-]*)[ \t]*:[ \t]*(?!\\*["']?«)\S+/g;
+/** Too common in a sentence to mask after a word: `could not open a session: refused` names no credential. */
+const PROSE_WORDS = /^(?:session|auth)$/i;
 const BEARER = /\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
-const URL_USERINFO = /(\/\/)[^\s/@:"'<>]+:[^\s/@"'<>]*@/g;
+/**
+ * To the last `@`, as a password can hold `/` or `@`, or with no password at all. `host:3000/@fs/x` is a
+ * port and a path, not a password, so a value of port shape before the first `/`, `?` or `#` stays readable.
+ */
+const URL_USERINFO = /(\/\/)(?:[^\s/@:"'<>]+:(?!\d{1,5}[/?#])[^\s"'<>]{0,1024}|[^\s/?#"'<>]*)@/g;
 /** A URL carried inside another URL's parameter (`?next=https%3A%2F%2Fapp%3Ftoken%3Dabc`). */
 const ENCODED_PARAM = /(%3F|%26|%23|%3B)([\w.-]+)%3D((?:(?!%26|%23|%3B)[^&;#\s"'<>])*)/gi;
 /** A status or exit code, or a named constant: `code=` that is not a one-time code. */
 const PLAIN_CODE_VALUE = /^(?:\d{1,3}|[A-Z][A-Z0-9_]*)$/;
+/** A signed URL's parts, which `SENSITIVE_URL_PARAMS` does not name. `X-Amz-Date` and the like stay readable. */
+const SIGNED_URL_PARAMS: ReadonlySet<string> = new Set(["x-amz-signature", "x-amz-credential", "x-goog-signature", "x-goog-credential"]);
+/**
+ * The longest text the masking rules run on. Their time grows with the length, and a page can choose
+ * the text, on the one thread that also answers a signal. Longer text is withheld whole, since cutting
+ * it could leave half a value for a rule to miss.
+ */
+const MAX_MASKED_TEXT = 16 * 1024;
 
 function isCredentialParam(name: string, value: string): boolean {
   const lower = name.toLowerCase();
   if (lower === "code" && PLAIN_CODE_VALUE.test(value)) return false;
-  return SENSITIVE_URL_PARAMS.has(lower) || isCredentialKey(name);
+  return SENSITIVE_URL_PARAMS.has(lower) || SIGNED_URL_PARAMS.has(lower) || isCredentialKey(name);
+}
+
+/** A credential-named array, to the end of its line: its values can hold anything that would end a shorter match. */
+function maskCredentialArrays(text: string): string {
+  let out = "";
+  let from = 0;
+  for (const m of text.matchAll(ARRAY_FIELD)) {
+    if (m.index < from || !isCredentialKey(m[2] ?? "")) continue;
+    const end = /[\r\n]/.exec(text.slice(m.index))?.index;
+    out += `${text.slice(from, m.index)}${m[1]}${m[2]}${m[1]}: [${REDACTION_MASK}]`;
+    from = end === undefined ? text.length : m.index + end;
+  }
+  return out + text.slice(from);
 }
 
 /** What `redactUrl` does not reach: named credentials outside a URL query, and in headers, bodies and URL userinfo. */
 function redactCredentialContext(text: string): string {
-  return text
+  return maskCredentialArrays(text)
     .replace(QUOTED_FIELD, (whole: string, q: string, name: string, vq: string, quote: string) =>
       isCredentialKey(name) ? `${q}${name}${q}: ${vq}${quote}${REDACTION_MASK}${vq}${quote}` : whole,
     )
     .replace(NUMERIC_FIELD, (whole: string, q: string, name: string) => (isCredentialKey(name) ? `${q}${name}${q}: ${REDACTION_MASK}` : whole))
+    .replace(AUTHORIZATION_ASSIGNMENT, (_whole: string, name: string) => `${name}=${REDACTION_MASK}`)
     .replace(ASSIGNMENT, (whole: string, name: string, value: string) => (value !== "" && value !== REDACTION_MASK && isCredentialParam(name, value) ? `${name}=${REDACTION_MASK}` : whole))
     .replace(CREDENTIAL_HEADER, (_whole: string, name: string) => `${name}: ${REDACTION_MASK}`)
     .replace(PASSWORD_FIELD, (_whole: string, name: string) => `${name}: ${REDACTION_MASK}`)
+    .replace(UNQUOTED_FIELD, (whole: string, name: string, at: number, all: string) => {
+      const inProse = PROSE_WORDS.test(name) && /[A-Za-z] $/.test(all.slice(Math.max(0, at - 2), at));
+      return !inProse && (isCredentialKey(name) || PROSE_WORDS.test(name)) ? `${name}: ${REDACTION_MASK}` : whole;
+    })
     .replace(BEARER, (_whole: string, word: string) => `${word} ${REDACTION_MASK}`)
     .replace(URL_USERINFO, (_whole: string, slashes: string) => `${slashes}${REDACTION_MASK}@`)
     .replace(ENCODED_PARAM, (whole: string, sep: string, name: string, value: string) => (value !== "" && isCredentialParam(name, value) ? `${sep}${name}%3D${REDACTION_MASK}` : whole));
@@ -285,9 +323,12 @@ function redactCredentialContext(text: string): string {
 /**
  * The one rule for text leaving a command: registered secrets first and whole, so no part of one is
  * left for a later rule to half-mask, then URL parameters, named credentials and credential shapes.
+ * Text past `MAX_MASKED_TEXT` once the secrets' masks are in is withheld whole.
  */
 export function redactSensitiveText(text: string, secrets: readonly string[]): string {
-  return redactCredentialShapes(redactCredentialContext(redactUrl(redactText(text, longestFirst(secrets)))));
+  const withoutSecrets = redactText(text, longestFirst(secrets));
+  if (withoutSecrets.length > MAX_MASKED_TEXT) return `${REDACTION_MASK} (${text.length} characters, too long to check)`;
+  return redactCredentialShapes(redactCredentialContext(redactUrl(withoutSecrets)));
 }
 
 /**
@@ -302,8 +343,10 @@ export function redactSensitivePath(path: string, secrets: readonly string[]): s
 export type RedactionFieldRule = (key: string) => "verbatim" | "path" | undefined;
 
 /**
- * Every string in `value`, object keys included, through `redactSensitiveText`. A field named for a
- * credential loses its whole value, whatever it looks like. `rule` exempts a caller's known fields.
+ * Every string VALUE in `value` through `redactSensitiveText`. A field named for a credential loses
+ * its whole value, whatever it looks like. `rule` exempts a caller's known fields. Keys are never
+ * touched: they are what a reader finds `exitCode` and `verdict` by, so a value that happens to equal
+ * one must not rename it. A map keyed by data has to reach here as text (see `buildDiagnostic`).
  */
 export function redactSensitiveValue(value: unknown, secrets: readonly string[], rule: RedactionFieldRule = () => undefined): unknown {
   const walk = (v: unknown, field: "verbatim" | "path" | "credential" | undefined): unknown => {
@@ -315,7 +358,7 @@ export function redactSensitiveValue(value: unknown, secrets: readonly string[],
     if (Array.isArray(v)) return v.map((item) => walk(item, field));
     if (v !== null && typeof v === "object") {
       return Object.fromEntries(
-        Object.entries(v).map(([k, item]) => [redactSensitiveText(k, secrets), walk(item, rule(k) ?? (field === "credential" || isCredentialKey(k) ? "credential" : undefined))]),
+        Object.entries(v).map(([k, item]) => [k, walk(item, rule(k) ?? (field === "credential" || isCredentialKey(k) ? "credential" : undefined))]),
       );
     }
     return v;
@@ -393,6 +436,14 @@ const ERROR_CODES = {
   "unsettled-exit": "E_TERMINAL_UNSETTLED",
 } as const;
 
+/** What names the ending rather than describes it: a value equal to one of these must not rewrite it. */
+const DIAGNOSTIC_VERBATIM_FIELDS: ReadonlySet<string> = new Set(["command", "trigger", "signal"]);
+
+/** `detail` is keyed by whatever the caller had to hand, so it is redacted as text: keys and values alike. */
+function progressForDiagnostic({ detail, ...progress }: TerminalProgress): Record<string, unknown> {
+  return detail === undefined ? progress : { ...progress, detail: JSON.stringify(detail) };
+}
+
 /** The redacted diagnostic. Throws only when caller-supplied values cannot be read or serialized. */
 function buildDiagnostic(command: ActiveCommand, trigger: Trigger, exitCode: number, secrets: readonly string[]): { message: string; diagnostic: Record<string, unknown> } {
   const { progress, registration, startedMs } = command;
@@ -413,11 +464,12 @@ function buildDiagnostic(command: ActiveCommand, trigger: Trigger, exitCode: num
           ...(trigger.kind === "watchdog" ? { inactivityMs: registration.inactivityMs } : {}),
           elapsedMs: Math.round(clock.monotonicMs() - startedMs),
           exitCode,
-          progress,
+          progress: progressForDiagnostic(progress),
           ...(error === undefined ? {} : { error }),
         }),
       ),
       secrets,
+      (key) => (DIAGNOSTIC_VERBATIM_FIELDS.has(key) ? "verbatim" : undefined),
     ) as Record<string, unknown>,
   };
 }

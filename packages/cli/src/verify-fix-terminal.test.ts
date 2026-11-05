@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
@@ -14,6 +14,7 @@ import {
   type TerminalResultDeps,
 } from "./terminal-result.js";
 import type { CliDeps } from "./cli-shared.js";
+import { runLedgerVerify } from "./ledger-api.js";
 import { runVerifyFix, verifyFixArtifactPath, type RunVerifyFixOptions, type VerifyFixReport } from "./verify-fix-api.js";
 import { registerVerifyFixCommands } from "./verify-fix-cli.js";
 
@@ -382,6 +383,41 @@ describe("where a verify-fix run writes", () => {
     expect(path.startsWith(join(dir, "home", ".jevitate", "logs"))).toBe(true);
   });
 
+  it.skipIf(process.platform === "win32")("moves a run out of a ledger reached through a linked directory", async () => {
+    await ledgerProject();
+    await symlink(join(dir, ".jevitate", "regressions", "ledger"), join(dir, "linked"));
+    const path = verifyFixArtifactPath(join(dir, "linked", `${FINGERPRINT}.json`), "STAMP");
+    expect(path.startsWith(join(dir, ".jevitate", "logs"))).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("moves a run out of a ledger reached through a linked file", async () => {
+    await ledgerProject();
+    await symlink(entry(dir), join(dir, "mission.result.json"));
+    const path = verifyFixArtifactPath(join(dir, "mission.result.json"), "STAMP");
+    expect(path.startsWith(join(dir, ".jevitate", "logs"))).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("moves a run out of a ledger reached through a link to a file not there yet", async () => {
+    await ledgerProject();
+    await symlink(join(dir, ".jevitate", "regressions", "ledger"), join(dir, "linked"));
+    const path = verifyFixArtifactPath(join(dir, "linked", "missing.json"), "STAMP");
+    expect(path.startsWith(join(dir, ".jevitate", "logs"))).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("leaves the ledger untouched on a run through a linked directory", async () => {
+    await ledgerProject();
+    await symlink(join(dir, ".jevitate", "regressions", "ledger"), join(dir, "linked"));
+    const { program } = cli();
+    await program.parseAsync(["node", "jevitate", "verify-fix", "--result", join(dir, "linked", `${FINGERPRINT}.json`), "--fingerprint", FINGERPRINT, "--json"]);
+    expect(await readdir(dirname(entry(dir)))).toEqual([`${FINGERPRINT}.json`]);
+  });
+
+  it.skipIf(process.platform === "win32")("keeps a run beside a linked directory that holds no ledger", async () => {
+    await mkdir(join(dir, "runs"));
+    await symlink(join(dir, "runs"), join(dir, "linked"));
+    expect(verifyFixArtifactPath(join(dir, "linked", "m.result.json"), "STAMP")).toBe(join(dir, "linked", "verify-fix-STAMP.json"));
+  });
+
   it("moves a run out of an explicit --result inside the regressions directory", async () => {
     await ledgerProject();
     const path = verifyFixArtifactPath(join(dir, ".jevitate", "regressions", "mission.result.json"), "STAMP");
@@ -499,6 +535,54 @@ describe("the one redacted verify-fix report", () => {
   it("keeps the exit code when a --param value equals the verdict", async () => {
     await runJson("the failing control", "--param", "mode=inconclusive");
     expect(process.exitCode).toBe(2);
+  });
+
+  it.each([
+    ["--param", "x=exitCode"],
+    ["--secret", "exitCode"],
+    ["--secret", "xitCod"],
+    ["--param", "x=verdict"],
+    ["--param", "x=fingerprint"],
+    ["--param", "x=title"],
+    ["--param", "x=reason"],
+    ["--param", "x=still-reproduces"],
+    ["--secret", "fixed"],
+  ])("exits 2 with %s %s on an inconclusive finding", async (flag, value) => {
+    await runJson("the failing control", flag, value);
+    expect(process.exitCode).toBe(2);
+  });
+
+  it.each(["exitCode", "verdict", "fingerprint", "title", "reason"])("keeps the report's %s key when a --param value equals it", async (key) => {
+    const terminal = await runJson("the failing control", "--param", `x=${key}`);
+    expect(Object.keys(terminal.envelopes()[0]?.data ?? {})).toContain(key);
+  });
+
+  it("names the verdict in the human summary when a --param value equals its key", async () => {
+    const mission = await writeMission(dir, markupMission());
+    const { program, terminal } = cli();
+    await program.parseAsync(["node", "jevitate", "verify-fix", "--result", mission, "--fingerprint", FINGERPRINT, "--param", "x=verdict"]);
+    expect(terminal.stdout.join("")).toContain("INCONCLUSIVE:");
+  });
+
+  it("keeps the returned report's exit code when a learned secret equals that key", async () => {
+    const mission = await writeMission(dir);
+    const report = await runVerifyFix({ resultPath: mission, fingerprint: FINGERPRINT, secrets: ["exitCode"] });
+    expect(report.exitCode).toBe(2);
+  });
+
+  it("keeps the artifact's report fields when a secret equals a key", async () => {
+    const mission = await writeMission(dir);
+    const report = await runVerifyFix({ resultPath: mission, fingerprint: FINGERPRINT, resultArtifact: true, secrets: ["exitCode"] });
+    const written = JSON.parse(await readFile(report.resultPath ?? "", "utf8")) as { result?: Record<string, unknown> } & Record<string, unknown>;
+    expect(written["exitCode"]).toBe(2);
+  });
+
+  it("keeps a ledger verify's exit code when a secret equals the verdict key", async () => {
+    const regressionsDir = join(dir, "regressions");
+    await mkdir(join(regressionsDir, "ledger"), { recursive: true });
+    await writeFile(join(regressionsDir, "ledger", `${FINGERPRINT}.json`), JSON.stringify({ ledger: { fingerprint: FINGERPRINT }, ...(markupMission() as object) }));
+    const verified = await runLedgerVerify({ regressionsDir, secrets: ["verdict"] });
+    expect(verified.exitCode).toBe(2);
   });
 
   it("keeps the fingerprint when a --param value equals it", async () => {

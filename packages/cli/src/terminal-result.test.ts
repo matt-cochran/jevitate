@@ -3,7 +3,7 @@ import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { __resetKillSwitchForTests, armMissionKillSwitch, installMissionKillSwitch, setKillSummary, setKillSwitchOutput, type KillSwitchDeps } from "./kill-signal.js";
 import { EventEmitter } from "node:events";
 import { runAsMcpInvocation } from "./approval-provenance.js";
-import { __resetTerminalResultForTests, installBrokenPipePolicy, redactSensitivePath, registerTerminalResult, reportCommandRejection, type TerminalResultDeps, type TerminalResultRegistration } from "./terminal-result.js";
+import { __resetTerminalResultForTests, installBrokenPipePolicy, redactSensitivePath, redactSensitiveText, redactSensitiveValue, registerTerminalResult, reportCommandRejection, type TerminalResultDeps, type TerminalResultRegistration } from "./terminal-result.js";
 
 const SECRET = "hunter2-very-secret-value";
 
@@ -1072,5 +1072,174 @@ describe("an uncaught error after the command completed", () => {
     p.register();
     p.throwFatal(new Error("uncaught"));
     expect(p.envelopes()[0]?.error.code).toBe("E_TERMINAL_INTERNAL");
+  });
+});
+
+describe("object keys under redaction", () => {
+  it("keeps a key equal to a registered secret", () => {
+    expect(Object.keys(redactSensitiveValue({ exitCode: 2 }, ["exitCode"]) as object)).toEqual(["exitCode"]);
+  });
+
+  it("keeps a key holding a registered secret as a substring", () => {
+    expect(Object.keys(redactSensitiveValue({ exitCode: 2 }, ["xitCod"]) as object)).toEqual(["exitCode"]);
+  });
+
+  it("keeps a key equal to a registered secret inside a nested object", () => {
+    expect(redactSensitiveValue({ a: { verdict: 1 } }, ["verdict"])).toEqual({ a: { verdict: 1 } });
+  });
+
+  it("still masks the value under a key that was kept", () => {
+    expect(redactSensitiveValue({ title: "saw title" }, ["title"])).toEqual({ title: "saw «redacted»" });
+  });
+});
+
+describe("a diagnostic's own fields under redaction", () => {
+  it("keeps its trigger when a secret equals it", () => {
+    const p = fakeProcess();
+    p.register({ secrets: ["internal-error"] }).fail(new Error("boom"));
+    expect(p.envelopes()[0]?.data).toMatchObject({ trigger: "internal-error" });
+  });
+
+  it("keeps its exit code when a secret equals that key", () => {
+    const p = fakeProcess();
+    p.register({ secrets: ["exitCode"] }).fail(new Error("boom"));
+    expect(p.envelopes()[0]?.data["exitCode"]).toBe(2);
+  });
+
+  it("keeps the process's exit code when a secret equals that key", () => {
+    const p = fakeProcess();
+    p.register({ secrets: ["exitCode"] }).fail(new Error("boom"));
+    expect(p.events).toContain("exit 2");
+  });
+
+  it("keeps the code in its envelope when a secret equals it", () => {
+    const p = fakeProcess();
+    p.register({ secrets: ["E_TERMINAL_INTERNAL"] }).fail(new Error("boom"));
+    expect(p.envelopes()[0]?.error?.code).toBe("E_TERMINAL_INTERNAL");
+  });
+
+  it("masks a credential in a progress detail's value", () => {
+    const p = fakeProcess();
+    const handle = p.register({ secrets: [] });
+    handle.progress({ detail: { nested: { token: "plain-short-tok" } } });
+    handle.fail(new Error("boom"));
+    expect(p.stdout.join("")).not.toContain("plain-short-tok");
+  });
+});
+
+describe("hostile text and the time it takes to mask", () => {
+  /** Far above what these take when linear, far below what backtracking takes at these lengths. */
+  const BOUND_MS = 500;
+  /** About 2 ms when linear, and over 300 ms when each backslash in a run starts its own match. */
+  const LINEAR_BOUND_MS = 150;
+  const elapsedMs = (text: string): number => {
+    const started = process.hrtime.bigint();
+    redactSensitiveText(text, []);
+    return Number(process.hrtime.bigint() - started) / 1e6;
+  };
+
+  it("masks an unterminated quote of escaped pairs within the bound", () => {
+    expect(elapsedMs(`x: "${"\\a".repeat(26)}`)).toBeLessThan(BOUND_MS);
+  });
+
+  it("masks an unterminated escaped quote of backslash pairs within the bound", () => {
+    expect(elapsedMs(`x: \\"${"\\\\".repeat(22)}`)).toBeLessThan(BOUND_MS);
+  });
+
+  it("masks a run of backslashes as long as the limit in linear time", () => {
+    expect(elapsedMs("\\".repeat(16_000))).toBeLessThan(LINEAR_BOUND_MS);
+  });
+
+  it("returns text far past the limit within the bound", () => {
+    expect(elapsedMs("eyJa-".repeat(40_000))).toBeLessThan(BOUND_MS);
+  });
+
+  it("still masks an escaped quote inside a credential's value", () => {
+    expect(redactSensitiveText(String.raw`password: "ab\"cd"`, [])).toBe(`password: "«redacted»"`);
+  });
+
+  it("still masks an escaped JSON credential", () => {
+    expect(redactSensitiveText(String.raw`{\"password\":\"hunter2\"}`, [])).not.toContain("hunter2");
+  });
+});
+
+describe("text past the masking limit", () => {
+  const LONG = 20_000;
+
+  it("keeps nothing of a plain value", () => {
+    expect(redactSensitiveText(`${"x ".repeat(LONG)} plain-readable-word`, [])).not.toContain("plain-readable-word");
+  });
+
+  it("keeps nothing of a credential past the cut", () => {
+    expect(redactSensitiveText(`${"x ".repeat(LONG)} password: hunter2`, [])).not.toContain("hunter2");
+  });
+
+  it("keeps nothing of a credential before the cut", () => {
+    expect(redactSensitiveText(`password: "hunter2 ${"x ".repeat(LONG)}`, [])).not.toContain("hunter2");
+  });
+
+  it("says the text was withheld", () => {
+    expect(redactSensitiveText("x ".repeat(LONG), [])).toContain("too long to check");
+  });
+
+  it("withholds text that a short secret's mask pushed past the limit", () => {
+    expect(redactSensitiveText(`${"ab ".repeat(5_000)} plain-readable-word`, ["ab"])).not.toContain("plain-readable-word");
+  });
+
+  it("leaves text at a length the rules can check readable", () => {
+    expect(redactSensitiveText(`${"x ".repeat(1_000)} plain-readable-word`, [])).toContain("plain-readable-word");
+  });
+});
+
+describe("credentials the masking rule names", () => {
+  const masked = (text: string): string => redactSensitiveText(text, []);
+
+  it.each([
+    ["token: plainvalue", "plainvalue"],
+    ["access_token: plainvalue", "plainvalue"],
+    ["session: plainvalue", "plainvalue"],
+    ["auth: plainvalue", "plainvalue"],
+    ["X-Session-Token: plainvalue", "plainvalue"],
+    ["x-amz-security-token: plainvalue", "plainvalue"],
+    ['password: "cut off before it clos', "cut off"],
+    ["Authorization=Bearer plainvalue", "plainvalue"],
+    ["authorization=Basic plainvalue", "plainvalue"],
+    ["proxy-authorization = Bearer plainvalue", "plainvalue"],
+    ['"set-cookie":["connect.sid=plainvalue; Path=/"]', "plainvalue"],
+    ['"cookie":["x=plainvalue"]', "plainvalue"],
+    ['{"a":[1],"cookie":["x=plainvalue"]}', "plainvalue"],
+    ['\\"cookies\\":[\\"x=plainvalue\\"]', "plainvalue"],
+    ['"cookie":["a=]","x=plainvalue"]', "plainvalue"],
+    ["https://u:p@ss@host/x", "p@ss"],
+    ["https://u:pa/ss@host/x", "pa/ss"],
+    ["https://plaintok@host/x", "plaintok"],
+    ["https://a@b@host/x", "a@b"],
+    ["https://h/x?X-Amz-Signature=plainvalue", "plainvalue"],
+    ["https://h/x?a=1&X-Amz-Credential=plainvalue", "plainvalue"],
+    ["X-Amz-Signature=plainvalue", "plainvalue"],
+    ["https://h/x?next=%3FX-Amz-Signature%3Dplainvalue", "plainvalue"],
+  ])("masks %s", (text, value) => {
+    expect(masked(text)).not.toContain(value);
+  });
+
+  it.each([
+    "code=3",
+    "code=500",
+    "code=ABC_DEF",
+    "input[name=password]",
+    "code: 3",
+    "status: failed",
+    "could not open a fresh session: refused",
+    "https://x.test/@scope/pkg",
+    "http://localhost:3000/@vite/client",
+    "https://x.test?email=a@b.test",
+    "https://h/x?X-Amz-Date=20261104",
+    '"items":["a","b"]',
+  ])("keeps %s readable", (text) => {
+    expect(masked(text)).toBe(text);
+  });
+
+  it("masks one credential array after another", () => {
+    expect(masked('"cookie":["a=one"]\n"set-cookie":["b=two"]')).toBe('"cookie": [«redacted»]\n"set-cookie": [«redacted»]');
   });
 });

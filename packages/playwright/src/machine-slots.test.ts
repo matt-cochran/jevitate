@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -340,5 +340,106 @@ describe("isTransientSlotError (Windows delete-pending slot files)", () => {
     }
     expect(isTransientSlotError(e("ENOSPC"), "win32")).toBe(false);
     expect(isTransientSlotError(undefined, "win32")).toBe(false);
+  });
+});
+
+/**
+ * What only the file's type or size rules out. A fix that is removed must fail here, not hang the
+ * worker, so the FIFOs always have a writer: a read that should not have happened then succeeds.
+ */
+describe.skipIf(process.platform === "win32")("what is not a small regular file at a slot's or a waiter's name", () => {
+  const OTHER_PID = 4242;
+  const slots = (): MachineBrowserSlots => new MachineBrowserSlots({ dir, host: "h", pid: 1, isAlive: () => true });
+  const record = (): string => JSON.stringify({ pid: OTHER_PID, host: "h", token: "t", cap: 1, since: 0 });
+  const writers: ReturnType<typeof spawn>[] = [];
+
+  /** A FIFO that hands `text` to every reader, until the test ends. */
+  const fifoServing = (path: string, text: string): void => {
+    spawnSync("sh", ["-c", 'mkfifo "$1"', "sh", path]);
+    writers.push(spawn("sh", ["-c", 'while :; do printf %s "$1" > "$2"; done', "sh", text, path], { stdio: "ignore" }));
+  };
+  const linkToRecord = (name: string): string => {
+    const target = join(dir, "elsewhere.txt");
+    writeFileSync(target, record());
+    symlinkSync(target, join(dir, name));
+    return target;
+  };
+
+  afterEach(() => {
+    for (const writer of writers.splice(0)) writer.kill("SIGKILL");
+  });
+
+  it("a FIFO at a waiter's name does not count as a waiter", () => {
+    fifoServing(join(dir, "waiter-f.json"), record());
+    expect(slots().hasWaiter(0)).toBe(false);
+  });
+
+  it("a link at a waiter's name does not count as a waiter", () => {
+    linkToRecord("waiter-l.json");
+    expect(slots().hasWaiter(0)).toBe(false);
+  });
+
+  it("an oversized file at a waiter's name does not count as a waiter", () => {
+    writeFileSync(join(dir, "waiter-big.json"), record() + " ".repeat(8_192));
+    expect(slots().hasWaiter(0)).toBe(false);
+  });
+
+  it("a small regular file at a waiter's name still counts as a waiter", () => {
+    writeFileSync(join(dir, "waiter-ok.json"), record());
+    expect(slots().hasWaiter(0)).toBe(true);
+  });
+
+  it("an old link at a waiter's name is left in place", () => {
+    linkToRecord("waiter-l.json");
+    new MachineBrowserSlots({ dir, host: "h", pid: 1, isAlive: () => true, waiterStaleMs: -1 }).hasWaiter(0);
+    expect(lstatSync(join(dir, "waiter-l.json")).isSymbolicLink()).toBe(true);
+  });
+
+  it("an old oversized file at a waiter's name is removed like any other unreadable waiter", () => {
+    const path = join(dir, "waiter-big.json");
+    writeFileSync(path, "x".repeat(8_192));
+    new MachineBrowserSlots({ dir, host: "h", pid: 1, isAlive: () => true, waiterStaleMs: -1 }).hasWaiter(0);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("a FIFO at a slot's name reads as an unreadable holder", () => {
+    fifoServing(slotFile(0), record());
+    expect(slots().list()[0]?.holder).toBeNull();
+  });
+
+  it("a link at a slot's name reads as an unreadable holder", () => {
+    linkToRecord("slot-0.json");
+    expect(slots().list()[0]?.holder).toBeNull();
+  });
+
+  it("an oversized file at a slot's name reads as an unreadable holder", () => {
+    writeFileSync(slotFile(0), record() + " ".repeat(8_192));
+    expect(slots().list()[0]?.holder).toBeNull();
+  });
+
+  it("a link at a slot's name keeps that index from being taken", () => {
+    linkToRecord("slot-0.json");
+    const lease = slots().tryAcquire(2);
+    lease?.release();
+    expect(lease?.index).toBe(1);
+  });
+
+  it("an old link at a slot's name is not cleared as stale", () => {
+    linkToRecord("slot-0.json");
+    new MachineBrowserSlots({ dir, host: "h", pid: 1, isAlive: () => true, now: () => Date.now() + 3_600_000 }).clearStale();
+    expect(lstatSync(slotFile(0)).isSymbolicLink()).toBe(true);
+  });
+
+  it("a directory at a slot's name keeps that index instead of failing the acquire", () => {
+    mkdirSync(slotFile(0));
+    const lease = slots().tryAcquire(2);
+    lease?.release();
+    expect(lease?.index).toBe(1);
+  });
+
+  it("a regular holder's slot is still released by its own process", () => {
+    const lease = slots().tryAcquire(1);
+    lease?.release();
+    expect(existsSync(slotFile(0))).toBe(false);
   });
 });

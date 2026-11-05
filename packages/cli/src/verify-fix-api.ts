@@ -2,7 +2,7 @@ import { journeyFixtureBaseDir } from "./journey-api.js";
 import { BranchReplayInputError, anchoredRecording, prefixFromBranch, prefixedOpener, recordedBranchOf, type JourneyPrefix, type PrefixFromBranchOptions, type RecordedBranch } from "./journey-prefix.js";
 import { readFile } from "node:fs/promises";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { InvariantSpecSchema, RecordingSchema, validateInvariantSpec, type InvariantSpec, type Recording, type RecordingEmulation } from "@jevitate/recording";
 import { loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { buildMissionFixtures, type FixtureFlags } from "./fixture-cli.js";
@@ -19,7 +19,7 @@ import {
   type MissionFixtures,
 } from "./mission-fixtures.js";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { dirname as dirnameOf, join as joinPath, resolve as resolveFile, sep as pathSep } from "node:path";
+import { basename, dirname as dirnameOf, join as joinPath, resolve as resolveFile, sep as pathSep } from "node:path";
 import { assertSameExtensionBuild, listVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
@@ -442,21 +442,44 @@ function describeEmulation(e: RecordingEmulation): string {
   return e.device !== undefined ? `--device "${e.device}"` : `--viewport ${e.viewport.width}x${e.viewport.height}`;
 }
 
+/** `path` with every link resolved, as far as it exists: an input that is not there yet still has a real parent. */
+function realPathAsFarAsItExists(path: string): string {
+  const missing: string[] = [];
+  for (let at = path; ; at = dirnameOf(at)) {
+    try {
+      return joinPath(realpathSync(at), ...missing);
+    } catch {
+      if (dirnameOf(at) === at) return path;
+      missing.unshift(basename(at));
+    }
+  }
+}
+
+/** Where `file` stands in a data directory, and whether a file beside it would land in something committed. */
+function artifactPlace(file: string): { readonly committed: boolean; readonly project: string | undefined } {
+  const parts = dirnameOf(file).split(pathSep);
+  const dataDir = parts.lastIndexOf(".jevitate");
+  return {
+    committed: parts.at(-1) === "ledger" || parts.includes("regressions") || (dataDir !== -1 && parts[dataDir + 1] !== "logs"),
+    project: dataDir === -1 ? undefined : parts.slice(0, dataDir).join(pathSep) || pathSep,
+  };
+}
+
 /**
  * Where a verify-fix run's own output is based (`verify-fix-<stamp>.json`: its result, videos and
  * screenshots unless a flag says otherwise). Beside a mission result, which is itself run output. But
  * not beside anything committed: a ledger entry, or anything else under `.jevitate/` but `logs/`. That
  * run's output goes to the TTL logs of the project holding the entry, else the working directory's.
+ * Decided on the real path as well as the given one, so a link into a ledger is still a ledger.
  * The one path the CLI's terminal layer and this report's writer share.
  */
 export function verifyFixArtifactPath(resultPath: string, stamp: string, deps: LayoutDeps = {}): string {
   const input = resolveFile(resultPath);
-  const parts = dirnameOf(input).split(pathSep);
-  const dataDir = parts.lastIndexOf(".jevitate");
-  const committed = parts.at(-1) === "ledger" || parts.includes("regressions") || (dataDir !== -1 && parts[dataDir + 1] !== "logs");
+  const real = artifactPlace(realPathAsFarAsItExists(input));
+  const given = artifactPlace(input);
   const name = `verify-fix-${stamp}.json`;
-  if (!committed) return joinPath(dirnameOf(input), name);
-  const project = dataDir === -1 ? undefined : parts.slice(0, dataDir).join(pathSep) || pathSep;
+  if (!real.committed && !given.committed) return joinPath(dirnameOf(input), name);
+  const project = real.committed ? real.project : given.project;
   return joinPath(logsDirFor(stamp, project === undefined ? deps : { ...deps, cwd: () => project }), name);
 }
 
