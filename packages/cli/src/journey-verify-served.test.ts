@@ -215,8 +215,8 @@ describe("journey verify --mutate (#402, served)", () => {
     const { report } = await verify(weak("weak-fx"), ["--json", "--fixtures", file]);
     // base + skip:3 + block-write:3
     expect(report.mutations).toHaveLength(2);
-    // The base replay, two mutated replays, and the closing replay as recorded.
-    expect(fxLog).toEqual(["setup", "restore", "setup", "restore", "setup", "restore", "setup", "restore"]);
+    // The base replay, the independence replay, two mutated replays, and the closing replay as recorded.
+    expect(fxLog).toEqual(["setup", "restore", "setup", "restore", "setup", "restore", "setup", "restore", "setup", "restore"]);
   }, 240_000);
 
   it("a strengthened Journey: the step-request status and the reloadThen are sensitive under skip and block-write; the valueEquals under stale-value — exit 0", async () => {
