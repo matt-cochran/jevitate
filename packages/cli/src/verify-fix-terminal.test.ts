@@ -511,6 +511,23 @@ describe("the one redacted verify-fix report", () => {
     expect(terminal.stdout.join("")).not.toContain("hunter2-secret");
   });
 
+  describe("a --param value and MIN_MASKED_PARAM_LENGTH", () => {
+    it("leaves a value too short to be a secret readable (5 characters)", async () => {
+      const terminal = await runJson("Save on acmeX staging", "--param", "tenant=acmeX");
+      expect(terminal.envelopes()[0]?.data["title"]).toBe("Save on acmeX staging");
+    });
+
+    it("masks a value at the limit (6 characters)", async () => {
+      const terminal = await runJson("Save on acmeXY staging", "--param", "tenant=acmeXY");
+      expect(terminal.stdout.join("")).not.toContain("acmeXY");
+    });
+
+    it("still masks a short --secret: the limit is only for a --param", async () => {
+      const terminal = await runJson("Save on acm staging", "--secret", "acm");
+      expect(terminal.stdout.join("")).not.toContain("Save on acm staging");
+    });
+  });
+
   it("masks a URL token on the --json stdout", async () => {
     const terminal = await runJson("failed at http://x.test/reset?token=shortTok1");
     expect(terminal.stdout.join("")).not.toContain("shortTok1");
