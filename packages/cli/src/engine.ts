@@ -67,13 +67,32 @@ export function formatVersion(engine: EngineInfo, tree: string = currentBuildTre
   return `${engine.version} (commit ${engine.commit}${treePart}, built ${engine.builtAt})`;
 }
 
-/** This build's identity: the published version plus which commit/build produced it. */
+// Ambient: `true` only in the bundle pack-release.sh builds (build.mjs); absent from every tsc build.
+declare const __JEVITATE_RELEASE_BUILD__: boolean;
+
+function isReleaseBundle(): boolean {
+  return typeof __JEVITATE_RELEASE_BUILD__ !== "undefined" && __JEVITATE_RELEASE_BUILD__;
+}
+
+/**
+ * The version a build reports. Anything but the release pack's bundle is an unreleased source build
+ * (#784) and says so in the version itself, `x.y.z-source-<commit>`. That is a semver prerelease rather
+ * than `+build` metadata, which semver ignores when comparing: a source build must differ from the
+ * published `x.y.z` for `semver.eq` as well as for string equality.
+ */
+export function markedVersion(engine: EngineInfo, release: boolean = isReleaseBundle()): string {
+  const marker = `-source-${engine.commit}`;
+  return release || engine.version.endsWith(marker) ? engine.version : `${engine.version}${marker}`;
+}
+
+/** This build's identity: its version, with the source marker unless it is the release, plus which commit/build produced it. */
 export function currentEngineInfo(): EngineInfo {
-  return {
+  const engine: EngineInfo = {
     version: readCliVersion(),
     commit: bundledCommit() ?? GENERATED_COMMIT,
     builtAt: bundledBuiltAt() ?? GENERATED_BUILT_AT,
   };
+  return { ...engine, version: markedVersion(engine) };
 }
 
 /**

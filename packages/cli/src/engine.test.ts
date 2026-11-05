@@ -1,10 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { currentBuildTree, currentEngineInfo, formatVersion, withEngine } from "./engine.js";
+import { currentBuildTree, currentEngineInfo, formatVersion, markedVersion, withEngine } from "./engine.js";
 import { readCliVersion } from "./version.js";
 
 describe("currentEngineInfo", () => {
-  test("version matches readCliVersion()", () => {
-    expect(currentEngineInfo().version).toBe(readCliVersion());
+  test("a source build's version is marked in JSON too, and starts with readCliVersion() (#784)", () => {
+    const engine = currentEngineInfo();
+    expect(engine.version).toBe(`${readCliVersion()}-source-${engine.commit}`);
   });
 
   test("commit is a short SHA or the honest 'unknown' — never fabricated", () => {
@@ -52,5 +53,21 @@ describe("build tree and --version (#534)", () => {
     const engine = { version: "1.2.3", commit: "abc1234", builtAt: "2026-10-15T00:00:00Z" };
     expect(formatVersion(engine, "unknown")).toBe("1.2.3 (commit abc1234, built 2026-10-15T00:00:00Z)");
     expect(formatVersion({ version: "1.2.3", commit: "unknown", builtAt: "unknown" }, "def5678")).toBe("1.2.3");
+  });
+});
+
+describe("markedVersion (#784)", () => {
+  const engine = { version: "1.2.3", commit: "abc1234", builtAt: "2026-11-01T00:00:00.000Z" };
+
+  test("a source build's version differs from the published one", () => {
+    expect(markedVersion(engine, false)).toBe("1.2.3-source-abc1234");
+  });
+
+  test("the release pack's version is the published one", () => {
+    expect(markedVersion(engine, true)).toBe("1.2.3");
+  });
+
+  test("marks once", () => {
+    expect(markedVersion({ ...engine, version: "1.2.3-source-abc1234" }, false)).toBe("1.2.3-source-abc1234");
   });
 });

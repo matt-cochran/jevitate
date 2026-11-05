@@ -7,7 +7,7 @@ import { registerAiCommands } from "./ai-cli.js";
 import { registerCheckCommand } from "./check-cli.js";
 import { registerReportCommands } from "./report-cli.js";
 import { registerInvariantsCommands } from "./invariants-validate.js";
-import { currentBuildTree, currentEngineInfo, formatVersion, type EngineInfo } from "./engine.js";
+import { currentBuildTree, currentEngineInfo, markedVersion, formatVersion, type EngineInfo } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { commandPath, trackActionCommand } from "./cli-refusal.js";
 import {
@@ -52,22 +52,12 @@ import { registerJourneezeHintCommands } from "./journeeze-hint-cli.js";
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
 export { fakeDoneJudge } from "./cli-shared.js";
 
-// Ambient: `true` only in the bundle pack-release.sh builds (build.mjs); absent from every tsc build.
-declare const __JEVITATE_RELEASE_BUILD__: boolean;
-
-function isReleaseBundle(): boolean {
-  return typeof __JEVITATE_RELEASE_BUILD__ !== "undefined" && __JEVITATE_RELEASE_BUILD__;
-}
-
 /**
  * `--version`'s display string: `x.y.z (commit <sha>, tree <tree>, built <iso>)`, so results from
- * different builds can be told apart (#83, tree #534). Anything but the release pack's bundle is an
- * unreleased source build (#784) and says so in the version itself, `x.y.z-source-<commit>`. That is
- * a semver prerelease rather than `+build` metadata, which semver ignores when comparing: a source
- * build must differ from the published `x.y.z` for `semver.eq` as well as for string equality.
+ * different builds can be told apart (#83, tree #534), with the source marker (`markedVersion`, #784).
  */
-export function versionString(engine: EngineInfo = currentEngineInfo(), tree: string = currentBuildTree(), release: boolean = isReleaseBundle()): string {
-  return formatVersion(release ? engine : { ...engine, version: `${engine.version}-source-${engine.commit}` }, tree);
+export function versionString(engine: EngineInfo = currentEngineInfo(), tree: string = currentBuildTree(), release?: boolean): string {
+  return formatVersion({ ...engine, version: markedVersion(engine, release) }, tree);
 }
 
 export function buildProgram(deps: CliDeps): Command {
