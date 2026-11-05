@@ -1,6 +1,6 @@
 # @jevitate/cli
 
-**Autonomous browser testing that turns discovered bugs into deterministic regression tests.**
+**Browser automation and testing in one tool: parameterized Journeys that do real work in your app, and autonomous exploration that turns discovered bugs into deterministic regression tests.**
 
 [Website](https://jevitate.com) · [Documentation](https://github.com/matt-cochran/jevitate/blob/main/docs/README.md) · [Demo](https://github.com/matt-cochran/jevitate/blob/main/docs/demo.md) · [Source](https://github.com/matt-cochran/jevitate)
 

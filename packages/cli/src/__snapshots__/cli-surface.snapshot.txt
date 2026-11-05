@@ -1,5 +1,5 @@
 # (root)
-  description: Autonomous browser testing that turns discovered bugs into deterministic regression tests
+  description: Browser automation and testing in one tool: parameterized Journeys that do real work in your app, and autonomous exploration that turns discovered bugs into deterministic regression tests
   options:
     - flags=-V, --version required=false mandatory=false negate=false variadic=false default=null description=output the version number
 

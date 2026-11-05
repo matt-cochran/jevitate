@@ -72,7 +72,7 @@ export function versionString(engine: EngineInfo = currentEngineInfo(), tree: st
 
 export function buildProgram(deps: CliDeps): Command {
   const program = new Command();
-  program.name("jevitate").description("Autonomous browser testing that turns discovered bugs into deterministic regression tests").version(versionString());
+  program.name("jevitate").description("Browser automation and testing in one tool: parameterized Journeys that do real work in your app, and autonomous exploration that turns discovered bugs into deterministic regression tests").version(versionString());
   // #218: the shared refusal path (cli-refusal.ts) needs to know which command is running.
   trackActionCommand(program);
   // #434/#435: the readiness and catalog-analysis pre-approval analyzers (once per process).
