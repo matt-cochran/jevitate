@@ -1,11 +1,26 @@
-> **Historical design note (2026-09-25).** This is the original design for jevitate as an automation
-> platform that performs typed site Actions for a user from a queue. Jevitate became a testing tool
-> instead, and its parts were superseded: Actions by promoted **Journeys** (typed parameters,
-> MCP `run_journey`, trust-gated sources), the command queue by the **mission queue**
-> (`jevitate mission run`), and approvals by the inbox/`jevitate ui` flow and promotion gates. The
-> ActionRunner, site-sdk, example-network integration and SQLite command/event layer were removed.
-> What carried over: the Screenplay layer (`@jevitate/screenplay`), site policies with human-like
-> pacing, throttles, budgets and quiet hours (now enforced on Journey runs), and the example site.
+> **Design note (2026-09-25, corrected 2026-11-05).** This is the original design for jevitate as an
+> automation platform that performs typed site Actions for a user from a queue. It is a design, not a
+> description of what ships. Part of it was built differently: Actions became **Journeys** (parameterized
+> flows with string parameters, run by MCP `run_journey` or `jevitate journey run`), the command queue
+> became the **mission queue** (`jevitate mission run`, which runs explorations, not Journeys), and the
+> Screenplay layer (`@jevitate/screenplay`), site policies with pacing, throttles, budgets and quiet hours
+> carried over. The ActionRunner, site-sdk, example-network integration and SQLite command/event layer
+> were removed; they were read-only and had no CLI or MCP surface.
+>
+> Several guarantees this design promises are not built yet: approvals that hold a run, a Jev sentinel
+> for writes, reconcile and per-write receipts, typed parameters, queued Journeys, and run modes with
+> one trust model. They are tracked in
+> [#792](https://github.com/matt-cochran/jevitate/issues/792) (run modes),
+> [#793](https://github.com/matt-cochran/jevitate/issues/793) (approvals that hold a run),
+> [#794](https://github.com/matt-cochran/jevitate/issues/794) (Jev sentinel for writes),
+> [#795](https://github.com/matt-cochran/jevitate/issues/795) (reconcile and receipts),
+> [#796](https://github.com/matt-cochran/jevitate/issues/796) (typed parameters),
+> [#797](https://github.com/matt-cochran/jevitate/issues/797) (queue Journeys),
+> [#798](https://github.com/matt-cochran/jevitate/issues/798) (human handback and vault autofill),
+> [#799](https://github.com/matt-cochran/jevitate/issues/799) (an agent can loosen its own limits),
+> [#800](https://github.com/matt-cochran/jevitate/issues/800) (job-level done checks) and
+> [#801](https://github.com/matt-cochran/jevitate/issues/801) (shorter paths with Jev-guided search).
+> What the run guards do today is in [safety.md](../safety.md#what-guards-a-journey-run).
 
 Yes. A Screenplay-inspired model fits this system well—especially if we adapt it for durable production automation instead of copying a UI-testing framework literally.
 
