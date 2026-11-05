@@ -111,7 +111,7 @@ MCP: `verify_journey` with `status: true`, which answers even while the same ser
 `journey verify <id> --mutate --resume` (MCP: `mutate: true, resume: true`) continues an interrupted proof with the
 same flags. The base replay runs again and must pass, the pair that was interrupted runs again, later pairs run,
 and finished pairs are reused. A pair with an errored replay is not reused: it runs again, in an interrupted proof
-and in one that finished `inconclusive` on errored replays and nothing else, which `--resume` also accepts. The closing replay always runs. The result says how many pairs were reused in
+and in one that finished `inconclusive` on errored replays and nothing else, which `--resume` also accepts. A proof whose independence replay errored is such a proof: the resume runs that replay again against its own base, as every resume does, and an error there leaves it `inconclusive`. The closing replay always runs. The result says how many pairs were reused in
 `reusedPairs` (0 on a run that did not resume), each one is marked `reused: true`, and the verdict comes from the
 same rule over the same results as an uninterrupted proof. A plain `--mutate` starts again and replaces the
 checkpoint, unless a live verifier owns it, in which case it runs without progress of its own.

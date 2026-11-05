@@ -87,6 +87,7 @@ import {
   type IsolationNote,
   checkpointPairOf,
   checkpointReplayOf,
+  isRepairableIsolation,
   openProofCheckpoint,
   resumeRefusalAgainstBase,
   reusedProofFields,
@@ -914,7 +915,7 @@ function isolationReason(note: IsolationNote, by: string | null): string {
   if (note === "base-write-open") return "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided";
   if (note === "state-crossed") return `the Journey as recorded failed straight after the base replay and passed after a quiet gap, ${CROSSED}`;
   if (note === "state-stuck") return `the Journey as recorded no longer passes after the base replay, ${CROSSED}`;
-  if (note === "independence-errored") return "the replay as recorded after the base errored, so the proof cannot say the replays are independent; retry it";
+  if (note === "independence-errored") return "the replay as recorded after the base errored, so the proof cannot say the replays are independent; retry it (--resume keeps what finished and runs this replay again)";
   return "sibling mutations disagree on a site, and a control and a re-run could not settle it; run the proof again";
 }
 
@@ -1385,7 +1386,8 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
     ...(redacted.reusedPairs === 0 ? {} : { reusedPairs: redacted.reusedPairs }),
     at: clock.nowIso(),
   });
-  checkpoint?.finish(redacted.verdict, !tainted() && mutations.some(mutationErrored));
+  const errorGap = checkpoint !== undefined && isRepairableIsolation(checkpoint.body.taint) ? true : !tainted() && mutations.some(mutationErrored);
+  checkpoint?.finish(redacted.verdict, errorGap);
   return redacted;
 }
 

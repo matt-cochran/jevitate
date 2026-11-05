@@ -156,7 +156,7 @@ const bodySchema = z.strictObject({
   updatedAt: iso,
   state: z.enum(["running", "interrupted", "finished"]),
   verdict: z.enum(["proven", "insensitive", "inconclusive"]).optional(),
-  /** It finished `inconclusive` on errored replays and nothing else, so a resume can run those again. */
+  /** It finished `inconclusive` on errored replays and nothing else, the independence replay's included, so a resume can run those again. */
   errorGap: z.literal(true).optional(),
   reusedPairs: count,
   taint: z.strictObject({ restoreFailed: z.boolean(), notIsolatedBy: z.string().nullable(), isolation: z.enum(ISOLATION_NOTES).nullable() }),
@@ -525,6 +525,13 @@ function pairProblems(body: CheckpointBody, plan: MutationPlan, journey: Journey
   return undefined;
 }
 
+/**
+ * The one isolation note a resume can answer: it says the independence replay gave no reading, not that
+ * state crossed. A resume never reuses that replay's answer and runs it against the base it re-measures,
+ * so dropping the note leaves that fresh run to decide; if it errors too, the note comes back.
+ */
+export const isRepairableIsolation = (taint: CheckpointBody["taint"]): boolean => taint.isolation === "independence-errored" && !taint.restoreFailed;
+
 /** A proof that ended on errored replays has a gap a resume can fill. Any other finished proof has said all it can. */
 const finishedForGood = (body: Pick<CheckpointBody, "state" | "verdict" | "errorGap">): boolean => body.state === "finished" && !(body.verdict === "inconclusive" && body.errorGap === true);
 
@@ -730,7 +737,8 @@ export async function openProofCheckpoint(
     // An errored pair stays on file until its new result takes its place, and is never reused.
     const reused = body.completed.filter((p) => !mutationErrored(reusedProofFields(p)));
     const { verdict: _verdict, errorGap: _errorGap, ...unfinished } = body;
-    const claimed: CheckpointBody = { ...unfinished, state: "running", phase: "base", independence: null, currentPair: null, replay: 0, reusedPairs: reused.length, updatedAt: clock.nowIso(), verifier: currentVerifierIdentity() };
+    const taint = body.taint.isolation === "independence-errored" ? { ...body.taint, isolation: null, notIsolatedBy: null } : body.taint;
+    const claimed: CheckpointBody = { ...unfinished, taint, state: "running", phase: "base", independence: null, currentPair: null, replay: 0, reusedPairs: reused.length, updatedAt: clock.nowIso(), verifier: currentVerifierIdentity() };
     try {
       // A resume that cannot record its claim cannot keep a second verifier out.
       writeCheckpointFile(req.path, key, claimed);
@@ -740,7 +748,7 @@ export async function openProofCheckpoint(
     const errored = body.completed.length - reused.length;
     notice(`journey verify: resuming with ${reused.length} of ${body.total} pairs finished${errored === 0 ? "" : ` and ${errored} errored, which run again`}; the base replay runs first and must pass before any is reused`);
     const session = new ProofCheckpointSession(req.path, key, claimed, notice);
-    return { session, resume: { pairs: new Map(reused.map((p) => [p.id, p])), restoreFailed: body.taint.restoreFailed, notIsolatedBy: body.taint.notIsolatedBy, isolation: body.taint.isolation } };
+    return { session, resume: { pairs: new Map(reused.map((p) => [p.id, p])), restoreFailed: taint.restoreFailed, notIsolatedBy: taint.notIsolatedBy, isolation: taint.isolation } };
   };
 
   const opened = await withCheckpointLock(req.path, req.resume ? claimResume : claimFresh).catch((err: unknown) => {

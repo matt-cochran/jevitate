@@ -44,7 +44,8 @@ import { verifyRecordPath } from "./journey-review-store.js";
  */
 
 const ID = "save-text";
-const SECRET_PARAM = "1234";
+// Low entropy, and not hex: the file's digests hold every short digit string sooner or later.
+const SECRET_PARAM = "qz71";
 const HOOK_TEXT = "restore --password hook-secret-text";
 const APP_TEXT = "page-said-private-customer-text";
 const READ_SAVE = "/api/save";
@@ -161,6 +162,19 @@ function request(resume: boolean, over: Partial<ProofCheckpointRequest> = {}): P
 type ProveExtra = Partial<Parameters<typeof verifyJourneyMutations>[0]>;
 const prove = (run: Run, checkpoint: ProofCheckpointRequest | undefined, extra: ProveExtra = {}): Promise<JourneyVerifyReport> =>
   verifyJourneyMutations({ dir: join(dir, "journeys"), id: ID, params: {}, ...(checkpoint === undefined ? {} : { checkpoint }), ...extra }, run);
+
+const realTimer = setTimeout;
+/** Moves the fake clock along under a proof whose held replays, or quiet gap, sleep on it. */
+async function driven<T>(work: Promise<T>): Promise<T> {
+  let done = false;
+  const ended = work.finally(() => void (done = true));
+  ended.catch(() => undefined);
+  while (!done) {
+    fake.runUntilIdle();
+    await new Promise((resolve) => realTimer(resolve, 1));
+  }
+  return ended;
+}
 
 /** Runs a proof that dies as replay `stopAt` starts, leaving the checkpoint as a kill would. */
 async function interruptAt(stopAt: number, results: (n: number) => RunResult | Error = proofResult, extra: ProveExtra = {}): Promise<void> {
@@ -424,21 +438,7 @@ describe("a resumed proof and an uninterrupted one", () => {
     });
   }
 
-  /**
-   * The same, with every replay reporting its steps, so pacing, shared controls and re-runs happen. Held replays sleep
-   * on the fake clock, which this moves along.
-   */
-  const realTimer = setTimeout;
-  async function driven<T>(work: Promise<T>): Promise<T> {
-    let done = false;
-    const ended = work.finally(() => void (done = true));
-    ended.catch(() => undefined);
-    while (!done) {
-      fake.runUntilIdle();
-      await new Promise((resolve) => realTimer(resolve, 1));
-    }
-    return ended;
-  }
+  /** The same, with every replay reporting its steps, so pacing, shared controls and re-runs happen. */
   function timedByLabel(answers: Readonly<Record<string, RunResult>>, stopAt?: string): { run: Run; onProgress: NonNullable<ProveExtra["onProgress"]>; labels: string[] } {
     const labels: string[] = [];
     const run = (async (options: never) => {
@@ -531,6 +531,67 @@ describe("the independence replay on a resume", () => {
     const report = await prove(resumed.run, request(true));
     expect(report.verdict).toBe("inconclusive");
     expect(report.reason).toMatch(/cannot say the replays are independent/);
+  });
+});
+
+describe("a proof that ended on an errored independence replay", () => {
+  async function endedOnIndependenceError(): Promise<void> {
+    const first = await prove(scripted(proofResult, new Error("no browser")).run, request(false));
+    expect(first.verdict).toBe("inconclusive");
+    expect(first.reason).toMatch(/cannot say the replays are independent/);
+    expect(readBody()).toMatchObject({ state: "finished", errorGap: true, taint: { isolation: "independence-errored" } });
+  }
+
+  it("a resume runs it again, and a pass lets the proof reach its verdict", async () => {
+    await endedOnIndependenceError();
+    const resumed = scripted(proofResult);
+    const report = await prove(resumed.run, request(true));
+    expect(resumed.independenceRuns()).toBe(1);
+    expect(report.verdict).toBe("proven");
+    expect(readBody()).toMatchObject({ state: "finished", verdict: "proven", independence: "passed", taint: { isolation: null } });
+  });
+
+  it("never reads the old answer: it errors again and the proof stays inconclusive, and a third try can still repair it", async () => {
+    await endedOnIndependenceError();
+    const again = await prove(scripted(proofResult, new Error("no browser")).run, request(true));
+    expect(again.verdict).toBe("inconclusive");
+    expect(readBody()).toMatchObject({ errorGap: true, taint: { isolation: "independence-errored" } });
+    expect((await prove(scripted(proofResult).run, request(true))).verdict).toBe("proven");
+  });
+
+  it("is read fresh: state crossing on the resume's own base is what the proof reports", async () => {
+    await endedOnIndependenceError();
+    const crossed = scripted(proofResult, requestBroken);
+    const report = await driven(prove(crossed.run, request(true)));
+    expect(report.verdict).toBe("inconclusive");
+    expect(readBody().taint.isolation).not.toBe("independence-errored");
+    await expect(prove(scripted(proofResult).run, request(true))).rejects.toMatchObject({ reason: "finished" });
+  });
+
+  it("a claim that dies before the replay reran leaves nothing to reuse: the next resume runs it too", async () => {
+    await endedOnIndependenceError();
+    await expect(prove(scripted(() => stall()).run, request(true))).rejects.toBeInstanceOf(JourneyVerifyStalledError);
+    expect(readBody().independence).toBeNull();
+    const resumed = scripted(proofResult);
+    expect((await prove(resumed.run, request(true))).verdict).toBe("proven");
+    expect(resumed.independenceRuns()).toBe(1);
+  });
+
+  it("a failed restore on the same proof is not repaired with it", async () => {
+    await endedOnIndependenceError();
+    writeSigned((b) => ({ ...b, taint: { ...b.taint, restoreFailed: true } }));
+    const report = await prove(scripted(proofResult).run, request(true));
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toContain("fixture restore failed");
+    await expect(prove(scripted(proofResult).run, request(true))).rejects.toMatchObject({ reason: "finished" });
+  });
+
+  it("the other isolation notes are not repaired", async () => {
+    await endedOnIndependenceError();
+    writeSigned((b) => ({ ...b, taint: { ...b.taint, isolation: "state-crossed" } }));
+    const report = await prove(scripted(proofResult).run, request(true));
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toMatch(/failed straight after the base replay/);
   });
 });
 
