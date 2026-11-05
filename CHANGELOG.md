@@ -35,6 +35,11 @@ behaviour changes).
   assertions it relaxes, so a reload-sensitive end state no longer refuses the proof when a slow write
   had not landed. A failed control reports counts and booleans that tell apart action omission,
   browser-context replacement, storage clearing and end-state timing, never storage values.
+- **Proofs compare like with like (#785, #766).** A targeted replay and its control now wait the same, so a
+  slow write can't read as a sensitive assertion. A replay that moved on early (a wait out of its cap, or a
+  skipped step with a write unanswered) is refused. A failed fixture restore makes a proof `inconclusive`.
+  Storage diagnostics hold only real counts, and the admission timeout and `jevitate doctor` name a
+  non-regular slot file.
 - **Empty `.git` directories.** A directory counts as a git root only when `.git` is a file or holds
   `HEAD`, so a sandbox's empty placeholder no longer makes its parent a project.
 - **Bystander signals (#764).** Browser teardown signals only processes with this process's exact owner
@@ -55,6 +60,11 @@ behaviour changes).
   `--version`. Release builds are unchanged.
 - **Release plan (#782).** A staging Release run with pending changesets fails rather than concluding
   success without publishing.
+- **Slow claims need a progress signal.** A step's own claim whose wait runs out of its cap (35 s by default)
+  counts as proof only if an unmutated control with the same cap passes, which adds one replay per such
+  mutation. A real job slower than the cap with no `progress` signal reads `cascade`, leaving the proof
+  `inconclusive`. A claim paired only with `block-write` whose `maxMs` is above the cap also reads `cascade`;
+  a derived `skip` pair can still prove it.
 - `verify-fix` and `journey verify` report an unexpected internal error as `E_TERMINAL_INTERNAL` on the
   CLI, and `journey lint` refuses an invalid targets file as `journey review` does.
 

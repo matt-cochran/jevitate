@@ -30,6 +30,11 @@ covered the same assertions. A replay that errored before opening a browser, as 
 retried once and listed in `mutations[].retries`. One that opened a browser may have changed the app, so it is
 not retried. A failed replay or a stall is never retried.
 
+A targeted replay and its control keep the same waits. A blocked step's own claim is capped in both; a failure
+after a capped wait ran out, or after a skipped step left a write unanswered, is not evidence, so that assertion
+stays `cascade` with the refusal named. A step's own claim whose wait ran out of its cap counts only if an
+unmutated control with the same cap passes. Any failed fixture restore during a proof makes it `inconclusive`.
+
 A closed output pipe never becomes a result. A closed stderr only stops progress lines. With stdout closed, a
 command keeps the exit code it set; one still running finishes first; and if no verdict was reached, it exits
 2. Only a command with no code to keep (`jevitate <cmd> | head -1`) exits 0.
