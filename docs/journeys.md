@@ -127,10 +127,11 @@ absent and unchanged for 30.0s …`. Without `waitFor`, a step is checked exactl
 starts. The lint (`journey lint`) judges the `expect` itself; a waited `expect` that claims nothing
 is flagged like any other.
 
-Under `journey verify --mutate`, a waited claim on the mutated step (`skip:<n>`, `block-write:<n>`)
-waits at most its hang threshold plus 5 s (`stallMs`, default 30 s) instead of `maxMs`: the job was never
-started (or its writes were aborted), so the claim must fail, and the proof does not wait out the
-budget to show it. Waits on other steps, and under `stale-value`, keep their `maxMs`.
+Under `journey verify --mutate`, a waited claim from the mutated step on runs a little past what the base
+replay's claim took (1 s and a quarter more), or to its hang threshold plus 5 s if that is longer, and never
+past `maxMs`: a claim whose job never started must fail, and the proof does not wait out the budget to show
+it. A `progress` signal cannot end this wait, since the action that brings the signal may be what was
+mutated, so such a replay reports `it never held` rather than a hang.
 
 ### Parameter-relative assertions
 
@@ -242,7 +243,7 @@ jevitate journey verify checkout --mutate --allow http://127.0.0.1:26110   # blo
 
 | Mutation | What the replay does | Derived for |
 |---|---|---|
-| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits at most its hang threshold plus 5 s) | each write step (the lint's rule) |
+| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits a little past what the base's claim took, or its hang threshold plus 5 s if longer) | each write step (the lint's rule) |
 | `block-write:<n>` | aborts the write requests step n sends, from its start until the network settled after it | each write step |
 | `stale-value:<n>` | types `""` into fill step n — or, for a `{ "var": name }` fill whose non-secret parameter an assertion names, an altered value of it (stale text in the composer) | each fill whose value a `valueEquals`/`textIncludes` checks, or whose variable an assertion names |
 | `swap-param:<name>` | replays with parameter `name` swapped for a wrong value where the app receives it (a fill, a select, a navigate URL): a reviewed `mutationValues` entry (#579), else for a select another enabled option of the live `<select>`, else another supplied parameter of the same shape, else the value with its last letter or digit changed; every assertion naming `${name}` still expects the supplied value | each non-secret `--param` an assertion at or after the action names and an action reads |
