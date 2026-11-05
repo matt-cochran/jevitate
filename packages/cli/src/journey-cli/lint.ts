@@ -12,23 +12,7 @@ import { withProjectFlags } from "../project-layout.js";
 import { DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, lintFindingLine, targetsOpts } from "./shared.js";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { journeyLinkWarnings } from "../journey-link-hints.js";
-import { loadTargetsFile, resolveTargetConfig, TargetConfigError } from "../target-config.js";
-
-/**
- * #763: the target's `safety.readRequests` for the Journey's site, resolved exactly as
- * `journey review` resolves its safety config. A Journey with no resolvable origin has no target
- * config, so it lints as before (no read-request policy).
- */
-function journeyReadRequests(journey: Journey, opts: { targetsFile?: string }): readonly string[] | undefined {
-  let origin: string | null = null;
-  try {
-    origin = new URL(journey.recording.site).origin;
-  } catch {
-    origin = null;
-  }
-  if (origin === null) return undefined;
-  return resolveTargetConfig(loadTargetsFile(opts.targetsFile), origin).safety?.readRequests;
-}
+import { journeyReadRequests, TargetConfigError } from "../target-config.js";
 
 /** Registers `jevitate journey lint`. */
 export function registerJourneyLint(journey: Command, program: Command, deps: CliDeps): void {

@@ -318,6 +318,21 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   return out;
 }
 
+/**
+ * #763: the target's `safety.readRequests` for a Journey's recorded site, for every write classifier that
+ * reads the Journey: lint, verify and readiness, as `journey review` resolves its safety config. A site
+ * with no resolvable origin has no target config, so no read-request policy.
+ */
+export function journeyReadRequests(journey: { readonly recording: { readonly site: string } }, opts: { readonly targetsFile?: string } = {}): readonly string[] | undefined {
+  let origin: string;
+  try {
+    origin = new URL(journey.recording.site).origin;
+  } catch {
+    return undefined;
+  }
+  return resolveTargetConfig(loadTargetsFile(opts.targetsFile), origin).safety?.readRequests;
+}
+
 /** Reads the whole targets file, keyed by origin. */
 export function loadTargetsFile(path = resolveDataDir(["targets.json"])): Readonly<Record<string, TargetConfig>> {
   let raw: string;

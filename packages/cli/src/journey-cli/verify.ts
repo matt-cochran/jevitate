@@ -36,7 +36,8 @@ import {
   environmentSeams,
 } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
-import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
+import { journeyReadRequests, TargetConfigError } from "../target-config.js";
+import { DEPRECATED_DIR_HELP, journeyLayout, targetsOpts } from "./shared.js";
 
 /** Test seams: the replay `verifyJourneyMutations` runs, and the terminal layer's process. */
 export interface JourneyVerifySeams {
@@ -89,7 +90,9 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       }
       if (plan === true) {
         try {
-          const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param });
+          // #763: the same read-request policy as `journey lint` and `journey review`.
+          const readRequests = journeyReadRequests(await loadJourneyToVerify(verifyJourneysDir, id), targetsOpts(deps));
+          const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, ...(readRequests === undefined ? {} : { readRequests }) });
           if (json) emitJson(program, ok(withEngine(report)));
           else {
             const out = program.configureOutput().writeOut;
@@ -104,6 +107,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
           }
         } catch (err) {
           if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+          else if (err instanceof TargetConfigError) emitJson(program, fail("E_TARGET_CONFIG", err.message));
           else throw err;
         }
         return;
@@ -142,6 +146,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       try {
         // Before any browser opens: from here on, every way of not finishing still ends with a result.
         const proved = await loadJourneyToVerify(verifyJourneysDir, id);
+        const readRequests = journeyReadRequests(proved, targetsOpts(deps));
         terminal = registerTerminalResult(
           {
             command: "journey verify",
@@ -163,6 +168,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
               dir: verifyJourneysDir,
               id,
               params: param,
+              ...(readRequests === undefined ? {} : { readRequests }),
               onProgress: ({ replay, mutation }) => progress.progress({ phase: mutation === undefined ? "as recorded" : undefined, replay, mutation }),
               browserPortFactory: deps.explore?.browserPortFactory,
               checkpoint: {
@@ -234,6 +240,8 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof TargetConfigError) {
+          emitJson(program, fail("E_TARGET_CONFIG", err.message));
         } else if (err instanceof JourneyRequiresAuthError) {
           emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
         } else if (err instanceof ExtensionMismatchError) {

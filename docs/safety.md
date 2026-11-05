@@ -288,6 +288,8 @@ no content type) whose method name starts with a built-in read verb — `Get`, `
 writes); or it matches an operator-supplied pattern — `--read-rpc <pattern>` (repeatable) or
 `safety.readRequests` in `~/.jevitate/targets.json`: a pattern starting with `/` is a path glob
 (`/api/search*`), any other pattern a glob over the RPC method (`Estimate*`, `pkg.Service/Estimate*`).
+`journey lint`, `journey review`, `journey readiness` and `journey verify` read the same target setting, so a
+proof neither skips nor blocks a request it marks a read.
 An unknown request is always a write — a misclassified read only costs a guard/finding; a
 misclassified write could let a run repeat a real side effect.
 
