@@ -38,7 +38,7 @@ import { defectSignalText, persistedDefect, replayWithEvidence, signalCheckable,
 import { RunScreenshots, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
 import { clock, isRecord } from "@jevitate/domain";
 import { writeMissionResult } from "./mission-journal.js";
-import { logsDirFor, type LayoutDeps } from "./project-dir.js";
+import { findGitRoot, logsDirFor, type LayoutDeps } from "./project-dir.js";
 import { redactSensitivePath, redactSensitiveValue, redactThrown, type RedactionFieldRule } from "./terminal-result.js";
 
 /**
@@ -457,21 +457,25 @@ function realPathAsFarAsItExists(path: string): string {
   }
 }
 
-/** Where `file` stands in a data directory, and whether a file beside it would land in something committed. */
+/** Where `file` stands in a data directory or a git work tree, and whether a file beside it would land in something committed. */
 function artifactPlace(file: string): { readonly committed: boolean; readonly project: string | undefined } {
-  const parts = dirnameOf(file).split(pathSep);
+  const dir = dirnameOf(file);
+  const parts = dir.split(pathSep);
   const dataDir = parts.lastIndexOf(".jevitate");
+  const inLogs = dataDir !== -1 && parts[dataDir + 1] === "logs";
+  const repo = findGitRoot(dir);
   return {
-    committed: parts.at(-1) === "ledger" || parts.includes("regressions") || (dataDir !== -1 && parts[dataDir + 1] !== "logs"),
-    project: dataDir === -1 ? undefined : parts.slice(0, dataDir).join(pathSep) || pathSep,
+    committed: parts.at(-1) === "ledger" || parts.includes("regressions") || (dataDir !== -1 && !inLogs) || (repo !== null && !inLogs),
+    project: dataDir === -1 ? (repo ?? undefined) : parts.slice(0, dataDir).join(pathSep) || pathSep,
   };
 }
 
 /**
  * Where a verify-fix run's own output is based (`verify-fix-<stamp>.json`: its result, videos and
  * screenshots unless a flag says otherwise). Beside a mission result, which is itself run output. But
- * not beside anything committed: a ledger entry, or anything else under `.jevitate/` but `logs/`. That
- * run's output goes to the TTL logs of the project holding the entry, else the working directory's.
+ * not beside anything committed: a ledger entry, anything else under `.jevitate/` but `logs/`, or anything
+ * in a git work tree but its `.jevitate/logs/`, such as a fixture. That run's output goes to the TTL logs of
+ * the project holding the input, else the working directory's.
  * Decided on the real path as well as the given one, so a link into a ledger is still a ledger.
  * The one path the CLI's terminal layer and this report's writer share.
  */

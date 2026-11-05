@@ -387,6 +387,33 @@ describe("where a verify-fix run writes", () => {
     expect(verifyFixArtifactPath(input, "STAMP")).toBe(join(dirname(input), "verify-fix-STAMP.json"));
   });
 
+  describe("over an input in a git work tree", () => {
+    const STAMP = "2026-01-02T03-04-05-678Z";
+    const repo = async (): Promise<string> => {
+      await mkdir(join(dir, "repo", ".git"), { recursive: true });
+      await writeFile(join(dir, "repo", ".git", "HEAD"), "ref: refs/heads/main\n");
+      await mkdir(join(dir, "repo", ".jevitate"), { recursive: true });
+      return join(dir, "repo");
+    };
+
+    it("leaves the tree clean: a fixture's run goes to that repo's logs", async () => {
+      const root = await repo();
+      expect(verifyFixArtifactPath(join(root, "tests", "fixtures", "x.json"), STAMP)).toBe(join(root, ".jevitate", "logs", "2026-01-02", `verify-fix-${STAMP}.json`));
+    });
+
+    it("keeps a run over that repo's own run output beside it", async () => {
+      const input = join(await repo(), ".jevitate", "logs", "2026-01-01", "explore.result.json");
+      expect(verifyFixArtifactPath(input, STAMP)).toBe(join(dirname(input), `verify-fix-${STAMP}.json`));
+    });
+
+    it("sees the tree through a link to it", async () => {
+      const root = await repo();
+      await mkdir(join(root, "tests"), { recursive: true });
+      await symlink(join(root, "tests"), join(dir, "linked"));
+      expect(verifyFixArtifactPath(join(dir, "linked", "x.json"), STAMP)).toBe(join(root, ".jevitate", "logs", "2026-01-02", `verify-fix-${STAMP}.json`));
+    });
+  });
+
   it("files a run under its stamp's date", async () => {
     await ledgerProject();
     expect(verifyFixArtifactPath(entry(dir), "2026-01-02T03-04-05-678Z")).toBe(join(dir, ".jevitate", "logs", "2026-01-02", "verify-fix-2026-01-02T03-04-05-678Z.json"));
