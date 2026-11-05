@@ -1,4 +1,5 @@
 // check-plan.ts — `jevitate check` planning: targets, per-item setup, fixtures, sessions (#231).
+import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { inMcpInvocation } from "./approval-provenance.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -495,7 +496,7 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
         try {
           await assertMcpRunnable(j, t.journeysDir ?? opts.journeysDir);
         } catch (err) {
-          throw new CheckPreflightError(`target ${t.name}: ${errorMessage(err)}`);
+          throw new CheckPreflightError(`target ${t.name}: ${err instanceof JourneyRunRefusedError ? `${err.code}: ` : ""}${errorMessage(err)}`);
         }
       }
       // #247: an item's `env`/`baseUrl` — resolved and the Journey rebased onto it now, so an unknown
