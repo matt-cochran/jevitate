@@ -233,7 +233,7 @@ real writes. Which guards apply depends on who starts it. These are the ones in 
 | --- | --- | --- |
 | Only a promoted Journey with a current approval runs | Yes. Refused before any browser opens with `E_JOURNEY_NOT_PROMOTED`, `E_JOURNEY_APPROVAL_STALE` or `E_JOURNEY_APPROVAL_UNKNOWN`. Promote it, or re-approve it, to lift it | No. It runs anyway and prints a `warning:` line on stderr with the same code. (`load run` on the CLI refuses an unpromoted Journey; `journey chain` runs promoted Journeys unless you pass `--allow-draft`) |
 | No click on a session-ending, destructive or paid control, and no Enter in a field whose form's default button is one | Yes: `E_RUN_REFUSED_DESTRUCTIVE`. Lifted by `mcpRun.allowDestructive`; a target's own `safety.deny` is never lifted | No |
-| No write to an origin outside the run's allowlist | Yes, at the browser context (popups, form posts and WebSocket frames included): `E_RUN_REFUSED_OFF_ALLOWLIST_WRITE`. Lifted by `mcpRun.allowOffAllowlistWrites` | No. The write is sent and listed in `offAllowlistWrites` in the result |
+| No write to an origin outside the run's allowlist | Yes, at the browser context (popups, form posts and WebSocket frames included, on a self-heal run too): `E_RUN_REFUSED_OFF_ALLOWLIST_WRITE`. Lifted by `mcpRun.allowOffAllowlistWrites` | No. The write is sent and listed in `offAllowlistWrites` in the result |
 | No replay on an environment flagged `production: true` | Yes: `E_RUN_REFUSED_PRODUCTION`. Lifted by `mcpRun.allowProduction` | No |
 | Site policy (pacing, minimum interval, budgets, quiet hours) | Yes, `{error: throttled}` | Yes. With no policy set, nothing is limited |
 | A value-free record of the run in `logs/<date>/journey-run-*.json` | Yes | Yes |

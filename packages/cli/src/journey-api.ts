@@ -692,7 +692,7 @@ export async function runJourneyProgrammatically(
       const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins, mutation.blockAfterWindow);
       // #453 (Q2): a guarded click/fill heal probe runs under a per-step write blocker.
       // Context-level (popups, WebSockets), no write exemptions; see heal-probe-guard.ts.
-      const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page);
+      const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page, runGuard === undefined ? undefined : (ws) => runGuard.claimSocket(ws));
       const observer = composeObservers(
         mutation.earliestObserver,
         outcomeChecks.observer(),

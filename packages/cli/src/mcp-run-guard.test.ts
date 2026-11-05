@@ -1,6 +1,7 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // A real browser: the default new PlaywrightBrowserPort() behind run_journey (test/browser-suites.ts reads this).
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,7 +26,7 @@ let otherOrigin: string;
 let root: string;
 let journeysDir: string;
 let targetsFile: string;
-const hits = { delete: 0, other: 0, redirected: 0, otherPaths: [] as string[] };
+const hits = { delete: 0, other: 0, redirected: 0, frames: 0, otherPaths: [] as string[] };
 
 const html = (body: string): string => `<!doctype html><meta charset=utf-8><title>t</title>${body}`;
 
@@ -50,7 +51,15 @@ function seed(j: Journey): void {
 }
 
 async function run(id: string, params: Record<string, string> = {}, extra: Record<string, unknown> = {}): Promise<{ isError?: boolean; body: Record<string, unknown>; text: string }> {
-  const tool = buildMcpTools({ journeysDir, pathRoots: [root], targetsConfigPath: targetsFile }).find((t) => t.name === "run_journey")!;
+  const tool = buildMcpTools({
+    journeysDir,
+    pathRoots: [root],
+    targetsConfigPath: targetsFile,
+    selfHealGateways: async () => {
+      const { FakeGenerationGateway, FakeJudgmentGateway, UsageTracker } = await import("@jevitate/ai-core");
+      return { judge: new FakeJudgmentGateway({}), gen: new FakeGenerationGateway(), usage: new UsageTracker() };
+    },
+  }).find((t) => t.name === "run_journey")!;
   const res = await tool.handler({ id, params, ...extra });
   const text = res.content[0]!.text;
   return { ...(res.isError === undefined ? {} : { isError: res.isError }), body: JSON.parse(text) as Record<string, unknown>, text };
@@ -65,6 +74,13 @@ beforeAll(async () => {
       hits.otherPaths.push(req.url ?? "");
     }
     send(res, "<h1 data-testid=done>other origin</h1>");
+  });
+  // A minimal WebSocket endpoint: completes the handshake and counts what the page sent.
+  other.on("upgrade", (req, socket) => {
+    const accept = createHash("sha1").update(`${String(req.headers["sec-websocket-key"])}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    socket.on("data", () => void (hits.frames += 1));
+    socket.on("error", () => undefined);
   });
   await new Promise<void>((r) => other.listen(0, "127.0.0.1", r));
   otherOrigin = `http://127.0.0.1:${(other.address() as { port: number }).port}`;
@@ -103,6 +119,7 @@ beforeAll(async () => {
       <form method=post action=/save><input data-testid=enter-plain-field aria-label="Plain field"><button>Save</button></form>
       <form method=post action=/delete><input data-testid=enter-disabled-field aria-label="Other"><input aria-label="Second"><button disabled>Delete disabled</button></form>
       <form method=post action=/delete><textarea data-testid=enter-area-field aria-label="Notes"></textarea><button>Delete notes</button></form>
+      <button data-testid=ws-send onclick="const s=new WebSocket('ws://127.0.0.1:${(other.address() as { port: number }).port}/feed');s.onopen=()=>{s.send('frame');document.body.insertAdjacentHTML('beforeend','<p data-testid=ws-sent>sent</p>')}">Send update</button>
       <input data-testid=tenant aria-label="Tenant">
       <button data-testid=named onclick="document.title=1">Delete customer-xyz</button>
       <a href="/fetch-off" data-testid=fetch-link>fetch page</a>`,
@@ -128,6 +145,7 @@ beforeEach(() => {
   hits.delete = 0;
   hits.other = 0;
   hits.redirected = 0;
+  hits.frames = 0;
   hits.otherPaths.length = 0;
   rmSync(targetsFile, { force: true });
 });
@@ -263,6 +281,41 @@ describe("#789 off-allowlist writes over MCP", () => {
     const r = await run("off-fetch");
     expect(r.body.code, r.text).toBe("E_RUN_REFUSED_OFF_ALLOWLIST_WRITE");
     expect(hits.other).toBe(0);
+  });
+
+  describe("WebSocket frames", () => {
+    // A self-heal run routes the context's sockets too, and the last route added is the one Playwright calls.
+    const heal = { selfHeal: "hybrid", fakeAi: true, changeNote: ["renamed Send to Send update"] };
+    const steps = [click("ws-send", "ws-sent"), click("noop", "clicked")];
+
+    it("a frame to another origin never leaves the browser, and ends the run", async () => {
+      seed(journey("ws-off", steps));
+      const r = await run("ws-off");
+      expect(r.body.code, r.text).toBe("E_RUN_REFUSED_OFF_ALLOWLIST_WRITE");
+      expect(hits.frames).toBe(0);
+    });
+
+    it("the same under a self-heal run", async () => {
+      seed(journey("ws-off-heal", steps));
+      const r = await run("ws-off-heal", {}, heal);
+      expect(r.body.code, r.text).toBe("E_RUN_REFUSED_OFF_ALLOWLIST_WRITE");
+      expect(hits.frames).toBe(0);
+    });
+
+    it("a self-heal run lets the frame through once a person lists that origin", async () => {
+      seed(journey("ws-ok-heal", steps));
+      configure({ allowOffAllowlistWrites: [otherOrigin] });
+      // A self-heal run writes its result under the project: this one's, never the real home's.
+      mkdirSync(join(root, ".jevitate"), { recursive: true });
+      const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
+      try {
+        const r = await run("ws-ok-heal", {}, heal);
+        expect(r.body.outcome, r.text).toBe("ok");
+        await vi.waitFor(() => expect(hits.frames).toBeGreaterThan(0), { timeout: 5_000 });
+      } finally {
+        cwd.mockRestore();
+      }
+    });
   });
 
   it("reaches the server once a person lists that origin", async () => {

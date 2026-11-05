@@ -215,15 +215,7 @@ export class McpRunGuard implements ReplayActionGuard {
       if (off !== undefined) this.#refuseWrite(off, " It came as a redirect from an allowed origin, which a browser cannot be stopped from following, so it may have been sent.");
     };
     const onSocket = (ws: WebSocketRoute): void => {
-      const url = ws.url().replace(/^ws/, "http");
-      const off = offAllowlistWriteOrigin("WEBSOCKET", url, this.#allowed);
-      // A socket route outlives `dispose` (it has no unroute): a session a mission goes on using gets its sockets back.
-      if (off === undefined || this.#disposed) {
-        ws.connectToServer();
-        return;
-      }
-      // Never connected; a frame the page sends is the write.
-      ws.onMessage(() => this.#refuseWrite(off, ""));
+      if (!this.claimSocket(ws)) ws.connectToServer();
     };
     await context.route("**/*", onRoute);
     await context.routeWebSocket(/.*/, onSocket);
@@ -232,6 +224,19 @@ export class McpRunGuard implements ReplayActionGuard {
       context.off("request", onRequest);
       await context.unroute("**/*", onRoute).catch(() => undefined);
     };
+  }
+
+  /**
+   * True when the guard took this socket: off the allowlist, it is never connected, and a frame the page
+   * sends is the write. Playwright calls only the socket route added last, so another route of the same
+   * context (a self-heal run's) asks here first or its socket would pass these frames.
+   */
+  claimSocket(ws: WebSocketRoute): boolean {
+    const off = offAllowlistWriteOrigin("WEBSOCKET", ws.url().replace(/^ws/, "http"), this.#allowed);
+    // A socket route outlives `dispose` (it has no unroute): a session a mission goes on using gets its sockets back.
+    if (off === undefined || this.#disposed) return false;
+    ws.onMessage(() => this.#refuseWrite(off, ""));
+    return true;
   }
 
   #mask(piece: string): string {
