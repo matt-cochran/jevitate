@@ -4,6 +4,7 @@ import { resolve as resolvePath } from "node:path";
 import { homeDataRoot } from "./project-dir.js";
 import { CATALOG_EXPORT_FORMATS } from "./catalog-bundle-api.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
+import { RunGuardRefusedError, runGuardRefusalBody } from "./mcp-run-guard.js";
 
 /**
  * #255 — MCP ⊇ CLI. Every CLI command an agent could run as `jevitate … --json` is reachable over
@@ -1308,9 +1309,13 @@ export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCl
   if (deps.runCli === undefined) {
     return { isError: true, body: { error: "not_configured", message: `${spec.name} runs \`jevitate ${commandFor(spec, args).path}\` in process, which this server was not given` } };
   }
-  const { stdout: raw, exitCode } = await (spec.answersWhileBusy?.(args) === true ? deps.runCli(argv, { unqueued: true }) : deps.runCli(argv));
+  const { stdout: raw, exitCode, refusal } = await (spec.answersWhileBusy?.(args) === true ? deps.runCli(argv, { unqueued: true }) : deps.runCli(argv));
   const stdout = deps.redact(raw);
   let envelope = lastEnvelope(stdout);
+  // #789: a refused replay is the answer, whatever the command made of it. What the command did report before it stays beside it.
+  if (refusal instanceof RunGuardRefusedError) {
+    return { isError: true, body: { ...runGuardRefusalBody(refusal), ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
+  }
   if (envelope === undefined && exitCode === 0) {
     // A command without --json (`recording promote`) prints its result as plain JSON.
     try {

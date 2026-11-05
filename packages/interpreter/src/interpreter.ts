@@ -4,6 +4,7 @@ import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { installFlashRecorder } from "./flash-recorder.js";
 import type { InterpretResult, StepResolution } from "./interpret-result.js";
 import type { StepWait } from "./outcome-wait.js";
+import { ReplayRefusal, type ReplayActionGuard } from "./replay-guard.js";
 import { runStep, type SelectAlternative } from "./run-step.js";
 import { ReplayTargetError, type ResolveTargetOptions, type ResolvedTarget } from "./resolve-target.js";
 import type { RecordingSink } from "./sink.js";
@@ -90,6 +91,8 @@ export class RecordingInterpreter {
        * (`setup.x`), and which names are secret (refused, never expanded). Absent: the vars only.
        */
       readonly refLookup?: AssertionRefLookup;
+      /** #789: see `ReplayActionGuard`. */
+      readonly actionGuard?: ReplayActionGuard;
     } = {},
   ) {}
 
@@ -99,6 +102,7 @@ export class RecordingInterpreter {
     selectAlternative?: (index: number) => SelectAlternative | undefined;
     fixtureBaseDir?: string;
     refLookup?: AssertionRefLookup;
+    actionGuard?: ReplayActionGuard;
   } {
     return {
       ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
@@ -107,6 +111,7 @@ export class RecordingInterpreter {
       ...(this.options.selectAlternative === undefined ? {} : { selectAlternative: this.options.selectAlternative }),
       ...(this.options.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: this.options.fixtureBaseDir }),
       ...(this.options.refLookup === undefined ? {} : { refLookup: this.options.refLookup }),
+      ...(this.options.actionGuard === undefined ? {} : { actionGuard: this.options.actionGuard }),
     };
   }
 
@@ -306,11 +311,13 @@ async function runFlat(
     selectAlternative?: (index: number) => SelectAlternative | undefined;
     fixtureBaseDir?: string;
     refLookup?: AssertionRefLookup;
+    actionGuard?: ReplayActionGuard;
   },
   sink?: RecordingSink,
   startIndex = 0,
 ): Promise<InterpretResult> {
   const { observer, skipStep, ...targetOpts } = runOpts;
+  const actionGuard = runOpts.actionGuard;
   // A transient-state check (#148) needs the flash recorder BEFORE the action that triggers it.
   if (flat.slice(startIndex, lastIndex + 1).some((r) => stepAssertions(r.step).some((a) => a.kind === "flashed"))) {
     await installFlashRecorder(actor.ability(BrowseTheWebToken).session.page);
@@ -352,6 +359,8 @@ async function runFlat(
       outcome = await runStep(actor, flat[i], vars, i, stepOpts);
     } catch (err) {
       await observe(observer?.afterStep && (() => observer.afterStep!({ actor, index: i, recorded, outcome: "failed" })));
+      if (err instanceof ReplayRefusal) throw err;
+      actionGuard?.afterStep({ index: i });
       const message = err instanceof Error ? err.message : String(err);
       return withWaits(
         err instanceof ReplayTargetError
@@ -364,6 +373,7 @@ async function runFlat(
       observer?.afterStep &&
         (() => observer.afterStep!({ actor, index: i, recorded, outcome: outcome.kind === "awaiting_human" ? "awaiting_human" : "done" })),
     );
+    actionGuard?.afterStep({ index: i });
     if (outcome.kind === "awaiting_human") {
       return withWaits({ outcome: "awaiting_human", at: i, prompt: outcome.prompt, resume: outcome.resume });
     }

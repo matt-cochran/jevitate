@@ -1,3 +1,4 @@
+import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, describeStep, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
@@ -88,6 +89,8 @@ export interface RunJourneyProgrammaticallyOptions {
   params: Record<string, string>;
   /** #788: decides on the stored Journey, right after it is read and before anything else: throws to refuse the run. */
   assertRunnable?: (stored: Journey) => Promise<void>;
+  /** #789: the `targets.json` an MCP run's guard reads (default: `~/.jevitate/targets.json`). */
+  runGuardTargetsFile?: string;
   /** Defaults to `safeRunPolicy()` (Slice 1: fail-closed secret mode) when omitted. */
   policy?: RunPolicy;
   /**
@@ -575,6 +578,9 @@ export async function runJourneyProgrammatically(
   // #402: the mutated copy replays (and is judged); the stored Journey still names, redacts and gates.
   const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
 
+  // #789: under an MCP invocation, this run's guard: a production target is refused here, before anything opens.
+  const runGuard = prepareMcpRunGuard({ site: journey.recording.site, allowedOrigins, environment: opts.environment, targetsFile: opts.runGuardTargetsFile });
+
   const policy = opts.policy ?? safeRunPolicy();
   // #583 §3: a prepare-only boundary never self-heals — refused before any fixture or browser opens.
   assertHandbackNoHeal(journey, policy.selfHeal.mode !== "fail-closed");
@@ -640,6 +646,7 @@ export async function runJourneyProgrammatically(
     // #485: the origins outside the run's allow list that the page sent a write to (origins only —
     // never a path, query or body). The campaign preflight reads them for an allow-list slip.
     const offAllowlist = watchOffAllowlistWrites(session, allowedOrigins);
+    await runGuard?.arm(session, params);
     // #583 §3: a declared boundary watches every first-party write for the whole run (aborting them
     // only with `blockWrites`), so the typed handback state is decided from the run's own evidence.
     const handbackObserver =
@@ -682,12 +689,13 @@ export async function runJourneyProgrammatically(
       const fixtureBaseDir = opts.fixtureBaseDir ?? journeyFixtureBaseDir();
       const interpreter =
         opts.interpreter ??
-        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined
+        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined && runGuard === undefined
           ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs })
           : new RecordingInterpreter({
               observer,
               fixtureBaseDir,
               refLookup: refs,
+              ...(runGuard === undefined ? {} : { actionGuard: runGuard }),
               ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }),
               ...(selectAlternative === undefined ? {} : { selectAlternative: (i: number) => (i === selectAlternative.index ? { avoid: selectAlternative.avoid } : undefined) }),
             }));
@@ -710,6 +718,7 @@ export async function runJourneyProgrammatically(
           ...(mutation.beforeEndState === undefined ? {} : { beforeEndState: mutation.beforeEndState }),
           ...(mutation.afterEndState === undefined ? {} : { afterEndState: mutation.afterEndState }),
         });
+        runGuard?.check();
         runSecrets = runSecretValues(secrets, raw);
         result = redactSecretValues(raw, runSecrets);
       } finally {
@@ -749,6 +758,7 @@ export async function runJourneyProgrammatically(
       return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields, fixtures: redactSecretValues(fx.record(), runSecrets) };
     } finally {
       offAllowlist.stop();
+      await runGuard?.dispose();
       await closeSession();
     }
   } catch (err) {
@@ -760,8 +770,6 @@ export async function runJourneyProgrammatically(
     if (mutation.onFixtureRestoreFailed !== undefined && fx?.restoreFailed() === true) mutation.onFixtureRestoreFailed();
   }
 }
-
-const READ_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
  * #542: a replay's allowlist — the recorded site (or the environment's origins), then the Journey's
@@ -782,25 +790,11 @@ export function effectiveAllowedOrigins(journey: Journey, environment: ResolvedJ
  * A session whose page has no context events (a test double) observes nothing.
  */
 export function watchOffAllowlistWrites(session: BrowserSession, allowedOrigins: readonly string[]): { stop(): string[] } {
-  const allowed = new Set(allowedOrigins.flatMap((o) => {
-    try {
-      return [new URL(o).origin];
-    } catch {
-      return [];
-    }
-  }));
+  const allowed = allowedOriginSet(allowedOrigins);
   const seen: string[] = [];
   const onRequest = (request: { method(): string; url(): string }): void => {
-    if (READ_METHODS.has(request.method().toUpperCase())) return;
-    let origin: string;
-    try {
-      const u = new URL(request.url());
-      if (u.protocol !== "http:" && u.protocol !== "https:") return;
-      origin = u.origin;
-    } catch {
-      return;
-    }
-    if (!allowed.has(origin) && !seen.includes(origin)) seen.push(origin);
+    const origin = offAllowlistWriteOrigin(request.method(), request.url(), allowed);
+    if (origin !== undefined && !seen.includes(origin)) seen.push(origin);
   };
   const page = session.page as Partial<Page> | undefined;
   const context = typeof page?.context === "function" ? page.context() : undefined;

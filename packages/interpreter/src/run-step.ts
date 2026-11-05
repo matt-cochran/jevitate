@@ -6,6 +6,7 @@ import { FixturePathError, SECRET_PARAM_NAME_RE, confineFixture, describeNavigat
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
+import type { ReplayActionGuard } from "./replay-guard.js";
 import { applyTextEdit } from "./rich-text.js";
 import { evaluateVisual, isVisualAssertion } from "./visual-state.js";
 
@@ -198,7 +199,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly selectAlternative?: (index: number) => SelectAlternative | undefined } = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard } = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   // #562/#565: an expectation's `${name}` / `{ var }` operands resolve as it is checked — after this
@@ -231,7 +232,10 @@ export async function runStep(
       return { kind: "done" };
     }
     case "click": {
-      await Click.on(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
+      const clicked = await strictTarget(actor, step.target, targetOpts);
+      // #789: checked on the element that resolved, right before the click can send anything.
+      await targetOpts.actionGuard?.beforeAction({ index, recorded: rec, locator: clicked.resolve(actor.ability(BrowseTheWebToken).session.page) });
+      await Click.on(clicked).performAs(actor);
       await postcondition(actor, expected(step.expect), step.waitFor, "click", index, targetOpts);
       return { kind: "done" };
     }
@@ -304,6 +308,7 @@ export async function runStep(
     }
     case "press": {
       const page = actor.ability(BrowseTheWebToken).session.page;
+      await targetOpts.actionGuard?.beforeAction({ index, recorded: rec, locator: page.locator(":focus"), key: step.key });
       await page.keyboard.press(step.key);
       await postcondition(actor, expected(step.expect), step.waitFor, "press", index, targetOpts);
       return { kind: "done" };

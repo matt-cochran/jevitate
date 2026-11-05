@@ -22,6 +22,7 @@ import { ChangesArgsError, ChangesInputError } from "../change-context.js";
 import { MAX_STEP_RESPONSE_TIMEOUT_MS } from "../journey-network-checks.js";
 import { McpArgError, argErrorBody, optBool, optEnum, optInt, optNamedSessions, optPath, optExtensions, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "../mcp-args.js";
 import { resourcePreflight } from "../resource-preflight.js";
+import { RunGuardRefusedError, runGuardRefusalBody } from "../mcp-run-guard.js";
 import type { McpToolCtx, McpToolGroup } from "./shared.js";
 import { jsonResult, errorResult, governanceArgs, withJourneyExitCode, SetupRequired, redactCredentials, tagsArg } from "./shared.js";
 import type { McpJourneyRunOptions } from "../mcp-api.js";
@@ -163,6 +164,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
       description:
         "Run a PUBLISHED Journey by id with string params (fail-closed policy) — `jevitate journey run`. Never accepts inline steps. " +
         "#788: an unpromoted Journey, or one changed since its approval, is refused before any browser ({error: refused, code: E_JOURNEY_NOT_PROMOTED | E_JOURNEY_APPROVAL_STALE | E_JOURNEY_APPROVAL_UNKNOWN, fix}): promote it with promote_journey, or try a draft on the CLI (`jevitate journey run`). " +
+        "#789: a click on a session-ending, destructive or paid control, a write to an origin outside the run's allowlist and a production environment are refused before anything is sent ({error: refused, outcome: refused, code: E_RUN_REFUSED_DESTRUCTIVE | E_RUN_REFUSED_OFF_ALLOWLIST_WRITE | E_RUN_REFUSED_PRODUCTION, setting, retryable: false}): do not retry; only a person lifts it, in the target's mcpRun section of ~/.jevitate/targets.json. " +
         "Optional 'storageState': a PATH (on the machine running this MCP server; inside the project or ~/.jevitate, never a repo's .jevitate/) to a Playwright storageState " +
         "JSON file, for a Journey authored behind a login (#118) — the file's contents are read only by the " +
         "server's own browser, never returned or logged. A Journey that declares metadata.requiresAuth refuses " +
@@ -242,6 +244,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
           if (err instanceof SiteGateRefusedError) {
             return errorResult({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
           }
+          if (err instanceof RunGuardRefusedError) return errorResult(runGuardRefusalBody(err));
           if (err instanceof JourneyRunRefusedError) return errorResult({ error: "refused", outcome: "refused", code: err.code, id: args.id, message: err.message, fix: err.fix, tryDraft: err.tryDraft, retryable: false });
           if (err instanceof UnknownJourneyError) return errorResult({ error: "not_found", id: args.id, message: err.message });
           if (err instanceof JourneyRequiresAuthError) return errorResult({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });

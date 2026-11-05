@@ -25,6 +25,7 @@ import { JourneyRequiresAuthError, UnknownJourneyError, prefixParams, runJourney
 import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { inMcpInvocation } from "./approval-provenance.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
+import { RunGuardRefusedError } from "./mcp-run-guard.js";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { parseDescriptorSpec } from "./explore-specs.js";
@@ -269,7 +270,7 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
       } catch (err) {
         // The site policy's own refusal keeps its code; anything else that stopped the replay means
         // the Journey did not reach its anchor — typed, never a restart from a URL.
-        if (err instanceof SiteGateRefusedError) throw err;
+        if (err instanceof SiteGateRefusedError || err instanceof RunGuardRefusedError) throw err;
         const message = err instanceof Error ? (err.message.split("\n")[0] ?? err.message) : String(err);
         throw new JourneyPrefixStaleError(`journey '${opts.id}' did not replay to ${where}: ${message}`, branch, undefined, await stalePageEvidence(session.page, secretValues));
       }

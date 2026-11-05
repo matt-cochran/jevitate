@@ -1,4 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
+
+// A real browser: the default new PlaywrightBrowserPort() behind run_journey (test/browser-suites.ts reads this).
 import { createServer, type Server } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -9,6 +11,7 @@ import { buildMcpTools } from "./mcp-api.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { journeyApprovalState, journeyDraftWarning } from "./journey-stale-api.js";
 import { runJourneyLoadTest } from "./load-api.js";
+import { resolveJourneyPrefix } from "./journey-prefix.js";
 import { runAsMcpInvocation } from "./approval-provenance.js";
 import { ProfileManager } from "@jevitate/daemon";
 import { buildProgram } from "./program.js";
@@ -157,6 +160,14 @@ describe("#788 the other surfaces", () => {
     seed(approved(journey("warn-ok")));
     expect(await journeyDraftWarning(journeysDir, "warn-ok", null)).toBeUndefined();
     expect(await journeyDraftWarning(journeysDir, "no-such-journey", null)).toBeUndefined();
+  });
+
+  it("over MCP, journey-anchored missions and run_check refuse a stale approval; the CLI's own calls are as they were", async () => {
+    const a = approved(journey("anchored"));
+    seed({ ...a, recording: { ...a.recording, site: `${origin}/x` } } as Journey);
+    const prefix = { dir: journeysDir, id: "anchored", params: { note: "x" }, atStep: "1" };
+    await expect(runAsMcpInvocation(() => resolveJourneyPrefix(prefix))).rejects.toThrow(/E_JOURNEY_APPROVAL_STALE/);
+    await expect(resolveJourneyPrefix(prefix)).resolves.toBeDefined();
   });
 
   it("`load run` refuses an unpromoted Journey on both surfaces and a stale one over MCP", async () => {

@@ -68,6 +68,8 @@ const OBSERVER_INTERNAL = "#246/#248: only annotate and demo replay with an obse
 const OBSERVER_NOT_INTERPRETER = "#251: annotate/demo pass their observer (`observer`) so `--screenshots` can compose with it; never a whole interpreter";
 const EVIDENCE_PACE = "#250: the after-clip's caption pace is fixed (EVIDENCE_PACE_MS); a test seam only";
 const NO_DELTAS_HERE = "#303: --action-deltas is a per-run opt-in on explore items, journey run/annotate/demo and verify-fix; this batch/suite/candidate replay only needs its verdict";
+const MCP_RUN_GATE = "#788: run_journey's own gate; this surface has its decision (a CLI draft, a proof or readiness replay) or its own check";
+const GUARD_TARGETS_SEAM = "#789: a test seam of run_journey; everywhere else the guard reads ~/.jevitate/targets.json";
 const NO_SCREENSHOTS_HERE = "#251: this surface takes no --screenshots (a batch/queued/MCP/suite-journey run: none asked for)";
 const WHOLE_JOURNEY = "#293: only an anchored mission replays a Journey PREFIX into its own open session (journey-prefix.ts); this surface replays the whole Journey in a browser of its own";
 const PREFIX_IN_SESSION = "#293: a Journey prefix replays INTO the mission's already-open session — the mission's own browser, emulation and capture apply";
@@ -166,8 +168,12 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
   // #497: the labels backfill replays with its own label-reading observer, never a whole interpreter.
   "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: OBSERVER_NOT_INTERPRETER },
-  "run.ts runJourneyProgrammatically": { fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
+  "run.ts runJourneyProgrammatically": {
+    assertRunnable: MCP_RUN_GATE,
+    runGuardTargetsFile: GUARD_TARGETS_SEAM, fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
+    assertRunnable: MCP_RUN_GATE,
+    runGuardTargetsFile: GUARD_TARGETS_SEAM,
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
@@ -196,6 +202,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
+    assertRunnable: MCP_RUN_GATE,
+    runGuardTargetsFile: GUARD_TARGETS_SEAM,
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
@@ -224,6 +232,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     stopAfterStep: WHOLE_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
+    assertRunnable: MCP_RUN_GATE,
+    runGuardTargetsFile: GUARD_TARGETS_SEAM,
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,

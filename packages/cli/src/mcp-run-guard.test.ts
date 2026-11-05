@@ -1,0 +1,307 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+// A real browser: the default new PlaywrightBrowserPort() behind run_journey (test/browser-suites.ts reads this).
+import { createServer, type Server } from "node:http";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { ALLOWED_TOOLS } from "@jevitate/mcp-facade";
+import type { Journey } from "@jevitate/journey";
+import type { RecordedStep } from "@jevitate/recording";
+import { buildMcpTools } from "./mcp-api.js";
+import { CLI_TOOL_SPECS } from "./mcp-cli-tools.js";
+import { journeyReviewHash } from "./journey-review.js";
+import { runJourneyProgrammatically } from "./journey-api.js";
+import { loadTargetsFile, TargetConfigError } from "./target-config.js";
+import { confineMcpPath, McpPathError } from "./mcp-paths.js";
+import { homeDataRoot } from "./project-dir.js";
+
+/** #789: an MCP-driven replay refuses destructive clicks and off-allowlist writes before anything leaves the browser. */
+
+let app: Server;
+let other: Server;
+let appOrigin: string;
+let otherOrigin: string;
+let root: string;
+let journeysDir: string;
+let targetsFile: string;
+const hits = { delete: 0, other: 0, redirected: 0, otherPaths: [] as string[] };
+
+const html = (body: string): string => `<!doctype html><meta charset=utf-8><title>t</title>${body}`;
+
+function send(res: import("node:http").ServerResponse, body: string): void {
+  res.writeHead(200, { "content-type": "text/html", "access-control-allow-origin": "*" });
+  res.end(html(body));
+}
+
+function journey(id: string, steps: RecordedStep[], parameters: Journey["metadata"]["parameters"] = []): Journey {
+  const j = {
+    metadata: { id, name: id, promoted: true, params: [], parameters, createdAtIso: "2026-11-05T00:00:00.000Z" },
+    recording: { version: "1", site: appOrigin, pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "ready" } } } }, ...steps] }] },
+  } as unknown as Journey;
+  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" };
+  return j;
+}
+
+const click = (testId: string, expectId: string): RecordedStep => ({ step: { kind: "click", target: { testId }, expect: { kind: "visible", target: { testId: expectId } } } }) as RecordedStep;
+
+function seed(j: Journey): void {
+  writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
+}
+
+async function run(id: string, params: Record<string, string> = {}, extra: Record<string, unknown> = {}): Promise<{ isError?: boolean; body: Record<string, unknown>; text: string }> {
+  const tool = buildMcpTools({ journeysDir, pathRoots: [root], targetsConfigPath: targetsFile }).find((t) => t.name === "run_journey")!;
+  const res = await tool.handler({ id, params, ...extra });
+  const text = res.content[0]!.text;
+  return { ...(res.isError === undefined ? {} : { isError: res.isError }), body: JSON.parse(text) as Record<string, unknown>, text };
+}
+
+const configure = (mcpRun: object, more: object = {}): void => writeFileSync(targetsFile, JSON.stringify({ [appOrigin]: { mcpRun, ...more } }));
+
+beforeAll(async () => {
+  other = createServer((req, res) => {
+    if (req.method === "POST") {
+      hits.other += 1;
+      hits.otherPaths.push(req.url ?? "");
+    }
+    send(res, "<h1 data-testid=done>other origin</h1>");
+  });
+  await new Promise<void>((r) => other.listen(0, "127.0.0.1", r));
+  otherOrigin = `http://127.0.0.1:${(other.address() as { port: number }).port}`;
+  app = createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/delete") {
+      hits.delete += 1;
+      send(res, "<p data-testid=gone>deleted</p>");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/redirect") {
+      res.writeHead(307, { location: `${otherOrigin}/after-redirect` });
+      res.end();
+      return;
+    }
+    if (req.url === "/fetch-off") {
+      send(res, `<i data-testid=ready>ready</i><button data-testid=go onclick="fetch('${otherOrigin}/beacon',{method:'POST',body:'x'}).catch(()=>0);document.body.insertAdjacentHTML('beforeend','<p data-testid=clicked>clicked</p>')">Save</button>`);
+      return;
+    }
+    send(
+      res,
+      `<i data-testid=ready>ready</i>
+      <form method=post action=/delete><button data-testid=del>Delete account</button></form>
+      <form method=post action=/delete><button data-testid=wrapped><span data-testid=inner>Delete</span> account</button></form>
+      <input data-testid=before-del aria-label="Before"><form method=post action=/delete><button data-testid=focus-del>Delete it</button></form>
+      <form method=post action="${otherOrigin}/ext"><button data-testid=ext>Export</button></form>
+      <form method=post action=/redirect><button data-testid=redir>Continue</button></form>
+      <button data-testid=noop onclick="document.body.insertAdjacentHTML('beforeend','<p data-testid=clicked>clicked</p>')">Open panel</button>
+      <input data-testid=tenant aria-label="Tenant">
+      <button data-testid=named onclick="document.title=1">Delete customer-xyz</button>
+      <a href="/fetch-off" data-testid=fetch-link>fetch page</a>`,
+    );
+  });
+  await new Promise<void>((r) => app.listen(0, "127.0.0.1", r));
+  appOrigin = `http://127.0.0.1:${(app.address() as { port: number }).port}`;
+  root = mkdtempSync(join(tmpdir(), "jev-789-"));
+  journeysDir = join(root, "journeys");
+  mkdirSync(journeysDir, { recursive: true });
+  targetsFile = join(root, "targets.json");
+});
+
+afterAll(() => {
+  for (const s of [app, other]) {
+    s.closeAllConnections();
+    s.close();
+  }
+  rmSync(root, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  hits.delete = 0;
+  hits.other = 0;
+  hits.redirected = 0;
+  hits.otherPaths.length = 0;
+  rmSync(targetsFile, { force: true });
+});
+
+describe("#789 destructive controls over MCP", () => {
+  it("refuses 'Delete account' by default: nothing reaches the server; the outcome is typed and names the setting", async () => {
+    seed(journey("del", [click("del", "gone")]));
+    const r = await run("del");
+    expect(r.isError).toBe(true);
+    expect(r.body).toMatchObject({ error: "refused", outcome: "refused", code: "E_RUN_REFUSED_DESTRUCTIVE", rule: "builtin:destructive", at: 2, retryable: false, setting: `targets.json["${appOrigin}"].mcpRun.allowDestructive` });
+    expect(hits.delete).toBe(0);
+  });
+
+  it("a person's mcpRun.allowDestructive lets it through, on that target only", async () => {
+    seed(journey("del-ok", [click("del", "gone")]));
+    configure({ allowDestructive: true });
+    const r = await run("del-ok");
+    expect(r.body.outcome, r.text).toBe("ok");
+    expect(hits.delete).toBe(1);
+    writeFileSync(targetsFile, JSON.stringify({ "http://other.example.test": { mcpRun: { allowDestructive: true } } }));
+    expect((await run("del-ok")).body.code).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+    expect(hits.delete).toBe(1);
+  });
+
+  it("exploration's safety.allowDestructive is not the switch", async () => {
+    seed(journey("del-safety", [click("del", "gone")]));
+    writeFileSync(targetsFile, JSON.stringify({ [appOrigin]: { safety: { allowDestructive: true } } }));
+    expect((await run("del-safety")).body.code).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+    expect(hits.delete).toBe(0);
+  });
+
+  it("judges the live element: a click on an inner span of a named button, recorded by test id", async () => {
+    seed(journey("del-span", [click("inner", "gone")]));
+    expect((await run("del-span")).body.code).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+    expect(hits.delete).toBe(0);
+  });
+
+  it("refuses Enter on a focused destructive button", async () => {
+    const focus = { step: { kind: "click", target: { testId: "before-del" }, expect: { kind: "visible", target: { testId: "before-del" } } } } as RecordedStep;
+    const tab = { step: { kind: "press", key: "Tab", expect: { kind: "visible", target: { testId: "before-del" } } } } as RecordedStep;
+    const enter = { step: { kind: "press", key: "Enter", expect: { kind: "visible", target: { testId: "gone" } } } } as RecordedStep;
+    seed(journey("del-enter", [focus, tab, enter]));
+    const r = await run("del-enter");
+    expect(r.body.code, r.text).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+    expect(hits.delete).toBe(0);
+  });
+
+  it("the target's own safety.deny holds even with allowDestructive", async () => {
+    seed(journey("deny", [click("noop", "clicked")]));
+    configure({ allowDestructive: true }, { safety: { deny: ["/^Open panel$/"] } });
+    const r = await run("deny");
+    expect(r.body).toMatchObject({ code: "E_RUN_REFUSED_DESTRUCTIVE", setting: `targets.json["${appOrigin}"].safety.deny` });
+  });
+
+  it("a refusal carries no page text and no parameter value", async () => {
+    const fill = { step: { kind: "fill", target: { testId: "tenant" }, value: { var: "customer" }, expect: { kind: "visible", target: { testId: "tenant" } } } } as RecordedStep;
+    seed(journey("del-named", [fill, click("named", "gone")], [{ name: "customer", description: "who", secret: true }]));
+    const r = await run("del-named", { customer: "customer-xyz" });
+    expect(r.body.code, r.text).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+    expect(r.text).not.toContain("customer-xyz");
+  });
+
+  it("an ordinary click is not refused", async () => {
+    seed(journey("plain", [click("noop", "clicked")]));
+    const r = await run("plain");
+    expect(r.body.outcome, r.text).toBe("ok");
+  });
+});
+
+describe("#789 off-allowlist writes over MCP", () => {
+  it("a form post to another origin never leaves the browser by default", async () => {
+    seed(journey("off", [click("ext", "done")]));
+    const r = await run("off");
+    expect(r.body).toMatchObject({ error: "refused", code: "E_RUN_REFUSED_OFF_ALLOWLIST_WRITE", at: 2, retryable: false, setting: `targets.json["${appOrigin}"].mcpRun.allowOffAllowlistWrites` });
+    expect(String(r.body.message)).toContain(otherOrigin);
+    expect(hits.other).toBe(0);
+  });
+
+  it("a fetch the page swallows still ends the run: a refused write is never read as a pass", async () => {
+    seed(journey("off-fetch", [click("fetch-link", "go"), click("go", "clicked")]));
+    const r = await run("off-fetch");
+    expect(r.body.code, r.text).toBe("E_RUN_REFUSED_OFF_ALLOWLIST_WRITE");
+    expect(hits.other).toBe(0);
+  });
+
+  it("reaches the server once a person lists that origin", async () => {
+    seed(journey("off-ok", [click("ext", "done")]));
+    configure({ allowOffAllowlistWrites: [otherOrigin] });
+    const r = await run("off-ok");
+    expect(r.body.outcome, r.text).toBe("ok");
+    expect(hits.other).toBe(1);
+    expect(r.body.offAllowlistWrites).toEqual([otherOrigin]);
+  });
+
+  it("a redirected write is detected, and ends the run the same way, saying it may have been sent", async () => {
+    seed(journey("off-redirect", [click("redir", "done")]));
+    const r = await run("off-redirect");
+    expect(r.body.code, r.text).toBe("E_RUN_REFUSED_OFF_ALLOWLIST_WRITE");
+    expect(String(r.body.message)).toContain("may have been sent");
+  });
+
+  it("outside an MCP invocation `journey run` is unchanged: the write is sent and reported", async () => {
+    seed(journey("cli-off", [click("ext", "done")]));
+    const r = await runJourneyProgrammatically({ dir: journeysDir, id: "cli-off", params: {} });
+    expect(r.outcome).toBe("ok");
+    expect(hits.other).toBe(1);
+    expect(r.offAllowlistWrites).toEqual([otherOrigin]);
+    seed(journey("cli-del", [click("del", "gone")]));
+    expect((await runJourneyProgrammatically({ dir: journeysDir, id: "cli-del", params: {} })).outcome).toBe("ok");
+    expect(hits.delete).toBe(1);
+  });
+});
+
+describe("#789 production", () => {
+  const seedEnvironments = (): string => {
+    const dir = join(root, "project", ".jevitate");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "environments.json");
+    writeFileSync(path, JSON.stringify({ live: { baseUrl: appOrigin, production: true } }));
+    return path;
+  };
+
+  it("refuses an environment flagged production: true, before any browser, unless a person allows it", async () => {
+    const environmentsFile = seedEnvironments();
+    seed(journey("prod", [click("noop", "clicked")]));
+    const tool = () => buildMcpTools({ journeysDir, pathRoots: [root], targetsConfigPath: targetsFile, environmentsFile }).find((t) => t.name === "run_journey")!;
+    const refused = JSON.parse((await tool().handler({ id: "prod", env: "live" })).content[0]!.text) as Record<string, unknown>;
+    expect(refused).toMatchObject({ code: "E_RUN_REFUSED_PRODUCTION", setting: `targets.json["${appOrigin}"].mcpRun.allowProduction`, retryable: false });
+    configure({ allowProduction: true });
+    const allowed = JSON.parse((await tool().handler({ id: "prod", env: "live" })).content[0]!.text) as Record<string, unknown>;
+    expect(allowed.outcome).toBe("ok");
+  });
+});
+
+describe("#789 only a person's targets.json can lift a refusal", () => {
+  // `allowDestructive` as an argument exists on exploration tools (`--allow-destructive`, exploration's
+  // own policy): it never reaches this guard, which reads only `mcpRun` from the targets file.
+  const LIFTING = /mcpRun|allowOffAllowlist|allowProduction/i;
+  const tools = (): ReturnType<typeof buildMcpTools> => buildMcpTools({ journeysDir, pathRoots: [root] });
+
+  it("the served tools still equal ALLOWED_TOOLS: no tool was added", () => {
+    expect(tools().map((t) => t.name).sort()).toEqual([...ALLOWED_TOOLS].sort());
+  });
+
+  it("no served tool takes an argument that could set it, in any schema", () => {
+    const names = (schema: unknown): string[] => {
+      if (schema === null || typeof schema !== "object") return [];
+      const o = schema as Record<string, unknown>;
+      return [...Object.keys((o.properties ?? {}) as object), ...Object.values(o).flatMap((v) => names(v))];
+    };
+    for (const t of tools()) expect(names(t.inputSchema).filter((n) => LIFTING.test(n)), t.name).toEqual([]);
+    for (const spec of CLI_TOOL_SPECS) expect(LIFTING.test(JSON.stringify(spec)), spec.name).toBe(false);
+  });
+
+  it("no path argument may name the file: refused read or written, through a symlink or not", () => {
+    const home = homeDataRoot();
+    expect(() => confineMcpPath(join(home, "targets.json"), "out", [home])).toThrow(McpPathError);
+    expect(() => confineMcpPath(join(home, "targets.json"), "saveStorageState", [home], { session: true })).toThrow(McpPathError);
+    expect(() => confineMcpPath(join(home, "sub", "..", "targets.json"), "out", [home])).toThrow(McpPathError);
+  });
+
+  it("mission_targets and site_policy refuse the field: unknown argument, and the file is untouched", async () => {
+    for (const name of ["mission_targets", "site_policy"]) {
+      const tool = tools().find((t) => t.name === name)!;
+      const res = await tool.handler({ action: "add", mcpRun: { allowDestructive: true } });
+      expect(res.isError, name).toBe(true);
+      expect(res.content[0]!.text).toContain("invalid_args");
+    }
+  });
+
+  it("targets.json is parsed strictly: an unknown key, a wrong type or a non-origin refuses the file", () => {
+    const load = (mcpRun: unknown): unknown => {
+      writeFileSync(targetsFile, JSON.stringify({ "https://a.test": { mcpRun } }));
+      return loadTargetsFile(targetsFile)["https://a.test"]?.mcpRun;
+    };
+    expect(load({ allowDestructive: true, allowOffAllowlistWrites: ["https://b.test"], allowProduction: false })).toEqual({ allowDestructive: true, allowOffAllowlistWrites: ["https://b.test"], allowProduction: false });
+    for (const bad of [true, { allowEverything: true }, { allowDestructive: "yes" }, { allowOffAllowlistWrites: ["*"] }, { allowOffAllowlistWrites: ["https://b.test/path"] }, { allowOffAllowlistWrites: "https://b.test" }]) {
+      expect(() => load(bad), JSON.stringify(bad)).toThrow(TargetConfigError);
+    }
+  });
+
+  it("a targets file it cannot read refuses the run (fail closed), with no browser", async () => {
+    seed(journey("bad-config", [click("noop", "clicked")]));
+    writeFileSync(targetsFile, "{ not json");
+    const r = await run("bad-config");
+    expect(r.body).toMatchObject({ error: "refused", code: "E_RUN_GUARD_CONFIG", retryable: false });
+  });
+});

@@ -1,6 +1,6 @@
 import { CommanderError, type Command } from "commander";
 import { EXIT_CODES } from "./exit-codes.js";
-import { runAsMcpInvocation } from "./approval-provenance.js";
+import { runAsMcpInvocation, type McpInvocation } from "./approval-provenance.js";
 
 /**
  * #255 — the CLI, in process, for the MCP tools that mirror a CLI command (mcp-cli-tools.ts).
@@ -31,6 +31,8 @@ export interface CliRunOutcome {
   readonly stdout: string;
   /** The command's contract exit code (exit-codes.ts). */
   readonly exitCode: number;
+  /** #789: the run guard ended a replay in this call: the tool's answer, however the command handled the error. */
+  readonly refusal?: Error;
 }
 
 export type McpCliRunner = (argv: readonly string[], options?: { readonly unqueued?: boolean }) => Promise<CliRunOutcome>;
@@ -56,12 +58,14 @@ export function makeInProcessCliRunner(build: () => Command): McpCliRunner {
     );
     const saved = process.exitCode;
     process.exitCode = undefined;
+    const invocation: McpInvocation = {};
     try {
       // #437: an approval made inside an MCP tool call is recorded as channel `mcp` (an agent's).
-      await runAsMcpInvocation(() => program.parseAsync([...argv], { from: "user" }));
+      await runAsMcpInvocation(() => program.parseAsync([...argv], { from: "user" }), invocation);
       const code = process.exitCode as number | string | undefined;
-      return { stdout, exitCode: code === undefined ? 0 : Number(code) };
+      return { stdout, exitCode: code === undefined ? 0 : Number(code), ...(invocation.refusal === undefined ? {} : { refusal: invocation.refusal }) };
     } catch (err) {
+      if (invocation.refusal !== undefined) return { stdout, exitCode: EXIT_CODES.inconclusive, refusal: invocation.refusal };
       if (err instanceof CommanderError) {
         const envelope = { v: 1, ok: false, error: { code: "E_CLI_USAGE", message: err.message.replace(/^error: /, "") } };
         return { stdout: `${stdout}${JSON.stringify(envelope)}\n`, exitCode: EXIT_CODES.usage };

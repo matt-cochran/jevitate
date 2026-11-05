@@ -28,6 +28,7 @@ import type { ResolvedJourneyEnvironment } from "./environments.js";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { inMcpInvocation } from "./approval-provenance.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
+import { RunGuardRefusedError } from "./mcp-run-guard.js";
 
 /**
  * #580 (docs/journey-chain-contract.md §5): `jevitate journey chain` runs a discover Journey once,
@@ -387,6 +388,11 @@ async function runHandoffChain(
         ...("reason" in result ? { reason: redactProducerParams(redactReason(result.reason, params, redactors), opts.params) } : {}),
       });
     } catch (err) {
+      // #789: a refused run ends the chain: the next request would only be refused again.
+      if (err instanceof RunGuardRefusedError) {
+        runs.push({ ...identity, outcome: "refused", ...stamp, reason: err.message });
+        break;
+      }
       runs.push({ ...identity, outcome: "error", ...stamp, reason: redactProducerParams(redactReason(err instanceof Error ? err.message : String(err), params, redactors), opts.params) });
     }
   }
@@ -495,6 +501,11 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
         ...("reason" in result ? { reason: redactProducerParams(redactReason(result.reason, mapped.params), opts.params) } : {}),
       });
     } catch (err) {
+      // #789: a refused run ends the chain: the next request would only be refused again.
+      if (err instanceof RunGuardRefusedError) {
+        runs.push({ commentId: request.commentId, account: request.account, outcome: "refused", reason: err.message });
+        break;
+      }
       // A param the reply Journey does not take (or any other refusal) fails only this request; the
       // rest of the chain still runs (§5 step 4).
       runs.push({ commentId: request.commentId, account: request.account, outcome: "error", reason: redactProducerParams(redactReason(err instanceof Error ? err.message : String(err), mapped.params), opts.params) });

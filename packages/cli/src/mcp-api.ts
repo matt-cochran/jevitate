@@ -12,6 +12,7 @@ import type { EmulationSpec } from "@jevitate/playwright";
 import { safeRunPolicy as defaultRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
+import { runAsMcpInvocation } from "./approval-provenance.js";
 import { runVerifyFix, type RunVerifyFixOptions, type VerifyFixReport } from "./verify-fix-api.js";
 import { type BrowserRunOptions } from "./browser-run-options.js";
 import { type ResolvedJourneyEnvironment } from "./environments.js";
@@ -227,13 +228,15 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   const runJourney =
     deps.runJourney ??
     ((id: string, params: Record<string, string>, storageState?: string, o?: McpJourneyRunOptions) =>
-      withSiteGate(deps.sitePolicyDbPath, (siteGate) =>
+      // #789: an MCP invocation, so the run guard applies (and an approval made here would say `mcp`).
+      runAsMcpInvocation(() => withSiteGate(deps.sitePolicyDbPath, (siteGate) =>
         runJourneyProgrammatically({
           dir: deps.journeysDir,
           id,
           params,
           // #788: only a promoted Journey with a current approval runs over MCP, refused before any browser.
           assertRunnable: (stored) => assertMcpRunnable(stored, deps.journeysDir),
+          ...(deps.targetsConfigPath === undefined ? {} : { runGuardTargetsFile: deps.targetsConfigPath }),
           policy: o?.policy ?? defaultRunPolicy(),
           ...(storageState !== undefined ? { storageState } : {}),
           ...(siteGate === undefined ? {} : { siteGate }),
@@ -247,7 +250,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           ...(o?.actionDeltas === true ? { actionDeltas: true } : {}),
           ...(o?.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: o.stepResponseTimeoutMs }),
         }),
-      ));
+      )));
   const pathRoots = deps.pathRoots ?? defaultMcpPathRoots();
   const credentialStore = deps.credentialStore ?? envCredentialStore();
 
