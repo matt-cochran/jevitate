@@ -1484,6 +1484,11 @@ export function judgeAssertions(journey: Journey, plan: MutationPlan, results: R
 /** #402: the proof's verdict — exit 0 `proven`, 1 `insensitive`, 2 `inconclusive` (docs/ci.md). */
 export type MutationProofVerdict = "proven" | "insensitive" | "inconclusive";
 
+/** A replay of this mutation errored, so it leaves the proof a gap. A refused targeted proof carries `error` but ran no replay. */
+export function mutationErrored(m: Pick<MutationRunResult, "outcome"> & Partial<Pick<MutationRunResult, "relaxed" | "targeted" | "control" | "rerun" | "atBaseTime">>): boolean {
+  return m.outcome === "error" || m.relaxed?.outcome === "error" || m.control === "error" || m.rerun === "error" || m.atBaseTime?.outcome === "error" || m.relaxed?.atBaseTime?.outcome === "error" || (m.targeted ?? []).some((t) => (t.refused === undefined && t.outcome === "error") || t.control === "error");
+}
+
 /**
  * #402: proven when every PAIRED assertion is sensitive; insensitive when any paired assertion still
  * passed under its mutation; inconclusive when a fixture restore failed or a replay left work behind
@@ -1512,10 +1517,8 @@ export function mutationProofVerdict(input: {
   const paired = input.assertions.filter((a) => a.verdict !== "unpaired");
   if (paired.length === 0) return { verdict: "inconclusive", reason: "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs)" };
   if (paired.some((a) => a.verdict === "insensitive")) return { verdict: "insensitive" };
-  // Every replay counts: relaxed, targeted, a control, a re-run. A refused targeted proof carries `error` but ran no replay.
-  const errored = input.mutations.filter(
-    (m) => m.outcome === "error" || m.relaxed?.outcome === "error" || m.control === "error" || m.rerun === "error" || m.atBaseTime?.outcome === "error" || m.relaxed?.atBaseTime?.outcome === "error" || (m.targeted ?? []).some((t) => (t.refused === undefined && t.outcome === "error") || t.control === "error"),
-  ).length;
+  // Every replay counts: relaxed, targeted, a control, a re-run.
+  const errored = input.mutations.filter(mutationErrored).length;
   if (errored > 0) {
     return { verdict: "inconclusive", reason: `${errored} of ${input.mutations.length} mutated replays errored, so the proof has a gap; retry it` };
   }

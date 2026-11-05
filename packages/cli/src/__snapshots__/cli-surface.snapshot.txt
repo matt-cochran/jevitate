@@ -1072,6 +1072,8 @@
     - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=param as key=value (repeatable)
     - flags=--plan required=false mandatory=false negate=false variadic=false default=null description=print the static mutation/assertion plan without opening a browser
     - flags=--project <path> required=true mandatory=false negate=false variadic=false default=null description=the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir
+    - flags=--resume required=false mandatory=false negate=false variadic=false default=null description=with --mutate: continue an interrupted proof of the same Journey and configuration, or one that ended inconclusive on errored replays, reusing finished pairs after the base replay passes again and running errored pairs again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused and never starts over
+    - flags=--status required=false mandatory=false negate=false variadic=false default=null description=read a proof's durable progress and whether its verifier is live, exited or stale; no browser, no hook, nothing of the app's
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start each replay authenticated (as journey run)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 

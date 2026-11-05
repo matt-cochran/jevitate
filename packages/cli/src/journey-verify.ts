@@ -25,6 +25,7 @@ import {
   journeyParamSchema,
   journeyWriteSteps,
   judgeAssertions,
+  mutationErrored,
   mutationProofVerdict,
   mutationReplay,
   needsRelaxedReplay,
@@ -1359,6 +1360,8 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
         const memoKey = `${kind}\u0000${key ?? ""}`;
         const known = targetedRuns.get(memoKey);
         if (known !== undefined) return known;
+        // The proof is already over: a targeted proof's next replay is not run, and whatever it reads, the verdict is decided.
+        if (tainted()) return Promise.resolve({ outcome: "error", failedSites: [], reason: "not run: the proof had already ended" });
         // A control runs after the targeted replay it answers for, and gets to each site no sooner than it did.
         const running = kind === "control" ? (targetedRuns.get(`targeted\u0000${key ?? ""}`) ?? Promise.resolve(undefined)).then((run) => runReplay(m, describe, "targeted-control", run)) : runReplay(m, describe, "targeted");
         targetedRuns.set(memoKey, running);
@@ -1421,6 +1424,10 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
       const fromRelaxed = entry.relaxed !== undefined && !(site.where === "step" && site.step === m.step) && entry.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition);
       const describe = proof !== undefined ? (j: Journey): MutationReplay => targetedMutationReplay(j, m, next.site, proof.relaxedSites, replayOpts) : (j: Journey): MutationReplay => (fromRelaxed ? relaxedMutationReplay : mutationReplay)(j, m, replayOpts);
       const rerun = await runReplay(m, describe, "rerun");
+      if (tainted()) {
+        mutations[index] = { ...entry, rerun: rerun.outcome };
+        break;
+      }
       const control = await controlFor(m, [rerun], [next.site]);
       const undecided = `sibling mutations disagree on ${next.site} (${next.sensitive} failed it, ${next.passed} passed it), and a control and a re-run could not settle it; run the proof again`;
       const controlFields = { control: control.outcome, ...(control.diagnostics === undefined ? {} : { controlDiagnostics: control.diagnostics }) };
@@ -1517,7 +1524,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
     ...(redacted.reusedPairs === 0 ? {} : { reusedPairs: redacted.reusedPairs }),
     at: clock.nowIso(),
   });
-  checkpoint?.finish(redacted.verdict);
+  checkpoint?.finish(redacted.verdict, !tainted() && mutations.some(mutationErrored));
   return redacted;
 }
 

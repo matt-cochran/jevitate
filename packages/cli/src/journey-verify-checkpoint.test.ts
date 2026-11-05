@@ -411,7 +411,8 @@ describe("a resumed proof and an uninterrupted one", () => {
         // A proof already inconclusive has no closing replay to be killed in, and so finished.
         if (ended === undefined) continue;
         expect(ended).toBeInstanceOf(JourneyVerifyStalledError);
-        const finished = readBody().completed.length;
+        // An errored pair is on file and is run again, so it is not reused.
+        const finished = readBody().completed.filter((p) => p.outcome !== "error").length;
         const rest = byPair(answers);
         const report = await prove(rest.run, request(true), { onProgress: rest.onProgress });
         expect({ stopAt, verdict: report.verdict, assertions: assertionsOf(report), summary: report.summary }).toEqual({ stopAt, verdict: whole.verdict, assertions: assertionsOf(whole), summary: whole.summary });
@@ -557,6 +558,160 @@ describe("a taint from before the interruption", () => {
   function proofResultAfter(finished: number): (n: number) => RunResult {
     return (n) => (n === 1 ? passed : (PROVING[n - 2 + finished] ?? passed));
   }
+});
+
+describe("a resume and an errored pair", () => {
+  const BOOM = new Error(`boom ${APP_TEXT}`);
+  /** Each replay answered by its label. `script` says what a label's answer is, or `passed`. The base reports its steps unless `paced` is false. */
+  function labelled(script: (label: string, seen: number, mutation: Record<string, unknown>) => RunResult | Error | undefined, paced = true): { run: Run; onProgress: NonNullable<ProveExtra["onProgress"]>; labels: string[] } {
+    const labels: string[] = [];
+    const run = (async (options: never, mutation: Record<string, unknown>) => {
+      const label = labels.at(-1)!;
+      if (label === "base") {
+        if (paced) await reportSteps(options);
+        return passed;
+      }
+      const answer = script(label, labels.filter((l) => l === label).length, mutation) ?? passed;
+      if (answer instanceof Error) throw answer;
+      return answer;
+    }) as unknown as Run;
+    return { run, labels, onProgress: (p) => void labels.push(p.mutation?.replace(" (retry after error)", "") ?? "base") };
+  }
+  const blockedButPassed = { outcome: "ok", output: {}, blockedWrites: [{ method: "POST", path: "/api/save" }] } as unknown as RunResult;
+  const proving = (label: string): RunResult | undefined => (label === "skip:3" || label === "block-write:3" ? requestBroken : label === "stale-value:2" ? stepBroken : undefined);
+  const erroringBlock = (label: string): RunResult | Error | undefined => (label === "block-write:3" ? BOOM : proving(label));
+  const proveLabelled = (l: ReturnType<typeof labelled>, resume: boolean): Promise<JourneyVerifyReport> => prove(l.run, request(resume), { onProgress: l.onProgress });
+
+  it("after a proof that finished inconclusive on an errored pair, runs that pair again and reaches the verdict", async () => {
+    const report = await proveLabelled(labelled(erroringBlock), false);
+    expect(report.verdict).toBe("inconclusive");
+    expect(readVerifyProgress(path, keyFile, ID).resume).toEqual({ possible: true });
+    const resumed = labelled(proving);
+    const second = await proveLabelled(resumed, true);
+    expect(second).toMatchObject({ verdict: "proven", reusedPairs: 2 });
+    expect(resumed.labels).toEqual(["base", "independence replay, as recorded", "block-write:3", "closing replay, as recorded"]);
+    expect(second.mutations.map((m) => [m.id, m.reused])).toEqual([
+      ["skip:3", true],
+      ["block-write:3", undefined],
+      ["stale-value:2", true],
+    ]);
+    expect(JSON.parse(readFileSync(verifyRecordPath(join(dir, "journeys"), ID), "utf8"))).toMatchObject({ verdict: "proven", reusedPairs: 2 });
+    expect(readBody()).toMatchObject({ state: "finished", verdict: "proven" });
+    expect(readBody().completed.map((p) => p.id)).toEqual(["skip:3", "block-write:3", "stale-value:2"]);
+    expect(await refusal(prove(labelled(proving).run, request(true)))).toBe("finished");
+  });
+
+  it("after an interruption, does not reuse an errored pair", async () => {
+    const killed = labelled((label) => (label === "stale-value:2" ? stall() : erroringBlock(label)));
+    await expect(proveLabelled(killed, false)).rejects.toBeInstanceOf(JourneyVerifyStalledError);
+    expect(readBody().completed.map((p) => [p.id, p.outcome])).toEqual([
+      ["skip:3", "failed"],
+      ["block-write:3", "error"],
+    ]);
+    const resumed = labelled(proving);
+    const report = await proveLabelled(resumed, true);
+    expect(report).toMatchObject({ verdict: "proven", reusedPairs: 1 });
+    expect(resumed.labels).toEqual(["base", "independence replay, as recorded", "block-write:3", "stale-value:2", "closing replay, as recorded"]);
+  });
+
+  it("stays inconclusive when the pair errors again, and can be resumed again", async () => {
+    await proveLabelled(labelled(erroringBlock), false);
+    const again = await proveLabelled(labelled(erroringBlock), true);
+    expect(again).toMatchObject({ verdict: "inconclusive", reusedPairs: 2 });
+    expect(readBody().completed.map((p) => p.id)).toEqual(["skip:3", "block-write:3", "stale-value:2"]);
+    expect((await proveLabelled(labelled(proving), true)).verdict).toBe("proven");
+  });
+
+  it("keeps an errored pair on file if the resume dies before it finishes", async () => {
+    await proveLabelled(labelled(erroringBlock), false);
+    const killed = labelled((label) => (label === "block-write:3" ? stall() : proving(label)));
+    await expect(proveLabelled(killed, true)).rejects.toBeInstanceOf(JourneyVerifyStalledError);
+    expect(readBody().verdict).toBeUndefined();
+    const resumed = labelled(proving);
+    expect(await proveLabelled(resumed, true)).toMatchObject({ verdict: "proven", reusedPairs: 2 });
+    expect(resumed.labels).toContain("block-write:3");
+  });
+
+  it("still refuses a proof that finished inconclusive with no errored pair: running it again changes nothing", async () => {
+    const unevaluable = { outcome: "quarantined", reason: APP_TEXT, outcomeFailures: [{ where: "unevaluable" }] } as unknown as RunResult;
+    const report = await proveLabelled(labelled((label) => (proving(label) === undefined ? undefined : unevaluable)), false);
+    expect(report.verdict).toBe("inconclusive");
+    expect(await refusal(prove(labelled(proving).run, request(true)))).toBe("finished");
+    expect(readVerifyProgress(path, keyFile, ID).resume).toEqual({ possible: false, refusal: "finished" });
+  });
+
+  it("still refuses an errored proof whose verdict an errored pair did not decide", async () => {
+    const report = await proveLabelled(labelled((label) => (label === "block-write:3" ? BOOM : label === "stale-value:2" ? passed : proving(label))), false);
+    expect(report.verdict).toBe("insensitive");
+    expect(await refusal(prove(labelled(proving).run, request(true)))).toBe("finished");
+  });
+
+  it("still refuses an errored proof a failed restore ended: the taint is the proof's, and no re-run lifts it", async () => {
+    const report = await proveLabelled(
+      labelled((label, _seen, mutation) => {
+        if (label === "stale-value:2") (mutation["onFixtureRestoreFailed"] as () => void)();
+        return erroringBlock(label);
+      }),
+      false,
+    );
+    expect(report.reason).toContain("fixture restore failed");
+    expect(await refusal(prove(labelled(proving).run, request(true)))).toBe("finished");
+  });
+
+  it("re-runs the reading when the only error was a sibling's re-run, which no pair keeps", async () => {
+    const answer = (label: string): RunResult | Error | undefined => (label === "skip:3 (re-run)" ? BOOM : label === "block-write:3" ? blockedButPassed : proving(label));
+    const report = await proveLabelled(labelled(answer, false), false);
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.mutations.find((m) => m.id === "skip:3")?.rerun).toBe("error");
+    expect(readVerifyProgress(path, keyFile, ID).resume).toEqual({ possible: true });
+  });
+
+  describe("a failed restore", () => {
+    const failRestore = (mutation: Record<string, unknown>): void => (mutation["onFixtureRestoreFailed"] as () => void)();
+
+    it("runs nothing more after a first replay", async () => {
+      const l = labelled((label, _seen, mutation) => {
+        if (label === "skip:3") failRestore(mutation);
+        return proving(label);
+      });
+      expect((await proveLabelled(l, false)).verdict).toBe("inconclusive");
+      expect(l.labels.at(-1)).toBe("skip:3");
+    });
+
+    it("runs no further replay of a targeted proof", async () => {
+      const journey = journeyOf();
+      journey.metadata.endState = [{ kind: "page", assertion: { kind: "visible", target: { testId: "saved" } } }] as never;
+      const save = journey.recording.pages[0]!.steps[2]! as { step: { expect?: unknown }; expectRequests?: unknown };
+      delete save.expectRequests;
+      save.step.expect = { kind: "visible", target: { testId: "status" } };
+      await new FsJourneyStore(join(dir, "journeys")).put(journey);
+      const stopped = { outcome: "quarantined", reason: "step 3 postcondition failed", at: 2 } as RunResult;
+      const endState = { outcome: "quarantined", reason: "end state", outcomeFailures: [{ where: "end-state", index: 0 }] } as unknown as RunResult;
+      const l = labelled((label, seen, mutation) => {
+        if (label !== "skip:3") return undefined;
+        if (seen < 3) return stopped;
+        failRestore(mutation);
+        return endState;
+      });
+      const report = await proveLabelled(l, false);
+      expect(report.reason).toContain("fixture restore failed");
+      expect(l.labels.filter((x) => x === "skip:3")).toHaveLength(3);
+      expect(l.labels.at(-1)).toBe("skip:3");
+    });
+
+    it("runs no control after a sibling's re-run", async () => {
+      const l = labelled((label, _seen, mutation) => {
+        if (label === "skip:3 (re-run)") {
+          failRestore(mutation);
+          return requestBroken;
+        }
+        return label === "block-write:3" ? blockedButPassed : proving(label);
+      }, false);
+      const report = await proveLabelled(l, false);
+      expect(report.reason).toContain("fixture restore failed");
+      expect(l.labels.at(-1)).toBe("skip:3 (re-run)");
+    });
+  });
 });
 
 describe("a checkpoint of the earlier experiment", () => {

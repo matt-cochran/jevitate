@@ -1227,7 +1227,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (301 exports)
+# @jevitate/journey (302 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1427,6 +1427,7 @@
   METRIC_KINDS: variable
   MetricKind: type-alias
   MetricSchema: variable
+  mutationErrored: function
   MutationFailedSite: type-alias
   MutationKind: type-alias
   MutationPair: interface

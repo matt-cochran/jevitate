@@ -7,6 +7,7 @@ import { clock } from "@jevitate/domain";
 import {
   assertionSiteKey,
   classifyMutation,
+  mutationErrored,
   needsRelaxedReplay,
   sitesReachedEarly,
   thinSites,
@@ -156,6 +157,8 @@ const bodySchema = z.strictObject({
   updatedAt: iso,
   state: z.enum(["running", "interrupted", "finished"]),
   verdict: z.enum(["proven", "insensitive", "inconclusive"]).optional(),
+  /** It finished `inconclusive` on errored replays and nothing else, so a resume can run those again. */
+  errorGap: z.literal(true).optional(),
   reusedPairs: count,
   taint: z.strictObject({ restoreFailed: z.boolean(), notIsolatedBy: z.string().nullable(), isolation: z.enum(ISOLATION_NOTES).nullable() }),
   verifier: z.strictObject({ pid: position, startToken: z.string(), host: z.string() }),
@@ -523,6 +526,9 @@ function pairProblems(body: CheckpointBody, plan: MutationPlan, journey: Journey
   return undefined;
 }
 
+/** A proof that ended on errored replays has a gap a resume can fill. Any other finished proof has said all it can. */
+const finishedForGood = (body: Pick<CheckpointBody, "state" | "verdict" | "errorGap">): boolean => body.state === "finished" && !(body.verdict === "inconclusive" && body.errorGap === true);
+
 export interface ResumeState {
   readonly pairs: ReadonlyMap<string, CheckpointPair>;
   readonly restoreFailed: boolean;
@@ -578,8 +584,10 @@ export class ProofCheckpointSession {
     this.#write({ phase: "pairs", currentPair: id });
   }
 
+  /** A pair run again after it errored takes its own place, so `completed` stays in the plan's order. */
   finishPair(pair: CheckpointPair): void {
-    this.#write({ completed: [...this.#body.completed, pair], currentPair: null });
+    const known = this.#body.completed.some((p) => p.id === pair.id);
+    this.#write({ completed: known ? this.#body.completed.map((p) => (p.id === pair.id ? pair : p)) : [...this.#body.completed, pair], currentPair: null });
   }
 
   /**
@@ -596,8 +604,8 @@ export class ProofCheckpointSession {
     }
   }
 
-  finish(verdict: MutationProofVerdict): void {
-    this.#write({ state: "finished", verdict, currentPair: null });
+  finish(verdict: MutationProofVerdict, errorGap: boolean): void {
+    this.#write({ state: "finished", verdict, currentPair: null, ...(errorGap ? { errorGap: true as const } : {}) });
   }
 
   /** The proof ended with no verdict, in a process that may go on (an MCP server), so its pid no longer says anything. */
@@ -705,7 +713,7 @@ export async function openProofCheckpoint(
     const verifier = verifierStateOf(body);
     if (verifier === "live") return refuse("live-verifier", `verifier ${body.verifier.pid} is still running this proof; read it with --status`);
     if (body.state === "running" && body.verifier.host !== hostname()) return refuse("other-host", `verifier ${body.verifier.pid} ran on host ${body.verifier.host}, where this host cannot check it`);
-    if (body.state === "finished") return refuse("finished", `this proof already finished (${body.verdict ?? "no verdict"}); its receipt stands`);
+    if (finishedForGood(body)) return refuse("finished", `this proof already finished (${body.verdict ?? "no verdict"}); its receipt stands`);
     if (body.journeyHash !== proof.journeyHash) return refuse("journey-hash", "the Journey changed since the checkpoint");
     if (body.planDigest !== planDigest) return refuse("mutation-plan", "the mutation plan changed since the checkpoint");
     if (body.bindings.params !== bindings.params) return refuse("params", "the parameters differ from the checkpoint's");
@@ -720,16 +728,20 @@ export async function openProofCheckpoint(
     if (old !== undefined) return refuse("too-old", old);
     const invalid = pairProblems(body, proof.plan, proof.journey, proof.sites);
     if (invalid !== undefined) return refuse("corrupt", `the checkpoint at ${req.path} cannot be used: ${invalid}`);
-    const claimed: CheckpointBody = { ...body, state: "running", phase: "base", independence: null, currentPair: null, replay: 0, reusedPairs: body.completed.length, updatedAt: clock.nowIso(), verifier: currentVerifierIdentity() };
+    // An errored pair stays on file until its new result takes its place, and is never reused.
+    const reused = body.completed.filter((p) => !mutationErrored(reusedProofFields(p)));
+    const { verdict: _verdict, errorGap: _errorGap, ...unfinished } = body;
+    const claimed: CheckpointBody = { ...unfinished, state: "running", phase: "base", independence: null, currentPair: null, replay: 0, reusedPairs: reused.length, updatedAt: clock.nowIso(), verifier: currentVerifierIdentity() };
     try {
       // A resume that cannot record its claim cannot keep a second verifier out.
       writeCheckpointFile(req.path, key, claimed);
     } catch (err) {
       return refuse("not-writable", `the claim could not be written to ${req.path} (${(err as NodeJS.ErrnoException).code ?? "error"})`);
     }
-    notice(`journey verify: resuming with ${body.completed.length} of ${body.total} pairs finished; the base replay runs first and must pass before any is reused`);
+    const errored = body.completed.length - reused.length;
+    notice(`journey verify: resuming with ${reused.length} of ${body.total} pairs finished${errored === 0 ? "" : ` and ${errored} errored, which run again`}; the base replay runs first and must pass before any is reused`);
     const session = new ProofCheckpointSession(req.path, key, claimed, notice);
-    return { session, resume: { pairs: new Map(body.completed.map((p) => [p.id, p])), restoreFailed: body.taint.restoreFailed, notIsolatedBy: body.taint.notIsolatedBy, isolation: body.taint.isolation } };
+    return { session, resume: { pairs: new Map(reused.map((p) => [p.id, p])), restoreFailed: body.taint.restoreFailed, notIsolatedBy: body.taint.notIsolatedBy, isolation: body.taint.isolation } };
   };
 
   const opened = await withCheckpointLock(req.path, req.resume ? claimResume : claimFresh).catch((err: unknown) => {
@@ -927,7 +939,7 @@ export function readVerifyProgress(path: string, keyFile: string, journeyId: str
       ? "live-verifier"
       : body.state === "running" && body.verifier.host !== hostname()
         ? "other-host"
-        : body.state === "finished"
+        : finishedForGood(body)
           ? "finished"
           : unknownRecordKind(body) !== undefined
             ? "unknown-record"

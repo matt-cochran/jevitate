@@ -28,7 +28,8 @@ fixtures, so state a fixture would have restored may remain.
 In `journey verify --mutate`, any errored replay leaves the proof `inconclusive`, even when other mutations
 covered the same assertions. A replay that errored before opening a browser, as on an admission timeout, is
 retried once and listed in `mutations[].retries`. One that opened a browser may have changed the app, so it is
-not retried. A failed replay or a stall is never retried.
+not retried. A failed replay or a stall is never retried. `--resume` runs an errored pair again without starting
+the proof over.
 
 What `journey verify --mutate` runs, in order:
 
@@ -109,7 +110,8 @@ MCP: `verify_journey` with `status: true`, which answers even while the same ser
 
 `journey verify <id> --mutate --resume` (MCP: `mutate: true, resume: true`) continues an interrupted proof with the
 same flags. The base replay runs again and must pass, the pair that was interrupted runs again, later pairs run,
-and finished pairs are reused. The closing replay always runs. The result says how many pairs were reused in
+and finished pairs are reused. A pair with an errored replay is not reused: it runs again, in an interrupted proof
+and in one that finished `inconclusive` on errored replays and nothing else, which `--resume` also accepts. The closing replay always runs. The result says how many pairs were reused in
 `reusedPairs` (0 on a run that did not resume), each one is marked `reused: true`, and the verdict comes from the
 same rule over the same results as an uninterrupted proof. A plain `--mutate` starts again and replaces the
 checkpoint, unless a live verifier owns it, in which case it runs without progress of its own.
@@ -118,7 +120,7 @@ A resume never starts over silently. It exits 2 with `E_JOURNEY_VERIFY_RESUME_RE
 
 | `reason` | Why |
 | --- | --- |
-| `no-checkpoint`, `finished`, `live-verifier`, `other-host` | nothing to resume, or a verifier owns it or cannot be checked from this host |
+| `no-checkpoint`, `finished`, `live-verifier`, `other-host` | nothing to resume (`finished`: the proof ended with a verdict a re-run of errored pairs could not change), or a verifier owns it or cannot be checked from this host |
 | `journey-hash`, `mutation-plan`, `params`, `hook`, `origin`, `browser`, `cli-build` | what the proof ran under changed. A build that cannot name itself counts as changed |
 | `too-old` | a reused result is over 24 hours old |
 | `corrupt`, `integrity`, `not-regular-file`, `key-unavailable`, `not-writable` | the file is damaged or was changed outside jevitate, a link or FIFO is at its path, or the key below cannot be used |

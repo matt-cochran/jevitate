@@ -54,7 +54,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
     .option("--mutate", "run the mutation proof")
     .option("--plan", "print the static mutation/assertion plan without opening a browser")
     .option("--status", "read a proof's durable progress and whether its verifier is live, exited or stale; no browser, no hook, nothing of the app's")
-    .option("--resume", "with --mutate: continue an interrupted proof of the same Journey and configuration, reusing finished pairs after the base replay passes again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused and never starts over")
+    .option("--resume", "with --mutate: continue an interrupted proof of the same Journey and configuration, or one that ended inconclusive on errored replays, reusing finished pairs after the base replay passes again and running errored pairs again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused and never starts over")
     .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--storage-state <file>", "Playwright storageState JSON to start each replay authenticated (as journey run)")
