@@ -1249,7 +1249,7 @@ export async function runDeclaredTargetedProof(
  * blocking step, or when the result would exceed `MAX_DECLARED_RELAXATIONS`.
  */
 export function suggestTargetedProofPlan(proof: TargetedProof, m: JourneyMutation): JourneyTargetedProofPlan | null {
-  if (proof.refused !== `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached` && !/^step-request:[1-9][0-9]*:[0-9]+ is not a step postcondition$/.test(proof.refused ?? "")) return null;
+  if (proof.refused !== `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached`) return null;
   const first = proof.failedSites[0];
   if (first === undefined || (first.where !== "step" && first.where !== "step-request")) return null;
   const relax = [...proof.relaxedSites, failedSiteKey(first)];
