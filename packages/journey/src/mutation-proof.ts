@@ -1150,7 +1150,8 @@ export type MutationProofVerdict = "proven" | "insensitive" | "inconclusive";
 
 /**
  * #402: proven when every PAIRED assertion is sensitive; insensitive when any paired assertion still
- * passed under its mutation; inconclusive when the unmutated replay failed, any mutated replay errored
+ * passed under its mutation; inconclusive when the unmutated replay failed, any mutated, relaxed or
+ * targeted replay errored
  * (a replay that could not run proves nothing, so a proof with a gap is not proven even when other
  * mutations covered the same sites), nothing was paired, or what is left is only cascades /
  * not-applied (nothing proven either way). An insensitive assertion is a real finding and outranks an
@@ -1158,7 +1159,7 @@ export type MutationProofVerdict = "proven" | "insensitive" | "inconclusive";
  */
 export function mutationProofVerdict(input: {
   readonly basePassed: boolean;
-  readonly mutations: readonly Pick<MutationRunResult, "outcome">[];
+  readonly mutations: readonly (Pick<MutationRunResult, "outcome"> & Partial<Pick<MutationRunResult, "relaxed" | "targeted">>)[];
   readonly assertions: readonly AssertionProof[];
 }): { readonly verdict: MutationProofVerdict; readonly reason?: string } {
   if (!input.basePassed) return { verdict: "inconclusive", reason: "the unmutated replay failed — no mutation was run" };
@@ -1168,7 +1169,10 @@ export function mutationProofVerdict(input: {
   const paired = input.assertions.filter((a) => a.verdict !== "unpaired");
   if (paired.length === 0) return { verdict: "inconclusive", reason: "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs)" };
   if (paired.some((a) => a.verdict === "insensitive")) return { verdict: "insensitive" };
-  const errored = input.mutations.filter((m) => m.outcome === "error").length;
+  // A relaxed or targeted replay counts too. A refused targeted proof carries `error` but ran no replay.
+  const errored = input.mutations.filter(
+    (m) => m.outcome === "error" || m.relaxed?.outcome === "error" || (m.targeted ?? []).some((t) => (t.refused === undefined && t.outcome === "error") || t.control === "error"),
+  ).length;
   if (errored > 0) {
     return { verdict: "inconclusive", reason: `${errored} of ${input.mutations.length} mutated replays errored, so the proof has a gap; retry it` };
   }

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeClock, clock, installClock, resetClock } from "@jevitate/domain";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
-import { MachineBrowserSlots, ResourceGovernor, type BrowserPort, type MachineSlotLease } from "@jevitate/playwright";
+import { MachineBrowserSlots, ResourceGovernor, type BrowserPort, type BrowserSession, type MachineSlotLease } from "@jevitate/playwright";
 import { registerJourneyVerify, type JourneyVerifySeams } from "./journey-cli/verify.js";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { planJourneyVerification, proofInactivityMs, verifyJourneyMutations, type JourneyVerifyProgress } from "./journey-verify.js";
@@ -177,6 +177,20 @@ describe("an errored mutated replay", () => {
 });
 
 describe("a replay that is not retried", () => {
+  it("is not retried once it has opened a browser session, which may have changed the app", async () => {
+    let calls = 0;
+    const run = (async (options: Parameters<Run>[0]) => {
+      calls += 1;
+      if (calls === 1) return passed;
+      await options.browserPortFactory!().open({} as never);
+      throw ADMISSION;
+    }) as unknown as Run;
+    const session = { close: async () => undefined } as unknown as BrowserSession;
+    const port: BrowserPort = { open: async () => session };
+    const report = await prove(run, { browserPortFactory: () => port });
+    expect(report.mutations.some((m) => m.retries !== undefined)).toBe(false);
+  });
+
   it("a failed replay is a result", async () => {
     const seen: JourneyVerifyProgress[] = [];
     const { run } = proofErroringAt();

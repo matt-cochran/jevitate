@@ -31,6 +31,10 @@ behaviour changes).
   honours `safety.readRequests`.
 - **Redaction on every surface.** `verify-fix` stdout, result file and MCP return come from one redacted
   report, and terminal diagnostics mask URL tokens, cookies and body passwords.
+- **Targeted control replays (#785).** A targeted proof's unmutated control keeps the waiting of the
+  assertions it relaxes, so a reload-sensitive end state no longer refuses the proof when a slow write
+  had not landed. A failed control reports counts and booleans that tell apart action omission,
+  browser-context replacement, storage clearing and end-state timing, never storage values.
 - **Empty `.git` directories.** A directory counts as a git root only when `.git` is a file or holds
   `HEAD`, so a sandbox's empty placeholder no longer makes its parent a project.
 - **Bystander signals (#764).** Browser teardown signals only processes with this process's exact owner
@@ -41,10 +45,11 @@ behaviour changes).
 - **Proofs keep their browser slot (#766).** `journey verify --mutate` keeps its machine slot between
   replays unless another run is waiting for one, when it yields and competes again. Waiters announce
   themselves with `waiter-*.json` beside the slots; a dead or stale one is ignored.
-- **Errored replays are retried once (#766, #778).** An errored mutated replay runs once more and is
-  listed in `mutations[].retries`. A failed replay or a stall is never retried.
-- **A proof with an errored replay is not proven (#766).** If any mutated replay errored, for example
-  on a browser-slot admission timeout, `journey verify --mutate` reads `inconclusive` (exit 2), even when
+- **Errored replays are retried once (#766, #778).** A replay that errored before opening a browser, as
+  on an admission timeout, runs once more and is listed in `mutations[].retries`. One that opened a
+  browser may have changed the app, so it is not retried. A failed replay or a stall is never retried.
+- **A proof with an errored replay is not proven (#766).** If any mutated, relaxed or targeted replay
+  errored, `journey verify --mutate` reads `inconclusive` (exit 2), even when
   other mutations covered the same assertions. An insensitive assertion still reads `insensitive`.
 - **Source builds identify themselves (#784).** An unreleased build reports `x.y.z-source-<commit>` from
   `--version`. Release builds are unchanged.

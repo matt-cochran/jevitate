@@ -157,7 +157,7 @@ export class JourneyVerifyStalledError extends Error {
  * it then unwinds by its own paths, fixture restore included. An open still pending at the stall is
  * closed the moment it lands.
  */
-function trackedPortFactory(factory: () => BrowserPort): { factory: () => BrowserPort; abandon: () => Promise<void> } {
+function trackedPortFactory(factory: () => BrowserPort, onOpened: () => void): { factory: () => BrowserPort; abandon: () => Promise<void> } {
   const pending = new Set<Promise<unknown>>();
   const opened = new Set<BrowserSession>();
   let abandoned = false;
@@ -169,6 +169,7 @@ function trackedPortFactory(factory: () => BrowserPort): { factory: () => Browse
       throw new Error("the replay was abandoned while its browser session opened");
     }
     opened.add(session);
+    onOpened();
     return session;
   };
   return {
@@ -197,8 +198,9 @@ async function replayWithinBound<T>(
   portFactory: () => BrowserPort,
   where: JourneyVerifyProgress,
   inactivityMs: number,
+  onSessionOpened: () => void,
 ): Promise<T> {
-  const tracked = trackedPortFactory(portFactory);
+  const tracked = trackedPortFactory(portFactory, onSessionOpened);
   const running = start(tracked.factory);
   let timer: ReturnType<typeof clock.setTimeout> | undefined;
   const stalled = new Promise<{ readonly stalled: true }>((resolve) => {
@@ -617,11 +619,12 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
   const portFactory = opts.browserPortFactory ?? ((): BrowserPort => new PlaywrightBrowserPort());
   let replays = 0;
   // Every replay of the proof goes through here: it is reported, and it is bounded.
+  let sessionsOpened = 0;
   const boundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: JourneyMutation, retry = false, probe?: ReplayProbe): ReturnType<Run> => {
     replays += 1;
     const where: JourneyVerifyProgress = { replay: replays, ...(m === undefined ? {} : { mutation: m.id }), ...(retry ? { retry: true as const } : {}) };
     onProgress?.(retry && m !== undefined ? { ...where, mutation: `${m.id} (retry after error)` } : where);
-    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, mutation), probe === undefined ? portFactory : probe.wrap(portFactory), where, inactivityMs);
+    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, mutation), probe === undefined ? portFactory : probe.wrap(portFactory), where, inactivityMs, () => void (sessionsOpened += 1));
   };
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
@@ -721,14 +724,16 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
       }
     };
     const retriesOf = new Map<string, { readonly reason: string }[]>();
-    // #778: one infrastructure error must not cost the proof, so an errored replay runs once more, its
-    // fixtures set up and restored by the run as between any two replays. A `failed` replay is a result
-    // and a stall ends the proof: neither gets here. A replay that never started (`describe` refused it,
-    // as a targeted proof's bad relaxation) would only be refused again.
+    // #778: one infrastructure error must not cost the proof, so a replay that errored before opening a
+    // browser, as on an admission timeout, runs once more. One that opened a browser may have changed the
+    // app, and a retry failing on that leftover state would read as proof, so it stays an error. A
+    // `failed` replay is a result and a stall ends the proof: neither gets here. A replay that never
+    // started (`describe` refused it, as a targeted proof's bad relaxation) would only be refused again.
     const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, kind: "control" | "other" = "other"): Promise<Replayed> => {
       const before = replays;
+      const sessionsBefore = sessionsOpened;
       const first = await attemptReplay(m, describe, false, kind);
-      if (first.outcome !== "error" || replays === before) return first;
+      if (first.outcome !== "error" || replays === before || sessionsOpened !== sessionsBefore) return first;
       retriesOf.set(m.id, [...(retriesOf.get(m.id) ?? []), { reason: first.reason ?? "unknown error" }]);
       return attemptReplay(m, describe, true, kind);
     };
