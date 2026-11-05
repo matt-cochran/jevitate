@@ -124,7 +124,8 @@ export function proofInactivityMs(journey: Journey, opts: Pick<VerifyJourneyOpti
   let replay = DEFAULT_OPEN_TIMEOUT_MS + pageUnresponsiveMsFromEnv() + DEFAULT_CLOSE_TIMEOUT_MS + FIXTURE_ALLOWANCE_MS;
   for (const { recorded } of flatJourneySteps(journey)) {
     const wait = "waitFor" in recorded.step ? recorded.step.waitFor : undefined;
-    replay += ACTION_BOUND_MS + SITE_GATE_WAIT_MS + RELOAD_BOUND_MS + (recorded.responseTimeoutMs ?? responseDefault);
+    // A relaxed site's kept response wait (`RelaxedSiteWait`) runs per request check, one after another.
+    replay += ACTION_BOUND_MS + SITE_GATE_WAIT_MS + RELOAD_BOUND_MS + (recorded.responseTimeoutMs ?? responseDefault) * Math.max(1, recorded.expectRequests?.length ?? 0);
     // A wait's last poll can start just before `maxMs` and still reload.
     if (wait !== undefined) replay += wait.maxMs + ACTION_BOUND_MS;
   }
@@ -266,7 +267,7 @@ function relaxedWaitObserver(
   waits: () => readonly RelaxedSiteWait[],
   params: Readonly<Record<string, string>>,
   responseTimeoutMs: number,
-  record: (ended: ReplayDiagnostics["relaxedWaits"][number]) => void,
+  record: (ended: ReplayDiagnostics["relaxedWaits"][number], wait: RelaxedSiteWait) => void,
 ): StepObserver {
   const captures = new Map<number, RequestCapture>();
   const stopCapture = (actor: Actor, index: number): void => {
@@ -314,7 +315,7 @@ function relaxedWaitObserver(
           } catch {
             // A closed or broken page ends the wait. The replay's own next action reports it.
           }
-          record({ site: w.site, ending, waitedMs: Math.round(clock.monotonicMs() - startedAt) });
+          record({ site: w.site, ending, waitedMs: Math.round(clock.monotonicMs() - startedAt) }, w);
         }
       } finally {
         stopCapture(actor, index);
@@ -327,16 +328,19 @@ const READ_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 /** How long a diagnostic read of the page may take: a frozen renderer must not hold up a replay's close. */
 const STORAGE_READ_BOUND_MS = 1_000;
 
-/** Key and cookie counts of the page, never a value. Null when the page cannot say in time. */
+/** A page can redefine what these read, so anything but a real count is no reading: page text never reaches a report. */
+const isCount = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+
+/** Key and cookie counts of the page, never a value. Null when the page cannot say in time, or says anything but a count. */
 async function readStorageCounts(page: BrowserSession["page"]): Promise<StorageCounts | null> {
   let timer: ReturnType<typeof clock.setTimeout> | undefined;
-  const read = async (): Promise<StorageCounts> => {
+  const read = async (): Promise<StorageCounts | null> => {
     const [sessionStorageKeys, localStorageKeys, cookies] = await Promise.all([
-      page.evaluate("sessionStorage.length") as Promise<number>,
-      page.evaluate("localStorage.length") as Promise<number>,
+      page.evaluate("sessionStorage.length") as Promise<unknown>,
+      page.evaluate("localStorage.length") as Promise<unknown>,
       page.context().cookies(),
     ]);
-    return { sessionStorageKeys, localStorageKeys, cookies: cookies.length };
+    return isCount(sessionStorageKeys) && isCount(localStorageKeys) ? { sessionStorageKeys, localStorageKeys, cookies: cookies.length } : null;
   };
   try {
     return await Promise.race([
@@ -376,6 +380,11 @@ class ReplayProbe {
 
   get openOptions(): string | undefined {
     return this.#openOptions;
+  }
+
+  /** Writes sent and neither answered nor failed yet. */
+  get writesInFlight(): number {
+    return Math.max(0, this.#writesSent - this.#writesAnswered - this.#writesAborted);
   }
 
   recordWait(ended: ReplayDiagnostics["relaxedWaits"][number]): void {
@@ -476,6 +485,8 @@ export interface JourneyVerifyMutation {
     readonly failedSites: readonly MutationFailedSite[];
     readonly blockedWrites?: readonly string[];
     readonly reason?: string;
+    /** Sites this replay moved on from early (a kept wait out of its cap, a skipped step with a write unanswered), so its failure counts for nothing. */
+    readonly waitsCut?: readonly string[];
   };
   /** #609: targeted proofs run for assertion sites this mutation left as a cascade. */
   readonly targeted?: readonly TargetedProof[];
@@ -620,11 +631,13 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
   let replays = 0;
   // Every replay of the proof goes through here: it is reported, and it is bounded.
   let sessionsOpened = 0;
+  // A replay's restore may fail whether it passes, fails or throws, so the run reports it as it happens.
+  let restoreFailed = false;
   const boundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: JourneyMutation, retry = false, probe?: ReplayProbe): ReturnType<Run> => {
     replays += 1;
     const where: JourneyVerifyProgress = { replay: replays, ...(m === undefined ? {} : { mutation: m.id }), ...(retry ? { retry: true as const } : {}) };
     onProgress?.(retry && m !== undefined ? { ...where, mutation: `${m.id} (retry after error)` } : where);
-    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, mutation), probe === undefined ? portFactory : probe.wrap(portFactory), where, inactivityMs, () => void (sessionsOpened += 1));
+    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, { ...mutation, onFixtureRestoreFailed: () => void (restoreFailed = true) }), probe === undefined ? portFactory : probe.wrap(portFactory), where, inactivityMs, () => void (sessionsOpened += 1));
   };
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
@@ -653,15 +666,28 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
         const how = describe(journey);
         // #785: a control is watched, so a failure can say what it did against the base replay.
         const probe = kind === "control" ? new ReplayProbe(stepsTotal) : undefined;
+        // A skipped step keeps no wait of its own, so a write an earlier step left in flight would be cut off by what follows.
+        const skipWatch = how.skipIndex === undefined ? undefined : new ReplayProbe(stepsTotal);
         // Described on the Journey the run moved onto the environment, as the mutated copy is.
         let waits: readonly RelaxedSiteWait[] = how.relaxedSiteWaits ?? [];
+        const waitsCut: string[] = [];
         const params = how.params ?? opts.params;
         const observer = composeObservers(
-          waits.length === 0 ? undefined : relaxedWaitObserver(() => waits, params, opts.stepResponseTimeoutMs ?? DEFAULT_STEP_RESPONSE_TIMEOUT_MS, (ended) => probe?.recordWait(ended)),
+          waits.length === 0 ? undefined : relaxedWaitObserver(() => waits, params, opts.stepResponseTimeoutMs ?? DEFAULT_STEP_RESPONSE_TIMEOUT_MS, (ended, wait) => {
+            probe?.recordWait(ended);
+            if (wait.kind === "page" && wait.capped === true && ended.ending === "timeout") waitsCut.push(wait.site);
+          }),
           probe?.observer(),
+          skipWatch === undefined
+            ? undefined
+            : {
+                afterStep: async ({ index }) => {
+                  if (index === how.skipIndex && skipWatch.writesInFlight > 0) waitsCut.push(`step:${index + 1}`);
+                },
+              },
         );
         const r = await boundedRun(
-          { ...runOpts, ...(how.params === undefined ? {} : { params: { ...how.params } }), ...(waits.length === 0 && probe === undefined ? {} : { observer }) },
+          { ...runOpts, ...(how.params === undefined ? {} : { params: { ...how.params } }), ...(waits.length === 0 && probe === undefined && skipWatch === undefined ? {} : { observer }) },
           {
             structuredFailures: true,
             ...(how.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: how.relaxedStepRequests }),
@@ -680,7 +706,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
           },
           m,
           retry,
-          probe,
+          probe ?? skipWatch,
         );
         const blocked = r.blockedWrites ?? [];
         const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
@@ -705,6 +731,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
           failedSites,
           ...blockedFields,
           ...(r.outcome === "quarantined" ? { reason: r.reason } : {}),
+          ...(waitsCut.length === 0 ? {} : { waitsCut }),
           ...(control === undefined
             ? {}
             : {
@@ -804,7 +831,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
   }));
   const order = new Map(journeyAssertions(journey).map((s, i) => [assertionSiteKey(s), i]));
   const siteOrder = (key: string): number => order.get(key) ?? Number.MAX_SAFE_INTEGER;
-  const { verdict, reason } = mutationProofVerdict({ basePassed: base.outcome === "ok", mutations, assertions: judged });
+  const { verdict, reason } = mutationProofVerdict({ basePassed: base.outcome === "ok", mutations, assertions: judged, restoreFailed });
   const count = (v: AssertionVerdict): number => assertions.filter((a) => a.verdict === v).length;
   const report: JourneyVerifyReport = {
     journeyId: journey.metadata.id,

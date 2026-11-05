@@ -688,6 +688,7 @@ export class MissionFixtures {
   #active = false;
   #cycles = 0;
   readonly #log: FixtureStepLog[] = [];
+  #restoreFailed = false;
 
   constructor(opts: FixtureRunOptions) {
     if (opts.hooks !== undefined && (opts.hooks.before !== undefined || opts.hooks.after !== undefined) && opts.allowShellHooks !== true) {
@@ -813,20 +814,28 @@ export class MissionFixtures {
     }
   }
 
-  /** Restores the state the last `setup()` created. Never throws: every step is logged. */
+  /** A restore step or the `--after` hook has failed. Sticky: what it left behind stays. */
+  restoreFailed(): boolean {
+    return this.#restoreFailed;
+  }
+
+  /** Restores the state the last `setup()` created. Never throws: every step is logged, and a failure shows in `restoreFailed()`. */
   async restore(): Promise<void> {
     // #560: each restore pass starts with no restore bindings, so `reset()` never reuses a stale id.
     this.#restoreValues = {};
     this.#restoreSecretNames = new Set();
     if (!this.#active) return;
     this.#active = false;
-    for (const [i, step] of (this.#opts.spec?.restore ?? []).entries()) await this.#runHttp(step, "restore", i);
+    for (const [i, step] of (this.#opts.spec?.restore ?? []).entries()) {
+      if ((await this.#runHttp(step, "restore", i)) !== null) this.#restoreFailed = true;
+    }
     const after = this.#opts.hooks?.after;
     if (after !== undefined) {
       const started = clock.now();
       const r = await runHook(after, this.#opts.hooks?.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS, JSON.stringify({ vars: this.publicOutputs() }), {
         JEVITATE_FIXTURE_PHASE: "restore",
       });
+      if (r.timedOut || r.exitCode !== 0) this.#restoreFailed = true;
       this.#log.push({
         phase: "restore",
         kind: "shell",

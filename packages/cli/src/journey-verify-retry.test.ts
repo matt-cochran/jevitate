@@ -159,6 +159,7 @@ describe("an errored mutated replay", () => {
       ({
         setup: async () => void log.push("setup"),
         restore: async () => void log.push("restore"),
+        restoreFailed: () => false,
         bindings: () => ({}),
         record: () => ({}),
       }) as unknown as MissionFixtures;
@@ -173,6 +174,20 @@ describe("an errored mutated replay", () => {
     }) as unknown as Run;
     await prove(run, { fixtures });
     expect(log.slice(0, 4)).toEqual(["setup", "restore", "setup", "restore"]);
+  });
+});
+
+describe("a proof's inactivity limit", () => {
+  const withChecks = (count: number): Journey => {
+    const copy = structuredClone(journey);
+    const save = copy.recording.pages[0]!.steps[2]!;
+    save.responseTimeoutMs = 600_000;
+    save.expectRequests = Array.from({ length: count }, () => ({ kind: "responseStatus", method: "POST", pathGlob: "/api/save", status: { class: 2 } }) as const);
+    return copy;
+  };
+
+  it("allows a step one response wait per request check", () => {
+    expect(proofInactivityMs(withChecks(3)) - proofInactivityMs(withChecks(1))).toBe(1_200_000);
   });
 });
 

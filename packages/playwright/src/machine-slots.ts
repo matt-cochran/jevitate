@@ -82,6 +82,8 @@ export interface SlotState {
   readonly heartbeatAt: number;
   /** Why the holder counts as stale; null while it is live. */
   readonly stale: string | null;
+  /** Something other than a regular file sits at this slot's name. It holds the index until a person removes it. */
+  readonly notRegularFile?: true;
 }
 
 export interface MachineSlotLease {
@@ -273,7 +275,8 @@ export class MachineBrowserSlots {
       return undefined;
     }
     // Not a file any holder wrote, so not a holder's to reclaim: it keeps this index.
-    return { index, path, holder, heartbeatAt: seen.mtimeMs, stale: seen.isFile() ? this.#staleReason(holder, seen.mtimeMs) : null };
+    if (!seen.isFile()) return { index, path, holder, heartbeatAt: seen.mtimeMs, stale: null, notRegularFile: true };
+    return { index, path, holder, heartbeatAt: seen.mtimeMs, stale: this.#staleReason(holder, seen.mtimeMs) };
   }
 
   /** Removes every stale slot; returns what was removed. */
@@ -478,12 +481,16 @@ export class MachineBrowserSlots {
         if (lease !== undefined) return lease;
         const remaining = deadline - this.#now();
         if (remaining <= 0) {
-          const holders = this.list()
-            .filter((s) => s.index < cap)
-            .map((s) => (s.holder === null ? `slot ${s.index}: unreadable` : `slot ${s.index}: pid ${s.holder.pid} on ${s.holder.host}`));
+          const states = this.list().filter((s) => s.index < cap);
+          const holders = states.map((s) => (s.notRegularFile === true ? `slot ${s.index}: ${s.path} is not a regular file` : s.holder === null ? `slot ${s.index}: unreadable` : `slot ${s.index}: pid ${s.holder.pid} on ${s.holder.host}`));
+          const blocked = states.filter((s) => s.notRegularFile === true);
+          const others = blocked.length === states.length ? "" : "Other jevitate runs on this machine hold the rest (see `jevitate doctor`); ";
+          const remove = blocked.length === 0 ? "" : `No run holds ${blocked.map((s) => s.path).join(", ")}, and jevitate never removes one: remove it by hand. `;
           throw new AdmissionTimeoutError(
             `admission timed out after ${Math.round((this.#now() - started) / 1000)}s: all ${cap} machine-wide browser slot(s) stayed busy (${holders.join("; ")}). ` +
-              `Other jevitate runs on this machine hold them (see \`jevitate doctor\`); wait, raise --max-browsers / JEVITATE_MAX_BROWSERS, or raise JEVITATE_ADMISSION_TIMEOUT_MS.`,
+              (blocked.length === 0
+                ? `Other jevitate runs on this machine hold them (see \`jevitate doctor\`); wait, raise --max-browsers / JEVITATE_MAX_BROWSERS, or raise JEVITATE_ADMISSION_TIMEOUT_MS.`
+                : `${remove}${others}you can also raise --max-browsers / JEVITATE_MAX_BROWSERS.`),
           );
         }
         announced = this.#announceWaiting(cap, announced);

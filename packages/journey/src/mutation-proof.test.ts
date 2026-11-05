@@ -304,6 +304,15 @@ describe("#402 mutationProofVerdict", () => {
       mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:1", verdict: "unpaired" }, { site: "step:2", verdict: "sensitive", provedBy: "skip:2" }] }).verdict,
     ).toBe("proven");
   });
+  it("a failed fixture restore keeps every-sensitive assertions from reading proven", () => {
+    expect(mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:2", verdict: "sensitive" }], restoreFailed: true }).verdict).toBe("inconclusive");
+  });
+  it("a failed fixture restore outranks an insensitive assertion, which it may have caused", () => {
+    expect(mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:2", verdict: "insensitive" }], restoreFailed: true }).verdict).toBe("inconclusive");
+  });
+  it("a failed fixture restore is named as the reason", () => {
+    expect(mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:2", verdict: "sensitive" }], restoreFailed: true }).reason).toMatch(/fixture restore failed/);
+  });
   it("a mutated replay that errored keeps every-sensitive assertions from reading proven", () => {
     expect(
       mutationProofVerdict({ basePassed: true, mutations: [ok, { outcome: "error" as const, failedSites: [] }], assertions: [{ site: "step:2", verdict: "sensitive" }] }).verdict,

@@ -437,6 +437,39 @@ describe.skipIf(process.platform === "win32")("what is not a small regular file 
     expect(lease?.index).toBe(1);
   });
 
+  it("a slot's non-regular file is reported as one", () => {
+    linkToRecord("slot-0.json");
+    expect(slots().list()[0]?.notRegularFile).toBe(true);
+  });
+
+  it("clearStale removes no old non-regular file", () => {
+    mkdirSync(slotFile(0));
+    expect(new MachineBrowserSlots({ dir, host: "h", pid: 1, isAlive: () => true, now: () => Date.now() + 3_600_000 }).clearStale()).toEqual([]);
+  });
+
+  it("a regular slot file is not reported as a non-regular one", () => {
+    const lease = slots().tryAcquire(1);
+    const reported = slots().list()[0]?.notRegularFile;
+    lease?.release();
+    expect(reported).toBeUndefined();
+  });
+
+  it("an admission timeout names the non-regular slot file's path", async () => {
+    mkdirSync(slotFile(0));
+    await expect(slots().acquire(1, Date.now())).rejects.toThrow(`${slotFile(0)} is not a regular file`);
+  });
+
+  it("an admission timeout on non-regular slot files alone does not blame other runs", async () => {
+    mkdirSync(slotFile(0));
+    await expect(slots().acquire(1, Date.now())).rejects.not.toThrow(/Other jevitate runs/);
+  });
+
+  it("an admission timeout on live holders still blames other runs", async () => {
+    const lease = slots().tryAcquire(1);
+    const timedOut = slots().acquire(1, Date.now());
+    await expect(timedOut.finally(() => lease?.release())).rejects.toThrow(/Other jevitate runs on this machine hold them/);
+  });
+
   it("a regular holder's slot is still released by its own process", () => {
     const lease = slots().tryAcquire(1);
     lease?.release();

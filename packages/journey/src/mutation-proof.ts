@@ -147,6 +147,8 @@ interface TargetedReplayRun {
   readonly outcome: MutationRunResult["outcome"];
   readonly failedSites: readonly MutationFailedSite[];
   readonly diagnostics?: TargetedControlDiagnostics;
+  /** Sites the replay moved on from early (`RelaxedSiteWait`), so its failure is no evidence. */
+  readonly waitsCut?: readonly string[];
 }
 
 /** A mutated replay: it passed, failed (where), was not applied (nothing to mutate), or errored. */
@@ -158,7 +160,7 @@ export interface MutationRunResult {
    * still skipped/blocked/emptied, but its `expect`/`waitFor` left out), so a replay that failed
    * first at that postcondition can still say whether each LATER site is broken or vacuous.
    */
-  readonly relaxed?: { readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] };
+  readonly relaxed?: { readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[]; readonly waitsCut?: readonly string[] };
   /** #609: targeted proofs run for assertion sites this mutation left as a cascade. */
   readonly targeted?: readonly TargetedProof[];
 }
@@ -605,24 +607,40 @@ export interface MutationReplay {
  *
  * Bounded and never fatal: a `page` wait polls the site's original assertion (its own `waitFor`, else
  * the interpreter's postcondition bound), a `response` wait holds until the step's matching requests
- * are answered (its `responseTimeoutMs`, else the run's). A mutated replay caps a `waitFor` as
- * `mutationWait` does, because what it waits on may never come. Neither can turn a failure into a pass:
- * only the unrelaxed assertions judge the replay.
+ * are answered (its `responseTimeoutMs`, else the run's). Neither can turn a failure into a pass: only
+ * the unrelaxed assertions judge the replay.
+ *
+ * A targeted replay and its control keep the SAME waits, so the mutation is all that differs: a replay
+ * that gave up earlier than its control would fail on timing and read as sensitivity. Every wait keeps
+ * its full `maxMs`, as a first mutated replay does, with one exception: a blocked step's own claim is
+ * `capped` as `mutationWait` does, in both replays, since the write it waits on never leaves. A value
+ * mutation still sends its write, so its claim is not capped. A skipped step keeps no wait in its
+ * replay, and its control waits as the base replay did: the step's whole presence is the mutation.
+ * A capped wait that runs out, or a skipped step with an earlier write still unanswered, moves the
+ * replay on early, so a failure after it is refused (`waitsCut`). A hang is not that: the wait's own
+ * progress signal ended it, not the cap.
  */
 type RelaxedSiteWait =
-  | { readonly kind: "page"; readonly site: string; readonly step: number; readonly assertion: Assertion; readonly wait?: OutcomeWait }
+  | { readonly kind: "page"; readonly site: string; readonly step: number; readonly assertion: Assertion; readonly wait?: OutcomeWait; readonly capped?: true }
   | { readonly kind: "response"; readonly site: string; readonly step: number; readonly check: NetworkCheck; readonly responseTimeoutMs?: number };
 
 /** The page wait of `step`'s own claim, read BEFORE it is weakened; null for a step with no claim. */
-function pageSiteWait(step: Step, n: number, mutated: boolean): RelaxedSiteWait | null {
+function pageSiteWait(step: Step, n: number, cap: boolean): RelaxedSiteWait | null {
   const assertion = step.kind === "assert" ? step.check : "expect" in step ? step.expect : null;
   if (assertion === null) return null;
   const wait = "waitFor" in step ? step.waitFor : undefined;
-  return { kind: "page", site: `step:${n}`, step: n, assertion, ...(wait === undefined ? {} : { wait: mutated ? mutationWait(wait) : wait }) };
+  if (wait === undefined) return { kind: "page", site: `step:${n}`, step: n, assertion };
+  const capped = cap ? mutationWait(wait) : wait;
+  return { kind: "page", site: `step:${n}`, step: n, assertion, wait: capped, ...(capped.maxMs < wait.maxMs ? { capped: true as const } : {}) };
+}
+
+/** The one site whose kept wait is capped under `m`: a blocked step's own claim (`RelaxedSiteWait`). */
+function cappedSite(m: JourneyMutation): string | undefined {
+  return m.kind === "block-write" ? `step:${m.step}` : undefined;
 }
 
 /** #785: the waits of `keys`, read from `from` before its sites are weakened. A step the replay leaves out waits for nothing. */
-function relaxedSiteWaits(from: Journey, keys: readonly string[], mutated: boolean, skipIndex?: number): RelaxedSiteWait[] {
+function relaxedSiteWaits(from: Journey, keys: readonly string[], capped: string | undefined, skipIndex?: number): RelaxedSiteWait[] {
   const steps = flat(from);
   return keys.flatMap((key): RelaxedSiteWait[] => {
     const match = /^(?:step|step-request):([1-9][0-9]*)(?::([0-9]+))?$/.exec(key);
@@ -631,7 +649,7 @@ function relaxedSiteWaits(from: Journey, keys: readonly string[], mutated: boole
     const recorded = steps[n - 1];
     if (recorded === undefined || n - 1 === skipIndex) return [];
     if (match[2] === undefined) {
-      const page = pageSiteWait(recorded.step, n, mutated);
+      const page = pageSiteWait(recorded.step, n, key === capped);
       return page === null ? [] : [page];
     }
     const check = recorded.expectRequests?.[Number(match[2])];
@@ -690,7 +708,7 @@ function relaxedExpect(step: Step): Assertion {
  * #554: the same mutation with the mutated step's OWN postcondition relaxed. `skip` skips the step
  * in place without turning its `expect` into an assert step; `block-write` and `stale-value` apply
  * the same action mutation but replace the step's `expect` with a schema-valid weak one (#567) and
- * drop `waitFor` (its `expectRequests` stay). What the claim waited for is kept as a non-fatal, capped
+ * drop `waitFor` (its `expectRequests` stay). What the claim waited for is kept as a non-fatal
  * `RelaxedSiteWait` (#785), so a later site does not fail on timing alone.
  * The input Journey is never modified and no step is removed, so it replays with the same indices.
  */
@@ -704,7 +722,7 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
     const copy = how.journey === journey ? structuredClone(journey) : how.journey;
     const target = flat(copy)[index];
     if (target !== undefined && "expect" in target.step) {
-      const waits = relaxedSiteWaits(copy, [`step:${m.step}`], true);
+      const waits = relaxedSiteWaits(copy, [`step:${m.step}`], cappedSite(m));
       const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
       delete step.waitFor;
       target.step = step as Step;
@@ -716,7 +734,7 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const copy = structuredClone(journey);
     const target = flat(copy)[index]!;
-    const waits = relaxedSiteWaits(copy, [`step:${m.step}`], true);
+    const waits = relaxedSiteWaits(copy, [`step:${m.step}`], cappedSite(m));
     const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
     delete step.waitFor;
     target.step = step as Step;
@@ -725,7 +743,7 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
   const copy = structuredClone(journey);
   const target = flat(copy)[index]!;
   if (target.step.kind === "fill") {
-    const waits = relaxedSiteWaits(copy, [`step:${m.step}`], true);
+    const waits = relaxedSiteWaits(copy, [`step:${m.step}`], cappedSite(m));
     const step: Record<string, unknown> = {
       ...target.step,
       value: { redacted: false, value: staleValue(journey, target.step, opts.params ?? {}) },
@@ -762,7 +780,7 @@ function failedSiteKey(f: MutationFailedSite): string {
 /**
  * #609 — `relaxedMutationReplay` plus a weakened postcondition at every earlier step in
  * `relaxedSiteKeys`: a step's `expect` becomes `relaxedExpect`, an `assert` step's
- * `check` becomes the no-claim `urlIncludes ""`, and each moves its `waitFor` to a non-fatal, capped
+ * `check` becomes the no-claim `urlIncludes ""`, and each moves its `waitFor` to a non-fatal
  * `RelaxedSiteWait` (#785). The target assertion is never relaxed, the input Journey is never modified,
  * and no step is removed (indices hold).
  * A declared `step-request:<n>:<i>` stays in the Journey and is masked by the private replay option.
@@ -781,7 +799,7 @@ export function targetedMutationReplay(
   const relaxed = relaxStepSites(journey, base.journey, relaxedSiteKeys);
   // `base.journey` still holds these sites' own claims; the mutated step's was read when it was weakened.
   const own = base.relaxedSiteWaits ?? [];
-  const waits = [...own, ...relaxedSiteWaits(base.journey, relaxedSiteKeys, true, base.skipIndex).filter((w) => !own.some((o) => o.site === w.site))];
+  const waits = [...own, ...relaxedSiteWaits(base.journey, relaxedSiteKeys, cappedSite(m), base.skipIndex).filter((w) => !own.some((o) => o.site === w.site))];
   return { ...base, journey: relaxed, ...(requests.length === 0 ? {} : { relaxedStepRequests: requests }), ...(waits.length === 0 ? {} : { relaxedSiteWaits: waits }) };
 }
 
@@ -805,15 +823,21 @@ function controlSiteKeys(journey: Journey, m: JourneyMutation, relaxedSiteKeys: 
   return [...new Set([...ownKey, ...relaxedSiteKeys])];
 }
 
-/** #785: the waiting `targetedControlReplay`'s weakened sites did: uncapped, as the base replay waits. */
+/** #785: the waiting `targetedControlReplay`'s weakened sites did, the same as the targeted replay's. */
 function targetedControlWaits(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): RelaxedSiteWait[] {
-  return relaxedSiteWaits(journey, controlSiteKeys(journey, m, relaxedSiteKeys), false);
+  return relaxedSiteWaits(journey, controlSiteKeys(journey, m, relaxedSiteKeys), cappedSite(m));
 }
 
 /** The replay a proof's control runs: `targetedControlReplay` and the waiting it keeps. */
 function controlWithWaits(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): MutationReplay {
   const waits = targetedControlWaits(journey, m, relaxedSiteKeys);
   return { ...targetedControlReplay(journey, m, relaxedSiteKeys), ...(waits.length === 0 ? {} : { relaxedSiteWaits: waits }) };
+}
+
+/** Why a replay is no evidence when it moved on early (`waitsCut`), or undefined when it did not. Site keys only. */
+function waitCutRefusal(run: Pick<TargetedReplayRun, "waitsCut">, replay: "mutated" | "control"): string | undefined {
+  if (run.waitsCut === undefined || run.waitsCut.length === 0) return undefined;
+  return `the ${replay} replay moved on early at ${run.waitsCut.join(", ")} (a kept wait ran out of its cap, or a skipped step left a write unanswered), so the comparison is not evidence`;
 }
 
 /** Clone page defenses and validate request masks against original sites; request arrays are retained. */
@@ -901,8 +925,8 @@ export async function runTargetedProof(
     initial.relaxed !== undefined &&
     initial.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition) &&
     !(target.where === "step" && target.step === m.step);
-  let run = relaxedFirst
-    ? { outcome: initial.relaxed!.outcome, failedSites: initial.relaxed!.failedSites }
+  let run: TargetedReplayRun = relaxedFirst
+    ? { outcome: initial.relaxed!.outcome, failedSites: initial.relaxed!.failedSites, ...(initial.relaxed!.waitsCut === undefined ? {} : { waitsCut: initial.relaxed!.waitsCut }) }
     : { outcome: initial.outcome, failedSites: initial.failedSites };
   for (;;) {
     const next = nextTargetedRelaxation(journey, plan, m, site, run, relaxedSites);
@@ -913,7 +937,10 @@ export async function runTargetedProof(
     const relaxedNow = [...relaxedSites];
     run = await replay((j) => targetedMutationReplay(j, m, site, relaxedNow, opts), "targeted");
   }
-  if (relaxedSites.length > 0 && classifyMutationPlain(target, m, run) === "sensitive") {
+  const sensitive = classifyMutationPlain(target, m, run) === "sensitive";
+  const cut = sensitive ? waitCutRefusal(run, "mutated") : undefined;
+  if (cut !== undefined) return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites, refused: cut };
+  if (relaxedSites.length > 0 && sensitive) {
     // A failure counts only when the same relaxations WITHOUT the mutation still pass.
     const control = await replay((j) => controlWithWaits(j, m, relaxedSites), "control");
     if (control.outcome !== "passed") {
@@ -927,6 +954,8 @@ export async function runTargetedProof(
         ...(control.diagnostics === undefined ? {} : { controlDiagnostics: control.diagnostics }),
       };
     }
+    const controlCut = waitCutRefusal(control, "control");
+    if (controlCut !== undefined) return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites, control: control.outcome, refused: controlCut };
     return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites, control: control.outcome };
   }
   return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites };
@@ -965,6 +994,8 @@ export async function runDeclaredTargetedProof(
     return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true, refused: `${key} blocked the declared proof (not in relax)` };
   }
   if (classifyMutationPlain(target, m, run) === "sensitive") {
+    const cut = waitCutRefusal(run, "mutated");
+    if (cut !== undefined) return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true, refused: cut };
     const control = await replay((j) => controlWithWaits(j, m, relaxedNow), "control");
     if (control.outcome !== "passed") {
       return {
@@ -978,6 +1009,8 @@ export async function runDeclaredTargetedProof(
         ...(control.diagnostics === undefined ? {} : { controlDiagnostics: control.diagnostics }),
       };
     }
+    const controlCut = waitCutRefusal(control, "control");
+    if (controlCut !== undefined) return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true, control: control.outcome, refused: controlCut };
     return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true, control: control.outcome };
   }
   return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true };
@@ -1056,7 +1089,9 @@ function classifyMutationPlain(site: JourneyAssertionSite, m: JourneyMutation, r
     result.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition) &&
     !(site.where === "step" && site.step === m.step)
   ) {
-    return classifyMutationPlain(site, m, { outcome: result.relaxed.outcome, failedSites: result.relaxed.failedSites });
+    const verdict = classifyMutationPlain(site, m, { outcome: result.relaxed.outcome, failedSites: result.relaxed.failedSites });
+    // The replay moved on early (`waitsCut`): its failure proves nothing.
+    return verdict === "sensitive" && (result.relaxed.waitsCut?.length ?? 0) > 0 ? "cascade" : verdict;
   }
   if (result.outcome === "passed") return "insensitive";
   if (result.outcome === "not-applied") return "not-applied";
@@ -1150,7 +1185,8 @@ export type MutationProofVerdict = "proven" | "insensitive" | "inconclusive";
 
 /**
  * #402: proven when every PAIRED assertion is sensitive; insensitive when any paired assertion still
- * passed under its mutation; inconclusive when the unmutated replay failed, any mutated, relaxed or
+ * passed under its mutation; inconclusive when a fixture restore failed (what it left behind may have
+ * decided any replay, either way, so this outranks everything), the unmutated replay failed, any mutated, relaxed or
  * targeted replay errored
  * (a replay that could not run proves nothing, so a proof with a gap is not proven even when other
  * mutations covered the same sites), nothing was paired, or what is left is only cascades /
@@ -1161,7 +1197,10 @@ export function mutationProofVerdict(input: {
   readonly basePassed: boolean;
   readonly mutations: readonly (Pick<MutationRunResult, "outcome"> & Partial<Pick<MutationRunResult, "relaxed" | "targeted">>)[];
   readonly assertions: readonly AssertionProof[];
+  /** A fixture restore failed at some point in the proof. */
+  readonly restoreFailed?: boolean;
 }): { readonly verdict: MutationProofVerdict; readonly reason?: string } {
+  if (input.restoreFailed === true) return { verdict: "inconclusive", reason: "a fixture restore failed during the proof, so state it left behind may have decided a replay; fix the restore and run the proof again" };
   if (!input.basePassed) return { verdict: "inconclusive", reason: "the unmutated replay failed — no mutation was run" };
   if (input.mutations.length > 0 && input.mutations.every((m) => m.outcome === "error")) {
     return { verdict: "inconclusive", reason: "every mutated replay errored" };

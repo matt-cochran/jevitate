@@ -223,6 +223,8 @@ export interface MutationReplayOptions {
   blockWritesAtStep?: number;
   /** #402: also return the outcome checks' structured failures (`outcomeFailures`). */
   structuredFailures?: boolean;
+  /** A proof must not trust a replay after a failed restore. Called once the run's restore has ended, however the run ended. */
+  onFixtureRestoreFailed?: () => void;
 }
 
 /** #402: what a mutation-proof replay returns beyond `journey run`'s result. */
@@ -746,6 +748,7 @@ export async function runJourneyProgrammatically(
     throw redactErrorSecrets(err, secretParamValues(journey, { ...inputParams, ...params }));
   } finally {
     await fx?.restore();
+    if (mutation.onFixtureRestoreFailed !== undefined && fx?.restoreFailed() === true) mutation.onFixtureRestoreFailed();
   }
 }
 
