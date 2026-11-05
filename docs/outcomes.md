@@ -67,7 +67,10 @@ with a failed fixture restore. A mutated replay that stopped early still stays o
 
 ### What a proof assumes
 
-A `proven` verdict holds if all of these are true. Each one that fails can produce a false reading.
+A `proven` verdict says what was shown, and no more: this Journey's checks noticed when a recorded step was changed,
+under the conditions the proof ran in. It does not say the Journey's checks are right in general, or that a real job
+can be done. A job being doable is shown by a successful run with a done check, not by a mutation proof. The verdict
+holds only if all of these are true. Each one that fails can produce a false reading.
 
 - **No one-off slowdown that nothing cross-checks.** A job can run slower in one mutated replay than in any other,
   so that a claim fails with room to spare. Nothing catches that unless the failure was thin or held, or a sibling
