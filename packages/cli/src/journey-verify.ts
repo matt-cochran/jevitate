@@ -816,6 +816,16 @@ export interface JourneyVerifyPlanReport {
 }
 
 /**
+ * What a proof that reaches a verdict runs when nothing needs more: the base, the independence replay,
+ * one per mutation, and the closing replay, which only a verdict that can still change gets. Relaxed and
+ * targeted replays, controls and re-runs add to it. A proof that fails or is tainted partway stops sooner.
+ */
+function minimumReplaysOf(plan: { readonly mutations: readonly unknown[]; readonly pairs: readonly unknown[] }): number {
+  if (plan.mutations.length === 0) return 1;
+  return plan.mutations.length + (plan.pairs.length === 0 ? 2 : 3);
+}
+
+/**
  * Static preview of `journey verify --mutate`: no browser, fixtures, hooks, target, session or
  * credential is opened. Values of params are used only to derive the plan and are never returned.
  */
@@ -846,7 +856,7 @@ export async function planJourneyVerification(
       pairs: pairs.length,
       assertions: assertions.length,
       unpaired: assertions.filter((assertion) => assertion.mutations.length === 0).length,
-      minimumReplays: plan.mutations.length + 1,
+      minimumReplays: minimumReplaysOf(plan),
     },
   };
 }

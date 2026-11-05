@@ -218,7 +218,8 @@ prints the same.
 The lint reads a Journey; `journey verify --plan` previews the exact negative-proof graph without a
 browser, target, session, fixture or hook, and `journey verify --mutate` runs it. Inspect the plan
 before a long proof: it lists every mutation, its paired assertions, unpaired assertions and the
-minimum replay count (the base plus one per mutation; relaxed or targeted proofs may add replays).
+minimum replay count (the base, an independence replay, one per mutation and a closing replay; relaxed and
+targeted replays, controls and re-runs add to it, and a proof that fails or is tainted partway stops sooner).
 Parameter values help derive the plan but are never returned. An assertion is evidence only if it
 **fails** when the outcome is absent, so the proof replays the Journey once as recorded (it must
 pass), then once per mutation, and checks that each mutation breaks the assertion paired with it:

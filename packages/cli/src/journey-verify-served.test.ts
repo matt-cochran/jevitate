@@ -193,7 +193,7 @@ describe("journey verify --mutate (#402, served)", () => {
       expect.objectContaining({ site: "step:3", mutation: "block-write:3" }),
     ]);
     expect(report.assertions.find((assertion) => assertion.site === "step:1")?.mutations).toEqual([]);
-    expect(report.summary).toEqual({ mutations: 2, pairs: 2, assertions: 3, unpaired: 2, minimumReplays: 3 });
+    expect(report.summary).toEqual({ mutations: 2, pairs: 2, assertions: 3, unpaired: 2, minimumReplays: 5 });
   });
 
   it("a weak Journey: the save step's own-target-visible expect still passes when the save is skipped or blocked — insensitive, exit 1", async () => {

@@ -9,7 +9,7 @@ import { ProfileManager } from "@jevitate/daemon";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { FsJourneyStore, ParamValidationError, assertionSiteKey, journeyAssertions, judgeAssertions, mutationProofVerdict, planJourneyMutations, type Journey, type JourneyAssertionSite, type MutationPlan, type ReplayPace } from "@jevitate/journey";
 import { registerJourneyVerify, type JourneyVerifySeams } from "./journey-cli/verify.js";
-import { JourneyVerifyStalledError, verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
+import { JourneyVerifyStalledError, planJourneyVerification, verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
 import {
   CHECKPOINT_MAX_AGE_MS,
   JourneyVerifyResumeRefusedError,
@@ -664,6 +664,14 @@ describe("a resume and an errored pair", () => {
     expect(report.verdict).toBe("inconclusive");
     expect(report.mutations.find((m) => m.id === "skip:3")?.rerun).toBe("error");
     expect(readVerifyProgress(path, keyFile, ID).resume).toEqual({ possible: true });
+  });
+
+  it("the plan's minimum is what a proof that reaches a verdict runs when nothing needs more", async () => {
+    const plan = await planJourneyVerification({ dir: join(dir, "journeys"), id: ID, params: {} });
+    const l = labelled(proving);
+    expect((await proveLabelled(l, false)).verdict).toBe("proven");
+    expect(l.labels).toEqual(["base", "independence replay, as recorded", "skip:3", "block-write:3", "stale-value:2", "closing replay, as recorded"]);
+    expect(plan.summary.minimumReplays).toBe(l.labels.length);
   });
 
   describe("a failed restore", () => {
