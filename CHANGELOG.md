@@ -38,6 +38,11 @@ behaviour changes).
 
 ### Changed
 
+- **Proofs keep their browser slot (#766).** `journey verify --mutate` keeps its machine slot between
+  replays unless another run is waiting for one, when it yields and competes again. Waiters announce
+  themselves with `waiter-*.json` beside the slots; a dead or stale one is ignored.
+- **Errored replays are retried once (#766, #778).** An errored mutated replay runs once more and is
+  listed in `mutations[].retries`. A failed replay or a stall is never retried.
 - **A proof with an errored replay is not proven (#766).** If any mutated replay errored, for example
   on a browser-slot admission timeout, `journey verify --mutate` reads `inconclusive` (exit 2), even when
   other mutations covered the same assertions. An insensitive assertion still reads `insensitive`.

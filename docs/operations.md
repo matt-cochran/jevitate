@@ -211,6 +211,10 @@ than the admission timeout (`JEVITATE_ADMISSION_TIMEOUT_MS`, default 5 min) fail
 naming the processes that hold the slots. Within one process, the browser pool's own context cap
 (`JEVITATE_BROWSER_MAX_CONTEXTS`) still applies.
 
+A `journey verify --mutate` proof keeps its slot between replays unless another run is waiting for one; it
+then yields and competes again. Waiters announce themselves with `waiter-*.json` beside the slots; a dead or
+stale one is ignored.
+
 **Memory ceiling.** The memory of the browsers a run launched (browser, renderers and helper
 processes, summed as Linux PSS, or RSS on macOS) is sampled every 2 s. Past the ceiling, the
 session's page is closed with a reason, and the run ends `inconclusive` (exit 2) with

@@ -25,6 +25,10 @@ verdict. The limit measures silence, not length: a proof whose replays keep star
 ended this way has no verdict, leaves any earlier mutation-proof receipt as it was, and does not run `after`
 fixtures, so state a fixture would have restored may remain.
 
+An errored mutated replay in `journey verify --mutate` is retried once and listed in `mutations[].retries`; a
+second error leaves the proof `inconclusive`, even when other mutations covered the same assertions. A failed
+replay or a stall is never retried.
+
 A closed output pipe never becomes a result. A closed stderr only stops progress lines. With stdout closed, a
 command keeps the exit code it set; one still running finishes first; and if no verdict was reached, it exits
 2. Only a command with no code to keep (`jevitate <cmd> | head -1`) exits 0.
