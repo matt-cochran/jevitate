@@ -1,3 +1,6 @@
+import { assertJourneyRunnable } from "@jevitate/mcp-facade";
+import { inMcpInvocation } from "./approval-provenance.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
 import { FsJourneyStore, JourneyRegistry, journeyParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
 import { createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import type { SiteGateDeps } from "@jevitate/runtime";
@@ -82,6 +85,10 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
   if (!stored) {
     throw new UnknownLoadJourneyError(`unknown journey '${opts.id}'`);
   }
+  // #788: `load run` replays a promoted Journey, as its help says — on both surfaces. A burst of writes
+  // is nobody's way to try a draft (`journey run` is). Over MCP a stale approval refuses too.
+  if (inMcpInvocation()) await assertMcpRunnable(stored, opts.dir);
+  else if (stored.metadata.promoted !== true) assertJourneyRunnable(opts.id, { promoted: false, approval: "unrecorded" });
   const journey = applyJourneyEnvironment(stored, opts.environment);
   const allowedOrigins = opts.environment === undefined ? [journey.recording.site] : [...opts.environment.allowedOrigins];
 

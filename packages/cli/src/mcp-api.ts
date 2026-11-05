@@ -11,6 +11,7 @@ import type { ChangeScope, SelfHealer } from "@jevitate/runtime";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { safeRunPolicy as defaultRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { runJourneyProgrammatically } from "./journey-api.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
 import { runVerifyFix, type RunVerifyFixOptions, type VerifyFixReport } from "./verify-fix-api.js";
 import { type BrowserRunOptions } from "./browser-run-options.js";
 import { type ResolvedJourneyEnvironment } from "./environments.js";
@@ -231,6 +232,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           dir: deps.journeysDir,
           id,
           params,
+          // #788: only a promoted Journey with a current approval runs over MCP, refused before any browser.
+          assertRunnable: (stored) => assertMcpRunnable(stored, deps.journeysDir),
           policy: o?.policy ?? defaultRunPolicy(),
           ...(storageState !== undefined ? { storageState } : {}),
           ...(siteGate === undefined ? {} : { siteGate }),

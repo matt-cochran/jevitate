@@ -16,6 +16,8 @@ import { MAX_STEP_RESPONSE_TIMEOUT_MS } from "../journey-network-checks.js";
 import { type ChangeScope, SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { ok, fail } from "../envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
+import { resolveCatalogDir } from "../catalog-api.js";
+import { journeyDraftWarning } from "../journey-stale-api.js";
 import { ExtensionMismatchError } from "../browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
 import { withSiteGate } from "../site-gate-cli.js";
@@ -211,6 +213,9 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         // the flag; a `--secret-mode` override is a later slice's concern.
         // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
         const recorded = await withRecordedFixtures(fixtureFlags, { dir: runJourneysDir, id });
+        // #788: a draft runs here, as authoring needs, and says once what MCP would answer.
+        const unapproved = await journeyDraftWarning(runJourneysDir, id, resolveCatalogDir(deps.catalogDir));
+        if (unapproved !== undefined) program.configureOutput().writeErr?.(unapproved);
         let fixtureDrift: FixtureDrift | undefined;
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
           ...(siteGate === undefined ? {} : { siteGate }),

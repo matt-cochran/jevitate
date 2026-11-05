@@ -1,5 +1,5 @@
 import { SiteGateRefusedError } from "@jevitate/runtime";
-import { findCapabilities } from "@jevitate/mcp-facade";
+import { findCapabilities, JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { type GenerationPort } from "@jevitate/ai-core";
 import { existsSync } from "node:fs";
@@ -162,6 +162,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     run_journey: {
       description:
         "Run a PUBLISHED Journey by id with string params (fail-closed policy) — `jevitate journey run`. Never accepts inline steps. " +
+        "#788: an unpromoted Journey, or one changed since its approval, is refused before any browser ({error: refused, code: E_JOURNEY_NOT_PROMOTED | E_JOURNEY_APPROVAL_STALE | E_JOURNEY_APPROVAL_UNKNOWN, fix}): promote it with promote_journey, or try a draft on the CLI (`jevitate journey run`). " +
         "Optional 'storageState': a PATH (on the machine running this MCP server; inside the project or ~/.jevitate, never a repo's .jevitate/) to a Playwright storageState " +
         "JSON file, for a Journey authored behind a login (#118) — the file's contents are read only by the " +
         "server's own browser, never returned or logged. A Journey that declares metadata.requiresAuth refuses " +
@@ -241,6 +242,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
           if (err instanceof SiteGateRefusedError) {
             return errorResult({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
           }
+          if (err instanceof JourneyRunRefusedError) return errorResult({ error: "refused", outcome: "refused", code: err.code, id: args.id, message: err.message, fix: err.fix, tryDraft: err.tryDraft, retryable: false });
           if (err instanceof UnknownJourneyError) return errorResult({ error: "not_found", id: args.id, message: err.message });
           if (err instanceof JourneyRequiresAuthError) return errorResult({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });
           if (err instanceof ExtensionMismatchError) return errorResult({ error: "invalid_args", code: err.code, message: err.message });

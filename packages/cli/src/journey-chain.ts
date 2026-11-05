@@ -26,6 +26,8 @@ import type { BrowserPort, EmulationSpec } from "@jevitate/playwright";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import type { ResolvedJourneyEnvironment } from "./environments.js";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { inMcpInvocation } from "./approval-provenance.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
 
 /**
  * #580 (docs/journey-chain-contract.md §5): `jevitate journey chain` runs a discover Journey once,
@@ -422,6 +424,10 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
     throw err;
   }
 
+  // #788: over MCP a chain answers as run_journey does, stale approvals included (the CLI stays as it was).
+  if (inMcpInvocation()) {
+    for (const j of [fromJourney as Journey, toJourney]) await assertMcpRunnable(j, opts.dir);
+  }
   if (opts.requirePromoted === true) {
     for (const j of [fromJourney as Journey, toJourney]) {
       if (!j.metadata.promoted) throw new JourneyChainError("E_CHAIN_NOT_PROMOTED", `journey '${j.metadata.id}' is not promoted — a chain runs promoted Journeys (journey chain --allow-draft runs drafts on the CLI)`);

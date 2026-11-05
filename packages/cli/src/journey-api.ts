@@ -86,6 +86,8 @@ export interface RunJourneyProgrammaticallyOptions {
   dir: string;
   id: string;
   params: Record<string, string>;
+  /** #788: decides on the stored Journey, right after it is read and before anything else: throws to refuse the run. */
+  assertRunnable?: (stored: Journey) => Promise<void>;
   /** Defaults to `safeRunPolicy()` (Slice 1: fail-closed secret mode) when omitted. */
   policy?: RunPolicy;
   /**
@@ -546,6 +548,7 @@ export async function runJourneyProgrammatically(
   if (!stored) {
     throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
   }
+  await opts.assertRunnable?.(stored);
   // #247: onto the chosen environment (a step on an origin it does not allow is refused here).
   const full = applyJourneyEnvironment(stored, opts.environment);
   // #293: only the prefix up to the anchor runs (its params are the ones those steps take).

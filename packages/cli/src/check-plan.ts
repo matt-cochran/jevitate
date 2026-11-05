@@ -1,4 +1,6 @@
 // check-plan.ts — `jevitate check` planning: targets, per-item setup, fixtures, sessions (#231).
+import { inMcpInvocation } from "./approval-provenance.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { InvariantSpec } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
@@ -488,6 +490,14 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
       const j = await registry.get(sj.id);
       if (j === null || j === undefined) throw new CheckPreflightError(`target ${t.name}: unknown Journey ${JSON.stringify(sj.id)}`);
       if (!j.metadata.promoted) throw new CheckPreflightError(`target ${t.name}: Journey ${sj.id} is not promoted`);
+      // #788: over MCP a stale approval refuses the suite, as run_journey refuses it. The CLI reports it (--require-approvals).
+      if (inMcpInvocation()) {
+        try {
+          await assertMcpRunnable(j, t.journeysDir ?? opts.journeysDir);
+        } catch (err) {
+          throw new CheckPreflightError(`target ${t.name}: ${errorMessage(err)}`);
+        }
+      }
       // #247: an item's `env`/`baseUrl` — resolved and the Journey rebased onto it now, so an unknown
       // environment or a step on an origin it does not allow refuses the suite before anything runs.
       let env: ResolvedJourneyEnvironment | undefined;
