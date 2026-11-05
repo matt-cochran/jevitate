@@ -1224,7 +1224,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (290 exports)
+# @jevitate/journey (301 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1271,6 +1271,7 @@
   assertionRefsBound: function
   assertionSiteKey: function
   AssertionVerdict: type-alias
+  BaseTimedRun: interface
   bindParams: function
   CAMPAIGN_LIMITS: variable
   CampaignSpec: type-alias
@@ -1296,6 +1297,8 @@
   checkStatement: function
   classifyHandback: function
   classifyMutation: function
+  classifyReplay: function
+  controlCanChangeVerdict: function
   declaredTargetedProofFor: function
   deriveParamSchema: function
   describeStep: function
@@ -1339,6 +1342,7 @@
   HandoffValueError: interface
   HEAL_REJECTION_CODES: variable
   HealAttemptSchema: variable
+  heldSites: function
   intentCoverage: function
   IntentCoverage: interface
   isNoClaimExpect: function
@@ -1444,9 +1448,12 @@
   OutcomeTargetSchema: variable
   outputKeyFields: function
   ownAssertions: function
+  paceBeforeMutationMs: function
   pacedReplay: function
   paceEndStateFloorMs: function
   paceFloorMs: function
+  paceMarginBoundMs: function
+  paceMarginOf: function
   paceTailMs: function
   PAIR_RELATIONS: variable
   PairRelation: type-alias
@@ -1470,6 +1477,7 @@
   relaxedMutationReplay: function
   removeAnchor: function
   renderJobStory: function
+  ReplayHolds: interface
   ReplayPace: interface
   resolveAnchorStep: function
   resolveJourneyStep: function
@@ -1490,8 +1498,11 @@
   secretParamNames: function
   secretParamValues: function
   SecretRef: interface
-  sitesOutranBy: function
+  SiblingDisagreement: interface
+  siblingDisagreements: function
+  SiteArrivals: interface
   sitesReachedEarly: function
+  sitesUnmatchedBy: function
   splitBudget: function
   stampAnchorStepIds: function
   StampedAnchor: interface

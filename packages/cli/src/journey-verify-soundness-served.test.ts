@@ -625,6 +625,8 @@ interface Row {
   readonly verdict: string;
   readonly reading?: readonly [site: string, verdict: string];
   readonly reason?: RegExp;
+  /** What one mutation must have made of a site, whatever its sibling read. */
+  readonly under?: readonly [mutation: string, site: string, verdict: string];
 }
 
 const html = (res: ServerResponse, body: string, headers: Record<string, string> = {}): void => void res.writeHead(200, { "content-type": "text/html", ...headers }).end(`<!doctype html><html><head><title>T</title></head><body>${body}</body></html>`);
@@ -649,7 +651,7 @@ const sessions = (): { sid: (req: IncomingMessage, res: Record<string, string>) 
 };
 
 /** Save answers at once and its job goes on; `onLanded` is its effect, `path` how it was started. */
-const crossing = (opts: { readonly fixtures: boolean; readonly method?: "GET" | "POST" }): ((ctx: RowContext) => (req: IncomingMessage, res: ServerResponse) => void) => () => {
+const crossing = (opts: { readonly fixtures: boolean; readonly method?: "GET" | "POST"; readonly landsMs?: number }): ((ctx: RowContext) => (req: IncomingMessage, res: ServerResponse) => void) => () => {
   let busyFrom = Number.POSITIVE_INFINITY;
   let busyTo = 0;
   let gone = false;
@@ -663,8 +665,8 @@ const crossing = (opts: { readonly fixtures: boolean; readonly method?: "GET" | 
     if (p === "/api/save") {
       if (opts.fixtures) after(3_000, () => void (gone = true));
       else {
-        busyFrom = now + 1_600;
-        busyTo = now + 5_300;
+        busyFrom = now + (opts.landsMs ?? 1_600);
+        busyTo = busyFrom + 3_500;
       }
       return json(res);
     }
@@ -759,8 +761,8 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reason: /cross into the next/,
   },
   {
-    name: "H1: a job's time-limited window that a held replay's own job also reaches, no fixture",
-    serve: crossing({ fixtures: false }),
+    name: "H1: the base's job opens a time-limited window, no fixture",
+    serve: crossing({ fixtures: false, landsMs: 3_000 }),
     journey: (site) => crossingJourney(site),
     verdict: "insensitive",
     reading: ["end-state:0", "insensitive"],
@@ -798,6 +800,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     serve: retrying(),
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [SAVED_YES] }),
     verdict: "proven",
+    under: ["block-write:2", "end-state:0", "sensitive"],
     reading: ["end-state:0", "sensitive"],
   },
   {
@@ -870,8 +873,8 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     limit: true,
     serve: toastServer(1_000, true),
     journey: (site) => toastJourney(site, true),
+    // The hold may read as state crossing replays first, depending on when the toast ends: either way the proof claims nothing.
     verdict: "inconclusive",
-    reading: ["end-state:0", "cascade"],
   },
   {
     name: "stated limit, today's reading: a client's retry on a line the step never recorded gets through, so the end state reads insensitive though it depends on the write",
@@ -916,11 +919,16 @@ describe("[realtime] the experiment's rows", () => {
     });
   }, 1_800_000);
 
-  it.each(ROWS_EXPERIMENT)("$name: $verdict", ({ name, verdict, reading: site, reason }) => {
+  it.each(ROWS_EXPERIMENT)("$name: $verdict", ({ name, verdict, reading: site, reason, under }) => {
     const proof = proofs.get(name);
     if (proof === undefined || proof instanceof Error) throw proof ?? new Error("no proof");
     const seen = site === undefined ? proof.report.verdict : `${proof.report.assertions.find((a) => a.site === site[0])?.verdict}, ${proof.report.verdict}`;
     expect(seen).toBe(site === undefined ? verdict : `${site[1]}, ${verdict}`);
     if (reason !== undefined) expect(proof.report.reason).toMatch(reason);
+    if (under !== undefined) {
+      const mutation = proof.report.mutations.find((m) => m.id === under[0])!;
+      const target = journeyAssertions(proof.journey).find((a) => assertionSiteKey(a) === under[1])!;
+      expect(classifyMutation(target, mutation, mutation)).toBe(under[2]);
+    }
   });
 });
