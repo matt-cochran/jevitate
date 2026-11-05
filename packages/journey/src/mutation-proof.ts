@@ -1,4 +1,4 @@
-import type { Assertion, OutcomeWait, RecordedStep, Step } from "@jevitate/recording";
+import type { Assertion, NetworkCheck, OutcomeWait, RecordedStep, Step } from "@jevitate/recording";
 import { WAIT_FOR_STALL_MS } from "@jevitate/recording";
 import type { Journey, JourneyTargetedProofPlan } from "./journey.js";
 import { isNoClaimExpect, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
@@ -92,6 +92,61 @@ export interface TargetedProof {
   readonly control?: MutationRunResult["outcome"];
   /** #616: a DECLARED plan chose this proof's relaxations, not the automatic bound search. */
   readonly declared?: true;
+  /** #785: what the failed control replay did, against the base replay. Set only when a control ran and did not pass. */
+  readonly controlDiagnostics?: TargetedControlDiagnostics;
+}
+
+/**
+ * #785: what one replay did, in counts and booleans only: never a storage value, token, URL or page
+ * text. Storage counts are `null` when the page could not be read at that moment.
+ */
+interface ReplayDiagnostics {
+  readonly stepsTotal: number;
+  readonly stepsCompleted: number;
+  readonly sessionsOpened: number;
+  /** The session's page or browser context changed during the replay. */
+  readonly pageReplaced: boolean;
+  /** First-party or not, the page's non-GET/HEAD/OPTIONS requests: sent, answered, failed (aborted), neither. */
+  readonly writesSent: number;
+  readonly writesAnswered: number;
+  readonly writesAborted: number;
+  readonly writesUnfinished: number;
+  /** Key and cookie counts as the last step ended, before the end state's reload. */
+  readonly storageBeforeEndState: StorageCounts | null;
+  /** Key and cookie counts on the final page, after the end state's reload. */
+  readonly storageAfterEndState: StorageCounts | null;
+  /** How each wait kept on a relaxed site ended (`RelaxedSiteWait`). */
+  readonly relaxedWaits: readonly { readonly site: string; readonly ending: RelaxedWaitEnding; readonly waitedMs: number }[];
+}
+
+interface StorageCounts {
+  readonly sessionStorageKeys: number;
+  readonly localStorageKeys: number;
+  readonly cookies: number;
+}
+
+/** `unresolved`: the assertion names a value only the replay holds (an `extract` output, `setup.x`), so it could not be waited on. */
+type RelaxedWaitEnding = "held" | "timeout" | "hang" | "unresolved" | "not-run";
+
+/** #785: what the evidence points to when a targeted control fails. Empty: none of the four. */
+type ControlFailureIndication = "action-omission" | "browser-context-replacement" | "storage-clearing" | "end-state-timing";
+
+interface TargetedControlDiagnostics {
+  /** Where the control failed, as site keys. */
+  readonly failedSites: readonly string[];
+  readonly control: ReplayDiagnostics;
+  /** The Journey replayed as recorded, for comparison. */
+  readonly base?: ReplayDiagnostics;
+  /** Both replays opened their session with the same options (false: a different browser context). */
+  readonly contextOptionsMatchBase?: boolean;
+  readonly indicates: readonly ControlFailureIndication[];
+}
+
+/** What a targeted proof's replay reports back; `diagnostics` only from a control that did not pass. */
+interface TargetedReplayRun {
+  readonly outcome: MutationRunResult["outcome"];
+  readonly failedSites: readonly MutationFailedSite[];
+  readonly diagnostics?: TargetedControlDiagnostics;
 }
 
 /** A mutated replay: it passed, failed (where), was not applied (nothing to mutate), or errored. */
@@ -530,6 +585,8 @@ export interface MutationReplay {
   readonly journey: Journey;
   /** #708: private verifier mask; stored checks/indices and request capture remain unchanged. */
   readonly relaxedStepRequests?: readonly string[];
+  /** #785: the waiting each relaxed site did; the verifier runs them as the step ends and ignores how they end. */
+  readonly relaxedSiteWaits?: readonly RelaxedSiteWait[];
   readonly skipIndex?: number;
   readonly blockIndex?: number;
   readonly blockRequests?: readonly string[];
@@ -539,6 +596,48 @@ export interface MutationReplay {
    * DIFFERENT enabled live option at this 0-based flat step while avoiding the supplied value.
    */
   readonly swapSelectAtStep?: { readonly index: number; readonly avoid: string };
+}
+
+/**
+ * #785: an assertion also WAITS. A relaxed site must stop being able to fail the replay and go on
+ * waiting as it did, or the replay moves on before what it was waiting for has landed (a reload that
+ * aborts a write still in flight), and the failure that follows is timing, not evidence.
+ *
+ * Bounded and never fatal: a `page` wait polls the site's original assertion (its own `waitFor`, else
+ * the interpreter's postcondition bound), a `response` wait holds until the step's matching requests
+ * are answered (its `responseTimeoutMs`, else the run's). A mutated replay caps a `waitFor` as
+ * `mutationWait` does, because what it waits on may never come. Neither can turn a failure into a pass:
+ * only the unrelaxed assertions judge the replay.
+ */
+type RelaxedSiteWait =
+  | { readonly kind: "page"; readonly site: string; readonly step: number; readonly assertion: Assertion; readonly wait?: OutcomeWait }
+  | { readonly kind: "response"; readonly site: string; readonly step: number; readonly check: NetworkCheck; readonly responseTimeoutMs?: number };
+
+/** The page wait of `step`'s own claim, read BEFORE it is weakened; null for a step with no claim. */
+function pageSiteWait(step: Step, n: number, mutated: boolean): RelaxedSiteWait | null {
+  const assertion = step.kind === "assert" ? step.check : "expect" in step ? step.expect : null;
+  if (assertion === null) return null;
+  const wait = "waitFor" in step ? step.waitFor : undefined;
+  return { kind: "page", site: `step:${n}`, step: n, assertion, ...(wait === undefined ? {} : { wait: mutated ? mutationWait(wait) : wait }) };
+}
+
+/** #785: the waits of `keys`, read from `from` before its sites are weakened. A step the replay leaves out waits for nothing. */
+function relaxedSiteWaits(from: Journey, keys: readonly string[], mutated: boolean, skipIndex?: number): RelaxedSiteWait[] {
+  const steps = flat(from);
+  return keys.flatMap((key): RelaxedSiteWait[] => {
+    const match = /^(?:step|step-request):([1-9][0-9]*)(?::([0-9]+))?$/.exec(key);
+    if (match === null) return [];
+    const n = Number(match[1]);
+    const recorded = steps[n - 1];
+    if (recorded === undefined || n - 1 === skipIndex) return [];
+    if (match[2] === undefined) {
+      const page = pageSiteWait(recorded.step, n, mutated);
+      return page === null ? [] : [page];
+    }
+    const check = recorded.expectRequests?.[Number(match[2])];
+    if (check === undefined) return [];
+    return [{ kind: "response", site: key, step: n, check, ...(recorded.responseTimeoutMs === undefined ? {} : { responseTimeoutMs: recorded.responseTimeoutMs }) }];
+  });
 }
 
 /**
@@ -591,7 +690,8 @@ function relaxedExpect(step: Step): Assertion {
  * #554: the same mutation with the mutated step's OWN postcondition relaxed. `skip` skips the step
  * in place without turning its `expect` into an assert step; `block-write` and `stale-value` apply
  * the same action mutation but replace the step's `expect` with a schema-valid weak one (#567) and
- * drop `waitFor` (its `expectRequests` stay).
+ * drop `waitFor` (its `expectRequests` stay). What the claim waited for is kept as a non-fatal, capped
+ * `RelaxedSiteWait` (#785), so a later site does not fail on timing alone.
  * The input Journey is never modified and no step is removed, so it replays with the same indices.
  */
 export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts: MutationReplayOptions = {}): MutationReplay {
@@ -604,9 +704,11 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
     const copy = how.journey === journey ? structuredClone(journey) : how.journey;
     const target = flat(copy)[index];
     if (target !== undefined && "expect" in target.step) {
+      const waits = relaxedSiteWaits(copy, [`step:${m.step}`], true);
       const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
       delete step.waitFor;
       target.step = step as Step;
+      return { ...how, journey: copy, relaxedSiteWaits: waits };
     }
     return { ...how, journey: copy };
   }
@@ -614,14 +716,16 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const copy = structuredClone(journey);
     const target = flat(copy)[index]!;
+    const waits = relaxedSiteWaits(copy, [`step:${m.step}`], true);
     const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
     delete step.waitFor;
     target.step = step as Step;
-    return { journey: copy, blockIndex: index, blockRequests: [...requests] };
+    return { journey: copy, blockIndex: index, blockRequests: [...requests], relaxedSiteWaits: waits };
   }
   const copy = structuredClone(journey);
   const target = flat(copy)[index]!;
   if (target.step.kind === "fill") {
+    const waits = relaxedSiteWaits(copy, [`step:${m.step}`], true);
     const step: Record<string, unknown> = {
       ...target.step,
       value: { redacted: false, value: staleValue(journey, target.step, opts.params ?? {}) },
@@ -629,6 +733,7 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
     };
     delete step.waitFor;
     target.step = step as Step;
+    return { journey: copy, relaxedSiteWaits: waits };
   }
   return { journey: copy };
 }
@@ -657,8 +762,9 @@ function failedSiteKey(f: MutationFailedSite): string {
 /**
  * #609 — `relaxedMutationReplay` plus a weakened postcondition at every earlier step in
  * `relaxedSiteKeys`: a step's `expect` becomes `relaxedExpect`, an `assert` step's
- * `check` becomes the no-claim `urlIncludes ""`, and each loses `waitFor`. The target assertion is
- * never relaxed, the input Journey is never modified, and no step is removed (indices hold).
+ * `check` becomes the no-claim `urlIncludes ""`, and each moves its `waitFor` to a non-fatal, capped
+ * `RelaxedSiteWait` (#785). The target assertion is never relaxed, the input Journey is never modified,
+ * and no step is removed (indices hold).
  * A declared `step-request:<n>:<i>` stays in the Journey and is masked by the private replay option.
  */
 export function targetedMutationReplay(
@@ -672,21 +778,42 @@ export function targetedMutationReplay(
   const base = relaxedMutationReplay(journey, m, opts);
   if (relaxedSiteKeys.length === 0) return base;
   const requests = relaxedSiteKeys.filter((k) => k.startsWith("step-request:"));
-  return { ...base, journey: relaxStepSites(journey, base.journey, relaxedSiteKeys), ...(requests.length === 0 ? {} : { relaxedStepRequests: requests }) };
+  const relaxed = relaxStepSites(journey, base.journey, relaxedSiteKeys);
+  // `base.journey` still holds these sites' own claims; the mutated step's was read when it was weakened.
+  const own = base.relaxedSiteWaits ?? [];
+  const waits = [...own, ...relaxedSiteWaits(base.journey, relaxedSiteKeys, true, base.skipIndex).filter((w) => !own.some((o) => o.site === w.site))];
+  return { ...base, journey: relaxed, ...(requests.length === 0 ? {} : { relaxedStepRequests: requests }), ...(waits.length === 0 ? {} : { relaxedSiteWaits: waits }) };
 }
 
 /**
  * #609 — the CONTROL for a targeted proof: the same weakened postconditions (the relaxed sites and the
  * mutated step's own claim, as the targeted replay weakens them) with NO mutation — the supplied
  * params, nothing skipped, blocked or swapped. It must pass: when relaxing the earlier checks breaks
- * the target on its own (e.g. a removed `waitFor` was the gate), the target's failure is not
- * evidence about the mutation.
+ * the target on its own, the target's failure is not evidence about the mutation. #785: a proof runs
+ * it with `targetedControlWaits`, so the control acts and waits as the base replay did and only stops
+ * judging the relaxed sites.
  */
 export function targetedControlReplay(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): MutationReplay {
+  const requests = relaxedSiteKeys.filter((k) => k.startsWith("step-request:"));
+  return { journey: relaxStepSites(journey, journey, controlSiteKeys(journey, m, relaxedSiteKeys)), ...(requests.length === 0 ? {} : { relaxedStepRequests: requests }) };
+}
+
+/** The sites a control weakens: the relaxed ones and the mutated step's own claim, as the targeted replay does. */
+function controlSiteKeys(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): string[] {
   const own = flat(journey)[m.step - 1]?.step;
   const ownKey = own !== undefined && (own.kind === "assert" || "expect" in own) ? [`step:${m.step}`] : [];
-  const requests = relaxedSiteKeys.filter((k) => k.startsWith("step-request:"));
-  return { journey: relaxStepSites(journey, journey, [...new Set([...ownKey, ...relaxedSiteKeys])]), ...(requests.length === 0 ? {} : { relaxedStepRequests: requests }) };
+  return [...new Set([...ownKey, ...relaxedSiteKeys])];
+}
+
+/** #785: the waiting `targetedControlReplay`'s weakened sites did: uncapped, as the base replay waits. */
+function targetedControlWaits(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): RelaxedSiteWait[] {
+  return relaxedSiteWaits(journey, controlSiteKeys(journey, m, relaxedSiteKeys), false);
+}
+
+/** The replay a proof's control runs: `targetedControlReplay` and the waiting it keeps. */
+function controlWithWaits(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): MutationReplay {
+  const waits = targetedControlWaits(journey, m, relaxedSiteKeys);
+  return { ...targetedControlReplay(journey, m, relaxedSiteKeys), ...(waits.length === 0 ? {} : { relaxedSiteWaits: waits }) };
 }
 
 /** Clone page defenses and validate request masks against original sites; request arrays are retained. */
@@ -765,10 +892,7 @@ export async function runTargetedProof(
   m: JourneyMutation,
   target: JourneyAssertionSite,
   initial: MutationRunResult,
-  replay: (
-    describe: (journey: Journey) => MutationReplay,
-    kind: "targeted" | "control",
-  ) => Promise<{ readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] }>,
+  replay: (describe: (journey: Journey) => MutationReplay, kind: "targeted" | "control") => Promise<TargetedReplayRun>,
   opts: MutationReplayOptions = {},
 ): Promise<TargetedProof> {
   const site = assertionSiteKey(target);
@@ -791,7 +915,7 @@ export async function runTargetedProof(
   }
   if (relaxedSites.length > 0 && classifyMutationPlain(target, m, run) === "sensitive") {
     // A failure counts only when the same relaxations WITHOUT the mutation still pass.
-    const control = await replay((j) => targetedControlReplay(j, m, relaxedSites), "control");
+    const control = await replay((j) => controlWithWaits(j, m, relaxedSites), "control");
     if (control.outcome !== "passed") {
       return {
         site,
@@ -800,6 +924,7 @@ export async function runTargetedProof(
         failedSites: run.failedSites,
         control: control.outcome,
         refused: `the unmutated control replay with ${relaxedSites.join(", ")} relaxed did not pass (${control.outcome})`,
+        ...(control.diagnostics === undefined ? {} : { controlDiagnostics: control.diagnostics }),
       };
     }
     return { site, relaxedSites, outcome: run.outcome, failedSites: run.failedSites, control: control.outcome };
@@ -823,10 +948,7 @@ export async function runDeclaredTargetedProof(
   m: JourneyMutation,
   target: JourneyAssertionSite,
   declared: JourneyTargetedProofPlan,
-  replay: (
-    describe: (journey: Journey) => MutationReplay,
-    kind: "targeted" | "control",
-  ) => Promise<{ readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[] }>,
+  replay: (describe: (journey: Journey) => MutationReplay, kind: "targeted" | "control") => Promise<TargetedReplayRun>,
   opts: MutationReplayOptions = {},
 ): Promise<TargetedProof> {
   const site = assertionSiteKey(target);
@@ -843,7 +965,7 @@ export async function runDeclaredTargetedProof(
     return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true, refused: `${key} blocked the declared proof (not in relax)` };
   }
   if (classifyMutationPlain(target, m, run) === "sensitive") {
-    const control = await replay((j) => targetedControlReplay(j, m, relaxedNow), "control");
+    const control = await replay((j) => controlWithWaits(j, m, relaxedNow), "control");
     if (control.outcome !== "passed") {
       return {
         site,
@@ -853,6 +975,7 @@ export async function runDeclaredTargetedProof(
         declared: true,
         control: control.outcome,
         refused: `the unmutated control replay with ${relax.join(", ")} relaxed did not pass (${control.outcome})`,
+        ...(control.diagnostics === undefined ? {} : { controlDiagnostics: control.diagnostics }),
       };
     }
     return { site, relaxedSites: relax, outcome: run.outcome, failedSites: run.failedSites, declared: true, control: control.outcome };
