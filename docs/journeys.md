@@ -221,8 +221,15 @@ before a long proof: it lists every mutation, its paired assertions, unpaired as
 minimum replay count (the base, an independence replay, one per mutation and a closing replay; relaxed and
 targeted replays, controls and re-runs add to it, and a proof that fails or is tainted partway stops sooner).
 Parameter values help derive the plan but are never returned. An assertion is evidence only if it
-**fails** when the outcome is absent, so the proof replays the Journey once as recorded (it must
-pass), then once per mutation, and checks that each mutation breaks the assertion paired with it:
+**fails** when the outcome is absent, so the proof replays the Journey as recorded (it must pass),
+then once per mutation, and checks that each mutation breaks the assertion paired with it.
+
+Budget for that before a long proof. No replay leaves a step sooner than the base did, so each takes at
+least as long as the base, and the count above is a floor: most proofs also run a control for each
+mutated step. A proof of 3 mutations on 2 steps runs 7 replays. Every replay that reaches a write sends
+it for real, so use a target whose data can take that, and fixtures that reset it. See
+[what a proof runs](outcomes.md).
+
 
 ```bash
 jevitate journey verify checkout --plan                   # static preflight; no browser or target

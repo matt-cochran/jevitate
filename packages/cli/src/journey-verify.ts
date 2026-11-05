@@ -1,6 +1,6 @@
 /**
  * #402 — `journey verify --mutate`: a built-in negative proof that each of a Journey's assertions
- * FAILS when its outcome is absent. The Journey is replayed once as recorded (it must pass), then
+ * FAILS when its outcome is absent. The Journey is replayed as recorded (it must pass), then
  * once per mutation (`planJourneyMutations`: skip a write step, abort its writes, type an empty or
  * stale value into a checked fill, or — #565 — swap or truncate a checked non-secret parameter); each assertion is sensitive only when its paired mutation broke it, at
  * that assertion, with nothing failing before the mutated step.
