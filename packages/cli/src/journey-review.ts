@@ -105,6 +105,8 @@ export interface JourneyVerifyRecord {
   readonly proofContext?: JourneyProofContext;
   readonly verdict: string;
   readonly reason?: string;
+  /** #787: the proof resumed, reusing this many pairs from an interrupted run of the same configuration. Absent otherwise. */
+  readonly reusedPairs?: number;
   readonly summary: Readonly<Record<string, number>>;
   readonly at: string;
   /** #616: the declared targeted-proof plans the automatic bound refused, read by readiness guidance. */

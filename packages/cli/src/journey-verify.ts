@@ -18,6 +18,7 @@ import {
   flatJourneySteps,
   journeyAssertions,
   journeyEndState,
+  journeyParamSchema,
   judgeAssertions,
   mutationProofVerdict,
   mutationReplay,
@@ -34,6 +35,7 @@ import {
   sitesReachedEarly,
   suggestTargetedProofPlan,
   thinSites,
+  validateParams,
   type AssertionVerdict,
   type Journey,
   type JourneyMutation,
@@ -67,6 +69,19 @@ import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-r
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
 import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
+import {
+  JourneyVerifyResumeRefusedError,
+  RETRY_REASON_NOT_KEPT,
+  checkpointPairOf,
+  checkpointReplayOf,
+  openProofCheckpoint,
+  resumeRefusalAgainstBase,
+  reusedProofFields,
+  type CheckpointPair,
+  type CheckpointReplay,
+  type ProofCheckpointRequest,
+  type ProofCheckpointSession,
+} from "./journey-verify-checkpoint.js";
 import { composeObservers } from "./run-screenshots.js";
 
 /** `journey run`'s options a proof passes through to every replay (params, environment, auth, fixtures, browser, gate). */
@@ -80,6 +95,8 @@ export type VerifyJourneyOptions = Omit<
   readonly onProgress?: (progress: JourneyVerifyProgress) => void;
   /** The governor whose machine slot the proof keeps between replays (default: the process-wide one its replays open sessions through). */
   readonly slotGovernor?: ResourceGovernor;
+  /** #787: keep durable progress for this proof, and with `resume` reuse the pairs an earlier run finished. */
+  readonly checkpoint?: ProofCheckpointRequest;
 };
 
 /** The replay a proof is starting. Names only: never a parameter value. */
@@ -555,6 +572,12 @@ export interface JourneyVerifyMutation {
    * entry per retry, with the error it followed. The replay's own result above is the retry's.
    */
   readonly retries?: readonly { readonly reason: string }[];
+  /**
+   * #787: this result came from a checkpoint and no replay of it ran in this process. The checkpoint
+   * keeps what the verdict reads and nothing the app wrote, so `reason`, `blockedWrites` and
+   * `controlDiagnostics` are absent here, and a `retries` entry or a targeted `refused` says its wording is not kept.
+   */
+  readonly reused?: true;
 }
 
 export interface JourneyVerifyAssertion {
@@ -583,6 +606,8 @@ export interface JourneyVerifyReport {
   readonly summary: Readonly<Record<"sensitive" | "insensitive" | "cascade" | "notApplied" | "error" | "unpaired" | "targeted", number>>;
   /** #616: a reviewable `metadata.targetedProofs` entry for each automatic proof stopped at its bound. */
   readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
+  /** #787: how many of `mutations` were reused from a checkpoint rather than run by this process. 0 on a run that did not resume. */
+  readonly reusedPairs: number;
 }
 
 export interface JourneyVerifyPlanReport {
@@ -674,18 +699,42 @@ function failedSitesOf(result: { outcome: string; reason?: string; at?: number }
  */
 export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Run = runJourneyProgrammatically): Promise<JourneyVerifyReport> {
   const endHold = (opts.slotGovernor ?? sharedResourceGovernor()).holdSlotBetweenSessions();
+  const owned: { session?: ProofCheckpointSession } = {};
   try {
-    return await proveJourneyMutations(opts, run);
+    return await proveJourneyMutations(opts, run, owned);
+  } catch (err) {
+    // In an MCP server the process outlives the proof, so its pid no longer says the proof is running.
+    owned.session?.interrupted();
+    throw err;
   } finally {
     endHold();
   }
 }
 
-async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Promise<JourneyVerifyReport> {
+/** Why a replay that closed with more writes open than the base may have decided another. Named by mutation id only. */
+function notIsolatedBy(id: string): string {
+  return `a replay of ${id} closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided`;
+}
+
+/** A pair's result from its checkpoint, in the report's shape. */
+function reusedMutation(pair: CheckpointPair): JourneyVerifyMutation {
+  return {
+    kind: pair.kind,
+    step: pair.step,
+    id: pair.id,
+    ...(pair.param === undefined ? {} : { param: pair.param }),
+    ...(pair.source === undefined ? {} : { source: pair.source }),
+    ...reusedProofFields(pair),
+    ...(pair.retries === 0 ? {} : { retries: Array.from({ length: pair.retries }, () => ({ reason: RETRY_REASON_NOT_KEPT })) }),
+    reused: true,
+  };
+}
+
+async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned: { session?: ProofCheckpointSession }): Promise<JourneyVerifyReport> {
   const journey = await loadJourneyToVerify(opts.dir, opts.id);
   // #711: receipt authority is proven before the first baseline/mutation replay spends a browser.
   const receiptDestination = await preflightVerifyRecord(opts.dir, journey.metadata.id);
-  const { readRequests, onProgress, slotGovernor: _slotGovernor, ...runOpts } = opts;
+  const { readRequests, onProgress, slotGovernor: _slotGovernor, checkpoint: checkpointRequest, ...runOpts } = opts;
   const inactivityMs = proofInactivityMs(journey, opts);
   const portFactory = opts.browserPortFactory ?? ((): BrowserPort => new PlaywrightBrowserPort());
   let replays = 0;
@@ -693,14 +742,29 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
   let sessionsOpened = 0;
   // A replay's restore may fail whether it passes, fails or throws, so the run reports it as it happens.
   let restoreFailed = false;
-  const boundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: Pick<JourneyMutation, "id">, retry = false, probe?: ReplayProbe): ReturnType<Run> => {
-    replays += 1;
-    const where: JourneyVerifyProgress = { replay: replays, ...(m === undefined ? {} : { mutation: m.id }), ...(retry ? { retry: true as const } : {}) };
-    onProgress?.(retry && m !== undefined ? { ...where, mutation: `${m.id} (retry after error)` } : where);
-    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, { ...mutation, onFixtureRestoreFailed: () => void (restoreFailed = true) }), probe === undefined ? portFactory : probe.wrap(portFactory), where, inactivityMs, () => void (sessionsOpened += 1));
-  };
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
+  const sites = journeyAssertions(journey);
+  const plan = planJourneyMutations(journey, { ...lintOpts, params: opts.params });
+  // #787: claimed before the first replay: a refused resume spends no browser and runs no hook.
+  // Bad params are the replay's own refusal, raised here too so a mistyped command cannot replace a checkpoint.
+  if (checkpointRequest !== undefined) validateParams(journeyParamSchema(journey), opts.params);
+  const opened = checkpointRequest === undefined ? {} : await openProofCheckpoint(checkpointRequest, { journey, journeyHash, plan, params: opts.params, sites });
+  const checkpoint = opened.session;
+  if (checkpoint !== undefined) owned.session = checkpoint;
+  const resuming = opened.resume;
+  // A taint belongs to the whole proof: an earlier run's stands, or a resume could read `proven` where the uninterrupted proof could not.
+  if (resuming?.restoreFailed === true) restoreFailed = true;
+  const boundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: Pick<JourneyMutation, "id">, retry = false, probe?: ReplayProbe): ReturnType<Run> => {
+    replays += 1;
+    checkpoint?.replayStarted(replays);
+    const where: JourneyVerifyProgress = { replay: replays, ...(m === undefined ? {} : { mutation: m.id }), ...(retry ? { retry: true as const } : {}) };
+    onProgress?.(retry && m !== undefined ? { ...where, mutation: `${m.id} (retry after error)` } : where);
+    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, { ...mutation, onFixtureRestoreFailed: () => {
+          restoreFailed = true;
+          checkpoint?.taint({ restoreFailed: true });
+        } }), probe === undefined ? portFactory : probe.wrap(portFactory), where, inactivityMs, () => void (sessionsOpened += 1));
+  };
 
   const stepsTotal = flatJourneySteps(journey).length;
   const baseProbe = new ReplayProbe(stepsTotal);
@@ -709,16 +773,26 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
   // Every other replay waits as this one did, so this one is their control (`pacedReplay`).
   const pace: ReplayPace = { stepEndMs: basePacer.reachedMs.filter((ms): ms is number => ms !== undefined), ...(basePacer.endStateReachedMs === undefined ? {} : { endStateMs: basePacer.endStateReachedMs }) };
   // Why a replay may have decided another: it closed with more writes open than the base did.
-  let notIsolated: string | undefined;
+  let notIsolated: string | undefined = resuming === undefined || resuming.notIsolatedBy === null ? undefined : notIsolatedBy(resuming.notIsolatedBy);
   const baseFields = { outcome: base.outcome, ...(base.outcome === "quarantined" ? { reason: base.reason } : {}) };
-  const sites = journeyAssertions(journey);
   const checkOf = new Map(sites.map((s) => [assertionSiteKey(s), describeCheck(s.check)]));
-  const plan = planJourneyMutations(journey, { ...lintOpts, params: opts.params });
+  if (resuming !== undefined) {
+    // Nothing is reused against an app whose as-recorded flow no longer passes, or a base it was not paced for.
+    if (base.outcome !== "ok") {
+      const why = base.outcome === "quarantined" ? redactSecretParams({ reason: base.reason }, journey, opts.params).reason : base.outcome;
+      throw new JourneyVerifyResumeRefusedError("base-failed", `the Journey as recorded did not pass the re-run of the base replay (${why})`);
+    }
+    const refused = resumeRefusalAgainstBase(resuming, plan, sites, pace, baseProbe.writesInFlightAtClose);
+    if (refused !== undefined) throw refused;
+  }
 
   const mutations: JourneyVerifyMutation[] = [];
   // #616: automatic targeted proofs stopped at their relaxation bound, each a reviewable start.
   const suggested: JourneyTargetedProofPlan[] = [];
   const seenSuggestions = new Set<string>();
+  // #787: this pair's replays as records, by kind, for a later base to be held against.
+  let pairReplays: CheckpointReplay[] = [];
+  let replayWritesInFlight = 0;
   if (base.outcome === "ok") {
     // One mutated replay, as `mutationReplay` (or #554's `relaxedMutationReplay`) describes it.
     type Replayed = NonNullable<JourneyVerifyMutation["relaxed"]> & { readonly diagnostics?: TargetedControlDiagnostics; readonly reachedMs?: readonly (number | undefined)[]; readonly endStateReachedMs?: number };
@@ -771,8 +845,10 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
           retry,
           probe,
         );
-        if (probe.writesInFlightAtClose > baseProbe.writesInFlightAtClose) {
-          notIsolated ??= `a replay of ${m.id} closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided`;
+        replayWritesInFlight = Math.max(replayWritesInFlight, probe.writesInFlightAtClose);
+        if (probe.writesInFlightAtClose > baseProbe.writesInFlightAtClose && notIsolated === undefined) {
+          notIsolated = notIsolatedBy(m.id);
+          checkpoint?.taint({ notIsolatedBy: m.id });
         }
         const blocked = r.blockedWrites ?? [];
         const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
@@ -825,7 +901,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
     // app, and a retry failing on that leftover state would read as proof, so it stays an error. A
     // `failed` replay is a result and a stall ends the proof: neither gets here. A replay that never
     // started (`describe` refused it, as a targeted proof's bad relaxation) would only be refused again.
-    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, kind: "control" | "other" = "other"): Promise<Replayed> => {
+    const attemptWithRetry = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, kind: "control" | "other"): Promise<Replayed> => {
       const before = replays;
       const sessionsBefore = sessionsOpened;
       const first = await attemptReplay(m, describe, false, kind);
@@ -833,15 +909,40 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
       retriesOf.set(m.id, [...(retriesOf.get(m.id) ?? []), { reason: first.reason ?? "unknown error" }]);
       return attemptReplay(m, describe, true, kind);
     };
+    // #787: the one place a replay of a pair runs, so each is kept as a record of its kind. A new kind is a new name here and in `REPLAY_RECORD_KINDS`.
+    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, record: string, kind: "control" | "other" = "other"): Promise<Replayed> => {
+      replayWritesInFlight = 0;
+      const ran = await attemptWithRetry(m, describe, kind);
+      pairReplays.push(checkpointReplayOf(record, ran, replayWritesInFlight));
+      return ran;
+    };
     // #402: a named mutation lowers to its `MutationReplay`; #609's targeted proof passes one directly.
-    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts));
+    const replay = (m: JourneyMutation, describe: typeof mutationReplay, record: string): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts), record);
     const reported = ({ reachedMs: _reachedMs, endStateReachedMs: _endStateReachedMs, ...result }: Replayed): Omit<Replayed, "reachedMs" | "endStateReachedMs"> => result;
     const siteByKey = new Map(sites.map((s) => [assertionSiteKey(s), s]));
+    // #616: a proof the automatic bound stopped names the plan a human could declare instead.
+    const noteSuggestion = (proof: TargetedProof, m: JourneyMutation): void => {
+      const suggestion = suggestTargetedProofPlan(proof, m);
+      if (suggestion === null) return;
+      const key = `${suggestion.check}\u0000${suggestion.mustFailWhen}\u0000${suggestion.relax.join(",")}`;
+      if (seenSuggestions.has(key)) return;
+      seenSuggestions.add(key);
+      suggested.push(suggestion);
+    };
     for (const m of plan.mutations) {
-      const firstRun = await replay(m, mutationReplay);
+      // #787: a finished pair is not run again. It reaches the same judging below as a pair just run.
+      const kept = resuming?.pairs.get(m.id);
+      if (kept !== undefined) {
+        mutations.push(reusedMutation(kept));
+        for (const proof of kept.targeted ?? []) noteSuggestion(proof as TargetedProof, m);
+        continue;
+      }
+      checkpoint?.startPair(m.id);
+      pairReplays = [];
+      const firstRun = await replay(m, mutationReplay, "first");
       // #554: a first failure at the mutated step's own postcondition hides the LATER paired sites
       // behind it; one relaxed replay (same action, the step's own expect/waitFor left out) judges them.
-      const relaxedRun = needsRelaxedReplay(plan, m, firstRun) ? await replay(m, relaxedMutationReplay) : undefined;
+      const relaxedRun = needsRelaxedReplay(plan, m, firstRun) ? await replay(m, relaxedMutationReplay, "relaxed") : undefined;
       const resultOf = (f: Replayed, r: Replayed | undefined): MutationRunResult => ({ outcome: f.outcome, failedSites: f.failedSites, ...(f.waitsCut === undefined ? {} : { waitsCut: f.waitsCut }), ...(r === undefined ? {} : { relaxed: r }) });
       // A site this mutation would read sensitive, reached with little to spare: only then is a fresh
       // unmutated replay run, once per mutation. It must pass, and get there no later than the mutated replay did.
@@ -850,7 +951,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
         const site = siteByKey.get(p.site);
         return p.mutation === m.id && site !== undefined && classifyMutation(site, m, resultOf(firstRun, relaxedRun)) === "sensitive" && [...thinOf(firstRun), ...(relaxedRun === undefined ? [] : thinOf(relaxedRun))].includes(p.site);
       });
-      const fresh = wouldCount ? await runReplay(m, (j) => ({ journey: j }), "control") : undefined;
+      const fresh = wouldCount ? await runReplay(m, (j) => ({ journey: j }), "control", "control") : undefined;
       const checked = (r: Replayed): Replayed => {
         if (fresh === undefined) return r;
         const cut = fresh.outcome === "passed" ? sitesOutranBy(r.failedSites, r.reachedMs ?? [], r.endStateReachedMs, fresh) : thinOf(r);
@@ -866,11 +967,11 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
       // One control per set of relaxations: sites of this mutation that relax the same ones share it.
       const controls = new Map<string, Promise<Replayed>>();
       const targetedReplay = (describe: (j: Journey) => MutationReplay, kind: "targeted" | "control", controlKey?: string): Promise<Replayed> => {
-        if (kind !== "control") return runReplay(m, describe);
+        if (kind !== "control") return runReplay(m, describe, "targeted");
         const key = controlKey ?? "";
         const known = controls.get(key);
         if (known !== undefined) return known;
-        const running = runReplay(m, describe, "control");
+        const running = runReplay(m, describe, "targeted-control", "control");
         controls.set(key, running);
         return running;
       };
@@ -885,17 +986,9 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
             ? await runTargetedProof(journey, plan, m, site, initial, targetedReplay, replayOpts)
             : await runDeclaredTargetedProof(journey, plan, m, site, declared, targetedReplay, replayOpts),
         );
-        // #616: a proof the automatic bound stopped names the plan a human could declare instead.
-        const suggestion = suggestTargetedProofPlan(targeted[targeted.length - 1]!, m);
-        if (suggestion !== null) {
-          const key = `${suggestion.check}\u0000${suggestion.mustFailWhen}\u0000${suggestion.relax.join(",")}`;
-          if (!seenSuggestions.has(key)) {
-            seenSuggestions.add(key);
-            suggested.push(suggestion);
-          }
-        }
+        noteSuggestion(targeted[targeted.length - 1]!, m);
       }
-      mutations.push({
+      const finished: JourneyVerifyMutation = {
         kind: m.kind,
         step: m.step,
         id: m.id,
@@ -906,7 +999,9 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
         ...controlFields,
         ...(targeted.length === 0 ? {} : { targeted }),
         ...(retriesOf.has(m.id) ? { retries: retriesOf.get(m.id)! } : {}),
-      });
+      };
+      mutations.push(finished);
+      checkpoint?.finishPair(checkpointPairOf(finished, pairReplays));
     }
   }
 
@@ -933,7 +1028,9 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
   const verdictInput = { basePassed: base.outcome === "ok", mutations, assertions: judged };
   // A last replay as recorded, where its result can still change the verdict: a replay's slow job has no
   // request to watch, so a late landing that stuck is only seen here. It cannot see one a restore then cleared.
-  if (pace.stepEndMs.length > 0 && mutationProofVerdict({ ...verdictInput, restoreFailed, ...(notIsolated === undefined ? {} : { notIsolated }) }).verdict !== "inconclusive") {
+  // #787: a resume always runs it: nothing from before the interruption can vouch for how the proof ended.
+  if (resuming !== undefined || (pace.stepEndMs.length > 0 && mutationProofVerdict({ ...verdictInput, restoreFailed, ...(notIsolated === undefined ? {} : { notIsolated }) }).verdict !== "inconclusive")) {
+    checkpoint?.phase("closing");
     try {
       const closing = await boundedRun({ ...runOpts }, { structuredFailures: true }, { id: "closing replay, as recorded" });
       if (closing.outcome !== "ok") notIsolated = "the Journey as recorded no longer passes after the mutated replays, so state one left behind may have decided another; isolate the replays (a fixture restore, or a longer job's end) and run the proof again";
@@ -964,6 +1061,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
     },
     // #616: in assertion order, so the first suggestion is the one for the refusal the verdict quotes.
     ...(suggested.length === 0 ? {} : { suggestedTargetedProofs: [...suggested].sort((a, b) => siteOrder(a.check) - siteOrder(b.check)) }),
+    reusedPairs: resuming?.pairs.size ?? 0,
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
   const redacted = redactSecretParams(report, journey, opts.params);
@@ -978,8 +1076,10 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
     ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
     summary: { ...redacted.summary },
     ...(redacted.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: redacted.suggestedTargetedProofs }),
+    ...(redacted.reusedPairs === 0 ? {} : { reusedPairs: redacted.reusedPairs }),
     at: clock.nowIso(),
   });
+  checkpoint?.finish(redacted.verdict);
   return redacted;
 }
 

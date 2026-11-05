@@ -95,6 +95,8 @@ export interface CliToolSpec {
   /** One command, or several selected by an `action` argument (a family of small commands). */
   readonly command?: CliCommandSpec;
   readonly actions?: Readonly<Record<string, CliCommandSpec>>;
+  /** #787: this call only reads, and must answer while a long call of the same server holds the queue. */
+  readonly answersWhileBusy?: (args: McpArgs) => boolean;
 }
 
 // ── Why a flag is not an MCP argument ──────────────────────────────────────────────────────────
@@ -380,7 +382,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "verify_journey",
     description:
-      "`jevitate journey verify <id> --plan|--mutate` (#402): plan previews the exact mutations, assertion pairings, unpaired assertions and minimum replay count without opening a browser; mutate proves each assertion can fail by replaying the Journey once, then once per mutation. Mutations only skip steps, abort the app's own writes or alter checked non-secret inputs; nothing is fabricated. Set exactly one of plan or mutate.",
+      "`jevitate journey verify <id> --plan|--mutate|--status` (#402): plan previews the exact mutations, assertion pairings, unpaired assertions and minimum replay count without opening a browser; mutate proves each assertion can fail by replaying the Journey once, then once per mutation. Mutations only skip steps, abort the app's own writes or alter checked non-secret inputs; nothing is fabricated. status (#787) reads a proof's durable progress and whether its verifier is live, exited or stale: no browser, no hook, nothing of the app's. resume, with mutate, continues an interrupted proof of the same Journey and configuration, reusing finished pairs after the base replay passes again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused by name (data.reason) and never starts over. Set exactly one of plan, mutate or status.",
     command: {
       path: "journey verify",
       params: {
@@ -388,6 +390,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EXTENSION,
         mutate: b("--mutate"),
         plan: b("--plan"),
+        status: b("--status"),
+        resume: b("--resume"),
         params: { kind: "params", flag: "--param" },
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),
@@ -397,6 +401,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       },
       omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
+    // The command takes `status` first and runs no proof, whatever else is set.
+    answersWhileBusy: (args) => args["status"] === true,
   },
   {
     name: "journey_readiness",
@@ -1302,7 +1308,7 @@ export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCl
   if (deps.runCli === undefined) {
     return { isError: true, body: { error: "not_configured", message: `${spec.name} runs \`jevitate ${commandFor(spec, args).path}\` in process, which this server was not given` } };
   }
-  const { stdout: raw, exitCode } = await deps.runCli(argv);
+  const { stdout: raw, exitCode } = await (spec.answersWhileBusy?.(args) === true ? deps.runCli(argv, { unqueued: true }) : deps.runCli(argv));
   const stdout = deps.redact(raw);
   let envelope = lastEnvelope(stdout);
   if (envelope === undefined && exitCode === 0) {
@@ -1315,7 +1321,7 @@ export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCl
   }
   if (envelope === undefined) return { isError: true, body: { error: "internal", message: "the command printed no JSON envelope", exitCode } };
   if (!envelope.ok) {
-    return { isError: true, body: { error: exitCode === 64 ? "invalid_args" : "refused", code: envelope.error?.code ?? "E_UNKNOWN", message: envelope.error?.message ?? "refused", exitCode } };
+    return { isError: true, body: { error: exitCode === 64 ? "invalid_args" : "refused", code: envelope.error?.code ?? "E_UNKNOWN", message: envelope.error?.message ?? "refused", exitCode, ...(envelope.data === undefined ? {} : { data: envelope.data }) } };
   }
   // 0/1/3/4 are answers; 2 (proved nothing) is never a pass.
   return { isError: exitCode === 2 || exitCode >= 64, body: { exitCode, data: envelope.data ?? null } };

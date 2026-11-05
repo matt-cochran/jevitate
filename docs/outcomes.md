@@ -35,6 +35,48 @@ after a capped wait ran out, or after a skipped step left a write unanswered, is
 stays `cascade` with the refusal named. A step's own claim whose wait ran out of its cap counts only if an
 unmutated control with the same cap passes. Any failed fixture restore during a proof makes it `inconclusive`.
 
+#### Following and resuming a long proof
+
+`journey verify <id> --mutate` writes a progress receipt to `.jevitate/logs/verify-progress/` as it goes, atomically,
+after each pair (one planned mutation with all its replays). `journey verify <id> --status` reads it: live, exited
+or stale verifier (pid plus the kernel's start time, so a reused pid is `stale`), pairs finished of the total, the
+current pair, and whether a resume could run. It opens no browser, runs no hook and reads nothing of the app's.
+MCP: `verify_journey` with `status: true`.
+
+`journey verify <id> --mutate --resume` (MCP: `mutate: true, resume: true`) continues an interrupted proof with the
+same flags. The base replay runs again and must pass, the pair that was interrupted runs again, later pairs run,
+and finished pairs are reused. The closing replay always runs. The result says how many pairs were reused in
+`reusedPairs` (0 on a run that did not resume), each one is marked `reused: true`, and the verdict comes from the
+same rule over the same results as an uninterrupted proof. A plain `--mutate` starts again and replaces the
+checkpoint, unless a live verifier owns it, in which case it runs without progress of its own.
+
+A resume never starts over silently. It exits 2 with `E_JOURNEY_VERIFY_RESUME_REFUSED` and a reason in `data.reason`:
+
+| `reason` | Why |
+| --- | --- |
+| `no-checkpoint`, `finished`, `live-verifier`, `other-host` | nothing to resume, or a verifier owns it or cannot be checked from this host |
+| `journey-hash`, `mutation-plan`, `params`, `hook`, `origin`, `browser`, `cli-build` | what the proof ran under changed. A build that cannot name itself counts as changed |
+| `too-old` | a reused result is over 24 hours old |
+| `corrupt`, `integrity`, `not-regular-file`, `key-unavailable`, `not-writable` | the file is damaged or was changed outside jevitate, a link or FIFO is at its path, or the key below cannot be used |
+| `base-failed` | the Journey as recorded no longer passes |
+| `pace`, `isolation` | the base, measured again, is slower than a reused failure allows (it reached a site sooner than the new base passes it, or with little to spare and no control), or left fewer writes open than a reused replay did. Controls are held to the same checks |
+| `unknown-record` | the checkpoint holds a kind of replay this build cannot re-check |
+
+Timing is why a resume on a slower or busier machine can be refused: a reused failure counts only against the base
+measured now. Run the proof again from the start.
+
+The checkpoint holds outcome classes, structured failed sites, site keys, mutation ids, step timings and write
+counts. It holds no hook text, parameter value, failure message, blocked request path or page text. On a reused pair
+`reason`, `blockedWrites` and `controlDiagnostics` are therefore absent, and a targeted refusal's or a retry's wording
+says it was not kept. The verdict reads none of these. Hooks, params, origin and browser settings are compared by
+HMAC-SHA-256 under a random key in `~/.jevitate/verify-checkpoint.key` (mode 0600), which also signs the file. Only
+the bytes of a `--fixtures` file and the text of a hook are bound: a script a hook calls, and a new deploy of the app
+between the two runs, cannot be detected, beyond the base and closing replays having to pass. Receipts stay until the
+next proof of that Journey replaces them; `logs prune` does not remove them.
+
+A coordinator that dies takes a verifier with it unless the run set `JEVITATE_PARENT_WATCHDOG=off`; either way the
+finished pairs stay on disk. A killed verifier never ran its `after` hook, so use a `--before` that resets the app.
+
 A closed output pipe never becomes a result. A closed stderr only stops progress lines. With stdout closed, a
 command keeps the exit code it set; one still running finishes first; and if no verdict was reached, it exits
 2. Only a command with no code to keep (`jevitate <cmd> | head -1`) exits 0.

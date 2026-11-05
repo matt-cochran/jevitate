@@ -12,12 +12,13 @@ import { withSiteGate } from "../site-gate-cli.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "../fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
-import { withEngine } from "../engine.js";
+import { currentBuildTree, currentEngineInfo, withEngine } from "../engine.js";
 import { JourneyVerifyStalledError, loadJourneyToVerify, planJourneyVerification, proofInactivityMs, verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
+import { JourneyVerifyResumeRefusedError, browserBindingOf, checkpointKeyPath, hookBindingOf, readVerifyProgress, verifyCheckpointPath, verifyProgressLine } from "../journey-verify-checkpoint.js";
 import { VerifyReceiptPreflightError } from "../journey-review-store.js";
 import { EXIT_CODES } from "../exit-codes.js";
 import { artifactStamp } from "../mission-journal.js";
-import { logsDirFor } from "../project-dir.js";
+import { homeDataRoot, logsDirFor } from "../project-dir.js";
 import { registerTerminalResult, type TerminalResultDeps, type TerminalResultHandle } from "../terminal-result.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 import {
@@ -52,6 +53,8 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
     .description("preview or prove that each Journey assertion fails when its outcome is absent")
     .option("--mutate", "run the mutation proof")
     .option("--plan", "print the static mutation/assertion plan without opening a browser")
+    .option("--status", "read a proof's durable progress and whether its verifier is live, exited or stale; no browser, no hook, nothing of the app's")
+    .option("--resume", "with --mutate: continue an interrupted proof of the same Journey and configuration, reusing finished pairs after the base replay passes again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused and never starts over")
     .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--storage-state <file>", "Playwright storageState JSON to start each replay authenticated (as journey run)")
@@ -61,11 +64,27 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
       if (layout === null) return;
       const verifyJourneysDir = layout.journeysDir;
-      const { mutate, plan, param, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<
-        { mutate?: boolean; plan?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags & EmulationFlags
+      const { mutate, plan, status, resume, param, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<
+        { mutate?: boolean; plan?: boolean; status?: boolean; resume?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags & EmulationFlags
       >();
+      const checkpointPath = verifyCheckpointPath(layout.projectDir ?? homeDataRoot(), verifyJourneysDir, id);
+      if (status === true) {
+        // `--mutate --status` reads as well as `--status`: it names the proof being asked about, and runs none.
+        if (plan === true || resume === true) {
+          emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify --status only reads: it takes neither --plan nor --resume"));
+          return;
+        }
+        const progress = readVerifyProgress(checkpointPath, checkpointKeyPath(), id);
+        if (json) emitJson(program, ok(withEngine(progress)));
+        else program.configureOutput().writeOut?.(verifyProgressLine(progress));
+        return;
+      }
       if ((mutate === true) === (plan === true)) {
-        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify needs exactly one of --plan or --mutate"));
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify needs exactly one of --plan, --mutate or --status"));
+        return;
+      }
+      if (resume === true && mutate !== true) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify --resume continues a proof: it needs --mutate"));
         return;
       }
       if (plan === true) {
@@ -146,6 +165,18 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
               params: param,
               onProgress: ({ replay, mutation }) => progress.progress({ phase: mutation === undefined ? "as recorded" : undefined, replay, mutation }),
               browserPortFactory: deps.explore?.browserPortFactory,
+              checkpoint: {
+                path: checkpointPath,
+                keyFile: checkpointKeyPath(),
+                resume: resume === true,
+                build: { ...currentEngineInfo(), tree: currentBuildTree() },
+                config: {
+                  hook: hookBindingOf(recorded.flags, environment?.fixtures),
+                  origin: { name: environment?.name, baseUrl: environment?.baseUrl, allowedOrigins: environment?.allowedOrigins, origins: environment?.origins, sourceOrigins: environment?.sourceOrigins, allow },
+                  browser: browserBindingOf(browser, emulation, storageState, environment?.secretFields),
+                },
+                onNotice: (text) => program.configureOutput().writeErr?.(`${text}\n`),
+              },
               ...(browser === undefined ? {} : { browser }),
               ...(emulation === undefined ? {} : { emulation }),
               ...(storageState !== undefined ? { storageState } : {}),
@@ -180,15 +211,19 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
           for (const a of report.assertions) out?.(`${verifyAssertionLine(a)}\n`);
           const s = report.summary;
           const targeted = s.targeted > 0 ? `, ${s.targeted} targeted` : "";
+          const reused = report.reusedPairs > 0 ? `, ${report.reusedPairs} pairs reused from a checkpoint` : "";
           out?.(
-            `${report.verdict} — journey '${report.journeyId}': ${s.sensitive} sensitive, ${s.insensitive} insensitive, ${s.cascade} cascade, ${s.notApplied} not applied, ${s.error} error, ${s.unpaired} unpaired${targeted}` +
+            `${report.verdict} — journey '${report.journeyId}': ${s.sensitive} sensitive, ${s.insensitive} insensitive, ${s.cascade} cascade, ${s.notApplied} not applied, ${s.error} error, ${s.unpaired} unpaired${targeted}${reused}` +
               `${report.reason === undefined ? "" : ` (${report.reason})`}\n`,
           );
         }
         process.exitCode = code;
         terminal.complete();
       } catch (err) {
-        if (err instanceof JourneyVerifyStalledError) {
+        if (err instanceof JourneyVerifyResumeRefusedError) {
+          emitJson(program, { ...fail(err.code, err.message), data: { reason: err.reason, exitCode: EXIT_CODES.inconclusive } });
+          process.exitCode = EXIT_CODES.inconclusive;
+        } else if (err instanceof JourneyVerifyStalledError) {
           // Only where the terminal layer stays out (an MCP call) does this run: elsewhere it ended the process first.
           emitJson(program, {
             ...fail(err.code, err.message),
