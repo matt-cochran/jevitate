@@ -22,6 +22,7 @@ import {
   checkpointPairOf,
   readVerifyProgress,
   resumeRefusalAgainstBase,
+  REPLAY_RECORD_KINDS,
   reusedProofFields,
   verifierStateOf,
   verifyCheckpointPath,
@@ -98,17 +99,29 @@ async function reportSteps(options: { observer?: { beforeStep?: (s: never) => Pr
 
 const stall = (): JourneyVerifyStalledError => new JourneyVerifyStalledError({ replay: 0 }, 1, true);
 
-/** Replay `n` as `script` says. Replay 1 is the base and reports its steps. An `Error` is thrown; a stall ends the proof as a kill would. */
-function scripted(script: (n: number, mutation: Record<string, unknown>) => RunResult | Error): { run: Run; calls: () => number } {
+/**
+ * Replay `n` as `script` says. Replay 1 is the base and reports its steps. An `Error` is thrown; a stall ends the proof as a kill
+ * would. The independence replay right after a base with steps is not numbered: it passes unless `independence` says otherwise.
+ */
+function scripted(script: (n: number, mutation: Record<string, unknown>) => RunResult | Error, independence: RunResult | Error = passed): { run: Run; calls: () => number; independenceRuns: () => number } {
   let n = 0;
+  let raw = 0;
+  let independenceRuns = 0;
   const run = (async (options: never, mutation: Record<string, unknown>) => {
+    raw += 1;
+    // An error before a browser opened is retried once.
+    if (raw === 2 || (raw === 3 && independence instanceof Error)) {
+      independenceRuns += 1;
+      if (independence instanceof Error) throw independence;
+      return independence;
+    }
     n += 1;
     const step = script(n, mutation);
     if (n === 1) await reportSteps(options);
     if (step instanceof Error) throw step;
     return step;
   }) as unknown as Run;
-  return { run, calls: () => n };
+  return { run, calls: () => n, independenceRuns: () => independenceRuns };
 }
 
 /** The plan's mutations, each answering so the paired assertions are proven: skip, block, then the fill's stale value. */
@@ -410,6 +423,60 @@ describe("a resumed proof and an uninterrupted one", () => {
     });
   }
 
+  /**
+   * The same, with every replay reporting its steps, so pacing, shared controls and re-runs happen. Held replays sleep
+   * on the fake clock, which this moves along.
+   */
+  const realTimer = setTimeout;
+  async function driven<T>(work: Promise<T>): Promise<T> {
+    let done = false;
+    const ended = work.finally(() => void (done = true));
+    ended.catch(() => undefined);
+    while (!done) {
+      fake.runUntilIdle();
+      await new Promise((resolve) => realTimer(resolve, 1));
+    }
+    return ended;
+  }
+  function timedByLabel(answers: Readonly<Record<string, RunResult>>, stopAt?: string): { run: Run; onProgress: NonNullable<ProveExtra["onProgress"]>; labels: string[] } {
+    const labels: string[] = [];
+    const run = (async (options: never) => {
+      const current = labels.at(-1)!;
+      if (current === stopAt) throw stall();
+      await reportSteps(options);
+      return answers[current] ?? passed;
+    }) as unknown as Run;
+    return { run, labels, onProgress: (p) => void labels.push(p.mutation ?? "base") };
+  }
+  const timedScripts: Record<string, Readonly<Record<string, RunResult>>> = {
+    "siblings sharing a control": { "skip:3": requestBroken, "block-write:3": requestBroken, "stale-value:2": stepBroken },
+    "a sibling's pass the failure does not reproduce against": { "skip:3": requestBroken, "stale-value:2": stepBroken },
+  };
+  for (const [name, answers] of Object.entries(timedScripts)) {
+    it(`reach the same verdict with the experiment's replays: ${name}`, async () => {
+      const once = timedByLabel(answers);
+      const whole = await driven(prove(once.run, undefined, { onProgress: once.onProgress }));
+      // Shared: the independence replay ran on these floors, so it is this step's control too.
+      expect(whole.mutations.find((m) => m.id === "skip:3")?.control).toBe("passed");
+      expect(once.labels.filter((l) => l === "independence replay, as recorded")).toHaveLength(1);
+      rmSync(verifyRecordPath(join(dir, "journeys"), ID), { force: true });
+      const killed = timedByLabel(answers, "stale-value:2");
+      await expect(driven(prove(killed.run, request(false), { onProgress: killed.onProgress }))).rejects.toBeInstanceOf(JourneyVerifyStalledError);
+      expect(readBody().completed.map((p) => p.id)).toEqual(["skip:3", "block-write:3"]);
+      const rest = timedByLabel(answers);
+      const report = await driven(prove(rest.run, request(true), { onProgress: rest.onProgress }));
+      expect({ verdict: report.verdict, assertions: assertionsOf(report), summary: report.summary }).toEqual({ verdict: whole.verdict, assertions: assertionsOf(whole), summary: whole.summary });
+      expect(report.reusedPairs).toBe(2);
+      // Never reused: a resume answers for the base it just measured.
+      expect(rest.labels.filter((l) => l === "independence replay, as recorded")).toHaveLength(1);
+    });
+  }
+
+  it("keep a replay at the base's time, and what it read, through the file", () => {
+    const original = { kind: "skip" as const, step: 3, id: "skip:3", outcome: "failed" as const, failedSites: [{ where: "end-state", index: 0 } as const], waitsCut: ["end-state:0"], control: "failed" as const, atBaseTime: { outcome: "passed" as const, failedSites: [] }, relaxed: { outcome: "failed" as const, failedSites: [], atBaseTime: { outcome: "failed" as const, failedSites: [] } } };
+    expect(reusedProofFields(checkpointPairOf(original, []))).toMatchObject({ atBaseTime: { outcome: "passed" }, relaxed: { atBaseTime: { outcome: "failed" } } });
+  });
+
   it("feed mutationProofVerdict the same input: a stored result reads as the original does", () => {
     const journey = journeyOf();
     const plan = planJourneyMutations(journey, {});
@@ -438,11 +505,31 @@ describe("a resumed proof and an uninterrupted one", () => {
   });
 });
 
+describe("the independence replay on a resume", () => {
+  it("runs again, and is reused from nothing", async () => {
+    await interruptAt(3);
+    expect(readBody().independence).toBe("passed");
+    const resumed = scripted((n) => (n === 1 ? passed : n === 2 ? requestBroken : n === 3 ? stepBroken : passed));
+    await prove(resumed.run, request(true));
+    expect(resumed.independenceRuns()).toBe(1);
+  });
+
+  it("leaves the proof inconclusive when it cannot run, whatever the reused pairs read", async () => {
+    await interruptAt(3);
+    const resumed = scripted((n) => (n === 1 ? passed : n === 2 ? requestBroken : n === 3 ? stepBroken : passed), new Error("no browser"));
+    const report = await prove(resumed.run, request(true));
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toMatch(/cannot say the replays are independent/);
+  });
+});
+
 describe("a taint from before the interruption", () => {
   it("a failed fixture restore keeps the resumed proof inconclusive", async () => {
     const { run } = scripted((n, mutation) => {
-      if (n === 2) (mutation["onFixtureRestoreFailed"] as () => void)();
-      return n === 3 ? stall() : proofResult(n);
+      if (n !== 2) return proofResult(n);
+      // Nothing runs after a failed restore, so the kill comes as it fails.
+      (mutation["onFixtureRestoreFailed"] as () => void)();
+      return stall();
     });
     await expect(prove(run, request(false))).rejects.toBeInstanceOf(JourneyVerifyStalledError);
     expect(readBody().taint.restoreFailed).toBe(true);
@@ -459,9 +546,29 @@ describe("a taint from before the interruption", () => {
     expect(report.reason).toContain("a replay of skip:3 closed with a write still unanswered");
   });
 
+  it("a note that state crosses replays keeps the resumed proof inconclusive, with its reason", async () => {
+    await interruptAt(3);
+    writeSigned((b) => ({ ...b, taint: { ...b.taint, isolation: "state-crossed" } }));
+    const report = await prove(scripted(proofResultAfter(1)).run, request(true));
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toMatch(/cross into the next/);
+  });
+
   function proofResultAfter(finished: number): (n: number) => RunResult {
     return (n) => (n === 1 ? passed : (PROVING[n - 2 + finished] ?? passed));
   }
+});
+
+describe("a checkpoint of the earlier experiment", () => {
+  it("is refused, not misread: its floors and controls meant something else", async () => {
+    await interruptAt(3);
+    writeSigned((b) => ({ ...b, schema: 1 }) as unknown as CheckpointBody);
+    expect(await refusal(prove(scripted(proofResult).run, request(true)))).toBe("corrupt");
+  });
+
+  it("knows the kinds this experiment runs per pair", () => {
+    expect(REPLAY_RECORD_KINDS).toEqual(expect.arrayContaining(["control", "at-base-time", "rerun"]));
+  });
 });
 
 describe("resume refuses, by name, and never starts over", () => {
@@ -858,13 +965,14 @@ describe("MCP (`verify_journey`) and the CLI", () => {
     const run = (async (options: never) => {
       n += 1;
       if (n === 1) await reportSteps(options);
-      if (n === 3) await held;
-      return proofResult(n);
+      if (n === 4) await held;
+      // Replay 2 is the independence replay.
+      return n === 2 ? passed : proofResult(n - 1);
     }) as unknown as Run;
     const { mcp } = surfaces(run);
     const proof = mcp({ id: ID, mutate: true });
-    for (let i = 0; i < 200 && n < 3; i++) await new Promise((resolve) => realSleep(resolve, 5));
-    expect(n).toBe(3);
+    for (let i = 0; i < 200 && n < 4; i++) await new Promise((resolve) => realSleep(resolve, 5));
+    expect(n).toBe(4);
     process.exitCode = 7;
     const seen = (await mcp({ id: ID, status: true })) as unknown as { isError?: boolean; body: { exitCode: number; data: { verifier: string; progress: { completed: number; currentPair: string } } } };
     expect(seen.isError).toBeFalsy();

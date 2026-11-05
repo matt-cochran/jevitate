@@ -821,6 +821,8 @@ export function sitesReachedEarly(failedSites: readonly MutationFailedSite[], m:
   const last = pace.stepEndMs.length - 1;
   return failedSites.flatMap((f) => {
     if (f.where === "unevaluable") return [];
+    // A step that failed never got to its own request checks: listing one is no reading of it, so no timing to judge.
+    if (f.where === "step-request" && failedSites.some((x) => x.where === "step" && x.step === f.step)) return [];
     const base = baseAtSite(f, m, pace);
     const reached = f.where === "end-state" ? (endStateReachedMs ?? reachedMs[last]) : reachedMs[f.step - 1];
     return base !== undefined && reached !== undefined && reached < base ? [failedSiteKey(f)] : [];
@@ -862,7 +864,7 @@ export function heldSites(failedSites: readonly MutationFailedSite[], holds: Rep
 }
 
 /** When a replay got to each site: `TargetedReplayRun.arrivedMs` and `endStateReachedMs`. */
-interface SiteArrivals {
+export interface SiteArrivals {
   readonly arrivedMs?: readonly (number | undefined)[];
   readonly endStateReachedMs?: number;
 }

@@ -217,6 +217,9 @@ describe("a claim compared with when the base's claim held", () => {
   it("still compares a request check with the step's end", () => {
     expect(sitesReachedEarly([REQUEST], skip2, SLOW_CHECK, [undefined, 2_000])).toEqual(["step-request:2:0"]);
   });
+  it("does not judge a request check its failed step never got to", () => {
+    expect(sitesReachedEarly([REQUEST, OWN], skip2, SLOW_CHECK, [undefined, 2_000])).toEqual([]);
+  });
   it("gives a dead claim no more room for a slow request check", () => {
     const paced = stepOf(replayOf(journey({ maxMs: 600_000, stallMs: 1_000 }), SLOW_CHECK), 2);
     expect("waitFor" in paced && paced.waitFor?.maxMs).toBe(6_000);

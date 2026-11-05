@@ -55,6 +55,7 @@ import {
   type MutationReplay,
   type MutationRunResult,
   type ReplayPace,
+  type SiteArrivals,
   type TargetedProof,
 } from "@jevitate/journey";
 import { DEFAULT_STEP_RESPONSE_TIMEOUT_MS, describeCheck, evaluateNetworkCheckAwaiting, monitorFor, type BlockedWrite, type RequestCapture } from "@jevitate/explore";
@@ -1042,13 +1043,15 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
     const noEndState = journeyEndState(journey).length === 0;
     // The replay is DESCRIBED, not fixed: `mutateJourney` re-describes it on the Journey the run moved
     // onto the environment (#247), so a mutated copy never drops `--env`/`--base-url`.
-    const attemptReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, retry: boolean, kind: ReplayKind): Promise<Replayed> => {
+    const attemptReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, retry: boolean, kind: ReplayKind, matchTo?: SiteArrivals): Promise<Replayed> => {
       try {
         const paced = (j: Journey): MutationReplay => pacedReplay(j, describe(j), m, pace);
         const how = paced(journey);
         const withMargin = kind !== "at-base-time";
         // Nothing reads the time after a last step with no end state, so holding it would only cost.
-        const pacer = new ReplayPacer(m.step - 1, (index) => (index === lastIndex && noEndState ? undefined : paceFloorMs(pace, m, index, withMargin)), paceBeforeMutationMs(pace, m));
+        // A control also gets to each site no sooner than the mutated replay it answers for did, dead waits included.
+        const atLeast = (floor: number | undefined, arrival: number | undefined): number | undefined => (floor === undefined || arrival === undefined ? (floor ?? arrival) : Math.max(floor, arrival));
+        const pacer = new ReplayPacer(m.step - 1, (index) => (index === lastIndex && noEndState ? undefined : atLeast(paceFloorMs(pace, m, index, withMargin), matchTo?.arrivedMs?.[index + 1])), paceBeforeMutationMs(pace, m));
         // #785: a control's counts say, on failure, what it did against the base replay. Any replay that
         // sent a write stays open as long as the base did, then until its writes have settled, so what it
         // started lands before its restore.
@@ -1076,7 +1079,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
           {
             structuredFailures: true,
             beforeEndState: async () => {
-              await pacer.hold(paceEndStateFloorMs(pace, m, withMargin));
+              await pacer.hold(atLeast(paceEndStateFloorMs(pace, m, withMargin), matchTo?.endStateReachedMs));
               // A claim is judged with what the app was already doing finished, as far as the Journey allows.
               await pacer.holding(() => probe.settleOpenWrites(settleBoundMs));
               pacer.noteEndState();
@@ -1172,18 +1175,18 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
     // app, and a retry failing on that leftover state would read as proof, so it stays an error. A
     // `failed` replay is a result and a stall ends the proof: neither gets here. A replay that never
     // started (`describe` refused it, as a targeted proof's bad relaxation) would only be refused again.
-    const attemptWithRetry = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, kind: ReplayKind): Promise<Replayed> => {
+    const attemptWithRetry = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, kind: ReplayKind, matchTo?: SiteArrivals): Promise<Replayed> => {
       const before = replays;
       const sessionsBefore = sessionsOpened;
-      const first = await attemptReplay(m, describe, false, kind);
+      const first = await attemptReplay(m, describe, false, kind, matchTo);
       if (first.outcome !== "error" || replays === before || sessionsOpened !== sessionsBefore) return first;
       retriesOf.set(m.id, [...(retriesOf.get(m.id) ?? []), { reason: first.reason ?? "unknown error" }]);
-      return attemptReplay(m, describe, true, kind);
+      return attemptReplay(m, describe, true, kind, matchTo);
     };
     // #787: the one place a replay of a pair runs, so each is kept as a record of its kind. A new kind is a new name here and in `REPLAY_RECORD_KINDS`.
-    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, kind: ReplayKind): Promise<Replayed> => {
+    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, kind: ReplayKind, matchTo?: SiteArrivals): Promise<Replayed> => {
       replayWritesInFlight = 0;
-      const ran = await attemptWithRetry(m, describe, kind);
+      const ran = await attemptWithRetry(m, describe, kind, matchTo);
       pairReplays.push(checkpointReplayOf(kind, ran, replayWritesInFlight));
       return ran;
     };
@@ -1201,20 +1204,25 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
       suggested.push(suggestion);
     };
     const asRecorded = (j: Journey): MutationReplay => ({ journey: j });
-    // Sibling mutations of a step have the same floors, so they share one matched control.
-    const stepControls = new Map<number, Promise<Replayed>>();
-    const controlFor = (m: JourneyMutation): Promise<Replayed> => {
-      const known = stepControls.get(m.step);
-      if (known === undefined) {
-        const running = runReplay(m, asRecorded, "control");
-        stepControls.set(m.step, running);
-        return running;
+    // Sibling mutations of a step have the same floors, so they share a matched control while it reached their sites together with them.
+    const stepControls = new Map<number, Replayed[]>();
+    const controlFor = async (m: JourneyMutation, runs: readonly Replayed[], sitesAtStake: readonly string[]): Promise<Replayed> => {
+      const known = (stepControls.get(m.step) ?? []).find((c) => runs.every((r) => sitesUnmatchedBy(r.failedSites.filter((f) => sitesAtStake.includes(siteKeyOf(f))), r, c, paceMarginOf(pace, m)).length === 0));
+      if (known !== undefined) {
+        // Each pair keeps a record of the control it read, whoever ran it: one that left a write open ended the proof.
+        pairReplays.push(checkpointReplayOf("control", known, 0));
+        return known;
       }
-      // Each pair keeps a record of the control it read, whoever ran it: one that left a write open ended the proof.
-      return known.then((shared) => {
-        pairReplays.push(checkpointReplayOf("control", shared, 0));
-        return shared;
-      });
+      const latest = (of: (r: Replayed) => number | undefined): number | undefined => {
+        const known = runs.map(of).filter((ms): ms is number => ms !== undefined);
+        return known.length === 0 ? undefined : Math.max(...known);
+      };
+      const longest = Math.max(0, ...runs.map((r) => r.arrivedMs?.length ?? 0));
+      const end = latest((r) => r.endStateReachedMs);
+      const matchTo: SiteArrivals = { arrivedMs: Array.from({ length: longest }, (_, i) => latest((r) => r.arrivedMs?.[i])), ...(end === undefined ? {} : { endStateReachedMs: end }) };
+      const ran = await runReplay(m, asRecorded, "control", matchTo);
+      stepControls.set(m.step, [...(stepControls.get(m.step) ?? []), ran]);
+      return ran;
     };
     const resultsSoFar = (extra?: readonly [string, MutationRunResult]): ReadonlyMap<string, MutationRunResult> => new Map([...mutations.map((e): [string, MutationRunResult] => [e.id, resultOfEntry(e)]), ...(extra === undefined ? [] : [extra])]);
 
@@ -1238,7 +1246,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
         return;
       }
       if (floored.outcome === "passed") {
-        stepControls.set(first.step, Promise.resolve(floored));
+        stepControls.set(first.step, [floored]);
         checkpoint?.independence("passed");
         return;
       }
@@ -1264,7 +1272,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
         return;
       }
       if (tainted()) return;
-      stepControls.set(first.step, Promise.resolve(again));
+      stepControls.set(first.step, [again]);
       checkpoint?.independence("hold-breaks-claim");
     };
 
@@ -1304,7 +1312,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
       const atStake = [...new Set([...needing(firstRun), ...(relaxedRun === undefined ? [] : needing(relaxedRun))])];
       const wanted = atStake.length > 0;
       const canChange = (keys: readonly string[]): boolean => !tainted() && controlCanChangeVerdict(journey, plan, resultsSoFar([m.id, provisional]), keys);
-      const fresh = wanted && canChange(atStake) ? await controlFor(m) : undefined;
+      const fresh = wanted && canChange(atStake) ? await controlFor(m, relaxedRun === undefined ? [firstRun] : [firstRun, relaxedRun], atStake) : undefined;
       const checked = async (r: Replayed, describe: typeof mutationReplay): Promise<Replayed> => {
         if (fresh === undefined) return r;
         const keys = needing(r);
@@ -1333,7 +1341,8 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
         const memoKey = `${kind}\u0000${key ?? ""}`;
         const known = targetedRuns.get(memoKey);
         if (known !== undefined) return known;
-        const running = runReplay(m, describe, kind === "control" ? "targeted-control" : "targeted");
+        // A control runs after the targeted replay it answers for, and gets to each site no sooner than it did.
+        const running = kind === "control" ? (targetedRuns.get(`targeted\u0000${key ?? ""}`) ?? Promise.resolve(undefined)).then((run) => runReplay(m, describe, "targeted-control", run)) : runReplay(m, describe, "targeted");
         targetedRuns.set(memoKey, running);
         return running;
       };
@@ -1393,8 +1402,8 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
       const proof = entry.targeted?.find((t) => t.site === next.site && t.refused === undefined);
       const fromRelaxed = entry.relaxed !== undefined && !(site.where === "step" && site.step === m.step) && entry.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition);
       const describe = proof !== undefined ? (j: Journey): MutationReplay => targetedMutationReplay(j, m, next.site, proof.relaxedSites, replayOpts) : (j: Journey): MutationReplay => (fromRelaxed ? relaxedMutationReplay : mutationReplay)(j, m, replayOpts);
-      const control = await controlFor(m);
       const rerun = await runReplay(m, describe, "rerun");
+      const control = await controlFor(m, [rerun], [next.site]);
       const undecided = `sibling mutations disagree on ${next.site} (${next.sensitive} failed it, ${next.passed} passed it), and a control and a re-run could not settle it; run the proof again`;
       const controlFields = { control: control.outcome, ...(control.diagnostics === undefined ? {} : { controlDiagnostics: control.diagnostics }) };
       if (rerun.outcome === "error" || control.outcome === "error") {
@@ -1440,7 +1449,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   // A last replay as recorded, where its result can still change the verdict: a replay's slow job has no
   // request to watch, so a late landing that stuck is only seen here. It cannot see one a restore then cleared.
   // #787: a resume always runs it: nothing from before the interruption can vouch for how the proof ended.
-  if (resuming !== undefined || (pace.stepEndMs.length > 0 && mutationProofVerdict({ ...verdictInput, restoreFailed, ...(notIsolated === undefined ? {} : { notIsolated }) }).verdict !== "inconclusive")) {
+  if (!tainted() && (resuming !== undefined || (pace.stepEndMs.length > 0 && mutationProofVerdict({ ...verdictInput, restoreFailed, ...(notIsolated === undefined ? {} : { notIsolated }) }).verdict !== "inconclusive"))) {
     checkpoint?.phase("closing");
     try {
       const closing = await boundedRun({ ...runOpts }, { structuredFailures: true }, { id: "closing replay, as recorded" });
