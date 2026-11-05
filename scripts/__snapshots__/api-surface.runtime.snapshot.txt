@@ -785,7 +785,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (163 exports)
+# @jevitate/journey (170 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -920,6 +920,10 @@
   nextTargetedRelaxation: function
   outputKeyFields: function
   ownAssertions: function
+  paceEndStateFloorMs: function
+  paceFloorMs: function
+  paceTailMs: function
+  pacedReplay: function
   planJourneyMutations: function
   prefixLandingPath: function
   readRecords: function
@@ -934,6 +938,8 @@
   secretNamedValues: function
   secretParamNames: function
   secretParamValues: function
+  sitesOutranBy: function
+  sitesReachedEarly: function
   splitBudget: function
   stampAnchorStepIds: function
   stampUnstampedAnchors: function
@@ -945,6 +951,7 @@
   targetedControlReplay: function
   targetedMutationReplay: function
   targetedProofPlanIssues: function
+  thinSites: function
   validateFieldValue: function
   validateParams: function
   validateRecords: function

@@ -223,6 +223,10 @@ export interface MutationReplayOptions {
   blockWritesAtStep?: number;
   /** #402: also return the outcome checks' structured failures (`outcomeFailures`). */
   structuredFailures?: boolean;
+  /** Mutation proof: awaited just before the end state's checks start. */
+  beforeEndState?: () => Promise<void>;
+  /** Mutation proof: called as the end state's checks end. They settle first, so only this shows when the base replay read it. */
+  afterEndState?: () => void;
   /** A proof must not trust a replay after a failed restore. Called once the run's restore has ended, however the run ended. */
   onFixtureRestoreFailed?: () => void;
 }
@@ -700,6 +704,8 @@ export async function runJourneyProgrammatically(
         const replayParams = replayed === journey ? params : prefixParams(journey, replayed, params);
         const raw = await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params: replayParams, policy }), {
           collectStepFailuresOnReplayFailure: mutation.structuredFailures === true,
+          ...(mutation.beforeEndState === undefined ? {} : { beforeEndState: mutation.beforeEndState }),
+          ...(mutation.afterEndState === undefined ? {} : { afterEndState: mutation.afterEndState }),
         });
         runSecrets = runSecretValues(secrets, raw);
         result = redactSecretValues(raw, runSecrets);

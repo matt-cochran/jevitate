@@ -163,11 +163,11 @@ describe("#785 a control whose POST is never answered", () => {
   it("is refused at its bound instead of hanging", () => {
     expect(endStateProof(report, "skip:2")?.control).toBe("failed");
   });
-  it("has its bounded response wait end in a timeout", () => {
-    expect(endStateProof(report, "skip:2")?.controlDiagnostics?.control.relaxedWaits.find((w) => w.site === "step-request:2:0")?.ending).toBe("timeout");
+  it("fails at its bounded response check", () => {
+    expect(endStateProof(report, "skip:2")?.controlDiagnostics?.failedSites).toContain("step-request:2:0");
   });
   it("is told apart as end-state timing", () => {
-    expect(endStateProof(report, "skip:2")?.controlDiagnostics?.indicates).toEqual(["end-state-timing"]);
+    expect(endStateProof(report, "skip:2")?.controlDiagnostics?.indicates).toContain("end-state-timing");
   });
   it("reports the base replay's storage as a count", () => {
     expect(endStateProof(report, "skip:2")?.controlDiagnostics?.base?.storageBeforeEndState?.sessionStorageKeys).toBe(1);
@@ -340,8 +340,8 @@ describe("[realtime] a write the mutation blocks, under a very long claim", () =
   it("reaches a proven verdict through its skipped step, without waiting the claim out", () => {
     expect(report.verdict).toBe("proven");
   });
-  it("refuses the blocked replay's own proof, whose kept wait ran out of its cap", () => {
-    expect(report.mutations.find((m) => m.id === "block-write:2")?.targeted?.find((t) => t.site === "end-state:0")?.refused).toMatch(/moved on early at step:2/);
+  it("reads the end state through the blocked replay, which waited as long as the base did", () => {
+    expect(report.mutations.find((m) => m.id === "block-write:2")?.relaxed?.failedSites).toContainEqual({ where: "end-state", index: 0 });
   });
 });
 
@@ -369,7 +369,7 @@ describe("[realtime] a skipped step whose claim only waited on an earlier step's
   });
 });
 
-describe("[realtime] a step's own claim whose capped wait runs out", () => {
+describe("[realtime] a step's own claim against a slow job", () => {
   const withoutEndState = (journey: Journey): Journey => {
     delete (journey.metadata as { endState?: unknown }).endState;
     return journey;
@@ -421,8 +421,8 @@ describe("[realtime] a step's own claim whose capped wait runs out", () => {
     it("reaches a proven verdict", () => {
       expect(report.verdict).toBe("proven");
     });
-    it("needed the control that shows the claim holds unmutated", () => {
-      expect(report.mutations.find((m) => m.id === "skip:2")?.targeted?.find((t) => t.site === "step:2")?.control).toBe("passed");
+    it("needs no control of its own, since the base replay is that control", () => {
+      expect(report.mutations.find((m) => m.id === "skip:2")?.targeted).toBeUndefined();
     });
   });
 
@@ -441,8 +441,8 @@ describe("[realtime] a step's own claim whose capped wait runs out", () => {
       report = await prove(journey).finally(served.close);
     }, 180_000);
 
-    it("stays a cascade and names the refusal", () => {
-      expect(ownSite(report, "step:2")).toMatchObject({ verdict: "cascade", targetedRefusal: expect.stringMatching(/step:2.*ran out of its cap/) });
+    it("reads sensitive, since the skipped replay waited as long as the base took", () => {
+      expect(ownSite(report, "step:2")).toMatchObject({ verdict: "sensitive", provedBy: "skip:2" });
     });
   });
 });

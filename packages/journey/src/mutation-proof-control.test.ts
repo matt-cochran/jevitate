@@ -125,12 +125,6 @@ describe("#785 a relaxed site keeps its waiting", () => {
     const waited = waitedOwnClaim();
     expect(targetedMutationReplay(waited, block, "end-state:0", ["step:2"]).relaxedSiteWaits).toEqual(await controlWaitsOf(waited, block, ["step:2"]));
   });
-  it("a blocked step's own claim is capped, since the write it waits on never leaves", () => {
-    expect(siteWait(relaxedMutationReplay(waitedOwnClaim(), block).relaxedSiteWaits, "step:1")).toMatchObject({ wait: mutationWait(WAIT), capped: true });
-  });
-  it("a claim its cap does not shorten is not marked capped", () => {
-    expect(siteWait(relaxedMutationReplay(waitedOwnClaim({ maxMs: 1_000, stallMs: 10_000 }), block).relaxedSiteWaits, "step:1")).not.toHaveProperty("capped");
-  });
   it("a value mutation's own claim keeps its full waitFor, since its write is still sent", () => {
     expect(siteWait(relaxedMutationReplay(waitedFill(), { kind: "stale-value", step: 1, id: "stale-value:1" }).relaxedSiteWaits, "step:1")).toMatchObject({ wait: WAIT });
   });
@@ -159,10 +153,10 @@ describe("#785 a failed control", () => {
   });
 });
 
-describe("a kept wait that ran out of its cap", () => {
+describe("a replay that failed sooner than an unmutated replay passed", () => {
   const END_STATE_FAILED = [{ where: "end-state", index: 0 }] as const;
   const OWN_FAILED = [{ where: "step", step: 1, postcondition: true }] as const;
-  const relaxedRun = { outcome: "failed", failedSites: END_STATE_FAILED, waitsCut: ["step:1"] } as const;
+  const relaxedRun = { outcome: "failed", failedSites: END_STATE_FAILED, waitsCut: ["end-state:0"] } as const;
   const setup = () => {
     const journey = waitedOwnClaim();
     const plan = planJourneyMutations(journey);
@@ -177,70 +171,63 @@ describe("a kept wait that ran out of its cap", () => {
   });
   it("still lets that relaxed replay's pass read insensitive", () => {
     const { m, target } = setup();
-    expect(classifyMutation(target, m, { outcome: "failed", failedSites: OWN_FAILED, relaxed: { outcome: "passed", failedSites: [], waitsCut: ["step:1"] } })).toBe("insensitive");
+    expect(classifyMutation(target, m, { outcome: "failed", failedSites: OWN_FAILED, relaxed: { outcome: "passed", failedSites: [], waitsCut: ["end-state:0"] } })).toBe("insensitive");
   });
   it("refuses an automatic proof resting on that relaxed replay, naming the site", async () => {
     const { journey, plan, m, target } = setup();
     const proof = await runTargetedProof(journey, plan, m, target, { outcome: "failed", failedSites: OWN_FAILED, relaxed: relaxedRun }, async () => ({ outcome: "passed", failedSites: [] }));
-    expect(proof.refused).toMatch(/mutated replay moved on early at step:1/);
+    expect(proof.refused).toMatch(/failed at end-state:0 sooner than an unmutated replay/);
   });
-  it("refuses an automatic proof whose control ran out of it", async () => {
-    const { journey, plan, m, target } = setup();
-    const initial = { outcome: "failed", failedSites: [{ where: "step", step: 2, postcondition: true }] } as const;
-    const proof = await runTargetedProof(journey, plan, m, target, initial, async (_d, kind) =>
-      kind === "targeted" ? { outcome: "failed", failedSites: END_STATE_FAILED } : { outcome: "passed", failedSites: [], waitsCut: ["step:1"] },
-    );
-    expect(proof.refused).toMatch(/control replay moved on early at step:1/);
-  });
-  it("refuses a declared proof whose targeted replay ran out of it", async () => {
+  it("refuses a declared proof whose targeted replay did", async () => {
     const { journey, plan, m, target } = setup();
     const proof = await runDeclaredTargetedProof(journey, plan, m, target, { check: "end-state:0", mustFailWhen: m.id, relax: ["step:2"] }, async () => relaxedRun);
-    expect(proof.refused).toMatch(/mutated replay moved on early/);
+    expect(proof.refused).toMatch(/sooner than an unmutated replay/);
   });
-  it("refuses a declared proof whose control ran out of it", async () => {
-    const { journey, plan, m, target } = setup();
-    const proof = await runDeclaredTargetedProof(journey, plan, m, target, { check: "end-state:0", mustFailWhen: m.id, relax: ["step:2"] }, async (_d, kind) =>
-      kind === "targeted" ? { outcome: "failed", failedSites: END_STATE_FAILED } : { outcome: "passed", failedSites: [], waitsCut: ["step:1"] },
-    );
-    expect(proof.refused).toMatch(/control replay moved on early/);
+  it("refuses a step's own claim that did, naming the site", async () => {
+    const journey = waitedOwnClaim();
+    const target = journeyAssertions(journey).find((s) => assertionSiteKey(s) === "step:1")!;
+    const proof = await runTargetedProof(journey, { mutations: [block], pairs: [{ site: "step:1", mutation: block.id }] }, block, target, { outcome: "failed", failedSites: OWN_FAILED, waitsCut: ["step:1"] }, async () => ({ outcome: "passed", failedSites: [] }));
+    expect(proof.refused).toMatch(/failed at step:1 sooner/);
+  });
+  it("leaves that own claim a cascade", () => {
+    const journey = waitedOwnClaim();
+    const target = journeyAssertions(journey).find((s) => assertionSiteKey(s) === "step:1")!;
+    expect(classifyMutation(target, block, { outcome: "failed", failedSites: OWN_FAILED, waitsCut: ["step:1"] })).toBe("cascade");
+  });
+  it("keeps an own claim that failed no sooner sensitive", () => {
+    const journey = waitedOwnClaim();
+    const target = journeyAssertions(journey).find((s) => assertionSiteKey(s) === "step:1")!;
+    expect(classifyMutation(target, block, { outcome: "failed", failedSites: OWN_FAILED })).toBe("sensitive");
   });
 });
 
-describe("a mutated step's own claim whose capped wait ran out", () => {
-  const OWN_FAILED = [{ where: "step", step: 1, postcondition: true }] as const;
-  const cut = { outcome: "failed", failedSites: OWN_FAILED, waitsCut: ["step:1"] } as const;
-  const setup = () => {
+describe("a targeted proof's control", () => {
+  const END_STATE_FAILED = [{ where: "end-state", index: 0 }] as const;
+  const declaredProof = (controlReachedMs: readonly number[]) => {
     const journey = waitedOwnClaim();
     const m = block;
-    const target = journeyAssertions(journey).find((s) => assertionSiteKey(s) === "step:1")!;
-    return { journey, plan: { mutations: [m], pairs: [{ site: "step:1", mutation: m.id }] }, m, target };
+    const target = journeyAssertions(journey).find((s) => assertionSiteKey(s) === "end-state:0")!;
+    const plan = { mutations: [m], pairs: [{ site: "step:2", mutation: m.id }, { site: "end-state:0", mutation: m.id }] };
+    return runDeclaredTargetedProof(journey, plan, m, target, { check: "end-state:0", mustFailWhen: m.id, relax: ["step:2"] }, async (_d, kind) =>
+      kind === "targeted" ? { outcome: "failed", failedSites: END_STATE_FAILED, reachedMs: [1_000, 2_000] } : { outcome: "passed", failedSites: [], reachedMs: controlReachedMs },
+    );
   };
 
-  it("is a cascade until a control speaks", () => {
-    const { m, target } = setup();
-    expect(classifyMutation(target, m, cut)).toBe("cascade");
+  it("is refused when it had longer to reach the site than the mutated replay", async () => {
+    expect((await declaredProof([1_000, 2_500])).refused).toMatch(/control had 2500ms to reach end-state:0 and the mutated replay 2000ms/);
   });
-  it("stays sensitive when its wait did not run out", () => {
-    const { m, target } = setup();
-    expect(classifyMutation(target, m, { outcome: "failed", failedSites: OWN_FAILED })).toBe("sensitive");
+  it("counts when it had no longer", async () => {
+    expect((await declaredProof([1_000, 1_500])).refused).toBeUndefined();
   });
-  it("runs its control with the mutated replay's capped wait", async () => {
-    const { journey, plan, m, target } = setup();
-    let controlled: Journey | undefined;
-    await runTargetedProof(journey, plan, m, target, cut, async (describeReplay) => {
-      controlled = describeReplay(journey).journey;
-      return { outcome: "passed", failedSites: [] };
+  it("is named by its relaxations, so sites relaxing the same ones can share it", async () => {
+    const journey = waitedOwnClaim();
+    const target = journeyAssertions(journey).find((s) => assertionSiteKey(s) === "end-state:0")!;
+    const plan = { mutations: [block], pairs: [{ site: "step:2", mutation: block.id }, { site: "end-state:0", mutation: block.id }] };
+    let key: string | undefined;
+    await runDeclaredTargetedProof(journey, plan, block, target, { check: "end-state:0", mustFailWhen: block.id, relax: ["step:2"] }, async (_d, kind, controlKey) => {
+      if (kind === "control") key = controlKey;
+      return kind === "targeted" ? { outcome: "failed", failedSites: END_STATE_FAILED } : { outcome: "passed", failedSites: [] };
     });
-    expect(controlled!.recording.pages[0]!.steps[0]!.step).toMatchObject({ kind: "click", waitFor: mutationWait(WAIT) });
-  });
-  it("reads sensitive once the control passes", async () => {
-    const { journey, plan, m, target } = setup();
-    const proof = await runTargetedProof(journey, plan, m, target, cut, async () => ({ outcome: "passed", failedSites: [] }));
-    expect(classifyMutation(target, m, { ...cut, targeted: [proof] })).toBe("sensitive");
-  });
-  it("stays a cascade, with the refusal named, when the control does not pass", async () => {
-    const { journey, plan, m, target } = setup();
-    const proof = await runTargetedProof(journey, plan, m, target, cut, async () => ({ outcome: "failed", failedSites: OWN_FAILED }));
-    expect(proof.refused).toMatch(/step:1 ran out of its cap/);
+    expect(key).toBe("step:2");
   });
 });

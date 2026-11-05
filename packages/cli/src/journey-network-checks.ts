@@ -231,7 +231,13 @@ export class JourneyOutcomeChecks {
   async run(
     actor: Actor,
     replay: () => Promise<JourneyRunResult>,
-    opts: { readonly collectStepFailuresOnReplayFailure?: boolean } = {},
+    opts: {
+      readonly collectStepFailuresOnReplayFailure?: boolean;
+      /** Awaited just before the end state's checks start. Never reached by a replay that failed first. */
+      readonly beforeEndState?: () => Promise<void>;
+      /** Called as the end state's checks end, however they ended. */
+      readonly afterEndState?: () => void;
+    } = {},
   ): Promise<JourneyRunResult> {
     this.#lastFailures = [];
     this.#slowSteps = [];
@@ -291,6 +297,7 @@ export class JourneyOutcomeChecks {
     }
     let end: SuccessCheckResult[] = [];
     if (this.#end.length > 0) {
+      await opts.beforeEndState?.();
       try {
         end = await evaluateOutcomeChecks(this.#end, {
           actor,
@@ -306,6 +313,8 @@ export class JourneyOutcomeChecks {
         const detail = `success checks could not be evaluated after the last step: ${e instanceof Error ? e.message : String(e)}`;
         this.#lastFailures = [{ where: "unevaluable", detail }];
         return { outcome: "quarantined", reason: detail };
+      } finally {
+        opts.afterEndState?.();
       }
     }
     // `evaluateOutcomeChecks` keeps the checks' order, which is `journeyEndState`: `endState` then

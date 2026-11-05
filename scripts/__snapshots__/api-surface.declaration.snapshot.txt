@@ -1224,7 +1224,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (282 exports)
+# @jevitate/journey (290 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1444,6 +1444,10 @@
   OutcomeTargetSchema: variable
   outputKeyFields: function
   ownAssertions: function
+  pacedReplay: function
+  paceEndStateFloorMs: function
+  paceFloorMs: function
+  paceTailMs: function
   PAIR_RELATIONS: variable
   PairRelation: type-alias
   ParamSchema: interface
@@ -1466,6 +1470,7 @@
   relaxedMutationReplay: function
   removeAnchor: function
   renderJobStory: function
+  ReplayPace: interface
   resolveAnchorStep: function
   resolveJourneyStep: function
   ReviewAnchorWarningSchema: variable
@@ -1485,6 +1490,8 @@
   secretParamNames: function
   secretParamValues: function
   SecretRef: interface
+  sitesOutranBy: function
+  sitesReachedEarly: function
   splitBudget: function
   stampAnchorStepIds: function
   StampedAnchor: interface
@@ -1503,6 +1510,7 @@
   targetedMutationReplay: function
   TargetedProof: interface
   targetedProofPlanIssues: function
+  thinSites: function
   validateFieldValue: function
   validateParams: function
   validateRecords: function
