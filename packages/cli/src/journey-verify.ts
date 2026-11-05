@@ -39,7 +39,17 @@ import {
 } from "@jevitate/journey";
 import { DEFAULT_STEP_RESPONSE_TIMEOUT_MS, describeCheck, type BlockedWrite } from "@jevitate/explore";
 import { clock } from "@jevitate/domain";
-import { DEFAULT_ADMISSION_TIMEOUT_MS, DEFAULT_CLOSE_TIMEOUT_MS, DEFAULT_OPEN_TIMEOUT_MS, PlaywrightBrowserPort, pageUnresponsiveMsFromEnv, type BrowserPort, type BrowserSession } from "@jevitate/playwright";
+import {
+  DEFAULT_ADMISSION_TIMEOUT_MS,
+  DEFAULT_CLOSE_TIMEOUT_MS,
+  DEFAULT_OPEN_TIMEOUT_MS,
+  PlaywrightBrowserPort,
+  pageUnresponsiveMsFromEnv,
+  sharedResourceGovernor,
+  type BrowserPort,
+  type BrowserSession,
+  type ResourceGovernor,
+} from "@jevitate/playwright";
 import { journeyContentHash } from "./journey-annotate-api.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
@@ -56,14 +66,21 @@ export type VerifyJourneyOptions = Omit<
   readonly readRequests?: readonly string[];
   /** Called as each replay starts, in order, targeted proofs' replays included. */
   readonly onProgress?: (progress: JourneyVerifyProgress) => void;
+  /** The governor whose machine slot the proof keeps between replays (default: the process-wide one its replays open sessions through). */
+  readonly slotGovernor?: ResourceGovernor;
 };
 
 /** The replay a proof is starting. Names only: never a parameter value. */
 export interface JourneyVerifyProgress {
   /** 1-based over the whole proof; replay 1 is the Journey as recorded. */
   readonly replay: number;
-  /** The mutation this replay runs under. Absent on replay 1. */
+  /**
+   * The mutation this replay runs under. Absent on replay 1. On a retry, the name is followed by
+   * ` (retry after error)`: a command's progress line prints this field, so that is what tells a reader.
+   */
   readonly mutation?: string;
+  /** This replay repeats one that errored. */
+  readonly retry?: true;
 }
 
 /** Hands a proof's bound the Journey it is sized from. */
@@ -231,6 +248,11 @@ export interface JourneyVerifyMutation {
   };
   /** #609: targeted proofs run for assertion sites this mutation left as a cascade. */
   readonly targeted?: readonly TargetedProof[];
+  /**
+   * #778: a replay of this mutation (first, relaxed or targeted) errored and was run once more. One
+   * entry per retry, with the error it followed. The replay's own result above is the retry's.
+   */
+  readonly retries?: readonly { readonly reason: string }[];
 }
 
 export interface JourneyVerifyAssertion {
@@ -345,20 +367,31 @@ function failedSitesOf(result: { outcome: string; reason?: string; at?: number }
 /**
  * Runs the proof for one Journey by id. Usage errors (unknown id, bad params, an environment that
  * refuses a step, a site-gate refusal) throw exactly as `journey run`'s do, before any mutation.
+ * The proof keeps its machine slot between replays unless another process waits for it (#766), so
+ * one admission wait cannot cost a proof that took 100 minutes to get there.
  */
 export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Run = runJourneyProgrammatically): Promise<JourneyVerifyReport> {
+  const endHold = (opts.slotGovernor ?? sharedResourceGovernor()).holdSlotBetweenSessions();
+  try {
+    return await proveJourneyMutations(opts, run);
+  } finally {
+    endHold();
+  }
+}
+
+async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Promise<JourneyVerifyReport> {
   const journey = await loadJourneyToVerify(opts.dir, opts.id);
   // #711: receipt authority is proven before the first baseline/mutation replay spends a browser.
   const receiptDestination = await preflightVerifyRecord(opts.dir, journey.metadata.id);
-  const { readRequests, onProgress, ...runOpts } = opts;
+  const { readRequests, onProgress, slotGovernor: _slotGovernor, ...runOpts } = opts;
   const inactivityMs = proofInactivityMs(journey, opts);
   const portFactory = opts.browserPortFactory ?? ((): BrowserPort => new PlaywrightBrowserPort());
   let replays = 0;
   // Every replay of the proof goes through here: it is reported, and it is bounded.
-  const boundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: JourneyMutation): ReturnType<Run> => {
+  const boundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: JourneyMutation, retry = false): ReturnType<Run> => {
     replays += 1;
-    const where: JourneyVerifyProgress = { replay: replays, ...(m === undefined ? {} : { mutation: m.id }) };
-    onProgress?.(where);
+    const where: JourneyVerifyProgress = { replay: replays, ...(m === undefined ? {} : { mutation: m.id }), ...(retry ? { retry: true as const } : {}) };
+    onProgress?.(retry && m !== undefined ? { ...where, mutation: `${m.id} (retry after error)` } : where);
     return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, mutation), portFactory, where, inactivityMs);
   };
   const lintOpts = readRequests === undefined ? {} : { readRequests };
@@ -381,7 +414,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     const replayOpts = { ...lintOpts, params: opts.params };
     // The replay is DESCRIBED, not fixed: `mutateJourney` re-describes it on the Journey the run moved
     // onto the environment (#247), so a mutated copy never drops `--env`/`--base-url`.
-    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay): Promise<Replayed> => {
+    const attemptReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, retry: boolean): Promise<Replayed> => {
       try {
         const how = describe(journey);
         const r = await boundedRun(
@@ -395,6 +428,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
             ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
           },
           m,
+          retry,
         );
         const blocked = r.blockedWrites ?? [];
         const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
@@ -421,6 +455,18 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         if (err instanceof JourneyVerifyStalledError) throw err;
         return { outcome: "error", failedSites: [], reason: err instanceof Error ? err.message : String(err) };
       }
+    };
+    const retriesOf = new Map<string, { readonly reason: string }[]>();
+    // #778: one infrastructure error must not cost the proof, so an errored replay runs once more, its
+    // fixtures set up and restored by the run as between any two replays. A `failed` replay is a result
+    // and a stall ends the proof: neither gets here. A replay that never started (`describe` refused it,
+    // as a targeted proof's bad relaxation) would only be refused again.
+    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay): Promise<Replayed> => {
+      const before = replays;
+      const first = await attemptReplay(m, describe, false);
+      if (first.outcome !== "error" || replays === before) return first;
+      retriesOf.set(m.id, [...(retriesOf.get(m.id) ?? []), { reason: first.reason ?? "unknown error" }]);
+      return attemptReplay(m, describe, true);
     };
     // #402: a named mutation lowers to its `MutationReplay`; #609's targeted proof passes one directly.
     const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts));
@@ -464,6 +510,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         ...first,
         ...(relaxed === undefined ? {} : { relaxed }),
         ...(targeted.length === 0 ? {} : { targeted }),
+        ...(retriesOf.has(m.id) ? { retries: retriesOf.get(m.id)! } : {}),
       });
     }
   }

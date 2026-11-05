@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MachineBrowserSlots, isTransientSlotError } from "./machine-slots.js";
+import { FakeClock, clock, installClock, resetClock } from "@jevitate/domain";
+import { MachineBrowserSlots, isTransientSlotError, type MachineSlotLease } from "./machine-slots.js";
 import { AdmissionTimeoutError } from "./browser-pool.js";
 
 /** #205: the machine-wide browser semaphore — concurrency, stale-holder recovery, timeouts. */
@@ -156,6 +157,176 @@ describe("MachineBrowserSlots", () => {
     writeFileSync(slotFile(0), JSON.stringify({ pid: process.pid, host: "x", token: "successor", acquiredAt: "x" }));
     lease.release();
     expect(JSON.parse(readFileSync(slotFile(0), "utf8")).token).toBe("successor");
+  });
+});
+
+describe("a process waiting for a slot (#766)", () => {
+  const HOLDER = 100;
+  const WAITER = 200;
+  let fake: FakeClock;
+  let leases: MachineSlotLease[];
+  let waits: Promise<unknown>[];
+
+  const slotsOf = (pid: number, extra: { isAlive?: (pid: number) => boolean } = {}): MachineBrowserSlots => new MachineBrowserSlots({ dir, host: "h", pid, isAlive: () => true, ...extra });
+  const held = (): MachineSlotLease => {
+    const lease = slotsOf(HOLDER).tryAcquire(1)!;
+    leases.push(lease);
+    return lease;
+  };
+  /** Starts another process's wait, already announced when this returns. */
+  const waitFor = (cap = 1, forMs = 60_000): Promise<MachineSlotLease> => {
+    const waiting = slotsOf(WAITER).acquire(cap, clock.now() + forMs);
+    waits.push(waiting.then((lease) => void leases.push(lease), () => undefined));
+    return waiting;
+  };
+  /** A waiter's file as a process that has stopped refreshing it left it, `ageMs` ago. */
+  const leftBehind = (ageMs: number, pid = WAITER): string => {
+    const path = join(dir, "waiter-left.json");
+    writeFileSync(path, JSON.stringify({ pid, host: "h", token: "left", cap: 1 }));
+    const t = new Date(clock.now() - ageMs);
+    utimesSync(path, t, t);
+    return path;
+  };
+
+  beforeEach(() => {
+    fake = new FakeClock();
+    installClock(fake);
+    leases = [];
+    waits = [];
+  });
+  afterEach(async () => {
+    // Each release lets the next wait in, at most one per wait.
+    for (let turn = 0; turn <= waits.length; turn++) {
+      for (const lease of leases) lease.release();
+      await fake.advanceBy(1_000);
+    }
+    await fake.advanceBy(120_000);
+    await Promise.all(waits);
+    for (const lease of leases) lease.release();
+    resetClock();
+  });
+
+  it("is visible to a holder", () => {
+    held();
+    void waitFor();
+    expect(slotsOf(HOLDER).hasWaiter(0)).toBe(true);
+  });
+
+  it("stays visible for as long as it keeps waiting", async () => {
+    held();
+    void waitFor();
+    await fake.advanceBy(30_000);
+    expect(slotsOf(HOLDER).hasWaiter(0)).toBe(true);
+  });
+
+  it("is not visible once it has the slot", async () => {
+    const lease = held();
+    const waiting = waitFor();
+    lease.release();
+    await fake.advanceBy(500);
+    await waiting;
+    expect(slotsOf(HOLDER).hasWaiter(0)).toBe(false);
+  });
+
+  it("is not visible once it has given up", async () => {
+    held();
+    const waiting = waitFor(1, 1_000).catch(() => undefined);
+    await fake.advanceBy(1_000);
+    await waiting;
+    expect(slotsOf(HOLDER).hasWaiter(0)).toBe(false);
+  });
+
+  it("does not count when its process is dead", () => {
+    leftBehind(0);
+    expect(slotsOf(HOLDER, { isAlive: (pid) => pid !== WAITER }).hasWaiter(0)).toBe(false);
+  });
+
+  it("does not count when its file stopped being refreshed, even with its pid alive", () => {
+    leftBehind(16_000);
+    expect(slotsOf(HOLDER).hasWaiter(0)).toBe(false);
+  });
+
+  it("has its stale file removed by the holder that judged it", () => {
+    const path = leftBehind(16_000);
+    slotsOf(HOLDER).hasWaiter(0);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("has its stale file removed by clearStale", () => {
+    const path = leftBehind(16_000);
+    slotsOf(HOLDER).clearStale();
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("announces itself again after a holder wrongly judged it stale", async () => {
+    held();
+    void waitFor();
+    for (const name of readdirSync(dir)) if (name.startsWith("waiter-")) rmSync(join(dir, name));
+    await fake.advanceBy(500);
+    expect(slotsOf(HOLDER).hasWaiter(0)).toBe(true);
+  });
+
+  it("does not count for a slot above its own cap", () => {
+    void waitFor(1);
+    expect(slotsOf(HOLDER).hasWaiter(1)).toBe(false);
+  });
+
+  it("does not count for its own process", () => {
+    held();
+    void waitFor();
+    expect(slotsOf(WAITER).hasWaiter(0)).toBe(false);
+  });
+
+  it("is not a slot: `list` does not show it", () => {
+    leftBehind(0);
+    expect(slotsOf(HOLDER).list()).toEqual([]);
+  });
+
+  it("gets the slot from a holder deferring to it, though the holder asked first", async () => {
+    const lease = held();
+    const waiting = waitFor();
+    lease.release();
+    const deferring = slotsOf(HOLDER).acquire(1, clock.now() + 60_000, { deferToWaiters: { index: 0, forMs: 5_000 } });
+    waits.push(deferring.then((l) => void leases.push(l), () => undefined));
+    await fake.advanceBy(500);
+    await waiting;
+    expect(JSON.parse(readFileSync(slotFile(0), "utf8")).pid).toBe(WAITER);
+  });
+
+  it("does not hold back a deferring holder that began waiting before it did", async () => {
+    const other = slotsOf(HOLDER).tryAcquire(1)!;
+    const earlier = slotsOf(300).acquire(1, clock.now() + 60_000, { deferToWaiters: { index: 0, forMs: 5_000 } });
+    waits.push(earlier.then((l) => void leases.push(l), () => undefined));
+    await fake.advanceBy(1_000);
+    void waitFor();
+    other.release();
+    await fake.advanceBy(500);
+    expect(JSON.parse(readFileSync(slotFile(0), "utf8")).pid).toBe(300);
+  });
+
+  it("holds a deferring holder back no longer than the grace it was given", async () => {
+    leftBehind(0);
+    const deferring = slotsOf(HOLDER).acquire(1, clock.now() + 60_000, { deferToWaiters: { index: 0, forMs: 2_000 } });
+    // Short of the waiter's stale bound, so it is still live when the grace ends.
+    await fake.advanceBy(2_000);
+    const lease = await deferring;
+    leases.push(lease);
+    expect(lease.index).toBe(0);
+  });
+});
+
+describe("a lease", () => {
+  it("is held while its slot file is its own", () => {
+    const lease = new MachineBrowserSlots({ dir }).tryAcquire(1)!;
+    expect(lease.isHeld()).toBe(true);
+    lease.release();
+  });
+
+  it("is not held once its slot was reclaimed and taken by someone else", () => {
+    const lease = new MachineBrowserSlots({ dir }).tryAcquire(1)!;
+    writeFileSync(slotFile(0), JSON.stringify({ pid: process.pid, host: "x", token: "successor", acquiredAt: "x" }));
+    expect(lease.isHeld()).toBe(false);
+    lease.release();
   });
 });
 

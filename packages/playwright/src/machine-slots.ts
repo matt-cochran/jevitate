@@ -28,6 +28,13 @@ import { clock } from "@jevitate/domain";
  *
  * Every slot this process holds is removed synchronously on process exit (SIGTERM/SIGINT included —
  * the kill switch exits through `process.exit`).
+ *
+ * A process that found its slots busy announces it with `waiter-<token>.json` for as long as it waits,
+ * so a holder able to give a slot up between sessions (`hasWaiter`) can see someone needs it. It only
+ * ever makes a holder yield, never grants anything: the slot files alone decide who holds what. A
+ * waiter counts while its process runs and its file is refreshed, each poll; a dead one's file is
+ * ignored and removed, so it cannot make holders yield for ever. A jevitate older than this file
+ * announces nothing, and waits as it always did.
  */
 
 export const DEFAULT_SLOT_HEARTBEAT_MS = 20_000;
@@ -38,6 +45,12 @@ export const DEFAULT_SLOT_POLL_MS = 500;
 const LOCK_STALE_MS = 10_000;
 /** An unparseable slot file younger than this may be mid-write; older, it is garbage. */
 const UNREADABLE_GRACE_MS = 10_000;
+/**
+ * A waiter that has not refreshed its file for this long no longer counts, whatever its pid says (a
+ * reused pid, a process on another host). Far above the poll, so a busy host only ever costs a holder
+ * one missed yield: the waiter's next poll refreshes it.
+ */
+const DEFAULT_WAITER_STALE_MS = 15_000;
 
 /** `~/.jevitate/run/browser-slots` (the directory every jevitate on this machine shares). */
 export function defaultSlotDir(home: string = homedir()): string {
@@ -66,6 +79,8 @@ export interface MachineSlotLease {
   readonly index: number;
   readonly waitedMs: number;
   readonly cap: number;
+  /** False once the slot file is no longer this lease's (reclaimed as stale after the machine slept). */
+  isHeld(): boolean;
   release(): void;
 }
 
@@ -79,9 +94,10 @@ export interface MachineSlotsOptions {
   readonly heartbeatMs?: number;
   readonly staleAfterMs?: number;
   readonly pollMs?: number;
+  readonly waiterStaleMs?: number;
 }
 
-/** Slot files held by this process, removed on exit. */
+/** Slot and waiter files held by this process, removed on exit. */
 const heldPaths = new Map<string, string>();
 let exitHookInstalled = false;
 function installExitHook(): void {
@@ -130,6 +146,34 @@ function unlinkIfHeld(path: string, token: string): void {
   }
 }
 
+interface SlotWaiter {
+  /** null when the file could not be parsed (it may be mid-write). */
+  readonly holder: SlotHolder | null;
+  readonly cap: number;
+  /** When it began waiting (ms since epoch). */
+  readonly since: number;
+  readonly heartbeatAt: number;
+}
+
+function readWaiter(path: string): SlotWaiter | undefined {
+  try {
+    const holder = readHolder(path);
+    if (holder === undefined) return undefined;
+    const { cap, since } = holder === null ? ({} as { cap?: unknown; since?: unknown }) : (JSON.parse(readFileSync(path, "utf8")) as { cap?: unknown; since?: unknown });
+    return { holder, cap: typeof cap === "number" ? cap : 0, since: typeof since === "number" ? since : 0, heartbeatAt: statSync(path).mtimeMs };
+  } catch {
+    return undefined; // gone between the two reads
+  }
+}
+
+function removeQuietly(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // already gone, or (Windows) still open: a uniquely named waiter file is never a slot
+  }
+}
+
 export class MachineBrowserSlots {
   readonly dir: string;
   readonly #host: string;
@@ -140,6 +184,7 @@ export class MachineBrowserSlots {
   readonly #heartbeatMs: number;
   readonly #staleAfterMs: number;
   readonly #pollMs: number;
+  readonly #waiterStaleMs: number;
 
   constructor(opts: MachineSlotsOptions = {}) {
     this.dir = opts.dir ?? defaultSlotDir();
@@ -151,6 +196,7 @@ export class MachineBrowserSlots {
     this.#heartbeatMs = opts.heartbeatMs ?? DEFAULT_SLOT_HEARTBEAT_MS;
     this.#staleAfterMs = opts.staleAfterMs ?? DEFAULT_SLOT_STALE_MS;
     this.#pollMs = opts.pollMs ?? DEFAULT_SLOT_POLL_MS;
+    this.#waiterStaleMs = opts.waiterStaleMs ?? DEFAULT_WAITER_STALE_MS;
   }
 
   #path(index: number): string {
@@ -202,6 +248,7 @@ export class MachineBrowserSlots {
   clearStale(): SlotState[] {
     const cleared: SlotState[] = [];
     for (const s of this.list()) if (s.stale !== null && this.#removeStale(s)) cleared.push(s);
+    this.hasWaiter(0); // drops stale waiters' files as a side effect
     return cleared;
   }
 
@@ -298,6 +345,13 @@ export class MachineBrowserSlots {
       index,
       waitedMs,
       cap,
+      isHeld: () => {
+        try {
+          return readHolder(path)?.token === token;
+        } catch {
+          return false;
+        }
+      },
       release: () => {
         if (released) return;
         released = true;
@@ -309,26 +363,105 @@ export class MachineBrowserSlots {
   }
 
   /**
-   * Waits (polling) until a slot in `0..cap-1` is free, until `deadline` (ms since epoch); past it
-   * fails with `AdmissionTimeoutError` naming who holds the slots.
+   * Is another process waiting for a slot that slot `index` would serve? A waiter whose cap stops
+   * below `index` would not be helped by it. Stale waiters do not count, and their files are removed.
+   * With `announcedBy` (ms since epoch), only a waiter already waiting by then counts.
    */
-  async acquire(cap: number, deadline: number): Promise<MachineSlotLease> {
+  hasWaiter(index: number, announcedBy: number = Number.POSITIVE_INFINITY): boolean {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw err;
+    }
+    let found = false;
+    // No early exit: every stale file met is cleared, whichever waiter is live.
+    for (const name of names) {
+      if (!/^waiter-.+\.json$/.test(name)) continue;
+      const path = join(this.dir, name);
+      const waiter = readWaiter(path);
+      if (waiter === undefined) continue;
+      if (this.#waiterStale(waiter)) {
+        removeQuietly(path);
+        continue;
+      }
+      const own = waiter.holder?.pid === this.#pid && waiter.holder.host === this.#host;
+      if (!own && waiter.holder !== null && waiter.cap > index && waiter.since <= announcedBy) found = true;
+    }
+    return found;
+  }
+
+  #waiterStale(waiter: SlotWaiter): boolean {
+    // Either way round: a timestamp far in the future (a clock moved back) must not keep a waiter live.
+    if (Math.abs(this.#now() - waiter.heartbeatAt) > this.#waiterStaleMs) return true;
+    return waiter.holder !== null && waiter.holder.host === this.#host && !this.#isAlive(waiter.holder.pid);
+  }
+
+  /**
+   * Announces (or refreshes) this process as waiting for a slot under `cap`. Best effort: one that
+   * cannot be announced still waits, and a holder simply does not yield to it.
+   */
+  #announceWaiting(cap: number, announced: { path: string; token: string } | undefined): { path: string; token: string } {
+    const token = announced?.token ?? randomUUID();
+    const path = announced?.path ?? join(this.dir, `waiter-${token}.json`);
+    const t = new Date(this.#now());
+    try {
+      if (announced !== undefined) {
+        utimesSync(path, t, t);
+        return announced;
+      }
+    } catch (err) {
+      // A holder judged this waiter stale and removed the file (a long stall here): announce it again.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return { path, token };
+    }
+    try {
+      writeFileSync(path, `${JSON.stringify({ pid: this.#pid, host: this.#host, token, cap, since: t.getTime() })}\n`);
+      utimesSync(path, t, t);
+      installExitHook();
+      heldPaths.set(path, token);
+    } catch {
+      // Nothing to undo: an unannounced waiter is what an older jevitate is.
+    }
+    return { path, token };
+  }
+
+  /**
+   * Waits (polling) until a slot in `0..cap-1` is free, until `deadline` (ms since epoch); past it
+   * fails with `AdmissionTimeoutError` naming who holds the slots. `deferToWaiters` is for a holder
+   * that just yielded slot `index`: for `forMs` it leaves free slots to a live waiter that slot serves,
+   * since otherwise it would retake the slot before the waiter's next poll and yielding would do nothing.
+   * Only a waiter already waiting when this call began counts, so two holders that yielded in turn do
+   * not defer to each other: the later one defers, the earlier one takes the slot.
+   */
+  async acquire(cap: number, deadline: number, opts: { readonly deferToWaiters?: { readonly index: number; readonly forMs: number } } = {}): Promise<MachineSlotLease> {
     if (!Number.isInteger(cap) || cap < 1) throw new RangeError(`maxBrowsers must be a positive integer, got ${cap}`);
     const started = this.#now();
-    for (;;) {
-      const lease = this.#tryAcquire(cap, started);
-      if (lease !== undefined) return lease;
-      const remaining = deadline - this.#now();
-      if (remaining <= 0) {
-        const holders = this.list()
-          .filter((s) => s.index < cap)
-          .map((s) => (s.holder === null ? `slot ${s.index}: unreadable` : `slot ${s.index}: pid ${s.holder.pid} on ${s.holder.host}`));
-        throw new AdmissionTimeoutError(
-          `admission timed out after ${Math.round((this.#now() - started) / 1000)}s: all ${cap} machine-wide browser slot(s) stayed busy (${holders.join("; ")}). ` +
-            `Other jevitate runs on this machine hold them (see \`jevitate doctor\`); wait, raise --max-browsers / JEVITATE_MAX_BROWSERS, or raise JEVITATE_ADMISSION_TIMEOUT_MS.`,
-        );
+    const defer = opts.deferToWaiters;
+    let announced: { path: string; token: string } | undefined;
+    try {
+      for (;;) {
+        const deferring = defer !== undefined && this.#now() - started < defer.forMs && this.hasWaiter(defer.index, started);
+        const lease = deferring ? undefined : this.#tryAcquire(cap, started);
+        if (lease !== undefined) return lease;
+        const remaining = deadline - this.#now();
+        if (remaining <= 0) {
+          const holders = this.list()
+            .filter((s) => s.index < cap)
+            .map((s) => (s.holder === null ? `slot ${s.index}: unreadable` : `slot ${s.index}: pid ${s.holder.pid} on ${s.holder.host}`));
+          throw new AdmissionTimeoutError(
+            `admission timed out after ${Math.round((this.#now() - started) / 1000)}s: all ${cap} machine-wide browser slot(s) stayed busy (${holders.join("; ")}). ` +
+              `Other jevitate runs on this machine hold them (see \`jevitate doctor\`); wait, raise --max-browsers / JEVITATE_MAX_BROWSERS, or raise JEVITATE_ADMISSION_TIMEOUT_MS.`,
+          );
+        }
+        announced = this.#announceWaiting(cap, announced);
+        await this.#sleep(Math.min(this.#pollMs, remaining));
       }
-      await this.#sleep(Math.min(this.#pollMs, remaining));
+    } finally {
+      if (announced !== undefined) {
+        heldPaths.delete(announced.path);
+        removeQuietly(announced.path);
+      }
     }
   }
 }
