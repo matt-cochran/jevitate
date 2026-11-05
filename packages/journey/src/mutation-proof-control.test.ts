@@ -205,3 +205,42 @@ describe("a kept wait that ran out of its cap", () => {
     expect(proof.refused).toMatch(/control replay moved on early/);
   });
 });
+
+describe("a mutated step's own claim whose capped wait ran out", () => {
+  const OWN_FAILED = [{ where: "step", step: 1, postcondition: true }] as const;
+  const cut = { outcome: "failed", failedSites: OWN_FAILED, waitsCut: ["step:1"] } as const;
+  const setup = () => {
+    const journey = waitedOwnClaim();
+    const m = block;
+    const target = journeyAssertions(journey).find((s) => assertionSiteKey(s) === "step:1")!;
+    return { journey, plan: { mutations: [m], pairs: [{ site: "step:1", mutation: m.id }] }, m, target };
+  };
+
+  it("is a cascade until a control speaks", () => {
+    const { m, target } = setup();
+    expect(classifyMutation(target, m, cut)).toBe("cascade");
+  });
+  it("stays sensitive when its wait did not run out", () => {
+    const { m, target } = setup();
+    expect(classifyMutation(target, m, { outcome: "failed", failedSites: OWN_FAILED })).toBe("sensitive");
+  });
+  it("runs its control with the mutated replay's capped wait", async () => {
+    const { journey, plan, m, target } = setup();
+    let controlled: Journey | undefined;
+    await runTargetedProof(journey, plan, m, target, cut, async (describeReplay) => {
+      controlled = describeReplay(journey).journey;
+      return { outcome: "passed", failedSites: [] };
+    });
+    expect(controlled!.recording.pages[0]!.steps[0]!.step).toMatchObject({ kind: "click", waitFor: mutationWait(WAIT) });
+  });
+  it("reads sensitive once the control passes", async () => {
+    const { journey, plan, m, target } = setup();
+    const proof = await runTargetedProof(journey, plan, m, target, cut, async () => ({ outcome: "passed", failedSites: [] }));
+    expect(classifyMutation(target, m, { ...cut, targeted: [proof] })).toBe("sensitive");
+  });
+  it("stays a cascade, with the refusal named, when the control does not pass", async () => {
+    const { journey, plan, m, target } = setup();
+    const proof = await runTargetedProof(journey, plan, m, target, cut, async () => ({ outcome: "failed", failedSites: OWN_FAILED }));
+    expect(proof.refused).toMatch(/step:1 ran out of its cap/);
+  });
+});

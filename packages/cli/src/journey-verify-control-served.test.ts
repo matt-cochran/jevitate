@@ -369,6 +369,84 @@ describe("[realtime] a skipped step whose claim only waited on an earlier step's
   });
 });
 
+describe("[realtime] a step's own claim whose capped wait runs out", () => {
+  const withoutEndState = (journey: Journey): Journey => {
+    delete (journey.metadata as { endState?: unknown }).endState;
+    return journey;
+  };
+  const ownSite = (report: JourneyVerifyReport, site: string) => report.assertions.find((a) => a.site === site);
+
+  describe("when the claim only waits on an earlier step's slow write", () => {
+    let report: JourneyVerifyReport;
+    beforeAll(async () => {
+      const served = await serveForm(9_000);
+      const journey = withoutEndState(
+        formJourney(served.origin, MARKER, [], [
+          { step: { kind: "click", target: { css: "#save" }, expect: { kind: "visible", target: { css: "#save" } } } },
+          {
+            step: { kind: "click", target: { css: "#other" }, expect: { kind: "textIncludes", target: { css: "#prefill" }, text: "Saved" }, waitFor: WAIT_PAST_POST },
+            expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/other", status: { class: 2 } }],
+          },
+        ]),
+      );
+      report = await prove(journey).finally(served.close);
+    }, 180_000);
+
+    it("does not read proven", () => {
+      expect(report.verdict).not.toBe("proven");
+    });
+    it("does not call the claim sensitive", () => {
+      expect(ownSite(report, "step:3")?.verdict).not.toBe("sensitive");
+    });
+  });
+
+  describe("when the claim waits on the step's own write, which answers inside the cap", () => {
+    let report: JourneyVerifyReport;
+    beforeAll(async () => {
+      const served = await serveForm(1_000);
+      const journey = withoutEndState(
+        formJourney(served.origin, MARKER, [], [
+          {
+            step: { kind: "click", target: { css: "#save" }, expect: { kind: "textIncludes", target: { css: "#prefill" }, text: "Saved" }, waitFor: WAIT_PAST_POST },
+            expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/save", status: { class: 2 } }],
+          },
+        ]),
+      );
+      report = await prove(journey).finally(served.close);
+    }, 180_000);
+
+    it("stays sensitive, proved by the skipped action", () => {
+      expect(ownSite(report, "step:2")).toMatchObject({ verdict: "sensitive", provedBy: "skip:2" });
+    });
+    it("reaches a proven verdict", () => {
+      expect(report.verdict).toBe("proven");
+    });
+    it("needed the control that shows the claim holds unmutated", () => {
+      expect(report.mutations.find((m) => m.id === "skip:2")?.targeted?.find((t) => t.site === "step:2")?.control).toBe("passed");
+    });
+  });
+
+  describe("when the claim's own write answers past the cap", () => {
+    let report: JourneyVerifyReport;
+    beforeAll(async () => {
+      const served = await serveForm(SLOW_POST_MS);
+      const journey = withoutEndState(
+        formJourney(served.origin, MARKER, [], [
+          {
+            step: { kind: "click", target: { css: "#save" }, expect: { kind: "textIncludes", target: { css: "#prefill" }, text: "Saved" }, waitFor: WAIT_PAST_POST },
+            expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/save", status: { class: 2 } }],
+          },
+        ]),
+      );
+      report = await prove(journey).finally(served.close);
+    }, 180_000);
+
+    it("stays a cascade and names the refusal", () => {
+      expect(ownSite(report, "step:2")).toMatchObject({ verdict: "cascade", targetedRefusal: expect.stringMatching(/step:2.*ran out of its cap/) });
+    });
+  });
+});
+
 describe("a fixture restore failing during a proof", () => {
   useSkippingTime({ per: "all", heldMs: 500 });
 

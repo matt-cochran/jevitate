@@ -256,6 +256,12 @@ export function controlFailureIndications(control: ReplayDiagnostics, base: Repl
   return out;
 }
 
+/** The `maxMs` of the stored Journey's waited claim at 1-based `step`, if it has one. */
+function storedWaitMaxMs(journey: Journey, step: number): number | undefined {
+  const stored = flatJourneySteps(journey)[step - 1]?.recorded.step;
+  return stored !== undefined && "waitFor" in stored ? stored.waitFor?.maxMs : undefined;
+}
+
 const siteKeyOf = (f: MutationFailedSite): string =>
   f.where === "step" ? `step:${f.step}` : f.where === "step-request" ? `step-request:${f.step}:${f.checkIndex}` : f.where === "end-state" ? `end-state:${f.index}` : "unevaluable";
 
@@ -490,6 +496,8 @@ export interface JourneyVerifyMutation {
   };
   /** #609: targeted proofs run for assertion sites this mutation left as a cascade. */
   readonly targeted?: readonly TargetedProof[];
+  /** The step's own capped wait ran out in this replay, so its failure there counts only with a control. */
+  readonly waitsCut?: readonly string[];
   /**
    * #778: a replay of this mutation (first, relaxed or targeted) errored and was run once more. One
    * entry per retry, with the error it followed. The replay's own result above is the retry's.
@@ -723,6 +731,9 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
           };
         }
         const failedSites = failedSitesOf(r, r.outcomeFailures ?? []);
+        // A wait shorter than the stored one was capped; a hang was ended by its own progress signal, not by the cap.
+        const ownWait = r.outcome === "quarantined" ? r.waits?.find((w) => w.step === m.step) : undefined;
+        if (ownWait?.ending === "timeout" && ownWait.maxMs < (storedWaitMaxMs(journey, m.step) ?? 0)) waitsCut.push(`step:${m.step}`);
         const control = r.outcome === "quarantined" ? probe?.read() : undefined;
         const baseDiagnostics = baseProbe.read();
         const contextOptionsMatchBase = baseProbe.openOptions === undefined || probe?.openOptions === undefined ? undefined : baseProbe.openOptions === probe.openOptions;
@@ -772,7 +783,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
       // #554: a first failure at the mutated step's own postcondition hides the LATER paired sites
       // behind it; one relaxed replay (same action, the step's own expect/waitFor left out) judges them.
       const relaxed = needsRelaxedReplay(plan, m, first) ? await replay(m, relaxedMutationReplay) : undefined;
-      const initial: MutationRunResult = { outcome: first.outcome, failedSites: first.failedSites, ...(relaxed === undefined ? {} : { relaxed }) };
+      const initial: MutationRunResult = { outcome: first.outcome, failedSites: first.failedSites, ...(first.waitsCut === undefined ? {} : { waitsCut: first.waitsCut }), ...(relaxed === undefined ? {} : { relaxed }) };
       // #609: a later assertion still a `cascade` is only hidden by an earlier postcondition; a
       // targeted proof relaxes them one at a time (in a clone) to reach the target itself.
       const targeted: TargetedProof[] = [];
@@ -781,7 +792,9 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
         const site = siteByKey.get(pair.site);
         if (site === undefined || classifyMutation(site, m, initial) !== "cascade") continue;
         // #616: a declared plan (reviewed earlier relaxations) replaces the automatic bound search.
-        const declared = declaredTargetedProofFor(journey, m, pair.site);
+        // A step's own claim whose capped wait ran out needs its control, which only the automatic path runs.
+        const ownWaitCut = site.where === "step" && site.step === m.step && first.waitsCut !== undefined;
+        const declared = ownWaitCut ? undefined : declaredTargetedProofFor(journey, m, pair.site);
         targeted.push(
           declared === undefined
             ? await runTargetedProof(journey, plan, m, site, initial, (describe, kind) => runReplay(m, describe, kind === "control" ? "control" : "other"), replayOpts)
@@ -814,7 +827,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run): Prom
   const results = new Map<string, MutationRunResult>(
     mutations.map((m) => [
       m.id,
-      { outcome: m.outcome, failedSites: m.failedSites, ...(m.relaxed === undefined ? {} : { relaxed: m.relaxed }), ...(m.targeted === undefined ? {} : { targeted: m.targeted }) },
+      { outcome: m.outcome, failedSites: m.failedSites, ...(m.waitsCut === undefined ? {} : { waitsCut: m.waitsCut }), ...(m.relaxed === undefined ? {} : { relaxed: m.relaxed }), ...(m.targeted === undefined ? {} : { targeted: m.targeted }) },
     ]),
   );
   // Base failed: nothing ran, so every paired assertion is an `error` (no proof either way).

@@ -156,6 +156,11 @@ export interface MutationRunResult {
   readonly outcome: "passed" | "failed" | "not-applied" | "error";
   readonly failedSites: readonly MutationFailedSite[];
   /**
+   * The mutated step's own capped wait (`mutationWait`) ran out, so its failure says only that the
+   * claim did not hold within the cap. It counts once a control shows the claim does, unmutated (`runTargetedProof`).
+   */
+  readonly waitsCut?: readonly string[];
+  /**
    * #554 — the same mutation replayed with the mutated step's own postcondition relaxed (its action
    * still skipped/blocked/emptied, but its `expect`/`waitFor` left out), so a replay that failed
    * first at that postcondition can still say whether each LATER site is broken or vacuous.
@@ -823,6 +828,16 @@ function controlSiteKeys(journey: Journey, m: JourneyMutation, relaxedSiteKeys: 
   return [...new Set([...ownKey, ...relaxedSiteKeys])];
 }
 
+/** The control for a mutated step's own claim: nothing mutated or relaxed, and the claim waiting no longer than the mutated replay's. */
+function ownClaimControl(journey: Journey, m: JourneyMutation): MutationReplay {
+  const copy = structuredClone(journey);
+  const target = flat(copy)[m.step - 1];
+  if (target !== undefined && "waitFor" in target.step && target.step.waitFor !== undefined) {
+    target.step = { ...target.step, waitFor: mutationWait(target.step.waitFor) } as Step;
+  }
+  return { journey: copy };
+}
+
 /** #785: the waiting `targetedControlReplay`'s weakened sites did, the same as the targeted replay's. */
 function targetedControlWaits(journey: Journey, m: JourneyMutation, relaxedSiteKeys: readonly string[]): RelaxedSiteWait[] {
   return relaxedSiteWaits(journey, controlSiteKeys(journey, m, relaxedSiteKeys), cappedSite(m));
@@ -920,6 +935,23 @@ export async function runTargetedProof(
   opts: MutationReplayOptions = {},
 ): Promise<TargetedProof> {
   const site = assertionSiteKey(target);
+  if (target.where === "step" && target.step === m.step && (initial.waitsCut?.length ?? 0) > 0) {
+    // The claim's capped wait ran out. If it holds within that cap unmutated, the mutation is what stopped it.
+    const control = await replay((j) => ownClaimControl(j, m), "control");
+    return {
+      site,
+      relaxedSites: [],
+      outcome: initial.outcome,
+      failedSites: initial.failedSites,
+      control: control.outcome,
+      ...(control.outcome === "passed"
+        ? {}
+        : {
+            refused: `the wait at ${site} ran out of its cap, and the unmutated control with the same cap did not pass (${control.outcome}), so the failure is not evidence`,
+            ...(control.diagnostics === undefined ? {} : { controlDiagnostics: control.diagnostics }),
+          }),
+    };
+  }
   const relaxedSites: string[] = [];
   const relaxedFirst =
     initial.relaxed !== undefined &&
@@ -1099,6 +1131,8 @@ function classifyMutationPlain(site: JourneyAssertionSite, m: JourneyMutation, r
   const fs = result.failedSites;
   if (site.where === "step") {
     const hit = fs.some((f) => f.where === "step" && f.step === site.step && f.postcondition);
+    // Its own capped wait ran out: not evidence until a control says so (`runTargetedProof`).
+    if (site.step === m.step && (result.waitsCut?.length ?? 0) > 0) return "cascade";
     return hit && site.step >= m.step ? "sensitive" : "cascade";
   }
   if (site.where === "step-request") {
