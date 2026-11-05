@@ -290,12 +290,12 @@ export class McpRunGuard implements ReplayActionGuard {
     if (ctx.key !== undefined && (await locator.count()) === 0) return; // No element holds focus: the key activates nothing.
     if (ctx.key !== undefined && SUBMITTING_KEY.test(ctx.key)) {
       // What Enter submits is named on the form's default button, whatever the field is called.
-      const button = (await locator.evaluateHandle(defaultButtonOf)).asElement();
-      if (button !== null) {
-        const { name, role } = await readControlIdentity(button);
-        const verdict = this.#judge(name, role, ctx.recorded);
-        if (verdict !== null) this.#refuseControl(verdict, ctx.index);
-      }
+      const handle = await locator.evaluateHandle(defaultButtonOf);
+      const button = handle.asElement();
+      const named = button === null ? null : await readControlIdentity(button);
+      await handle.dispose();
+      const verdict = named === null ? null : this.#judge(named.name, named.role, ctx.recorded);
+      if (verdict !== null) this.#refuseControl(verdict, ctx.index);
     }
     const element = await readControlIdentity(locator);
     if (ctx.key !== undefined && TEXT_ROLES.has(element.role)) return;
