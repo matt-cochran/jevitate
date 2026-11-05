@@ -30,10 +30,65 @@ covered the same assertions. A replay that errored before opening a browser, as 
 retried once and listed in `mutations[].retries`. One that opened a browser may have changed the app, so it is
 not retried. A failed replay or a stall is never retried.
 
-A targeted replay and its control keep the same waits. A blocked step's own claim is capped in both; a failure
-after a capped wait ran out, or after a skipped step left a write unanswered, is not evidence, so that assertion
-stays `cascade` with the refusal named. A step's own claim whose wait ran out of its cap counts only if an
-unmutated control with the same cap passes. Any failed fixture restore during a proof makes it `inconclusive`.
+What `journey verify --mutate` runs, in order:
+
+1. **The base**: the Journey as recorded. It must pass. It stays open until the writes it sent are answered, up to
+   the longest of the Journey's response timeouts and the base's own length. A write that outlasts that makes the
+   proof `inconclusive`, unless it is a line the Journey never recorded and is also still open in the next replay,
+   which marks it a long-lived connection.
+2. **The independence replay**: as recorded, straight after the base, held to the floors of the first mutated
+   replay. A failure is run again after a quiet gap of at least 5 s. If that passes, or the Journey no longer passes
+   unheld, the proof is `inconclusive`, because state may cross replays. If both held replays fail and the unheld one
+   passes, the hold is what breaks the claim, and the proof goes on.
+3. **One replay per mutation**, each held to floors: from the mutated step on, it cannot leave a step or read its end
+   state before the base did plus a margin of 1 s and a quarter of the base's time on the mutated step. Before the end
+   state, it waits for its open writes as the base did. A claim wait runs past what the base's claim took, and no
+   further than the larger of that and the hang threshold. If a failure at the step's own claim hides later paired
+   sites, a relaxed replay of the same mutation reads them. If an earlier check still hides a site, a targeted replay
+   relaxes it.
+4. **A matched control**, only when needed: a fresh replay as recorded on the same floors. It must pass the site and
+   reach it within the margin of the mutated replay, in either direction. A `sensitive` reading needs one when the
+   site was reached inside twice the margin of the base's time, or the replay was held on the way there. Mutations of
+   one step share a control. A targeted proof always has its own, with the same relaxations and floors, because it also
+   answers whether relaxing broke the site.
+5. **The mutation at the base's time**, only when the control failed at the same site: the mutated replay held with
+   no margin. A pass reads `insensitive`, since the claim held without the mutation. A failure reads `cascade`.
+6. **Disagreement**: when one mutation of a step fails a site and another passes it, a control runs and the failing
+   mutation runs once more. If the failure reproduces, `sensitive` stands, since skip and block can really differ. If
+   the re-run passes the site, the failure is struck and the site reads `insensitive`, since a replay saw the claim
+   hold with the mutation applied. If neither is clear, the proof is `inconclusive`.
+7. **The closing replay**: as recorded, last, when the verdict could still change.
+
+A blocked write's recorded lines stay blocked for the rest of that replay, except while a later step that records the
+same line runs. If one is answered anyway (a popup, a worker), that mutation reads `not-applied`. Open writes are
+counted when they go to the Journey's own origins or a line it recorded, and a line it did not record that repeats is
+background. A write still open when any replay closes makes the proof `inconclusive`, and nothing further runs, as
+with a failed fixture restore. A mutated replay that stopped early still stays open as long as the base did.
+
+### What a proof assumes
+
+A `proven` verdict holds if all of these are true. Each one that fails can produce a false reading.
+
+- **No one-off slowdown that nothing cross-checks.** A job can run slower in one mutated replay than in any other,
+  so that a claim fails with room to spare. Nothing catches that unless the failure was thin or held, or a sibling
+  mutation of the step passed the same site. A mutation with no sibling, or whose sibling also failed, reads
+  `sensitive`.
+- **State from one replay reaches the next only where the independence replay would meet it.** A job that
+  lands after the independence replay ends, and changes what a site reads only inside one mutated replay, reads
+  `sensitive` if that replay has no sibling that passes. So does a change made to the app from outside the proof.
+- **A control and a mutated replay see the same app.** A control running near a mutated replay is taken as speaking for
+  it, including when siblings share one. An app that changes between them is outside the proof.
+- **A blocked write's retry uses a recorded line.** A retry on a path the step never recorded is a new write and gets
+  through. The site then reads `insensitive`, or `sensitive` for what remains, on an app the block no longer describes.
+- **An aborted write ends soon.** A write the browser gave up on keeps its replay open for 2 s. A server still working
+  after that is seen only through the independence replay.
+
+Some readings are limits rather than assumptions: they are never `proven`, but they say less than the Journey deserves.
+
+- A claim that really depends on the mutated write and also decays inside the hold (a toast shorter than the margin)
+  reads `cascade`, and the proof `inconclusive`: the experiment cannot tell it from a claim the hold broke.
+- A failed fixture restore, a write left open, and state crossing replays stop the proof at once, so sites not yet
+  reached read `error`. Fix the cause and run it again.
 
 #### Following and resuming a long proof
 

@@ -156,7 +156,8 @@ describe("#785 a control whose POST is never answered", () => {
   useSkippingTime({ per: "all", heldMs: 500 });
   let report: JourneyVerifyReport;
   beforeAll(async () => {
-    const served = await serve(0, (n) => (n === 1 ? 0 : "hold"));
+    // The base and the replay straight after it are answered; the control's POST is the third.
+    const served = await serve(0, (n) => (n <= 2 ? 0 : "hold"));
     report = await prove(draftJourney(served.origin)).finally(served.close);
   }, 120_000);
 
@@ -184,7 +185,7 @@ describe("#785 a page lying about its storage counts", () => {
   let report: JourneyVerifyReport;
   beforeAll(async () => {
     const lie = `<script>Object.defineProperty(Storage.prototype, 'length', { get: () => '${LIE} ' + document.cookie });</script>`;
-    const served = await serve(0, (n) => (n === 1 ? 0 : "hold"), lie);
+    const served = await serve(0, (n) => (n <= 2 ? 0 : "hold"), lie);
     report = await prove(draftJourney(served.origin)).finally(served.close);
   }, 120_000);
 

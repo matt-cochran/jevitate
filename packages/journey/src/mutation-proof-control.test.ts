@@ -203,21 +203,25 @@ describe("a replay that failed sooner than an unmutated replay passed", () => {
 
 describe("a targeted proof's control", () => {
   const END_STATE_FAILED = [{ where: "end-state", index: 0 }] as const;
-  const declaredProof = (controlReachedMs: readonly number[]) => {
+  const declaredProof = (controlArrivedMs: readonly number[]) => {
     const journey = waitedOwnClaim();
     const m = block;
     const target = journeyAssertions(journey).find((s) => assertionSiteKey(s) === "end-state:0")!;
     const plan = { mutations: [m], pairs: [{ site: "step:2", mutation: m.id }, { site: "end-state:0", mutation: m.id }] };
     return runDeclaredTargetedProof(journey, plan, m, target, { check: "end-state:0", mustFailWhen: m.id, relax: ["step:2"] }, async (_d, kind) =>
-      kind === "targeted" ? { outcome: "failed", failedSites: END_STATE_FAILED, reachedMs: [1_000, 2_000] } : { outcome: "passed", failedSites: [], reachedMs: controlReachedMs },
+      kind === "targeted" ? { outcome: "failed", failedSites: END_STATE_FAILED, endStateReachedMs: 2_000 } : { outcome: "passed", failedSites: [], arrivedMs: [0, 0], endStateReachedMs: controlArrivedMs.at(-1)!, marginMs: 1_000 },
     );
   };
 
-  it("is refused when it had longer to reach the site than the mutated replay", async () => {
-    expect((await declaredProof([1_000, 2_500])).refused).toMatch(/control had 2500ms to reach end-state:0 and the mutated replay 2000ms/);
+  it("is refused when it got to the site later than the margin allows", async () => {
+    expect((await declaredProof([1_000, 3_500])).refused).toMatch(/control reached end-state:0 at 3500ms and the mutated replay at 2000ms/);
   });
-  it("counts when it had no longer", async () => {
+  it("is refused when it got to the site sooner than the margin allows", async () => {
+    expect((await declaredProof([1_000, 500])).refused).toMatch(/control reached end-state:0 at 500ms and the mutated replay at 2000ms/);
+  });
+  it("counts within the margin, either way", async () => {
     expect((await declaredProof([1_000, 1_500])).refused).toBeUndefined();
+    expect((await declaredProof([1_000, 2_500])).refused).toBeUndefined();
   });
   it("is named by its relaxations, so sites relaxing the same ones can share it", async () => {
     const journey = waitedOwnClaim();

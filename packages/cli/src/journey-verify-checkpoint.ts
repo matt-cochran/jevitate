@@ -78,9 +78,13 @@ const waitsCut = z.array(siteKey).optional();
  * The replay kinds this build knows how to re-check. A kind is a record's name, not a field, so a new kind of
  * replay in the proof adds a name here and a `runReplay` call; a file naming any other kind is refused.
  */
-export const REPLAY_RECORD_KINDS: readonly string[] = ["first", "relaxed", "targeted", "control", "targeted-control"];
+export const REPLAY_RECORD_KINDS: readonly string[] = ["first", "relaxed", "targeted", "control", "targeted-control", "at-base-time", "rerun"];
 /** Whose failure a control already answers for, or that the proof never reads as thin. Any other kind, a new one too, gets the thin check. */
-const NOT_THIN_CHECKED: ReadonlySet<string> = new Set(["targeted", "control", "targeted-control"]);
+const NOT_THIN_CHECKED: ReadonlySet<string> = new Set(["targeted", "control", "targeted-control", "at-base-time"]);
+
+/** Why a replay may have decided another, by class: no site, request or page text. */
+const ISOLATION_NOTES = ["write-open", "base-write-open", "state-crossed", "state-stuck", "independence-errored", "siblings-undecided"] as const;
+export type IsolationNote = (typeof ISOLATION_NOTES)[number];
 
 /** One replay a pair ran, whatever its kind: how it ended, where, when it got there, and what it left open. */
 const replayRecord = z.strictObject({
@@ -92,6 +96,8 @@ const replayRecord = z.strictObject({
   writesInFlightAtClose: count,
 });
 
+const atBaseTime = z.strictObject({ outcome, failedSites }).optional();
+
 const pairRecord = z.strictObject({
   id: z.string().min(1),
   kind: z.enum(["skip", "block-write", "stale-value", "swap-param", "truncate-param", "guard-param"]),
@@ -101,8 +107,11 @@ const pairRecord = z.strictObject({
   outcome,
   failedSites,
   waitsCut,
-  relaxed: z.strictObject({ outcome, failedSites, waitsCut }).optional(),
+  relaxed: z.strictObject({ outcome, failedSites, waitsCut, atBaseTime }).optional(),
   control: outcome.optional(),
+  /** A reading that needed a control kept none, because the verdict could no longer change. */
+  controlSkipped: z.literal(true).optional(),
+  atBaseTime,
   targeted: z
     .array(
       z.strictObject({
@@ -126,7 +135,8 @@ const pairRecord = z.strictObject({
 });
 
 const bodySchema = z.strictObject({
-  schema: z.literal(1),
+  /** 2: floors held every replay and controls match both ways, so a file of the older experiment is refused, not misread. */
+  schema: z.literal(2),
   journeyId: z.string().min(1),
   journeyHash: z.string().min(1),
   planDigest: digest,
@@ -134,7 +144,12 @@ const bodySchema = z.strictObject({
   build: z.strictObject({ version: z.string(), commit: z.string(), builtAt: z.string(), tree: z.string() }),
   total: count,
   completed: z.array(pairRecord),
-  phase: z.enum(["base", "pairs", "closing"]),
+  phase: z.enum(["base", "independence", "pairs", "disagreements", "closing"]),
+  /**
+   * How this run's independence replay came out. Never reused: it answers whether state crosses from the
+   * base just measured, so a resume runs it again against its own base. Null until it has run.
+   */
+  independence: z.enum(["passed", "hold-breaks-claim"]).nullable(),
   currentPair: z.string().nullable(),
   replay: count,
   startedAt: iso,
@@ -142,7 +157,7 @@ const bodySchema = z.strictObject({
   state: z.enum(["running", "interrupted", "finished"]),
   verdict: z.enum(["proven", "insensitive", "inconclusive"]).optional(),
   reusedPairs: count,
-  taint: z.strictObject({ restoreFailed: z.boolean(), notIsolatedBy: z.string().nullable() }),
+  taint: z.strictObject({ restoreFailed: z.boolean(), notIsolatedBy: z.string().nullable(), isolation: z.enum(ISOLATION_NOTES).nullable() }),
   verifier: z.strictObject({ pid: position, startToken: z.string(), host: z.string() }),
 });
 const fileSchema = z.strictObject({ body: bodySchema, mac: digest });
@@ -506,6 +521,8 @@ export interface ResumeState {
   readonly pairs: ReadonlyMap<string, CheckpointPair>;
   readonly restoreFailed: boolean;
   readonly notIsolatedBy: string | null;
+  /** Why a replay may have decided another. Absent or null with `notIsolatedBy` set: a replay closed with a write open. */
+  readonly isolation?: IsolationNote | null;
 }
 
 /** One proof's writer. A failed write never ends a proof: the next one writes everything again. */
@@ -541,6 +558,10 @@ export class ProofCheckpointSession {
 
   replayStarted(replay: number): void {
     this.#write({ replay });
+  }
+
+  independence(independence: NonNullable<CheckpointBody["independence"]>): void {
+    this.#write({ independence });
   }
 
   phase(phase: CheckpointBody["phase"]): void {
@@ -624,7 +645,7 @@ export async function openProofCheckpoint(
   const planDigest = mutationPlanDigest(proof.plan);
   const now = clock.nowIso();
   const fresh: CheckpointBody = {
-    schema: 1,
+    schema: 2,
     journeyId,
     journeyHash: proof.journeyHash,
     planDigest,
@@ -639,7 +660,8 @@ export async function openProofCheckpoint(
     updatedAt: now,
     state: "running",
     reusedPairs: 0,
-    taint: { restoreFailed: false, notIsolatedBy: null },
+    independence: null,
+    taint: { restoreFailed: false, notIsolatedBy: null, isolation: null },
     verifier: currentVerifierIdentity(),
   };
 
@@ -692,7 +714,7 @@ export async function openProofCheckpoint(
     if (old !== undefined) return refuse("too-old", old);
     const invalid = pairProblems(body, proof.plan, proof.journey, proof.sites);
     if (invalid !== undefined) return refuse("corrupt", `the checkpoint at ${req.path} cannot be used: ${invalid}`);
-    const claimed: CheckpointBody = { ...body, state: "running", phase: "base", currentPair: null, replay: 0, reusedPairs: body.completed.length, updatedAt: clock.nowIso(), verifier: currentVerifierIdentity() };
+    const claimed: CheckpointBody = { ...body, state: "running", phase: "base", independence: null, currentPair: null, replay: 0, reusedPairs: body.completed.length, updatedAt: clock.nowIso(), verifier: currentVerifierIdentity() };
     try {
       // A resume that cannot record its claim cannot keep a second verifier out.
       writeCheckpointFile(req.path, key, claimed);
@@ -701,7 +723,7 @@ export async function openProofCheckpoint(
     }
     notice(`journey verify: resuming with ${body.completed.length} of ${body.total} pairs finished; the base replay runs first and must pass before any is reused`);
     const session = new ProofCheckpointSession(req.path, key, claimed, notice);
-    return { session, resume: { pairs: new Map(body.completed.map((p) => [p.id, p])), restoreFailed: body.taint.restoreFailed, notIsolatedBy: body.taint.notIsolatedBy } };
+    return { session, resume: { pairs: new Map(body.completed.map((p) => [p.id, p])), restoreFailed: body.taint.restoreFailed, notIsolatedBy: body.taint.notIsolatedBy, isolation: body.taint.isolation } };
   };
 
   const opened = await withCheckpointLock(req.path, req.resume ? claimResume : claimFresh).catch((err: unknown) => {
@@ -731,8 +753,10 @@ export interface FinishedPair {
   readonly outcome: MutationRunResult["outcome"];
   readonly failedSites: readonly MutationFailedSite[];
   readonly waitsCut?: readonly string[];
-  readonly relaxed?: { readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[]; readonly waitsCut?: readonly string[] };
+  readonly relaxed?: { readonly outcome: MutationRunResult["outcome"]; readonly failedSites: readonly MutationFailedSite[]; readonly waitsCut?: readonly string[]; readonly atBaseTime?: MutationRunResult["atBaseTime"] };
   readonly control?: MutationRunResult["outcome"];
+  readonly controlSkipped?: true;
+  readonly atBaseTime?: MutationRunResult["atBaseTime"];
   readonly targeted?: readonly TargetedProof[];
   readonly retries?: readonly unknown[];
 }
@@ -741,6 +765,9 @@ const structuredSites = (sites: readonly MutationFailedSite[]): MutationFailedSi
   sites.map((f): MutationFailedSite =>
     f.where === "step" ? { where: "step", step: f.step, postcondition: f.postcondition } : f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
   );
+
+const storedAtBaseTime = (run: MutationRunResult["atBaseTime"]): { outcome: MutationRunResult["outcome"]; failedSites: MutationFailedSite[] } | undefined =>
+  run === undefined ? undefined : { outcome: run.outcome, failedSites: structuredSites(run.failedSites) };
 
 const optional = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } => (value === undefined ? {} : ({ [key]: value } as { [P in K]: V }));
 
@@ -756,9 +783,11 @@ export function checkpointPairOf(pair: FinishedPair, replays: readonly Checkpoin
     ...optional("waitsCut", pair.waitsCut === undefined ? undefined : [...pair.waitsCut]),
     ...optional(
       "relaxed",
-      pair.relaxed === undefined ? undefined : { outcome: pair.relaxed.outcome, failedSites: structuredSites(pair.relaxed.failedSites), ...optional("waitsCut", pair.relaxed.waitsCut === undefined ? undefined : [...pair.relaxed.waitsCut]) },
+      pair.relaxed === undefined ? undefined : { outcome: pair.relaxed.outcome, failedSites: structuredSites(pair.relaxed.failedSites), ...optional("waitsCut", pair.relaxed.waitsCut === undefined ? undefined : [...pair.relaxed.waitsCut]), ...optional("atBaseTime", storedAtBaseTime(pair.relaxed.atBaseTime)) },
     ),
     ...optional("control", pair.control),
+    ...optional("controlSkipped", pair.controlSkipped),
+    ...optional("atBaseTime", storedAtBaseTime(pair.atBaseTime)),
     ...optional(
       "targeted",
       pair.targeted?.map((t) => ({
@@ -783,13 +812,14 @@ export function checkpointReplayOf(kind: string, run: { readonly outcome: Mutati
 }
 
 /** The result `classifyMutation` and `mutationProofVerdict` read, as the uninterrupted proof gave them. */
-export function reusedProofFields(pair: CheckpointPair): Pick<MutationRunResult, "outcome" | "failedSites"> & Partial<Pick<MutationRunResult, "waitsCut" | "relaxed" | "targeted" | "control">> {
+export function reusedProofFields(pair: CheckpointPair): Pick<MutationRunResult, "outcome" | "failedSites"> & Partial<Pick<MutationRunResult, "waitsCut" | "relaxed" | "targeted" | "control" | "atBaseTime">> {
   return {
     outcome: pair.outcome,
     failedSites: pair.failedSites,
     ...optional("waitsCut", pair.waitsCut),
     ...optional("relaxed", pair.relaxed),
     ...optional("control", pair.control),
+    ...optional("atBaseTime", pair.atBaseTime),
     ...optional("targeted", pair.targeted),
   };
 }
@@ -825,11 +855,13 @@ export function resumeRefusalAgainstBase(state: ResumeState, plan: MutationPlan,
     if (sensitive.length === 0) continue;
     const cutFor = (r: CheckpointReplay): readonly string[] | undefined => (r.kind === "first" ? pair.waitsCut : r.kind === "relaxed" ? pair.relaxed?.waitsCut : undefined);
     for (const r of pair.replays) {
-      if (r.outcome !== "failed" || (cutFor(r)?.length ?? 0) > 0) continue;
+      // A replay at the base's time only ever says a claim held without the mutation, and a failure there is no reading.
+      if (r.outcome !== "failed" || r.kind === "at-base-time" || (cutFor(r)?.length ?? 0) > 0) continue;
       const reached = undefinedHoles(r.reachedMs);
       const early = sitesReachedEarly(r.failedSites, m, pace, reached, r.endStateReachedMs);
       if (early.length > 0) return new JourneyVerifyResumeRefusedError("pace", `a ${r.kind} replay of ${m.id} failed at ${early.join(", ")} sooner than the re-measured base replay passed it, so the reused failure is not evidence`);
-      if (NOT_THIN_CHECKED.has(r.kind) || pair.control !== undefined) continue;
+      // A skipped control stands on the verdict being decided by other reused results, which still are.
+      if (NOT_THIN_CHECKED.has(r.kind) || pair.control !== undefined || pair.controlSkipped === true) continue;
       const thin = thinSites(r.failedSites, m, pace, reached, r.endStateReachedMs);
       if (sensitive.some((p) => thin.includes(p.site))) return new JourneyVerifyResumeRefusedError("pace", `a ${r.kind} replay of ${m.id} reached ${thin.join(", ")} with little to spare over the re-measured base replay, and no control replay answers for it`);
     }
@@ -920,7 +952,7 @@ export function readVerifyProgress(path: string, keyFile: string, journeyId: str
       verifierPid: body.verifier.pid,
       verifierStartToken: body.verifier.startToken,
       build: body.build,
-      taint: { restoreFailed: body.taint.restoreFailed, notIsolated: body.taint.notIsolatedBy !== null },
+      taint: { restoreFailed: body.taint.restoreFailed, notIsolated: body.taint.notIsolatedBy !== null || body.taint.isolation !== null },
     },
   };
 }

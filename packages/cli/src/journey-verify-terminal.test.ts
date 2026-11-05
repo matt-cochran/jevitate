@@ -313,7 +313,8 @@ describe("the inactivity limit", () => {
   });
 
   it("covers a step's declared response wait", () => {
-    expect(proofInactivityMs(sized(10, { responseTimeoutMs: 600_000 })) - proofInactivityMs(sized(10))).toBe(10 * (600_000 - 15_000));
+    // At least: the longest step also sizes the pacing margin and the wait for open writes.
+    expect(proofInactivityMs(sized(10, { responseTimeoutMs: 600_000 })) - proofInactivityMs(sized(10))).toBeGreaterThanOrEqual(10 * (600_000 - 15_000));
   });
 
   it("covers the 300 s admission bound and a replay floor for the smallest Journey", () => {

@@ -7,8 +7,11 @@ import { join } from "node:path";
 import { clock } from "@jevitate/domain";
 import { FsJourneyStore, assertionSiteKey, classifyMutation, journeyAssertions, type Journey } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
-import { verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
+import { appendFile } from "node:fs/promises";
+import { runJourneyProgrammatically } from "./journey-api.js";
+import { verifyJourneyMutations, type JourneyVerifyReport, type VerifyJourneyOptions } from "./journey-verify.js";
 import { MissionFixtures } from "./mission-fixtures.js";
+import { composeObservers } from "./run-screenshots.js";
 
 /**
  * The soundness matrix of `journey verify --mutate`: mutation kind × job timing × what the site really
@@ -77,6 +80,39 @@ const MATRIX: readonly (readonly [Kind, Relation, string, string, string, string
 ];
 
 const ROWS = MATRIX.flatMap(([kind, relation, ...cells]) => COLUMNS.map((timing, i) => ({ kind, relation, timing, expected: cells[i]! })));
+
+/** How many proofs of this file run at once. */
+const PROOF_POOL = 6;
+/** With this set, every proof appends what each replay took, by kind and step, as one JSON line. */
+const COST_LOG = process.env["JEV_PROOF_COST_LOG"];
+
+/** A proof, measured through the `run` seam and the progress lines when `COST_LOG` is set: nothing about the proof itself changes. */
+async function proveMeasured(name: string, opts: VerifyJourneyOptions): Promise<JourneyVerifyReport> {
+  if (COST_LOG === undefined) return verifyJourneyMutations(opts);
+  const startedAt = clock.monotonicMs();
+  const replays: { label: string; atMs: number; endedMs?: number; stepEndMs: Record<number, number> }[] = [];
+  const report = await verifyJourneyMutations(
+    {
+      ...opts,
+      onProgress: (p) => {
+        opts.onProgress?.(p);
+        replays.push({ label: p.mutation ?? "base", atMs: clock.monotonicMs() - startedAt, stepEndMs: {} });
+      },
+    },
+    async (options, mutation) => {
+      const replay = replays.at(-1)!;
+      const at = clock.monotonicMs();
+      const timing = { afterStep: async ({ index }: { index: number }) => void (replay.stepEndMs[index] = Math.round(clock.monotonicMs() - at)) };
+      try {
+        return await runJourneyProgrammatically({ ...options, observer: composeObservers(options.observer, timing) }, mutation);
+      } finally {
+        replay.endedMs = clock.monotonicMs() - startedAt;
+      }
+    },
+  );
+  await appendFile(COST_LOG, `${JSON.stringify({ name, ms: Math.round(clock.monotonicMs() - startedAt), replays, verdict: report.verdict, assertions: report.assertions.map((a) => [a.site, a.verdict, a.provedBy]), mutations: report.mutations.map((m) => [m.id, m.step, m.outcome]) })}\n`);
+  return report;
+}
 
 /** One session's page state, kept per browser context, so nothing here crosses from one replay to the next. */
 interface SessionState {
@@ -237,7 +273,7 @@ async function proveOne(key: string): Promise<{ journey: Journey; report: Journe
   const journey = matrixJourney(served.origin, { param, family, mutations, ...(targeted === undefined ? {} : { targeted }) });
   const dir = await mkdtemp(join(tmpdir(), "jev-soundness-"));
   await new FsJourneyStore(dir).put(journey);
-  const report = await verifyJourneyMutations({ dir, id: "matrix", params: param ? { name: "alice" } : {}, browserPortFactory: () => new PlaywrightBrowserPort() }).finally(served.close);
+  const report = await proveMeasured(key, { dir, id: "matrix", params: param ? { name: "alice" } : {}, browserPortFactory: () => new PlaywrightBrowserPort() }).finally(served.close);
   return { journey, report };
 }
 
@@ -275,7 +311,7 @@ describe("[realtime] the soundness matrix", () => {
 
   beforeAll(async () => {
     const keys = [...new Set(ROWS.map((r) => proofKey(r.kind, r.relation, r.timing)))];
-    proofs = await pool(keys, 4, proveOne);
+    proofs = await pool(keys, PROOF_POOL, proveOne);
   }, 3_600_000);
 
   it.each(ROWS)("$kind, $relation site, $timing job: $expected", ({ kind, relation, timing, expected }) => {
@@ -463,13 +499,13 @@ describe("[realtime] the review's findings", () => {
   let proofs: Map<string, { journey: Journey; report: JourneyVerifyReport } | Error>;
 
   beforeAll(async () => {
-    proofs = await pool(FINDINGS.map((f) => f.name), 4, async (name) => {
+    proofs = await pool(FINDINGS.map((f) => f.name), PROOF_POOL, async (name) => {
       const finding = FINDINGS.find((f) => f.name === name)!;
       const served = await serveProbe(finding.jobMs, [], { done: false });
       const journey = finding.journey(served.origin);
       const dir = await mkdtemp(join(tmpdir(), "jev-findings-"));
       await new FsJourneyStore(dir).put(journey);
-      const report = await verifyJourneyMutations({
+      const report = await proveMeasured(name, {
         dir,
         id: journey.metadata.id,
         params: {},
@@ -555,5 +591,327 @@ document.getElementById('ack').onclick = async () => { await fetch('/api/ack', {
   // The fresh control stops skip:3 counting; block-write:3 had the room to see the end state hold without the write.
   it("reads the truth, that the end state does not depend on the step, and not proven", () => {
     expect(report.verdict).toBe("insensitive");
+  });
+});
+
+/**
+ * THE EXPERIMENT'S ROWS. The fixture can vary what the matrix above holds fixed: state that crosses
+ * replays, a job that runs slow in one replay (`first`), claims that decay, a client's retry,
+ * background writes, a short claim on a slow request check. Each row fails on the code before the
+ * experiment changed, except a row marked `limit`, which pins today's reading of a stated limit in
+ * `docs/outcomes.md` (a limit's reading is not the truth of the Journey: it says so in its name).
+ */
+interface RowContext {
+  /** The kind of replay running now, by its progress label. */
+  label: string;
+  /** True the first time it is asked for this label. */
+  firstOf(label: string): boolean;
+}
+interface Row {
+  readonly name: string;
+  readonly limit?: true;
+  readonly fixtures?: true;
+  readonly serve: (ctx: RowContext) => (req: IncomingMessage, res: ServerResponse) => void;
+  readonly journey: (site: string) => Journey;
+  readonly verdict: string;
+  readonly reading?: readonly [site: string, verdict: string];
+  readonly reason?: RegExp;
+}
+
+const html = (res: ServerResponse, body: string, headers: Record<string, string> = {}): void => void res.writeHead(200, { "content-type": "text/html", ...headers }).end(`<!doctype html><html><head><title>T</title></head><body>${body}</body></html>`);
+const pathOfUrl = (req: IncomingMessage): string => new URL(req.url ?? "/", "http://x").pathname;
+const sidOf = (req: IncomingMessage): string => /sid=(\d+)/.exec(req.headers.cookie ?? "")?.[1] ?? "";
+const NOCLAIM = { kind: "urlIncludes", text: "" } as const;
+const WROTE = (p: string, method = "POST") => ({ delta: { verdict: "relevant-change", why: "w", changes: [], requests: [`${method} ${p} → 200`], overheadMs: 1 } });
+const NAV_TO = (css: string) => ({ step: { kind: "navigate", url: "/", expect: vis(css) } });
+const J = (site: string, steps: readonly unknown[], meta: object = {}): Journey => probeJourney(site, steps, meta);
+
+const sessions = (): { sid: (req: IncomingMessage, res: Record<string, string>) => string } => {
+  let next = 1;
+  return {
+    sid: (req, headers) => {
+      const sid = sidOf(req);
+      if (sid !== "") return sid;
+      const fresh = String(next++);
+      headers["set-cookie"] = `sid=${fresh}; Path=/`;
+      return fresh;
+    },
+  };
+};
+
+/** Save answers at once and its job goes on; `onLanded` is its effect, `path` how it was started. */
+const crossing = (opts: { readonly fixtures: boolean; readonly method?: "GET" | "POST" }): ((ctx: RowContext) => (req: IncomingMessage, res: ServerResponse) => void) => () => {
+  let busyFrom = Number.POSITIVE_INFINITY;
+  let busyTo = 0;
+  let gone = false;
+  return (req, res) => {
+    const p = pathOfUrl(req);
+    const now = clock.monotonicMs();
+    if (p === "/seed") {
+      gone = false;
+      return json(res, { id: "1" });
+    }
+    if (p === "/api/save") {
+      if (opts.fixtures) after(3_000, () => void (gone = true));
+      else {
+        busyFrom = now + 3_000;
+        busyTo = now + 5_500;
+      }
+      return json(res);
+    }
+    const bad = opts.fixtures ? gone : now >= busyFrom && now < busyTo;
+    html(res, `<button id="save">Save</button><p id="row">row: ${bad ? "gone" : "present"}</p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'${opts.method ?? "POST"}'}).catch(()=>{})</script>`);
+  };
+};
+const crossingJourney = (site: string, extra: object = {}, line: object = WROTE("/api/save")): Journey =>
+  J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, ...line }], { endState: [{ kind: "reloadThen", assertion: text("#row", "row: present") }], ...extra });
+
+/** An earlier step's toast lasts `toastMs`; `ownToast`: it is the last step's own write that brings it. */
+const toastServer = (toastMs: number, ownToast: boolean) => () => (req: IncomingMessage, res: ServerResponse): void => {
+  const p = pathOfUrl(req);
+  if (p.startsWith("/api/")) return json(res);
+  const show = `$('toast').textContent='Welcome';setTimeout(()=>{$('toast').textContent=''},${toastMs})`;
+  html(res, `<button id="hello">Hello</button><button id="ack">Ack</button><p id="toast"></p><script>const $=(i)=>document.getElementById(i);
+$('hello').onclick=async()=>{await fetch('/api/hello',{method:'POST'});${ownToast ? "" : show}};
+$('ack').onclick=async()=>{await fetch('/api/ack',{method:'POST'});${ownToast ? show : ""}};</script>`);
+};
+const toastJourney = (site: string, ownToast: boolean): Journey =>
+  J(site, [NAV_TO("#hello"), { step: { kind: "click", target: { css: "#hello" }, expect: ownToast ? vis("#hello") : text("#toast", "Welcome") }, ...WROTE("/api/hello") }, { step: { kind: "click", target: { css: "#ack" }, expect: NOCLAIM }, ...WROTE("/api/ack") }], {
+    endState: [{ kind: "page", assertion: text("#toast", "Welcome") }],
+  });
+
+/** Ack's claim reads only Start's job, which takes 7 s the first time `slowIn` starts it and 800 ms otherwise. */
+const oneSlow = (slowIn: string) => (ctx: RowContext) => {
+  const at = new Map<string, number>();
+  const s = sessions();
+  return (req: IncomingMessage, res: ServerResponse): void => {
+    const headers: Record<string, string> = {};
+    const sid = s.sid(req, headers);
+    const p = pathOfUrl(req);
+    const now = clock.monotonicMs();
+    if (p === "/api/start") {
+      at.set(sid, now + (ctx.label === slowIn && ctx.firstOf(slowIn) ? 7_000 : 800));
+      return json(res);
+    }
+    if (p === "/api/ack") return json(res);
+    if (p === "/api/status") return json(res, { done: (at.get(sid) ?? Number.POSITIVE_INFINITY) <= now });
+    html(res, `<button id="start">S</button><button id="ack">A</button><p id="started"></p><p id="job">job: pending</p><script>const $=(i)=>document.getElementById(i);let q;
+$('start').onclick=async()=>{await fetch('/api/start',{method:'POST'});$('started').textContent='Started';q=setInterval(async()=>{const b=await(await fetch('/api/status')).json();if(b.done){clearInterval(q);$('job').textContent='job: done'}},200)};
+$('ack').onclick=()=>fetch('/api/ack',{method:'POST'}).catch(()=>{});</script>`, headers);
+  };
+};
+const oneSlowSteps = (ackLine: object) => [NAV_TO("#start"), { step: { kind: "click", target: { css: "#start" }, expect: text("#started", "Started") }, ...WROTE("/api/start") }, { step: { kind: "click", target: { css: "#ack" }, expect: text("#job", "job: done") }, ...ackLine }];
+
+/** A POST that fails is sent again by the client, 1.5 s on. The next step's button appears only after the click. */
+const retrying = (retryLine?: string) => () => {
+  const saved = new Map<string, boolean>();
+  const s = sessions();
+  return (req: IncomingMessage, res: ServerResponse): void => {
+    const headers: Record<string, string> = {};
+    const sid = s.sid(req, headers);
+    const p = pathOfUrl(req);
+    if (p === "/api/save" || p === "/api/save-retry") {
+      saved.set(sid, true);
+      return json(res);
+    }
+    html(res, `<button id="save">Save</button><div id="host"></div><p id="said"></p><p id="saved">${saved.get(sid) ? "YES" : "NO"}</p><script>const $=(i)=>document.getElementById(i);
+const send=async(left,url)=>{try{await fetch(url,{method:'POST'});$('said').textContent='Saved'}catch{if(left>0)setTimeout(()=>send(left-1,'${retryLine ?? "/api/save"}'),1500)}};
+$('save').onclick=()=>{$('host').innerHTML='<button id="next">Next</button>';send(3,'/api/save')};</script>`, headers);
+  };
+};
+const SAVED_YES = { kind: "reloadThen", assertion: text("#saved", "YES") } as const;
+
+/** A POST held open after its click; `keepalive`: a repeating POST the Journey never recorded starts 3 s after load. */
+const saving = (opts: { readonly saveMs: number; readonly keepalive?: boolean; readonly optimistic?: boolean }) => () => {
+  const saved = new Map<string, boolean>();
+  const s = sessions();
+  return (req: IncomingMessage, res: ServerResponse): void => {
+    const headers: Record<string, string> = {};
+    const sid = s.sid(req, headers);
+    const p = pathOfUrl(req);
+    if (p === "/api/keepalive") return after(500, () => json(res));
+    if (p === "/api/save") return after(opts.saveMs, () => {
+      saved.set(sid, true);
+      json(res);
+    });
+    html(res, `<button id="save">Save</button><p id="said"></p><p id="saved">${saved.get(sid) ? "YES" : "NO"}</p><script>const $=(i)=>document.getElementById(i);
+${opts.keepalive === true ? "setTimeout(()=>setInterval(()=>fetch('/api/keepalive',{method:'POST'}).catch(()=>{}),1000),3000);" : ""}
+$('save').onclick=async()=>{${opts.optimistic === true ? "$('said').textContent='Saving';" : ""}try{await fetch('/api/save',{method:'POST'});${opts.optimistic === true ? "" : "$('said').textContent='Saved';"}}catch{}};</script>`, headers);
+  };
+};
+
+const ROWS_EXPERIMENT: readonly Row[] = [
+  {
+    name: "H1: the base's job lands in the next replay and a fixture restore clears it",
+    fixtures: true,
+    serve: crossing({ fixtures: true }),
+    journey: (site) => crossingJourney(site),
+    verdict: "inconclusive",
+    reason: /cross into the next/,
+  },
+  {
+    name: "H1: the base's job opens a time-limited window in the next replay, no fixture",
+    serve: crossing({ fixtures: false }),
+    journey: (site) => crossingJourney(site),
+    verdict: "inconclusive",
+    reason: /cross into the next/,
+  },
+  {
+    name: "M4: the same job started by a GET, with no write to see",
+    serve: crossing({ fixtures: false, method: "GET" }),
+    journey: (site) => crossingJourney(site, { mutationPairs: [{ check: "end-state:0", mustFailWhen: "skip:2" }] }, {}),
+    verdict: "inconclusive",
+    reason: /cross into the next/,
+  },
+  {
+    name: "H2: the pacing hold outlasts a toast an earlier step showed",
+    serve: toastServer(1_300, false),
+    journey: (site) => toastJourney(site, false),
+    verdict: "insensitive",
+    reading: ["end-state:0", "insensitive"],
+  },
+  {
+    name: "H3: one replay's job runs slow, and the sibling mutation passes the site",
+    serve: oneSlow("skip:3"),
+    journey: (site) => J(site, oneSlowSteps(WROTE("/api/ack"))),
+    verdict: "insensitive",
+    reading: ["step:3", "insensitive"],
+  },
+  {
+    name: "H4: a client's retry after the block window, with no claim on the step",
+    serve: retrying(),
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, ...WROTE("/api/save") }, { step: { kind: "click", target: { css: "#next" }, expect: NOCLAIM } }], { endState: [SAVED_YES] }),
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
+  },
+  {
+    name: "H4: a client's retry during a relaxed replay's kept wait",
+    serve: retrying(),
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [SAVED_YES] }),
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
+  },
+  {
+    name: "H4: a client's retry during a targeted replay",
+    serve: retrying(),
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }, { step: { kind: "assert", check: text("#said", "Saved") } }], {
+      endState: [SAVED_YES],
+      mutationPairs: [{ check: "step:3", mustFailWhen: "block-write:2" }],
+    }),
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
+  },
+  {
+    name: "M1: a repeating POST the Journey never recorded, open as a longer replay closes",
+    serve: saving({ saveMs: 0, keepalive: true }),
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [{ kind: "page", assertion: text("#said", "Saved") }] }),
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
+  },
+  {
+    name: "M2: a claim on optimistic text with a short wait, on a step with a slow request check",
+    serve: saving({ saveMs: 8_000, optimistic: true }),
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saving"), waitFor: { maxMs: 2_000 } }, expectRequests: POST("/api/save") }]),
+    verdict: "proven",
+    reading: ["step:2", "sensitive"],
+  },
+  {
+    name: "M3: a write still open as the base would have closed, its effect cleared by the restore",
+    fixtures: true,
+    serve: () => {
+      let gone = false;
+      return (req, res) => {
+        const p = pathOfUrl(req);
+        if (p === "/seed") {
+          gone = false;
+          return json(res, { id: "1" });
+        }
+        if (p === "/api/save") return after(8_000, () => {
+          gone = true;
+          json(res);
+        });
+        html(res, `<button id="save">Save</button><p id="row">row: ${gone ? "gone" : "present"}</p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).catch(()=>{})</script>`);
+      };
+    },
+    journey: (site) => crossingJourney(site),
+    verdict: "insensitive",
+    reading: ["end-state:0", "insensitive"],
+  },
+  {
+    name: "stated limit, today's reading: a one-off slow job, no sibling to disagree, plenty of room reads proven though the claim is independent",
+    limit: true,
+    serve: oneSlow("skip:3"),
+    journey: (site) => J(site, oneSlowSteps({}), { mutationPairs: [{ check: "step:3", mustFailWhen: "skip:3" }] }),
+    verdict: "proven",
+    reading: ["step:3", "sensitive"],
+  },
+  {
+    name: "stated limit, today's reading: state landing later than the independence replay, only inside one mutated replay, reads proven though the end state is independent",
+    limit: true,
+    serve: (ctx) => (req, res) => {
+      if (pathOfUrl(req).startsWith("/api/")) return json(res);
+      html(res, `<button id="save">Save</button><p id="row">row: ${ctx.label === "skip:2" ? "gone" : "present"}</p><script>document.getElementById('save').onclick=()=>{}</script>`);
+    },
+    journey: (site) => crossingJourney(site, { mutationPairs: [{ check: "end-state:0", mustFailWhen: "skip:2" }] }, {}),
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
+  },
+  {
+    name: "stated limit, today's reading: a claim that really depends on the write but decays inside the hold cannot be told from one the hold broke",
+    limit: true,
+    serve: toastServer(1_300, true),
+    journey: (site) => toastJourney(site, true),
+    verdict: "inconclusive",
+    reading: ["end-state:0", "cascade"],
+  },
+  {
+    name: "stated limit, today's reading: a client's retry on a line the step never recorded gets through, so the end state reads insensitive though it depends on the write",
+    limit: true,
+    serve: retrying("/api/save-retry"),
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, ...WROTE("/api/save") }, { step: { kind: "click", target: { css: "#next" }, expect: NOCLAIM } }], { endState: [SAVED_YES] }),
+    verdict: "insensitive",
+    reading: ["end-state:0", "insensitive"],
+  },
+];
+
+describe("[realtime] the experiment's rows", () => {
+  let proofs: Map<string, { journey: Journey; report: JourneyVerifyReport } | Error>;
+
+  beforeAll(async () => {
+    proofs = await pool(ROWS_EXPERIMENT.map((r) => r.name), PROOF_POOL, async (name) => {
+      const row = ROWS_EXPERIMENT.find((r) => r.name === name)!;
+      const seen = new Set<string>();
+      const ctx: RowContext = {
+        label: "base",
+        firstOf: (label) => {
+          if (seen.has(label)) return false;
+          seen.add(label);
+          return true;
+        },
+      };
+      const served = await listen(row.serve(ctx));
+      const journey = row.journey(served.origin);
+      const dir = await mkdtemp(join(tmpdir(), "jev-rows-"));
+      await new FsJourneyStore(dir).put(journey);
+      const report = await proveMeasured(name, {
+        dir,
+        id: journey.metadata.id,
+        params: {},
+        browserPortFactory: () => new PlaywrightBrowserPort(),
+        onProgress: (p) => void (ctx.label = p.mutation ?? "base"),
+        ...(row.fixtures === true
+          ? { fixtures: (at: string) => new MissionFixtures({ spec: { setup: [{ method: "POST", url: "/seed" }], restore: [{ method: "DELETE", url: "/seed" }] }, auth: {}, site: at, seedUrl: `${at}/`, baseUrl: at, allowlist: [at], secrets: [] }) }
+          : {}),
+      }).finally(served.close);
+      return { journey, report };
+    });
+  }, 1_800_000);
+
+  it.each(ROWS_EXPERIMENT)("$name: $verdict", ({ name, verdict, reading: site, reason }) => {
+    const proof = proofs.get(name);
+    if (proof === undefined || proof instanceof Error) throw proof ?? new Error("no proof");
+    const seen = site === undefined ? proof.report.verdict : `${proof.report.assertions.find((a) => a.site === site[0])?.verdict}, ${proof.report.verdict}`;
+    expect(seen).toBe(site === undefined ? verdict : `${site[1]}, ${verdict}`);
+    if (reason !== undefined) expect(proof.report.reason).toMatch(reason);
   });
 });

@@ -187,7 +187,8 @@ describe("a proof's inactivity limit", () => {
   };
 
   it("allows a step one response wait per request check", () => {
-    expect(proofInactivityMs(withChecks(3)) - proofInactivityMs(withChecks(1))).toBe(1_200_000);
+    // At least: the longest step also sizes the pacing margin and the wait for open writes.
+    expect(proofInactivityMs(withChecks(3)) - proofInactivityMs(withChecks(1))).toBeGreaterThanOrEqual(1_200_000);
   });
 });
 

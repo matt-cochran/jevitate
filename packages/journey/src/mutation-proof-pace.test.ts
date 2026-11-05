@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   JourneySchema,
+  controlCanChangeVerdict,
+  heldSites,
   mutationProofVerdict,
   paceEndStateFloorMs,
   paceFloorMs,
   paceTailMs,
   pacedReplay,
   relaxedMutationReplay,
-  sitesOutranBy,
+  siblingDisagreements,
   sitesReachedEarly,
+  sitesUnmatchedBy,
   thinSites,
   type Journey,
+  type MutationPlan,
   type MutationReplay,
+  type MutationRunResult,
   type ReplayPace,
 } from "./index.js";
 
@@ -161,17 +166,69 @@ describe("a failed site with little to spare over the base", () => {
   });
 });
 
-describe("a fresh control against a mutated replay", () => {
+describe("a matched control against a mutated replay", () => {
   const END = { where: "end-state", index: 0 } as const;
+  const OWN = { where: "step", step: 2, postcondition: true } as const;
 
-  it("outran it when it took longer to reach the end state", () => {
-    expect(sitesOutranBy([END], [undefined, 3_000], 3_500, { reachedMs: [undefined, 5_000], endStateReachedMs: 6_000 })).toEqual(["end-state:0"]);
+  it("does not match when it got to the end state later than the margin allows", () => {
+    expect(sitesUnmatchedBy([END], { endStateReachedMs: 3_500 }, { endStateReachedMs: 6_000 }, 1_000)).toEqual(["end-state:0"]);
   });
-  it("did not when it took no longer", () => {
-    expect(sitesOutranBy([END], [undefined, 3_000], 3_500, { reachedMs: [undefined, 1_000], endStateReachedMs: 1_500 })).toEqual([]);
+  it("does not match when it got there sooner than the margin allows, where a claim that decays could still hold", () => {
+    expect(sitesUnmatchedBy([END], { endStateReachedMs: 6_000 }, { endStateReachedMs: 3_500 }, 1_000)).toEqual(["end-state:0"]);
+  });
+  it("matches within the margin, either way", () => {
+    expect(sitesUnmatchedBy([END], { endStateReachedMs: 3_500 }, { endStateReachedMs: 4_000 }, 1_000)).toEqual([]);
+  });
+  it("compares when a step's site was arrived at, not when a claim that failed gave up", () => {
+    expect(sitesUnmatchedBy([OWN], { arrivedMs: [undefined, 1_000] }, { arrivedMs: [undefined, 1_200] }, 1_000)).toEqual([]);
   });
   it("says nothing when it measured nothing", () => {
-    expect(sitesOutranBy([END], [undefined, 3_000], 3_500, {})).toEqual([]);
+    expect(sitesUnmatchedBy([END], { endStateReachedMs: 3_500 }, {}, 1_000)).toEqual([]);
+  });
+});
+
+describe("a site the replay was held on the way to", () => {
+  const END = { where: "end-state", index: 0 } as const;
+  const OWN = { where: "step", step: 2, postcondition: true } as const;
+
+  it("is named for an end state read after a hold", () => {
+    expect(heldSites([END], { endStateHeldMs: 400 })).toEqual(["end-state:0"]);
+  });
+  it("is named for a later step reached after a hold", () => {
+    expect(heldSites([OWN], { heldMs: [undefined, 400] })).toEqual(["step:2"]);
+  });
+  it("is not named for the mutated step itself, which nothing held", () => {
+    expect(heldSites([OWN], { heldMs: [undefined, 0] })).toEqual([]);
+  });
+});
+
+describe("a claim compared with when the base's claim held", () => {
+  const OWN = { where: "step", step: 2, postcondition: true } as const;
+  const REQUEST = { where: "step-request", step: 2, checkIndex: 0 } as const;
+  /** Step 2's claim held 100 ms in; its request check kept the step going for 8 s. */
+  const SLOW_CHECK: ReplayPace = { stepEndMs: [2_000, 10_000], claimHeldMs: [1_000, 2_100] };
+
+  it("is not early for failing later than the claim held, though the step went on longer", () => {
+    expect(sitesReachedEarly([OWN], skip2, SLOW_CHECK, [undefined, 2_000])).toEqual([]);
+  });
+  it("is early for failing before the claim held", () => {
+    expect(sitesReachedEarly([OWN], skip2, SLOW_CHECK, [undefined, 50])).toEqual(["step:2"]);
+  });
+  it("still compares a request check with the step's end", () => {
+    expect(sitesReachedEarly([REQUEST], skip2, SLOW_CHECK, [undefined, 2_000])).toEqual(["step-request:2:0"]);
+  });
+  it("gives a dead claim no more room for a slow request check", () => {
+    const paced = stepOf(replayOf(journey({ maxMs: 600_000, stallMs: 1_000 }), SLOW_CHECK), 2);
+    expect("waitFor" in paced && paced.waitFor?.maxMs).toBe(6_000);
+  });
+});
+
+describe("a floor with no margin", () => {
+  it("is what the base took", () => {
+    expect(paceFloorMs(PACE, skip2, 1, false)).toBe(8_000);
+  });
+  it("is what the base took to read its end state", () => {
+    expect(paceEndStateFloorMs({ ...PACE, endStateMs: 14_000 }, skip2, false)).toBe(12_000);
   });
 });
 
@@ -184,7 +241,60 @@ describe("a proof whose replays were not isolated", () => {
   it("gives that as its reason", () => {
     expect(mutationProofVerdict({ ...input, notIsolated: "a replay left work" }).reason).toBe("a replay left work");
   });
+  it("counts a control that errored as an errored replay", () => {
+    const sensitive = { basePassed: true, mutations: [{ outcome: "failed" as const, control: "error" as const }], assertions: [{ site: "step:1", verdict: "sensitive" as const }] };
+    expect(mutationProofVerdict(sensitive).verdict).toBe("inconclusive");
+  });
+  it("counts a re-run that errored as an errored replay", () => {
+    const sensitive = { basePassed: true, mutations: [{ outcome: "failed" as const, rerun: "error" as const }], assertions: [{ site: "step:1", verdict: "sensitive" as const }] };
+    expect(mutationProofVerdict(sensitive).verdict).toBe("inconclusive");
+  });
   it("still names a failed restore first", () => {
     expect(mutationProofVerdict({ ...input, restoreFailed: true, notIsolated: "a replay left work" }).reason).toMatch(/fixture restore failed/);
+  });
+});
+
+describe("sibling mutations of a step", () => {
+  const j = journey();
+  const OWN_2: MutationRunResult = { outcome: "failed", failedSites: [{ where: "step", step: 2, postcondition: true }] };
+  const PASSED: MutationRunResult = { outcome: "passed", failedSites: [] };
+  const skip1 = { kind: "skip", step: 1, id: "skip:1" } as const;
+  const plan: MutationPlan = { mutations: [skip2, block2], pairs: [{ site: "step:2", mutation: skip2.id }, { site: "step:2", mutation: block2.id }] };
+
+  it("disagree when one fails a site the other passes", () => {
+    expect(siblingDisagreements(j, plan, new Map([[skip2.id, OWN_2], [block2.id, PASSED]]))).toEqual([{ site: "step:2", sensitive: skip2.id, passed: block2.id }]);
+  });
+  it("agree when both fail it", () => {
+    expect(siblingDisagreements(j, plan, new Map([[skip2.id, OWN_2], [block2.id, OWN_2]]))).toEqual([]);
+  });
+  it("do not disagree with a mutation of another step", () => {
+    const across: MutationPlan = { mutations: [skip1, skip2], pairs: [{ site: "step:2", mutation: skip1.id }, { site: "step:2", mutation: skip2.id }] };
+    expect(siblingDisagreements(j, across, new Map([[skip2.id, OWN_2], [skip1.id, PASSED]]))).toEqual([]);
+  });
+  it("do not disagree once the failure has been struck", () => {
+    expect(siblingDisagreements(j, plan, new Map([[skip2.id, { ...OWN_2, waitsCut: ["step:2"] }], [block2.id, PASSED]]))).toEqual([]);
+  });
+});
+
+describe("whether a control can still change the verdict", () => {
+  const j = journey();
+  const OWN_1: MutationRunResult = { outcome: "failed", failedSites: [{ where: "step", step: 1, postcondition: true }] };
+  const OWN_2: MutationRunResult = { outcome: "failed", failedSites: [{ where: "step", step: 2, postcondition: true }] };
+  const PASSED: MutationRunResult = { outcome: "passed", failedSites: [] };
+  const NOT_APPLIED: MutationRunResult = { outcome: "not-applied", failedSites: [] };
+  const skip1 = { kind: "skip", step: 1, id: "skip:1" } as const;
+  const plan: MutationPlan = { mutations: [skip1, skip2, block2], pairs: [{ site: "step:1", mutation: skip1.id }, { site: "step:2", mutation: skip2.id }, { site: "step:2", mutation: block2.id }] };
+
+  it("can while the proof can still be proven", () => {
+    expect(controlCanChangeVerdict(j, plan, new Map([[skip1.id, OWN_1], [skip2.id, OWN_2]]), ["step:2"])).toBe(true);
+  });
+  it("cannot once another site is finally insensitive", () => {
+    expect(controlCanChangeVerdict(j, plan, new Map([[skip1.id, PASSED], [skip2.id, OWN_2]]), ["step:2"])).toBe(false);
+  });
+  it("cannot when the proof cannot be proven and the reading has no sibling to fall to", () => {
+    expect(controlCanChangeVerdict(j, plan, new Map([[skip1.id, NOT_APPLIED], [skip2.id, OWN_2], [block2.id, OWN_2]]), ["step:2"])).toBe(false);
+  });
+  it("can when the proof cannot be proven but a sibling is still to run, since its pass would decide the site", () => {
+    expect(controlCanChangeVerdict(j, plan, new Map([[skip1.id, NOT_APPLIED], [skip2.id, OWN_2]]), ["step:2"])).toBe(true);
   });
 });

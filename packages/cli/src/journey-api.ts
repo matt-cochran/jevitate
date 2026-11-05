@@ -221,6 +221,14 @@ export interface MutationReplayOptions {
    * never sent; what was blocked comes back as `blockedWrites`.
    */
   blockWritesAtStep?: number;
+  /**
+   * With `blockWritesAtStep`: these recorded write lines stay blocked for the rest of the replay, so a
+   * client's retry of an aborted write cannot land later. `exemptSteps` (0-based) record the same line
+   * as their own, so it goes through while they run.
+   */
+  blockAfterWindow?: { requests: readonly string[]; exemptSteps: readonly number[] };
+  /** Mutation proof: runs first as each step ends, before anything that step goes on waiting for. */
+  earliestObserver?: StepObserver;
   /** #402: also return the outcome checks' structured failures (`outcomeFailures`). */
   structuredFailures?: boolean;
   /** Mutation proof: awaited just before the end state's checks start. */
@@ -235,8 +243,10 @@ export interface MutationReplayOptions {
 export interface MutationReplayFields {
   /** The step-request / end-state checks that failed (`structuredFailures`). */
   outcomeFailures?: OutcomeCheckFailure[];
-  /** The writes aborted in `blockWritesAtStep`'s window. */
+  /** The writes aborted in `blockWritesAtStep`'s window, and after it (`blockAfterWindow`). */
   blockedWrites?: BlockedWrite[];
+  /** `METHOD /path` of a blocked line a server answered after the window all the same (a popup, a worker). */
+  blockEscaped?: string[];
 }
 
 /** #453: what a self-heal run adds to its result — the proposal it wrote and the persisted result file. */
@@ -663,11 +673,12 @@ export async function runJourneyProgrammatically(
         resolveRef: refs,
         ...(opts.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: opts.stepResponseTimeoutMs }),
       });
-      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins);
+      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins, mutation.blockAfterWindow);
       // #453 (Q2): a guarded click/fill heal probe runs under a per-step write blocker.
       // Context-level (popups, WebSockets), no write exemptions; see heal-probe-guard.ts.
       const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page);
       const observer = composeObservers(
+        mutation.earliestObserver,
         outcomeChecks.observer(),
         blocker?.observer,
         replayDeltas?.observer(),
@@ -711,7 +722,6 @@ export async function runJourneyProgrammatically(
         result = redactSecretValues(raw, runSecrets);
       } finally {
         await gate.done();
-        await blocker?.guard.disarm();
         await healGuard?.guard.disarm();
         await healGuard?.dispose();
         await handbackObserver?.disarm();
@@ -729,10 +739,6 @@ export async function runJourneyProgrammatically(
       // #583: the typed handback state, decided from the run's own results and network evidence —
       // attached only when the Journey declares a boundary (otherwise the result is unchanged).
       result = attachHandback(result, journey, handbackObserver?.counts() ?? { writes: 0, writesBlocked: 0, observation: "unavailable" });
-      const mutationFields: MutationReplayFields = {
-        ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretValues([...outcomeChecks.lastFailures], runSecrets) } : {}),
-        ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
-      };
       const slowFields = outcomeChecks.slowSteps.length === 0 ? {} : { slowSteps: [...outcomeChecks.slowSteps] };
       const writeOrigins = offAllowlist.stop();
       const originFields = writeOrigins.length === 0 ? {} : { offAllowlistWrites: redactSecretValues(writeOrigins, runSecrets) };
@@ -740,6 +746,13 @@ export async function runJourneyProgrammatically(
       const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretValues(replayDeltaSummary(replayDeltas), runSecrets) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
+      // After the close: a replay stays open a while before it, and a block holds until then.
+      await blocker?.guard.disarm();
+      const mutationFields: MutationReplayFields = {
+        ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretValues([...outcomeChecks.lastFailures], runSecrets) } : {}),
+        ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
+        ...(blocker === undefined || blocker.escaped().length === 0 ? {} : { blockEscaped: blocker.escaped() }),
+      };
       if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields };
       await fx.restore();
       // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
@@ -943,27 +956,66 @@ export function draftOnStored(stored: Journey, draft: ProposedRevisionDraft, env
 const BLOCK_WINDOW_SETTLE_MS = 5_000;
 
 /**
- * #402 block-write: a `ReadOnlyGuard` armed on the page whose action window is ONLY the given step —
- * opened as it begins, closed once the network settled after it. Every held write is aborted (a
- * write navigation too: never answered with a status that could read as a success).
+ * #402 block-write: a `ReadOnlyGuard` armed on the page whose action window is the given step — opened
+ * as it begins, closed once the network settled after it. Every held write is aborted (a write
+ * navigation too: never answered with a status that could read as a success). The step's own lines
+ * stay blocked after the window (`blockAfterWindow`). What the guard's page route cannot reach is watched
+ * on the context: a matching write answered after the window means the mutation did not hold.
  */
-async function stepWriteBlocker(page: Page, index: number, allowedOrigins: readonly string[]): Promise<{ guard: ReadOnlyGuard; observer: StepObserver }> {
+async function stepWriteBlocker(
+  page: Page,
+  index: number,
+  allowedOrigins: readonly string[],
+  after: MutationReplayOptions["blockAfterWindow"],
+): Promise<{ guard: ReadOnlyGuard; observer: StepObserver; escaped: () => string[] }> {
   const guard = new ReadOnlyGuard(writeClassifier({}), { allowlist: [...allowedOrigins], navigationWrites: "abort" });
   await guard.arm(page);
   const monitor = monitorFor(page);
   await monitor.instrument();
+  let held: ReadonlySet<string> = new Set();
+  let released = false;
+  const lineOf = (r: { method(): string; url(): string }): string | undefined => {
+    try {
+      return `${r.method().toUpperCase()} ${new URL(r.url()).pathname}`;
+    } catch {
+      return undefined;
+    }
+  };
+  const sentAfterWindow = new Set<unknown>();
+  const escaped = new Set<string>();
+  const context = typeof page.context === "function" ? page.context() : undefined;
+  if (after !== undefined && typeof context?.on === "function") {
+    context.on("request", (r) => {
+      const line = lineOf(r);
+      if (!released && line !== undefined && held.has(line)) sentAfterWindow.add(r);
+    });
+    context.on("requestfinished", (r) => {
+      const line = lineOf(r);
+      if (line !== undefined && sentAfterWindow.has(r)) escaped.add(line);
+    });
+  }
   return {
     guard,
+    escaped: () => [...escaped],
     observer: {
       beforeStep: async ({ index: i }) => {
         if (i === index) guard.beginAction();
+        if (after?.exemptSteps.includes(i) === true) {
+          released = true;
+          guard.releaseHeldLines(true);
+        }
       },
       afterStep: async ({ index: i }) => {
+        if (after?.exemptSteps.includes(i) === true) {
+          released = false;
+          guard.releaseHeldLines(false);
+        }
         if (i !== index) return;
         try {
           await monitor.waitSettled({ ceilingMs: BLOCK_WINDOW_SETTLE_MS });
         } finally {
           guard.settled();
+          if (after !== undefined) held = guard.holdLines(after.requests);
         }
       },
     },
