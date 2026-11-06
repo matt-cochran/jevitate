@@ -1,6 +1,7 @@
+import type { BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, describeStep, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
@@ -94,6 +95,11 @@ export interface RunJourneyProgrammaticallyOptions {
   runGuardTargetsFile?: string;
   /** #790: told what the run resolved to and watches its writes, for its value-free record. */
   runRecorder?: JourneyRunRecorder;
+  /**
+   * The secret parameters an operator's binding supplied (secret-params.ts) → where each may be
+   * typed: its origins, or `allowlist` for this run's allowlist. Checked at type time.
+   */
+  boundSecretParams?: BoundSecretParams;
   /** Defaults to `safeRunPolicy()` (Slice 1: fail-closed secret mode) when omitted. */
   policy?: RunPolicy;
   /**
@@ -276,9 +282,9 @@ export function redactSecretParams<T>(result: T, journey: Journey, params: Recor
  * #564: a run's full secret set — its secret-param values plus every value the run bound under a
  * credential-like name (an `extract as: "apiKey"` output, read from the result's `output`).
  */
-export function runSecretValues(secrets: readonly string[], result: unknown): string[] {
+export function runSecretValues(secrets: readonly string[], result: unknown, nonSecret: ReadonlySet<string> = new Set()): string[] {
   const output = result !== null && typeof result === "object" && "output" in result ? (result as { output: unknown }).output : undefined;
-  return [...new Set([...secrets, ...secretNamedValues(output)])];
+  return [...new Set([...secrets, ...secretNamedValues(output, nonSecret)])];
 }
 
 export function redactSecretValues<T>(result: T, secrets: readonly string[]): T {
@@ -614,7 +620,8 @@ export async function runJourneyProgrammatically(
     }
     // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
     // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
-    const secrets = secretParamValues(journey, params);
+    // A fixture's credential-named output is redacted by name, wherever a param carried it.
+    const secrets = [...new Set([...secretParamValues(journey, params), ...(fx?.secrets() ?? [])])];
     const mask = opts.mask ?? new SecretPixelMask(secrets);
     const capturing = opts.session === undefined && (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined);
     const openPort = (): BrowserPort => {
@@ -675,6 +682,7 @@ export async function runJourneyProgrammatically(
         new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
+      const boundOption = opts.boundSecretParams === undefined ? {} : { boundSecretParams: new Map(Object.entries(opts.boundSecretParams).map(([n, o]) => [n, o === "allowlist" ? allowedOrigins : o] as const)) };
       const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
       // #322/#400: a full replay (never an anchored prefix) must also satisfy the Journey's end state
       // and each step's request expectations.
@@ -709,8 +717,9 @@ export async function runJourneyProgrammatically(
       const interpreter =
         opts.interpreter ??
         (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined && runGuard === undefined
-          ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs, onExtracted })
+          ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs, onExtracted, ...boundOption })
           : new RecordingInterpreter({
+              ...boundOption,
               observer,
               fixtureBaseDir,
               refLookup: refs,
@@ -739,7 +748,7 @@ export async function runJourneyProgrammatically(
           ...(mutation.afterEndState === undefined ? {} : { afterEndState: mutation.afterEndState }),
         });
         runGuard?.check();
-        runSecrets = runSecretValues(secrets, raw);
+        runSecrets = runSecretValues(secrets, raw, declaredNonSecretParams(journey));
         result = redactSecretValues(raw, runSecrets);
       } finally {
         await gate.done();

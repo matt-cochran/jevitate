@@ -204,7 +204,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     secretParams.push({
       name,
       secret: true,
-      description: "a value code typed during authoring (a --secret-field/--totp binding, or one holding a --secret) — never kept in the Journey; at replay the operator binds it: journey run --secret-field, or secretFields in targets.json",
+      description: "a value code typed during authoring (a --secret-field/--totp binding, or one holding a --secret) — never kept in the Journey; at replay the operator binds it: journey run --secret-field, or secretFields in targets.json (a --totp code has no binding on a replay: --param on the CLI)",
     });
     return { step: d.step, classify: "variable", name };
   });

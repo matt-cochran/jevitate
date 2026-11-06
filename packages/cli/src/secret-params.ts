@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, SECRET_PARAM_NAME_RE, flatJourneySteps, secretParamNames, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, declaredNonSecretParams, flatJourneySteps, isSecretName, secretParamNames, type Journey } from "@jevitate/journey";
 import { SecretFieldSpecError, fieldMatches, parseSecretField, type Control, type SecretField } from "@jevitate/explore";
 import type { TargetDescriptor } from "@jevitate/recording";
 import { SETUP_REF } from "./mission-fixtures.js";
@@ -21,7 +21,8 @@ function refusalMessage(names: readonly string[]): string {
   return (
     `the value of secret parameter${names.length === 1 ? "" : "s"} ${names.join(", ")} cannot travel through an MCP request, because it would pass through the model; nothing ran. ` +
     `Ask the operator to bind the field in ~/.jevitate/targets.json under the environment's origin ("secretFields": ["label=<field>=env:<VAR>"]) and call run_journey with 'env' or 'baseUrl' and without this parameter, ` +
-    `or to run it on the CLI: jevitate journey run <id> --secret-field ${secretFieldHelp}`
+    `or to run it on the CLI: jevitate journey run <id> --secret-field ${secretFieldHelp}. A secret that no field types (one in a navigate URL) runs on the CLI with --param. ` +
+    `If the name only looks like a credential, the Journey's author can declare the parameter "secret": false`
   );
 }
 
@@ -55,7 +56,7 @@ async function loadJourney(dir: string, id: string): Promise<Journey | null> {
 /** The secret parameters of `journey` (or by name alone, when there is no such Journey) that `params` gives a value for. */
 export function secretParamsCarriedBy(journey: Journey | null, params: Readonly<Record<string, unknown>>): string[] {
   const strings = Object.fromEntries(Object.entries(params).filter(([, v]) => holdsValue(v))) as Record<string, string>;
-  const secret = journey === null ? Object.keys(strings).filter((n) => SECRET_PARAM_NAME_RE.test(n)) : secretParamNames(journey, strings);
+  const secret = journey === null ? Object.keys(strings).filter(isSecretName) : secretParamNames(journey, strings);
   return secret.filter((n) => n in strings);
 }
 
@@ -63,22 +64,28 @@ export function secretParamsCarriedBy(journey: Journey | null, params: Readonly<
 export async function secretParamsCarried(dir: string, ids: readonly unknown[], params: unknown): Promise<string[]> {
   if (params === null || typeof params !== "object" || Array.isArray(params)) return [];
   const given = params as Record<string, unknown>;
-  const names = new Set(secretParamsCarriedBy(null, given));
-  for (const id of ids) {
-    if (typeof id !== "string" || id === "") continue;
-    for (const n of secretParamsCarriedBy(await loadJourney(dir, id), given)) names.add(n);
-  }
-  return [...names].sort();
+  const journeys = (await Promise.all(ids.map((id) => (typeof id === "string" && id !== "" ? loadJourney(dir, id) : null)))).filter((j) => j !== null);
+  if (journeys.length === 0) return secretParamsCarriedBy(null, given).sort();
+  // One request's params can reach two Journeys: a declared `secret: false` speaks for its name
+  // unless the other declares it secret.
+  const declaredSecret = new Set(journeys.flatMap((j) => (j.metadata.parameters ?? []).filter((p) => p.secret === true).map((p) => p.name)));
+  const nonSecret = new Set(journeys.flatMap((j) => [...declaredNonSecretParams(j)]));
+  const names = new Set(journeys.flatMap((j) => secretParamsCarriedBy(j, given)));
+  return [...names].filter((n) => declaredSecret.has(n) || !nonSecret.has(n)).sort();
 }
 
-/** The warning for secret parameters given with `--param`, or undefined. It names them and never holds a value. */
-export function secretParamArgvWarning(journey: Journey, params: Readonly<Record<string, string>>): string | undefined {
-  const names = secretParamsCarriedBy(journey, params);
-  if (names.length === 0) return undefined;
+/** The warning for these secret parameters on the command line. It names them and never holds a value. */
+export function secretParamNamesArgvWarning(names: readonly string[]): string {
   return (
     `warning: --param ${names.join(", ")}: a secret value on the command line is visible in the process list and shell history. ` +
     `\`jevitate journey run\` reads it from the environment instead: --secret-field ${secretFieldHelp}\n`
   );
+}
+
+/** The warning for secret parameters given with `--param`, or undefined. */
+export function secretParamArgvWarning(journey: Journey, params: Readonly<Record<string, string>>): string | undefined {
+  const names = secretParamsCarriedBy(journey, params);
+  return names.length === 0 ? undefined : secretParamNamesArgvWarning(names);
 }
 
 /** `secretParamArgvWarning`, for a command that has only the Journey's id. */
@@ -113,20 +120,46 @@ function secretParamTargets(journey: Journey): Array<{ name: string; target: Tar
   });
 }
 
-/**
- * The secret parameters the bindings supply: a binding matches the recorded target of the step that
- * types the parameter, the way it matched the live field when the Journey was authored.
- */
-function paramsFromFields(journey: Journey, fields: readonly SecretField[]): { params: Record<string, string>; used: Set<SecretField> } {
-  const params: Record<string, string> = {};
-  const used = new Set<SecretField>();
-  for (const { name, target } of secretParamTargets(journey)) {
-    const field = fields.find((f) => fieldMatchesTarget(f, target));
-    if (field === undefined) continue;
-    used.add(field);
-    params[name] ??= field.secret;
+/** Where a secret an operator's binding supplied may be typed: its origins, or the run's allowlist. */
+export type BoundSecretParams = Readonly<Record<string, readonly string[] | "allowlist">>;
+
+/** Two secret parameters and one binding, or one parameter and two bindings: which value goes where cannot be told. */
+export class SecretFieldAmbiguousError extends Error {
+  readonly code = "E_SECRET_FIELD_AMBIGUOUS";
+  constructor(readonly params: readonly string[], descriptors: readonly string[]) {
+    super(
+      `secret parameter${params.length === 1 ? "" : "s"} ${params.join(", ")}: ${descriptors.join(", ")} cannot say which value goes to which field, so nothing ran. ` +
+        `Bind each by a target only its own recorded step has (testId, id or name), or give all but one with --param on the CLI`,
+    );
+    this.name = "SecretFieldAmbiguousError";
   }
-  return { params, used };
+}
+
+/**
+ * The secret parameters the bindings supply, leaving out those already `given`: a binding matches
+ * the recorded target of the step that types the parameter, the way it matched the live field when
+ * the Journey was authored. A value is never guessed: an ambiguous match refuses.
+ */
+function paramsFromFields(journey: Journey, fields: readonly SecretField[], given: ReadonlySet<string> = new Set()): { params: Record<string, string>; used: Set<SecretField> } {
+  const fieldsOf = new Map<string, Set<SecretField>>();
+  const paramsOf = new Map<SecretField, Set<string>>();
+  for (const { name, target } of secretParamTargets(journey)) {
+    if (given.has(name)) continue;
+    for (const field of fields.filter((f) => fieldMatchesTarget(f, target))) {
+      fieldsOf.set(name, (fieldsOf.get(name) ?? new Set()).add(field));
+      paramsOf.set(field, (paramsOf.get(field) ?? new Set()).add(name));
+    }
+  }
+  const ambiguous = new Set<string>();
+  for (const [name, bound] of fieldsOf) if (bound.size > 1) ambiguous.add(name);
+  for (const names of paramsOf.values()) if (names.size > 1) for (const n of names) ambiguous.add(n);
+  if (ambiguous.size > 0) {
+    const descriptors = [...new Set([...ambiguous].flatMap((n) => [...(fieldsOf.get(n) ?? [])].map((f) => f.descriptor)))];
+    throw new SecretFieldAmbiguousError([...ambiguous].sort(), descriptors);
+  }
+  const params: Record<string, string> = {};
+  for (const [name, bound] of fieldsOf) params[name] = [...bound][0]!.secret;
+  return { params, used: new Set(paramsOf.keys()) };
 }
 
 /**
@@ -134,7 +167,8 @@ function paramsFromFields(journey: Journey, fields: readonly SecretField[]): { p
  * `targets.json`) supply; an explicit param wins, then a flag. A binding the operator typed that
  * supplies nothing is a mistake (`SecretFieldSpecError`, value-free); a target's spec that does not
  * resolve contributes nothing, and the parameter is reported missing as usual. An unknown Journey
- * keeps `params`, and the run reports it.
+ * keeps `params`, and the run reports it. `bound` says where each resolved value may be typed: a
+ * target's on its own origin, a flag's on the run's allowlist.
  */
 export async function withSecretParams(req: {
   readonly dir: string;
@@ -142,20 +176,21 @@ export async function withSecretParams(req: {
   readonly params: Readonly<Record<string, string>>;
   readonly flags: readonly string[];
   readonly targetFields: readonly string[] | undefined;
+  readonly targetOrigin: string | undefined;
   readonly env: Readonly<Record<string, string | undefined>>;
-}): Promise<Record<string, string>> {
-  if (req.flags.length === 0 && (req.targetFields ?? []).length === 0) return { ...req.params };
-  const flagFields = req.flags.map((spec) => replayField(spec, req.env));
+}): Promise<{ params: Record<string, string>; bound?: BoundSecretParams }> {
+  if (req.flags.length === 0 && (req.targetFields ?? []).length === 0) return { params: { ...req.params } };
+  const flagFields = [...new Set(req.flags)].map((spec) => replayField(spec, req.env));
   const journey = await loadJourney(req.dir, req.id);
-  if (journey === null) return { ...req.params };
-  const fromFlags = paramsFromFields(journey, flagFields);
+  if (journey === null) return { params: { ...req.params } };
+  const fromFlags = paramsFromFields(journey, flagFields, new Set(Object.keys(req.params)));
   const unused = flagFields.filter((f) => !fromFlags.used.has(f));
   if (unused.length > 0) {
     throw new SecretFieldSpecError(
-      `--secret-field ${unused.map((f) => f.descriptor).join(", ")} matches no secret parameter of journey '${req.id}' (a recorded step's label, testId, id or name; type= needs a live field, so it cannot match on a replay)`,
+      `--secret-field ${unused.map((f) => f.descriptor).join(", ")} matches no secret parameter of journey '${req.id}' that --param did not give (a recorded step's label, testId, id or name; type= needs a live field, so it cannot match on a replay)`,
     );
   }
-  const targetFields = (req.targetFields ?? []).flatMap((spec) => {
+  const targetFields = [...new Set(req.targetFields ?? [])].flatMap((spec) => {
     try {
       return [replayField(spec, req.env)];
     } catch (err) {
@@ -163,5 +198,10 @@ export async function withSecretParams(req: {
       throw err;
     }
   });
-  return { ...paramsFromFields(journey, targetFields).params, ...fromFlags.params, ...req.params };
+  const fromTargets = paramsFromFields(journey, targetFields, new Set([...Object.keys(req.params), ...Object.keys(fromFlags.params)]));
+  const bound: Record<string, readonly string[] | "allowlist"> = {};
+  for (const name of Object.keys(fromFlags.params)) bound[name] = "allowlist";
+  // Targets are keyed by origin, so there is one whenever a target's binding applied.
+  for (const name of Object.keys(fromTargets.params)) bound[name] = req.targetOrigin === undefined ? [] : [req.targetOrigin];
+  return { params: { ...fromTargets.params, ...fromFlags.params, ...req.params }, ...(Object.keys(bound).length === 0 ? {} : { bound }) };
 }

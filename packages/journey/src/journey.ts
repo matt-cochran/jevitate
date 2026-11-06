@@ -17,7 +17,7 @@ import {
   type TargetDescriptor,
 } from "@jevitate/recording";
 import { MAX_DECLARED_RELAXATIONS, mutationPairIssues, targetedProofPlanIssues } from "./mutation-proof.js";
-import { SECRET_PARAM_NAME_RE, secretParamNames } from "./intent.js";
+import { isSecretName, secretParamNames } from "./intent.js";
 import { ApprovalProposalSchema } from "./proposal-schema.js";
 import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
 import { anchorRuleIssues } from "./anchor-rules.js";
@@ -507,7 +507,7 @@ export const JourneySchema: ZodType<Journey> = z.object({
   // #579: mutationValues are reviewed, non-secret values — never a credential.
   (j.metadata.parameters ?? []).forEach((p, i) => {
     if (p.mutationValues === undefined) return;
-    if (p.secret === true || SECRET_PARAM_NAME_RE.test(p.name)) {
+    if (p.secret === true || (p.secret !== false && isSecretName(p.name))) {
       ctx.addIssue({
         code: "custom",
         path: ["metadata", "parameters", i, "mutationValues"],
@@ -608,7 +608,7 @@ function assertionRefIssues(j: Journey): { path: (string | number)[]; message: s
     for (const name of assertionRefs(a)) {
       if (secret.has(name)) {
         out.push({ path, message: `assertion reference \${${name}} names a secret parameter — an assertion's expected text is model-visible and persisted, so it may not use one` });
-      } else if (!name.startsWith("setup.") && SECRET_PARAM_NAME_RE.test(name)) {
+      } else if (!name.startsWith("setup.") && isSecretName(name)) {
         // #564: an `extract` output (or undeclared name) that reads as a credential is a secret too.
         out.push({ path, message: `E_ASSERTION_REF_SECRET: assertion reference \${${name}} names a credential-like value — an assertion's expected text is model-visible and persisted, so it may not use one` });
       } else if (!declared.has(name) && !extracted.has(name) && !(name.startsWith("setup.") && name.length > "setup.".length)) {

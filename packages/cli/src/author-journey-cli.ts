@@ -192,7 +192,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         "Each take is a full goal run (the same runner and run-shaping flags as `jevitate explore --strategy goal`),",
         "writing its own result, transcript and Recording (under --out). A take that does not reach the goal",
         "is reported with its stop reason, its checks' verdicts and those paths. A field code types itself",
-        "(--secret-field/--totp) becomes a secret Journey parameter (secret1, …), supplied at replay by the same binding: journey run --secret-field.",
+        "(--secret-field/--totp) becomes a secret Journey parameter (secret1, …), supplied at replay: journey run --secret-field for a --secret-field binding, --param for a --totp one.",
         "Every --success check is kept as the Journey's end state (metadata.endState); each step's expect comes from what it",
         "changed (a write's responseStatus, text it added — richer with --action-deltas), never from its own target.",
       ].join("\n"),

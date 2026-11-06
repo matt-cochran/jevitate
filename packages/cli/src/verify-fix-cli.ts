@@ -223,7 +223,7 @@ export function registerVerifyFixCommands(
           ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
           fixtureFlags: o,
           secrets,
-          journeyPrefix: { params: o.param, dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) },
+          journeyPrefix: { params: o.param, warn: (line) => program.configureOutput().writeErr?.(line), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) },
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(screenshots === undefined ? {} : { screenshots }),

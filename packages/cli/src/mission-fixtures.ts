@@ -1,3 +1,4 @@
+import { isSecretName } from "@jevitate/journey";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { redactText, redactUrl } from "@jevitate/ai-core";
@@ -756,7 +757,15 @@ export class MissionFixtures {
   secrets(): string[] {
     const values = [...this.#secretNames].map((n) => this.#values[n]);
     values.push(...[...this.#restoreSecretNames].map((n) => this.#restoreValues[n]));
-    return values.filter((v): v is string => v !== undefined && v !== "");
+    // An output named like a credential is one, listed in secretOutputs or not (as an `extract` output is, #564).
+    values.push(...Object.entries(this.#values).filter(([k]) => isSecretName(k)).map(([, v]) => v));
+    values.push(...Object.entries(this.#restoreValues).filter(([k]) => isSecretName(k)).map(([, v]) => v));
+    return [...new Set(values.filter((v): v is string => v !== undefined && v !== ""))];
+  }
+
+  /** The public outputs a result or artifact may hold: no credential-named value. */
+  #reportedOutputs(): Record<string, string> {
+    return Object.fromEntries(Object.entries(this.publicOutputs()).filter(([k]) => !isSecretName(k)));
   }
 
   #redact(text: string): string {
@@ -772,7 +781,7 @@ export class MissionFixtures {
     return {
       identity: this.identity(),
       specHash: this.#specHash,
-      outputs: this.publicOutputs(),
+      outputs: this.#reportedOutputs(),
       secretOutputs: [...this.#secretNames].sort(),
       cycles: this.#cycles,
       log: [...this.#log],
@@ -794,7 +803,7 @@ export class MissionFixtures {
       specHash: this.#specHash,
       ...(this.#opts.spec === undefined ? {} : { spec: this.#opts.spec }),
       ...(hooks === undefined ? {} : { hooks }),
-      outputs: this.publicOutputs(),
+      outputs: this.#reportedOutputs(),
       secretOutputs: [...this.#secretNames].sort(),
       ...(identities === undefined ? {} : { identities }),
     };

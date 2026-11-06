@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import type { Locator, Page } from "playwright";
 import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import type { AssertionRefLookup } from "@jevitate/recording";
-import { FixturePathError, SECRET_PARAM_NAME_RE, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
+import { FixturePathError, isSecretName, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { anchorLocator, resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
@@ -132,6 +132,27 @@ export interface StepRefOptions {
 }
 
 /**
+ * A secret code resolved for this run (an operator's binding, never a request's) is only ever typed
+ * on the origins it is bound to. The allowlist check on steps is static, and a redirect is not a
+ * step: this reads the page the value is about to reach. Fails closed, naming only the origin.
+ */
+function assertBoundSecretOrigin(actor: Actor, value: ValueOrVar, bound: ReadonlyMap<string, readonly string[]> | undefined): void {
+  if (bound === undefined || !("var" in value)) return;
+  const origins = bound.get(value.var);
+  if (origins === undefined) return;
+  const url = actor.ability(BrowseTheWebToken).session.page.url();
+  let origin: string;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    origin = "an unreadable page";
+  }
+  if (!origins.includes(origin)) {
+    throw new Error(`E_SECRET_ORIGIN_REFUSED: secret parameter ${value.var} was not typed: the page is on ${origin}, and its binding is for ${origins.join(", ")}`);
+  }
+}
+
+/**
  * #565: the references a step's expectation may use — the run's `vars` (its params, and every
  * earlier `extract` output) first, then `refLookup`; a name `refLookup` marks secret stays secret.
  */
@@ -140,7 +161,7 @@ function stepRefs(vars: Map<string, string>, lookup: AssertionRefLookup | undefi
     const other = lookup?.(name);
     const v = vars.get(name);
     // #564: a binding whose name reads as a credential (`extract as: "apiKey"`) is a secret too.
-    if (v !== undefined) return { value: v, secret: other?.secret === true || SECRET_PARAM_NAME_RE.test(name) };
+    if (v !== undefined) return { value: v, secret: other?.secret === true || isSecretName(name) };
     return other;
   };
 }
@@ -220,7 +241,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string) => void } = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly boundSecretParams?: ReadonlyMap<string, readonly string[]>; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string) => void } = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   // #562/#565: an expectation's `${name}` / `{ var }` operands resolve as it is checked — after this
@@ -262,7 +283,9 @@ export async function runStep(
     }
     case "fill": {
       const text = resolveValue(step.value, vars);
-      await Enter.theText(text).into(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
+      const field = await strictTarget(actor, step.target, targetOpts);
+      assertBoundSecretOrigin(actor, step.value, targetOpts.boundSecretParams);
+      await Enter.theText(text).into(field).performAs(actor);
       await postcondition(actor, expected(step.expect), step.waitFor, "fill", index, targetOpts);
       return { kind: "done" };
     }
@@ -296,6 +319,7 @@ export async function runStep(
       const page = actor.ability(BrowseTheWebToken).session.page;
       const locator = await resolveTarget(page, step.target, targetOpts);
       const value = chosen ?? (await selectAlternativeValue(locator, alternative!.avoid));
+      assertBoundSecretOrigin(actor, step.value, targetOpts.boundSecretParams);
       await locator.selectOption(value);
       await postcondition(actor, expected(step.expect), step.waitFor, "select", index, targetOpts);
       return { kind: "done" };

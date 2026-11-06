@@ -1,3 +1,4 @@
+import { secretParamNamesArgvWarning } from "./secret-params.js";
 import { redactCredentialShapes, redactText, redactUrl } from "@jevitate/ai-core";
 import { clock } from "@jevitate/domain";
 import {
@@ -390,6 +391,8 @@ export class BranchReplayInputError extends Error {
 }
 
 export interface PrefixFromBranchOptions {
+  /** Told when a secret parameter came from `--param`, on the command line. */
+  readonly warn?: (line: string) => void;
   /** `--param` values: the branch's secret params (by name), or overrides of its recorded ones. */
   readonly params?: Readonly<Record<string, string>>;
   readonly storageState?: string;
@@ -406,6 +409,8 @@ export async function prefixFromBranch(branch: RecordedBranch, opts: PrefixFromB
   const info = branch.replay;
   if (info === undefined) throw new BranchReplayInputError(`the finding branched from journey '${branch.journeyId}' step ${branch.step}, but its result records no replay info — re-run the anchored mission`);
   const params = { ...info.params, ...(opts.params ?? {}) };
+  const onArgv = info.secretParams.filter((n) => opts.params?.[n] !== undefined);
+  if (onArgv.length > 0) opts.warn?.(secretParamNamesArgvWarning(onArgv));
   const missing = info.secretParams.filter((n) => !(n in params));
   if (missing.length > 0) {
     throw new BranchReplayInputError(`the finding's Journey prefix types secret param(s) ${missing.join(", ")}: give them again with --param <name>=<value>`);

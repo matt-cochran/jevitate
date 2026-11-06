@@ -206,8 +206,9 @@ the author command takes the same run-shaping flags: `--secret`, `--secret-field
 hang flags, `--save-storage-state`, `--viewport`/`--device`/`--geolocation` and `--screenshots`.
 Reproduce whatever setup the goal run needed. A field that code typed (a `--secret-field` or
 `--totp` binding) is never kept in the Journey: it becomes a secret parameter (`secret1`, …,
-declared `secret: true`) that the same binding supplies at replay
-([Secret parameters on a replay](#secret-parameters-on-a-replay)).
+declared `secret: true`). At replay the same `--secret-field` binding supplies it
+([Secret parameters on a replay](#secret-parameters-on-a-replay)). `journey run` has no `--totp`, so a
+Journey authored with one takes the code through `--param` on the CLI and has no MCP path.
 
 Every take writes its own result, transcript and Recording (under `--out`, default
 `.jevitate/logs/<date>`). When the discovery take does not reach the goal, the `not-reached` result
@@ -914,17 +915,37 @@ parameter is reported missing.
 `--param secret1=…` still works on the CLI, and warns on stderr: the value is in the process list and
 the shell history. `journey run` is the only command with `--secret-field` and `targets.json`
 resolution. `journey verify`, `journey readiness`, `journey chain`, `journey demo`,
-`journey annotate`, `load run`, `explore --from-journey` and `source run` take a secret parameter
-through `--param` only, with the same warning.
+`journey annotate`, `load run`, `explore --from-journey`, `source run`, `verify-fix` and
+`regression capture`/`run` take a secret parameter through `--param` only, with the same warning.
 
-Over MCP a value for a secret parameter, declared or named like a credential, is refused by name with
-`E_SECRET_PARAM_OVER_MCP` before anything runs, on `run_journey`, `verify_journey`,
-`journey_readiness`, `chain_journeys`, `demo_journey`, `annotate_journey`, `run_load_test`,
-`run_exploration` and `sources`. The value would have passed through the model, and the refusal, the
-logs and the run record do not hold it. `run_journey` with `env` or `baseUrl` runs such a Journey when
-`targets.json` binds the field; leave the parameter out of the request. A `${setup.x}` reference holds
-no value and is not refused. A secret in a `navigate` URL has no field to bind, so it runs on the CLI
-only. `run_check` and `run_campaign` read `params` from the suite or spec file, not from the request.
+A bound value is typed only where its binding applies. At the moment of typing, the page must be on
+the origin the `targets.json` entry is keyed by, or for `--secret-field` on the run's allowlist.
+Anywhere else, such as after a redirect, nothing is typed and the step fails with
+`E_SECRET_ORIGIN_REFUSED`. A value given with `--param` has no such check.
+
+A value is never guessed. If two secret parameters match one binding, or one parameter matches two,
+nothing runs: `E_JOURNEY_RUN_ARGS` on the CLI, `E_SECRET_FIELD_AMBIGUOUS` over MCP. Bind each by a
+target only its own step has, or give all but one with `--param`.
+
+Over MCP a value for a secret parameter is refused by name with `E_SECRET_PARAM_OVER_MCP` before
+anything runs, on `run_journey`, `verify_journey`, `journey_readiness`, `chain_journeys`,
+`demo_journey`, `annotate_journey`, `run_load_test`, `run_exploration` and `sources`. The value would
+have passed through the model, and the refusal, the logs and the run record do not hold it.
+`run_journey` with `env` or `baseUrl` runs such a Journey when `targets.json` binds the field; leave
+the parameter out of the request. A `${setup.x}` reference holds no value and is not refused. A secret
+in a `navigate` URL has no field to bind, so it runs on the CLI only. `run_check` and `run_campaign`
+read `params` from the suite or spec file, not from the request.
+
+**Which names count.** A parameter is secret when it declares `secret: true`, or when a segment of its
+name reads as a credential: `password`, `pwd`, `pass`, `secret`, `token`, `apiKey`, `accessKey`,
+`privateKey`, `auth`, `authorization`, `bearer`, `jwt`, `otp`, `totp`, `mfa`, `pin`, `ssn`, `cvv`,
+`cvc`, `session`, `sess`, `cookie`, `credential`. Segments split on camelCase, `_`, `-`, spaces and
+digits, so `pin_code` counts and `spin`, `passengers` and `footprint` do not. `token_count` and
+`session_name` have such a segment, so they are secret until the Journey declares
+`"secret": false`, which is the author's statement that the value is not a credential: it goes through
+MCP and is not redacted. Keep it for names that only look like credentials, because a reviewer reads
+it on the review sheet like any other parameter. An assertion still may not reference a
+credential-like name, whatever it declares.
 
 ### Parameters in a `navigate` URL
 

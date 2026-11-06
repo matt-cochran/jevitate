@@ -175,6 +175,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM, fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
+    boundSecretParams: "only `journey run` and `run_journey` resolve a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,
@@ -206,6 +207,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
+    boundSecretParams: "only `journey run` and `run_journey` resolve a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,
@@ -237,6 +239,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     stopAfterStep: WHOLE_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
+    boundSecretParams: "only `journey run` and `run_journey` resolve a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,

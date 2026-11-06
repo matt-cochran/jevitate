@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { RecordedStep, Step, TargetDescriptor } from "@jevitate/recording";
-import { describeNavigateUrl, SECRET_PARAM_NAME_RE as SECRET_NAME_RE } from "@jevitate/recording";
+import { describeNavigateUrl, isSecretName } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 
 /**
@@ -46,21 +46,25 @@ export function intentCoverage(journey: Journey): IntentCoverage {
   };
 }
 
-/**
- * A parameter NAME that reads as a credential. Defense in depth for Journeys that declare no
- * `parameters`: such a `--param` value is redacted as if it were marked `secret: true`. Defined in
- * `@jevitate/recording` (the interpreter checks it too) and re-exported here.
- */
-export const SECRET_PARAM_NAME_RE: RegExp = SECRET_NAME_RE;
+export { isSecretName };
 
-/** The parameter names whose values are secret: declared `secret: true`, or a credential-like name. */
+/** The parameters a Journey explicitly declares `secret: false`: what a credential-like name means is the author's call. */
+export function declaredNonSecretParams(journey: Journey): Set<string> {
+  return new Set((journey.metadata.parameters ?? []).filter((p) => p.secret === false).map((p) => p.name));
+}
+
+/**
+ * The parameter names whose values are secret: declared `secret: true`, or a credential-like name
+ * (defense in depth, for Journeys that declare no `parameters`) unless declared `secret: false`.
+ */
 export function secretParamNames(journey: Journey, params: Readonly<Record<string, string>> = {}): string[] {
+  const nonSecret = declaredNonSecretParams(journey);
   const names = new Set<string>();
   for (const p of journey.metadata.parameters ?? []) {
-    if (p.secret === true || SECRET_PARAM_NAME_RE.test(p.name)) names.add(p.name);
+    if (p.secret === true || (p.secret !== false && isSecretName(p.name))) names.add(p.name);
   }
   for (const n of [...journey.metadata.params, ...Object.keys(params)]) {
-    if (SECRET_PARAM_NAME_RE.test(n)) names.add(n);
+    if (isSecretName(n) && !nonSecret.has(n)) names.add(n);
   }
   return [...names].sort();
 }
@@ -76,10 +80,10 @@ export function secretParamValues(journey: Journey, params: Readonly<Record<stri
  * #564: the non-blank values a run bound (its `vars` / `output`: params and `extract` outputs) under a
  * credential-like name — an `extract as: "apiKey"` is a secret, so every sink redacts its value.
  */
-export function secretNamedValues(bindings: unknown): string[] {
+export function secretNamedValues(bindings: unknown, nonSecret: ReadonlySet<string> = new Set()): string[] {
   if (bindings === null || typeof bindings !== "object") return [];
   return Object.entries(bindings as Record<string, unknown>)
-    .filter(([name, v]) => SECRET_PARAM_NAME_RE.test(name) && typeof v === "string" && v.trim() !== "")
+    .filter(([name, v]) => isSecretName(name) && !nonSecret.has(name) && typeof v === "string" && v.trim() !== "")
     .map(([, v]) => v as string);
 }
 

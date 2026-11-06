@@ -95,6 +95,8 @@ export class RecordingInterpreter {
       readonly actionGuard?: ReplayActionGuard;
       /** #790: told each value an `extract` binds, as it binds it, whether or not the run goes on to return. */
       readonly onExtracted?: (value: string) => void;
+      /** The secret parameters an operator's binding supplied → the origins each may be typed on, checked at type time. */
+      readonly boundSecretParams?: ReadonlyMap<string, readonly string[]>;
     } = {},
   ) {}
 
@@ -106,6 +108,7 @@ export class RecordingInterpreter {
     refLookup?: AssertionRefLookup;
     actionGuard?: ReplayActionGuard;
     onExtracted?: (value: string) => void;
+    boundSecretParams?: ReadonlyMap<string, readonly string[]>;
   } {
     return {
       ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
@@ -116,6 +119,7 @@ export class RecordingInterpreter {
       ...(this.options.refLookup === undefined ? {} : { refLookup: this.options.refLookup }),
       ...(this.options.actionGuard === undefined ? {} : { actionGuard: this.options.actionGuard }),
       ...(this.options.onExtracted === undefined ? {} : { onExtracted: this.options.onExtracted }),
+      ...(this.options.boundSecretParams === undefined ? {} : { boundSecretParams: this.options.boundSecretParams }),
     };
   }
 

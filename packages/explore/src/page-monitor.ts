@@ -3,7 +3,7 @@ import type { Page, Request } from "playwright";
 import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
 import { visibleBusyIndicator } from "./hang.js";
 import { clock, isExternalSchemeUrl } from "@jevitate/domain";
-import { SECRET_PARAM_NAME_RE } from "@jevitate/recording";
+import { isSecretName } from "@jevitate/recording";
 import { RPC_CONTENT, rpcStatusOfResponse, type RpcStatus } from "./rpc-status.js";
 import { clockBounded } from "./clock-bound.js";
 import { bodyValues } from "./request-body-values.js";
@@ -317,7 +317,7 @@ function declaredFieldType(value: unknown): DeclaredFieldType {
 
 /** Appends `value`'s declared field under `name`, dropping credential-named fields and past the cap. */
 function pushDeclaredField(out: DeclaredField[], name: string, value: unknown): void {
-  if (out.length >= MAX_DECLARED_FIELDS || SECRET_PARAM_NAME_RE.test(name)) return;
+  if (out.length >= MAX_DECLARED_FIELDS || isSecretName(name)) return;
   out.push({ name, type: declaredFieldType(value) });
 }
 
@@ -352,7 +352,7 @@ function declaredFields(body: string | null, contentType: string | undefined): D
   if (type.includes("application/x-www-form-urlencoded")) {
     for (const [key] of new URLSearchParams(body)) {
       if (out.length >= MAX_DECLARED_FIELDS) break;
-      if (out.some((f) => f.name === key) || SECRET_PARAM_NAME_RE.test(key)) continue;
+      if (out.some((f) => f.name === key) || isSecretName(key)) continue;
       out.push({ name: key, type: "string" });
     }
     return out;
@@ -730,7 +730,7 @@ export class PageMonitor {
 
   /**
    * Registers a per-request hook fed the declared field names and JSON types of each write's body
-   * (never values; credential-named fields are dropped by `SECRET_PARAM_NAME_RE`). Returns an
+   * (never values; credential-named fields are dropped by `isSecretName`). Returns an
    * unsubscribe function. Nothing is added to the capture's `CapturedRequest` records.
    */
   onDeclaredFields(hook: (fields: DeclaredFields) => void): () => void {

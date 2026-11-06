@@ -353,6 +353,7 @@ describe("#399: a fixture output used as a secret param never comes back in the 
       setup: vi.fn(async () => {}),
       restore: vi.fn(async () => {}),
       bindings: () => ({ values: { inviteToken: token }, secretNames: new Set<string>() }),
+      secrets: () => [],
       record: () => ({ identity: "h", specHash: "s", outputs: { inviteToken: token }, secretOutputs: [], cycles: 1, log: [{ ok: true, url: `/api/invite -> ${token}` }] }),
     };
     const opens: OpenOptions[] = [];

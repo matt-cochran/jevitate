@@ -2,7 +2,7 @@
 import {
   AssertionSchema,
   HttpCheckSchema,
-  SECRET_PARAM_NAME_RE,
+  isSecretName,
   STYLE_CHANNELS,
   STYLE_PROPERTIES,
   COMPARE_OPS,
@@ -274,7 +274,7 @@ function parseBodyShapeSpec(kind: string, value: string): RequestBodyShape {
     const name = part.slice(0, idx);
     const predicate = part.slice(idx + 1);
     if (!BODY_PREDICATES.has(predicate)) throw new Error(`${kind}: body predicate must be one of ${[...BODY_PREDICATES].join(", ")}, got ${JSON.stringify(predicate)}`);
-    if (SECRET_PARAM_NAME_RE.test(name)) {
+    if (isSecretName(name)) {
       throw new Error(`${kind}: body field ${JSON.stringify(name)} names a credential — a body shape declares field names and predicates only`);
     }
     return { name, predicate: predicate as BodyFieldPredicate };

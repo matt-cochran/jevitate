@@ -1,7 +1,7 @@
 import { contentHash, legacyContentHash } from "@jevitate/domain";
 import type { JourneyProposal, JourneyReviewProposal } from "@jevitate/journey";
 import {
-  SECRET_PARAM_NAME_RE,
+  isSecretName,
   describeStep,
   flatJourneySteps,
   isNoClaimExpect,
@@ -172,7 +172,7 @@ function reviewTarget(t: TargetDescriptor | undefined): JourneyReviewStep["targe
 
 /** Does the field read as a credential (its name, label or test id)? Its literal value is then never shown. */
 function secretLooking(t: TargetDescriptor): boolean {
-  return [t.name, t.label, t.testId, t.text, t.display?.name].some((s) => s !== undefined && SECRET_PARAM_NAME_RE.test(s));
+  return [t.name, t.label, t.testId, t.text, t.display?.name].some((s) => s !== undefined && isSecretName(s));
 }
 
 function hideValue(v: ValueOrVar): ValueOrVar {

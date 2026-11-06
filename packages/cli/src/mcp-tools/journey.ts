@@ -14,7 +14,7 @@ import { ExtensionMismatchError, type BrowserRunOptions } from "../browser-run-o
 import { browserRunFromFlags, emulationFromFlags } from "../cli-shared.js";
 import { environmentFromFlags, isEnvironmentError } from "../environments.js";
 import { buildMissionFixtures, checkSetupRefs } from "../fixture-cli.js";
-import { secretParamRefusalBody, secretParamsCarried, withSecretParams } from "../secret-params.js";
+import { SecretFieldAmbiguousError, secretParamRefusalBody, secretParamsCarried, withSecretParams } from "../secret-params.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "../mission-fixtures.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
 import { makeEvidenceSelfHealer } from "../self-heal-adapter.js";
@@ -53,7 +53,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
       { ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }), ...(deps.targetsConfigPath === undefined ? {} : { targetsFile: deps.targetsConfigPath }) },
     );
     // A secret parameter's value comes only from the operator's targets.json, read here by code.
-    const params = await withSecretParams({ dir: deps.journeysDir, id: args.id as string, params: requested, flags: [], targetFields: environment?.secretFields, env: process.env });
+    const { params, bound } = await withSecretParams({ dir: deps.journeysDir, id: args.id as string, params: requested, flags: [], targetFields: environment?.secretFields, targetOrigin: environment?.baseUrl, env: process.env });
     // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
     const storageState = optPath(args, "storageState", pathRoots, { session: true }) ?? environment?.storageState;
     if (args.storageState !== undefined && storageState !== undefined && !existsSync(storageState)) throw new McpArgError(`storage state not found: ${storageState}`);
@@ -145,6 +145,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
       options: {
         policy,
         fixtures,
+        ...(bound === undefined ? {} : { boundSecretParams: bound }),
         ...(selfHealer === undefined ? {} : { selfHealer }),
         ...(healScope === undefined ? {} : { heal: { scope: healScope } }),
         ...(environment === undefined ? {} : { environment }),
@@ -235,6 +236,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
             return errorResult({ error: "invalid_args", code: err.code, message: err.message });
           }
           if (err instanceof SetupRequired) return errorResult({ error: "setup_required", message: err.message });
+          if (err instanceof SecretFieldAmbiguousError) return errorResult({ error: "invalid_args", code: err.code, params: err.params, message: err.message });
           throw err;
         }
         // #205: the same pre-run checks as `jevitate journey run` (orphan sweep, starved-host refusal).

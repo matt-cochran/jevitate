@@ -15,13 +15,31 @@ import { encodeUrlParamValue } from "./navigate-params.js";
  * page's (encoded) URL.
  */
 
+/** Words that hold a credential whatever surrounds them, also inside an all-lowercase compound (`mypassword`, `authtoken`). */
+const SECRET_COMPOUND_RE =
+  /password|passwd|passcode|passphrase|credential|api[-_ ]?key|api[-_ ]?secret|private[-_ ]?key|access[-_ ]?key|secret[-_ ]?key|client[-_ ]?secret|auth[-_ ]?token|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|bearer[-_ ]?token|session[-_ ]?(id|key|token)/;
+
+/** Words that read as a credential only as a whole segment of a name: `pin_code`, not `spin`; `pass`, not `passengers`. */
+const SECRET_SEGMENTS: ReadonlySet<string> = new Set([
+  "auth", "authn", "authorization", "bearer", "cookie", "cred", "creds", "cvc", "cvv", "hotp", "jwt", "mfa", "oauth", "otp", "pass", "pin", "pw", "pwd", "secret", "sess", "session", "ssn", "token", "totp",
+]);
+
 /**
- * A binding NAME that reads as a credential (a parameter, an `extract` output, a fixture output).
- * Defense in depth: a parameter so named is redacted as if it were `secret: true`, and (#564) an
- * assertion may never reference a value so named — its text would be model-visible and persisted.
- * Re-exported by `@jevitate/journey`.
+ * Does this binding NAME read as a credential (a parameter, an `extract` output, a fixture output)?
+ * Matched on the name's segments (camelCase, snake_case, kebab-case, spaces, digits), never on a
+ * substring, so `passengers` and `footprint` are not. Defense in depth: a parameter so named is
+ * secret unless it declares `secret: false`, and (#564) an assertion may never reference a value so
+ * named: its text would be model-visible and persisted. Re-exported by `@jevitate/journey`.
  */
-export const SECRET_PARAM_NAME_RE = /pass(word|code|phrase)?|secret|token|api[_-]?key|otp|pin\b|credential|session|cookie/i;
+export function isSecretName(name: string): boolean {
+  if (SECRET_COMPOUND_RE.test(name.toLowerCase())) return true;
+  const segments = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z]+/);
+  return segments.some((s) => SECRET_SEGMENTS.has(s) || (s.endsWith("s") && SECRET_SEGMENTS.has(s.slice(0, -1))));
+}
 
 /** A `${name}` placeholder (the grammar the `http` check's URL and assertions use, #543). */
 export const PLACEHOLDER_RE = /\$\{([^}]*)\}/g;

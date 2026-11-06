@@ -49,7 +49,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   /** #293: the prefix a branch-point failure replays through; `null` after refusing (exit 64). */
   const branchPrefixOrRefuse = async (branch: RecordedBranch, params: Record<string, string>, storageState: string | undefined): Promise<JourneyPrefix | null> => {
     try {
-      return await prefixFromBranch(branch, { params, ...(storageState === undefined ? {} : { storageState }), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) });
+      return await prefixFromBranch(branch, { params, warn: (line) => program.configureOutput().writeErr?.(line), ...(storageState === undefined ? {} : { storageState }), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) });
     } catch (err) {
       if (!(err instanceof BranchReplayInputError)) throw err;
       emitJson(program, fail("E_REGRESSION_ARGS", err.message));

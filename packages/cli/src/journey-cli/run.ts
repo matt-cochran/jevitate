@@ -30,7 +30,7 @@ import { withEngine } from "../engine.js";
 import { BoundaryNoHealError, handbackExitCode, handbackLine } from "../journey-handback.js";
 import { type EmulationSpec } from "@jevitate/playwright";
 import { SecretFieldSpecError } from "@jevitate/explore";
-import { withSecretParams, warnSecretParamsOnArgv } from "../secret-params.js";
+import { SecretFieldAmbiguousError, withSecretParams, warnSecretParamsOnArgv, type BoundSecretParams } from "../secret-params.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 
 /** Registers `jevitate journey run`. */
@@ -129,10 +129,11 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
       } & EmulationFlags & ScreenshotsFlags>();
       // A secret parameter from the environment (--secret-field, targets.json), before any browser opens.
       let param: Record<string, string>;
+      let boundSecretParams: BoundSecretParams | undefined;
       try {
-        param = await withSecretParams({ dir: runJourneysDir, id, params: paramFlags, flags: secretField, targetFields: environment?.secretFields, env: deps.explore?.env ?? process.env });
+        ({ params: param, bound: boundSecretParams } = await withSecretParams({ dir: runJourneysDir, id, params: paramFlags, flags: secretField, targetFields: environment?.secretFields, targetOrigin: environment?.baseUrl, env: deps.explore?.env ?? process.env }));
       } catch (err) {
-        if (!(err instanceof SecretFieldSpecError)) throw err;
+        if (!(err instanceof SecretFieldSpecError || err instanceof SecretFieldAmbiguousError)) throw err;
         emitJson(program, fail("E_JOURNEY_RUN_ARGS", err.message));
         return;
       }
@@ -240,6 +241,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           dir: runJourneysDir,
           id,
           params: param,
+          ...(boundSecretParams === undefined ? {} : { boundSecretParams }),
           policy,
           selfHealer,
           ...(healScope === undefined ? {} : { heal: { scope: healScope } }),

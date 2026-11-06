@@ -349,7 +349,8 @@ built-in verb (`Preview*`, `Recalculate*`, …).
 - An MCP request never carries a secret parameter's value: it is refused by name with
   `E_SECRET_PARAM_OVER_MCP` before anything runs. On a replay the value comes from an environment
   variable through `journey run --secret-field` or `secretFields` in `targets.json`; `--param` on the
-  CLI still works and warns on stderr
+  CLI still works and warns on stderr. A value from a binding is typed only on the binding's origin,
+  checked as it is typed, so a redirect to another origin gets nothing (`E_SECRET_ORIGIN_REFUSED`)
   ([Secret parameters on a replay](./journeys.md#secret-parameters-on-a-replay)).
 - `--storage-state` files go only to the browser. Artifacts record their path, never their
   contents.
