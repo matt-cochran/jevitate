@@ -26,7 +26,9 @@ function browserCacheOf(home: string): string {
  * `HOME` moves under it the same way, for workers and every CLI they spawn, so a test neither writes
  * to the real `~/.jevitate` (logs, proof progress, its key) nor reads the person's targets file. A
  * test that really needs the real home reads `JEVITATE_TEST_REAL_HOME`, and passes it on as `HOME` to
- * what it spawns. Pinned by `packages/cli/src/test-home-isolated.test.ts`.
+ * what it spawns. `findProjectDir` reads it too, so a checkout under the real home doesn't take the real
+ * `~/.jevitate` for a project, in the workers and in every CLI they spawn. Pinned by
+ * `packages/cli/src/test-home-isolated.test.ts`.
  *
  * Vitest runs this once per workspace project, in one process: the second call keeps the first's home.
  */

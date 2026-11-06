@@ -15,6 +15,9 @@ describe("a test run's home", () => {
     expect(homeDataRoot()).toBe(`${homedir()}/.jevitate`);
     const child = execFileSync(process.execPath, ["-p", "require('node:os').homedir()"], { encoding: "utf8" }).trim();
     expect(child).toBe(homedir());
+    // What keeps a spawned CLI, in a checkout under the real home, from reading the real `~/.jevitate` as a project.
+    const named = execFileSync(process.execPath, ["-p", "process.env.JEVITATE_TEST_REAL_HOME"], { encoding: "utf8" }).trim();
+    expect(named).toBe(real);
   });
 
   it("is removed with the run's temp directory", () => {

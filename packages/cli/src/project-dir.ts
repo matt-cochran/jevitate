@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { homedir as osHomedir, userInfo } from "node:os";
+import { homedir as osHomedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { clock } from "@jevitate/domain";
 
@@ -33,23 +33,25 @@ export function homeDataRoot(deps: LayoutDeps = {}): string {
   return join((deps.homedir ?? osHomedir)(), ".jevitate");
 }
 
-/** The account's own `~/.jevitate`, from the system's user record: `HOME` may point elsewhere. Null where there is no such record. */
-function accountDataRoot(): string | null {
-  try {
-    return join(userInfo().homedir, ".jevitate");
-  } catch {
-    return null;
-  }
+/**
+ * The real home's `~/.jevitate` while a test run has moved `HOME` (`test/global-temp-cleanup.ts`, which
+ * every process the run spawns inherits): a checkout under the real home must not take it for a project.
+ * Never set otherwise, so a person's runs are untouched: a container whose project is its account's home,
+ * with `HOME` elsewhere, keeps its `environments.json` and the `production: true` flag in it.
+ */
+function realHomeDataRootUnderTest(): string | null {
+  const real = process.env.JEVITATE_TEST_REAL_HOME;
+  return real === undefined || real === "" ? null : join(real, ".jevitate");
 }
 
-/** The nearest `.jevitate/` walking up from the working directory — never the per-user one, wherever `HOME` points. */
+/** The nearest `.jevitate/` walking up from the working directory — never the per-user one. */
 export function findProjectDir(deps: LayoutDeps = {}): string | null {
   const home = homeDataRoot(deps);
-  const account = accountDataRoot();
+  const testRealHome = realHomeDataRootUnderTest();
   let dir = resolve((deps.cwd ?? (() => process.cwd()))());
   for (;;) {
     const candidate = join(dir, ".jevitate");
-    if (candidate !== home && candidate !== account && isDir(candidate)) return candidate;
+    if (candidate !== home && candidate !== testRealHome && isDir(candidate)) return candidate;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
