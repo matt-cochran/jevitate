@@ -320,7 +320,8 @@ proof stays inconclusive (exit 2); it is never counted as proof. Refusal reasons
 - there is no failed site to relax, or the first failure is before the mutated step;
 - the failing site is not a step postcondition (an action failed, or it is an end-state or
   request check), or it is a `handback` resume assertion;
-- the failing step is not before the target, or is not paired with this mutation (pair it);
+- the failing step is not before the target (the target held under the mutation, so make it read what
+  the mutation removes), or is not paired with this mutation (the refusal names the pair to add);
 - the site is already relaxed, or the bound of 4 relaxations is reached;
 - the unmutated control replay with the same relaxations did not pass.
 

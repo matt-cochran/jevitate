@@ -1147,17 +1147,24 @@ export function nextTargetedRelaxation(
   const first = result.failedSites[0];
   if (first === undefined) return { refuse: "no failed site to relax" };
   if (first.where === "unevaluable") return { refuse: "unevaluable end state" };
-  if (first.where === "end-state") return { refuse: `${failedSiteKey(first)} is not an earlier step assertion` };
+  // What a target that held under this mutation can do about it: it is not this mutation's to prove as it stands.
+  const heldAdvice = (): string => (target.where === "end-state" ? `pair ${targetSiteKey} with the mutation of the step whose write it reads` : `make ${targetSiteKey}'s own check read what ${m.id} removes`);
+  if (first.where === "end-state") return { refuse: `${failedSiteKey(first)} is not an earlier step assertion: only ${failedSiteKey(first)} failed, so ${targetSiteKey} held under ${m.id} and cannot show what it changes; ${heldAdvice()}, or remove ${targetSiteKey}'s claim` };
   const key = failedSiteKey(first);
   if (first.where === "step" && !first.postcondition) return { refuse: `${key} action failed (not a postcondition)` };
   if (first.step < m.step) return { refuse: "failure before the mutated step" };
   const step = flat(journey)[first.step - 1]?.step;
   if (step === undefined) return { refuse: `${key} does not exist` };
   if (first.where === "step" && step.kind === "handback") return { refuse: `${key} is a resume assertion (not a relaxable page postcondition)` };
-  if ((target.where === "step" || target.where === "step-request") && target.step <= first.step) {
-    return { refuse: `${key} is not before the target ${targetSiteKey}` };
+  if ((target.where === "step" || target.where === "step-request") && target.step === first.step) {
+    return { refuse: `${key} is not before the target ${targetSiteKey}: both are step ${first.step}, and its postcondition fails before the request check is judged; move the request check to a later step or the end state` };
   }
-  if (!plan.pairs.some((p) => p.site === key && p.mutation === m.id)) return { refuse: `${key} is not paired with ${m.id}` };
+  if ((target.where === "step" || target.where === "step-request") && target.step < first.step) {
+    return { refuse: `${key} is not before the target ${targetSiteKey}: the replay got past ${targetSiteKey} and failed at ${key}, so ${targetSiteKey} held under ${m.id} and cannot show what it changes; ${heldAdvice()} (for example, move ${key}'s check onto it), or remove ${targetSiteKey}'s claim` };
+  }
+  if (!plan.pairs.some((p) => p.site === key && p.mutation === m.id)) {
+    return { refuse: `${key} is not paired with ${m.id}: if it depends on ${m.id}, add {"check":"${key}","mustFailWhen":"${m.id}"} to metadata.mutationPairs, and the proof can relax it to reach ${targetSiteKey}` };
+  }
   if (relaxedSoFar.includes(key)) return { refuse: `${key} is already relaxed` };
   if (relaxedSoFar.length >= MAX_TARGETED_RELAXATIONS) return { refuse: `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached` };
   return { relax: key };
