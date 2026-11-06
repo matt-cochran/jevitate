@@ -54,6 +54,7 @@ interface Browser {
 }
 /** The browser reports a write, as a page's CDP session does, under its own request id. */
 const browserSent = ({ cdp }: Browser, requestId: string): void => void cdp.emit("Network.requestWillBeSent", { requestId, request: { method: "POST", url: SAVE } });
+const browserAnswered = ({ cdp }: Browser, requestId: string, cacheControl = "no-store"): void => void cdp.emit("Network.responseReceived", { requestId, response: { headers: { "Cache-Control": cacheControl } } });
 const bodyArrived = ({ cdp }: Browser, requestId: string): void => void cdp.emit("Network.dataReceived", { requestId });
 const write = ({ context }: Browser): void => void context.emit("request", request("POST", SAVE));
 const newDocument = ({ context, page }: Browser): void => {
@@ -63,6 +64,7 @@ const newDocument = ({ context, page }: Browser): void => {
 
 let dir: string;
 let fake: FakeClock;
+let hanging: "newCDPSession" | "enable" | undefined;
 const progressPath = (): string => verifyCheckpointPath(join(dir, ".jevitate"), dir, ID);
 const taintOnFile = (): unknown => (JSON.parse(readFileSync(progressPath(), "utf8")) as { body: { taint: unknown } }).body.taint;
 const stalled = (sessionsClosed: boolean): JourneyVerifyStalledError => new JourneyVerifyStalledError({ replay: 3 }, 1, sessionsClosed);
@@ -75,8 +77,9 @@ async function proveWith(during: (browser: Browser) => void, thenThrow: boolean 
   const browserPortFactory = (): BrowserPort => ({
     open: async () => {
       const context = new EventEmitter();
-      const cdp = Object.assign(new EventEmitter(), { send: async () => ({}) });
-      Object.assign(context, { newCDPSession: async () => cdp });
+      const never = new Promise<never>(() => undefined);
+      const cdp = Object.assign(new EventEmitter(), { send: async () => (hanging === "enable" ? never : {}) });
+      Object.assign(context, { newCDPSession: async () => (hanging === "newCDPSession" ? never : cdp) });
       const page = Object.assign(new EventEmitter(), { context: () => context });
       browser = { context, page, cdp };
       return { page, close: async () => undefined } as unknown as BrowserSession;
@@ -113,6 +116,7 @@ beforeEach(async () => {
   await new FsJourneyStore(dir).put(JOURNEY);
   fake = new FakeClock();
   installClock(fake);
+  hanging = undefined;
 });
 
 afterEach(() => {
@@ -142,6 +146,7 @@ describe("a write a new document dropped", () => {
     b.context.emit("request", save);
     browserSent(b, id);
     b.context.emit("response", { request: () => save });
+    browserAnswered(b, id);
     bodyArrived(b, id);
     return save;
   };
@@ -157,6 +162,7 @@ describe("a write a new document dropped", () => {
       const save = request("POST", SAVE);
       b.context.emit("request", save);
       browserSent(b, "r1");
+      browserAnswered(b, "r1");
       bodyArrived(b, "r1");
       b.context.emit("response", { request: () => save });
     });
@@ -173,6 +179,89 @@ describe("a write a new document dropped", () => {
     });
     expect(report.verdict).toBe("inconclusive");
     expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it.each(["", "no-cache", "max-age=60", "no-storey"])("a body reported under Cache-Control %j answers nothing: only a no-store body reports at its end", async (cacheControl) => {
+    const report = await proveWith((b) => {
+      const save = request("POST", SAVE);
+      b.context.emit("request", save);
+      browserSent(b, "r1");
+      b.context.emit("response", { request: () => save });
+      browserAnswered(b, "r1", cacheControl);
+      bodyArrived(b, "r1");
+    });
+    expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it.each(["no-store", "private, no-store", "NO-STORE, max-age=0"])("a body reported under Cache-Control %j answers the write", async (cacheControl) => {
+    const report = await proveWith((b) => {
+      const save = request("POST", SAVE);
+      b.context.emit("request", save);
+      browserSent(b, "r1");
+      b.context.emit("response", { request: () => save });
+      browserAnswered(b, "r1", cacheControl);
+      bodyArrived(b, "r1");
+    });
+    expect(report.reason ?? "").not.toMatch(UNANSWERED);
+  });
+
+  describe("a held write and a body on the same line that ends", () => {
+    const held = (b: Browser): object => {
+      const a = request("POST", SAVE);
+      b.context.emit("request", a);
+      browserSent(b, "a");
+      b.context.emit("response", { request: () => a });
+      browserAnswered(b, "a");
+      const other = request("POST", SAVE);
+      b.context.emit("request", other);
+      browserSent(b, "b");
+      b.context.emit("response", { request: () => other });
+      browserAnswered(b, "b");
+      return other;
+    };
+
+    it("the browser says the body ended after Playwright says the request finished: the held write is still open", async () => {
+      const report = await proveWith((b) => {
+        const other = held(b);
+        b.context.emit("requestfinished", other);
+        bodyArrived(b, "b");
+        b.cdp.emit("Network.loadingFinished", { requestId: "b" });
+      });
+      expect(report.reason).toMatch(UNANSWERED);
+    });
+
+    it("the browser says the body ended before Playwright does: the held write is still open", async () => {
+      const report = await proveWith((b) => {
+        const other = held(b);
+        bodyArrived(b, "b");
+        b.cdp.emit("Network.loadingFinished", { requestId: "b" });
+        b.context.emit("requestfinished", other);
+      });
+      expect(report.reason).toMatch(UNANSWERED);
+    });
+  });
+
+  describe("attaching to the page's network events hangs", () => {
+    const heldBy = (hang: (b: Browser) => void) => (b: Browser): void => {
+      hang(b);
+      const save = request("POST", SAVE);
+      b.context.emit("request", save);
+      b.context.emit("response", { request: () => save });
+    };
+
+    it("the replay carries on, and a write with no reported body reads as open", async () => {
+      hanging = "newCDPSession";
+      const report = await proveWith(heldBy(() => undefined));
+      expect(report.verdict).toBe("inconclusive");
+      expect(report.reason).toMatch(UNANSWERED);
+    });
+
+    it("the same when Network.enable never answers", async () => {
+      hanging = "enable";
+      const report = await proveWith(heldBy(() => undefined));
+      expect(report.verdict).toBe("inconclusive");
+      expect(report.reason).toMatch(UNANSWERED);
+    });
   });
 
   it("with no CDP session nothing says a body arrived, so a response alone keeps the write open", async () => {
@@ -201,6 +290,7 @@ describe("a write a new document dropped", () => {
       b.context.emit("request", held);
       browserSent(b, "r2");
       b.context.emit("response", { request: () => held });
+      browserAnswered(b, "r2");
     });
     expect(report.reason).toMatch(UNANSWERED);
   });
@@ -213,6 +303,7 @@ describe("a write a new document dropped", () => {
       b.context.emit("request", held);
       browserSent(b, "r2");
       b.context.emit("response", { request: () => held });
+      browserAnswered(b, "r2");
     });
     expect(report.reason).toMatch(UNANSWERED);
   });
@@ -225,6 +316,7 @@ describe("a write a new document dropped", () => {
       b.context.emit("request", held);
       browserSent(b, "r2");
       b.context.emit("response", { request: () => held });
+      browserAnswered(b, "r2");
     });
     expect(report.reason).toMatch(UNANSWERED);
   });
@@ -238,6 +330,7 @@ describe("a write a new document dropped", () => {
       b.context.emit("request", held);
       browserSent(b, "r2");
       b.context.emit("response", { request: () => held });
+      browserAnswered(b, "r2");
     });
     expect(report.reason).toMatch(UNANSWERED);
   });

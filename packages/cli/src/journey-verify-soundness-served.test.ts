@@ -4,9 +4,10 @@ import type { AddressInfo } from "node:net";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createGzip } from "node:zlib";
 import { clock } from "@jevitate/domain";
 import { FsJourneyStore, assertionSiteKey, classifyMutation, journeyAssertions, type Journey } from "@jevitate/journey";
-import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
 import { appendFile } from "node:fs/promises";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { planJourneyVerification, verifyJourneyMutations, type JourneyVerifyReport, type VerifyJourneyOptions } from "./journey-verify.js";
@@ -622,6 +623,8 @@ interface Row {
   readonly name: string;
   readonly limit?: true;
   readonly fixtures?: true;
+  /** The browser never answers attaching to the page's network events. */
+  readonly attachHangs?: true;
   readonly serve: (ctx: RowContext) => (req: IncomingMessage, res: ServerResponse) => void;
   readonly journey: (site: string) => Journey;
   readonly verdict: string;
@@ -761,6 +764,7 @@ const answeredUnread = (status: number) => () => {
     html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='${said}'})</script>`);
   };
 };
+const unreadSaved = (site: string): Journey => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }]);
 const unreadJourney = (status: number) => (site: string): Journey => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", `Saved ${status}`) }, ...WROTE("/api/save") }]);
 
 /** A Save whose headers go at once and whose body, read by nobody, ends `bodyMs` later. Its effect lands as the body ends. Chromium reports none of that body until it ends. */
@@ -783,14 +787,82 @@ const streaming = (bodyMs: number, shared: boolean) => () => {
 };
 const streamJourney = (assertion: ReturnType<typeof text>) => (site: string): Journey => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [{ kind: "reloadThen", assertion }] });
 
+/**
+ * A Save answered with 200 whose body stays open. The site does not depend on it: the app reads BUSY only while a mutated
+ * replay runs and that body is open, so a replay that closes on the open write is all that keeps this from reading proven.
+ */
+const heldSave = (opts: { readonly headers?: Record<string, string>; readonly first?: (res: ServerResponse) => void; readonly redirect?: true; readonly click?: string }) => (ctx: RowContext) => {
+  let first = true;
+  let held = false;
+  return (req: IncomingMessage, res: ServerResponse): void => {
+    const url = new URL(req.url ?? "/", "http://x");
+    if (url.pathname === "/api/health") return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ s: held && /^(?:skip|block)/.test(ctx.label) ? "BUSY" : "OK" }));
+    if (url.pathname === "/api/save" && opts.redirect === true && !url.searchParams.has("hop")) {
+      req.resume();
+      return void res.writeHead(307, { location: "/api/save?hop=1" }).end();
+    }
+    if (url.pathname === "/api/save") {
+      req.resume();
+      res.writeHead(200, { "content-type": "application/json", ...opts.headers });
+      res.flushHeaders();
+      if (!first || url.searchParams.get("k") === "b") return void res.end("{}");
+      first = false;
+      held = true;
+      opts.first?.(res);
+      return after(60_000, () => {
+        held = false;
+        res.end();
+      });
+    }
+    html(res, `<button id="save">Save</button><p id="said"></p><p id="health">?</p><script>const said=()=>{document.getElementById('said').textContent='Saved'};document.getElementById('save').onclick=()=>{${opts.click ?? "fetch('/api/save',{method:'POST'}).then(said)"}};setInterval(async()=>{try{document.getElementById('health').textContent=(await (await fetch('/api/health')).json()).s}catch{}},250)</script>`);
+  };
+};
+const heldJourney = (site: string): Journey => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, ...WROTE("/api/save") }], { endState: [{ kind: "page", assertion: text("#health", "OK") }] });
+const STILL_OPEN = /the base replay closed with a write still unanswered/;
+const GZIP_FIRST_BLOCK = (res: ServerResponse): void => {
+  const z = createGzip();
+  z.on("data", (d: Buffer) => res.write(d));
+  z.write(Buffer.from('{"aaaaaaa"'));
+  z.flush();
+};
+/** Only `no-store` bodies report bytes only at their end. These read as open until they finish, whatever they sent. */
+const heldRow = (name: string, opts: Parameters<typeof heldSave>[0]): Row => ({ name, serve: heldSave(opts), journey: heldJourney, verdict: "inconclusive", reason: STILL_OPEN });
+
 const ROWS_EXPERIMENT: readonly Row[] = [
+  heldRow("answered with no-store, then keeps working with nothing sent: the write stays open", { headers: { "cache-control": "no-store" } }),
+  heldRow("no Cache-Control, first bytes sent and unread: reported bytes do not answer it", { first: (res) => void res.write('{"a"') }),
+  heldRow("Cache-Control: no-cache, first bytes sent and unread: reported bytes do not answer it", { headers: { "cache-control": "no-cache" }, first: (res) => void res.write('{"a"') }),
+  heldRow("no Cache-Control, a gzip block flushed and unread: reported bytes do not answer it", { headers: { "content-encoding": "gzip" }, first: GZIP_FIRST_BLOCK }),
+  heldRow("a 307, then no Cache-Control and first bytes sent: reported bytes do not answer it", { redirect: true, first: (res) => void res.write('{"a"') }),
+  heldRow("two writes on one line, the first held and the second read: the second's body does not answer the first", {
+    headers: { "cache-control": "no-store" },
+    click: "fetch('/api/save?k=a',{method:'POST'}).then(async()=>{const r=await fetch('/api/save?k=b',{method:'POST'});await r.text();said()})",
+  }),
+  {
+    name: "two no-store writes on one line, both complete and unread: both are answered",
+    serve: () => (req: IncomingMessage, res: ServerResponse): void => {
+      if (pathOfUrl(req) === "/api/save") return void res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end("{}");
+      html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=async()=>{await fetch('/api/save?k=a',{method:'POST'});await fetch('/api/save?k=b',{method:'POST'});document.getElementById('said').textContent='Saved'}</script>`);
+    },
+    journey: unreadSaved,
+    verdict: "proven",
+    reading: ["step:2", "sensitive"],
+  },
+  {
+    name: "attaching to the page's network events hangs: the proof carries on, and a no-store write reads as open",
+    attachHangs: true,
+    serve: answeredUnread(200),
+    journey: unreadJourney(200),
+    verdict: "inconclusive",
+    reason: STILL_OPEN,
+  },
   {
     name: "no delta: a networkCheck names a POST, and page timing shows it: no pair comes of that, and the reason says what to add",
     serve: saving({ saveMs: 0 }),
     journey: (site) =>
       J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, timing: { atMs: 0, durationMs: 0, gapBeforeMs: 0, page: { route: "/", kind: "transition", settled: true, requests: { count: 1, pending: 0, slowest: [{ endpoint: "POST /api/save", url: `${site}/api/save`, status: 200, durationMs: 5 }] } } } }], { networkChecks: POST("/api/save") }),
     verdict: "inconclusive",
-    reason: /no assertion is paired.*end-state:0 names POST \/api\/save, and no step records it.*If this request is the step's write, add it to that step's delta\.requests.*"check":"end-state:0","mustFailWhen":"skip:<step>"/,
+    reason: /no assertion is paired.*end-state:0 names POST \/api\/save, and no step records it as a write.*If this request is the step's write, add it to that step's delta\.requests.*"check":"end-state:0","mustFailWhen":"skip:<step>"/,
   },
   {
     name: "no delta and no network check: the reason says what to add",
@@ -800,14 +872,14 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reason: /no assertion is paired.*if a step sends a write, add it to that step's delta\.requests.*"requests":\["POST \/path → 200"\]/,
   },
   {
-    name: "a read RPC a check names by glob: no pair, and the reason calls it no write",
+    name: "a read RPC a delta records and a check names by glob: no pair, and the reason does not say no step records it",
     serve: () => (req, res) => {
       if (pathOfUrl(req).startsWith("/board.v1.Items/")) return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
       html(res, `<button id="open">Open</button><script>document.getElementById('open').onclick=()=>fetch('/board.v1.Items/GetItem',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})</script>`);
     },
-    journey: (site) => J(site, [NAV_TO("#open"), { step: { kind: "click", target: { css: "#open" }, expect: NOCLAIM } }], { networkChecks: POST("/board.v1.Items/Get*") }),
+    journey: (site) => J(site, [NAV_TO("#open"), { step: { kind: "click", target: { css: "#open" }, expect: NOCLAIM }, delta: { verdict: "no-change", why: "w", changes: [], requests: ["POST /board.v1.Items/GetItem → 200"], overheadMs: 1 } }], { networkChecks: POST("/board.v1.Items/Get*") }),
     verdict: "inconclusive",
-    reason: /If this request is the step's write, add it.*If it is a read, there is no write here to prove/,
+    reason: /no step records it as a write.*If this request is the step's write, add it.*If it is a read, there is no write here to prove/,
   },
   {
     name: "a check naming the first of two recorded writes stays with the last write, which can't break it: a recording can place a timer's write under the wrong step",
@@ -851,35 +923,9 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reading: ["end-state:0", "sensitive"],
   },
   {
-    name: "a body held open past the bound, its effect crossing replays, stays open: it is a server still working",
+    name: "a body still open past the bound, its effect crossing replays, does not read proven",
     serve: streaming(2_500, true),
     journey: streamJourney(text("#saved", "NO")),
-    verdict: "inconclusive",
-  },
-  {
-    name: "answered, then keeps working with its body unsent, and the app is busy for a while: no false proven",
-    // The independent check's attack, scaled down: 200 headers at once, the first write's body held 8 s, the app busy from 1 s to 8 s.
-    serve: () => {
-      let first = true;
-      let busyFrom = Infinity;
-      let busyTo = 0;
-      return (req: IncomingMessage, res: ServerResponse): void => {
-        if (pathOfUrl(req) === "/api/save") {
-          req.resume();
-          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-          res.flushHeaders();
-          if (!first) return void res.end("{}");
-          first = false;
-          const now = clock.monotonicMs();
-          busyFrom = now + 1_000;
-          busyTo = now + 8_000;
-          return after(8_000, () => res.end("{}"));
-        }
-        const now = clock.monotonicMs();
-        html(res, `<button id="save">Save</button><p id="said"></p><p id="health">${now >= busyFrom && now < busyTo ? "BUSY" : "OK"}</p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='Saved'})</script>`);
-      };
-    },
-    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [{ kind: "reloadThen", assertion: text("#health", "OK") }] }),
     verdict: "inconclusive",
   },
   {
@@ -1064,6 +1110,17 @@ const ROWS_EXPERIMENT: readonly Row[] = [
   },
 ];
 
+const attachHangsPort = (): BrowserPort => {
+  const port = new PlaywrightBrowserPort();
+  return {
+    open: async (o) => {
+      const session = await port.open(o);
+      Object.assign(session.page.context(), { newCDPSession: () => new Promise(() => undefined) });
+      return session;
+    },
+  };
+};
+
 describe("[realtime] the experiment's rows", () => {
   let proofs: Map<string, { journey: Journey; report: JourneyVerifyReport } | Error>;
 
@@ -1088,7 +1145,7 @@ describe("[realtime] the experiment's rows", () => {
         dir,
         id: journey.metadata.id,
         params: {},
-        browserPortFactory: () => new PlaywrightBrowserPort(),
+        browserPortFactory: row.attachHangs === true ? attachHangsPort : () => new PlaywrightBrowserPort(),
         onProgress: (p) => {
           ctx.label = p.mutation ?? "base";
           ctx.replay = p.replay;

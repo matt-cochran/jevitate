@@ -63,8 +63,8 @@ What `journey verify --mutate` runs, in order:
 A blocked write's recorded lines stay blocked for the rest of that replay, except while a later step that records the
 same line runs. If one is answered anyway (a popup, a worker), that mutation reads `not-applied`. Open writes are
 counted when they go to the Journey's own origins or a line it recorded, and a line it did not record that repeats is
-background. A write is open until it finishes, fails, or its response's body reaches the browser. A response alone does not close
-it: a server that sends its headers and keeps working has not answered yet. A write still open when any replay closes, or that replay throws or stalls, makes the proof `inconclusive`, and nothing further
+background. A write is open until it finishes or fails, or, on a `no-store` response only, until bytes of its body are reported (see
+"What a proof assumes"). A response alone does not close it: a server that sends its headers and keeps working has not answered yet. A write still open when any replay closes, or that replay throws or stalls, makes the proof `inconclusive`, and nothing further
 runs, as with a failed fixture restore. A stalled replay whose close never finished can't say what was open, and counts as having a write open, and a resume reads the same. A mutated replay that stopped early still stays open as long as the base did.
 
 ### What a proof assumes
@@ -104,15 +104,26 @@ holds only if all of these are true. Each one that fails can produce a false rea
   verdict. To correct the credit, move the line to the delta of the step that starts the timer and add
   `{"check":"end-state:0","mustFailWhen":"skip:<that step>"}` to `metadata.mutationPairs`: the site is then proved by that
   skip. The last write's block still fails the check, and nothing in the proof marks that reading as wrong.
-- **A server that answers, then keeps doing work the Journey depends on, has not sent body bytes a page is reading.**
-  Chromium reports nothing about a `no-store` response's body the page does not read until that body ends, so a body with
-  nothing reported keeps the write open, up to the replay's bound, and then the proof reads `inconclusive`. Once a body is
-  reported, the replay stays open for 2 s more and the write reads as answered, because the end of an unread `no-store`
-  body is never reported. So a page that reads a streaming response, from a server that has sent its first bytes and goes
-  on working, reads as answered after those 2 s, and what the server does next is seen only through the independence replay.
-  That is a false reading when that work changes what a site reads. An unread `no-store` body over about 2 MB is never
-  reported at all, and neither is one on a write a popup sends as it opens, before the replay can watch it: those writes
-  read as open, and the proof `inconclusive` or `cascade`, never a verdict that body supports.
+- **A server that answers, then keeps doing work the Journey depends on, has sent nothing that reads as a finished
+  `no-store` body.** A write stays open until it finishes or fails, up to the replay's bound, and then the proof reads
+  `inconclusive`. A response does not close it, and neither do bytes arriving, with one exception. Chromium never reports the
+  end of a `no-store` body the page does not read, so a write that waited for that would read `inconclusive` about a request
+  answered in milliseconds. It does report such a body's bytes, only when the body ends. So on a `no-store` response, and on
+  no other, reported bytes count: the replay stays open for 2 s more, which every replay with such a write pays, and the
+  write reads as answered. A `no-store` body with nothing reported stays open.
+
+  This can be a false reading. The bytes are reported as they arrive, not at the end, when the page reads the body, holds
+  an unread `r.clone()` of it (a fetch wrapper that clones does this), or sent it with `sendBeacon`. So a `no-store` response
+  whose server has sent its first bytes and goes on working reads as answered after those 2 s for those pages, and what the
+  server does next is seen only through the independence replay. If that work changes what a site reads, that site can read
+  `sensitive` and the proof `proven`. This can't be limited to pages that don't read: the browser's events look the same
+  for a complete unread body and for the first bytes of one that is read, cloned or beaconed. A page that reads a body
+  to its end is not at risk once it ends, since the write then finishes.
+
+  Reads as open, so `inconclusive` or `cascade`, though the server did answer: an unread `no-store` body over about 2 MB, which
+  is never reported; a write a dedicated worker sends unread with `no-store`, since the page's events don't show it; one a
+  popup sends as it opens, before the replay can watch it; and any unread `no-store` write if the browser doesn't let the
+  replay watch the page within 2 s.
 
 Some readings are limits rather than assumptions: they are never `proven`, but they say less than the Journey deserves.
 

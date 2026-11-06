@@ -352,11 +352,13 @@ const READ_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 /** How long a replay stays open after a write the browser gave up on: the server may still be working, and nothing will say when it stops. */
 const ABORTED_WRITE_GRACE_MS = 2_000;
 /**
- * How long a replay stays open once a response's body has reached the browser and it has not said the body ended. Chromium
- * never says so for a `no-store` body the page does not read, but one the page does read reports its bytes as they come, so
- * this can be a body still streaming.
+ * How long a replay stays open once a `no-store` response's body has been reported and the browser has not said it ended.
+ * Chromium never says so for such a body the page does not read, but one the page reads, clones or beacons reports its
+ * bytes as they come, so this can be a body still streaming.
  */
 const RESPONDED_BODY_GRACE_MS = 2_000;
+/** How long a replay waits to watch a page's bodies. It takes milliseconds, so past this the browser is wedged: no body is seen, and the replay carries on. */
+const BODY_WATCH_BOUND_MS = 2_000;
 /** How often a replay waiting for its open writes looks again. */
 const OPEN_WRITE_POLL_MS = 50;
 /** How long the replay that follows a failed independence replay waits: past most of what the failed one started. */
@@ -466,9 +468,9 @@ class ReplayProbe {
   readonly #relaxedWaits: ReplayDiagnostics["relaxedWaits"][number][] = [];
   readonly #beforeClose: ((writesSent: number) => Promise<void>) | undefined;
   readonly #scope: WriteScope | undefined;
-  readonly #open = new Map<unknown, { readonly line: string; readonly seq: number; responded?: boolean; bodyAt?: number }>();
-  /** Writes in scope by the browser's own request id, whether their body has arrived and whether it has gone to a write in `#open`. */
-  readonly #bodies = new Map<string, { readonly line: string; arrived: boolean; claimed: boolean }>();
+  readonly #open = new Map<unknown, { readonly line: string; readonly seq: number; responded?: boolean }>();
+  /** Writes in scope the browser has not said ended, by its own request id: whether the response is `no-store`, and when its body was reported. */
+  readonly #bodies = new Map<string, { readonly line: string; noStore: boolean; arrivedAt?: number }>();
   readonly #responded = new WeakSet<object>();
   #requestSeq = 0;
   #navigationSeq = 0;
@@ -503,21 +505,31 @@ class ReplayProbe {
   }
 
   #openInScope(): string[] {
-    // A response whose body has not reached the browser is a server still working. What is left in `#open` with a body is only that body's moment, which `settleOpenWrites` gives it.
-    return [...this.#open.values()].filter((o) => o.bodyAt === undefined).map((o) => o.line).filter((line) => this.#scope?.isBackground(line, this.#sent.get(line) ?? 0) !== true);
+    // A response with no reported body is a server still working. Playwright's requests can't be matched to the browser's ids, so
+    // this counts by line: as many answered writes as the line has reported bodies that have not ended. It is worked out each time,
+    // so a body that ends stops counting for whichever write was read as answered by it.
+    const bodies = new Map<string, number>();
+    for (const b of this.#bodies.values()) if (b.arrivedAt !== undefined) bodies.set(b.line, (bodies.get(b.line) ?? 0) + 1);
+    const open = [...this.#open.values()].filter((o) => {
+      const left = bodies.get(o.line) ?? 0;
+      if (o.responded !== true || left === 0) return true;
+      bodies.set(o.line, left - 1);
+      return false;
+    });
+    return open.map((o) => o.line).filter((line) => this.#scope?.isBackground(line, this.#sent.get(line) ?? 0) !== true);
   }
 
   /**
    * Waits for the writes in scope to be answered, new ones they lead to included, up to `boundMs`,
    * then a moment more after one the browser gave up on: a browser-side abort does not mean the server stopped.
-   * A body that has arrived gets a moment too. Past that it reads as answered: Chromium never reports the end of a
-   * `no-store` body the page does not read. A body that has not arrived keeps the write open, so a server that answers
-   * and keeps working is waited for, up to the bound. See "What a proof assumes" in docs/outcomes.md for what is left.
+   * A reported `no-store` body gets a moment too. Past that it reads as answered: Chromium never reports the end of
+   * such a body the page does not read. Any other response keeps the write open until it finishes, so a server that
+   * answers and keeps working is waited for, up to the bound. See "What a proof assumes" in docs/outcomes.md for what is left.
    */
   async settleOpenWrites(boundMs: number): Promise<void> {
     const startedAt = clock.monotonicMs();
     while (clock.monotonicMs() - startedAt < boundMs) {
-      const graceUntil = Math.max(this.#lastAbortAt === undefined ? 0 : this.#lastAbortAt + ABORTED_WRITE_GRACE_MS, ...[...this.#open.values()].map((o) => (o.bodyAt === undefined ? 0 : o.bodyAt + RESPONDED_BODY_GRACE_MS)));
+      const graceUntil = Math.max(this.#lastAbortAt === undefined ? 0 : this.#lastAbortAt + ABORTED_WRITE_GRACE_MS, ...[...this.#bodies.values()].map((b) => (b.arrivedAt === undefined ? 0 : b.arrivedAt + RESPONDED_BODY_GRACE_MS)));
       const graceLeft = graceUntil - clock.monotonicMs();
       if (this.#openInScope().length === 0 && graceLeft <= 0) return;
       await clock.sleep(Math.min(OPEN_WRITE_POLL_MS, boundMs - (clock.monotonicMs() - startedAt)));
@@ -533,23 +545,10 @@ class ReplayProbe {
   }
 
   /**
-   * Gives an arrived body to the oldest answered write on its line that has none. The browser's request ids can't be
-   * matched to Playwright's requests, but two writes on one line open at once need only the count to be right.
-   */
-  #claimBody(line: string): boolean {
-    for (const o of this.#open.values()) {
-      if (o.line !== line || o.responded !== true || o.bodyAt !== undefined) continue;
-      o.bodyAt = clock.monotonicMs();
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Listens for `Network.dataReceived`, the one thing that tells a complete unread body from one the server has not
-   * finished: for a `no-store` body the page does not read, Chromium reports its bytes only when it ends. Observation
-   * only: it reads no body. With no CDP, or if this fails, no body is ever seen and the write stays open, which reads
-   * `inconclusive` rather than a verdict nothing supports.
+   * Listens for `Network.dataReceived`, the one thing that tells a complete unread `no-store` body from one the server has
+   * not finished: Chromium reports such a body's bytes only when it ends. Any other body reports bytes as they come, and
+   * reaches `requestfinished`, so only `no-store` counts. Observation only: it reads no body. With no CDP, or if this fails
+   * or takes too long, no body is ever seen and the write stays open, which reads `inconclusive` rather than a verdict nothing supports.
    */
   async #watchBodies(page: BrowserSession["page"] | undefined): Promise<void> {
     const context = typeof page?.context === "function" ? page.context() : undefined;
@@ -560,22 +559,31 @@ class ReplayProbe {
         const line = lineOfRequest(request.method, request.url);
         // A redirect keeps its id, and may have turned the write into a read.
         if (READ_METHODS.has(request.method.toUpperCase()) || this.#scope?.counts(line, request.url) !== true) this.#bodies.delete(requestId);
-        else this.#bodies.set(requestId, { line, arrived: false, claimed: false });
+        else this.#bodies.set(requestId, { line, noStore: false });
+      });
+      cdp.on("Network.responseReceived", ({ requestId, response }) => {
+        const body = this.#bodies.get(requestId);
+        const cacheControl = Object.entries(response.headers).find(([name]) => name.toLowerCase() === "cache-control")?.[1] ?? "";
+        if (body !== undefined) body.noStore = /(?:^|[\s,])no-store(?:$|[\s,;])/i.test(cacheControl);
       });
       cdp.on("Network.dataReceived", ({ requestId }) => {
         const body = this.#bodies.get(requestId);
-        if (body === undefined || body.arrived) return;
-        body.arrived = true;
-        body.claimed = this.#claimBody(body.line);
+        if (body !== undefined && body.noStore && body.arrivedAt === undefined) body.arrivedAt = clock.monotonicMs();
       });
       cdp.on("Network.loadingFinished", ({ requestId }) => void this.#bodies.delete(requestId));
       cdp.on("Network.loadingFailed", ({ requestId }) => void this.#bodies.delete(requestId));
       await cdp.send("Network.enable");
     };
-    const attaching = (target: NonNullable<BrowserSession["page"]>): Promise<void> =>
-      attach(target).catch(() => {
+    const attaching = async (target: NonNullable<BrowserSession["page"]>): Promise<void> => {
+      let timer: ReturnType<typeof clock.setTimeout> | undefined;
+      try {
+        await Promise.race([attach(target), new Promise<void>((resolve) => (timer = clock.setTimeout(resolve, BODY_WATCH_BOUND_MS)))]);
+      } catch {
         // A page that closed first has nothing to watch. Observation never stops a replay.
-      });
+      } finally {
+        clock.clearTimeout(timer);
+      }
+    };
     context.on("page", (popup) => void attaching(popup));
     await attaching(page!);
   }
@@ -604,6 +612,8 @@ class ReplayProbe {
           this.#open.delete(r);
           this.#lastAbortAt = clock.monotonicMs();
         }
+        // What was reported belongs to what the old document had open, and may never say it ended.
+        for (const [id, b] of this.#bodies) if (b.arrivedAt !== undefined) this.#bodies.delete(id);
       });
     }
     source.on("response", (res) => {
@@ -612,15 +622,7 @@ class ReplayProbe {
       this.#writesAnswered += 1;
       this.#responded.add(r);
       const open = this.#open.get(r);
-      if (open === undefined) return;
-      open.responded = true;
-      // The browser can report the body before Playwright reports the response.
-      for (const body of this.#bodies.values()) {
-        if (!body.arrived || body.claimed || body.line !== open.line) continue;
-        body.claimed = true;
-        open.bodyAt = clock.monotonicMs();
-        break;
-      }
+      if (open !== undefined) open.responded = true;
     });
     source.on("requestfinished", (r) => {
       if (!isWrite(r)) return;
@@ -1463,7 +1465,7 @@ function withWhatToAdd(reason: string, journey: Journey): string {
     reason,
     ...named.map(
       (n) =>
-        `${n.site} names ${n.line}, and no step records it: a check names a request, not the step that sends it. If this request is the step's write, add it to that step's delta.requests, with the path it sends (a step with no delta: ${deltaWith(n.line)}), which gives the step skip and block-write mutations, or add {"check":"${n.site}","mustFailWhen":"skip:<step>"} to metadata.mutationPairs. If it is a read, there is no write here to prove`,
+        `${n.site} names ${n.line}, and no step records it as a write: a check names a request, not the step that sends it. If this request is the step's write, add it to that step's delta.requests, with the path it sends (a step with no delta: ${deltaWith(n.line)}), which gives the step skip and block-write mutations, or add {"check":"${n.site}","mustFailWhen":"skip:<step>"} to metadata.mutationPairs. If it is a read, there is no write here to prove`,
     ),
   ].join("; ");
 }
