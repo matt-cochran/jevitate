@@ -268,6 +268,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     ((a: McpVerifyFixArgs) =>
       runVerifyFix({
         targets: loadTargetsFile(deps.targetsConfigPath),
+        ...(deps.targetsConfigPath === undefined ? {} : { runGuardTargetsFile: deps.targetsConfigPath }),
         resultPath: a.resultPath,
         fingerprint: a.fingerprint,
         // #767: the tool's report is persisted too (the terminal layer does nothing inside an MCP

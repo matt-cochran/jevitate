@@ -229,14 +229,14 @@ security bug, and how to report one.
 **What guards a Journey run.** A Journey is a flow that does real work in your app, so a run can send
 real writes. Which guards apply depends on who starts it. These are the ones in code today:
 
-| Guard | MCP (`run_journey`, `chain_journeys`, `load run`, `source run`) | CLI (`journey run`) |
+| Guard | MCP (`run_journey`, `chain_journeys`, `load run`, `source run`, `regressions run`, `regressions capture`) | CLI (`journey run`, `regression run`, `regression capture`) |
 | --- | --- | --- |
-| Only a promoted Journey with a current approval runs | Yes. Refused before any browser opens with `E_JOURNEY_NOT_PROMOTED`, `E_JOURNEY_APPROVAL_STALE` or `E_JOURNEY_APPROVAL_UNKNOWN`. Promote it, or re-approve it, to lift it | No. It runs anyway and prints a `warning:` line on stderr with the same code. (`load run` on the CLI refuses an unpromoted Journey; `journey chain` runs promoted Journeys unless you pass `--allow-draft`) |
+| Only a promoted Journey with a current approval runs | Yes for a Journey (a regression is no Journey: this row is not about one). Refused before any browser opens with `E_JOURNEY_NOT_PROMOTED`, `E_JOURNEY_APPROVAL_STALE` or `E_JOURNEY_APPROVAL_UNKNOWN`. Promote it, or re-approve it, to lift it | No. It runs anyway and prints a `warning:` line on stderr with the same code. (`load run` on the CLI refuses an unpromoted Journey; `journey chain` runs promoted Journeys unless you pass `--allow-draft`) |
 | No click on a session-ending, destructive or paid control, and no Enter in a field whose form's default button is one | Yes: `E_RUN_REFUSED_DESTRUCTIVE`. Lifted by `mcpRun.allowDestructive`; a target's own `safety.deny` is never lifted | No |
 | No write to an origin outside the run's allowlist | Yes, at the browser context (popups, form posts and WebSocket frames included, on a self-heal run too): `E_RUN_REFUSED_OFF_ALLOWLIST_WRITE`. Lifted by `mcpRun.allowOffAllowlistWrites` | No. The write is sent and listed in `offAllowlistWrites` in the result |
-| No replay on an environment flagged `production: true` | Yes: `E_RUN_REFUSED_PRODUCTION`. Lifted by `mcpRun.allowProduction` | No |
-| Site policy (pacing, minimum interval, budgets, quiet hours) | Yes, `{error: throttled}` | Yes. With no policy set, nothing is limited |
-| A value-free record of the run in `logs/<date>/journey-run-*.json` | Yes | Yes |
+| No replay on an environment flagged `production: true` | Yes: `E_RUN_REFUSED_PRODUCTION`, before anything is sent. `verify_fix` refuses it too. Lifted by `mcpRun.allowProduction` | No, and not on `verify-fix` |
+| Site policy (pacing, minimum interval, budgets, quiet hours) | Yes on a Journey's run, `{error: throttled}` | Yes. With no policy set, nothing is limited |
+| A value-free record of the run in `logs/<date>/journey-run-*.json` | Yes on `run_journey` | Yes on `journey run` |
 
 The `mcpRun` settings live in a target's entry in `~/.jevitate/targets.json`:
 `"mcpRun": { "allowDestructive": true, "allowOffAllowlistWrites": ["https://api.example.com"], "allowProduction": true }`.
@@ -251,6 +251,8 @@ submit button, or a key the page's own script turns into a write.
 What does not guard a run today:
 
 - A CLI run has none of the refusals above. The person at the terminal is the guard.
+- `verify_fix` has only the production refusal of those above. Its replay stays on the origins the finding's mission
+  was allowed: it can't be moved onto another one.
 - Nothing asks for approval before a write. `queue_action` writes an inbox item and no run waits for
   its answer ([#793](https://github.com/matt-cochran/jevitate/issues/793)).
 - A Journey's parameters are names with string values; nothing checks their type

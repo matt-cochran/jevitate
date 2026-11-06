@@ -39,6 +39,7 @@ import { RunScreenshots, screenshotsDirFor, type ScreenshotsResult, type Screens
 import { clock, isRecord } from "@jevitate/domain";
 import { writeMissionResult } from "./mission-journal.js";
 import { findGitRoot, logsDirFor, type LayoutDeps } from "./project-dir.js";
+import { prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { redactSensitivePath, redactSensitiveValue, redactThrown, type RedactionFieldRule } from "./terminal-result.js";
 
 /**
@@ -64,6 +65,8 @@ export const VERIFY_FIX_EXIT_CODES: Readonly<Record<VerifyFixVerdict, number>> =
 export interface RunVerifyFixOptions {
   /** Path of the mission's `<stem>.result.json`. */
   readonly resultPath: string;
+  /** `targets.json` as the MCP floor reads it (default: `~/.jevitate/targets.json`). */
+  readonly runGuardTargetsFile?: string;
   /**
    * #293: a finding a journey-anchored run found (its result's `branch`) is replayed THROUGH the same
    * Journey prefix — every replay session replays it first, and the finding's Recording starts on
@@ -542,6 +545,14 @@ async function replayFinding(opts: RunVerifyFixOptions, known: ReadonlySet<strin
   }
   // Guardrail #1: the replay may only ever touch the mission's own authorized origins.
   const origin = assertAuthorizedExploreTarget(mission.target.seedUrl, mission.target.allowlist);
+  // #789: over MCP a finding is not replayed on a production origin, nor under a production environment's allow list, before anything opens. The CLI is the person's.
+  prepareMcpRunGuard({
+    site: origin,
+    allowedOrigins: mission.target.allowlist,
+    environment: opts.env === undefined ? undefined : resolveJourneyEnvironment({ env: opts.env, targets: {}, ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) }),
+    targetsFile: opts.runGuardTargetsFile,
+    environmentsFile: opts.environmentsFile,
+  });
   const target = resolveTargetConfig(opts.targets ?? {}, origin);
   // #175: the operator's targets.json session is the last fallback (verify_fix over MCP of a
   // mission recorded without one); never an MCP argument.

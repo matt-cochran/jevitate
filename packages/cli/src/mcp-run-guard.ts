@@ -310,7 +310,8 @@ export class McpRunGuard implements ReplayActionGuard {
   }
 
   afterStep(): void {
-    if (this.#refusal !== undefined) throw this.#refusal;
+    // Noted again here: a route's callback runs in the async context of whoever launched a pooled browser, which may be an earlier tool call.
+    if (this.#refusal !== undefined) throw refused(this.#refusal);
   }
 
   /** Throws what ended the run, if anything did since the last step (a write the end state's checks set off). */
