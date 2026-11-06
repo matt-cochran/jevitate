@@ -230,6 +230,12 @@ function bytesToBind(file: string | undefined): string | null {
   }
 }
 
+/** `<name>=<file>` with the file's bytes as a digest: the session a fixture step authenticates as is what binds, and the same path can hold another login. */
+function fixtureIdentityBinding(spec: string): { readonly spec: string; readonly digest: string | null } {
+  const bytes = bytesToBind(spec.slice(spec.indexOf("=") + 1).trim());
+  return { spec, digest: bytes === null ? null : createHash("sha256").update(bytes).digest("hex") };
+}
+
 /** What the hooks' results can depend on that this process can see: their text and limits, and the fixture files' bytes. A script a hook runs is not read. */
 export function hookBindingOf(flags: { readonly fixtures?: string; readonly before?: string; readonly after?: string; readonly allowShellHooks?: boolean; readonly hookTimeoutMs?: string; readonly fixtureIdentity?: readonly string[] }, environmentFixtures: string | undefined): unknown {
   return {
@@ -241,7 +247,7 @@ export function hookBindingOf(flags: { readonly fixtures?: string; readonly befo
     content: bytesToBind(flags.fixtures),
     environmentFixtures,
     environmentContent: bytesToBind(environmentFixtures),
-    fixtureIdentity: flags.fixtureIdentity,
+    fixtureIdentity: flags.fixtureIdentity?.map(fixtureIdentityBinding),
   };
 }
 

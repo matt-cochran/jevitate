@@ -137,9 +137,12 @@ The checkpoint holds outcome classes, structured failed sites, site keys, mutati
 counts. It holds no hook text, parameter value, failure message, blocked request path or page text. On a reused pair
 `reason`, `blockedWrites` and `controlDiagnostics` are therefore absent, and a targeted refusal's or a retry's wording
 says it was not kept. The verdict reads none of these. Hooks, params, origin and browser settings are compared by
-HMAC-SHA-256 under a random key in `~/.jevitate/verify-checkpoint.key` (mode 0600), which also signs the file. Only
-the bytes of a fixture file and a `--storage-state` file and the text of a hook are bound: a script a hook calls, and a
-new deploy of the app between the two runs, cannot be detected, beyond the base and closing replays having to pass.
+HMAC-SHA-256 under a random key in `~/.jevitate/verify-checkpoint.key` (mode 0600), which also signs the file. The
+signature proves the file came from this user's own runs. It does not stop that user's own processes, which can read
+the key, nor someone putting back an older genuine file: a rollback reads as that earlier proof, within the 24-hour
+limit. Only the bytes of a fixture file, a `--fixture-identity` session file and a `--storage-state` file and the text
+of a hook are bound: a script a hook calls, and a new deploy of the app between the two runs, cannot be detected, beyond
+the base and closing replays having to pass.
 Receipts stay until the next proof of that Journey replaces them; `logs prune` does not remove them.
 
 The key protects against a change to the file, not against everything. Someone who can write `.jevitate/` but cannot

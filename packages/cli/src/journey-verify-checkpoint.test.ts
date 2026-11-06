@@ -1022,6 +1022,18 @@ describe("what a binding reads", () => {
     expect(canonicalJson(hookBindingOf({ fixtures: link }, undefined))).not.toBe(first);
   });
 
+  it("binds a fixture identity's session file by its bytes, and keeps none of them", () => {
+    const session = join(dir, "identity.json");
+    writeFileSync(session, "cookie-one");
+    const flags = { fixtureIdentity: [`admin=${session}`] };
+    const first = canonicalJson(hookBindingOf(flags, undefined));
+    expect(first).not.toContain("cookie-one");
+    expect(canonicalJson(hookBindingOf(flags, undefined))).toBe(first);
+    writeFileSync(session, "cookie-two");
+    expect(canonicalJson(hookBindingOf(flags, undefined))).not.toBe(first);
+    expect(hookBindingOf({ fixtureIdentity: [`admin=${join(dir, "missing.json")}`] }, undefined)).toMatchObject({ fixtureIdentity: [{ digest: null }] });
+  });
+
   it("binds an environment's fixture file beside a flag's", () => {
     const flag = join(dir, "flag.json");
     const target = join(dir, "target.json");
